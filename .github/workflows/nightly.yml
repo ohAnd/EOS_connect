@@ -1,0 +1,36 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build the Docker image
+      run: docker build . --file Dockerfile --tag eos_connect_v0.0.${{github.run_number}}
+    - name: Save Docker image to file
+      run: docker save eos_connect_v0.0.${{github.run_number}} -o eos_connect_v0.0.${{github.run_number}}
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: eos_connect_v0.0.${{github.run_number}}
+        path: |
+          eos_connect_v0.0.${{github.run_number}}
+
+    - uses: "marvinpinto/action-automatic-releases@latest"
+      with:
+        repo_token: "${{ secrets.GITHUB_TOKEN }}"
+        automatic_release_tag: "v0.0.${{github.run_number}}"
+        draft: false
+        prerelease: false
+        title: "eos_connect dockerimage v0.0.${{github.run_number}}"
+        files: |
+          eos_connect_v0.0.${{github.run_number}}
