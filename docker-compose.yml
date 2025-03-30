@@ -1,10 +1,6 @@
-version: '3.8'
-
 services:
   eos_connect:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/wolfimbusch/eos_connect:nightly
     ports:
       - "8081:8081"
     volumes:

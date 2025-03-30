@@ -1,0 +1,38 @@
+name: Nightly Build and Push
+# This workflow builds and pushes a Docker image to GitHub Container Registry
+# and optionally to Docker Hub.
+# It runs nightly at 2 AM UTC and can also be triggered manually.
+# The image is tagged with "nightly" and the repository owner is converted to lowercase.
+# The workflow uses the GITHUB_TOKEN secret for authentication with GitHub Container Registry.
+# Uncomment the Docker Hub section if you want to push to Docker Hub as well.
+# The Docker Hub credentials should be stored in the repository secrets as DOCKER_USERNAME and DOCKER_PASSWORD.
+# The workflow is triggered on a schedule and can also be run manually.
+
+on:
+  schedule: # runs on the default branch: master
+  - cron: "0 2 * * *" # run at 2 AM UTC
+  workflow_dispatch: # allows manual triggering of the workflow
+  
+jobs:
+  publish_image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Convert repository owner to lowercase
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Build image
+        run: docker build -t ghcr.io/${{ env.owner }}/eos_connect:nightly .
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Push Docker image to GitHub Container Registry
+        run: docker push ghcr.io/${{ env.owner }}/eos_connect:nightly
+
+#      - name: Log in to Docker Hub
+#        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+#      - name: Push image to Docker Hub
+#        run: docker push ${{ secrets.DOCKER_USERNAME }}/eos_connect:nightly
