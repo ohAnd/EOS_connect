@@ -1,4 +1,4 @@
-name: Nightly Build 
+name: Nightly Build
 
 on:
   schedule: # runs on the default branch: master
