@@ -1,36 +1,20 @@
-name: Docker Image CI
+name: Nightly Build
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
+  schedule: # runs on the default branch: master
+  - cron: "0 2 * * *" # run at 2 AM UTC
+  workflow_dispatch: # allows manual triggering of the workflow
+  
 jobs:
-
-  build:
-
+  publish_image:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag eos_connect_v0.0.${{github.run_number}}
-    - name: Save Docker image to file
-      run: docker save eos_connect_v0.0.${{github.run_number}} -o eos_connect_v0.0.${{github.run_number}}
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: eos_connect_v0.0.${{github.run_number}}
-        path: |
-          eos_connect_v0.0.${{github.run_number}}
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/eos_connect_test:nightly
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+      - name: Push image to Docker Hub
+        run: docker push ${{ secrets.DOCKER_USERNAME }}/eos_connect_test:nightly
 
-    - uses: "marvinpinto/action-automatic-releases@latest"
-      with:
-        repo_token: "${{ secrets.GITHUB_TOKEN }}"
-        automatic_release_tag: "v0.0.${{github.run_number}}"
-        draft: false
-        prerelease: false
-        title: "eos_connect dockerimage v0.0.${{github.run_number}}"
-        files: |
-          eos_connect_v0.0.${{github.run_number}}
