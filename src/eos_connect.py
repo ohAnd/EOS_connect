@@ -381,7 +381,10 @@ def get_prices_from_tibber(tgt_duration, start_time=None):
 
     if len(extended_prices) < tgt_duration:
         remaining_hours = tgt_duration - len(extended_prices)
-        extended_prices.extend(prices[:remaining_hours])
+        if remaining_hours == 1:
+            extended_prices.append(extended_prices[-1])
+        else:
+            extended_prices.extend(prices[:remaining_hours])
     logger.info("[PRICES] Prices from TIBBER fetched successfully.")
     return extended_prices
 
@@ -464,6 +467,11 @@ def get_pv_forecast(tgt_value="power", pv_config_name="default", tgt_duration=24
         request_type,
         pv_config_name,
     )
+    # fix for time changes e.g. western europe then fill or reduce the array to 48 values
+    if len(forecast_values) > tgt_duration:
+        forecast_values = forecast_values[:tgt_duration]
+    elif len(forecast_values) < tgt_duration:
+        forecast_values.extend([forecast_values[-1]] * (tgt_duration - len(forecast_values)))
     return forecast_values
 
 
