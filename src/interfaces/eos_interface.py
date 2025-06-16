@@ -152,7 +152,10 @@ class EosInterface:
             return {"error": "Request timed out - trying again with next run"}
         except requests.exceptions.RequestException as e:
             logger.error(
-                "[EOS] OPTIMIZE Request failed: %s - response: %s", e, response
+                "[EOS] OPTIMIZE Request failed: %s - response: %s", e, response.text
+            )
+            logger.debug(
+                "[EOS] The payload for the optimization request was: %s", payload
             )
             return {"error": str(e)}
 
