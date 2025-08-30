@@ -69,7 +69,8 @@ A default config file will be created with the first start, if there is no `conf
   Runtime of additional load 1 in hours. Set to 0 if not needed. (If not needed, set to `additional_load_1_runtime: ""`)
 
 - **`additional_load_1_consumption`**:
-  Overall consumption of additional load 1 in Wh for the given hours. Set to 0 if not needed. (If not needed, set to `additional_load_1_consumption: ""`)
+  Consumption of additional load 1 in Wh for ONE hour. Set to 0 if not needed. (If not needed, set to `additional_load_1_consumption: ""`)
+  - Needed Amount will be calculated based on runtime and this hourly consumption.
 
 ---
 

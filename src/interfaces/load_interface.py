@@ -279,168 +279,6 @@ class LoadInterface:
             return round(total_energy / total_duration, 4)
         return 0
 
-    # def create_load_profile_openhab_from_last_days(self, tgt_duration, start_time=None):
-    #     """
-    #     Creates a load profile for energy consumption over the last `tgt_duration` hours.
-
-    #     The function calculates the energy consumption for each hour from the current hour
-    #     going back `tgt_duration` hours. It fetches energy data for base load and
-    #     additional loads, processes the data, and sums the energy values. If the total energy
-    #     for an hour is zero, it skips that hour. The resulting load profile is a list of energy
-    #      consumption values for each hour.
-
-    #     """
-    #     logger.info("[LOAD-IF] Creating load profile from openhab ...")
-    #     current_time = datetime.now(self.time_zone).replace(
-    #         minute=0, second=0, microsecond=0
-    #     )
-    #     if start_time is None:
-    #         start_time = current_time.replace(
-    #             hour=0, minute=0, second=0, microsecond=0
-    #         ) - timedelta(hours=tgt_duration)
-    #         end_time = start_time + timedelta(hours=tgt_duration)
-    #     else:
-    #         start_time = current_time - timedelta(hours=tgt_duration)
-    #         end_time = current_time
-
-    #     load_profile = []
-    #     current_hour = start_time
-
-    #     while current_hour < end_time:
-    #         next_hour = current_hour + timedelta(hours=1)
-    #         # logger.debug("[LOAD-IF] Fetching data for %s to %s",current_hour, next_hour)
-
-    #         energy_data = self.__fetch_historical_energy_data_from_openhab(
-    #             self.load_sensor, current_hour, next_hour
-    #         )
-    #         energy = self.__process_energy_data(energy_data)
-    #         if energy == 0:
-    #             logger.warning(
-    #                 "[LOAD-IF] load = 0 ... Energy for %s: %5.1f Wh",
-    #                 current_hour,
-    #                 round(energy, 1),
-    #             )
-    #             # current_hour += timedelta(hours=1)
-    #             # continue
-
-    #         energy_sum = abs(energy)
-
-    #         load_profile.append(energy_sum)
-    #         logger.debug("[LOAD-IF] Energy for %s: %s", current_hour, energy_sum)
-
-    #         current_hour += timedelta(hours=1)
-    #     logger.info("[LOAD-IF] Load profile created successfully.")
-    #     return load_profile
-
-    # def create_load_profile_homeassistant_from_last_days(
-    #     self, tgt_duration, start_time=None
-    # ):
-    #     """
-    #     Creates a load profile for energy consumption over the last `tgt_duration` hours.
-
-    #     This function calculates the energy consumption for each hour from the current hour
-    #     going back `tgt_duration` hours. It fetches energy data from Home Assistant,
-    #     processes the data, and sums the energy values. If the total energy for an hour is zero,
-    #     it skips that hour. The resulting load profile is a list of energy consumption values
-    #     for each hour.
-
-    #     Args:
-    #         tgt_duration (int): The target duration in hours for which the load profile is needed.
-    #         start_time (datetime, optional): The start time for fetching the load profile.
-    #         Defaults to None.
-
-    #     Returns:
-    #         list: A list of energy consumption values for the specified duration.
-    #     """
-    #     logger.info("[LOAD-IF] Creating load profile from Home Assistant ...")
-    #     current_time = datetime.now(self.time_zone).replace(
-    #         minute=0, second=0, microsecond=0
-    #     )
-    #     if start_time is None:
-    #         start_time = current_time.replace(
-    #             hour=0, minute=0, second=0, microsecond=0
-    #         ) - timedelta(hours=tgt_duration)
-    #         end_time = start_time + timedelta(hours=tgt_duration)
-    #     else:
-    #         start_time = current_time - timedelta(hours=tgt_duration)
-    #         end_time = current_time
-
-    #     load_profile = []
-    #     current_hour = start_time
-
-    #     # current_hour = datetime.strptime("18.03.2025 11:00", "%d.%m.%Y %H:%M")
-    #     # end_time = current_hour + timedelta(hours=tgt_duration)
-
-    #     # check car load data for W or kW
-    #     car_load_data = self.__fetch_historical_energy_data_from_homeassistant(
-    #         self.car_charge_load_sensor, current_hour, end_time
-    #     )
-    #     # check for max value in car_load_data
-    #     max_car_load = 0
-    #     car_load_unit_factor = 1
-    #     for data_entry in car_load_data:
-    #         try:
-    #             float(data_entry["state"])
-    #         except ValueError:
-    #             continue
-    #         max_car_load = max(max_car_load, float(data_entry["state"]))
-    #     if 0 < max_car_load < 23:
-    #         max_car_load = max_car_load * 1000
-    #         car_load_unit_factor = 1000
-    #     logger.debug("[LOAD-IF] Max car load: %s W", round(max_car_load, 0))
-
-    #     while current_hour < end_time:
-    #         next_hour = current_hour + timedelta(hours=1)
-    #         # logger.debug("[LOAD-IF] Fetching data for %s to %s", current_hour, next_hour)
-    #         energy_data = self.__fetch_historical_energy_data_from_homeassistant(
-    #             self.load_sensor, current_hour, next_hour
-    #         )
-    #         car_load_data = self.__fetch_historical_energy_data_from_homeassistant(
-    #             self.car_charge_load_sensor, current_hour, next_hour
-    #         )
-
-    #         # print(f'HA Energy data: {car_load_data}')
-    #         energy = abs(self.__process_energy_data({"data": energy_data}))
-    #         car_load_energy = abs(
-    #             self.__process_energy_data({"data": car_load_data}) * car_load_unit_factor
-    #         )
-    #         car_load_energy = max(car_load_energy, 0)  # prevent negative values
-    #         # print(f'HA Energy Orig: {energy}')
-    #         # print(f'HA Car load energy: {car_load_energy}')
-    #         energy = energy - car_load_energy
-    #         if energy < 0:
-    #             logger.error(
-    #                 "[LOAD-IF] DATA ERROR Energy for %s: %5.1f Wh (car load: %5.1f Wh)",
-    #                 current_hour,
-    #                 round(energy, 1),
-    #                 round(car_load_energy, 1),
-    #             )
-    #         # print(f'HA Energy Final: {energy}')
-    #         if energy == 0:
-    #             logger.warning(
-    #                 "[LOAD-IF] load = 0 ... Energy for %s: %5.1f Wh (car load: %5.1f Wh)",
-    #                 current_hour,
-    #                 round(energy, 1),
-    #                 round(car_load_energy, 1),
-    #             )
-    #             # current_hour += timedelta(hours=1)
-    #             # continue
-
-    #         energy_sum = energy
-
-    #         load_profile.append(energy_sum)
-    #         logger.debug(
-    #             "[LOAD-IF] Energy for %s: %5.1f Wh (car load: %5.1f Wh)",
-    #             current_hour,
-    #             round(energy, 1),
-    #             round(car_load_energy, 1),
-    #         )
-    #         # logger.debug("[LOAD-IF] Energy for %s: %s", current_hour, round(energy_sum,1))
-
-    #         current_hour += timedelta(hours=1)
-    #     logger.info("[LOAD-IF] Load profile created successfully.")
-    #     return load_profile
-
     def __get_additional_load_list_from_to(self, item, start_time, end_time):
         """
         Retrieves and processes additional load data within a specified time range.
@@ -829,3 +667,207 @@ class LoadInterface:
             self.src,
         )
         return default_profile[:tgt_duration]
+
+    # additional load planning methods
+    def get_additional_load_remaining_hours(self, target_runtime, limit):
+        """
+        Calculates the remaining hours needed to reach the target runtime,
+        considering the hours already run today. If the remaining hours needed
+        exceed the hours left until midnight, returns 0 (impossible to complete today).
+
+        Args:
+            target_runtime (float): The desired total runtime in hours.
+            limit (Any): A parameter used to determine the already run hours 
+                         (passed to get_additional_load_start_and_duration_today).
+        Returns:
+            float: The number of additional hours required to reach the target runtime.
+                Returns 0 if the target has already been met, exceeded, 
+                or cannot be completed today.
+        """
+
+        already_runned_hours = self.get_additional_load_start_and_duration_today(limit)
+        hours_needed_for_target = target_runtime
+
+        if already_runned_hours and already_runned_hours.get("duration") is not None:
+            remaining_hours_above_limit = already_runned_hours["duration"]
+            hours_needed_for_target = max(
+                0, target_runtime - remaining_hours_above_limit
+            )
+
+        # Calculate hours remaining until midnight in the configured timezone
+        if self.time_zone is None:
+            now = datetime.now()
+        else:
+            now = datetime.now(self.time_zone)
+
+        # Calculate midnight of the next day
+        next_midnight = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+        # Calculate remaining hours until midnight (as float for precision)
+        hours_until_midnight = (next_midnight - now).total_seconds() / 3600
+
+        # If the needed hours exceed the available hours until midnight, return 0
+        if hours_needed_for_target > hours_until_midnight:
+            logger.debug(
+                "[LOAD-IF] Cannot complete target runtime today. "
+                "Needed: %.2f hours, Available until midnight: %.2f hours",
+                hours_needed_for_target,
+                hours_until_midnight,
+            )
+            return 0.0
+
+        return hours_needed_for_target
+
+    def get_additional_load_start_and_duration_today(self, limit=10):
+        """
+        Finds the hour when the additional load last started being above the given limit
+        and the duration of the current/last continuous load period.
+
+        Args:
+            limit (float): The threshold value for the additional load (default: 10).
+
+        Returns:
+            dict: Dictionary with 'start_hour' and 'duration', or empty dict if no periods found.
+              Example: {'start_hour': 7, 'duration': 4}
+        """
+        load_profile = self.__get_additional_load_profile_today_until_now()
+        logger.debug(
+            "[LOAD-IF] Additional load profile (today until now): %s", load_profile
+        )
+
+        if not load_profile:
+            return {}
+
+        # Find all hours above the limit
+        hours_above_limit = [i for i, value in enumerate(load_profile) if value > limit]
+
+        if not hours_above_limit:
+            return {}  # No hours above limit
+
+        # Find continuous periods by looking for gaps
+        periods = []
+        current_period_start = hours_above_limit[0]
+
+        for i in range(1, len(hours_above_limit)):
+            prev_hour = hours_above_limit[i - 1]
+            curr_hour = hours_above_limit[i]
+
+            # Check if there's a gap (not consecutive hours)
+            if curr_hour - prev_hour > 1:
+                # End current period and start new one
+                period_duration = prev_hour - current_period_start + 1
+                periods.append(
+                    {
+                        "start_hour": current_period_start,
+                        "end_hour": prev_hour,
+                        "duration": period_duration,
+                    }
+                )
+                current_period_start = curr_hour
+
+        # Add the last period
+        last_end_hour = hours_above_limit[-1]
+        last_duration = last_end_hour - current_period_start + 1
+        periods.append(
+            {
+                "start_hour": current_period_start,
+                "end_hour": last_end_hour,
+                "duration": last_duration,
+            }
+        )
+
+        # Return the last period's start and duration
+        if periods:
+            last_period = periods[-1]
+            return {
+                "start_hour": last_period["start_hour"],
+                "duration": last_period["duration"],
+            }
+
+        # If not found, return dict with None content as requested
+        return {"start_hour": None, "duration": None}
+
+    def __get_additional_load_profile_today_until_now(self):
+        """
+        Generate the additional load profile for today from midnight until the current time.
+        This method calculates the energy consumption for each hour from midnight of the current day
+        up to the present moment, based on the configured additional load sensor. The energy values
+        are aggregated into a list, where each entry corresponds to the energy consumed
+        in a specific hour.
+        Returns:
+            list: A list of energy values (in Wh) for each hour from midnight to now.
+                  If no data is available, the list will be empty.
+        Logs:
+            - Debug messages for the creation of the load profile and energy values per hour.
+            - Warning if the energy value for an hour is zero.
+            - Error if no load profile data is available for the specified day.
+        """
+        load_profile = []
+
+        if self.time_zone is None:
+            now = datetime.now()
+            today_midnight = datetime.now().replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+        else:
+            now = datetime.now(self.time_zone)
+            today_midnight = datetime.now(self.time_zone).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+
+        logger.debug(
+            "[LOAD-IF] Creating additional load profile for today from %s to %s",
+            today_midnight,
+            now,
+        )
+
+        current_hour = today_midnight
+        end_time = now
+
+        while current_hour < end_time:
+            next_hour = current_hour + timedelta(hours=1)
+
+            add_load_data_1_energy = 0
+            # check if additional load 1 sensor is configured
+            if self.additional_load_1_sensor != "":
+                add_load_data_1 = self.__get_additional_load_list_from_to(
+                    self.additional_load_1_sensor, current_hour, next_hour
+                )
+                add_load_data_1_energy = abs(
+                    self.__process_energy_data(
+                        {"data": add_load_data_1}, self.additional_load_1_sensor
+                    )
+                )
+            add_load_data_1_energy = max(
+                add_load_data_1_energy, 0
+            )  # prevent negative values
+
+            energy = add_load_data_1_energy
+
+            if energy == 0:
+                logger.warning(
+                    "[LOAD-IF] Additional load = 0 ... Energy for %s: %5.1f Wh",
+                    current_hour,
+                    round(energy, 1),
+                )
+                # current_hour += timedelta(hours=1)
+                # continue
+
+            energy_sum = energy
+
+            load_profile.append(energy_sum)
+            logger.debug(
+                "[LOAD-IF] additional load - energy for %s: %5.1f Wh",
+                current_hour,
+                round(energy, 1),
+            )
+            current_hour += timedelta(hours=1)
+        if not load_profile:
+            logger.error(
+                "[LOAD-IF] additional load - No load profile data available for the specified day - % s to % s",
+                current_hour,
+                end_time,
+            )
+        return load_profile

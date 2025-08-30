@@ -38,6 +38,8 @@ if sys.version_info < (3, 11):
     sys.exit(1)
 
 EOS_TGT_DURATION = 48
+
+
 ###################################################################################################
 # Custom formatter to use the configured timezone
 class TimezoneFormatter(logging.Formatter):
@@ -304,14 +306,38 @@ def create_optimize_request():
         return eauto_object
 
     def get_dishwasher_data():
-        consumption_wh = config_manager.config["load"].get(
+        # calculating additional load based on target runtime, remaining hours
+        # and consumption per hour
+
+        limit_wattage_device_off_in_w = 50
+
+        consumption_wh_hourly = config_manager.config["load"].get(
             "additional_load_1_consumption", 1
         )
+        if not consumption_wh_hourly or consumption_wh_hourly == 0:
+            consumption_wh_hourly = 1
+
+        target_duration_h = config_manager.config["load"].get(
+            "additional_load_1_runtime", 1
+        )
+        if not target_duration_h or target_duration_h == 0:
+            target_duration_h = 1
+
+        duration_h = load_interface.get_additional_load_remaining_hours(
+            target_duration_h, limit_wattage_device_off_in_w
+        )
+        consumption_wh = consumption_wh_hourly * duration_h
+        logger.debug(
+            "[Main] calculating additional load - consumption_wh: %s, duration_h: %s",
+            consumption_wh,
+            duration_h,
+        )
+        # due to EOS API requirements
         if not consumption_wh or consumption_wh == 0:
             consumption_wh = 1
-        duration_h = config_manager.config["load"].get("additional_load_1_runtime", 1)
         if not duration_h or duration_h == 0:
             duration_h = 1
+
         dishwasher_object = {
             "consumption_wh": consumption_wh,
             "duration_h": duration_h,

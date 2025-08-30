@@ -49,8 +49,8 @@ class ConfigManager:
                         # item / entity for additional load power data
                         "additional_load_1_sensor": "additional_load_1_sensor",
                         "additional_load_1_runtime": 0,  # runtime for additional load 1 in minutes
-                        "additional_load_1_consumption": 0,  # consumption for
-                        # additional load 1 in Wh
+                        "additional_load_1_consumption": 0,  # consumption for additional load 1
+                         # in Wh for ONE hour - default: 0 (or empty) = not used
                     }
                 ),
                 "eos": CommentedMap(
@@ -182,7 +182,7 @@ class ConfigManager:
             "additional_load_1_runtime",
         )
         config["load"].yaml_add_eol_comment(
-            "consumption for additional load 1 in Wh - default: 0"
+            "consumption for additional load 1 in Wh for ONE hour - default: 0"
             + ' (If not needed set to `additional_load_1_sensor: ""`)',
             "additional_load_1_consumption",
         )

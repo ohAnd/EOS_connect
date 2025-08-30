@@ -155,17 +155,17 @@ class EosInterface:
                 "[EOS] OPTIMIZE Request failed: %s - response: %s", e, response
             )
             logger.debug(
-                "[EOS] OPTIMIZE ERROR - payload for the request was:"+
-                "\n---REQUEST--------------------------------------------------\n %s"+
-                "\n------------------------------------------------------------",
-                payload
+                "[EOS] OPTIMIZE ERROR - payload for the request was:"
+                + "\n---REQUEST--------------------------------------------------\n %s"
+                + "\n------------------------------------------------------------",
+                payload,
             )
             logger.debug(
-                "[EOS] OPTIMIZE ERROR - response of EOS is:"+
-                "\n---RESPONSE-------------------------------------------------\n %s"+
-                "\n------------------------------------------------------------",
-                 response.text
-            )            
+                "[EOS] OPTIMIZE ERROR - response of EOS is:"
+                + "\n---RESPONSE-------------------------------------------------\n %s"
+                + "\n------------------------------------------------------------",
+                response.text,
+            )
             return {"error": str(e)}
 
     def examine_response_to_control_data(self, optimized_response_in):
@@ -243,13 +243,24 @@ class EosInterface:
 
         if "washingstart" in optimized_response_in:
             self.home_appliance_start_hour = optimized_response_in["washingstart"]
-            if self.home_appliance_start_hour == current_hour:
+
+            # Check if current hour or previous hour matches the start hour
+            # Handle day transition from 23 to 0 o'clock
+            previous_hour = (current_hour - 1) % 24
+
+            if (
+                self.home_appliance_start_hour == current_hour
+                or self.home_appliance_start_hour == previous_hour
+            ):
                 self.home_appliance_released = True
             else:
                 self.home_appliance_released = False
+
             logger.debug(
-                "[EOS] RESPONSE Home appliance - current hour %s:00 - start hour %s - is Released: %s",
+                "[EOS] RESPONSE Home appliance - current hour %s:00 - "+
+                "previous hour %s:00 - start hour %s - is Released: %s",
                 current_hour,
+                previous_hour,
                 self.home_appliance_start_hour,
                 self.home_appliance_released,
             )
@@ -315,7 +326,7 @@ class EosInterface:
             bool: True if the home appliance is released, False otherwise.
         """
         return self.home_appliance_released
-    
+
     def get_home_appliance_start_hour(self):
         """
         Get the home appliance start hour.
@@ -394,8 +405,8 @@ class EosInterface:
             return None
         except requests.exceptions.ConnectTimeout:
             logger.error(
-                "[EOS] Failed to get EOS version - Server not reachable:"+
-                " Connection to %s timed out",
+                "[EOS] Failed to get EOS version - Server not reachable:"
+                + " Connection to %s timed out",
                 self.base_url,
             )
             return "Server not reachable"
