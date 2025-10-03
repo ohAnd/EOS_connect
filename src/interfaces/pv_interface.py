@@ -997,6 +997,13 @@ class PvInterface:
             except (TypeError, ValueError):
                 scale_factor = 1.0
 
+            if scale_factor <= 0:
+                logger.debug(
+                    "[PV-IF] EVCC PV forecast scale factor invalid (%s) - using 1.0",
+                    scale_factor,
+                )
+                scale_factor = 1.0
+
             pv_forecast = [val * scale_factor for val in pv_forecast]
 
             # Clear any previous errors on success
