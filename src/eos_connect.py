@@ -11,7 +11,7 @@ import json
 import threading
 import pytz
 import requests
-from flask import Flask, Response, render_template_string, request
+from flask import Flask, Response, render_template_string, request, send_from_directory
 from version import __version__
 from config import ConfigManager
 from log_handler import MemoryLogHandler
@@ -92,8 +92,8 @@ timezone_formatter = TimezoneFormatter(
 streamhandler.setFormatter(timezone_formatter)
 
 memory_handler = MemoryLogHandler(
-    max_records=5000,    # All log entries (mixed levels)
-    max_alerts=2000      # Dedicated alert buffer (WARNING/ERROR/CRITICAL only)
+    max_records=5000,  # All log entries (mixed levels)
+    max_alerts=2000,  # Dedicated alert buffer (WARNING/ERROR/CRITICAL only)
 )
 memory_handler.setFormatter(timezone_formatter)  # Use timezone formatter for web logs
 logger.addHandler(memory_handler)
@@ -909,6 +909,22 @@ mqtt_interface.on_mqtt_command = mqtt_control_callback
 app = Flask(__name__)
 
 
+# legacy web site support
+@app.route("/index_legacy.html", methods=["GET"])
+def main_page_legacy():
+    """
+    Renders the main page of the web application.
+
+    This function reads the content of the 'index.html' file located in the 'web' directory
+    and returns it as a rendered template string.
+    """
+    with open(base_path + "/web/index_legacy.html", "r", encoding="utf-8") as html_file:
+        return render_template_string(html_file.read())
+
+
+# new web site support
+
+
 @app.route("/", methods=["GET"])
 def main_page():
     """
@@ -921,16 +937,62 @@ def main_page():
         return render_template_string(html_file.read())
 
 
-@app.route("/style.css", methods=["GET"])
-def style_css():
+@app.route("/js/<filename>")
+def serve_js_files(filename):
     """
-    Serves the CSS file for styling the web application.
+    Dynamically serve JavaScript files from the js directory.
+    This allows adding new JS modules without modifying the server code.
+    """
+    try:
+        js_directory = os.path.join(os.path.dirname(__file__), "web", "js")
 
-    This function reads the content of the 'style.css' file located in the 'web' directory
-    and returns it as a response with the appropriate content type.
+        # Security check: only allow .js files
+        if not filename.endswith(".js"):
+            logger.warning("[Web] Blocked attempt to serve non-JS file: %s", filename)
+            return "Not Found", 404
+
+        # Check if file exists
+        file_path = os.path.join(js_directory, filename)
+        if not os.path.exists(file_path):
+            logger.warning("[Web] JavaScript file not found: %s", filename)
+            return "Not Found", 404
+
+        # logger.debug("[Web] Serving JavaScript file: %s", filename)
+        return send_from_directory(
+            js_directory, filename, mimetype="application/javascript"
+        )
+
+    except (OSError, IOError, ValueError) as e:
+        logger.error("[Web] Error serving JavaScript file %s: %s", filename, e)
+        return "Server Error", 500
+
+
+# Also add CSS file serving for completeness
+@app.route("/css/<filename>")
+def serve_css_files(filename):
     """
-    with open(base_path + "/web/style.css", "r", encoding="utf-8") as css_file:
-        return Response(css_file.read(), content_type="text/css")
+    Dynamically serve CSS files from the web directory.
+    """
+    try:
+        web_directory = os.path.join(os.path.dirname(__file__), "web", "css")
+
+        # Security check: only allow .css files
+        if not filename.endswith(".css"):
+            logger.warning("[Web] Blocked attempt to serve non-CSS file: %s", filename)
+            return "Not Found", 404
+
+        # Check if file exists
+        file_path = os.path.join(web_directory, filename)
+        if not os.path.exists(file_path):
+            logger.warning("[Web] CSS file not found: %s", filename)
+            return "Not Found", 404
+
+        # logger.debug("[Web] Serving CSS file: %s", filename)
+        return send_from_directory(web_directory, filename, mimetype="text/css")
+
+    except (OSError, IOError, ValueError) as e:
+        logger.error("[Web] Error serving CSS file %s: %s", filename, e)
+        return "Server Error", 500
 
 
 @app.route("/json/optimize_request.json", methods=["GET"])
@@ -954,23 +1016,29 @@ def get_optimize_response():
         content_type="application/json",
     )
 
+
 @app.route("/json/optimize_request.test.json", methods=["GET"])
 def get_optimize_request_test():
     """
     Retrieves the last optimization request and returns it as a JSON response.
     """
-    with open(base_path + "/json/optimize_request.test.json", "r", encoding="utf-8") as file:
+    with open(
+        base_path + "/json/optimize_request.test.json", "r", encoding="utf-8"
+    ) as file:
         return Response(
             file.read(),
             content_type="application/json",
         )
+
 
 @app.route("/json/optimize_response.test.json", methods=["GET"])
 def get_optimize_response_test():
     """
     Retrieves the last optimization response and returns it as a JSON response.
     """
-    with open(base_path + "/json/optimize_response.test.json", "r", encoding="utf-8") as file:
+    with open(
+        base_path + "/json/optimize_response.test.json", "r", encoding="utf-8"
+    ) as file:
         return Response(
             file.read(),
             content_type="application/json",
@@ -1029,6 +1097,61 @@ def get_controls():
     return Response(
         json.dumps(response_data, indent=4), content_type="application/json"
     )
+
+
+@app.route("/json/test/<filename>")
+def serve_test_json_files(filename):
+    """
+    Dynamically serve test JSON files from the json directory.
+    This allows adding new test JSON files without modifying the server code.
+    Supports all test files like current_controls.test.json, optimize_request.test.json, etc.
+    """
+    try:
+        # Test files are in the json/test/ subdirectory
+        json_test_directory = os.path.join(os.path.dirname(__file__), "json", "test")
+
+        # Security check: only allow .json files
+        if not filename.endswith(".json"):
+            logger.warning("[Web] Blocked attempt to serve non-JSON file: %s", filename)
+            return Response(
+                '{"error": "Invalid file type"}',
+                status=400,
+                content_type="application/json",
+            )
+
+        # Additional security: only allow files with .test.json ending 
+        # (all test files must follow this naming convention)
+        if not filename.endswith(".test.json"):
+            logger.warning(
+                "[Web] Blocked attempt to serve non-test JSON file: %s", filename
+            )
+            return Response(
+                '{"error": "Access denied - not a test file"}',
+                status=403,
+                content_type="application/json",
+            )
+
+        # Check if file exists in test directory
+        file_path = os.path.join(json_test_directory, filename)
+        if not os.path.exists(file_path):
+            logger.warning("[Web] Test JSON file not found: %s", filename)
+            logger.debug("[Web] Looked in directory: %s", json_test_directory)
+            return Response(
+                '{"error": "Test file not found"}',
+                status=404,
+                content_type="application/json",
+            )
+
+        # logger.info("[Web] Serving test JSON file: %s from %s", filename, json_test_directory)
+        return send_from_directory(
+            json_test_directory, filename, mimetype="application/json"
+        )
+
+    except (OSError, IOError, ValueError) as e:
+        logger.error("[Web] Error serving test JSON file %s: %s", filename, e)
+        return Response(
+            '{"error": "Server error"}', status=500, content_type="application/json"
+        )
 
 
 @app.route("/controls/mode_override", methods=["POST"])
@@ -1137,41 +1260,35 @@ def handle_mode_override():
             content_type="application/json",
         )
 
+
 @app.route("/logs", methods=["GET"])
 def get_logs():
     """
     Retrieve application logs with optional filtering.
-    
+
     Query parameters:
     - level: Filter by log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     - limit: Maximum number of records to return (default: 100)
     - since: ISO timestamp to get logs since that time
     """
     try:
-        level_filter = request.args.get('level')
-        limit = int(request.args.get('limit', 100))
-        since = request.args.get('since')
+        level_filter = request.args.get("level")
+        limit = int(request.args.get("limit", 100))
+        since = request.args.get("since")
 
         logs = memory_handler.get_logs(
-            level_filter=level_filter,
-            limit=limit,
-            since=since
+            level_filter=level_filter, limit=limit, since=since
         )
 
         response_data = {
             "logs": logs,
             "total_count": len(logs),
             "timestamp": datetime.now(time_zone).isoformat(),
-            "filters_applied": {
-                "level": level_filter,
-                "limit": limit,
-                "since": since
-            }
+            "filters_applied": {"level": level_filter, "limit": limit, "since": since},
         }
 
         return Response(
-            json.dumps(response_data, indent=2),
-            content_type="application/json"
+            json.dumps(response_data, indent=2), content_type="application/json"
         )
 
     except (ValueError, TypeError, KeyError) as e:
@@ -1179,8 +1296,9 @@ def get_logs():
         return Response(
             json.dumps({"error": "Failed to retrieve logs"}),
             status=500,
-            content_type="application/json"
+            content_type="application/json",
         )
+
 
 @app.route("/logs/alerts", methods=["GET"])
 def get_alerts():
@@ -1192,9 +1310,9 @@ def get_alerts():
 
         # Group alerts by level for easier processing
         grouped_alerts = {
-            'WARNING': [a for a in alerts if a['level'] == 'WARNING'],
-            'ERROR': [a for a in alerts if a['level'] == 'ERROR'],
-            'CRITICAL': [a for a in alerts if a['level'] == 'CRITICAL']
+            "WARNING": [a for a in alerts if a["level"] == "WARNING"],
+            "ERROR": [a for a in alerts if a["level"] == "ERROR"],
+            "CRITICAL": [a for a in alerts if a["level"] == "CRITICAL"],
         }
 
         response_data = {
@@ -1203,12 +1321,11 @@ def get_alerts():
             "alert_counts": {
                 level: len(items) for level, items in grouped_alerts.items()
             },
-            "timestamp": datetime.now(time_zone).isoformat()
+            "timestamp": datetime.now(time_zone).isoformat(),
         }
 
         return Response(
-            json.dumps(response_data, indent=2),
-            content_type="application/json"
+            json.dumps(response_data, indent=2), content_type="application/json"
         )
 
     except (ValueError, TypeError, KeyError) as e:
@@ -1216,8 +1333,9 @@ def get_alerts():
         return Response(
             json.dumps({"error": "Failed to retrieve alerts"}),
             status=500,
-            content_type="application/json"
+            content_type="application/json",
         )
+
 
 @app.route("/logs/clear", methods=["POST"])
 def clear_logs():
@@ -1230,7 +1348,7 @@ def clear_logs():
 
         return Response(
             json.dumps({"status": "success", "message": "Logs cleared"}),
-            content_type="application/json"
+            content_type="application/json",
         )
 
     except (RuntimeError, ValueError, TypeError, KeyError) as e:
@@ -1238,8 +1356,9 @@ def clear_logs():
         return Response(
             json.dumps({"error": "Failed to clear logs"}),
             status=500,
-            content_type="application/json"
+            content_type="application/json",
         )
+
 
 @app.route("/logs/alerts/clear", methods=["POST"])
 def clear_alerts_only():
@@ -1252,7 +1371,7 @@ def clear_alerts_only():
 
         return Response(
             json.dumps({"status": "success", "message": "Alert logs cleared"}),
-            content_type="application/json"
+            content_type="application/json",
         )
 
     except (RuntimeError, ValueError, TypeError, KeyError) as e:
@@ -1260,8 +1379,9 @@ def clear_alerts_only():
         return Response(
             json.dumps({"error": "Failed to clear alert logs"}),
             status=500,
-            content_type="application/json"
+            content_type="application/json",
         )
+
 
 @app.route("/logs/stats", methods=["GET"])
 def get_log_stats():
@@ -1270,15 +1390,14 @@ def get_log_stats():
     """
     try:
         stats = memory_handler.get_buffer_stats()
-        
+
         response_data = {
             "buffer_stats": stats,
-            "timestamp": datetime.now(time_zone).isoformat()
+            "timestamp": datetime.now(time_zone).isoformat(),
         }
 
         return Response(
-            json.dumps(response_data, indent=2),
-            content_type="application/json"
+            json.dumps(response_data, indent=2), content_type="application/json"
         )
 
     except (ValueError, TypeError, KeyError) as e:
@@ -1286,8 +1405,9 @@ def get_log_stats():
         return Response(
             json.dumps({"error": "Failed to retrieve buffer stats"}),
             status=500,
-            content_type="application/json"
+            content_type="application/json",
         )
+
 
 if __name__ == "__main__":
     http_server = None
@@ -1320,7 +1440,7 @@ if __name__ == "__main__":
         logger.error("[Main] EOS Connect cannot start without its web interface.")
         sys.exit(1)
 
-    except Exception as e:
+    except (OSError, ImportError) as e:
         # Only handle truly unexpected errors (not port-related)
         logger.error("[Main] Unexpected error: %s", str(e))
         logger.error("[Main] EOS Connect cannot start. Please check the logs.")
