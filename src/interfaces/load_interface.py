@@ -25,7 +25,7 @@ class LoadInterface:
     def __init__(
         self,
         config,
-        timezone=None,  # Changed default to None
+        tz_name=None,  # Changed default to None
     ):
         self.src = config.get("source", "")
         self.url = config.get("url", "")
@@ -35,24 +35,24 @@ class LoadInterface:
         self.access_token = config.get("access_token", "")
 
         # Handle timezone properly
-        if timezone == "UTC" or timezone is None:
+        if tz_name == "UTC" or tz_name is None:
             self.time_zone = None  # Use local timezone
-        elif isinstance(timezone, str):
+        elif isinstance(tz_name, str):
             # Try to convert string timezone to proper timezone object
             try:
-                self.time_zone = zoneinfo.ZoneInfo(timezone)
+                self.time_zone = zoneinfo.ZoneInfo(tz_name)
             except ImportError:
                 # Fallback for older Python versions
                 try:
-                    self.time_zone = pytz.timezone(timezone)
+                    self.time_zone = pytz.timezone(tz_name)
                 except ImportError:
                     logger.warning(
                         "[LOAD-IF] Cannot parse timezone '%s', using local time",
-                        timezone,
+                        tz_name,
                     )
                     self.time_zone = None
         else:
-            self.time_zone = timezone
+            self.time_zone = tz_name
 
         self.__check_config()
 
@@ -250,7 +250,7 @@ class LoadInterface:
                         + quote((current_time + timedelta(hours=2)).isoformat())
                         + ")"
                     )
-                logger.warning(
+                logger.info(
                     "[LOAD-IF] Skipping invalid sensor data for '%s' at %s: state '%s' cannot be"
                     + " processed (%s). "
                     "This may indicate missing or corrupted data in the database. %s",
