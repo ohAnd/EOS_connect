@@ -28,12 +28,12 @@ import logging
 import time
 import asyncio
 import math
+import sys
 import aiohttp
 import pytz
 import requests
 import pandas as pd
 import numpy as np
-import sys
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
 
 logger = logging.getLogger("__main__")
@@ -129,7 +129,8 @@ class PvInterface:
                         '[PV-IF] Please add: api_key: "your_solcast_api_key" in config.yaml'
                     )
                     raise ValueError(
-                        "[PV-IF] Solcast API key required - see CONFIG_README.md for setup instructions"
+                        "[PV-IF] Solcast API key required - see CONFIG_README.md"
+                        + " for setup instructions"
                     )
 
                 # Check resource_id
@@ -142,7 +143,8 @@ class PvInterface:
                         '[PV-IF] Please add: resource_id: "your_resource_id" in config.yaml'
                     )
                     raise ValueError(
-                        f"[PV-IF] Solcast resource_id required for '{entry_name}' - see CONFIG_README.md for setup instructions"
+                        f"[PV-IF] Solcast resource_id required for '{entry_name}' - see"
+                        + " CONFIG_README.md for setup instructions"
                     )
 
                 logger.debug("[PV-IF] Solcast config validated for '%s'", entry_name)
@@ -165,7 +167,8 @@ class PvInterface:
                         ", ".join(missing),
                     )
                     raise ValueError(
-                        f"[PV-IF] Missing required parameters for '{entry_name}': {', '.join(missing)}"
+                        "[PV-IF] Missing required parameters "
+                        + f"for '{entry_name}': {', '.join(missing)}"
                     )
 
             # Common parameters for all sources
@@ -184,7 +187,8 @@ class PvInterface:
                     ", ".join(missing_common),
                 )
                 raise ValueError(
-                    f"[PV-IF] Missing required parameters for '{entry_name}': {', '.join(missing_common)}"
+                    "[PV-IF] Missing required parameters"
+                    + f" for '{entry_name}': {', '.join(missing_common)}"
                 )
 
     def __start_update_service(self):
@@ -1327,13 +1331,13 @@ class PvInterface:
         lat_rad = math.radians(latitude)
         results = []
 
-        for time in times:
+        for t in times:
             # Convert to Julian day number
-            a = (14 - time.month) // 12
-            y = time.year - a
-            m = time.month + 12 * a - 3
+            a = (14 - t.month) // 12
+            y = t.year - a
+            m = t.month + 12 * a - 3
             jdn = (
-                time.day
+                t.day
                 + (153 * m + 2) // 5
                 + 365 * y
                 + y // 4
@@ -1343,20 +1347,20 @@ class PvInterface:
             )
 
             # Add fraction of day
-            hour_fraction = (time.hour + time.minute / 60 + time.second / 3600) / 24
+            hour_fraction = (t.hour + t.minute / 60 + t.second / 3600) / 24
             jd = jdn + hour_fraction - 0.5
 
             # Number of days since J2000.0
             n = jd - 2451545.0
 
             # Mean longitude of sun
-            L = (280.460 + 0.9856474 * n) % 360
+            long_of_sun = (280.460 + 0.9856474 * n) % 360
 
             # Mean anomaly of sun
             g = math.radians((357.528 + 0.9856003 * n) % 360)
 
             # Ecliptic longitude of sun
-            lambda_sun = math.radians(L + 1.915 * math.sin(g) + 0.020 * math.sin(2 * g))
+            lambda_sun = math.radians(long_of_sun + 1.915 * math.sin(g) + 0.020 * math.sin(2 * g))
 
             # Obliquity of ecliptic
             epsilon = math.radians(23.439 - 0.0000004 * n)
