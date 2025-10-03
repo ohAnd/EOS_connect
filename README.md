@@ -46,10 +46,10 @@ EOS Connect helps you get the most out of your solar and storage systems—wheth
   - [Webpage Example](#webpage-example)
   - [Provided Data per **EOS connect** API](#provided-data-per-eos-connect-api)
     - [Web API (REST/JSON)](#web-api-restjson)
-    - [Main Endpoints](#main-endpoints)
+      - [Main Endpoints](#main-endpoints)
     - [MQTT - provided data and possible commands](#mqtt---provided-data-and-possible-commands)
-    - [Published Topics](#published-topics)
-    - [Example Usage](#example-usage)
+      - [Published Topics](#published-topics)
+      - [Example Usage](#example-usage)
     - [Subscribed Topics](#subscribed-topics)
     - [System Mode Control (`control/overall_state/set`)](#system-mode-control-controloverall_stateset)
     - [How to Use](#how-to-use)
@@ -329,20 +329,30 @@ All endpoints return JSON and can be accessed via HTTP requests.
 
 ---
 
-### Main Endpoints
+#### Main Endpoints
 
 | Endpoint                          | Method | Returns / Accepts           | Description                                                      |
 |------------------------------------|--------|-----------------------------|------------------------------------------------------------------|
 | `/json/current_controls.json`      | GET    | JSON                        | Current system control states (AC/DC charge, mode, etc.)         |
 | `/json/optimize_request.json`      | GET    | JSON                        | Last optimization request sent to EOS                            |
 | `/json/optimize_response.json`     | GET    | JSON                        | Last optimization response from EOS                              |
+| `/json/optimize_request.test.json` | GET    | JSON                        | Test optimization request (static file)                         |
+| `/json/optimize_response.test.json`| GET    | JSON                        | Test optimization response (static file)                        |
 | `/controls/mode_override`          | POST   | JSON (see below)            | Override system mode, duration, and grid charge power            |
+| `/logs`                           | GET    | JSON                        | Retrieve application logs with optional filtering                |
+| `/logs/alerts`                    | GET    | JSON                        | Retrieve warning and error logs for alert system                |
+| `/logs/clear`                     | POST   | JSON                        | Clear all stored logs from memory (file logs remain intact)     |
+| `/logs/alerts/clear`              | POST   | JSON                        | Clear only alert logs from memory, keeping regular logs intact  |
+| `/logs/stats`                     | GET    | JSON                        | Get buffer usage statistics for log storage                      |
 
 ---
 
 <details>
 <summary>Show Example: <code>/json/current_controls.json</code> (GET)</summary>
 
+Get current system control states and battery information.
+
+**Response:**
 ```json
 {
   "current_states": {
@@ -362,14 +372,91 @@ All endpoints return JSON and can be accessed via HTTP requests.
   "evcc": {
     "charging_mode": "pv",
     "charging_state": true,
-    "current_sessions": [ ... ]
+    "current_sessions": [
+      {
+        "vehicle": "Tesla Model 3",
+        "charging_power": 1500,
+        "session_energy": 12.5
+      }
+    ]
   },
   "state": {
     "last_response_timestamp": "2024-06-01T12:00:00+02:00",
     "next_run": "2024-06-01T12:03:00+02:00"
   },
   "timestamp": "2024-06-01T12:00:00+02:00",
-  "api_version": "0.0.1"
+  "api_version": "0.1.24"
+}
+```
+</details>
+
+---
+
+<details>
+<summary>Show Example: <code>/json/optimize_request.json</code> (GET)</summary>
+
+Get the last optimization request sent to EOS.
+
+**Response:**
+```json
+{
+  "request": {
+    "pv_forecast": [
+      {"time": "2024-06-01T13:00:00+02:00", "power": 3500},
+      {"time": "2024-06-01T14:00:00+02:00", "power": 4200},
+      {"time": "2024-06-01T15:00:00+02:00", "power": 3800}
+    ],
+    "load_forecast": [
+      {"time": "2024-06-01T13:00:00+02:00", "power": 800},
+      {"time": "2024-06-01T14:00:00+02:00", "power": 1200},
+      {"time": "2024-06-01T15:00:00+02:00", "power": 900}
+    ],
+    "price_forecast": [
+      {"time": "2024-06-01T13:00:00+02:00", "price": 0.25},
+      {"time": "2024-06-01T14:00:00+02:00", "price": 0.28},
+      {"time": "2024-06-01T15:00:00+02:00", "price": 0.22}
+    ],
+    "battery_soc": 85.5,
+    "optimization_hours": 48
+  },
+  "timestamp": "2024-06-01T12:00:00+02:00"
+}
+```
+</details>
+
+---
+
+<details>
+<summary>Show Example: <code>/json/optimize_response.json</code> (GET)</summary>
+
+Get the last optimization response received from EOS.
+
+**Response:**
+```json
+{
+  "response": {
+    "status": "success",
+    "optimization_result": [
+      {
+        "time": "2024-06-01T13:00:00+02:00",
+        "battery_charge_power": 2000,
+        "battery_discharge_power": 0,
+        "grid_power": -1500,
+        "mode": "charge"
+      },
+      {
+        "time": "2024-06-01T14:00:00+02:00",
+        "battery_charge_power": 0,
+        "battery_discharge_power": 1000,
+        "grid_power": 200,
+        "mode": "discharge"
+      }
+    ],
+    "total_cost": 12.45,
+    "self_consumption": 78.5,
+    "processing_time": "00:02:15"
+  },
+  "timestamp": "2024-06-01T12:02:15+02:00"
 }
 ```
 </details>
@@ -381,7 +468,7 @@ All endpoints return JSON and can be accessed via HTTP requests.
 
 Override the system mode, duration, and grid charge power.
 
-**Payload:**
+**Request Payload:**
 ```json
 {
   "mode": 1,                // Integer, see mode table below
@@ -393,11 +480,24 @@ Override the system mode, duration, and grid charge power.
 **Response:**
 - On success:
   ```json
-  { "status": "success", "message": "Mode override applied" }
+  { 
+    "status": "success", 
+    "message": "Mode override applied",
+    "applied_settings": {
+      "mode": 1,
+      "mode_name": "ChargeFromGrid",
+      "duration": "02:00",
+      "grid_charge_power": 2000,
+      "end_time": "2024-06-01T14:00:00+02:00"
+    }
+  }
   ```
 - On error:
   ```json
-  { "error": "Invalid mode value" }
+  { 
+    "error": "Invalid mode value",
+    "details": "Mode must be between 0 and 4"
+  }
   ```
 
 **System Modes (`mode` field):**
@@ -414,20 +514,204 @@ Override the system mode, duration, and grid charge power.
 
 ---
 
+<details>
+<summary>Show Example: <code>/logs</code> (GET)</summary>
+
+Retrieve application logs with optional filtering.
+
+**Query Parameters:**
+- `level`: Filter by log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`)
+- `limit`: Maximum number of records to return (default: 100)
+- `since`: ISO timestamp to get logs since that time
+
+**Examples:**
+- Get last 50 logs: `GET /logs?limit=50`
+- Get only error logs: `GET /logs?level=ERROR`
+- Get logs since 1 hour ago: `GET /logs?since=2024-06-01T11:00:00Z`
+
+**Response:**
+```json
+{
+  "logs": [
+    {
+      "timestamp": "2024-06-01T12:00:00.123456",
+      "level": "INFO",
+      "message": "[Main] Starting optimization run",
+      "module": "__main__",
+      "funcName": "run_optimization",
+      "lineno": 542,
+      "severity": 20
+    }
+  ],
+  "total_count": 1,
+  "timestamp": "2024-06-01T12:00:00+02:00",
+  "filters_applied": {
+    "level": null,
+    "limit": 100,
+    "since": null
+  }
+}
+```
+</details>
+
+---
+
+<details>
+<summary>Show Example: <code>/logs/alerts</code> (GET)</summary>
+
+Retrieve warning and error logs for alert system.
+
+**Response:**
+```json
+{
+  "alerts": [
+    {
+      "timestamp": "2024-06-01T12:00:00.123456",
+      "level": "WARNING",
+      "message": "[Battery] SOC exceeded maximum threshold",
+      "module": "__main__",
+      "funcName": "setting_control_data",
+      "lineno": 234,
+      "severity": 30
+    }
+  ],
+  "grouped_alerts": {
+    "WARNING": [ ... ],
+    "ERROR": [ ... ],
+    "CRITICAL": [ ... ]
+  },
+  "alert_counts": {
+    "WARNING": 1,
+    "ERROR": 0,
+    "CRITICAL": 0
+  },
+  "timestamp": "2024-06-01T12:00:00+02:00"
+}
+```
+</details>
+
+---
+
+<details>
+<summary>Show Example: <code>/logs/stats</code> (GET)</summary>
+
+Get buffer usage statistics for log storage monitoring.
+
+**Response:**
+```json
+{
+  "buffer_stats": {
+    "main_buffer": {
+      "current_size": 3456,
+      "max_size": 5000,
+      "usage_percent": 69.1
+    },
+    "alert_buffer": {
+      "current_size": 23,
+      "max_size": 2000,
+      "usage_percent": 1.2
+    },
+    "alert_levels": ["WARNING", "ERROR", "CRITICAL"]
+  },
+  "timestamp": "2024-06-01T12:00:00+02:00"
+}
+```
+</details>
+
+---
+
+<details>
+<summary>Show Example: <code>/logs/clear</code> (POST)</summary>
+
+Clear all stored logs from memory (file logs remain intact).
+
+**Response:**
+- On success:
+  ```json
+  { "status": "success", "message": "Logs cleared" }
+  ```
+- On error:
+  ```json
+  { "error": "Failed to clear logs" }
+  ```
+
+**Note:** This clears both the main log buffer (5000 entries) and the alert buffer (2000 entries).
+</details>
+
+---
+
+<details>
+<summary>Show Example: <code>/logs/alerts/clear</code> (POST)</summary>
+
+Clear only alert logs from memory, keeping regular logs intact.
+
+**Response:**
+- On success:
+  ```json
+  { "status": "success", "message": "Alert logs cleared" }
+  ```
+- On error:
+  ```json
+  { "error": "Failed to clear alert logs" }
+  ```
+
+**Note:** This only clears the dedicated alert buffer (2000 entries), leaving the main log buffer untouched.
+</details>
+
+---
+
 **How to Use:**
 - **Get current system state:**  
   `GET http://localhost:8081/json/current_controls.json`
 - **Override mode and charge power:**  
   `POST http://localhost:8081/controls/mode_override`  
   with JSON body as shown above.
+- **Monitor application logs:**  
+  `GET http://localhost:8081/logs?level=ERROR&limit=20`
+- **Get system alerts:**  
+  `GET http://localhost:8081/logs/alerts`
+- **Get log buffer statistics:**  
+  `GET http://localhost:8081/logs/stats`
+- **Clear memory logs:**  
+  `POST http://localhost:8081/logs/clear`
+- **Clear only alerts:**  
+  `POST http://localhost:8081/logs/alerts/clear`
 
 You can use `curl`, Postman, or any HTTP client to interact with these endpoints.
 
-**Notes:**
-- The web API is always available on the configured port.
-- All responses are in JSON format.
-- The override will be active for the specified duration, after which the system returns to automatic mode.
-- Invalid values will result in an error response.
+**Examples using curl:**
+```bash
+# Get last 10 error logs
+curl "http://localhost:8081/logs?level=ERROR&limit=10"
+
+# Get current system alerts
+curl "http://localhost:8081/logs/alerts"
+
+# Get log buffer usage statistics
+curl "http://localhost:8081/logs/stats"
+
+# Clear all memory logs
+curl -X POST "http://localhost:8081/logs/clear"
+
+# Clear only alert logs
+curl -X POST "http://localhost:8081/logs/alerts/clear"
+
+# Override system mode
+curl -X POST "http://localhost:8081/controls/mode_override" \
+  -H "Content-Type: application/json" \
+  -d '{"mode": 1, "duration": "02:00", "grid_charge_power": 2.0}'
+```
+
+**Memory Log System Notes:**
+- **Main buffer**: Stores the last 5000 log entries (all levels mixed)
+- **Alert buffer**: Stores the last 2000 alert entries (WARNING/ERROR/CRITICAL only)
+- **Persistent storage**: File-based logs are not affected by memory operations
+- **Timezone aware**: All timestamps use the configured timezone
+- **Thread-safe**: Safe for concurrent access from multiple clients
+- **Performance**: Memory-based access provides fast response times
+- **Monitoring**: Use `/logs/stats` to monitor buffer usage and plan capacity
+
+The logging API enables real-time monitoring, alerting systems, and debugging without affecting the persistent file-based logging system.
 
 </details>
 
@@ -446,7 +730,7 @@ EOS Connect publishes a wide range of real-time system data and control states t
 
 ---
 
-### Published Topics
+#### Published Topics
 
 | Topic Suffix                                      | Full Topic Example                                             | Payload Type / Example         | Description                                              |
 |---------------------------------------------------|---------------------------------------------------------------|-------------------------------|----------------------------------------------------------|
@@ -476,7 +760,7 @@ EOS Connect publishes a wide range of real-time system data and control states t
 
 ---
 
-### Example Usage
+#### Example Usage
 
 - **Monitor battery SOC in Home Assistant:**
   - Subscribe to `myhome/eos_connect/battery/soc` to get real-time battery state of charge.

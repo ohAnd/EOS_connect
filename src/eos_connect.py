@@ -12,9 +12,9 @@ import threading
 import pytz
 import requests
 from flask import Flask, Response, render_template_string, request
-from gevent.pywsgi import WSGIServer
 from version import __version__
 from config import ConfigManager
+from log_handler import MemoryLogHandler
 from interfaces.base_control import BaseControl
 from interfaces.load_interface import LoadInterface
 from interfaces.battery_interface import BatteryInterface
@@ -56,18 +56,20 @@ class TimezoneFormatter(logging.Formatter):
         return record_time.strftime(datefmt or self.default_time_format)
 
 
-###################################################################################################
+##################################################################################################
 LOGLEVEL = logging.DEBUG  # start before reading the config file
 logger = logging.getLogger(__name__)
-formatter = logging.Formatter(
+
+# Basic formatter for startup logging (before config/timezone is available)
+basic_formatter = logging.Formatter(
     "%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S"
 )
 streamhandler = logging.StreamHandler(sys.stdout)
-
-streamhandler.setFormatter(formatter)
+streamhandler.setFormatter(basic_formatter)
 logger.addHandler(streamhandler)
 logger.setLevel(LOGLEVEL)
 logger.info("[Main] Starting eos_connect - version: %s", __version__)
+
 ###################################################################################################
 base_path = os.path.dirname(os.path.abspath(__file__))
 # get param to set a specific path
@@ -75,16 +77,28 @@ if len(sys.argv) > 1:
     current_dir = sys.argv[1]
 else:
     current_dir = base_path
+
 ###################################################################################################
 config_manager = ConfigManager(current_dir)
 time_zone = pytz.timezone(config_manager.config["time_zone"])
 
 LOGLEVEL = config_manager.config["log_level"].upper()
 logger.setLevel(LOGLEVEL)
-formatter = TimezoneFormatter(
+
+# Now upgrade to timezone-aware formatter after config is loaded
+timezone_formatter = TimezoneFormatter(
     "%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S", tz=time_zone
 )
-streamhandler.setFormatter(formatter)
+streamhandler.setFormatter(timezone_formatter)
+
+memory_handler = MemoryLogHandler(
+    max_records=5000,    # All log entries (mixed levels)
+    max_alerts=2000      # Dedicated alert buffer (WARNING/ERROR/CRITICAL only)
+)
+memory_handler.setFormatter(timezone_formatter)  # Use timezone formatter for web logs
+logger.addHandler(memory_handler)
+logger.debug("[Main] Memory log handler initialized successfully")
+
 logger.info(
     "[Main] set user defined time zone to %s and loglevel to %s",
     config_manager.config["time_zone"],
@@ -1123,6 +1137,157 @@ def handle_mode_override():
             content_type="application/json",
         )
 
+@app.route("/logs", methods=["GET"])
+def get_logs():
+    """
+    Retrieve application logs with optional filtering.
+    
+    Query parameters:
+    - level: Filter by log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    - limit: Maximum number of records to return (default: 100)
+    - since: ISO timestamp to get logs since that time
+    """
+    try:
+        level_filter = request.args.get('level')
+        limit = int(request.args.get('limit', 100))
+        since = request.args.get('since')
+
+        logs = memory_handler.get_logs(
+            level_filter=level_filter,
+            limit=limit,
+            since=since
+        )
+
+        response_data = {
+            "logs": logs,
+            "total_count": len(logs),
+            "timestamp": datetime.now(time_zone).isoformat(),
+            "filters_applied": {
+                "level": level_filter,
+                "limit": limit,
+                "since": since
+            }
+        }
+
+        return Response(
+            json.dumps(response_data, indent=2),
+            content_type="application/json"
+        )
+
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error("[API] Error retrieving logs: %s", e)
+        return Response(
+            json.dumps({"error": "Failed to retrieve logs"}),
+            status=500,
+            content_type="application/json"
+        )
+
+@app.route("/logs/alerts", methods=["GET"])
+def get_alerts():
+    """
+    Retrieve warning and error logs for alert system.
+    """
+    try:
+        alerts = memory_handler.get_alerts()
+
+        # Group alerts by level for easier processing
+        grouped_alerts = {
+            'WARNING': [a for a in alerts if a['level'] == 'WARNING'],
+            'ERROR': [a for a in alerts if a['level'] == 'ERROR'],
+            'CRITICAL': [a for a in alerts if a['level'] == 'CRITICAL']
+        }
+
+        response_data = {
+            "alerts": alerts,
+            "grouped_alerts": grouped_alerts,
+            "alert_counts": {
+                level: len(items) for level, items in grouped_alerts.items()
+            },
+            "timestamp": datetime.now(time_zone).isoformat()
+        }
+
+        return Response(
+            json.dumps(response_data, indent=2),
+            content_type="application/json"
+        )
+
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error("[API] Error retrieving alerts: %s", e)
+        return Response(
+            json.dumps({"error": "Failed to retrieve alerts"}),
+            status=500,
+            content_type="application/json"
+        )
+
+@app.route("/logs/clear", methods=["POST"])
+def clear_logs():
+    """
+    Clear all stored logs from memory (file logs remain intact).
+    """
+    try:
+        memory_handler.clear_logs()
+        logger.info("[API] Memory logs cleared via web API")
+
+        return Response(
+            json.dumps({"status": "success", "message": "Logs cleared"}),
+            content_type="application/json"
+        )
+
+    except (RuntimeError, ValueError, TypeError, KeyError) as e:
+        logger.error("[API] Error clearing logs: %s", e)
+        return Response(
+            json.dumps({"error": "Failed to clear logs"}),
+            status=500,
+            content_type="application/json"
+        )
+
+@app.route("/logs/alerts/clear", methods=["POST"])
+def clear_alerts_only():
+    """
+    Clear only alert logs from memory, keeping regular logs intact.
+    """
+    try:
+        memory_handler.clear_alerts_only()
+        logger.info("[API] Alert logs cleared via web API")
+
+        return Response(
+            json.dumps({"status": "success", "message": "Alert logs cleared"}),
+            content_type="application/json"
+        )
+
+    except (RuntimeError, ValueError, TypeError, KeyError) as e:
+        logger.error("[API] Error clearing alert logs: %s", e)
+        return Response(
+            json.dumps({"error": "Failed to clear alert logs"}),
+            status=500,
+            content_type="application/json"
+        )
+
+@app.route("/logs/stats", methods=["GET"])
+def get_log_stats():
+    """
+    Get buffer usage statistics.
+    """
+    try:
+        stats = memory_handler.get_buffer_stats()
+        
+        response_data = {
+            "buffer_stats": stats,
+            "timestamp": datetime.now(time_zone).isoformat()
+        }
+
+        return Response(
+            json.dumps(response_data, indent=2),
+            content_type="application/json"
+        )
+
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error("[API] Error retrieving buffer stats: %s", e)
+        return Response(
+            json.dumps({"error": "Failed to retrieve buffer stats"}),
+            status=500,
+            content_type="application/json"
+        )
 
 if __name__ == "__main__":
     http_server = None
@@ -1182,5 +1347,6 @@ if __name__ == "__main__":
         battery_interface.shutdown()
         logger.info("[Main] Server stopped gracefully")
     finally:
+        logging.shutdown()  # This will call close() on all handlers
         logger.info("[Main] Cleanup complete. Goodbye!")
         sys.exit(0)
