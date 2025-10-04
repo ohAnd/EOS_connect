@@ -1292,7 +1292,7 @@ def get_logs():
         )
 
     except (ValueError, TypeError, KeyError) as e:
-        logger.error("[API] Error retrieving logs: %s", e)
+        logger.error("[Web] Error retrieving logs: %s", e)
         return Response(
             json.dumps({"error": "Failed to retrieve logs"}),
             status=500,
@@ -1329,7 +1329,7 @@ def get_alerts():
         )
 
     except (ValueError, TypeError, KeyError) as e:
-        logger.error("[API] Error retrieving alerts: %s", e)
+        logger.error("[Web] Error retrieving alerts: %s", e)
         return Response(
             json.dumps({"error": "Failed to retrieve alerts"}),
             status=500,
@@ -1344,7 +1344,7 @@ def clear_logs():
     """
     try:
         memory_handler.clear_logs()
-        logger.info("[API] Memory logs cleared via web API")
+        logger.info("[Web] Memory logs cleared via web API")
 
         return Response(
             json.dumps({"status": "success", "message": "Logs cleared"}),
@@ -1352,7 +1352,7 @@ def clear_logs():
         )
 
     except (RuntimeError, ValueError, TypeError, KeyError) as e:
-        logger.error("[API] Error clearing logs: %s", e)
+        logger.error("[Web] Error clearing logs: %s", e)
         return Response(
             json.dumps({"error": "Failed to clear logs"}),
             status=500,
@@ -1367,7 +1367,7 @@ def clear_alerts_only():
     """
     try:
         memory_handler.clear_alerts_only()
-        logger.info("[API] Alert logs cleared via web API")
+        logger.info("[Web] Alert logs cleared via web API")
 
         return Response(
             json.dumps({"status": "success", "message": "Alert logs cleared"}),
@@ -1375,7 +1375,7 @@ def clear_alerts_only():
         )
 
     except (RuntimeError, ValueError, TypeError, KeyError) as e:
-        logger.error("[API] Error clearing alert logs: %s", e)
+        logger.error("[Web] Error clearing alert logs: %s", e)
         return Response(
             json.dumps({"error": "Failed to clear alert logs"}),
             status=500,
@@ -1401,7 +1401,7 @@ def get_log_stats():
         )
 
     except (ValueError, TypeError, KeyError) as e:
-        logger.error("[API] Error retrieving buffer stats: %s", e)
+        logger.error("[Web] Error retrieving buffer stats: %s", e)
         return Response(
             json.dumps({"error": "Failed to retrieve buffer stats"}),
             status=500,
