@@ -212,7 +212,8 @@ class BaseControl:
         # store the current charge demand without override
         self.current_bat_charge_max = value_max
         logger.debug(
-            "[BASE-CTRL] set current battery charge max to %s", self.current_bat_charge_max
+            "[BASE-CTRL] set current battery charge max to %s",
+            self.current_bat_charge_max,
         )
         self.__set_current_overall_state()
 
@@ -278,8 +279,9 @@ class BaseControl:
         # override overall state if EVCC charging state is active and
         # in mode fast charge and discharge is allowed
         if (
-            new_state == MODE_DISCHARGE_ALLOWED
-            and self.current_evcc_charging_state
+            # new_state == MODE_DISCHARGE_ALLOWED
+            # and 
+            self.current_evcc_charging_state
             and self.current_evcc_charging_mode in ("now", "pv+now", "minpv+now")
         ):
             new_state = MODE_AVOID_DISCHARGE_EVCC_FAST
@@ -291,8 +293,9 @@ class BaseControl:
         # override overall state if EVCC charging state is active and
         # in mode pv charge and discharge is allowed
         if (
-            new_state == MODE_DISCHARGE_ALLOWED
-            and self.current_evcc_charging_state
+            # new_state == MODE_DISCHARGE_ALLOWED
+            # and 
+            self.current_evcc_charging_state
             and self.current_evcc_charging_mode == "pv"
         ):
             new_state = MODE_DISCHARGE_ALLOWED_EVCC_PV
@@ -304,8 +307,9 @@ class BaseControl:
         # override overall state if EVCC charging state is active and
         # in mode pv charge and discharge is allowed
         if (
-            new_state == MODE_DISCHARGE_ALLOWED
-            and self.current_evcc_charging_state
+            # new_state == MODE_DISCHARGE_ALLOWED
+            # and 
+            self.current_evcc_charging_state
             and self.current_evcc_charging_mode == "minpv"
         ):
             new_state = MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV
