@@ -92,7 +92,7 @@ timezone_formatter = TimezoneFormatter(
 streamhandler.setFormatter(timezone_formatter)
 
 memory_handler = MemoryLogHandler(
-    max_records=5000,  # All log entries (mixed levels)
+    max_records=10000,  # All log entries (mixed levels)
     max_alerts=2000,  # Dedicated alert buffer (WARNING/ERROR/CRITICAL only)
 )
 memory_handler.setFormatter(timezone_formatter)  # Use timezone formatter for web logs

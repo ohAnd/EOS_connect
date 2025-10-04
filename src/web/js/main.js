@@ -105,17 +105,35 @@ async function showCurrentData() {
     document.getElementById('version_overlay').innerText = "EOS connect version: " + data_controls["eos_connect_version"];
 
     const menuElement = document.getElementById('current_header_left');
-    menuElement.innerHTML = '<i class="fa-solid fa-bars"></i>';
-    menuElement.title = "Menu";
     
-    // Remove any existing event listeners by cloning the element
-    const newMenuElement = menuElement.cloneNode(true);
-    menuElement.parentNode.replaceChild(newMenuElement, menuElement);
+    // Only update menu element if it doesn't have the correct icon already
+    const expectedIcon = '<i class="fa-solid fa-bars" style="color: #cccccc;"></i>';
+    const currentIcon = menuElement.querySelector('i.fa-solid.fa-bars');
     
-    // Add single event listener
-    newMenuElement.addEventListener('click', function () {
-        showMainMenu(data_controls["eos_connect_version"]);
-    });
+    if (!currentIcon || currentIcon.outerHTML !== expectedIcon) {
+        // Preserve any existing notification dot
+        const existingDot = menuElement.querySelector('.notification-dot');
+        
+        // Update the icon
+        menuElement.innerHTML = expectedIcon;
+        menuElement.title = "Menu";
+        
+        // Restore notification dot if it existed
+        if (existingDot) {
+            menuElement.appendChild(existingDot);
+        }
+        
+        // Remove any existing event listeners by cloning the element
+        const newMenuElement = menuElement.cloneNode(true);
+        menuElement.parentNode.replaceChild(newMenuElement, menuElement);
+        
+        // Add single event listener
+        newMenuElement.addEventListener('click', function () {
+            showMainMenu(data_controls["eos_connect_version"]);
+        });
+        
+        console.log('[Main] Updated menu element and preserved notification dot');
+    }
 }
 
 // Use manager functions for statistics and schedule
@@ -163,6 +181,10 @@ async function init() {
         }
         if (!loggingManager) {
             loggingManager = new LoggingManager();
+            // Initialize logging manager with slight delay to ensure DOM is ready
+            setTimeout(() => {
+                loggingManager.init();
+            }, 1000);
         }
 
         // Fetch all data using the new dataManager

@@ -25,6 +25,9 @@ function overlayMenu(header, content, close = true) {
     document.getElementById('overlay_menu_head').innerHTML = header;
     document.getElementById('overlay_menu_content').innerHTML = content;
     document.getElementById('overlay_menu_close').style.display = close ? '' : 'none';
+    
+    // Block background scrolling
+    document.body.style.overflow = 'hidden';
 }
 
 function closeOverlayMenu(direct = true) {
@@ -33,6 +36,8 @@ function closeOverlayMenu(direct = true) {
         if (direct) {
             overlayMenu('', '', false);
             overlay.style.display = 'none';
+            // Restore background scrolling
+            document.body.style.overflow = '';
         } else {
             overlay.style.transition = 'opacity 1s';
             overlay.style.opacity = '0';
@@ -40,6 +45,8 @@ function closeOverlayMenu(direct = true) {
                 overlayMenu('', '', false);
                 overlay.style.display = 'none';
                 overlay.style.opacity = '1';
+                // Restore background scrolling
+                document.body.style.overflow = '';
             }, 250);
         }
     }
@@ -171,44 +178,44 @@ function showMainMenu(version) {
         <div onclick="showAlarmsMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
-            <i class="fa-solid fa-triangle-exclamation" style="margin-right: 10px; color: #ff6b35; width: 16px;"></i>
+            <i class="fa-solid fa-triangle-exclamation" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
             <span>Alarms</span>
         </div>
         
         <div onclick="showLogsMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
-            <i class="fa-solid fa-file-lines" style="margin-right: 10px; color: #4a9eff; width: 16px;"></i>
+            <i class="fa-solid fa-list-ul" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
             <span>Logs</span>
         </div>
         
+        <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 5px 0;">
+
         <div onclick="showInfoMenu('${version}'); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
-            <i class="fa-solid fa-circle-info" style="margin-right: 10px; color: #00d4aa; width: 16px;"></i>
+            <i class="fa-solid fa-info-circle" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
             <span>Info</span>
         </div>
-        
-        <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 5px 0;">
         
         <div onclick="window.open('https://github.com/ohAnd/ha_addons/blob/master/eos_connect/CHANGELOG.md', '_blank'); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center; justify-content: space-between;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
             <div style="display: flex; align-items: center;">
-                <i class="fa-solid fa-file-invoice" style="margin-right: 10px; color: #f39c12; width: 16px;"></i>
+                <i class="fa-solid fa-file-text" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
                 <span>Changelog</span>
             </div>
-            <i class="fa-solid fa-external-link-alt" style="font-size: 0.7em; opacity: 0.7;"></i>
+            <i class="fa-solid fa-external-link-alt" style="font-size: 0.7em; color: #888888;"></i>
         </div>
         
         <div onclick="window.open('https://github.com/ohAnd/EOS_connect/issues', '_blank'); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center; justify-content: space-between;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
             <div style="display: flex; align-items: center;">
-                <i class="fa-solid fa-bug" style="margin-right: 10px; color: #e74c3c; width: 16px;"></i>
+                <i class="fa-solid fa-bug" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
                 <span>Bug Report</span>
             </div>
-            <i class="fa-solid fa-external-link-alt" style="font-size: 0.7em; opacity: 0.7;"></i>
+            <i class="fa-solid fa-external-link-alt" style="font-size: 0.7em; color: #888888;"></i>
         </div>
     `;
     
@@ -223,6 +230,11 @@ function showMainMenu(version) {
     
     // Append dropdown to parent container
     parentBox.appendChild(dropdown);
+    
+    // Update dropdown notifications using centralized system
+    if (typeof MenuNotifications !== 'undefined') {
+        MenuNotifications.updateDropdown();
+    }
     
     // Add click outside listener to close dropdown
     setTimeout(() => {
@@ -240,6 +252,185 @@ function closeDropdownMenu() {
         document.removeEventListener('click', handleClickOutside, true);
     }
 }
+
+/**
+ * Hamburger Menu Dot Controller - Simple State-Aware System
+ * Knows exactly what's displayed and only changes when needed
+ */
+const MenuNotifications = {
+    displayedColor: null, // What's actually displayed: null, 'red', 'orange', 'white', 'gray'
+    
+    /**
+     * Initialize the notification system
+     */
+    init() {
+        console.log('[MenuNotifications] Simple state-aware system initialized');
+    },
+    
+    /**
+     * Show a dot with specific color (external interface)
+     * Priority order: red > orange > white > gray > none
+     * @param {string|null} requestedColor - 'red', 'orange', 'white', 'gray', or null
+     */
+    showDot(requestedColor) {
+        console.log(`[MenuNotifications] Request: show ${requestedColor}, currently displaying: ${this.displayedColor}`);
+        
+        // Determine what should be displayed based on priority
+        let targetColor = this.getTargetColor(requestedColor);
+        
+        // Only update if the target is different from what's displayed
+        if (targetColor !== this.displayedColor) {
+            console.log(`[MenuNotifications] State change needed: '${this.displayedColor}' → '${targetColor}'`);
+            this.displayedColor = targetColor;
+            this.renderDot();
+        } else {
+            console.log(`[MenuNotifications] No change needed - already displaying '${this.displayedColor}'`);
+        }
+    },
+    
+    /**
+     * Determine target color based on priority rules
+     */
+    getTargetColor(requestedColor) {
+        // For now, just return the requested color
+        // Later can add priority logic for multiple sources
+        return requestedColor;
+    },
+    
+    /**
+     * Render the dot based on displayedColor (only called when state changes)
+     */
+    renderDot() {
+        const menuElement = document.getElementById('current_header_left');
+        if (!menuElement) {
+            console.log(`[MenuNotifications] Menu element not found`);
+            return;
+        }
+        
+        // Always remove existing dot first (clean slate)
+        const existingDot = menuElement.querySelector('.notification-dot');
+        if (existingDot) {
+            existingDot.remove();
+        }
+        
+        // Add new dot if needed
+        if (this.displayedColor) {
+            const colors = {
+                'red': 'rgb(220, 53, 69)',
+                'orange': 'rgb(255, 193, 7)', 
+                'white': 'rgb(255, 255, 255)',
+                'gray': 'rgb(136, 136, 136)'
+            };
+            
+            const dotColor = colors[this.displayedColor];
+            if (dotColor) {
+                const dot = document.createElement('div');
+                dot.className = 'notification-dot';
+                dot.style.cssText = `
+                    position: absolute;
+                    top: 2px;
+                    right: 2px;
+                    width: 6px;
+                    height: 6px;
+                    background-color: ${dotColor};
+                    border-radius: 50%;
+                    /* border: 1px solid darkgray; optional border */
+                    z-index: 999;
+                    pointer-events: none;
+                `;
+                menuElement.appendChild(dot);
+                console.log(`[MenuNotifications] Rendered ${this.displayedColor} dot`);
+            }
+        } else {
+            console.log(`[MenuNotifications] Removed dot (no color)`);
+        }
+    },
+    
+    /**
+     * Update dropdown menu notifications
+     */
+    updateDropdown() {
+        const dropdown = document.getElementById('main-dropdown-menu');
+        if (!dropdown) return;
+        
+        // Only update Alarms menu item (not Logs)
+        const alarmsItem = dropdown.querySelector('div[onclick*="showAlarmsMenu"]');
+        if (alarmsItem) {
+            // Convert our color system to old status system for dropdown
+            let status = null;
+            if (this.displayedColor === 'red') status = 'error';
+            else if (this.displayedColor === 'orange') status = 'warning';
+            
+            this.addDropdownNotification(alarmsItem, status);
+        }
+        
+        // Ensure Logs menu item has no notification dot
+        const logsItem = dropdown.querySelector('div[onclick*="showLogsMenu"]');
+        if (logsItem) {
+            const existingDot = logsItem.querySelector('.dropdown-notification-dot');
+            if (existingDot) {
+                existingDot.remove();
+            }
+        }
+    },
+    
+    /**
+     * Add notification dot to dropdown menu item
+     * @param {Element} menuItem - The menu item element
+     * @param {string|null} status - The notification status
+     */
+    addDropdownNotification(menuItem, status) {
+        // Remove existing notification dot
+        const existingDot = menuItem.querySelector('.dropdown-notification-dot');
+        if (existingDot) {
+            existingDot.remove();
+        }
+        
+        // Add new notification dot if needed
+        if (status) {
+            const dotColor = status === 'error' ? '#dc3545' : '#ffc107';
+            const dot = document.createElement('div');
+            dot.className = 'dropdown-notification-dot';
+            dot.style.cssText = `
+                width: 8px;
+                height: 8px;
+                background-color: ${dotColor};
+                border-radius: 50%;
+                margin-left: auto;
+                margin-right: 8px;
+                flex-shrink: 0;
+                border: 1px solid rgba(255,255,255,0.2);
+            `;
+            
+            menuItem.appendChild(dot);
+        }
+    },
+    
+    /**
+     * Restore notification after menu element changes (only if actually missing)
+     */
+    restoreAfterMenuChange() {
+        // Small delay to ensure DOM is updated
+        setTimeout(() => {
+            if (this.displayedColor) {
+                // Check if dot actually exists before restoring
+                const menuElement = document.getElementById('current_header_left');
+                const existingDot = menuElement ? menuElement.querySelector('.notification-dot') : null;
+                
+                if (!existingDot) {
+                    console.log(`[MenuNotifications] Dot missing, restoring ${this.displayedColor} dot`);
+                    this.renderDot();
+                } else {
+                    console.log(`[MenuNotifications] Dot already exists, no restore needed`);
+                }
+            }
+        }, 50);
+    }
+};
+
+// Initialize and make globally available
+MenuNotifications.init();
+window.MenuNotifications = MenuNotifications;
 
 /**
  * Handle clicks outside dropdown to close it
@@ -294,7 +485,7 @@ function showInfoMenu(version) {
 }
 
 /**
- * Create full-screen overlay for logs with small margins
+ * Create full-screen overlay for logs with responsive margins
  */
 function showFullScreenOverlay(header, content, close = true) {
     // Create overlay if it doesn't exist
@@ -302,6 +493,10 @@ function showFullScreenOverlay(header, content, close = true) {
     if (!overlay) {
         overlay = document.createElement('div');
         overlay.id = 'full_screen_overlay';
+        
+        // Responsive padding: very small on mobile, larger on desktop
+        const paddingValue = isMobile() ? '8px' : '60px';
+        
         overlay.style.cssText = `
             position: fixed;
             top: 0;
@@ -311,17 +506,25 @@ function showFullScreenOverlay(header, content, close = true) {
             background-color: rgba(0, 0, 0, 0.6);
             display: none;
             z-index: 1000;
-            padding: 60px;
+            padding: ${paddingValue};
             box-sizing: border-box;
         `;
         document.body.appendChild(overlay);
+    } else {
+        // Update padding if overlay already exists (responsive on resize)
+        const paddingValue = isMobile() ? '8px' : '60px';
+        overlay.style.padding = paddingValue;
     }
 
-    // Create content container
+    // Create content container with responsive padding
+    const headerPadding = isMobile() ? '12px 15px' : '15px 20px';
+    const contentPadding = isMobile() ? '15px' : '20px';
+    const borderRadius = isMobile() ? '6px' : '10px';
+    
     overlay.innerHTML = `
         <div style="
             background-color: rgb(78, 78, 78);
-            border-radius: 10px;
+            border-radius: ${borderRadius};
             width: 100%;
             height: 100%;
             display: flex;
@@ -330,26 +533,28 @@ function showFullScreenOverlay(header, content, close = true) {
         ">
             <!-- Header -->
             <div id="full_screen_header" style="
-                padding: 15px 20px;
+                padding: ${headerPadding};
                 border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 10px 10px 0 0;
+                border-radius: ${borderRadius} ${borderRadius} 0 0;
                 background-color: rgb(58, 58, 58);
                 color: lightgray;
                 font-weight: bold;
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
+                font-size: ${isMobile() ? '0.9em' : '1em'};
             ">
                 ${header}
-                ${close ? '<button onclick="closeFullScreenOverlay()" style="background: none; border: none; color: lightgray; font-size: 1.5em; cursor: pointer; padding: 0; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 50%; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor=\'rgba(255,255,255,0.1)\'" onmouseout="this.style.backgroundColor=\'transparent\'">×</button>' : ''}
+                ${close ? `<button onclick="closeFullScreenOverlay()" style="background: none; border: none; color: lightgray; font-size: 1.5em; cursor: pointer; padding: 0; width: ${isMobile() ? '28px' : '30px'}; height: ${isMobile() ? '28px' : '30px'}; display: flex; align-items: center; justify-content: center; border-radius: 50%; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='rgba(255,255,255,0.1)'" onmouseout="this.style.backgroundColor='transparent'">×</button>` : ''}
             </div>
             
             <!-- Content -->
             <div id="full_screen_content" style="
                 flex: 1;
-                padding: 20px;
+                padding: ${contentPadding};
                 overflow: auto;
                 color: lightgray;
+                font-size: ${isMobile() ? '0.85em' : '1em'};
             ">
                 ${content}
             </div>
@@ -357,6 +562,9 @@ function showFullScreenOverlay(header, content, close = true) {
     `;
 
     overlay.style.display = 'flex';
+    
+    // Block background scrolling
+    document.body.style.overflow = 'hidden';
     
     // Add escape key listener
     const escapeHandler = (e) => {
@@ -375,6 +583,10 @@ function closeFullScreenOverlay() {
     const overlay = document.getElementById('full_screen_overlay');
     if (overlay) {
         overlay.style.display = 'none';
+        
+        // Restore background scrolling
+        document.body.style.overflow = '';
+        
         // Remove escape key listener
         if (overlay.escapeHandler) {
             document.removeEventListener('keydown', overlay.escapeHandler);
