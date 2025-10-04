@@ -16,7 +16,7 @@ on:
   workflow_dispatch: # allows manual triggering of the workflow
 
 env:
-  VERSION_PREFIX: 0.1.
+  VERSION_PREFIX: 0.2.
 
 jobs:
   publish_image:

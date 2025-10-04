@@ -14,7 +14,7 @@ on:
   workflow_dispatch: # allows manual triggering of the workflow
 
 env:
-  VERSION_PREFIX: 0.1.24.
+  VERSION_PREFIX: 0.2.01.
   VERSION_SUFFIX: -develop
 
 jobs:
