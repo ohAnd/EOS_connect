@@ -11,6 +11,8 @@ import zoneinfo
 import requests
 import pytz
 
+from interfaces.evcc_interface import EvccInterface
+
 logger = logging.getLogger("__main__")
 logger.info("[LOAD-IF] loading module ")
 
@@ -26,7 +28,9 @@ class LoadInterface:
         self,
         config,
         timezone=None,  # Changed default to None
+        evcc_interface: EvccInterface = None,
     ):
+        self.evcc_interface = evcc_interface
         self.src = config.get("source", "")
         self.url = config.get("url", "")
         self.load_sensor = config.get("load_sensor", "")
@@ -55,6 +59,26 @@ class LoadInterface:
             self.time_zone = timezone
 
         self.__check_config()
+
+    def __parse_iso_time_timezone(self, time_str):
+        time = datetime.fromisoformat(time_str)
+        
+        # If no timezone is configured, return the time as-is
+        if self.time_zone is None:
+            return time
+            
+        if time.tzinfo is None:
+            # If datetime is naive, localize it
+            if hasattr(self.time_zone, 'localize'):
+                # pytz timezone object
+                time = self.time_zone.localize(time)
+            else:
+                # zoneinfo.ZoneInfo object
+                time = time.replace(tzinfo=self.time_zone)
+        else:
+            # Convert to configured timezone
+            time = time.astimezone(self.time_zone)
+        return time
 
     def __check_config(self):
         """
@@ -615,6 +639,32 @@ class LoadInterface:
                     + " will improve with collected data"
                 )
 
+        if self.evcc_interface is not None:
+            # use projected charge start and end time to calculate car load
+            evcc_detail = self.evcc_interface.get_current_detail_data()
+            try:
+                charge_start = self.__parse_iso_time_timezone(evcc_detail[0]["planProjectedStart"])
+                charge_end = self.__parse_iso_time_timezone(evcc_detail[0]["planProjectedEnd"])
+                charge_amount = evcc_detail[0].get("chargeRemainingEnergy", 0)
+                charge_duration = ((charge_end - charge_start).total_seconds() + 3599) / 3600
+                charge_per_hour = charge_amount / charge_duration if charge_duration > 0 else 0
+                day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                start_index = int((charge_start - day_start).total_seconds() / 3600)
+                end_index = start_index + int(charge_duration)
+                for i in range(start_index, end_index):
+                    if 0 <= i < len(load_profile):
+                        load_profile[i] += charge_per_hour
+                        logger.debug(
+                            "[LOAD-IF] Adding projected EV charge load of %5.1f Wh at hour index %d",
+                            charge_per_hour, i
+                        )
+                logger.info(
+                    "[LOAD-IF] Adjusted load profile for projected EV charging from %s to %s",
+                    charge_start, charge_end
+                )
+            except:
+                pass
+        logger.debug("[LOAD-IF] Load profile values : %s", load_profile)
         return load_profile
 
     def get_load_profile(self, tgt_duration, start_time=None):
