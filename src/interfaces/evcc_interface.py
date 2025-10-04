@@ -87,23 +87,6 @@ class EvccInterface:
         self.last_known_charging_state = False
         # off, pv, pvmin, now
         self.last_known_charging_mode = None
-        self.current_detail_data_list = [
-            {
-                "connected": False,
-                "charging": False,
-                "mode": "off",
-                "chargeDuration": 0,
-                "chargeRemainingDuration": 0,
-                "chargedEnergy": 0,
-                "chargeRemainingEnergy": 0,
-                "sessionEnergy": 0,
-                "vehicleSoc": 0,
-                "vehicleRange": 0,
-                "vehicleOdometer": 0,
-                "vehicleName": "",
-                "smartCostActive": False,
-            }
-        ]
         self.external_battery_mode_en = ext_bat_mode
         self.external_battery_mode = "off"  # Default mode
 
@@ -212,6 +195,8 @@ class EvccInterface:
                 "vehicleOdometer": 0,
                 "vehicleName": "",
                 "smartCostActive": False,
+                "planProjectedStart": "",
+                "planProjectedEnd": "",
             }
         ]
 
@@ -418,6 +403,8 @@ class EvccInterface:
                 "vehicleOdometer": loadpoint.get("vehicleOdometer", 0),
                 "vehicleName": vehicle_name,
                 "smartCostActive": loadpoint.get("smartCostActive", False),
+                "planProjectedStart": loadpoint.get("planProjectedStart", ""),
+                "planProjectedEnd": loadpoint.get("planProjectedEnd", ""),
             }
             self.current_detail_data_list.append(detail_data)
         return True

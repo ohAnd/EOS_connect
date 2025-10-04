@@ -237,6 +237,7 @@ evcc_interface = EvccInterface(
 load_interface = LoadInterface(
     config_manager.config.get("load", {}),
     time_zone,
+    evcc_interface,
 )
 
 battery_interface = BatteryInterface(
