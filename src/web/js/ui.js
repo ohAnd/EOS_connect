@@ -176,6 +176,15 @@ function showMainMenu(version) {
     `;
     
     dropdown.innerHTML = `
+        <div onclick="showOverrideControlsMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
+            onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
+            onmouseout="this.style.backgroundColor='transparent'">
+            <i class="fa-solid fa-sliders" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
+            <span>Override Controls</span>
+        </div>
+        
+        <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 5px 0;">
+        
         <div onclick="showAlarmsMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
@@ -329,8 +338,8 @@ const MenuNotifications = {
                 dot.className = 'notification-dot';
                 dot.style.cssText = `
                     position: absolute;
-                    top: 2px;
-                    right: 2px;
+                    top: -2px;
+                    right: -2px;
                     width: 6px;
                     height: 6px;
                     background-color: ${dotColor};
@@ -458,6 +467,18 @@ function showAlarmsMenu() {
 }
 
 /**
+ * Show override controls menu using modern full-screen overlay
+ */
+function showOverrideControlsMenu() {
+    if (controlsManager) {
+        controlsManager.showOverrideMenuFullScreen();
+    } else {
+        showFullScreenOverlay("Override Controls", "<div style='text-align: center; color: #888; padding: 20px;'>Controls system not initialized</div>");
+        setTimeout(() => closeFullScreenOverlay(), 2000);
+    }
+}
+
+/**
  * Show logs menu using LoggingManager
  */
 function showLogsMenu() {
@@ -470,19 +491,77 @@ function showLogsMenu() {
 }
 
 /**
- * Show info menu (original version info)
+ * Show info menu using modern full-screen overlay
  */
 function showInfoMenu(version) {
-    const infoContent = 
-        '<i style="font-size: smaller;">currently installed:</i><br><br>' + version + "<br><br>" +
-        "<hr style='border-color: rgba(44, 44, 44, 0.596);'>" +
-        '<div style="font-size: 2em;">' +
-        '<a href="https://github.com/ohAnd/EOS_connect" target="_blank" style="padding-right: 20px; color: inherit; text-decoration: none;" title="GitHub Repository"><i class="fa-brands fa-square-github"></i></a>' +
-        '<a href="https://github.com/ohAnd/ha_addons/blob/master/eos_connect/CHANGELOG.md" target="_blank" style="padding-right: 20px; color: inherit; text-decoration: none;" title="Changelog"><i class="fa-solid fa-file-invoice"></i></a>' +
-        '<a href="https://github.com/ohAnd/EOS_connect/issues" target="_blank" style="color: inherit; text-decoration: none;" title="Bug Reports"><i class="fa-solid fa-bug"></i></a>' +
-        "</div>";
+    const header = `
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <i class="fas fa-info-circle" style="color: #17a2b8;"></i>
+            <span>EOS connect Information</span>
+        </div>
+    `;
     
-    overlayMenu("Version Info", infoContent);
+    const content = `
+        <div style="height: calc(100% - 20px); overflow-y: auto; margin-top: 10px; text-align: center;">
+            <!-- Version Section -->
+            <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 30px; margin-bottom: 25px; border-left: 4px solid #17a2b8;">
+                <div style="font-size: 1.2em; color: #17a2b8; margin-bottom: 15px; font-weight: bold;">
+                    <i class="fas fa-code-branch" style="margin-right: 10px;"></i>Version Information
+                </div>
+                <div style="font-size: 0.9em; color: #888; margin-bottom: 15px;">Currently installed version:</div>
+                <div style="font-size: 1.4em; color: #fff; font-weight: bold; background-color: rgba(255,255,255,0.1); padding: 12px 20px; border-radius: 6px; display: inline-block;">
+                    ${version}
+                </div>
+            </div>
+            
+            <!-- Links Section -->
+            <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 30px; border-left: 4px solid #28a745;">
+                <div style="font-size: 1.2em; color: #28a745; margin-bottom: 20px; font-weight: bold;">
+                    <i class="fas fa-external-link-alt" style="margin-right: 10px;"></i>Project Resources
+                </div>
+                
+                <div style="display: flex; justify-content: center; gap: 30px; flex-wrap: wrap;">
+                    <!-- GitHub Repository -->
+                    <a href="https://github.com/ohAnd/EOS_connect" target="_blank" 
+                       style="color: inherit; text-decoration: none; display: flex; flex-direction: column; align-items: center; padding: 20px; background-color: rgba(255,255,255,0.05); border-radius: 8px; transition: all 0.3s ease; min-width: 120px;"
+                       onmouseover="this.style.backgroundColor='rgba(255,255,255,0.1)'; this.style.transform='translateY(-2px)'"
+                       onmouseout="this.style.backgroundColor='rgba(255,255,255,0.05)'; this.style.transform='translateY(0)'">
+                        <i class="fa-brands fa-github" style="font-size: 2.5em; margin-bottom: 10px; color: #fff;"></i>
+                        <span style="font-size: 0.9em; font-weight: bold;">Repository</span>
+                        <span style="font-size: 0.75em; color: #888; margin-top: 5px;">Source Code</span>
+                    </a>
+                    
+                    <!-- Changelog -->
+                    <a href="https://github.com/ohAnd/ha_addons/blob/master/eos_connect/CHANGELOG.md" target="_blank" 
+                       style="color: inherit; text-decoration: none; display: flex; flex-direction: column; align-items: center; padding: 20px; background-color: rgba(255,255,255,0.05); border-radius: 8px; transition: all 0.3s ease; min-width: 120px;"
+                       onmouseover="this.style.backgroundColor='rgba(255,255,255,0.1)'; this.style.transform='translateY(-2px)'"
+                       onmouseout="this.style.backgroundColor='rgba(255,255,255,0.05)'; this.style.transform='translateY(0)'">
+                        <i class="fas fa-file-text" style="font-size: 2.5em; margin-bottom: 10px; color: #ffc107;"></i>
+                        <span style="font-size: 0.9em; font-weight: bold;">Changelog</span>
+                        <span style="font-size: 0.75em; color: #888; margin-top: 5px;">Version History</span>
+                    </a>
+                    
+                    <!-- Bug Reports -->
+                    <a href="https://github.com/ohAnd/EOS_connect/issues" target="_blank" 
+                       style="color: inherit; text-decoration: none; display: flex; flex-direction: column; align-items: center; padding: 20px; background-color: rgba(255,255,255,0.05); border-radius: 8px; transition: all 0.3s ease; min-width: 120px;"
+                       onmouseover="this.style.backgroundColor='rgba(255,255,255,0.1)'; this.style.transform='translateY(-2px)'"
+                       onmouseout="this.style.backgroundColor='rgba(255,255,255,0.05)'; this.style.transform='translateY(0)'">
+                        <i class="fas fa-bug" style="font-size: 2.5em; margin-bottom: 10px; color: #dc3545;"></i>
+                        <span style="font-size: 0.9em; font-weight: bold;">Issues</span>
+                        <span style="font-size: 0.75em; color: #888; margin-top: 5px;">Bug Reports</span>
+                    </a>
+                </div>
+            </div>
+            
+            <!-- Footer -->
+            <div style="margin-top: 25px; padding: 20px; color: #888; font-size: 0.8em;">
+                <i class="fas fa-heart" style="color: #dc3545; margin-right: 5px;"></i>
+                Made with care for the EOS ecosystem
+            </div>
+        </div>
+    `;
+    
+    showFullScreenOverlay(header, content);
 }
 
 /**
@@ -579,12 +658,15 @@ function showFullScreenOverlay(header, content, close = true) {
 
 /**
  * Close full-screen overlay
+ * @param {number} waittime - Optional delay before closing (ms)
  */
-function closeFullScreenOverlay() {
+function closeFullScreenOverlay(waittime = 0) {
     const overlay = document.getElementById('full_screen_overlay');
     if (overlay) {
-        overlay.style.display = 'none';
-        
+        setTimeout(() => {
+            overlay.style.display = 'none';
+        }, waittime);
+
         // Restore background scrolling
         document.body.style.overflow = '';
         

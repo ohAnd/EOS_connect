@@ -21,6 +21,7 @@ let max_charge_power_w = 0;
 let inverter_mode_num = -1;
 let chartInstance = null;
 let menuControlEventListener = null;
+let data_controls = null; // Global data_controls for use across modules
 
 // Constants are now loaded from constants.js
 
@@ -64,7 +65,7 @@ function handlingErrorInResponse(data_response) {
 // ADD ASYNC KEYWORD HERE - THIS WAS MISSING!
 async function showCurrentData() {
     //console.log("------- showCurrentControls -------");
-    const data_controls = await dataManager.fetchCurrentControls(currentTestScenario);
+    data_controls = await dataManager.fetchCurrentControls(currentTestScenario);
     showCarChargingData(data_controls);
 
     // Use controlsManager to update controls (check if it exists first)

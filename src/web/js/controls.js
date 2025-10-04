@@ -7,12 +7,12 @@ class ControlsManager {
     constructor() {
         this.menuControlEventListener = null;
         this.icons = [
-            { icon: "fa-plug-circle-bolt", color: COLOR_MODE_CHARGE_FROM_GRID, title: "Charge from grid" },
-            { icon: "fa-lock", color: COLOR_MODE_AVOID_DISCHARGE, title: "Avoid discharge" },
-            { icon: "fa-battery-half", color: COLOR_MODE_DISCHARGE_ALLOWED, title: "Discharge allowed" },
-            { icon: "fa-charging-station", color: COLOR_MODE_AVOID_DISCHARGE_EVCC_FAST, title: "Avoid discharge due to e-car fast charge" },
-            { icon: "fa-charging-station", color: COLOR_MODE_DISCHARGE_ALLOWED_EVCC_PV, title: "Discharge allowed during e-car charging in pv mode" },
-            { icon: "fa-charging-station", color: COLOR_MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV, title: "Discharge allowed during e-car charging in min+pv mode" }
+            { icon: "fa-plug-circle-bolt", color: COLOR_MODE_CHARGE_FROM_GRID, title: "Charge From Grid" },
+            { icon: "fa-lock", color: COLOR_MODE_AVOID_DISCHARGE, title: "Avoid Discharge" },
+            { icon: "fa-battery-half", color: COLOR_MODE_DISCHARGE_ALLOWED, title: "Discharge Allowed" },
+            { icon: "fa-charging-station", color: COLOR_MODE_AVOID_DISCHARGE_EVCC_FAST, title: "Avoid Discharge Due to E-Car Fast Charge" },
+            { icon: "fa-charging-station", color: COLOR_MODE_DISCHARGE_ALLOWED_EVCC_PV, title: "Discharge Allowed During E-Car Charging in PV Mode" },
+            { icon: "fa-charging-station", color: COLOR_MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV, title: "Discharge Allowed During E-Car Charging in Min+PV Mode" }
         ];
     }
 
@@ -24,120 +24,321 @@ class ControlsManager {
     }
 
     /**
-     * Adjust grid charge power by delta amount
+     * Create and show the override controls menu using modern full-screen overlay
      */
-    adjustGridChargePower(delta) {
-        const input = document.getElementById("grid_charge_power");
-        if (!input) return;
-
-        let newValue = parseFloat(input.value) + delta;
-        newValue = Math.max(parseFloat(input.min), Math.min(parseFloat(input.max), newValue));
-        input.value = newValue.toFixed(1);
-    }
-
-    /**
-     * Create and show the override controls menu
-     */
-    showOverrideMenu(maxChargePower, overrideActive) {
-        const buttons = this.icons.map((icon, index) => {
-            if (index > 2) return; // without special evcc modes
-            const isDisabled = false; // Could be: index === inverter_mode_num;
+    showOverrideMenuFullScreen(maxChargePower = null, overrideActive = false) {
+        let currentModeNum = -1;
+        
+        // Use current data if available
+        if (typeof data_controls !== 'undefined' && data_controls) {
+            if (!maxChargePower) {
+                maxChargePower = data_controls.battery?.max_charge_power_dyn ? data_controls.battery.max_charge_power_dyn / 1000 : 5.0;
+            }
             
-            return `<button id="mode_${index}" class="button" style="
-                cursor: ${isDisabled ? 'not-allowed' : 'pointer'}; 
-                font-size: 0.8em; padding: 0.15em 0.3em; margin: 10px; 
-                color: ${isDisabled ? 'gray' : icon.color}; 
-                transition: color 0.3s; 
-                background-color: ${isDisabled ? '#333' : 'rgb(58, 58, 58)'}; 
-                border-radius: 10px; 
-                border: 1px solid ${isDisabled ? 'gray' : icon.color};"
-                ${isDisabled ? ' disabled' : ` 
-                    onmouseover="this.style.color='white'" 
-                    onmouseout="this.style.color='${icon.color}'" 
-                    onmousedown="this.style.color='#000000'" 
-                    onmouseup="this.style.color='${icon.color}'" 
-                    onclick="controlsManager.handleModeChange(${index})"`}>
-                <i class="fa-solid ${icon.icon}"></i>
-            </button>`;
-        }).join('') + (overrideActive ? 
-            `<br><span style="font-size: x-small; margin: 40px;"><i>Back To Automatic</i></span><br>
-            <button id="mode_auto" class="button" style="
-                font-size: 0.8em; padding: 0.15em 0.3em; margin: 10px; 
-                color: green; transition: color 0.3s; 
-                background-color: rgb(58, 58, 58); 
-                border-radius: 10px; border: 1px solid grey; cursor: pointer;"
-                onmouseover="this.style.color='white'" 
-                onmouseout="this.style.color='green'" 
-                onmousedown="this.style.color='#000000'" 
-                onmouseup="this.style.color='green'" 
-                onclick="controlsManager.handleModeChange('-2')">
-                <i class="fa-solid fa-clock-rotate-left"></i>
-            </button>` : ''
-        );
+            // Check multiple ways override could be indicated
+            if (data_controls.current_states) {
+                overrideActive = data_controls.current_states.override_active === true;
+                currentModeNum = data_controls.current_states.inverter_mode_num;
+            }
+        } 
+        
+        if (!maxChargePower) {
+            maxChargePower = 5.0; // Default fallback
+        }
+        
+        // Also check global variable as fallback for mode number
+        if ((currentModeNum === -1 || currentModeNum === null || currentModeNum === undefined) && typeof inverter_mode_num !== 'undefined') {
+            currentModeNum = inverter_mode_num;
+        }
+        
+        console.log('[ControlsManager] Override menu - maxChargePower:', maxChargePower, 'overrideActive:', overrideActive, 'currentModeNum:', currentModeNum);
+        
+        // Safely log data_controls only if it exists
+        if (typeof data_controls !== 'undefined' && data_controls) {
+            console.log('[ControlsManager] Full data_controls object:', data_controls);
+            if (data_controls.current_states) {
+                console.log('[ControlsManager] current_states details:', {
+                    override_active: data_controls.current_states.override_active,
+                    inverter_mode_num: data_controls.current_states.inverter_mode_num,
+                    inverter_mode: data_controls.current_states.inverter_mode
+                });
+            }
+        } else {
+            console.log('[ControlsManager] data_controls is not available globally');
+        }
 
-        const durationEntry = `<select id="duration_time" style="padding: 10px; font-size: 1em; border-radius: 5px; border: 1px solid #ccc; background-color: #444; color: white;">
-            ${Array.from({ length: 48 }, (_, i) => {
-                const hours = Math.floor((i + 1) / 2);
-                const minutes = ((i + 1) % 2) * 30;
-                const timeLabel = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-                return `<option value="${timeLabel}" ${hours === 2 && minutes === 0 ? 'selected' : ''}>${timeLabel}</option>`;
-            }).join('')}
-        </select>`;
+        const header = `
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <i class="fas fa-sliders" style="color: #cccccc;"></i>
+                <span>Override Current Controls</span>
+            </div>
+        `;
 
-        const acChargePower = `<div style="display: flex; justify-content: center; align-items: center; margin-top: 10px; padding-bottom: 10px;">
-            <button id="charge-power-decrease" onclick="controlsManager.adjustGridChargePower(-0.1)" style="padding: 10px; font-size: 1em; margin-right: 10px; border-radius: 5px; border: 1px solid #ccc; background-color: #444; color: white; transition: color 0.3s;" 
-                onmouseover="this.style.color='gray'" 
-                onmouseout="this.style.color='white'" 
-                onmousedown="this.style.backgroundColor='lightblue'" 
-                onmouseup="this.style.color='white';this.style.backgroundColor='#444'">-</button>
-            <input id="grid_charge_power" type="number" step="0.25" min="0.5" max="${maxChargePower.toFixed(1)}" value="${maxChargePower.toFixed(1)}" style="padding: 10px; font-size: 1em; text-align: center; width: 1.4em; border-radius: 5px; border: 1px solid #ccc; background-color: #444; color: white;">
-            <button id="charge-power-increase" onclick="controlsManager.adjustGridChargePower(0.1)" style="padding: 10px; font-size: 1em; margin-left: 10px; border-radius: 5px; border: 1px solid #ccc; background-color: #444; color: white; transition: color 0.3s;" 
-                onmouseover="this.style.color='gray'" 
-                onmouseout="this.style.color='white'" 
-                onmousedown="this.style.backgroundColor='lightblue'" 
-                onmouseup="this.style.color='white';this.style.backgroundColor='#444'">+</button>
-        </div>`;
+        const content = `
+            <div style="height: calc(100% - 20px); overflow-y: auto; margin-top: 10px; text-align: center;">
+                <!-- Mode Selection Section -->
+                <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 25px; margin-bottom: 20px; border-left: 4px solid lightgray;">
+                    <div style="font-size: 1.2em; margin-bottom: 20px; font-weight: bold;">
+                        <i class="fas fa-cog" style="margin-right: 10px;"></i>Battery Mode Selection
+                    </div>
+                    
+                    <div style="display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; margin-bottom: 20px;">
+                        ${this.icons.slice(0, 3).map((icon, index) => {
+                            // Mode numbers in data are 1-based (1,2,3) but our array is 0-based (0,1,2)
+                            // So we need to compare (currentModeNum - 1) with index, OR currentModeNum with (index + 1)
+                            // const isCurrentMode = overrideActive && (currentModeNum === (index + 1));
+                            const isCurrentMode = (currentModeNum === (index));
+                            const isDisabled = isCurrentMode;
+                            const buttonColor = isDisabled ? '#666' : icon.color;
+                            const bgColor = isDisabled ? 'rgba(51, 51, 51, 0.8)' : 'rgba(58, 58, 58, 0.8)';
+                            console.log(`[ControlsManager] Mode ${index} - isCurrentMode: ${isCurrentMode}, isDisabled: ${isDisabled}, currentModeNum: ${currentModeNum}, bgcolor: ${bgColor}`);
+                            // const borderColor = isDisabled ? '#444' : icon.color;
+                            const borderColor = icon.color; // show border color if Disabled it will shown with 0.5 opacity
+                            const cursor = isDisabled ? 'not-allowed' : 'pointer';
+                            
+                            return `
+                            <button id="mode_${index}" ${isDisabled ? '' : `onclick="controlsManager.handleModeChangeFullScreen(${index})"`}
+                                ${isDisabled ? 'disabled' : ''} 
+                                style="
+                                    padding: 20px 25px;
+                                    font-size: 1.5em;
+                                    color: ${buttonColor};
+                                    background-color: ${bgColor};
+                                    border: 2px solid ${borderColor};
+                                    border-radius: 12px;
+                                    cursor: ${cursor};
+                                    transition: all 0.3s ease;
+                                    min-width: 175px;
+                                    display: flex;
+                                    flex-direction: column;
+                                    align-items: center;
+                                    gap: 8px;
+                                    opacity: ${isDisabled ? '0.5' : '1'};
+                                "
+                                ${!isDisabled ? `
+                                    onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'; this.style.transform='translateY(-2px)'"
+                                    onmouseout="this.style.backgroundColor='${bgColor}'; this.style.transform='translateY(0)'"
+                                ` : ''}>
+                                <i class="fa-solid ${icon.icon}"></i>
+                                <span style="font-size: 0.6em; color: ${isDisabled ? '#888' : '#ccc'};">
+                                    ${icon.title || 'Mode ' + (index)}
+                                    <!-- ${isCurrentMode ? ' ...' : ''} -->
+                                </span>
+                            </button>
+                        `;
+                        }).join('')}
+                    </div>
+                    
+                </div>
+                
+                ${overrideActive ? `
+                    <!-- Back to Automatic Section -->
+                    <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 25px; margin-bottom: 20px; border-left: 4px solid #28a745;">
+                        <div style="font-size: 1.1em; color: #28a745; margin-bottom: 15px; font-weight: bold;">
+                            <i class="fas fa-undo" style="margin-right: 10px;"></i>Return to Automatic Mode
+                        </div>
+                        <div style="margin-bottom: 15px; font-size: 0.9em; color: #888;">
+                            Override is currently active (Mode ${this.icons[currentModeNum].title}). Click to cancel the override and return to automatic optimization mode.
+                        </div>
+                        <button id="mode_auto" onclick="controlsManager.handleModeChangeFullScreen('-2')" 
+                            style="
+                                padding: 18px 30px;
+                                font-size: 1.1em;
+                                color: #28a745;
+                                background-color: rgba(40, 167, 69, 0.1);
+                                border: 2px solid #28a745;
+                                border-radius: 10px;
+                                cursor: pointer;
+                                transition: all 0.3s ease;
+                                display: inline-flex;
+                                align-items: center;
+                                gap: 12px;
+                                font-weight: bold;
+                            "
+                            onmouseover="this.style.backgroundColor='rgba(40, 167, 69, 0.2)'; this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(40, 167, 69, 0.3)'"
+                            onmouseout="this.style.backgroundColor='rgba(40, 167, 69, 0.1)'; this.style.transform='translateY(0)'; this.style.boxShadow='none'">
+                            <i class="fa-solid fa-clock-rotate-left"></i>
+                            <span>Back to Automatic</span>
+                        </button>
+                    </div>
+                ` : ''}
+                
+                <!-- Debug Section
+                <div style="background-color: rgba(0,0,0,0.2); border-radius: 8px; padding: 15px; margin-bottom: 20px; border-left: 4px solid #666;">
+                    <div style="font-size: 0.9em; color: #888; margin-bottom: 10px;">
+                        <strong>Debug Info:</strong><br>
+                        Override Active: ${overrideActive ? 'YES' : 'NO'}<br>
+                        Current Mode: ${currentModeNum}<br>
+                        Max Charge Power: ${maxChargePower} kW
+                    </div>
+                </div>
+                -->
+                
+                
+                <div style="margin-top: auto;">
+                </div>
 
-        // Add passive touch event listeners after overlay is created
+                <!-- Duration Selection Section -->
+                <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 25px; margin-bottom: 20px; border-left: 4px solid #17a2b8;">
+                    <div style="font-size: 1.1em; color: #17a2b8; margin-bottom: 15px; font-weight: bold;">
+                        <i class="fas fa-clock" style="margin-right: 10px;"></i>Override Duration
+                    </div>
+                    
+                    <select id="duration_time" style="
+                        padding: 12px 20px;
+                        font-size: 1em;
+                        border-radius: 8px;
+                        border: 2px solid #17a2b8;
+                        background-color: rgba(58, 58, 58, 0.8);
+                        color: white;
+                        cursor: pointer;
+                        min-width: 150px;
+                    ">
+                        ${Array.from({ length: 48 }, (_, i) => {
+                            const hours = Math.floor((i + 1) / 2);
+                            const minutes = ((i + 1) % 2) * 30;
+                            const timeLabel = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+                            return `<option value="${timeLabel}" ${hours === 2 && minutes === 0 ? 'selected' : ''}>${timeLabel}</option>`;
+                        }).join('')}
+                    </select>
+                </div>
+
+                <!-- Grid Charge Power Section (Only for Mode 0) -->
+                <div id="grid-power-section" style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 25px; border-left: 4px solid ${this.icons[0].color};">
+                    <div style="font-size: 1.1em; color: ${this.icons[0].color}; margin-bottom: 15px; font-weight: bold;">
+                        <i class="fas fa-bolt" style="margin-right: 10px;"></i>Grid Charge Power (kW)<br> <span style="font-size: 0.85em; color: #888; font-weight: normal;">Mode '${this.icons[0].title}' Only</span>
+                    </div>
+                    
+                    <div style="display: flex; justify-content: center; align-items: center; gap: 15px; flex-wrap: wrap;">
+                        <button id="charge-power-decrease" onclick="controlsManager.adjustGridChargePowerFullScreen(-0.1)" 
+                            style="
+                                padding: 12px 18px;
+                                font-size: 1.2em;
+                                background-color: rgba(58, 58, 58, 0.8);
+                                color: white;
+                                border: 2px solid #666;
+                                border-radius: 8px;
+                                cursor: pointer;
+                                transition: all 0.3s ease;
+                                min-width: 50px;
+                            "
+                            onmouseover="this.style.backgroundColor='rgba(220, 53, 69, 0.2)'; this.style.borderColor='${this.icons[0].color}'"
+                            onmouseout="this.style.backgroundColor='rgba(58, 58, 58, 0.8)'; this.style.borderColor='#666'">
+                            <i class="fas fa-minus"></i>
+                        </button>
+                        
+                        <input id="grid_charge_power" type="number" step="0.25" min="0.5" max="${maxChargePower.toFixed(1)}" value="${maxChargePower.toFixed(1)}" 
+                            style="
+                                padding: 12px;
+                                font-size: 1.1em;
+                                text-align: center;
+                                width: 120px;
+                                border-radius: 8px;
+                                border: 2px solid ${this.icons[0].color};
+                                background-color: rgba(58, 58, 58, 0.8);
+                                color: white;
+                            ">
+                        
+                        <button id="charge-power-increase" onclick="controlsManager.adjustGridChargePowerFullScreen(0.1)" 
+                            style="
+                                padding: 12px 18px;
+                                font-size: 1.2em;
+                                background-color: rgba(58, 58, 58, 0.8);
+                                color: white;
+                                border: 2px solid #666;
+                                border-radius: 8px;
+                                cursor: pointer;
+                                transition: all 0.3s ease;
+                                min-width: 50px;
+                            "
+                            onmouseover="this.style.backgroundColor='rgba(220, 53, 69, 0.2)'; this.style.borderColor='#dc3545'"
+                            onmouseout="this.style.backgroundColor='rgba(58, 58, 58, 0.8)'; this.style.borderColor='#666'">
+                            <i class="fas fa-plus"></i>
+                        </button>
+                    </div>
+                    
+                    <div style="margin-top: 10px; font-size: 0.85em; color: #888;">
+                        Range: 0.5 - ${maxChargePower.toFixed(1)} kW
+                    </div>
+                </div>
+            </div>
+        `;
+
+        showFullScreenOverlay(header, content);
+        
+        // Add mode-specific control logic and touch event listeners
         setTimeout(() => {
+            // Add click handlers for mode buttons to show/hide relevant controls
+            this.icons.slice(0, 3).forEach((icon, index) => {
+                const button = document.getElementById(`mode_${index}`);
+                if (button && !button.disabled) {
+                    const originalOnClick = button.getAttribute('onclick');
+                    button.setAttribute('onclick', `controlsManager.selectModeForOverride(${index}); ${originalOnClick}`);
+                }
+            });
+            
+            // Initialize with mode 0 (grid charge) selected by default
+            // this.selectModeForOverride(0);
+            
+            // Add touch event listeners for power adjustment buttons
             const decreaseBtn = document.getElementById('charge-power-decrease');
             const increaseBtn = document.getElementById('charge-power-increase');
             
-            if (decreaseBtn) {
-                decreaseBtn.addEventListener('touchstart', function() {
-                    this.style.backgroundColor = 'lightblue';
-                }, { passive: true });
-                decreaseBtn.addEventListener('touchend', function() {
-                    this.style.color = 'white';
-                    this.style.backgroundColor = '#444';
-                }, { passive: true });
-            }
-            
-            if (increaseBtn) {
-                increaseBtn.addEventListener('touchstart', function() {
-                    this.style.backgroundColor = 'lightblue';
-                }, { passive: true });
-                increaseBtn.addEventListener('touchend', function() {
-                    this.style.color = 'white';
-                    this.style.backgroundColor = '#444';
-                }, { passive: true });
-            }
-        }, 0);
-
-        const content = `<div style="font-size: 2em;">${buttons}</div>
-            <hr style='border-color: rgba(44, 44, 44, 0.596);'>
-            Duration <br>
-            <div style="display: flex; justify-content: center; align-items: center; margin-top: 10px; padding-bottom: 10px;">${durationEntry}</div>
-            <hr style='border-color: rgba(44, 44, 44, 0.596);'>
-            Grid Charge Power (kW)<br>${acChargePower}`;
-
-        overlayMenu("Override Current Controls", content);
+            [decreaseBtn, increaseBtn].forEach(btn => {
+                if (btn) {
+                    btn.addEventListener('touchstart', function() {
+                        this.style.backgroundColor = 'rgba(220, 53, 69, 0.3)';
+                    }, { passive: true });
+                    btn.addEventListener('touchend', function() {
+                        this.style.backgroundColor = 'rgba(58, 58, 58, 0.8)';
+                    }, { passive: true });
+                }
+            });
+        }, 100);
     }
 
     /**
-     * Handle mode change button clicks
+     * Select mode for override and show/hide relevant controls
      */
-    async handleModeChange(mode) {
+    selectModeForOverride(mode) {
+        // Highlight selected mode button
+        this.icons.slice(0, 3).forEach((icon, index) => {
+            const button = document.getElementById(`mode_${index}`);
+            if (button) {
+                if (index === mode) {
+                    // Highlight selected mode
+                    button.style.backgroundColor = 'rgba(255, 193, 7, 0.2)';
+                    button.style.borderColor = '#ffc107';
+                    button.style.boxShadow = '0 0 10px rgba(255, 193, 7, 0.3)';
+                } else if (!button.disabled) {
+                    // Reset non-selected modes
+                    button.style.backgroundColor = 'rgba(58, 58, 58, 0.8)';
+                    button.style.borderColor = icon.color;
+                    button.style.boxShadow = 'none';
+                }
+            }
+        });
+        
+        // Show/hide grid charge power section based on mode
+        const gridPowerSection = document.getElementById('grid-power-section');
+        if (gridPowerSection) {
+            if (mode === 0) {
+                // Mode 0 (Grid Charge) - show power controls
+                gridPowerSection.style.display = 'block';
+            } else {
+                // Mode 1 & 2 (Avoid Discharge, Allow Discharge) - hide power controls
+                gridPowerSection.style.display = 'none';
+            }
+        }
+        
+        // Store selected mode for later use
+        this.selectedOverrideMode = mode;
+    }
+
+    /**
+     * Handle mode change for full-screen overlay
+     */
+    async handleModeChangeFullScreen(mode) {
         const durationElement = document.getElementById('duration_time');
         const gridChargePowerElement = document.getElementById('grid_charge_power');
         
@@ -148,31 +349,45 @@ class ControlsManager {
 
         const duration = durationElement.value;
         const gridChargePower = gridChargePowerElement.value;
-        const controlData = { 
-            "mode": mode, 
-            "duration": duration, 
-            "grid_charge_power": parseFloat(gridChargePower) 
+        
+        const controlData = {
+            mode: mode,
+            duration: duration,
+            grid_charge_power: parseFloat(gridChargePower)
         };
 
+        console.log('[ControlsManager] Sending override control data:', controlData);
+
         try {
-            console.log('[ControlsManager] Sending mode change:', controlData);
             const result = await dataManager.setOverrideControl(controlData);
-            
             console.log('[ControlsManager] Override control set successfully:', result);
-            closeOverlayMenu();
-            overlayMenu('<span style="color:orange;">Success</span>', "Mode changed successfully.", false);
             
-            setTimeout(() => {
-                closeOverlayMenu(false);
-            }, 2000);
+            // Close the overlay after successful operation
+            closeFullScreenOverlay(2500);
             
+            // Refresh data to show updated state
+            if (typeof init === 'function') {
+                setTimeout(init, 500); // Small delay to allow server to process
+            }
         } catch (error) {
-            console.error('[ControlsManager] Failed to change mode:', error);
-            overlayMenu("Error", `Failed to change mode: ${error.message}`);
-            setTimeout(() => {
-                closeOverlayMenu(false);
-            }, 2000);
+            console.error('[ControlsManager] Error setting override control:', error);
+            alert('Failed to set override control: ' + error.message);
         }
+    }
+
+    /**
+     * Adjust grid charge power for full-screen overlay
+     */
+    adjustGridChargePowerFullScreen(delta) {
+        const input = document.getElementById('grid_charge_power');
+        if (!input) return;
+        
+        const currentValue = parseFloat(input.value) || 0;
+        const maxValue = parseFloat(input.max) || 10;
+        const minValue = parseFloat(input.min) || 0.5;
+        
+        const newValue = Math.max(minValue, Math.min(maxValue, currentValue + delta));
+        input.value = newValue.toFixed(1);
     }
 
     /**
@@ -284,7 +499,8 @@ class ControlsManager {
     setupOverrideClickHandler(iconElement, maxChargePower, overrideActive) {
         const newListener = () => {
             console.log('[ControlsManager] Override active:', overrideActive, '- Max charge power:', maxChargePower);
-            this.showOverrideMenu(maxChargePower, overrideActive);
+            // this.showOverrideMenu(maxChargePower, overrideActive);
+            this.showOverrideMenuFullScreen(maxChargePower, overrideActive);
         };
 
         // Remove old listener if it exists
@@ -295,15 +511,6 @@ class ControlsManager {
         // Add new listener
         this.menuControlEventListener = newListener;
         iconElement.addEventListener('click', this.menuControlEventListener);
-    }
-
-    /**
-     * Show control details (left header click)
-     */
-    showControlDetails() {
-        // This could show detailed control information
-        console.log('[ControlsManager] Show control details clicked');
-        // Implementation depends on what you want to show
     }
 
     /**
@@ -319,22 +526,3 @@ class ControlsManager {
 }
 
 // ControlsManager instance is created in main.js during initialization
-
-// Legacy compatibility functions - keep for backward compatibility
-function adjustGridChargePower(delta) {
-    if (controlsManager) {
-        return controlsManager.adjustGridChargePower(delta);
-    }
-}
-
-function menu_controls_override(icons, ac_charge_max, auto_active) {
-    if (controlsManager) {
-        return controlsManager.showOverrideMenu(ac_charge_max, auto_active);
-    }
-}
-
-function handleModeChange(mode) {
-    if (controlsManager) {
-        return controlsManager.handleModeChange(mode);
-    }
-}
