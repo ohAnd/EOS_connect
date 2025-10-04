@@ -26,6 +26,8 @@ class ScheduleManager {
         var discharge_allowed = data_response["discharge_allowed"];
         var ac_charge = data_response["ac_charge"];
         var inverter_mode_num = data_controls["current_states"]["inverter_mode_num"];
+        var manual_override_active = data_controls["current_states"]["override_active"];
+        var manual_override_active_until = data_controls["current_states"]["override_end_time"];
         var max_charge_power_w = data_controls["max_charge_power_w"];
 
         // Add timezone indicator to schedule header
@@ -44,6 +46,8 @@ class ScheduleManager {
         priceData.forEach((value, index) => {
             if (index > 23) return;
 
+            var currentModeAtHour = (ac_charge[(index + currentHour)]) ? 0 : (discharge_allowed[(index + currentHour)] === 1) ? 2 : 1;
+            
             if ((index + 1) % 4 === 0 && (index + 1) !== 0) {
                 var row = document.createElement('div');
                 row.className = 'table-row';
@@ -78,36 +82,27 @@ class ScheduleManager {
             buttonDiv.style.display = "inline-block";
             buttonDiv.style.textAlign = "center";
 
+            // car charging override active
             if (index === 0 && inverter_mode_num > 2) {
-                // override first hour - if eos connect overriding eos
+                // override first hour - if eos connect overriding eos by evcc
+                buttonDiv.style.color = EOS_CONNECT_ICONS[inverter_mode_num].color;
                 if (inverter_mode_num === 3) { // MODE_AVOID_DISCHARGE_EVCC_FAST
-                    //buttonDiv.style.backgroundColor = "#3399FF";
-                    buttonDiv.style.color = COLOR_MODE_AVOID_DISCHARGE_EVCC_FAST;
-                    buttonDiv.innerHTML = " <i class='fa-solid fa-charging-station'></i> <i class='fa-solid fa-lock'></i> ";
+                    buttonDiv.innerHTML = " <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[1].icon + "'></i> ";
                 } else if (inverter_mode_num === 4) { // MODE_DISCHARGE_ALLOWED_EVCC_PV
-                    //buttonDiv.style.backgroundColor = "#3399FF";
-                    buttonDiv.style.color = COLOR_MODE_DISCHARGE_ALLOWED_EVCC_PV;
-                    buttonDiv.innerHTML = " <i class='fa-solid fa-charging-station'></i> <i class='fa-solid fa-battery-half'></i> ";
+                    buttonDiv.innerHTML = " <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[2].icon + "'></i> ";
                 } else if (inverter_mode_num === 5) { //MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV
-                    //buttonDiv.style.backgroundColor = "rgb(255, 144, 144)";
-                    buttonDiv.style.color = COLOR_MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV;
-                    buttonDiv.innerHTML = " <i class='fa-solid fa-charging-station'></i> <i class='fa-solid fa-battery-half'></i> ";
+                    buttonDiv.innerHTML = " <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[2].icon + "'></i> ";
                 }
-            } else if (discharge_allowed[(index + currentHour)] === 1) {
-                //buttonDiv.style.backgroundColor = "grey";
-                buttonDiv.style.color = COLOR_MODE_DISCHARGE_ALLOWED;
-                buttonDiv.innerHTML = "<i class='fa-solid fa-battery-half'></i>";
-            } else if (ac_charge[(index + currentHour)]) {
-                //buttonDiv.style.backgroundColor = color_bat_grid_charging;
-                buttonDiv.style.color = COLOR_MODE_CHARGE_FROM_GRID;
-                let acChargeValue = ac_charge[(index + currentHour)] === 0 ? "" : (ac_charge[(index + currentHour)] / 1000).toFixed(1) + '<span style="font-size: xx-small;"> kWh<span>';
-                buttonDiv.innerHTML = "<i class='fa-solid fa-plug-circle-bolt'></i> " + acChargeValue;
-                buttonDiv.style.padding = "0 10px";
-                buttonDiv.style.width = "";
-            } else {
-                //buttonDiv.style.backgroundColor = "";
-                buttonDiv.style.color = COLOR_MODE_AVOID_DISCHARGE;
-                buttonDiv.innerHTML = "<i class='fa-solid fa-lock'></i>";
+            }
+            else {
+                // 30 minutes in seconds = 30 * 60 = 1800
+                if (manual_override_active && (manual_override_active_until - (labelTime.getTime() / 1000)) > -(45 * 60)) {
+                    buttonDiv.style.color = EOS_CONNECT_ICONS[inverter_mode_num].color;
+                    buttonDiv.innerHTML = "<i style='color:orange;' class='fa-solid fa-triangle-exclamation'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i>";
+                } else {
+                    buttonDiv.style.color = EOS_CONNECT_ICONS[currentModeAtHour].color;
+                    buttonDiv.innerHTML += "<i class='fa-solid " + EOS_CONNECT_ICONS[currentModeAtHour].icon + "'></i>";
+                }
             }
 
             cell2.appendChild(buttonDiv);

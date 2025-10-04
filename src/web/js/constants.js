@@ -12,6 +12,15 @@ const COLOR_MODE_AVOID_DISCHARGE_EVCC_FAST = "#3399FF";
 const COLOR_MODE_DISCHARGE_ALLOWED_EVCC_PV = "lightgreen";
 const COLOR_MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV = "darkorange";
 
+const EOS_CONNECT_ICONS = [
+    { icon: "fa-plug-circle-bolt", color: COLOR_MODE_CHARGE_FROM_GRID, title: "Charge From Grid" },
+    { icon: "fa-lock", color: COLOR_MODE_AVOID_DISCHARGE, title: "Avoid Discharge" },
+    { icon: "fa-battery-half", color: COLOR_MODE_DISCHARGE_ALLOWED, title: "Discharge Allowed" },
+    { icon: "fa-charging-station", color: COLOR_MODE_AVOID_DISCHARGE_EVCC_FAST, title: "Avoid Discharge Due to E-Car Fast Charge" },
+    { icon: "fa-charging-station", color: COLOR_MODE_DISCHARGE_ALLOWED_EVCC_PV, title: "Discharge Allowed During E-Car Charging in PV Mode" },
+    { icon: "fa-charging-station", color: COLOR_MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV, title: "Discharge Allowed During E-Car Charging in Min+PV Mode" }
+];
+
 // Global managers - will be initialized in main.js
 let controlsManager;
 let scheduleManager;
