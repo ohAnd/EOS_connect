@@ -171,7 +171,8 @@ function showMainMenu(version) {
         z-index: 1000;
         min-width: 180px;
         padding: 8px 0;
-        font-size: 0.9em;
+        // font-size: 0.9em;
+        font-size: ${isMobile() ? '1.1em' : '0.9em'};
     `;
     
     dropdown.innerHTML = `
@@ -542,7 +543,7 @@ function showFullScreenOverlay(header, content, close = true) {
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                font-size: ${isMobile() ? '0.9em' : '1em'};
+                font-size: ${isMobile() ? '1.1em' : '1em'};
             ">
                 ${header}
                 ${close ? `<button onclick="closeFullScreenOverlay()" style="background: none; border: none; color: lightgray; font-size: 1.5em; cursor: pointer; padding: 0; width: ${isMobile() ? '28px' : '30px'}; height: ${isMobile() ? '28px' : '30px'}; display: flex; align-items: center; justify-content: center; border-radius: 50%; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='rgba(255,255,255,0.1)'" onmouseout="this.style.backgroundColor='transparent'">×</button>` : ''}
