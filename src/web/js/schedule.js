@@ -19,12 +19,14 @@ class ScheduleManager {
     /**
      * Show schedule for next 24 hours
      */
-    showSchedule(data_request, data_response) {
+    showSchedule(data_request, data_response, data_controls) {
         //console.log("------- showSchedule -------");
         var serverTime = new Date(data_response["timestamp"]);
         var currentHour = serverTime.getHours();
         var discharge_allowed = data_response["discharge_allowed"];
         var ac_charge = data_response["ac_charge"];
+        var inverter_mode_num = data_controls["current_states"]["inverter_mode_num"];
+        var max_charge_power_w = data_controls["max_charge_power_w"];
 
         // Add timezone indicator to schedule header
         document.getElementById('load_schedule_header').innerHTML =
@@ -136,8 +138,8 @@ class ScheduleManager {
 }
 
 // Legacy compatibility function
-function showSchedule(data_request, data_response) {
+function showSchedule(data_request, data_response, data_controls) {
     if (scheduleManager) {
-        scheduleManager.showSchedule(data_request, data_response);
+        scheduleManager.showSchedule(data_request, data_response, data_controls);
     }
 }
