@@ -34,7 +34,7 @@ class MemoryLogHandler(logging.Handler):
         self._shutdown = False
 
         # Define alert levels
-        self.alert_levels = {'WARNING', 'ERROR', 'CRITICAL'}
+        self.alert_levels = {"WARNING", "ERROR", "CRITICAL"}
 
     def emit(self, record):
         """Store the log record in memory - completely non-blocking version"""
@@ -55,8 +55,23 @@ class MemoryLogHandler(logging.Handler):
                     return
 
                 # Create log entry with minimal processing
+                # Use timezone-aware timestamp if formatter is timezone-aware
+                if (
+                    hasattr(self, "formatter")
+                    and self.formatter
+                    and hasattr(self.formatter, "tz")
+                    and self.formatter.tz
+                ):
+                    # Use the formatter's timezone to create timezone-aware timestamp
+                    timestamp = datetime.fromtimestamp(
+                        record.created, self.formatter.tz
+                    ).isoformat()
+                else:
+                    # Fallback to naive timestamp (original behavior)
+                    timestamp = datetime.fromtimestamp(record.created).isoformat()
+
                 log_entry = {
-                    "timestamp": datetime.fromtimestamp(record.created).isoformat(),
+                    "timestamp": timestamp,
                     "level": record.levelname,
                     "message": (
                         str(record.msg) if hasattr(record, "msg") else "No message"
@@ -160,7 +175,9 @@ class MemoryLogHandler(logging.Handler):
             try:
                 # Filter by specific levels if provided
                 if levels != list(self.alert_levels):
-                    alerts = [alert for alert in alerts if alert.get("level", "") in levels]
+                    alerts = [
+                        alert for alert in alerts if alert.get("level", "") in levels
+                    ]
 
                 # Filter by time if provided
                 if since:
@@ -169,7 +186,8 @@ class MemoryLogHandler(logging.Handler):
                         alerts = [
                             alert
                             for alert in alerts
-                            if datetime.fromisoformat(alert.get("timestamp", "")) >= since_dt
+                            if datetime.fromisoformat(alert.get("timestamp", ""))
+                            >= since_dt
                         ]
                     except (ValueError, TypeError):
                         pass
@@ -232,14 +250,18 @@ class MemoryLogHandler(logging.Handler):
                     "main_buffer": {
                         "current_size": len(self.records),
                         "max_size": self.max_records,
-                        "usage_percent": round((len(self.records) / self.max_records) * 100, 1)
+                        "usage_percent": round(
+                            (len(self.records) / self.max_records) * 100, 1
+                        ),
                     },
                     "alert_buffer": {
                         "current_size": len(self.alert_records),
                         "max_size": self.max_alerts,
-                        "usage_percent": round((len(self.alert_records) / self.max_alerts) * 100, 1)
+                        "usage_percent": round(
+                            (len(self.alert_records) / self.max_alerts) * 100, 1
+                        ),
                     },
-                    "alert_levels": list(self.alert_levels)
+                    "alert_levels": list(self.alert_levels),
                 }
                 return stats
             finally:

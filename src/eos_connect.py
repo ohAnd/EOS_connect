@@ -1119,7 +1119,7 @@ def serve_test_json_files(filename):
                 content_type="application/json",
             )
 
-        # Additional security: only allow files with .test.json ending 
+        # Additional security: only allow files with .test.json ending
         # (all test files must follow this naming convention)
         if not filename.endswith(".test.json"):
             logger.warning(
