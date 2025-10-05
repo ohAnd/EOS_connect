@@ -465,7 +465,7 @@ class LoadInterface:
                         + quote((current_time - timedelta(hours=2)).isoformat())
                         + "&end_date="
                         + quote((current_time + timedelta(hours=2)).isoformat())
-                        + ")"
+                        + " )"
                     )
                 logger.error(
                     "[LOAD-IF] DATA ERROR load smaller than car load "
