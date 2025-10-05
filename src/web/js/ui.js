@@ -25,7 +25,7 @@ function overlayMenu(header, content, close = true) {
     document.getElementById('overlay_menu_head').innerHTML = header;
     document.getElementById('overlay_menu_content').innerHTML = content;
     document.getElementById('overlay_menu_close').style.display = close ? '' : 'none';
-    
+
     // Block background scrolling
     document.body.style.overflow = 'hidden';
 }
@@ -85,7 +85,7 @@ function initializeValueChangeObservers() {
  */
 function toggleTestPanel() {
     const testControls = document.getElementById('test_controls');
-    
+
     if (testControls.style.display === 'none' || testControls.style.display === '') {
         testControls.style.display = 'block';
     } else {
@@ -96,22 +96,22 @@ function toggleTestPanel() {
 function switchTestScenario() {
     const select = document.getElementById('test_scenario_select');
     const scenario = select.value;
-    
+
     if (scenario === 'live') {
         currentTestScenario = TEST_SCENARIOS.LIVE;
     } else {
         currentTestScenario = scenario;
     }
-    
+
     console.log('[TestMode] Switched to scenario:', currentTestScenario);
-    
+
     // Automatically refresh data when switching scenarios
     refreshTestData();
 }
 
 async function refreshTestData() {
     console.log('[TestMode] Refreshing data with scenario:', currentTestScenario);
-    
+
     // Force refresh by calling init() which will use the current test scenario
     if (typeof init === 'function') {
         await init();
@@ -133,11 +133,11 @@ function hideTestPanel() {
 }
 
 // Initialize test panel on page load
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     // Show test panel ONLY if URL contains test=1 parameter
     const urlParams = new URLSearchParams(window.location.search);
     const isTestParam = urlParams.get('test') === '1';
-    
+
     if (isTestParam) {
         console.log('[TestMode] Test mode activated via ?test=1 parameter');
         setTimeout(() => showTestPanel(), 1000); // Show after page loads
@@ -156,7 +156,7 @@ function showMainMenu(version) {
         existingDropdown.remove();
         return; // Toggle behavior - close if already open
     }
-    
+
     // Create dropdown menu
     const dropdown = document.createElement('div');
     dropdown.id = 'main-dropdown-menu';
@@ -174,7 +174,7 @@ function showMainMenu(version) {
         // font-size: 0.9em;
         font-size: ${isMobile() ? '1.1em' : '0.9em'};
     `;
-    
+
     dropdown.innerHTML = `
         <div onclick="showOverrideControlsMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
@@ -201,13 +201,6 @@ function showMainMenu(version) {
         
         <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 5px 0;">
 
-        <div onclick="showInfoMenu('${version}'); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
-            onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
-            onmouseout="this.style.backgroundColor='transparent'">
-            <i class="fa-solid fa-info-circle" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
-            <span>Info</span>
-        </div>
-        
         <div onclick="window.open('https://github.com/ohAnd/ha_addons/blob/master/eos_connect/CHANGELOG.md', '_blank'); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center; justify-content: space-between;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
@@ -217,35 +210,40 @@ function showMainMenu(version) {
             </div>
             <i class="fa-solid fa-external-link-alt" style="font-size: 0.7em; color: #888888;"></i>
         </div>
-        
-        <div onclick="window.open('https://github.com/ohAnd/EOS_connect/issues', '_blank'); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center; justify-content: space-between;" 
+        <div onclick="sendBugReport(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
             <div style="display: flex; align-items: center;">
                 <i class="fa-solid fa-bug" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
                 <span>Bug Report</span>
             </div>
-            <i class="fa-solid fa-external-link-alt" style="font-size: 0.7em; color: #888888;"></i>
+        </div>
+
+        <div onclick="showInfoMenu('${version}'); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
+            onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
+            onmouseout="this.style.backgroundColor='transparent'">
+            <i class="fa-solid fa-info-circle" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
+            <span>Info</span>
         </div>
     `;
-    
+
     // Find the menu icon parent container to position relative to it
     const menuIcon = document.getElementById('current_header_left');
     const parentBox = menuIcon.closest('.top-box');
-    
+
     // Add relative positioning to parent if not already present
     if (getComputedStyle(parentBox).position === 'static') {
         parentBox.style.position = 'relative';
     }
-    
+
     // Append dropdown to parent container
     parentBox.appendChild(dropdown);
-    
+
     // Update dropdown notifications using centralized system
     if (typeof MenuNotifications !== 'undefined') {
         MenuNotifications.updateDropdown();
     }
-    
+
     // Add click outside listener to close dropdown
     setTimeout(() => {
         document.addEventListener('click', handleClickOutside, true);
@@ -269,14 +267,14 @@ function closeDropdownMenu() {
  */
 const MenuNotifications = {
     displayedColor: null, // What's actually displayed: null, 'red', 'orange', 'white', 'gray'
-    
+
     /**
      * Initialize the notification system
      */
     init() {
         console.log('[MenuNotifications] Simple state-aware system initialized');
     },
-    
+
     /**
      * Show a dot with specific color (external interface)
      * Priority order: red > orange > white > gray > none
@@ -284,10 +282,10 @@ const MenuNotifications = {
      */
     showDot(requestedColor) {
         console.log(`[MenuNotifications] Request: show ${requestedColor}, currently displaying: ${this.displayedColor}`);
-        
+
         // Determine what should be displayed based on priority
         let targetColor = this.getTargetColor(requestedColor);
-        
+
         // Only update if the target is different from what's displayed
         if (targetColor !== this.displayedColor) {
             console.log(`[MenuNotifications] State change needed: '${this.displayedColor}' → '${targetColor}'`);
@@ -297,7 +295,7 @@ const MenuNotifications = {
             console.log(`[MenuNotifications] No change needed - already displaying '${this.displayedColor}'`);
         }
     },
-    
+
     /**
      * Determine target color based on priority rules
      */
@@ -306,7 +304,7 @@ const MenuNotifications = {
         // Later can add priority logic for multiple sources
         return requestedColor;
     },
-    
+
     /**
      * Render the dot based on displayedColor (only called when state changes)
      */
@@ -316,22 +314,22 @@ const MenuNotifications = {
             console.log(`[MenuNotifications] Menu element not found`);
             return;
         }
-        
+
         // Always remove existing dot first (clean slate)
         const existingDot = menuElement.querySelector('.notification-dot');
         if (existingDot) {
             existingDot.remove();
         }
-        
+
         // Add new dot if needed
         if (this.displayedColor) {
             const colors = {
                 'red': 'rgb(220, 53, 69)',
-                'orange': 'rgb(255, 193, 7)', 
+                'orange': 'rgb(255, 193, 7)',
                 'white': 'rgb(255, 255, 255)',
                 'gray': 'rgb(136, 136, 136)'
             };
-            
+
             const dotColor = colors[this.displayedColor];
             if (dotColor) {
                 const dot = document.createElement('div');
@@ -355,14 +353,14 @@ const MenuNotifications = {
             console.log(`[MenuNotifications] Removed dot (no color)`);
         }
     },
-    
+
     /**
      * Update dropdown menu notifications
      */
     updateDropdown() {
         const dropdown = document.getElementById('main-dropdown-menu');
         if (!dropdown) return;
-        
+
         // Only update Alarms menu item (not Logs)
         const alarmsItem = dropdown.querySelector('div[onclick*="showAlarmsMenu"]');
         if (alarmsItem) {
@@ -370,10 +368,10 @@ const MenuNotifications = {
             let status = null;
             if (this.displayedColor === 'red') status = 'error';
             else if (this.displayedColor === 'orange') status = 'warning';
-            
+
             this.addDropdownNotification(alarmsItem, status);
         }
-        
+
         // Ensure Logs menu item has no notification dot
         const logsItem = dropdown.querySelector('div[onclick*="showLogsMenu"]');
         if (logsItem) {
@@ -383,7 +381,7 @@ const MenuNotifications = {
             }
         }
     },
-    
+
     /**
      * Add notification dot to dropdown menu item
      * @param {Element} menuItem - The menu item element
@@ -395,7 +393,7 @@ const MenuNotifications = {
         if (existingDot) {
             existingDot.remove();
         }
-        
+
         // Add new notification dot if needed
         if (status) {
             const dotColor = status === 'error' ? '#dc3545' : '#ffc107';
@@ -411,11 +409,11 @@ const MenuNotifications = {
                 flex-shrink: 0;
                 border: 1px solid rgba(255,255,255,0.2);
             `;
-            
+
             menuItem.appendChild(dot);
         }
     },
-    
+
     /**
      * Restore notification after menu element changes (only if actually missing)
      */
@@ -426,7 +424,7 @@ const MenuNotifications = {
                 // Check if dot actually exists before restoring
                 const menuElement = document.getElementById('current_header_left');
                 const existingDot = menuElement ? menuElement.querySelector('.notification-dot') : null;
-                
+
                 if (!existingDot) {
                     console.log(`[MenuNotifications] Dot missing, restoring ${this.displayedColor} dot`);
                     this.renderDot();
@@ -448,7 +446,7 @@ window.MenuNotifications = MenuNotifications;
 function handleClickOutside(event) {
     const dropdown = document.getElementById('main-dropdown-menu');
     const menuIcon = document.getElementById('current_header_left');
-    
+
     if (dropdown && !dropdown.contains(event.target) && !menuIcon.contains(event.target)) {
         closeDropdownMenu();
     }
@@ -500,7 +498,7 @@ function showInfoMenu(version) {
             <span>EOS connect Information</span>
         </div>
     `;
-    
+
     const content = `
         <div style="height: calc(100% - 20px); overflow-y: auto; margin-top: 10px; text-align: center;">
             <!-- Version Section -->
@@ -560,7 +558,7 @@ function showInfoMenu(version) {
             </div>
         </div>
     `;
-    
+
     showFullScreenOverlay(header, content);
 }
 
@@ -573,10 +571,10 @@ function showFullScreenOverlay(header, content, close = true) {
     if (!overlay) {
         overlay = document.createElement('div');
         overlay.id = 'full_screen_overlay';
-        
+
         // Responsive padding: very small on mobile, larger on desktop
         const paddingValue = isMobile() ? '8px' : '60px';
-        
+
         overlay.style.cssText = `
             position: fixed;
             top: 0;
@@ -600,7 +598,7 @@ function showFullScreenOverlay(header, content, close = true) {
     const headerPadding = isMobile() ? '12px 15px' : '15px 20px';
     const contentPadding = isMobile() ? '15px' : '20px';
     const borderRadius = isMobile() ? '6px' : '10px';
-    
+
     overlay.innerHTML = `
         <div style="
             background-color: rgb(78, 78, 78);
@@ -642,10 +640,10 @@ function showFullScreenOverlay(header, content, close = true) {
     `;
 
     overlay.style.display = 'flex';
-    
+
     // Block background scrolling
     document.body.style.overflow = 'hidden';
-    
+
     // Add escape key listener
     const escapeHandler = (e) => {
         if (e.key === 'Escape') {
@@ -669,7 +667,7 @@ function closeFullScreenOverlay(waittime = 0) {
 
         // Restore background scrolling
         document.body.style.overflow = '';
-        
+
         // Remove escape key listener
         if (overlay.escapeHandler) {
             document.removeEventListener('keydown', overlay.escapeHandler);
@@ -680,3 +678,15 @@ function closeFullScreenOverlay(waittime = 0) {
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
