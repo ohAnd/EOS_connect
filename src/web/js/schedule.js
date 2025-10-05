@@ -46,7 +46,7 @@ class ScheduleManager {
         priceData.forEach((value, index) => {
             if (index > 23) return;
 
-            var currentModeAtHour = (ac_charge[(index + currentHour)]) ? 0 : (discharge_allowed[(index + currentHour)] === 1) ? 2 : 1;
+            var currentModeAtHour = (ac_charge[(index + currentHour)] > 0) ? 0 : (discharge_allowed[(index + currentHour)] === 1) ? 2 : 1;
             
             if ((index + 1) % 4 === 0 && (index + 1) !== 0) {
                 var row = document.createElement('div');
