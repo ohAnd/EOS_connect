@@ -20,31 +20,31 @@ class ControlsManager {
      */
     showOverrideMenuFullScreen(maxChargePower = null, overrideActive = false) {
         let currentModeNum = -1;
-        
+
         // Use current data if available
         if (typeof data_controls !== 'undefined' && data_controls) {
             if (!maxChargePower) {
                 maxChargePower = data_controls.battery?.max_charge_power_dyn ? data_controls.battery.max_charge_power_dyn / 1000 : 5.0;
             }
-            
+
             // Check multiple ways override could be indicated
             if (data_controls.current_states) {
                 overrideActive = data_controls.current_states.override_active === true;
                 currentModeNum = data_controls.current_states.inverter_mode_num;
             }
-        } 
-        
+        }
+
         if (!maxChargePower) {
             maxChargePower = 5.0; // Default fallback
         }
-        
+
         // Also check global variable as fallback for mode number
         if ((currentModeNum === -1 || currentModeNum === null || currentModeNum === undefined) && typeof inverter_mode_num !== 'undefined') {
             currentModeNum = inverter_mode_num;
         }
-        
+
         console.log('[ControlsManager] Override menu - maxChargePower:', maxChargePower, 'overrideActive:', overrideActive, 'currentModeNum:', currentModeNum);
-        
+
         // Safely log data_controls only if it exists
         if (typeof data_controls !== 'undefined' && data_controls) {
             console.log('[ControlsManager] Full data_controls object:', data_controls);
@@ -68,6 +68,96 @@ class ControlsManager {
 
         const content = `
             <div style="height: calc(100% - 20px); overflow-y: auto; margin-top: 10px; text-align: center;">
+
+                <!-- Duration Selection Section -->
+                <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 25px; margin-bottom: 20px; border-left: 4px solid #17a2b8;">
+                    <div style="font-size: 1.1em; color: #17a2b8; margin-bottom: 15px; font-weight: bold;">
+                        <i class="fas fa-clock" style="margin-right: 10px;"></i>Override Duration<br> <span style="font-size: 0.75em; color: #888; font-weight: normal;">Selected duration will be taken over with mode change</span>
+                    </div>
+                    
+                    <select id="duration_time" style="
+                        padding: 12px 20px;
+                        font-size: 1em;
+                        border-radius: 8px;
+                        border: 2px solid #17a2b8;
+                        background-color: rgba(58, 58, 58, 0.8);
+                        color: white;
+                        cursor: pointer;
+                        min-width: 150px;
+                    ">
+                        ${Array.from({ length: 48 }, (_, i) => {
+                            const hours = Math.floor((i + 1) / 2);
+                            const minutes = ((i + 1) % 2) * 30;
+                            const timeLabel = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+                            return `<option value="${timeLabel}" ${hours === 2 && minutes === 0 ? 'selected' : ''}>${timeLabel}</option>`;
+                        }).join('')}
+                    </select>
+                </div>
+
+                <!-- Grid Charge Power Section (Only for Mode 0) -->
+                ${ currentModeNum === 0 && overrideActive ? '' : `
+                <div id="grid-power-section" style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 25px; border-left: 4px solid ${EOS_CONNECT_ICONS[0].color}; margin-bottom: 15px; ">
+                    <div style="font-size: 1.1em; color: ${EOS_CONNECT_ICONS[0].color}; margin-bottom: 15px; font-weight: bold;">
+                        <i class="fas fa-bolt" style="margin-right: 10px;"></i>Grid Charge Power (kW)<br> <span style="font-size: 0.75em; color: #888; font-weight: normal;">Mode '${EOS_CONNECT_ICONS[0].title}' Only</span>
+                    </div>
+                    
+                    <div style="display: flex; justify-content: center; align-items: center; gap: 15px; flex-wrap: wrap;">
+                        <button id="charge-power-decrease" onclick="controlsManager.adjustGridChargePowerFullScreen(-0.1)" 
+                            style="
+                                padding: 12px 18px;
+                                font-size: 1.2em;
+                                background-color: rgba(58, 58, 58, 0.8);
+                                color: white;
+                                border: 2px solid #666;
+                                border-radius: 8px;
+                                cursor: pointer;
+                                transition: all 0.3s ease;
+                                min-width: 50px;
+                            "
+                            onmouseover="this.style.backgroundColor='rgba(220, 53, 69, 0.2)'; this.style.borderColor='${EOS_CONNECT_ICONS[0].color}'"
+                            onmouseout="this.style.backgroundColor='rgba(58, 58, 58, 0.8)'; this.style.borderColor='#666'">
+                            <i class="fas fa-minus"></i>
+                        </button>
+                        
+                        <input id="grid_charge_power" type="number" step="0.25" min="0.5" max="${maxChargePower.toFixed(1)}" value="${maxChargePower.toFixed(1)}" 
+                            style="
+                                padding: 12px;
+                                font-size: 1.1em;
+                                text-align: center;
+                                width: 120px;
+                                border-radius: 8px;
+                                border: 2px solid ${EOS_CONNECT_ICONS[0].color};
+                                background-color: rgba(58, 58, 58, 0.8);
+                                color: white;
+                            ">
+                        
+                        <button id="charge-power-increase" onclick="controlsManager.adjustGridChargePowerFullScreen(0.1)" 
+                            style="
+                                padding: 12px 18px;
+                                font-size: 1.2em;
+                                background-color: rgba(58, 58, 58, 0.8);
+                                color: white;
+                                border: 2px solid #666;
+                                border-radius: 8px;
+                                cursor: pointer;
+                                transition: all 0.3s ease;
+                                min-width: 50px;
+                            "
+                            onmouseover="this.style.backgroundColor='rgba(220, 53, 69, 0.2)'; this.style.borderColor='#dc3545'"
+                            onmouseout="this.style.backgroundColor='rgba(58, 58, 58, 0.8)'; this.style.borderColor='#666'">
+                            <i class="fas fa-plus"></i>
+                        </button>
+                    </div>
+                    
+                    <div style="margin-top: 10px; font-size: 0.75em; color: #888;">
+                        Range: 0.5 - ${maxChargePower.toFixed(1)} kW
+                    </div>
+                </div>
+                `}
+
+                <div style="margin-top: auto;">
+                </div>
+
                 <!-- Mode Selection Section -->
                 <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 25px; margin-bottom: 20px; border-left: 4px solid lightgray;">
                     <div style="font-size: 1.2em; margin-bottom: 20px; font-weight: bold;">
@@ -167,97 +257,16 @@ class ControlsManager {
                 -->
                 
                 
-                <div style="margin-top: auto;">
-                </div>
 
-                <!-- Duration Selection Section -->
-                <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 25px; margin-bottom: 20px; border-left: 4px solid #17a2b8;">
-                    <div style="font-size: 1.1em; color: #17a2b8; margin-bottom: 15px; font-weight: bold;">
-                        <i class="fas fa-clock" style="margin-right: 10px;"></i>Override Duration
-                    </div>
-                    
-                    <select id="duration_time" style="
-                        padding: 12px 20px;
-                        font-size: 1em;
-                        border-radius: 8px;
-                        border: 2px solid #17a2b8;
-                        background-color: rgba(58, 58, 58, 0.8);
-                        color: white;
-                        cursor: pointer;
-                        min-width: 150px;
-                    ">
-                        ${Array.from({ length: 48 }, (_, i) => {
-                            const hours = Math.floor((i + 1) / 2);
-                            const minutes = ((i + 1) % 2) * 30;
-                            const timeLabel = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-                            return `<option value="${timeLabel}" ${hours === 2 && minutes === 0 ? 'selected' : ''}>${timeLabel}</option>`;
-                        }).join('')}
-                    </select>
-                </div>
 
-                <!-- Grid Charge Power Section (Only for Mode 0) -->
-                <div id="grid-power-section" style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 25px; border-left: 4px solid ${EOS_CONNECT_ICONS[0].color};">
-                    <div style="font-size: 1.1em; color: ${EOS_CONNECT_ICONS[0].color}; margin-bottom: 15px; font-weight: bold;">
-                        <i class="fas fa-bolt" style="margin-right: 10px;"></i>Grid Charge Power (kW)<br> <span style="font-size: 0.85em; color: #888; font-weight: normal;">Mode '${EOS_CONNECT_ICONS[0].title}' Only</span>
-                    </div>
-                    
-                    <div style="display: flex; justify-content: center; align-items: center; gap: 15px; flex-wrap: wrap;">
-                        <button id="charge-power-decrease" onclick="controlsManager.adjustGridChargePowerFullScreen(-0.1)" 
-                            style="
-                                padding: 12px 18px;
-                                font-size: 1.2em;
-                                background-color: rgba(58, 58, 58, 0.8);
-                                color: white;
-                                border: 2px solid #666;
-                                border-radius: 8px;
-                                cursor: pointer;
-                                transition: all 0.3s ease;
-                                min-width: 50px;
-                            "
-                            onmouseover="this.style.backgroundColor='rgba(220, 53, 69, 0.2)'; this.style.borderColor='${EOS_CONNECT_ICONS[0].color}'"
-                            onmouseout="this.style.backgroundColor='rgba(58, 58, 58, 0.8)'; this.style.borderColor='#666'">
-                            <i class="fas fa-minus"></i>
-                        </button>
-                        
-                        <input id="grid_charge_power" type="number" step="0.25" min="0.5" max="${maxChargePower.toFixed(1)}" value="${maxChargePower.toFixed(1)}" 
-                            style="
-                                padding: 12px;
-                                font-size: 1.1em;
-                                text-align: center;
-                                width: 120px;
-                                border-radius: 8px;
-                                border: 2px solid ${EOS_CONNECT_ICONS[0].color};
-                                background-color: rgba(58, 58, 58, 0.8);
-                                color: white;
-                            ">
-                        
-                        <button id="charge-power-increase" onclick="controlsManager.adjustGridChargePowerFullScreen(0.1)" 
-                            style="
-                                padding: 12px 18px;
-                                font-size: 1.2em;
-                                background-color: rgba(58, 58, 58, 0.8);
-                                color: white;
-                                border: 2px solid #666;
-                                border-radius: 8px;
-                                cursor: pointer;
-                                transition: all 0.3s ease;
-                                min-width: 50px;
-                            "
-                            onmouseover="this.style.backgroundColor='rgba(220, 53, 69, 0.2)'; this.style.borderColor='#dc3545'"
-                            onmouseout="this.style.backgroundColor='rgba(58, 58, 58, 0.8)'; this.style.borderColor='#666'">
-                            <i class="fas fa-plus"></i>
-                        </button>
-                    </div>
-                    
-                    <div style="margin-top: 10px; font-size: 0.85em; color: #888;">
-                        Range: 0.5 - ${maxChargePower.toFixed(1)} kW
-                    </div>
-                </div>
+                
+
+                
             </div>
         `;
 
         showFullScreenOverlay(header, content);
-        
+
         // Add mode-specific control logic and touch event listeners
         setTimeout(() => {
             // Add click handlers for mode buttons to show/hide relevant controls
@@ -268,20 +277,20 @@ class ControlsManager {
                     button.setAttribute('onclick', `controlsManager.selectModeForOverride(${index}); ${originalOnClick}`);
                 }
             });
-            
+
             // Initialize with mode 0 (grid charge) selected by default
             // this.selectModeForOverride(0);
-            
+
             // Add touch event listeners for power adjustment buttons
             const decreaseBtn = document.getElementById('charge-power-decrease');
             const increaseBtn = document.getElementById('charge-power-increase');
-            
+
             [decreaseBtn, increaseBtn].forEach(btn => {
                 if (btn) {
-                    btn.addEventListener('touchstart', function() {
+                    btn.addEventListener('touchstart', function () {
                         this.style.backgroundColor = 'rgba(220, 53, 69, 0.3)';
                     }, { passive: true });
-                    btn.addEventListener('touchend', function() {
+                    btn.addEventListener('touchend', function () {
                         this.style.backgroundColor = 'rgba(58, 58, 58, 0.8)';
                     }, { passive: true });
                 }
@@ -310,7 +319,7 @@ class ControlsManager {
                 }
             }
         });
-        
+
         // Show/hide grid charge power section based on mode
         const gridPowerSection = document.getElementById('grid-power-section');
         if (gridPowerSection) {
@@ -322,7 +331,7 @@ class ControlsManager {
                 gridPowerSection.style.display = 'none';
             }
         }
-        
+
         // Store selected mode for later use
         this.selectedOverrideMode = mode;
     }
@@ -333,7 +342,7 @@ class ControlsManager {
     async handleModeChangeFullScreen(mode) {
         const durationElement = document.getElementById('duration_time');
         const gridChargePowerElement = document.getElementById('grid_charge_power');
-        
+
         if (!durationElement || !gridChargePowerElement) {
             console.error('[ControlsManager] Duration or grid charge power elements not found');
             return;
@@ -341,7 +350,7 @@ class ControlsManager {
 
         const duration = durationElement.value;
         const gridChargePower = gridChargePowerElement.value;
-        
+
         const controlData = {
             mode: mode,
             duration: duration,
@@ -353,10 +362,10 @@ class ControlsManager {
         try {
             const result = await dataManager.setOverrideControl(controlData);
             console.log('[ControlsManager] Override control set successfully:', result);
-            
+
             // Close the overlay after successful operation
             closeFullScreenOverlay(2500);
-            
+
             // Refresh data to show updated state
             if (typeof init === 'function') {
                 setTimeout(init, 500); // Small delay to allow server to process
@@ -373,11 +382,11 @@ class ControlsManager {
     adjustGridChargePowerFullScreen(delta) {
         const input = document.getElementById('grid_charge_power');
         if (!input) return;
-        
+
         const currentValue = parseFloat(input.value) || 0;
         const maxValue = parseFloat(input.max) || 10;
         const minValue = parseFloat(input.min) || 0.5;
-        
+
         const newValue = Math.max(minValue, Math.min(maxValue, currentValue + delta));
         input.value = newValue.toFixed(1);
     }
@@ -399,7 +408,7 @@ class ControlsManager {
 
         // Update overall state
         const cleanModeText = inverterModeText.replace("MODE ", "");
-        document.getElementById('control_overall').innerHTML = overrideActive ? 
+        document.getElementById('control_overall').innerHTML = overrideActive ?
             `<i class="fa-solid fa-triangle-exclamation"></i> ${cleanModeText}` : cleanModeText;
 
         // Update controls based on override state
@@ -417,9 +426,9 @@ class ControlsManager {
      * Update controls when override is active
      */
     updateOverrideControls(states, overrideEndTime, inverterModeNum) {
-        const overrideEndFormatted = new Date(overrideEndTime * 1000).toLocaleString(navigator.language, { 
-            hour: '2-digit', 
-            minute: '2-digit' 
+        const overrideEndFormatted = new Date(overrideEndTime * 1000).toLocaleString(navigator.language, {
+            hour: '2-digit',
+            minute: '2-digit'
         });
 
         document.getElementById('control_ac_charge_desc').innerText = "Override Active";
@@ -451,13 +460,13 @@ class ControlsManager {
         document.getElementById('control_ac_charge_desc').style.color = "";
         document.getElementById('control_ac_charge').innerText = (states.current_ac_charge_demand / 1000).toFixed(1) + " kW";
         document.getElementById('control_ac_charge').style.color = "";
-        
+
         document.getElementById('control_dc_charge_desc').innerText = "DC Charge";
         document.getElementById('control_dc_charge').innerText = (states.current_dc_charge_demand / 1000).toFixed(1) + " kW";
-        
+
         document.getElementById('control_discharge_allowed_desc').innerText = "Discharge allowed";
         document.getElementById('control_discharge_allowed').innerText = states.current_discharge_allowed ? "Yes" : "No";
-        
+
         document.getElementById('current_controls_box').style.border = "";
     }
 
@@ -472,7 +481,7 @@ class ControlsManager {
 
         const iconData = EOS_CONNECT_ICONS[inverterModeNum] || {};
         const { icon, color, title } = iconData;
-        
+
         iconElement.innerHTML = `<i class="fa-solid ${icon}"></i>`;
         iconElement.style.color = color || "";
         iconElement.title = title || "";
