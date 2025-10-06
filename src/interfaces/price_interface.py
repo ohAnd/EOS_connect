@@ -88,6 +88,8 @@ class PriceInterface:
     ):
         self.src = config["source"]
         self.access_token = config.get("token", "")
+        self.fixed_price_adder_ct = config.get("fixed_price_adder_ct", 0.0)
+        self.relative_price_multiplier = config.get("relative_price_multiplier", 0.0)
         self.fixed_24h_array = config.get("fixed_24h_array", False)
         # for HA addon config - if string, convert to list of floats
         if isinstance(self.fixed_24h_array, str) and self.fixed_24h_array != "":
@@ -359,10 +361,21 @@ class PriceInterface:
 
         prices = []
         for price in data["values"]:
-            prices.append(round(price["marketpriceEurocentPerKWh"] / 100000, 9))
+            price_with_fixed = (
+                round(price["marketpriceEurocentPerKWh"] / 100000, 9)
+                + self.fixed_price_adder_ct / 100000
+            )
+            price_final = round(
+                price_with_fixed * (1 + self.relative_price_multiplier), 9
+            )
+            prices.append(price_final)
+
             # logger.debug(
-            #     "[Main] day 1 - price for %s -> %s", price["marketpriceEurocentPerKWh"],
-            #       price["start"]
+            #     "[PRICE-IF] day 1 - price for %s real: %s (fix: %s) -> %s",
+            #     round(price["marketpriceEurocentPerKWh"] / 100000, 9),
+            #     price_final,
+            #     round(self.fixed_price_adder_ct / 100000, 9),
+            #     price["start"],
             # )
 
         if start_time is None:

@@ -64,6 +64,8 @@ class ConfigManager:
                     {
                         "source": "default",
                         "token": "tibberBearerToken",  # token for electricity price
+                        "fixed_price_adder_ct": 0.0,  # Describes the fixed cost addition in ct per kWh.
+                        "relative_price_multiplier": 0.00,  # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
                         # 24 hours array with fixed end customer prices in ct/kWh over the day
                         "fixed_24h_array": "10.1,10.1,10.1,10.1,10.1,23,28.23,28.23"
                         + ",28.23,28.23,28.23,23.52,23.52,23.52,23.52,28.17,28.17,34.28,"
@@ -210,6 +212,14 @@ class ConfigManager:
         )
         config["price"].yaml_add_eol_comment("Token for electricity price", "token")
         config["price"].yaml_add_eol_comment(
+            "fixed cost addition in ct per kWh", "fixed_price_adder_ct"
+        )
+        config["price"].yaml_add_eol_comment(
+            "relative cost addition as a multiplier in %. Applied to (base energy price"
+            + " + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).",
+            "relative_price_multiplier",
+        )
+        config["price"].yaml_add_eol_comment(
             "24 hours array with fixed end customer prices in ct/kWh over the day",
             "fixed_24h_array",
         )
@@ -258,8 +268,8 @@ class ConfigManager:
             "price for battery in euro/Wh - default: 0.0", "price_euro_per_wh_accu"
         )
         config["battery"].yaml_add_eol_comment(
-            "enabling charging curve for controlled charging power"+
-            " according to the SOC (default: true)",
+            "enabling charging curve for controlled charging power"
+            + " according to the SOC (default: true)",
             "charging_curve_enabled",
         )
 
@@ -332,13 +342,16 @@ class ConfigManager:
             "type",
         )
         config["inverter"].yaml_add_eol_comment(
-            "Address of the inverter (fronius_gen24/fronius_gen24_legacy only)", "address"
+            "Address of the inverter (fronius_gen24/fronius_gen24_legacy only)",
+            "address",
         )
         config["inverter"].yaml_add_eol_comment(
-            "Username for the inverter (fronius_gen24/fronius_gen24_legacy only)", "user"
+            "Username for the inverter (fronius_gen24/fronius_gen24_legacy only)",
+            "user",
         )
         config["inverter"].yaml_add_eol_comment(
-            "Password for the inverter (fronius_gen24/fronius_gen24_legacy only)", "password"
+            "Password for the inverter (fronius_gen24/fronius_gen24_legacy only)",
+            "password",
         )
         config["inverter"].yaml_add_eol_comment(
             "Max inverter grid charge rate in W - default: 5000", "max_grid_charge_rate"
