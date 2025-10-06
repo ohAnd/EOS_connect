@@ -3,17 +3,16 @@
  * This should contain ALL the initialization logic from the legacy file
  */
 /*
-        * TIME HANDLING STRATEGY
-        * ======================
-        * 
-        * SERVER TIME: Used for all data processing and calculations (from data_response["timestamp"])
-        * USER TIME: Used for display - chart labels and schedule show in user's local timezone
-        * 
-        * This allows users in different timezones to see when events happen in their local time
-        * while maintaining consistent server-based data processing.
-        */
-const TEST_MODE = false;
-if (TEST_MODE) {
+* TIME HANDLING STRATEGY
+* ======================
+* 
+* SERVER TIME: Used for all data processing and calculations (from data_response["timestamp"])
+* USER TIME: Used for display - chart labels and schedule show in user's local timezone
+* 
+* This allows users in different timezones to see when events happen in their local time
+* while maintaining consistent server-based data processing.
+*/
+if (isTestMode) {
     document.body.style.backgroundColor = 'lightgreen';
 }
 
@@ -23,18 +22,12 @@ let chartInstance = null;
 let menuControlEventListener = null;
 let data_controls = null; // Global data_controls for use across modules
 
-// Constants are now loaded from constants.js
-
-// Functions now properly modularized - check respective manager files for implementations
-
-// Set up chart resize handler - this needs to be in main.js
+// Set up chart resize handler
 window.addEventListener('resize', () => {
     if (chartManager) {
         chartManager.updateLegendVisibility();
     }
 });
-
-// Legacy wrapper functions now in data.js
 
 // Use handlingErrorInResponse from data.js
 function handlingErrorInResponse(data_response) {
@@ -54,15 +47,6 @@ function handlingErrorInResponse(data_response) {
     return false;
 }
 
-// Chart functions now handled by ChartManager in chart.js
-
-// setBatteryChargingData moved to battery.js manager
-
-// EVCC functions moved to evcc.js - using manager pattern
-
-// showCarChargingData moved to evcc.js manager
-
-// ADD ASYNC KEYWORD HERE - THIS WAS MISSING!
 async function showCurrentData() {
     //console.log("------- showCurrentControls -------");
     data_controls = await dataManager.fetchCurrentControls(currentTestScenario);
@@ -73,14 +57,14 @@ async function showCurrentData() {
         controlsManager.updateCurrentControls(data_controls);
     }
 
-    // Keep the battery and version display logic
+    // battery and version display
     document.getElementById('battery_soc').innerText = data_controls["battery"]["soc"] + " %";
     document.getElementById('battery_icon_main').innerHTML = getBatteryIcon(data_controls["battery"]["soc"]);
     document.getElementById('current_max_charge_dyn').innerHTML = "<i>" + (data_controls["battery"]["max_charge_power_dyn"] / 1000).toFixed(2) + " kW</i>";
     document.getElementById('battery_usable_capacity').innerHTML = '<i class="fa-solid fa-database"></i> ' + (data_controls["battery"]["usable_capacity"] / 1000).toFixed(1) + ' <span style="font-size: 0.6em;">kWh</span>';
     document.getElementById('battery_usable_capacity').title = "usable capacity: " + (data_controls["battery"]["usable_capacity"] / 1000).toFixed(1) + " kWh";
 
-    // Keep timestamp and version logic
+    // timestamp and version
     const timestamp_last_run = new Date(data_controls.state.last_response_timestamp);
     const timestamp_next_run = new Date(data_controls.state.next_run);
     const timestamp_last_run_formatted = timestamp_last_run.toLocaleString(navigator.language, {
@@ -138,9 +122,6 @@ async function showCurrentData() {
 }
 
 // Use manager functions for statistics and schedule
-// showStatistics moved to statistics.js manager
-
-// showSchedule moved to schedule.js manager
 
 // function to observe changed values of doc elements from class "valueChange" and animate the change
 Array.from(document.getElementsByClassName("valueChange")).forEach(function (element) {
@@ -188,8 +169,8 @@ async function init() {
             }, 1000);
         }
 
-        // Fetch all data using the new dataManager
-        const allData = await dataManager.fetchAllData(TEST_MODE, currentTestScenario);
+        // Fetch all data using the dataManager
+        const allData = await dataManager.fetchAllData(isTestMode, currentTestScenario);
         const { request: data_request, response: data_response, controls: data_controls } = allData;
 
         // Extract max_charge_power_w from request data
@@ -242,4 +223,4 @@ async function init() {
 
 // Initialize and start polling
 init();
-setInterval(init, 1000); // Keep 1000ms for now to match legacy behavior
+setInterval(init, 1000);

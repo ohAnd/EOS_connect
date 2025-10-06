@@ -281,7 +281,7 @@ const MenuNotifications = {
      * @param {string|null} requestedColor - 'red', 'orange', 'white', 'gray', or null
      */
     showDot(requestedColor) {
-        console.log(`[MenuNotifications] Request: show ${requestedColor}, currently displaying: ${this.displayedColor}`);
+        // console.log(`[MenuNotifications] Request: show ${requestedColor}, currently displaying: ${this.displayedColor}`);
 
         // Determine what should be displayed based on priority
         let targetColor = this.getTargetColor(requestedColor);
@@ -292,7 +292,7 @@ const MenuNotifications = {
             this.displayedColor = targetColor;
             this.renderDot();
         } else {
-            console.log(`[MenuNotifications] No change needed - already displaying '${this.displayedColor}'`);
+            // console.log(`[MenuNotifications] No change needed - already displaying '${this.displayedColor}'`);
         }
     },
 

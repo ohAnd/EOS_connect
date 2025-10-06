@@ -77,16 +77,18 @@ class DataManager {
     /**
      * Fetch optimization request data
      */
-    async fetchOptimizationRequest(testMode = false) {
-        const filename = testMode ? "optimize_request.test.json" : "optimize_request.json";
+    async fetchOptimizationRequest(isTestMode = null) {
+        const filename = isTestMode ? "optimize_request.test.json" : "optimize_request.json";
+        // console.log(`[DataManager] Fetching optimization request: ${filename}`);
         return this.fetchEOSConnectData(filename);
     }
 
     /**
      * Fetch optimization response data
      */
-    async fetchOptimizationResponse(testMode = false) {
-        const filename = testMode ? "optimize_response.test.json" : "optimize_response.json";
+    async fetchOptimizationResponse(isTestMode = null) {
+        const filename = isTestMode ? "optimize_response.test.json" : "optimize_response.json";
+        // console.log(`[DataManager] Fetching optimization response: ${filename}`);
         return this.fetchEOSConnectData(filename);
     }
 
@@ -119,11 +121,12 @@ class DataManager {
      * Fetch all data needed for initialization
      * Returns both request and response data
      */
-    async fetchAllData(testMode = false, testScenario = null) {
+    async fetchAllData(isTestMode = false, testScenario = null) {
+        // testScenario != 'LIVE' ? console.log("[DataManager] Fetching all data in TEST mode") : null;
         try {
             const [requestData, responseData, controlsData] = await Promise.all([
-                this.fetchOptimizationRequest(testMode),
-                this.fetchOptimizationResponse(testMode),
+                this.fetchOptimizationRequest(isTestMode),
+                this.fetchOptimizationResponse(isTestMode),
                 this.fetchCurrentControls(testScenario)
             ]);
 
