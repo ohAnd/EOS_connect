@@ -98,6 +98,12 @@ A default config file will be created with the first start, if there is no `conf
 - **`price.token`**:  
   Token for accessing electricity price data. (If not needed, set to `token: ""`)
 
+- **`fixed_price_adder_ct`**:
+  Describes the fixed cost addition in ct per kWh. Only applied to source default (akkudoktor).
+  
+- **`relative_price_multiplier`**:
+  Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%). Only applied to source default (akkudoktor).
+
 - **`price.fixed_24h_array`**:
   24 hours array with fixed end customer prices in ct/kWh over the day.
   - Leave empty if not set source to `fixed_24h`.
@@ -380,6 +386,8 @@ eos:
 price:
   source: default  # data source for electricity price tibber, smartenergy_at, fixed_24h, default (default uses akkudoktor)
   token: tibberBearerToken # Token for electricity price
+  fixed_price_adder_ct: 2.5 # Describes the fixed cost addition in ct per kWh.
+  relative_price_multiplier: 0.05 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
   fixed_24h_array: 10.41, 10.42, 10.42, 10.42, 10.42, 23.52, 28.17, 28.17, 28.17, 28.17, 28.17, 23.52, 23.52, 23.52, 23.52, 28.17, 28.17, 34.28, 34.28, 34.28, 34.28, 34.28, 28.17, 23.52 # 24 hours array with fixed prices over the day
   feed_in_price: 0.0 # feed in price for the grid in €/kWh
   negative_price_switch: false # switch for no payment if negative stock price is given
@@ -458,6 +466,8 @@ eos:
 # Electricity price configuration
 price:
   source: default  # data source for electricity price tibber, smartenergy_at, fixed_24h, default (default uses akkudoktor)
+  fixed_price_adder_ct: 0 # Describes the fixed cost addition in ct per kWh.
+  relative_price_multiplier: 0 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
 # battery configuration
 battery:
   source: default  # Data source for battery soc - openhab, homeassistant, default
