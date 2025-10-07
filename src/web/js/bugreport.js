@@ -6,7 +6,7 @@
 class BugReportManager {
     constructor() {
         this.repoOwner = 'ohAnd';
-        this.repoName = 'openhab'; // Using openhab repo for bug reports
+        this.repoName = 'EOS_connect'; // Using EOS_connect repo for bug reports
         this.maxBodySize = 65536; // GitHub API body size limit (~64KB)
     }
 
