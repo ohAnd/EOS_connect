@@ -22,7 +22,7 @@ Usage:
 import logging
 import time
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import pandas as pd
 import numpy as np
@@ -75,6 +75,26 @@ class EosInterface:
             ">=2025-04-09"  # use as default value in case version check fails
         )
         self.eos_version = self.__retrieve_eos_version()
+
+        self.last_control_data = [
+            {
+                "ac_charge_demand": 0,
+                "dc_charge_demand": 0,
+                "discharge_allowed": False,
+                "error": 0,
+                "hour": -1,
+            },
+            {
+                "ac_charge_demand": 0,
+                "dc_charge_demand": 0,
+                "discharge_allowed": False,
+                "error": 0,
+                "hour": -1,
+            }
+        ]
+
+        self.last_optimization_runtimes = [0] * 5  # list to store last 5 runtimes
+        self.last_optimization_runtime_number = 0  # index for circular list
 
     # EOS basic API helper
     def set_config_value(self, key, value):
@@ -144,12 +164,29 @@ class EosInterface:
             elapsed_time = end_time - start_time
             minutes, seconds = divmod(elapsed_time, 60)
             logger.info(
-                "[EOS] OPTIMIZE response retrieved successfully in %d min %.2f sec",
+                "[EOS] OPTIMIZE response retrieved successfully in %d min %.2f sec for current run",
                 int(minutes),
                 seconds,
             )
             response.raise_for_status()
-            return response.json()
+            # Check if the array is still filled with zeros
+            if all(runtime == 0 for runtime in self.last_optimization_runtimes):
+                # Fill all entries with the first real value
+                self.last_optimization_runtimes = [elapsed_time] * 5
+            else:
+                # Store the runtime in the circular list only if successful
+                self.last_optimization_runtimes[
+                    self.last_optimization_runtime_number
+                ] = elapsed_time
+            self.last_optimization_runtime_number = (
+                self.last_optimization_runtime_number + 1
+            ) % 5
+            # logger.debug(
+            #     "[EOS] OPTIMIZE Last 5 runtimes in seconds: %s",
+            #     self.last_optimization_runtimes,
+            # )
+            avg_runtime = sum(self.last_optimization_runtimes) / 5
+            return response.json(), avg_runtime
         except requests.exceptions.Timeout:
             logger.error("[EOS] OPTIMIZE Request timed out after %s seconds", timeout)
             return {"error": "Request timed out - trying again with next run"}
@@ -212,9 +249,14 @@ class EosInterface:
         # ecar_response = None
         if "ac_charge" in optimized_response_in:
             ac_charge_demand_relative = optimized_response_in["ac_charge"]
+            self.last_control_data[0]["ac_charge_demand"] = ac_charge_demand_relative[
+                current_hour
+            ]
+            self.last_control_data[1]["ac_charge_demand"] = ac_charge_demand_relative[
+                current_hour + 1 if current_hour < 23 else 0
+            ]
             # getting entry for current hour
             ac_charge_demand_relative = ac_charge_demand_relative[current_hour]
-
             logger.debug(
                 "[EOS] RESPONSE AC charge demand for current hour %s:00 -> %s %%",
                 current_hour,
@@ -222,6 +264,13 @@ class EosInterface:
             )
         if "dc_charge" in optimized_response_in:
             dc_charge_demand_relative = optimized_response_in["dc_charge"]
+            self.last_control_data[0]["dc_charge_demand"] = dc_charge_demand_relative[
+                current_hour
+            ]
+            self.last_control_data[1]["dc_charge_demand"] = dc_charge_demand_relative[
+                current_hour + 1 if current_hour < 23 else 0
+            ]
+
             # getting entry for current hour
             dc_charge_demand_relative = dc_charge_demand_relative[current_hour]
             logger.debug(
@@ -231,6 +280,12 @@ class EosInterface:
             )
         if "discharge_allowed" in optimized_response_in:
             discharge_allowed = optimized_response_in["discharge_allowed"]
+            self.last_control_data[0]["discharge_allowed"] = discharge_allowed[
+                current_hour
+            ]
+            self.last_control_data[1]["discharge_allowed"] = discharge_allowed[
+                current_hour + 1 if current_hour < 23 else 0
+            ]
             # getting entry for current hour
             discharge_allowed = bool(discharge_allowed[current_hour])
             logger.debug(
@@ -254,6 +309,11 @@ class EosInterface:
         else:
             logger.error("[EOS] RESPONSE No control data in optimized response")
             response_error = True
+
+        self.last_control_data[0]["error"] = int(response_error)
+        self.last_control_data[1]["error"] = int(response_error)
+        self.last_control_data[0]["hour"] = current_hour
+        self.last_control_data[1]["hour"] = current_hour + 1 if current_hour < 23 else 0
 
         if "washingstart" in optimized_response_in:
             self.home_appliance_start_hour = optimized_response_in["washingstart"]
@@ -302,6 +362,15 @@ class EosInterface:
                 e,
             )
 
+    def get_last_control_data(self):
+        """
+        Get the last control data for the EOS interface.
+
+        Returns:
+            list: The last control data.
+        """
+        return self.last_control_data
+
     def set_last_start_solution(self, last_start_solution):
         """
         Set the last start solution for the EOS interface.
@@ -312,14 +381,12 @@ class EosInterface:
         self.last_start_solution = last_start_solution
 
     def get_last_start_solution(self):
-        '''
         """
         Get the last start solution for the EOS interface.
 
         Returns:
             str: The last start solution.
         """
-        '''
         return self.last_start_solution
 
     def get_home_appliance_released(self):
@@ -449,3 +516,136 @@ class EosInterface:
             str: The EOS version.
         """
         return self.eos_version
+
+    def calculate_next_run_time(self, current_time, avg_runtime, update_interval):
+        """
+        Calculate the next run time to align completion near quarter-hour marks.
+
+        Args:
+            current_time: Current datetime
+            avg_runtime: Average runtime in seconds
+
+        Returns:
+            datetime: Next scheduled run time
+        """
+        # Configuration
+        quarter_hour_minutes = [0, 15, 30, 45]  # Target completion minutes
+        alignment_tolerance = max(
+            10, avg_runtime * 0.05
+        )  # 5% of runtime or 10s minimum
+        min_interval = max(
+            30, update_interval * 0.3
+        )  # Minimum 30s or 30% of user interval
+        max_interval = update_interval * 1.7  # Maximum 170% of user interval
+
+        # Reset to full minutes
+        next_eval = current_time.replace(second=0, microsecond=0)
+
+        # Calculate target completion time (current + user interval + avg runtime)
+        target_completion = next_eval + timedelta(seconds=update_interval + avg_runtime)
+
+        # Find the nearest quarter-hour mark to our target completion
+        target_minute = target_completion.minute
+        nearest_quarter = min(
+            quarter_hour_minutes,
+            key=lambda x: min(
+                abs(x - target_minute),
+                abs(x + 60 - target_minute),
+                abs(x - 60 - target_minute),
+            ),
+        )
+
+        # Calculate the target completion time aligned to quarter-hour
+        aligned_completion = target_completion.replace(minute=nearest_quarter, second=0)
+
+        # If we've passed this quarter-hour, move to the next one
+        if aligned_completion <= current_time + timedelta(seconds=avg_runtime + 30):
+            next_quarter_idx = (quarter_hour_minutes.index(nearest_quarter) + 1) % 4
+            if next_quarter_idx == 0:  # Rolled over to next hour
+                aligned_completion = aligned_completion.replace(
+                    hour=aligned_completion.hour + 1, minute=0
+                )
+            else:
+                aligned_completion = aligned_completion.replace(
+                    minute=quarter_hour_minutes[next_quarter_idx]
+                )
+
+        # Calculate when to start to finish at the aligned time
+        aligned_start = aligned_completion - timedelta(seconds=avg_runtime)
+
+        # Apply guardrails
+        proposed_interval = (aligned_start - current_time).total_seconds()
+
+        # --- NEW LOGIC: Force alignment if close to quarter-hour ---
+        # How close (in seconds) to force alignment
+        force_alignment_threshold = 120  # 2 minutes
+
+        # Calculate seconds to next quarter-hour from expected completion
+        expected_completion = current_time + timedelta(seconds=update_interval + avg_runtime)
+        completion_minute = expected_completion.minute
+        completion_second = expected_completion.second
+        seconds_past_quarter = (completion_minute % 15) * 60 + completion_second
+        seconds_to_next_quarter = 900 - seconds_past_quarter
+
+        # Only force alignment if user interval is close to quarter-hour
+        if (
+            seconds_to_next_quarter <= force_alignment_threshold
+            and update_interval >= (seconds_to_next_quarter * 0.8)
+        ):
+            # Force alignment to finish exactly at the next quarter-hour
+            next_quarter_minute = ((current_time.minute // 15) + 1) * 15 % 60
+            next_quarter_hour = current_time.hour + ((current_time.minute // 45) + 1) // 4
+            aligned_completion = current_time.replace(
+                hour=next_quarter_hour % 24,
+                minute=next_quarter_minute,
+                second=0,
+                microsecond=0,
+            )
+            aligned_start = aligned_completion - timedelta(seconds=avg_runtime)
+            next_eval = aligned_start
+            logger.debug(
+                "[OPTIMIZATION] Forcing alignment to quarter-hour: completion target %s",
+                aligned_completion.strftime("%H:%M:%S"),
+            )
+        # Guardrail 1: Minimum interval
+        elif update_interval < min_interval:
+            logger.debug(
+                "[OPTIMIZATION] User interval too short (%ds), applying minimum %ds",
+                update_interval,
+                min_interval,
+            )
+            next_eval = current_time + timedelta(seconds=min_interval)
+        # Guardrail 2: Maximum interval
+        elif update_interval > max_interval:
+            logger.debug(
+                "[OPTIMIZATION] User interval too long (%ds), applying maximum %ds",
+                update_interval,
+                max_interval,
+            )
+            next_eval = current_time + timedelta(seconds=max_interval)
+        # Otherwise, use user interval
+        else:
+            next_eval = current_time + timedelta(seconds=update_interval)
+
+        # Final safety check: ensure we don't schedule in the past
+        if next_eval <= current_time:
+            next_eval = current_time + timedelta(seconds=min_interval)
+            logger.warning(
+                "[OPTIMIZATION] Scheduling conflict resolved, using minimum interval"
+            )
+
+        # Log the scheduling decision
+        expected_completion = next_eval + timedelta(seconds=avg_runtime)
+        completion_minute = expected_completion.minute
+        completion_second = expected_completion.second
+        seconds_past_quarter = (completion_minute % 15) * 60 + completion_second
+        seconds_to_next_quarter = min(seconds_past_quarter, 900 - seconds_past_quarter)
+
+        logger.info(
+            "[OPTIMIZATION] Next run: %s, expected completion: %s (%.0f sec from quarter-hour)",
+            next_eval.strftime("%H:%M:%S"),
+            expected_completion.strftime("%H:%M:%S"),
+            seconds_to_next_quarter,
+        )
+
+        return next_eval

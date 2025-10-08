@@ -573,7 +573,7 @@ class MqttInterface:
         :param qos: Quality of Service level (default: 0)
         :param retain: Retain the message (default: False)
         """
-        logger.debug("[MQTT] Publishing message to topic '%s': %s", topic, payload)
+        # logger.debug("[MQTT] Publishing message to topic '%s': %s", topic, payload)
         self.client.publish(topic, payload, qos=qos, retain=retain)
 
     def __subscribe(self, topic, qos=0):

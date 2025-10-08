@@ -434,13 +434,14 @@ class OptimizationScheduler:
     managing the lifecycle of the optimization service.
     Attributes:
         update_interval (int): The interval in seconds between optimization runs.
-        _update_thread (threading.Thread): The background thread running the optimization loop.
+        _update_thread_optimization_loop (threading.Thread): The background thread
+            running the optimization loop.
         _stop_event (threading.Event): An event used to signal the thread to stop.
     Methods:
-        start_update_service():
+        __start_update_service_optimization_loop():
         shutdown():
         _update_state_loop():
-        run_optimization():
+        __run_optimization_loop():
     """
 
     def __init__(self, update_interval):
@@ -470,12 +471,16 @@ class OptimizationScheduler:
             "last_response_timestamp": datetime.now(time_zone).isoformat(),
             "next_run": None,
         }
-        self._update_thread = None
+        self._update_thread_optimization_loop = None
         self._stop_event = threading.Event()
-        self.start_update_service()
-        self._update_thread_inner_loop = None
-        self._stop_event_inner_loop = threading.Event()
-        self.__start_update_service_inner_loop()
+        self._last_avg_runtime = 120  # Initialize with a default value
+        self.__start_update_service_optimization_loop()
+        self._update_thread_control_loop = None
+        self._stop_event_control_loop = threading.Event()
+        self.__start_update_service_control_loop()
+        self._update_thread_data_loop = None
+        self._stop_event_data_loop = threading.Event()
+        self.__start_update_service_data_loop()
 
     def get_last_request_response(self):
         """
@@ -513,38 +518,74 @@ class OptimizationScheduler:
         """
         self.current_state["next_run"] = next_run_time
 
-    def start_update_service(self):
+    def __start_update_service_optimization_loop(self):
         """
         Starts the background thread to periodically update the state.
         """
-        if self._update_thread is None or not self._update_thread.is_alive():
+        if (
+            self._update_thread_optimization_loop is None
+            or not self._update_thread_optimization_loop.is_alive()
+        ):
             self._stop_event.clear()
-            self._update_thread = threading.Thread(
-                target=self._update_state_loop, daemon=True
+            self._update_thread_optimization_loop = threading.Thread(
+                target=self.__update_state_optimization_loop, daemon=True
             )
-            self._update_thread.start()
-            logger.info("[OPTIMIZATION] Update service started.")
+            self._update_thread_optimization_loop.start()
+            logger.info("[OPTIMIZATION] Update service Optimization Run started.")
 
-    def _update_state_loop(self):
+    def __update_state_optimization_loop(self):
         """
         The loop that runs in the background thread to update the state.
         """
         while not self._stop_event.is_set():
             try:
-                self.run_optimization()
+                # Calculate next run time BEFORE running optimization
+                loop_start = datetime.now(time_zone)
+                self.__run_optimization_loop()
+
+                # Calculate actual sleep time based on smart scheduling
+                loop_now = datetime.now(time_zone)
+                next_eval = eos_interface.calculate_next_run_time(
+                    loop_now,
+                    getattr(self, "_last_avg_runtime", 120),  # Use last known runtime
+                    self.update_interval,
+                )
+                actual_sleep_interval = max(10, (next_eval - loop_now).total_seconds())
+                self.__set_state_next_run(next_eval.astimezone(time_zone).isoformat())
+                mqtt_interface.update_publish_topics(
+                    {
+                        "optimization/last_run": {
+                            "value": self.get_current_state()["last_response_timestamp"]
+                        },
+                        "optimization/next_run": {
+                            "value": self.get_current_state()["next_run"]
+                        },
+                    }
+                )
+                minutes, seconds = divmod(actual_sleep_interval, 60)
+                logger.info(
+                    "[Main] Next optimization at %s (based on average runtime of %.0f seconds)."
+                    + " Sleeping for %d min %.0f seconds\n",
+                    next_eval.strftime("%H:%M:%S"),
+                    getattr(self, "_last_avg_runtime", 120),
+                    minutes,
+                    seconds,
+                )
+
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:
                 logger.error("[OPTIMIZATION] Error while updating state: %s", e)
-                # Break the sleep interval into smaller chunks to allow immediate shutdown
-            sleep_interval = self.update_interval
-            while sleep_interval > 0:
+                actual_sleep_interval = self.update_interval  # Fallback on error
+
+            # Use the calculated sleep interval instead of fixed interval
+            while actual_sleep_interval > 0:
                 if self._stop_event.is_set():
                     return  # Exit immediately if stop event is set
-                time.sleep(min(1, sleep_interval))  # Sleep in 1-second chunks
-                sleep_interval -= 1
+                time.sleep(min(1, actual_sleep_interval))  # Sleep in 1-second chunks
+                actual_sleep_interval -= 1
 
-        self.start_update_service()
+        # self.__start_update_service_optimization_loop()
 
-    def run_optimization(self):
+    def __run_optimization_loop(self):
         """
         Executes the optimization process by creating an optimization request,
         sending it to the EOS interface, processing the response, and scheduling
@@ -584,9 +625,11 @@ class OptimizationScheduler:
         mqtt_interface.update_publish_topics(
             {"optimization/state": {"value": self.get_current_state()["request_state"]}}
         )
-        optimized_response = eos_interface.eos_set_optimize_request(
+        optimized_response, avg_runtime = eos_interface.eos_set_optimize_request(
             json_optimize_input, config_manager.config["eos"]["timeout"]
         )
+        # Store the runtime for use in sleep calculation
+        self._last_avg_runtime = avg_runtime
 
         json_optimize_input["timestamp"] = datetime.now(time_zone).isoformat()
         self.last_request_response["request"] = json.dumps(
@@ -615,70 +658,147 @@ class OptimizationScheduler:
             base_control.set_current_evcc_charging_mode(
                 evcc_interface.get_charging_mode()
             )
-            change_control_state()
-        # +++++++++
+            # change_control_state() # -> moved to __run_control_loop
 
-        loop_now = datetime.now(time_zone)
-        # Reset base to full minutes on the clock
-        next_eval = loop_now.replace(microsecond=0)
-        # Add the update interval to calculate the next evaluation time
-        next_eval += timedelta(seconds=self.update_interval)
-        sleeptime = (next_eval - loop_now).total_seconds()
-        minutes, seconds = divmod(sleeptime, 60)
-        self.__set_state_next_run(next_eval.astimezone(time_zone).isoformat())
-        mqtt_interface.update_publish_topics(
-            {
-                "optimization/last_run": {
-                    "value": self.get_current_state()["last_response_timestamp"]
-                },
-                "optimization/next_run": {
-                    "value": self.get_current_state()["next_run"]
-                },
-            }
-        )
-        logger.info(
-            "[Main] Next optimization at %s. Sleeping for %d min %.0f seconds\n",
-            next_eval.strftime("%H:%M:%S"),
-            minutes,
-            seconds,
-        )
-
-    def __start_update_service_inner_loop(self):
+    def __start_update_service_control_loop(self):
         """
         Starts the background thread to periodically update the state.
         """
         if (
-            self._update_thread_inner_loop is None
-            or not self._update_thread_inner_loop.is_alive()
+            self._update_thread_control_loop is None
+            or not self._update_thread_control_loop.is_alive()
         ):
-            self._stop_event_inner_loop.clear()
-            self._update_thread_inner_loop = threading.Thread(
-                target=self.__update_state_loop_inner_loop, daemon=True
+            self._stop_event_control_loop.clear()
+            self._update_thread_control_loop = threading.Thread(
+                target=self.__update_state_loop_control_loop, daemon=True
             )
-            self._update_thread_inner_loop.start()
-            logger.info("[OPTIMIZATION] Update service 2 started.")
+            self._update_thread_control_loop.start()
+            logger.info("[OPTIMIZATION] Update service Control started.")
 
-    def __update_state_loop_inner_loop(self):
+    def __update_state_loop_control_loop(self):
         """
         The loop that runs in the background thread to update the state.
         """
-        while not self._stop_event_inner_loop.is_set():
+        while not self._stop_event_control_loop.is_set():
             try:
-                self.__run_inner_loop()
+                self.__run_control_loop()
+            except (requests.exceptions.RequestException, ValueError, KeyError) as e:
+                logger.error("[OPTIMIZATION] Error while running control loop: %s", e)
+                # Break the sleep interval into smaller chunks to allow immediate shutdown
+            sleep_interval = 1
+            while sleep_interval > 0:
+                if self._stop_event_control_loop.is_set():
+                    return  # Exit immediately if stop event is set
+                time.sleep(min(1, sleep_interval))  # Sleep in 1-second chunks
+                sleep_interval -= 1
+        self.__start_update_service_control_loop()
+
+    def __run_control_loop(self):
+        current_hour = datetime.now(time_zone).hour
+        last_control_selected_entry = 0
+        if current_hour == eos_interface.get_last_control_data()[1]["hour"]:
+            last_control_selected_entry = 1
+        elif -1 == eos_interface.get_last_control_data()[0]["hour"]:
+            # logger.debug("[Main] check current tgt ctrl - still in startup - skip")
+            return
+        elif (
+            current_hour != eos_interface.get_last_control_data()[0]["hour"]
+            and current_hour != eos_interface.get_last_control_data()[1]["hour"]
+        ):
+            logger.warning(
+                "[Main] check current tgt ctrl - wrong hour data for fast control - skip"
+            )
+            return
+
+        ac_charge_demand = eos_interface.get_last_control_data()[
+            last_control_selected_entry
+        ]["ac_charge_demand"]
+        dc_charge_demand = eos_interface.get_last_control_data()[
+            last_control_selected_entry
+        ]["dc_charge_demand"]
+        discharge_allowed = eos_interface.get_last_control_data()[
+            last_control_selected_entry
+        ]["discharge_allowed"]
+        error = eos_interface.get_last_control_data()[last_control_selected_entry][
+            "error"
+        ]
+
+        if (
+            ac_charge_demand is None
+            or dc_charge_demand is None
+            or discharge_allowed is None
+        ):
+            logger.warning(
+                "[Main] check current tgt ctrl - missing data for fast control - skip"
+            )
+            return
+
+        if ac_charge_demand < 0 or dc_charge_demand < 0:
+            logger.warning(
+                "[Main] check current tgt ctrl - invalid data for fast control - skip"
+            )
+            return
+
+        if error is not True:
+            # logger.debug(
+            #     "[Main] Optimization fast control loop - current state: %s (Num: %s) -> ac_charge_demand: %s, dc_charge_demand: %s, discharge_allowed: %s",
+            #     base_control.get_current_overall_state(),
+            #     base_control.get_current_overall_state_number(),
+            #     ac_charge_demand,
+            #     dc_charge_demand,
+            #     discharge_allowed,
+            # )
+            setting_control_data(ac_charge_demand, dc_charge_demand, discharge_allowed)
+            # get recent evcc states
+            base_control.set_current_evcc_charging_state(
+                evcc_interface.get_charging_state()
+            )
+            base_control.set_current_evcc_charging_mode(
+                evcc_interface.get_charging_mode()
+            )
+            change_control_state()
+        # logger.debug(
+        #     "[Main] Optimization control loop - secondly check - current state: %s (Num: %s)",
+        #     base_control.get_current_overall_state(),
+        #     base_control.get_current_overall_state_number(),
+        # )
+
+    def __start_update_service_data_loop(self):
+        """
+        Starts the background thread to periodically update the state.
+        """
+        if (
+            self._update_thread_data_loop is None
+            or not self._update_thread_data_loop.is_alive()
+        ):
+            self._stop_event_data_loop.clear()
+            self._update_thread_data_loop = threading.Thread(
+                target=self.__update_state_loop_data_loop, daemon=True
+            )
+            self._update_thread_data_loop.start()
+            logger.info("[OPTIMIZATION] Update service Data started.")
+
+    def __update_state_loop_data_loop(self):
+        """
+        The loop that runs in the background thread to update the state.
+        """
+        while not self._stop_event_data_loop.is_set():
+            try:
+                self.__run_data_loop()
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:
                 logger.error(
-                    "[OPTIMIZATION] Error while updating inverter data state: %s", e
+                    "[OPTIMIZATION] Error while running data control loop: %s", e
                 )
                 # Break the sleep interval into smaller chunks to allow immediate shutdown
             sleep_interval = 15
             while sleep_interval > 0:
-                if self._stop_event_inner_loop.is_set():
+                if self._stop_event_data_loop.is_set():
                     return  # Exit immediately if stop event is set
                 time.sleep(min(1, sleep_interval))  # Sleep in 1-second chunks
                 sleep_interval -= 1
-        self.__start_update_service_inner_loop()
+        self.__start_update_service_data_loop()
 
-    def __run_inner_loop(self):
+    def __run_data_loop(self):
         if inverter_type in ["fronius_gen24", "fronius_gen24_legacy"]:
             inverter_interface.fetch_inverter_data()
             mqtt_interface.update_publish_topics(
@@ -724,14 +844,24 @@ class OptimizationScheduler:
         """
         Stops the background thread and shuts down the update service.
         """
-        if self._update_thread and self._update_thread.is_alive():
+        if (
+            self._update_thread_optimization_loop
+            and self._update_thread_optimization_loop.is_alive()
+        ):
             self._stop_event.set()
-            self._update_thread.join()
-            logger.info("[OPTIMIZATION] Update service stopped.")
-        if self._update_thread_inner_loop and self._update_thread_inner_loop.is_alive():
-            self._stop_event_inner_loop.set()
-            self._update_thread_inner_loop.join()
-            logger.info("[OPTIMIZATION] Update service Inner Loop stopped.")
+            self._update_thread_optimization_loop.join()
+            logger.info("[OPTIMIZATION] Update service Optimization Loop stopped.")
+        if (
+            self._update_thread_control_loop
+            and self._update_thread_control_loop.is_alive()
+        ):
+            self._stop_event_control_loop.set()
+            self._update_thread_control_loop.join()
+            logger.info("[OPTIMIZATION] Update service Control Loop stopped.")
+        if self._update_thread_data_loop and self._update_thread_data_loop.is_alive():
+            self._stop_event_data_loop.set()
+            self._update_thread_data_loop.join()
+            logger.info("[OPTIMIZATION] Update service Data Loop stopped.")
 
 
 optimization_scheduler = OptimizationScheduler(
@@ -821,7 +951,7 @@ def change_control_state():
     )
 
     # Check if the overall state of the inverter was changed recently
-    if base_control.was_overall_state_changed_recently(180):
+    if base_control.was_overall_state_changed_recently():
         logger.debug("[Main] Overall state changed recently")
         # MODE_CHARGE_FROM_GRID
         if current_overall_state == 0:
@@ -892,11 +1022,12 @@ def change_control_state():
         return True
 
     # Log the current state if no recent changes were made
-    logger.info(
-        "[Main] Overall state not changed recently"
-        + " - remaining in current state: %s  (_____OOOOO_____)",
-        current_overall_state_text,
-    )
+    if datetime.now().minute % 5 == 0 and datetime.now().second == 0:
+        logger.info(
+            "[Main] Overall state not changed recently"
+            + " - remaining in current state: %s  (_____OOOOO_____)",
+            current_overall_state_text,
+        )
     return False
 
 

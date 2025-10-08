@@ -378,12 +378,12 @@ class EvccInterface:
             if self.on_charging_state_change:
                 self.on_charging_state_change(sum_charging_state)
 
-        logger.debug(
-            "[EVCC] SUM Charging state: %s - Charging mode: %s - SmartCostActive: %s",
-            sum_charging_state,
-            sum_charging_mode,
-            sum_smart_cost_active,
-        )
+        # logger.debug(
+        #     "[EVCC] SUM Charging state: %s - Charging mode: %s - SmartCostActive: %s",
+        #     sum_charging_state,
+        #     sum_charging_mode,
+        #     sum_smart_cost_active,
+        # )
         # Check if the charging state has changed
         if sum_charging_mode != self.last_known_charging_mode:
             logger.info("[EVCC] SUM Charging mode changed to: %s", sum_charging_mode)

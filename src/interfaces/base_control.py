@@ -70,7 +70,7 @@ class BaseControl:
         """
         return state_mapping.get(num_mode, "unknown state")
 
-    def was_overall_state_changed_recently(self, time_window_seconds):
+    def was_overall_state_changed_recently(self, time_window_seconds=1):
         """
         Checks if the overall state was changed within the last `time_window_seconds`.
         """
@@ -155,6 +155,16 @@ class BaseControl:
         current_charge_demand = (
             value_relative * self.config["battery"]["max_charge_power_w"]
         )
+        if current_charge_demand == self.current_ac_charge_demand:
+            # logger.debug(
+            #     "[BASE-CTRL] NO CHANGE AC charge demand for current hour %s:00 "+
+            #     "unchanged -> %s Wh -"
+            #     + " based on max charge power %s W",
+            #     current_hour,
+            #     self.current_ac_charge_demand,
+            #     self.config["battery"]["max_charge_power_w"],
+            # )
+            return
         # store the current charge demand without override
         self.current_ac_charge_demand_no_override = current_charge_demand
         if not self.override_active:
@@ -184,6 +194,16 @@ class BaseControl:
         current_charge_demand = (
             value_relative * self.config["battery"]["max_charge_power_w"]
         )
+        if current_charge_demand == self.current_dc_charge_demand:
+            # logger.debug(
+            #     "[BASE-CTRL] NO CHANGE DC charge demand for current hour %s:00 "+
+            #     "unchanged -> %s Wh -"
+            #     + " based on max charge power %s W",
+            #     current_hour,
+            #     self.current_dc_charge_demand,
+            #     self.config["battery"]["max_charge_power_w"],
+            # )
+            return
         # store the current charge demand without override
         self.current_dc_charge_demand_no_override = current_charge_demand
         if not self.override_active:
@@ -209,6 +229,12 @@ class BaseControl:
         """
         Sets the current maximum battery charge power.
         """
+        if value_max == self.current_bat_charge_max:
+            # logger.debug(
+            #     "[BASE-CTRL] NO CHANGE Battery charge max unchanged -> %s W",
+            #     self.current_bat_charge_max,
+            # )
+            return
         # store the current charge demand without override
         self.current_bat_charge_max = value_max
         logger.debug(
@@ -222,6 +248,13 @@ class BaseControl:
         Sets the current discharge demand.
         """
         current_hour = datetime.now(self.time_zone).hour
+        if value == self.current_discharge_allowed:
+            # logger.debug(
+            #     "[BASE-CTRL] NO CHANGE Discharge allowed for current hour %s:00 unchanged -> %s",
+            #     current_hour,
+            #     self.current_discharge_allowed,
+            # )
+            return
         self.current_discharge_allowed = value
         logger.debug(
             "[BASE-CTRL] set Discharge allowed for current hour %s:00 %s",
@@ -280,7 +313,7 @@ class BaseControl:
         # in mode fast charge and discharge is allowed
         if (
             # new_state == MODE_DISCHARGE_ALLOWED
-            # and 
+            # and
             self.current_evcc_charging_state
             and self.current_evcc_charging_mode in ("now", "pv+now", "minpv+now")
         ):
@@ -294,7 +327,7 @@ class BaseControl:
         # in mode pv charge and discharge is allowed
         if (
             # new_state == MODE_DISCHARGE_ALLOWED
-            # and 
+            # and
             self.current_evcc_charging_state
             and self.current_evcc_charging_mode == "pv"
         ):
@@ -308,7 +341,7 @@ class BaseControl:
         # in mode pv charge and discharge is allowed
         if (
             # new_state == MODE_DISCHARGE_ALLOWED
-            # and 
+            # and
             self.current_evcc_charging_state
             and self.current_evcc_charging_mode == "minpv"
         ):
