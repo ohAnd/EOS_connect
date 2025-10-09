@@ -4,7 +4,7 @@ This module fetches energy data from OpenHAB, processes it, and creates a load p
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 import logging
 import json
@@ -258,7 +258,7 @@ battery_interface = BatteryInterface(
     on_bat_max_changed=None,
 )
 
-price_interface = PriceInterface(config_manager.config["price"])
+price_interface = PriceInterface(config_manager.config["price"], time_zone)
 
 pv_interface = PvInterface(
     config_manager.config["pv_forecast_source"],
@@ -539,8 +539,6 @@ class OptimizationScheduler:
         """
         while not self._stop_event.is_set():
             try:
-                # Calculate next run time BEFORE running optimization
-                loop_start = datetime.now(time_zone)
                 self.__run_optimization_loop()
 
                 # Calculate actual sleep time based on smart scheduling
@@ -609,10 +607,10 @@ class OptimizationScheduler:
         """
         logger.info("[Main] start new run")
         # update prices
-        price_interface.update_prices(
-            EOS_TGT_DURATION,
-            datetime.now(time_zone).replace(hour=0, minute=0, second=0, microsecond=0),
-        )
+        # price_interface.update_prices(
+        #     EOS_TGT_DURATION,
+        #     datetime.now(time_zone).replace(hour=0, minute=0, second=0, microsecond=0),
+        # )
         # create optimize request
         json_optimize_input = create_optimize_request()
         self.__set_state_request()
@@ -1593,6 +1591,7 @@ if __name__ == "__main__":
         ):
             inverter_interface.shutdown()
         pv_interface.shutdown()
+        price_interface.shutdown()
         mqtt_interface.shutdown()
         evcc_interface.shutdown()
         battery_interface.shutdown()
