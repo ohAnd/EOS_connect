@@ -34,6 +34,7 @@ import pvlib
 import pandas as pd
 import numpy as np
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
+from collections import defaultdict
 
 logger = logging.getLogger("__main__")
 logger.info("[PV-IF] loading module ")
@@ -838,13 +839,30 @@ class PvInterface:
 
 
         if solar_forecast and isinstance(solar_forecast, list):
-            # Extract values from the timeseries format
-            pv_forecast = [item.get("val", 0) for item in solar_forecast[:hours]]
-            # Ensure the list has exactly 'hours' entries
-            if len(pv_forecast) < hours:
-                pv_forecast.extend([0] * (hours - len(pv_forecast)))
-            elif len(pv_forecast) > hours:
-                pv_forecast = pv_forecast[:hours]
+            # Build a mapping from hour (datetime) to list of values
+            import dateutil.parser
+
+            tz = pytz.timezone(self.time_zone)
+            # Start at midnight today in configured timezone
+            midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+            hour_bins = [midnight + timedelta(hours=i) for i in range(hours)]
+            hour_map = {h: [] for h in hour_bins}
+
+            for item in solar_forecast:
+                ts = dateutil.parser.isoparse(item.get("ts"))
+                # Align to the start of the hour in configured timezone
+                ts = ts.astimezone(tz)
+                hour_start = ts.replace(minute=0, second=0, microsecond=0)
+                if hour_start in hour_map:
+                    hour_map[hour_start].append(item.get("val", 0.0))
+
+            pv_forecast = [0] * hours
+            for idx, h in enumerate(hour_bins):
+                vals = hour_map[h]
+                if vals:
+                    pv_forecast[idx] = sum(vals) / len(vals)
+                else:
+                    pv_forecast[idx] = 0.0
 
             # Scale each value according to the solar_forecast_scale (e.g., 0.5 or 0.75)
             try:
