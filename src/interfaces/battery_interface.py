@@ -75,6 +75,8 @@ class BatteryInterface:
         self.current_soc = 0
         self.current_usable_capacity = 0
         self.on_bat_max_changed = on_bat_max_changed
+        self.soc_fail_count = 0
+
         self.update_interval = 30
         self._update_thread = None
         self._stop_event = threading.Event()
@@ -109,31 +111,23 @@ class BatteryInterface:
             if raw_value <= 1.0:
                 soc = raw_value * 100  # Convert decimal to percentage
                 logger.debug(
-                    "[BATTERY-IF] Detected decimal format (0.0-1.0): %s -> %s%%", raw_value, soc
+                    "[BATTERY-IF] Detected decimal format (0.0-1.0): %s -> %s%%",
+                    raw_value,
+                    soc,
                 )
             else:
                 soc = raw_value  # Already in percentage format
-                logger.debug("[BATTERY-IF] Detected percentage format (0-100): %s%%", soc)
-
-            logger.info("[BATTERY-IF] successfully fetched SOC = %s %%", soc)
-            return round(soc)
+                logger.debug(
+                    "[BATTERY-IF] Detected percentage format (0-100): %s%%", soc
+                )
+            self.soc_fail_count = 0  # Reset fail count on success
+            return round(soc, 1)
         except requests.exceptions.Timeout:
-            logger.error(
-                "[BATTERY-IF] OPENHAB - Request timed out while fetching battery SOC. "
-                "Using default SOC = %s%%.",
-                soc,
+            return self._handle_soc_error(
+                "openhab", "Request timed out", self.current_soc
             )
-            return soc  # Default SOC value in case of timeout
         except requests.exceptions.RequestException as e:
-            logger.error(
-                (
-                    "[BATTERY-IF] OPENHAB - Request failed while fetching battery SOC: %s. "
-                    "Using default SOC = %s%%."
-                ),
-                e,
-                soc,
-            )
-            return soc  # Default SOC value in case of request failure
+            return self._handle_soc_error("openhab", e, self.current_soc)
 
     def __fetch_soc_data_from_homeassistant(self):
         """
@@ -148,7 +142,6 @@ class BatteryInterface:
             requests.exceptions.Timeout: If the request to the Home Assistant API times out.
             requests.exceptions.RequestException: If there is an error during the request.
         """
-        # logger.debug("[BATTERY-IF] getting SOC from homeassistant ...")
         homeassistant_url = f"{self.url}/api/states/{self.soc_sensor}"
         # Headers for the API request
         headers = {
@@ -160,49 +153,58 @@ class BatteryInterface:
             response = requests.get(homeassistant_url, headers=headers, timeout=6)
             response.raise_for_status()
             entity_data = response.json()
-            # print(f'Entity data: {entity_data}')
             soc = float(entity_data["state"])
-            # print(f'State: {state}')
-            logger.debug("[BATTERY-IF] successfully fetched SOC = %s %%", soc)
+            self.soc_fail_count = 0  # Reset fail count on success
             return round(soc, 1)
         except requests.exceptions.Timeout:
-            logger.error(
-                (
-                    "[BATTERY-IF] HOMEASSISTANT - Request timed out while fetching battery SOC. "
-                    "Using default SOC = %s%%.",
-                    soc,
-                )
+            return self._handle_soc_error(
+                "homeassistant", "Request timed out", self.current_soc
             )
-            return soc  # Default SOC value in case of timeout
         except requests.exceptions.RequestException as e:
-            logger.error(
-                (
-                    "[BATTERY-IF] HOMEASSISTANT - Request failed while fetching battery SOC: %s. "
-                    "Using default SOC = %s %%."
-                ),
-                e,
-                soc,
-            )
-            return soc  # Default SOC value in case of request failure
+            return self._handle_soc_error("homeassistant", e, self.current_soc)
 
     def __battery_request_current_soc(self):
         """
         Fetch the current state of charge (SOC) of the battery from OpenHAB.
         """
         # default value for start SOC = 5
+        default = False
         if self.src == "default":
+            self.current_soc = 5
+            default = True
             logger.debug("[BATTERY-IF] source set to default with start SOC = 5%")
-            return 5
         if self.src == "openhab":
             self.current_soc = self.__fetch_soc_data_from_openhab()
-            return self.current_soc
         if self.src == "homeassistant":
             self.current_soc = self.__fetch_soc_data_from_homeassistant()
-            return self.current_soc
-        logger.error(
-            "[BATTERY-IF] source currently not supported. Using default start SOC = 5%."
+        else:
+            self.current_soc = 5
+            default = True
+            logger.error(
+                "[BATTERY-IF] source currently not supported. Using default start SOC = 5%."
+            )
+        if default is False:
+            logger.debug("[BATTERY-IF] successfully fetched SOC = %s %%", self.current_soc)
+        return self.current_soc
+
+    def _handle_soc_error(self, source, error, last_soc):
+        self.soc_fail_count += 1
+        logger.warning(
+            "[BATTERY-IF] %s - Error fetching battery SOC: %s. Failure count: %d/5."
+            + " Using last known SOC = %s%%.",
+            source.upper(),
+            error,
+            self.soc_fail_count,
+            last_soc,
         )
-        return 5
+        if self.soc_fail_count >= 5:
+            logger.error(
+                "[BATTERY-IF] %s - 5 consecutive SOC fetch failures. Using fallback SOC = 5%%.",
+                source.upper(),
+            )
+            self.soc_fail_count = 0  # Reset after fallback
+            return 5
+        return last_soc
 
     def get_current_soc(self):
         """
@@ -274,10 +276,7 @@ class BatteryInterface:
             c_rate = max_c_rate
         else:
             # Logarithmic decrease of C-rate after 50% SOC
-            c_rate = max(
-            min_c_rate,
-            max_c_rate * (1 - (soc - 50) / 60) ** 2
-            )
+            c_rate = max(min_c_rate, max_c_rate * (1 - (soc - 50) / 60) ** 2)
 
         # Calculate the maximum charge power in watts
         max_charge_power = c_rate * battery_capacity_wh
@@ -292,7 +291,8 @@ class BatteryInterface:
         if self.max_charge_power_dyn != self.last_max_charge_power_dyn:
             self.last_max_charge_power_dyn = self.max_charge_power_dyn
             logger.info(
-                "[BATTERY-IF] Max dynamic charge power changed to %s W", self.max_charge_power_dyn
+                "[BATTERY-IF] Max dynamic charge power changed to %s W",
+                self.max_charge_power_dyn,
             )
             if self.on_bat_max_changed:
                 self.on_bat_max_changed()
