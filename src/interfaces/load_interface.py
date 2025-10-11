@@ -181,11 +181,11 @@ class LoadInterface:
                 return filtered_data
             logger.error(
                 "[LOAD-IF] HOMEASSISTANT - Failed to retrieve"
-                + " historical data for '%s' - error: %s",
+                + " historical data for '%s' - error: %s - error message: %s",
                 entity_id,
                 response.status_code,
+                response.text
             )
-            logger.error(response.text)
             return []
         except requests.exceptions.Timeout:
             logger.error(
@@ -467,7 +467,7 @@ class LoadInterface:
                         + quote((current_time + timedelta(hours=2)).isoformat())
                         + " )"
                     )
-                logger.error(
+                logger.warning(
                     "[LOAD-IF] DATA ERROR load smaller than car load "
                     + "- Energy for %s: %5.1f Wh (sum add energy %5.1f Wh - car load: %5.1f Wh) %s",
                     current_hour,

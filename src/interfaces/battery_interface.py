@@ -189,22 +189,23 @@ class BatteryInterface:
 
     def _handle_soc_error(self, source, error, last_soc):
         self.soc_fail_count += 1
-        logger.warning(
-            "[BATTERY-IF] %s - Error fetching battery SOC: %s. Failure count: %d/5."
-            + " Using last known SOC = %s%%.",
-            source.upper(),
-            error,
-            self.soc_fail_count,
-            last_soc,
-        )
-        if self.soc_fail_count >= 5:
+        if self.soc_fail_count < 5:
+            logger.warning(
+                "[BATTERY-IF] %s - Error fetching battery SOC: %s. Failure count: %d/5."
+                + " Using last known SOC = %s%%.",
+                source.upper(),
+                error,
+                self.soc_fail_count,
+                last_soc,
+            )
+            return last_soc
+        else:
             logger.error(
                 "[BATTERY-IF] %s - 5 consecutive SOC fetch failures. Using fallback SOC = 5%%.",
                 source.upper(),
             )
             self.soc_fail_count = 0  # Reset after fallback
             return 5
-        return last_soc
 
     def get_current_soc(self):
         """
