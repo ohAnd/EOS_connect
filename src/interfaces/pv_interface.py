@@ -29,6 +29,7 @@ import time
 import asyncio
 import math
 import sys
+from collections import defaultdict
 import aiohttp
 import pytz
 import requests
@@ -961,39 +962,33 @@ class PvInterface:
             # Get timezone-aware current time
             tz = pytz.timezone(self.time_zone)
             current_time = datetime.now(tz).replace(minute=0, second=0, microsecond=0)
-
-            # Calculate midnight of today
             midnight_today = current_time.replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-
-            # Create forecast array for 48 hours starting from midnight today
             forecast_hours = [midnight_today + timedelta(hours=i) for i in range(hours)]
             pv_forecast = [0.0] * hours  # Initialize with zeros
 
-            # Create lookup dictionary from API data
-            forecast_lookup = {}
+            # with thanks for the hint from @forouher with PR #108
+            # --- AGGREGATE 15-min intervals to hourly Wh ---
+            forecast_items = []
             for item in solar_forecast:
-                try:
-                    # Parse timestamp from API
-                    ts_str = item.get("ts", "")
-                    if ts_str:
-                        # Parse ISO format timestamp with timezone
-                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                        # Convert to configured timezone
-                        ts = ts.astimezone(tz)
-                        # Round down to hour
-                        ts = ts.replace(minute=0, second=0, microsecond=0)
-                        forecast_lookup[ts] = item.get("val", 0)
-                except (ValueError, TypeError) as e:
-                    logger.warning("[PV-IF] Error parsing timestamp %s: %s", ts_str, e)
-                    continue
+                ts_str = item.get("ts", "")
+                if ts_str:
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    ts = ts.astimezone(tz)
+                    # Convert W to Wh for 15 min: Wh = W * 0.25
+                    val_wh = item.get("val", 0) * 0.25
+                    forecast_items.append((ts, val_wh))
 
-            # Fill forecast array with values from API or keep zeros for missing hours
+            # Group by hour and sum Wh values
+            hourly_values = defaultdict(float)
+            for ts, val_wh in forecast_items:
+                hour_ts = ts.replace(minute=0, second=0, microsecond=0)
+                hourly_values[hour_ts] += val_wh
+
+            # Fill forecast array for 48 hours from midnight
             for i, hour in enumerate(forecast_hours):
-                if hour in forecast_lookup:
-                    pv_forecast[i] = forecast_lookup[hour]
-                # else: keep the initialized zero value
+                pv_forecast[i] = hourly_values.get(hour, 0.0)
 
             # Apply scaling factor
             try:
@@ -1360,7 +1355,9 @@ class PvInterface:
             g = math.radians((357.528 + 0.9856003 * n) % 360)
 
             # Ecliptic longitude of sun
-            lambda_sun = math.radians(long_of_sun + 1.915 * math.sin(g) + 0.020 * math.sin(2 * g))
+            lambda_sun = math.radians(
+                long_of_sun + 1.915 * math.sin(g) + 0.020 * math.sin(2 * g)
+            )
 
             # Obliquity of ecliptic
             epsilon = math.radians(23.439 - 0.0000004 * n)
