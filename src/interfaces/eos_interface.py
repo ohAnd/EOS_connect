@@ -586,11 +586,14 @@ class EosInterface:
                 minutes=add_minutes
             )
             next_eval = next_slot - timedelta(seconds=avg_runtime)
-            logger.info(
-                "[OPTIMIZATION] Strict slot alignment: next run at %s (will finish at %s)",
-                next_eval.strftime("%H:%M:%S"),
-                next_slot.strftime("%H:%M:%S"),
-            )
+            if next_eval <= base_time: 
+                next_slot += timedelta(minutes=15)
+                next_eval = next_slot - timedelta(seconds=avg_runtime)
+                logger.info(
+                    "[OPTIMIZATION] Strict slot alignment: next run at %s (will finish at %s)",
+                    next_eval.strftime("%H:%M:%S"),
+                    next_slot.strftime("%H:%M:%S"),
+                )
             return next_eval
 
         # For intervals < 15 min: Check if we can fit a normal run before next quarter
