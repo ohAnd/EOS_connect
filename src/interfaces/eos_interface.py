@@ -520,142 +520,77 @@ class EosInterface:
 
     def calculate_next_run_time(self, current_time, avg_runtime, update_interval):
         """
-        Calculate the next run time based on simple logic:
-        - If there's enough time for a normal interval run before the next quarter-hour, do it
-        - Otherwise, extend the interval to hit the next quarter-hour exactly
-        - On first run, automatically sync to quarter-hour alignment
+        Calculate the next run time prioritizing quarter-hour alignment with improved gap filling.
         """
-        # Handle first run - sync to quarter-hour alignment
-        if self.is_first_run:
-            self.is_first_run = False  # Mark that we've done the first run
+        # Calculate minimum time between runs
+        min_gap_seconds = max((update_interval + avg_runtime) * 0.7, 30)
 
-            if update_interval >= 900:
-                # For long intervals, immediately sync to next slot
-                base_time = current_time + timedelta(seconds=avg_runtime)
-                minute = base_time.minute
-                add_minutes = (15 - (minute % 15)) % 15
-                next_slot = base_time.replace(second=0, microsecond=0) + timedelta(
-                    minutes=add_minutes
-                )
-                next_eval = next_slot - timedelta(seconds=avg_runtime)
-                logger.info(
-                    "[OPTIMIZATION] First sync run (long interval): %s (will finish at %s)",
-                    next_eval.strftime("%H:%M:%S"),
-                    next_slot.strftime("%H:%M:%S"),
-                )
-                return next_eval
+        # Find next quarter-hour from current time
+        next_quarter = current_time.replace(second=0, microsecond=0)
+        current_minute = next_quarter.minute
 
-            # For short intervals, find the nearest quarter-hour within reasonable time
-            next_quarter_time = current_time.replace(second=0, microsecond=0)
-            next_quarter_time += timedelta(
-                minutes=(15 - (next_quarter_time.minute % 15)) % 15
+        minutes_past_quarter = current_minute % 15
+        if minutes_past_quarter == 0 and current_time.second > 0:
+            minutes_to_add = 15
+        elif minutes_past_quarter == 0:
+            minutes_to_add = 15
+        else:
+            minutes_to_add = 15 - minutes_past_quarter
+
+        next_quarter += timedelta(minutes=minutes_to_add)
+
+        quarter_aligned_start = next_quarter - timedelta(seconds=avg_runtime)
+
+        # **BUG FIX**: Check if quarter_aligned_start is in the past
+        if quarter_aligned_start <= current_time:
+            # Move to the next quarter-hour
+            next_quarter += timedelta(minutes=15)
+            quarter_aligned_start = next_quarter - timedelta(seconds=avg_runtime)
+            logger.debug(
+                "[OPTIMIZATION] Quarter start was in past, moved to next: %s",
+                next_quarter.strftime("%H:%M:%S"),
             )
 
-            # Calculate when to start to finish at the quarter-hour
-            sync_start = next_quarter_time - timedelta(seconds=avg_runtime)
+        time_until_quarter_start = (
+            quarter_aligned_start - current_time
+        ).total_seconds()
 
-            # If sync is too far away (>2x interval), use normal calculation
-            time_to_sync = (sync_start - current_time).total_seconds()
-            if time_to_sync > update_interval * 2:
-                # Fall through to normal calculation logic below
-                pass
-            elif time_to_sync < 30:
-                # If sync is too soon (<30 seconds), target next quarter-hour
-                next_quarter_time += timedelta(minutes=15)
-                sync_start = next_quarter_time - timedelta(seconds=avg_runtime)
-                logger.info(
-                    "[OPTIMIZATION] First sync run: %s (will finish at %s)",
-                    sync_start.strftime("%H:%M:%S"),
-                    next_quarter_time.strftime("%H:%M:%S"),
-                )
-                return sync_start
-            else:
-                logger.info(
-                    "[OPTIMIZATION] First sync run: %s (will finish at %s)",
-                    sync_start.strftime("%H:%M:%S"),
-                    next_quarter_time.strftime("%H:%M:%S"),
-                )
-                return sync_start
-
-        # For intervals >= 15 min, always use strict slot alignment
-        if update_interval >= 900:
-            base_time = current_time + timedelta(seconds=avg_runtime)
-            minute = base_time.minute
-            add_minutes = (15 - (minute % 15)) % 15
-            next_slot = base_time.replace(second=0, microsecond=0) + timedelta(
-                minutes=add_minutes
-            )
-            next_eval = next_slot - timedelta(seconds=avg_runtime)
-            logger.info(
-                "[OPTIMIZATION] Strict slot alignment: next run at %s (will finish at %s)",
-                next_eval.strftime("%H:%M:%S"),
-                next_slot.strftime("%H:%M:%S"),
-            )
-            return next_eval
-
-        # For intervals < 15 min: Check if we can fit a normal run before next quarter
-
-        # Calculate normal next run
-        normal_next_run = current_time + timedelta(seconds=update_interval)
-        normal_completion = normal_next_run + timedelta(seconds=avg_runtime)
-
-        # Find the next quarter-hour slot after current time
-        next_quarter_time = current_time.replace(second=0, microsecond=0)
-        next_quarter_time += timedelta(
-            minutes=(15 - (next_quarter_time.minute % 15)) % 15
+        # Debug logging
+        logger.debug(
+            "[OPTIMIZATION] Debug: current=%s, next_quarter=%s, quarter_start=%s, time_until=%.1fs",
+            current_time.strftime("%H:%M:%S"),
+            next_quarter.strftime("%H:%M:%S"),
+            quarter_aligned_start.strftime("%H:%M:%S"),
+            time_until_quarter_start,
         )
 
-        # If next quarter is in the past (edge case), move to next one
-        if next_quarter_time <= current_time:
-            next_quarter_time += timedelta(minutes=15)
-
-        # Check if normal completion fits before next quarter (with small buffer)
-        buffer_seconds = 30  # buffer before quarter-hour
-
-        # If normal completion fits before next quarter-hour (with buffer)
-        if normal_completion <= (next_quarter_time - timedelta(seconds=buffer_seconds)):
-            next_eval = normal_next_run
-            logger.debug(
-                "[OPTIMIZATION] Normal interval fits before next quarter:"
-                + " run at %s, completion at %s",
-                next_eval.strftime("%H:%M:%S"),
-                normal_completion.strftime("%H:%M:%S"),
+        # More aggressive gap-filling: if we have at least 2x the update interval,
+        # try a gap-fill run
+        if (
+            time_until_quarter_start >= (2 * update_interval)
+            and time_until_quarter_start >= min_gap_seconds
+        ):
+            normal_next_start = current_time + timedelta(seconds=update_interval)
+            logger.info(
+                "[OPTIMIZATION] Gap-fill run: start %s (quarter-aligned run follows at %s)",
+                normal_next_start.strftime("%H:%M:%S"),
+                next_quarter.strftime("%H:%M:%S"),
             )
-        else:
-            # If normal run would finish too close to the quarter-hour, delay start
-            time_to_quarter = (next_quarter_time - normal_completion).total_seconds()
-            if 0 <= time_to_quarter < avg_runtime:
-                # Delay start so run finishes exactly at the quarter-hour
-                next_eval = next_quarter_time - timedelta(seconds=avg_runtime)
-                logger.debug(
-                    "[OPTIMIZATION] Delaying start to align with quarter-hour:"
-                    + " run at %s, completion at %s",
-                    next_eval.strftime("%H:%M:%S"),
-                    next_quarter_time.strftime("%H:%M:%S"),
-                )
-            else:
-                # Otherwise, use the calculated alignment
-                next_eval = next_quarter_time - timedelta(seconds=avg_runtime)
-                logger.debug(
-                    "[OPTIMIZATION] Extending interval to hit quarter-hour:"
-                    + " run at %s, completion at %s",
-                    next_eval.strftime("%H:%M:%S"),
-                    next_quarter_time.strftime("%H:%M:%S"),
-                )
+            return normal_next_start
 
-        # Log final decision
-        expected_completion = next_eval + timedelta(seconds=avg_runtime)
-        completion_minute = expected_completion.minute
-        seconds_past_quarter = (
-            completion_minute % 15
-        ) * 60 + expected_completion.second
-        seconds_to_quarter = min(seconds_past_quarter, 900 - seconds_past_quarter)
+        # Otherwise, use quarter-aligned timing
+        absolute_min_seconds = max(avg_runtime * 0.5, 30)
+        if time_until_quarter_start < absolute_min_seconds:
+            next_quarter += timedelta(minutes=15)
+            quarter_aligned_start = next_quarter - timedelta(seconds=avg_runtime)
+            logger.debug(
+                "[OPTIMIZATION] Quarter too close, moved to next: %s",
+                next_quarter.strftime("%H:%M:%S"),
+            )
 
         logger.info(
-            "[OPTIMIZATION] Next run: %s, expected completion: %s (%.0f sec from quarter-hour)",
-            next_eval.strftime("%H:%M:%S"),
-            expected_completion.strftime("%H:%M:%S"),
-            seconds_to_quarter,
+            "[OPTIMIZATION] Quarter-hour aligned run: start %s, finish at %s",
+            quarter_aligned_start.strftime("%H:%M:%S"),
+            next_quarter.strftime("%H:%M:%S"),
         )
-
-        return next_eval
+        return quarter_aligned_start
