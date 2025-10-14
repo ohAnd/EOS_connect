@@ -974,7 +974,46 @@ You can run EOS Connect in three ways. Choose the method that best fits your env
 
 ## Contributing
 
-Contributions are welcome! Please submit a pull request or open an issue for any suggestions or improvements.
+We welcome PRs. Keep main clean, iterate fast on develop.
+
+Branch roles
+- main: stable, tagged releases only (comes from develop).
+- develop: integration branch (target of normal PRs).
+- feature_<short-desc> or feature_<issue>-<desc>: new code (from develop).
+- bugfix_<issue>-<desc>: fix for something already in develop.
+- hotfix_<issue>-<desc>: urgent production fix (from main → PR to main → merge back into develop).
+
+Flow
+1. Update local: git fetch origin && git switch develop && git pull --ff-only
+2. Create branch: git switch -c feature/better-forecast
+3. Code + tests + docs (README / CONFIG_README / MQTT if behavior changes)
+4. Run formatting, lint, tests
+5. Rebase before PR: git fetch origin && git rebase origin/develop
+6. Push: git push -u origin feature/better-forecast
+7. Open PR → base: develop (link issues: Closes #123)
+8. Keep PR focused; squash or rebase merge (no merge commits)
+
+Commits (Conventional)
+feat: add battery forecast smoothing
+fix: correct negative PV handling
+docs: update MQTT topic table
+
+Hotfix
+git switch main
+git pull --ff-only
+git switch -c hotfix/overrun-calc
+...fix...
+PR → main, tag release, then: git switch develop && git merge --ff-only main
+
+Guidelines
+- One logical change per PR
+- Add/adjust tests for logic changes
+- Document new config keys / API / MQTT topics
+- Prefer clarity over cleverness
+
+Unsure? Open an issue first—happy to discuss ideas.
+
+Thanks for contributing!
 
 ## Glossary
 
