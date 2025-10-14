@@ -20,7 +20,9 @@ Usage:
         "token": "your_access_token",
         "feed_in_tariff_price": 5.0,
         "negative_price_switch": True,
-        "fixed_24h_array": [10.0] * 24
+        "fixed_24h_array": [10.0] * 24,
+        "use_cache": True,
+        "cache_expiry_minutes": 60
     }
     price_interface = PriceInterface(config, timezone="Europe/Berlin")
     price_interface.update_prices(tgt_duration=24, start_time=datetime.now())
@@ -54,11 +56,15 @@ class PriceInterface:
         fixed_24h_array (list): Optional fixed 24-hour price array.
         feed_in_tariff_price (float): Feed-in tariff price in cents per kWh.
         negative_price_switch (bool): If True, sets feed-in prices to 0 for negative prices.
+        use_cache (bool): If True, caches successful Tibber API responses (default: True).
+        cache_expiry_minutes (int): Cache validity duration in minutes (default: 60).
         time_zone (str): Timezone for date and time operations.
         current_prices (list): Current prices including taxes.
         current_prices_direct (list): Current prices without tax.
         current_feedin (list): Current feed-in prices.
         default_prices (list): Default price list if external data is unavailable.
+        tibber_cache (dict): Cache storage for Tibber prices.
+        tibber_cache_timestamp (datetime): Timestamp of last successful Tibber fetch.
 
     Methods:
         update_prices(tgt_duration, start_time):
@@ -98,19 +104,27 @@ class PriceInterface:
             self.fixed_24h_array = False
         self.feed_in_tariff_price = config.get("feed_in_price", 0.0)
         self.negative_price_switch = config.get("negative_price_switch", False)
+        self.use_cache = config.get("use_cache", True)
+        self.cache_expiry_minutes = config.get("cache_expiry_minutes", 60)
         self.time_zone = timezone
         self.current_prices = []
         self.current_prices_direct = []  # without tax
         self.current_feedin = []
         self.default_prices = [0.0001] * 48  # if external data are not available
+        # Cache for Tibber prices
+        self.tibber_cache = None
+        self.tibber_cache_timestamp = None
 
         self.__check_config()  # Validate configuration parameters
         logger.info(
             "[PRICE-IF] Initialized with"
-            + " source: %s, feed_in_tariff_price: %s, negative_price_switch: %s",
+            + " source: %s, feed_in_tariff_price: %s, negative_price_switch: %s,"
+            + " use_cache: %s, cache_expiry_minutes: %s",
             self.src,
             self.feed_in_tariff_price,
             self.negative_price_switch,
+            self.use_cache,
+            self.cache_expiry_minutes,
         )
 
     def __check_config(self):
@@ -183,6 +197,19 @@ class PriceInterface:
         #     "[PRICE-IF] Returning current feed-in prices: %s", self.current_feedin
         # )
         return self.current_feedin
+
+    def __is_cache_valid(self):
+        """
+        Checks if the Tibber price cache is still valid.
+
+        Returns:
+            bool: True if cache exists and hasn't expired, False otherwise.
+        """
+        if not self.use_cache or self.tibber_cache is None or self.tibber_cache_timestamp is None:
+            return False
+
+        elapsed_minutes = (datetime.now() - self.tibber_cache_timestamp).total_seconds() / 60
+        return elapsed_minutes < self.cache_expiry_minutes
 
     def __create_feedin_prices(self):
         """
@@ -396,17 +423,34 @@ class PriceInterface:
             )
             response.raise_for_status()
         except requests.exceptions.Timeout:
+            if self.__is_cache_valid():
+                logger.warning(
+                    "[PRICE-IF] Request timed out while fetching prices from Tibber."
+                    + " Using cached prices."
+                )
+                self.current_prices_direct = self.tibber_cache["prices_direct"].copy()
+                return self.tibber_cache["prices"]
             logger.error(
                 "[PRICE-IF] Request timed out while fetching prices from Tibber."
-                + " Default prices will be used."
+                + " No valid cache available. Default prices will be used."
             )
+            self.current_prices_direct = self.default_prices.copy()
             return self.default_prices
         except requests.exceptions.RequestException as e:
+            if self.__is_cache_valid():
+                logger.warning(
+                    "[PRICE-IF] Request failed while fetching prices from Tibber: %s"
+                    + " Using cached prices.",
+                    e,
+                )
+                self.current_prices_direct = self.tibber_cache["prices_direct"].copy()
+                return self.tibber_cache["prices"]
             logger.error(
                 "[PRICE-IF] Request failed while fetching prices from Tibber: %s"
-                + " Default prices will be used.",
+                + " No valid cache available. Default prices will be used.",
                 e,
             )
+            self.current_prices_direct = self.default_prices.copy()
             return self.default_prices
 
         response.raise_for_status()
@@ -468,6 +512,16 @@ class PriceInterface:
             extended_prices.extend(prices[:remaining_hours])
             extended_prices_direct.extend(prices_direct[:remaining_hours])
         self.current_prices_direct = extended_prices_direct.copy()
+
+        # Cache the successful result
+        if self.use_cache:
+            self.tibber_cache = {
+                "prices": extended_prices.copy(),
+                "prices_direct": extended_prices_direct.copy()
+            }
+            self.tibber_cache_timestamp = datetime.now()
+            logger.debug("[PRICE-IF] Tibber prices cached successfully.")
+
         logger.debug("[PRICE-IF] Prices from TIBBER fetched successfully.")
         return extended_prices
 
