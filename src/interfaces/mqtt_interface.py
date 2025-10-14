@@ -56,7 +56,7 @@ class MqttInterface:
         password = config_mqtt.get("password", "")
         self.tls = config_mqtt.get("tls", False)
         self.base_topic = "eos_connect"
-        self.ha_auto_discovery = config_mqtt.get("ha_mqtt_auto_discovery", False)
+        self.ha_auto_discovery = config_mqtt.get("ha_mqtt_auto_discovery", True)
         self.auto_discover_topic = config_mqtt.get(
             "ha_mqtt_auto_discovery_prefix", "homeassistant"
         )

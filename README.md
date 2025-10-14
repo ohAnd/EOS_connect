@@ -100,7 +100,7 @@ EOS Connect helps you get the most out of your solar and storage systems—wheth
 
 ### **Integration with External Systems**
 - **Home Assistant**:
-  - Full MQTT integration with Home Assistant Auto Discovery.
+  - Full MQTT integration with Home Assistant Auto Discovery (enabled by default via `mqtt.ha_mqtt_auto_discovery`).
   - Automatically detects and configures energy system entities.
 - **OpenHAB**:
   - Integrates with OpenHAB for monitoring and controlling energy systems.
@@ -331,19 +331,19 @@ All endpoints return JSON and can be accessed via HTTP requests.
 
 #### Main Endpoints
 
-| Endpoint                          | Method | Returns / Accepts           | Description                                                      |
-|------------------------------------|--------|-----------------------------|------------------------------------------------------------------|
-| `/json/current_controls.json`      | GET    | JSON                        | Current system control states (AC/DC charge, mode, etc.)         |
-| `/json/optimize_request.json`      | GET    | JSON                        | Last optimization request sent to EOS                            |
-| `/json/optimize_response.json`     | GET    | JSON                        | Last optimization response from EOS                              |
-| `/json/optimize_request.test.json` | GET    | JSON                        | Test optimization request (static file)                         |
-| `/json/optimize_response.test.json`| GET    | JSON                        | Test optimization response (static file)                        |
-| `/controls/mode_override`          | POST   | JSON (see below)            | Override system mode, duration, and grid charge power            |
-| `/logs`                           | GET    | JSON                        | Retrieve application logs with optional filtering                |
-| `/logs/alerts`                    | GET    | JSON                        | Retrieve warning and error logs for alert system                |
-| `/logs/clear`                     | POST   | JSON                        | Clear all stored logs from memory (file logs remain intact)     |
-| `/logs/alerts/clear`              | POST   | JSON                        | Clear only alert logs from memory, keeping regular logs intact  |
-| `/logs/stats`                     | GET    | JSON                        | Get buffer usage statistics for log storage                      |
+| Endpoint                            | Method | Returns / Accepts | Description                                                    |
+| ----------------------------------- | ------ | ----------------- | -------------------------------------------------------------- |
+| `/json/current_controls.json`       | GET    | JSON              | Current system control states (AC/DC charge, mode, etc.)       |
+| `/json/optimize_request.json`       | GET    | JSON              | Last optimization request sent to EOS                          |
+| `/json/optimize_response.json`      | GET    | JSON              | Last optimization response from EOS                            |
+| `/json/optimize_request.test.json`  | GET    | JSON              | Test optimization request (static file)                        |
+| `/json/optimize_response.test.json` | GET    | JSON              | Test optimization response (static file)                       |
+| `/controls/mode_override`           | POST   | JSON (see below)  | Override system mode, duration, and grid charge power          |
+| `/logs`                             | GET    | JSON              | Retrieve application logs with optional filtering              |
+| `/logs/alerts`                      | GET    | JSON              | Retrieve warning and error logs for alert system               |
+| `/logs/clear`                       | POST   | JSON              | Clear all stored logs from memory (file logs remain intact)    |
+| `/logs/alerts/clear`                | POST   | JSON              | Clear only alert logs from memory, keeping regular logs intact |
+| `/logs/stats`                       | GET    | JSON              | Get buffer usage statistics for log storage                    |
 
 ---
 
@@ -355,37 +355,61 @@ Get current system control states and battery information.
 **Response:**
 ```json
 {
-  "current_states": {
-    "current_ac_charge_demand": 2000,
-    "current_dc_charge_demand": 0,
-    "current_discharge_allowed": true,
-    "inverter_mode": "Discharge Allowed",
-    "inverter_mode_num": 2,
-    "override_active": false,
-    "override_end_time": null
-  },
-  "battery": {
-    "soc": 85.5,
-    "usable_capacity": 9000,
-    "max_charge_power_dyn": 5000
-  },
-  "evcc": {
-    "charging_mode": "pv",
-    "charging_state": true,
-    "current_sessions": [
-      {
-        "vehicle": "Tesla Model 3",
-        "charging_power": 1500,
-        "session_energy": 12.5
-      }
-    ]
-  },
-  "state": {
-    "last_response_timestamp": "2024-06-01T12:00:00+02:00",
-    "next_run": "2024-06-01T12:03:00+02:00"
-  },
-  "timestamp": "2024-06-01T12:00:00+02:00",
-  "api_version": "0.1.24"
+    "current_states": {
+        "current_ac_charge_demand": 0,
+        "current_dc_charge_demand": 10000.0,
+        "current_discharge_allowed": true,
+        "inverter_mode": "MODE DISCHARGE ALLOWED",
+        "inverter_mode_num": 2,
+        "override_active": false,
+        "override_end_time": 0
+    },
+    "evcc": {
+        "charging_state": false,
+        "charging_mode": "off",
+        "current_sessions": [
+            {
+                "connected": false,
+                "charging": false,
+                "mode": "pv",
+                "chargeDuration": 0,
+                "chargeRemainingDuration": 0,
+                "chargedEnergy": 0,
+                "chargeRemainingEnergy": 0,
+                "sessionEnergy": 0,
+                "vehicleSoc": 0,
+                "vehicleRange": 0,
+                "vehicleOdometer": 0,
+                "vehicleName": "",
+                "smartCostActive": false
+            }
+        ]
+    },
+    "battery": {
+        "soc": 23.8,
+        "usable_capacity": 3867.11,
+        "max_charge_power_dyn": 10000,
+        "max_grid_charge_rate": 10000
+    },
+    "inverter": {
+        "inverter_special_data": {
+            "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": 39.71,
+            "MODULE_TEMPERATURE_MEAN_01_F32": 27.47,
+            "MODULE_TEMPERATURE_MEAN_03_F32": 27.15,
+            "MODULE_TEMPERATURE_MEAN_04_F32": 26.81,
+            "FANCONTROL_PERCENT_01_F32": 0.0,
+            "FANCONTROL_PERCENT_02_F32": 0.0
+        }
+    },
+    "state": {
+        "request_state": "response received",
+        "last_request_timestamp": "2024-11-14T22:28:56.678704+02:00",
+        "last_response_timestamp": "2024-11-14T22:30:01.194684+02:00",
+        "next_run": "2024-11-14T22:35:01.196502+02:00"
+    },
+    "eos_connect_version": "0.2.01.138-develop",
+    "timestamp": "2024-06-01T12:00:00+02:00",
+    "api_version": "0.0.1"
 }
 ```
 </details>
@@ -400,26 +424,46 @@ Get the last optimization request sent to EOS.
 **Response:**
 ```json
 {
-  "request": {
-    "pv_forecast": [
-      {"time": "2024-06-01T13:00:00+02:00", "power": 3500},
-      {"time": "2024-06-01T14:00:00+02:00", "power": 4200},
-      {"time": "2024-06-01T15:00:00+02:00", "power": 3800}
-    ],
-    "load_forecast": [
-      {"time": "2024-06-01T13:00:00+02:00", "power": 800},
-      {"time": "2024-06-01T14:00:00+02:00", "power": 1200},
-      {"time": "2024-06-01T15:00:00+02:00", "power": 900}
-    ],
-    "price_forecast": [
-      {"time": "2024-06-01T13:00:00+02:00", "price": 0.25},
-      {"time": "2024-06-01T14:00:00+02:00", "price": 0.28},
-      {"time": "2024-06-01T15:00:00+02:00", "price": 0.22}
-    ],
-    "battery_soc": 85.5,
-    "optimization_hours": 48
+  "ems": {
+    "pv_prognose_wh": [0, 0, 0, ...],
+    "strompreis_euro_pro_wh": [0.0003389, 0.0003315, ...],
+    "einspeiseverguetung_euro_pro_wh": [0.0000794, 0.0000794, ...],
+    "preis_euro_pro_wh_akku": 0,
+    "gesamtlast": [383.316, 351.8412, ...]
   },
-  "timestamp": "2024-06-01T12:00:00+02:00"
+  "pv_akku": {
+    "device_id": "battery1",
+    "capacity_wh": 22118,
+    "charging_efficiency": 0.93,
+    "discharging_efficiency": 0.93,
+    "max_charge_power_w": 10000,
+    "initial_soc_percentage": 24,
+    "min_soc_percentage": 5,
+    "max_soc_percentage": 95
+  },
+  "inverter": {
+    "device_id": "inverter1",
+    "max_power_wh": 10000,
+    "battery_id": "battery1"
+  },
+  "eauto": {
+    "device_id": "ev1",
+    "capacity_wh": 27000,
+    "charging_efficiency": 0.9,
+    "discharging_efficiency": 0.95,
+    "max_charge_power_w": 7360,
+    "initial_soc_percentage": 50,
+    "min_soc_percentage": 5,
+    "max_soc_percentage": 100
+  },
+  "dishwasher": {
+    "device_id": "additional_load_1",
+    "consumption_wh": 1,
+    "duration_h": 1
+  },
+  "temperature_forecast": [9.3, 9.3,...],
+  "start_solution": [0, 14, ...],
+  "timestamp": "2025-10-14T22:21:12.128290+02:00"
 }
 ```
 </details>
@@ -434,29 +478,41 @@ Get the last optimization response received from EOS.
 **Response:**
 ```json
 {
-  "response": {
-    "status": "success",
-    "optimization_result": [
-      {
-        "time": "2024-06-01T13:00:00+02:00",
-        "battery_charge_power": 2000,
-        "battery_discharge_power": 0,
-        "grid_power": -1500,
-        "mode": "charge"
-      },
-      {
-        "time": "2024-06-01T14:00:00+02:00",
-        "battery_charge_power": 0,
-        "battery_discharge_power": 1000,
-        "grid_power": 200,
-        "mode": "discharge"
-      }
-    ],
-    "total_cost": 12.45,
-    "self_consumption": 78.5,
-    "processing_time": "00:02:15"
+  "ac_charge": [0, 0, ...],
+  "dc_charge": [1, 1, ...],
+  "discharge_allowed": [0, 0, ...],
+  "eautocharge_hours_float": null,
+  "result": {
+    "Last_Wh_pro_Stunde": [487.02085, 387.7635, ...],
+    "EAuto_SoC_pro_Stunde": [50, 50, ...],
+    "Einnahmen_Euro_pro_Stunde": [0, 0, ...],
+    "Gesamt_Verluste": 817.136415028724,
+    "Gesamtbilanz_Euro": 0.638737006073083,
+    "Gesamteinnahmen_Euro": 0,
+    "Gesamtkosten_Euro": 0.638737006073083,
+    "Home_appliance_wh_per_hour": [0, 1, ...],
+    "Kosten_Euro_pro_Stunde": [0, 0, ...],
+    "Netzbezug_Wh_pro_Stunde": [0, 0, ...],
+    "Netzeinspeisung_Wh_pro_Stunde": [0, 0, ...],
+    "Verluste_Pro_Stunde": [36.6574833333333, 29.1865, ...],
+    "akku_soc_pro_stunde": [24, 21.632343189559, 19.7472269946047, ...],
+    "Electricity_price": [0.0003635, 0.0003462, ...]
   },
-  "timestamp": "2024-06-01T12:02:15+02:00"
+  "eauto_obj": {
+    "device_id": "ev1",
+    "hours": 48,
+    "charge_array": [1, 1, ...],
+    "discharge_array": [1, 1, ...],
+    "discharging_efficiency": 0.95,
+    "capacity_wh": 27000,
+    "charging_efficiency": 0.9,
+    "max_charge_power_w": 7360,
+    "soc_wh": 13500,
+    "initial_soc_percentage": 50
+  },
+  "start_solution": [0, 14, ...],
+  "washingstart": 23,
+  "timestamp": "2025-10-14T22:21:12.128796+02:00"
 }
 ```
 </details>
@@ -502,13 +558,16 @@ Override the system mode, duration, and grid charge power.
 
 **System Modes (`mode` field):**
 
-| Mode Name         | Mode Number | Description                                 |
-|-------------------|-------------|---------------------------------------------|
-| `Auto`            | 0           | Fully automatic optimization (default mode) |
-| `ChargeFromGrid`  | 1           | Force battery charging from the grid        |
-| `Discharge`       | 2           | Force battery discharge                     |
-| `Idle`            | 3           | No charging or discharging                  |
-| `PVOnly`          | 4           | Charge battery only from PV (solar)         |
+| Mode Name                      | Mode Number | Description                                 |
+| ------------------------------ | ----------- | ------------------------------------------- |
+| `Auto`                         | -2          | Fully automatic optimization (default mode) |
+| `StartUp`                      | -1          | System startup state                        |
+| `Charge from Grid`             | 0           | Force battery charging from the grid        |
+| `Avoid Discharge`              | 1           | Prevent battery discharge                   |
+| `Discharge Allowed`            | 2           | Allow battery discharge                     |
+| `Avoid Discharge EVCC FAST`    | 3           | Avoid discharge with EVCC fast charge       |
+| `Avoid Discharge EVCC PV`      | 4           | Avoid discharge with EVCC PV mode           |
+| `Avoid Discharge EVCC MIN+PV`  | 5           | Avoid discharge with EVCC MIN+PV mode       |
 
 </details>
 
@@ -732,31 +791,30 @@ EOS Connect publishes a wide range of real-time system data and control states t
 
 #### Published Topics
 
-| Topic Suffix                                      | Full Topic Example                                             | Payload Type / Example         | Description                                              |
-|---------------------------------------------------|---------------------------------------------------------------|-------------------------------|----------------------------------------------------------|
-| `optimization/state`                              | `myhome/eos_connect/optimization/state`                       | String (`"ok"`, `"error"`)    | Current optimization request state                       |
-| `optimization/last_run`                           | `myhome/eos_connect/optimization/last_run`                    | ISO timestamp                 | Timestamp of the last optimization run                   |
-| `optimization/next_run`                           | `myhome/eos_connect/optimization/next_run`                    | ISO timestamp                 | Timestamp of the next scheduled optimization run         |
-| `control/override_charge_power`                   | `myhome/eos_connect/control/override_charge_power`             | Integer (W)                   | Override charge power                                    |
-| `control/override_active`                         | `myhome/eos_connect/control/override_active`                   | Boolean (`true`/`false`)      | Whether override is active                               |
-| `control/override_end_time`                       | `myhome/eos_connect/control/override_end_time`                 | ISO timestamp                 | When override ends                                       |
-| `control/overall_state`                           | `myhome/eos_connect/control/overall_state`                     | Integer (see mode table)      | Current overall system mode                              |
-| `control/eos_homeappliance_released`              | `myhome/eos_connect/control/eos_homeappliance_released`        | Boolean                       | Home appliance released flag                             |
-| `control/eos_homeappliance_start_hour`            | `myhome/eos_connect/control/eos_homeappliance_start_hour`      | Integer (hour)                | Home appliance start hour                                |
-| `battery/soc`                                    | `myhome/eos_connect/battery/soc`                              | Float (%)                     | Battery state of charge                                  |
-| `battery/remaining_energy`                        | `myhome/eos_connect/battery/remaining_energy`                  | Integer (Wh)                  | Usable battery capacity                                  |
-| `battery/dyn_max_charge_power`                    | `myhome/eos_connect/battery/dyn_max_charge_power`              | Integer (W)                   | Dynamic max charge power                                 |
-| `inverter/special/temperature_inverter`           | `myhome/eos_connect/inverter/special/temperature_inverter`     | Float (°C)                    | Inverter temperature (if Fronius V1/V2)                        |
-| `inverter/special/temperature_ac_module`          | `myhome/eos_connect/inverter/special/temperature_ac_module`    | Float (°C)                    | AC module temperature (if Fronius V1/V2)                       |
-| `inverter/special/temperature_dc_module`          | `myhome/eos_connect/inverter/special/temperature_dc_module`    | Float (°C)                    | DC module temperature (if Fronius V1/V2)                       |
-| `inverter/special/temperature_battery_module`     | `myhome/eos_connect/inverter/special/temperature_battery_module`| Float (°C)                   | Battery module temperature (if Fronius V1/V2)                  |
-| `inverter/special/fan_control_01`                 | `myhome/eos_connect/inverter/special/fan_control_01`           | Integer                       | Fan control 1 (if Fronius V1/V2)                               |
-| `inverter/special/fan_control_02`                 | `myhome/eos_connect/inverter/special/fan_control_02`           | Integer                       | Fan control 2 (if Fronius V1/V2)                               |
-| `evcc`                                            | `myhome/eos_connect/evcc`                                      | JSON object                   | Charging state, mode, and session info (if enabled)      |
-| `status`                                          | `myhome/eos_connect/status`                                    | String (`"online"`)           | Always set to `"online"`                                 |
-| `control/eos_ac_charge_demand`                    | `myhome/eos_connect/control/eos_ac_charge_demand`              | Integer (W)                   | AC charge demand                                         |
-| `control/eos_dc_charge_demand`                    | `myhome/eos_connect/control/eos_dc_charge_demand`              | Integer (W)                   | DC charge demand                                         |
-| `control/eos_discharge_allowed`                   | `myhome/eos_connect/control/eos_discharge_allowed`             | Boolean                       | Discharge allowed                                        |
+| Topic Suffix                                  | Full Topic Example                                               | Payload Type / Example     | Description                                         |
+| --------------------------------------------- | ---------------------------------------------------------------- | -------------------------- | --------------------------------------------------- |
+| `optimization/state`                          | `myhome/eos_connect/optimization/state`                          | String (`"ok"`, `"error"`) | Current optimization request state                  |
+| `optimization/last_run`                       | `myhome/eos_connect/optimization/last_run`                       | ISO timestamp              | Timestamp of the last optimization run              |
+| `optimization/next_run`                       | `myhome/eos_connect/optimization/next_run`                       | ISO timestamp              | Timestamp of the next scheduled optimization run    |
+| `control/override_charge_power`               | `myhome/eos_connect/control/override_charge_power`               | Integer (W)                | Override charge power                               |
+| `control/override_active`                     | `myhome/eos_connect/control/override_active`                     | Boolean (`true`/`false`)   | Whether override is active                          |
+| `control/override_end_time`                   | `myhome/eos_connect/control/override_end_time`                   | ISO timestamp              | When override ends                                  |
+| `control/overall_state`                       | `myhome/eos_connect/control/overall_state`                       | Integer (see mode table)   | Current overall system mode                         |
+| `control/eos_homeappliance_released`          | `myhome/eos_connect/control/eos_homeappliance_released`          | Boolean                    | Home appliance released flag                        |
+| `control/eos_homeappliance_start_hour`        | `myhome/eos_connect/control/eos_homeappliance_start_hour`        | Integer (hour)             | Home appliance start hour                           |
+| `battery/soc`                                 | `myhome/eos_connect/battery/soc`                                 | Float (%)                  | Battery state of charge                             |
+| `battery/remaining_energy`                    | `myhome/eos_connect/battery/remaining_energy`                    | Integer (Wh)               | Usable battery capacity                             |
+| `battery/dyn_max_charge_power`                | `myhome/eos_connect/battery/dyn_max_charge_power`                | Integer (W)                | Dynamic max charge power                            |
+| `inverter/special/temperature_inverter`       | `myhome/eos_connect/inverter/special/temperature_inverter`       | Float (°C)                 | Inverter temperature (if Fronius V1/V2)             |
+| `inverter/special/temperature_ac_module`      | `myhome/eos_connect/inverter/special/temperature_ac_module`      | Float (°C)                 | AC module temperature (if Fronius V1/V2)            |
+| `inverter/special/temperature_dc_module`      | `myhome/eos_connect/inverter/special/temperature_dc_module`      | Float (°C)                 | DC module temperature (if Fronius V1/V2)            |
+| `inverter/special/temperature_battery_module` | `myhome/eos_connect/inverter/special/temperature_battery_module` | Float (°C)                 | Battery module temperature (if Fronius V1/V2)       |
+| `inverter/special/fan_control_01`             | `myhome/eos_connect/inverter/special/fan_control_01`             | Integer                    | Fan control 1 (if Fronius V1/V2)                    |
+| `inverter/special/fan_control_02`             | `myhome/eos_connect/inverter/special/fan_control_02`             | Integer                    | Fan control 2 (if Fronius V1/V2)                    |
+| `status`                                      | `myhome/eos_connect/status`                                      | String (`"online"`)        | Always set to `"online"`                            |
+| `control/eos_ac_charge_demand`                | `myhome/eos_connect/control/eos_ac_charge_demand`                | Integer (W)                | AC charge demand                                    |
+| `control/eos_dc_charge_demand`                | `myhome/eos_connect/control/eos_dc_charge_demand`                | Integer (W)                | DC charge demand                                    |
+| `control/eos_discharge_allowed`               | `myhome/eos_connect/control/eos_discharge_allowed`               | Boolean                    | Discharge allowed                                   |
 
 ---
 
@@ -777,7 +835,7 @@ You can use any MQTT client, automation platform, or dashboard tool to subscribe
 
 **Notes:**
 - The `<mqtt_configured_prefix>` is set in your configuration file (see `config.yaml`).
-- Some topics (e.g., inverter special values, EVCC) are only published if the corresponding hardware is present and enabled.
+- Some topics (e.g., inverter special values) are only published if the corresponding hardware is present and enabled.
 - All topics are published with real-time updates as soon as new data is available.
 
 </details>
@@ -797,11 +855,11 @@ EOS Connect can be remotely controlled via MQTT by publishing messages to specif
 
 ### Subscribed Topics
 
-| Topic Suffix                      | Full Topic Example                                         | Expected Payload         | Description / Effect                                  |
-|------------------------------------|-----------------------------------------------------------|-------------------------|-------------------------------------------------------|
-| `control/overall_state/set`        | `myhome/eos_connect/control/overall_state/set`            | Integer or string (mode)| Changes the system mode (see table below)             |
-| `control/override_remain_time/set` | `myhome/eos_connect/control/override_remain_time/set`     | String `"HH:MM"`        | Sets the override duration (e.g., `"02:00"`)          |
-| `control/override_charge_power/set`| `myhome/eos_connect/control/override_charge_power/set`    | Integer (watts)         | Sets the override grid charge power (e.g., `2000`)    |
+| Topic Suffix                        | Full Topic Example                                     | Expected Payload         | Description / Effect                               |
+| ----------------------------------- | ------------------------------------------------------ | ------------------------ | -------------------------------------------------- |
+| `control/overall_state/set`         | `myhome/eos_connect/control/overall_state/set`         | Integer or string (mode) | Changes the system mode (see table below)          |
+| `control/override_remain_time/set`  | `myhome/eos_connect/control/override_remain_time/set`  | String `"HH:MM"`         | Sets the override duration (e.g., `"02:00"`)       |
+| `control/override_charge_power/set` | `myhome/eos_connect/control/override_charge_power/set` | Integer (watts)          | Sets the override grid charge power (e.g., `2000`) |
 
 ---
 
@@ -810,13 +868,13 @@ EOS Connect can be remotely controlled via MQTT by publishing messages to specif
 You can set the system mode by publishing either the **mode name** (string) or the **mode number** (integer).  
 **Only the following values are accepted:**
 
-| Mode Name         | Mode Number | Description                                 |
-|-------------------|-------------|---------------------------------------------|
-| `Auto`            | 0           | Fully automatic optimization (default mode) |
-| `ChargeFromGrid`  | 1           | Force battery charging from the grid        |
-| `Discharge`       | 2           | Force battery discharge                     |
-| `Idle`            | 3           | No charging or discharging                  |
-| `PVOnly`          | 4           | Charge battery only from PV (solar)         |
+| Mode Name        | Mode Number | Description                                 |
+| ---------------- | ----------- | ------------------------------------------- |
+| `Auto`           | 0           | Fully automatic optimization (default mode) |
+| `ChargeFromGrid` | 1           | Force battery charging from the grid        |
+| `Discharge`      | 2           | Force battery discharge                     |
+| `Idle`           | 3           | No charging or discharging                  |
+| `PVOnly`         | 4           | Charge battery only from PV (solar)         |
 
 ---
 
@@ -982,6 +1040,9 @@ Branch roles
 - feature_<short-desc> or feature_<issue>-<desc>: new code (from develop).
 - bugfix_<issue>-<desc>: fix for something already in develop.
 - hotfix_<issue>-<desc>: urgent production fix (from main → PR to main → merge back into develop).
+- issue-<number>-<desc>: automatically created from a GitHub issue (allowed and recommended).
+
+You can create a branch manually or use GitHub’s "Create branch" button on an issue, which will name it like `issue-123-description`. This is fully supported and recommended for traceability.
 
 Flow
 1. Update local: git fetch origin && git switch develop && git pull --ff-only
@@ -1020,20 +1081,20 @@ Thanks for contributing!
 <details>
 <summary>Show Glossary</summary>
 
-| Term / Abbreviation | Meaning                                                                                   |
-|---------------------|------------------------------------------------------------------------------------------|
-| **EOS**             | Energy Optimization System – the [backend optimizer](https://github.com/Akkudoktor-EOS/EOS) this project connects to.              |
-| **SOC**             | State of Charge – the current charge level of your battery, usually in percent (%).      |
-| **PV**              | Photovoltaic – refers to solar panels and their energy production.                       |
-| **EV**              | Electric Vehicle.                                                                        |
-| **EVCC**            | Electric Vehicle Charge Controller – [software](https://github.com/evcc-io/evcc)/hardware for managing EV charging.         |
-| **HA**              | [Home Assistant](https://www.home-assistant.io/) – popular open-source smart home platform.                                |
-| **OpenHAB**         | Another [open-source](https://www.openhab.org/) smart home platform.                                                 |
-| **MQTT**            | Lightweight messaging protocol for IoT and smart home integration.                       |
-| **API**             | Application Programming Interface – allows other software to interact with EOS Connect.   |
-| **Add-on**          | A packaged extension for Home Assistant, installable via its UI.                         |
-| **Grid**            | The public electricity network.                                                          |
-| **Dashboard**       | The web interface provided by EOS Connect for monitoring and control.                    |
+| Term / Abbreviation | Meaning                                                                                                               |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **EOS**             | Energy Optimization System – the [backend optimizer](https://github.com/Akkudoktor-EOS/EOS) this project connects to. |
+| **SOC**             | State of Charge – the current charge level of your battery, usually in percent (%).                                   |
+| **PV**              | Photovoltaic – refers to solar panels and their energy production.                                                    |
+| **EV**              | Electric Vehicle.                                                                                                     |
+| **EVCC**            | Electric Vehicle Charge Controller – [software](https://github.com/evcc-io/evcc)/hardware for managing EV charging.   |
+| **HA**              | [Home Assistant](https://www.home-assistant.io/) – popular open-source smart home platform.                           |
+| **OpenHAB**         | Another [open-source](https://www.openhab.org/) smart home platform.                                                  |
+| **MQTT**            | Lightweight messaging protocol for IoT and smart home integration.                                                    |
+| **API**             | Application Programming Interface – allows other software to interact with EOS Connect.                               |
+| **Add-on**          | A packaged extension for Home Assistant, installable via its UI.                                                      |
+| **Grid**            | The public electricity network.                                                                                       |
+| **Dashboard**       | The web interface provided by EOS Connect for monitoring and control.                                                 |
 
 </details>
 
