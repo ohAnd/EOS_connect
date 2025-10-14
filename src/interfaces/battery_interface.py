@@ -173,9 +173,9 @@ class BatteryInterface:
             self.current_soc = 5
             default = True
             logger.debug("[BATTERY-IF] source set to default with start SOC = 5%")
-        if self.src == "openhab":
+        elif self.src == "openhab":
             self.current_soc = self.__fetch_soc_data_from_openhab()
-        if self.src == "homeassistant":
+        elif self.src == "homeassistant":
             self.current_soc = self.__fetch_soc_data_from_homeassistant()
         else:
             self.current_soc = 5
@@ -326,7 +326,7 @@ class BatteryInterface:
         while not self._stop_event.is_set():
             try:
                 self.__battery_request_current_soc()
-                self.current_usable_capacity = (
+                self.current_usable_capacity = max(0, (
                     self.battery_data.get("capacity_wh", 0)
                     * self.battery_data.get("discharge_efficiency", 1.0)
                     * (
@@ -334,7 +334,7 @@ class BatteryInterface:
                         - self.battery_data.get("min_soc_percentage", 0)
                     )
                     / 100
-                )
+                ))
                 self.__get_max_charge_power_dyn()
 
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:
