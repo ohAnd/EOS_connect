@@ -447,40 +447,21 @@ class PvInterface:
 
         forecast_request_payload = self.__create_forecast_request(pv_config_entry)
 
-        # Network request handling
-        try:
+        def request_func():
             response = requests.get(forecast_request_payload, timeout=5)
             response.raise_for_status()
             day_values = response.json()
-            day_values = day_values["values"]
-        except requests.exceptions.Timeout:
+            return day_values["values"]
+
+        def error_handler(error_type, exception):
             return self._handle_interface_error(
-                "timeout",
-                f"Akkudoktor API request timed out for {tgt_value}.",
+                error_type,
+                f"Akkudoktor API error for {tgt_value}: {exception}",
                 pv_config_entry,
                 "akkudoktor",
             )
-        except requests.exceptions.RequestException as e:
-            return self._handle_interface_error(
-                "request_failed",
-                f"Akkudtoktor API request failed for {tgt_value}: {e}",
-                pv_config_entry,
-                "akkudoktor",
-            )
-        except (ValueError, TypeError) as e:
-            return self._handle_interface_error(
-                "invalid_json",
-                f"Invalid JSON response for {tgt_value}: {e}",
-                pv_config_entry,
-                "akkudoktor",
-            )
-        except (KeyError, AttributeError) as e:
-            return self._handle_interface_error(
-                "parsing_error",
-                f"Error parsing response structure for {tgt_value}: {e}",
-                pv_config_entry,
-                "akkudoktor",
-            )
+
+        day_values = self._retry_request(request_func, error_handler)
 
         # Data processing
         try:
@@ -631,8 +612,26 @@ class PvInterface:
             f"&forecast_days={int(np.ceil(hours/24))}"
             f"&timezone={timezone}"
         )
-        response = requests.get(url, timeout=5)
-        data = response.json()
+
+        def request_func():
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            return response
+
+        def error_handler(error_type, exception):
+            return self._handle_interface_error(
+                error_type,
+                f"Open-Meteo API error for {pv_config_entry['name']}: {exception}",
+                pv_config_entry,
+                "openmeteo_api",
+            )
+
+        response = self._retry_request(request_func, error_handler)
+
+        def json_func():
+            return response.json()
+
+        data = self._retry_request(json_func, error_handler)
 
         radiation = data["hourly"]["shortwave_radiation"][:hours]  # W/m²
         cloudcover = data["hourly"]["cloudcover"][:hours]  # %
@@ -823,43 +822,27 @@ class PvInterface:
         )
         logger.debug("[PV-IF] Fetching PV forecast from Forecast.Solar API: %s", url)
 
-        # Network request handling
-        try:
+        def request_func():
             response = requests.get(url, timeout=5)
             response.raise_for_status()
-        except requests.exceptions.Timeout:
+            return response
+
+        def error_handler(error_type, exception):
             return self._handle_interface_error(
-                "timeout",
-                "Forecast.Solar API request timed out.",
-                pv_config_entry,
-                "forecast_solar",
-            )
-        except requests.exceptions.RequestException as e:
-            return self._handle_interface_error(
-                "request_failed",
-                f"Forecast.Solar API request failed: {e}",
+                error_type,
+                f"Forecast.Solar API error: {exception}",
                 pv_config_entry,
                 "forecast_solar",
             )
 
-        # JSON parsing and data extraction
-        try:
+        response = self._retry_request(request_func, error_handler)
+
+        def json_func():
             data = response.json()
             watt_hours_period = data.get("result", {}).get("watt_hours_period", {})
-        except (ValueError, TypeError) as e:
-            return self._handle_interface_error(
-                "invalid_json",
-                f"Invalid JSON response: {e}",
-                pv_config_entry,
-                "forecast_solar",
-            )
-        except (KeyError, AttributeError) as e:
-            return self._handle_interface_error(
-                "parsing_error",
-                f"Error parsing forecast data: {e}",
-                pv_config_entry,
-                "forecast_solar",
-            )
+            return watt_hours_period
+
+        watt_hours_period = self._retry_request(json_func, error_handler)
 
         # Data validation
         if not watt_hours_period:
@@ -916,46 +899,48 @@ class PvInterface:
         url = self.config_special.get("url", "").rstrip("/") + "/api/state"
         logger.debug("[PV-IF] Fetching PV forecast from EVCC API: %s", url)
 
-        # Network request handling
-        try:
+        def request_func():
             response = requests.get(url, timeout=5)
             response.raise_for_status()
-        except requests.exceptions.Timeout:
+            return response
+
+        def error_handler(error_type, exception):
             return self._handle_interface_error(
-                "timeout", "EVCC API request timed out.", pv_config_entry, "evcc"
-            )
-        except requests.exceptions.RequestException as e:
-            return self._handle_interface_error(
-                "request_failed", f"EVCC API request failed: {e}", pv_config_entry
+                error_type,
+                f"EVCC API error: {exception}",
+                pv_config_entry,
+                "evcc",
             )
 
-        # JSON parsing and data extraction
-        try:
+        response = self._retry_request(request_func, error_handler)
+
+        def json_func():
             data = response.json()
             solar_forecast_all = data.get("forecast", {}).get("solar", {})
             solar_forecast_scale = solar_forecast_all.get("scale", "unknown")
             solar_forecast = solar_forecast_all.get("timeseries", [])
-
             logger.debug(
                 "[PV-IF] EVCC API solar forecast received with scale: %s",
                 solar_forecast_scale,
             )
+            return solar_forecast, solar_forecast_scale
 
-        except (ValueError, TypeError) as e:
+        result = self._retry_request(json_func, error_handler)
+        if not result:
             return self._handle_interface_error(
-                "invalid_json", f"Invalid JSON response: {e}", pv_config_entry
+                "no_valid_data",
+                "No valid solar forecast data found in EVCC API.",
+                pv_config_entry,
+                "evcc",
             )
-        except (KeyError, AttributeError) as e:
-            return self._handle_interface_error(
-                "parsing_error", f"Error parsing forecast data: {e}", pv_config_entry
-            )
+        solar_forecast, solar_forecast_scale = result
 
-        # Data validation and processing
         if not solar_forecast or not isinstance(solar_forecast, list):
             return self._handle_interface_error(
                 "no_valid_data",
                 "No valid solar forecast data found in EVCC API.",
                 pv_config_entry,
+                "evcc",
             )
 
         try:
@@ -1019,6 +1004,7 @@ class PvInterface:
                 "processing_error",
                 f"Error processing forecast values: {e}",
                 pv_config_entry,
+                "evcc",
             )
 
     def __get_pv_forecast_solcast_api(self, pv_config_entry, tgt_duration=48):
@@ -1071,74 +1057,42 @@ class PvInterface:
             params["hours"],
         )
 
-        # Network request handling
-        try:
+        def request_func():
             response = requests.get(url, params=params, headers=headers, timeout=15)
-
-            # Enhanced error logging for debugging
-            logger.debug(
-                "[PV-IF] Solcast API response status: %d", response.status_code
-            )
-
-            # Check for API-specific error responses
+            logger.debug("[PV-IF] Solcast API response status: %d", response.status_code)
             if response.status_code == 429:
-                return self._handle_interface_error(
-                    "rate_limit",
-                    "Solcast API rate limit exceeded",
-                    pv_config_entry,
-                    "solcast",
-                )
+                raise requests.exceptions.RequestException("rate_limit")
             elif response.status_code == 403:
-                logger.error(
-                    "[PV-IF] Solcast API 403 Forbidden - Response: %s",
-                    response.text[:200],
-                )
-                return self._handle_interface_error(
-                    "auth_error",
-                    "Solcast API authentication failed (403) - check API key and "
-                    + "resource ID access. Response: {response.text[:100]}",
-                    pv_config_entry,
-                    "solcast",
-                )
+                raise requests.exceptions.RequestException("auth_error")
             elif response.status_code == 404:
-                return self._handle_interface_error(
-                    "not_found",
-                    f"Solcast resource ID '{resource_id}' not found - check resource ID",
-                    pv_config_entry,
-                    "solcast",
-                )
+                raise requests.exceptions.RequestException("not_found")
             elif response.status_code == 400:
-                return self._handle_interface_error(
-                    "bad_request",
-                    "Solcast API bad request - check parameters",
-                    pv_config_entry,
-                    "solcast",
-                )
-
+                raise requests.exceptions.RequestException("bad_request")
             response.raise_for_status()
-            data = response.json()
+            return response
 
-        except requests.exceptions.Timeout:
+        def error_handler(error_type, exception):
+            # Map custom error codes to messages
+            error_map = {
+                "rate_limit": "Solcast API rate limit exceeded",
+                "auth_error": "Solcast API authentication failed (403) - check API key and resource ID access.",
+                "not_found": f"Solcast resource ID '{resource_id}' not found - check resource ID",
+                "bad_request": "Solcast API bad request - check parameters",
+            }
+            msg = error_map.get(str(exception), f"Solcast API error: {exception}")
             return self._handle_interface_error(
-                "timeout",
-                "Solcast API request timed out.",
+                error_type,
+                msg,
                 pv_config_entry,
                 "solcast",
             )
-        except requests.exceptions.RequestException as e:
-            return self._handle_interface_error(
-                "request_failed",
-                f"Solcast API request failed: {e}",
-                pv_config_entry,
-                "solcast",
-            )
-        except (ValueError, TypeError) as e:
-            return self._handle_interface_error(
-                "invalid_json",
-                f"Invalid JSON response from Solcast: {e}",
-                pv_config_entry,
-                "solcast",
-            )
+
+        response = self._retry_request(request_func, error_handler)
+
+        def json_func():
+            return response.json()
+
+        data = self._retry_request(json_func, error_handler)
 
         # Data processing
         try:
@@ -1250,24 +1204,6 @@ class PvInterface:
                 pv_config_entry,
                 "solcast",
             )
-
-    def _handle_interface_error(
-        self, error_type, message, pv_config_entry, source="unknown"
-    ):
-        """
-        Centralized error handling for all API errors.
-        """
-        logger.error("[PV-IF] %s", message)
-        self.pv_forcast_request_error.update(
-            {
-                "error": error_type,
-                "timestamp": datetime.now().isoformat(),
-                "message": message,
-                "config_entry": pv_config_entry,
-                "source": source,
-            }
-        )
-        return []
 
     def test_output(self):
         """
@@ -1419,3 +1355,51 @@ class PvInterface:
         aoi = math.degrees(math.acos(cos_aoi))
 
         return aoi
+
+    def _retry_request(self, request_func, error_handler, max_retries=3, delay=1):
+        """
+        Centralized retry logic for API requests.
+
+        Args:
+            request_func (callable): Function that performs the request and returns the result.
+            error_handler (callable): Function to call on final failure.
+            max_retries (int): Number of retries before error handler is called.
+            delay (int): Delay in seconds between retries.
+
+        Returns:
+            The result of request_func, or error_handler on failure.
+        """
+        for attempt in range(max_retries):
+            try:
+                return request_func()
+            except requests.exceptions.Timeout as e:
+                if attempt == max_retries - 1:
+                    return error_handler("timeout", e)
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    return error_handler("request_failed", e)
+            except (ValueError, TypeError) as e:
+                if attempt == max_retries - 1:
+                    return error_handler("invalid_json", e)
+            except (KeyError, AttributeError) as e:
+                if attempt == max_retries - 1:
+                    return error_handler("parsing_error", e)
+            time.sleep(delay)
+
+    def _handle_interface_error(
+        self, error_type, message, pv_config_entry, source="unknown"
+    ):
+        """
+        Centralized error handling for all API errors.
+        """
+        logger.error("[PV-IF] %s", message)
+        self.pv_forcast_request_error.update(
+            {
+                "error": error_type,
+                "timestamp": datetime.now().isoformat(),
+                "message": message,
+                "config_entry": pv_config_entry,
+                "source": source,
+            }
+        )
+        return []
