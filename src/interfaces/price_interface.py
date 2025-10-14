@@ -21,7 +21,7 @@ Usage:
         "feed_in_tariff_price": 5.0,
         "negative_price_switch": True,
         "fixed_24h_array": [10.0] * 24,
-        "use_cache": True,
+        "use_cache": False,
         "cache_expiry_minutes": 60
     }
     price_interface = PriceInterface(config, timezone="Europe/Berlin")
@@ -104,7 +104,7 @@ class PriceInterface:
             self.fixed_24h_array = False
         self.feed_in_tariff_price = config.get("feed_in_price", 0.0)
         self.negative_price_switch = config.get("negative_price_switch", False)
-        self.use_cache = config.get("use_cache", True)
+        self.use_cache = config.get("use_cache", False)
         self.cache_expiry_minutes = config.get("cache_expiry_minutes", 60)
         self.time_zone = timezone
         self.current_prices = []
