@@ -12,7 +12,7 @@ on:
   workflow_dispatch: # allows manual triggering of the workflow
 
 jobs:
-  test:
+  pytest:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,8 +31,9 @@ jobs:
 
       - name: Run unit and regression tests
         run: python -m pytest -v tests/
-  publish_image:
-    needs: test
+
+  build_image:
+    needs: pytest
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -44,7 +45,6 @@ jobs:
       - name: Build image
         run: docker build -t ghcr.io/${{ env.owner }}/eos_connect:feature .
 
-      # Only run tagging and pushing tasks for "push" events
       - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 

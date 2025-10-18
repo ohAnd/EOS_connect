@@ -558,16 +558,16 @@ Override the system mode, duration, and grid charge power.
 
 **System Modes (`mode` field):**
 
-| Mode Name                      | Mode Number | Description                                 |
-| ------------------------------ | ----------- | ------------------------------------------- |
-| `Auto`                         | -2          | Fully automatic optimization (default mode) |
-| `StartUp`                      | -1          | System startup state                        |
-| `Charge from Grid`             | 0           | Force battery charging from the grid        |
-| `Avoid Discharge`              | 1           | Prevent battery discharge                   |
-| `Discharge Allowed`            | 2           | Allow battery discharge                     |
-| `Avoid Discharge EVCC FAST`    | 3           | Avoid discharge with EVCC fast charge       |
-| `Avoid Discharge EVCC PV`      | 4           | Avoid discharge with EVCC PV mode           |
-| `Avoid Discharge EVCC MIN+PV`  | 5           | Avoid discharge with EVCC MIN+PV mode       |
+| Mode Name                     | Mode Number | Description                                 |
+| ----------------------------- | ----------- | ------------------------------------------- |
+| `Auto`                        | -2          | Fully automatic optimization (default mode) |
+| `StartUp`                     | -1          | System startup state                        |
+| `Charge from Grid`            | 0           | Force battery charging from the grid        |
+| `Avoid Discharge`             | 1           | Prevent battery discharge                   |
+| `Discharge Allowed`           | 2           | Allow battery discharge                     |
+| `Avoid Discharge EVCC FAST`   | 3           | Avoid discharge with EVCC fast charge       |
+| `Avoid Discharge EVCC PV`     | 4           | Avoid discharge with EVCC PV mode           |
+| `Avoid Discharge EVCC MIN+PV` | 5           | Avoid discharge with EVCC MIN+PV mode       |
 
 </details>
 
@@ -791,30 +791,32 @@ EOS Connect publishes a wide range of real-time system data and control states t
 
 #### Published Topics
 
-| Topic Suffix                                  | Full Topic Example                                               | Payload Type / Example     | Description                                         |
-| --------------------------------------------- | ---------------------------------------------------------------- | -------------------------- | --------------------------------------------------- |
-| `optimization/state`                          | `myhome/eos_connect/optimization/state`                          | String (`"ok"`, `"error"`) | Current optimization request state                  |
-| `optimization/last_run`                       | `myhome/eos_connect/optimization/last_run`                       | ISO timestamp              | Timestamp of the last optimization run              |
-| `optimization/next_run`                       | `myhome/eos_connect/optimization/next_run`                       | ISO timestamp              | Timestamp of the next scheduled optimization run    |
-| `control/override_charge_power`               | `myhome/eos_connect/control/override_charge_power`               | Integer (W)                | Override charge power                               |
-| `control/override_active`                     | `myhome/eos_connect/control/override_active`                     | Boolean (`true`/`false`)   | Whether override is active                          |
-| `control/override_end_time`                   | `myhome/eos_connect/control/override_end_time`                   | ISO timestamp              | When override ends                                  |
-| `control/overall_state`                       | `myhome/eos_connect/control/overall_state`                       | Integer (see mode table)   | Current overall system mode                         |
-| `control/eos_homeappliance_released`          | `myhome/eos_connect/control/eos_homeappliance_released`          | Boolean                    | Home appliance released flag                        |
-| `control/eos_homeappliance_start_hour`        | `myhome/eos_connect/control/eos_homeappliance_start_hour`        | Integer (hour)             | Home appliance start hour                           |
-| `battery/soc`                                 | `myhome/eos_connect/battery/soc`                                 | Float (%)                  | Battery state of charge                             |
-| `battery/remaining_energy`                    | `myhome/eos_connect/battery/remaining_energy`                    | Integer (Wh)               | Usable battery capacity                             |
-| `battery/dyn_max_charge_power`                | `myhome/eos_connect/battery/dyn_max_charge_power`                | Integer (W)                | Dynamic max charge power                            |
-| `inverter/special/temperature_inverter`       | `myhome/eos_connect/inverter/special/temperature_inverter`       | Float (°C)                 | Inverter temperature (if Fronius V1/V2)             |
-| `inverter/special/temperature_ac_module`      | `myhome/eos_connect/inverter/special/temperature_ac_module`      | Float (°C)                 | AC module temperature (if Fronius V1/V2)            |
-| `inverter/special/temperature_dc_module`      | `myhome/eos_connect/inverter/special/temperature_dc_module`      | Float (°C)                 | DC module temperature (if Fronius V1/V2)            |
-| `inverter/special/temperature_battery_module` | `myhome/eos_connect/inverter/special/temperature_battery_module` | Float (°C)                 | Battery module temperature (if Fronius V1/V2)       |
-| `inverter/special/fan_control_01`             | `myhome/eos_connect/inverter/special/fan_control_01`             | Integer                    | Fan control 1 (if Fronius V1/V2)                    |
-| `inverter/special/fan_control_02`             | `myhome/eos_connect/inverter/special/fan_control_02`             | Integer                    | Fan control 2 (if Fronius V1/V2)                    |
-| `status`                                      | `myhome/eos_connect/status`                                      | String (`"online"`)        | Always set to `"online"`                            |
-| `control/eos_ac_charge_demand`                | `myhome/eos_connect/control/eos_ac_charge_demand`                | Integer (W)                | AC charge demand                                    |
-| `control/eos_dc_charge_demand`                | `myhome/eos_connect/control/eos_dc_charge_demand`                | Integer (W)                | DC charge demand                                    |
-| `control/eos_discharge_allowed`               | `myhome/eos_connect/control/eos_discharge_allowed`               | Boolean                    | Discharge allowed                                   |
+| Topic Suffix                                  | Full Topic Example                                               | Payload Type / Example     | Description                                                 |
+| --------------------------------------------- | ---------------------------------------------------------------- | -------------------------- | ----------------------------------------------------------- |
+| `optimization/state`                          | `myhome/eos_connect/optimization/state`                          | String (`"ok"`, `"error"`) | Current optimization request state                          |
+| `optimization/last_run`                       | `myhome/eos_connect/optimization/last_run`                       | ISO timestamp              | Timestamp of the last optimization run                      |
+| `optimization/next_run`                       | `myhome/eos_connect/optimization/next_run`                       | ISO timestamp              | Timestamp of the next scheduled optimization run            |
+| `control/override_charge_power`               | `myhome/eos_connect/control/override_charge_power`               | Integer (W)                | Override charge power                                       |
+| `control/override_active`                     | `myhome/eos_connect/control/override_active`                     | Boolean (`true`/`false`)   | Whether override is active                                  |
+| `control/override_end_time`                   | `myhome/eos_connect/control/override_end_time`                   | ISO timestamp              | When override ends                                          |
+| `control/overall_state`                       | `myhome/eos_connect/control/overall_state`                       | Integer (see mode table)   | Current overall system mode - see System Mode Control below |
+| `control/eos_homeappliance_released`          | `myhome/eos_connect/control/eos_homeappliance_released`          | Boolean                    | Home appliance released flag                                |
+| `control/eos_homeappliance_start_hour`        | `myhome/eos_connect/control/eos_homeappliance_start_hour`        | Integer (hour)             | Home appliance start hour                                   |
+| `battery/soc`                                 | `myhome/eos_connect/battery/soc`                                 | Float (%)                  | Battery state of charge                                     |
+| `battery/remaining_energy`                    | `myhome/eos_connect/battery/remaining_energy`                    | Integer (Wh)               | Usable battery capacity                                     |
+| `battery/dyn_max_charge_power`                | `myhome/eos_connect/battery/dyn_max_charge_power`                | Integer (W)                | Dynamic max charge power                                    |
+| `inverter/special/temperature_inverter`       | `myhome/eos_connect/inverter/special/temperature_inverter`       | Float (°C)                 | Inverter temperature (if Fronius V1/V2)                     |
+| `inverter/special/temperature_ac_module`      | `myhome/eos_connect/inverter/special/temperature_ac_module`      | Float (°C)                 | AC module temperature (if Fronius V1/V2)                    |
+| `inverter/special/temperature_dc_module`      | `myhome/eos_connect/inverter/special/temperature_dc_module`      | Float (°C)                 | DC module temperature (if Fronius V1/V2)                    |
+| `inverter/special/temperature_battery_module` | `myhome/eos_connect/inverter/special/temperature_battery_module` | Float (°C)                 | Battery module temperature (if Fronius V1/V2)               |
+| `inverter/special/fan_control_01`             | `myhome/eos_connect/inverter/special/fan_control_01`             | Integer                    | Fan control 1 (if Fronius V1/V2)                            |
+| `inverter/special/fan_control_02`             | `myhome/eos_connect/inverter/special/fan_control_02`             | Integer                    | Fan control 2 (if Fronius V1/V2)                            |
+| `status`                                      | `myhome/eos_connect/status`                                      | String (`"online"`)        | Always set to `"online"`                                    |
+| `control/eos_ac_charge_demand`                | `myhome/eos_connect/control/eos_ac_charge_demand`                | Integer (W)                | AC charge demand                                            |
+| `control/eos_dc_charge_demand`                | `myhome/eos_connect/control/eos_dc_charge_demand`                | Integer (W)                | DC charge demand                                            |
+| `control/eos_discharge_allowed`               | `myhome/eos_connect/control/eos_discharge_allowed`               | Boolean                    | Discharge allowed                                           |
+
+
 
 ---
 
@@ -1049,6 +1051,10 @@ Flow
 2. Create branch: git switch -c feature/better-forecast
 3. Code + tests + docs (README / CONFIG_README / MQTT if behavior changes)
 4. Run formatting, lint, tests
+   - Ensure all Python files are formatted with [Black](https://black.readthedocs.io/en/stable/) (`black .`)
+     - **Tip for VS Code users:** Install the [Black Formatter extension](https://github.com/microsoft/vscode-black-formatter) for automatic formatting on save. (// VS Code settings.json "[python]": { "editor.formatOnSave": true })
+   - Run [pylint](https://pylint.pycqa.org/) and ensure a score of **9.0 or higher** for all files (`pylint src/`)
+   - tests - see info at guidelines below
 5. Rebase before PR: git fetch origin && git rebase origin/develop
 6. Push: git push -u origin feature/better-forecast
 7. Open PR → base: develop (link issues: Closes #123)
@@ -1069,10 +1075,12 @@ PR → main, tag release, then: git switch develop && git merge --ff-only main
 Guidelines
 - One logical change per PR
 - Add/adjust tests for logic changes
+  - Use [pytest](https://docs.pytest.org/) for all unit and integration tests.
+  - Place tests in the `tests/` directory, organized to mirror the structure of the `src/` directory:
+    - Create a subfolder for each source module or feature (e.g., if your code is in `src/interfaces/mqtt_interface.py`, place tests in `tests/interfaces/test_mqtt_interface.py`).
+    - Name test files as `test_<uut-filename>.py` (e.g., `test_mqtt_interface.py` for `mqtt_interface.py`).
 - Document new config keys / API / MQTT topics
 - Prefer clarity over cleverness
-
-Unsure? Open an issue first—happy to discuss ideas.
 
 Thanks for contributing!
 
