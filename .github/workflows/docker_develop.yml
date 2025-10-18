@@ -78,7 +78,7 @@ jobs:
         run: docker save ghcr.io/${{ env.owner }}/eos_connect:develop -o eos_connect_${{ env.VERSION }}.tar.gz
 
       - name: Upload Docker image artifact
-        if: github.event_name == 'pull_request'
+        # if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: eos_connect_image-${{ env.VERSION }}
