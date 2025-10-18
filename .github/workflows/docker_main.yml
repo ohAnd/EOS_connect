@@ -44,9 +44,9 @@ jobs:
       - name: Run unit and regression tests
         run: python -m pytest -v tests/
  
-  build_image:
-    needs: pytest
+  publish_image:
     runs-on: ubuntu-latest
+    needs: pytest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,30 +74,17 @@ jobs:
       - name: Build image
         run: docker build -t ghcr.io/${{ env.owner }}/eos_connect:release .
 
-      - name: Save Docker image as tarball
-        run: docker save ghcr.io/${{ env.owner }}/eos_connect:release -o eos_connect_${{ env.VERSION }}.tar.gz
-
-      - name: Upload Docker image artifact
+      # Only upload the image artifact for pull_request events
+      - name: Upload Docker image as artifact
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: eos_connect_image-${{ env.VERSION }}
           path: eos_connect_${{ env.VERSION }}.tar.gz
 
-  publish_image:
-    needs: build_image
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    steps:
-      - name: Download Docker image artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: eos_connect_image-${{ env.VERSION }}
-
-      - name: Load Docker image
-        run: docker load -i eos_connect_${{ env.VERSION }}.tar.gz
-
+      # Only run tagging and pushing tasks for "push" events
       - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Tag image with release version
@@ -109,11 +96,7 @@ jobs:
         run: docker tag ghcr.io/${{ env.owner }}/eos_connect:release ghcr.io/${{ env.owner }}/eos_connect:latest
 
       - name: Push Docker image to GitHub Container Registry
+        if: github.event_name == 'push'
         run: |
           docker push ghcr.io/${{ env.owner }}/eos_connect:${{ env.VERSION }}
           docker push ghcr.io/${{ env.owner }}/eos_connect:latest
-
-#      - name: Log in to Docker Hub
-#        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-#      - name: Push image to Docker Hub
-#        run: docker push ${{ secrets.DOCKER_USERNAME }}/eos_connect:nightly
