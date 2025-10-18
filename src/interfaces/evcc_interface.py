@@ -308,10 +308,10 @@ class EvccInterface:
             return None
         # check if there are more than one loadpoints
         loadpoints = data["loadpoints"] if data["loadpoints"] else None
-        logger.debug(
-            "[EVCC] got 1st loadpoint: %s",
-            loadpoints[0].get("title") if loadpoints else "None",
-        )
+        # logger.debug(
+        #     "[EVCC] got 1st loadpoint: %s",
+        #     loadpoints[0].get("title") if loadpoints else "None",
+        # )
 
         vehicles = data.get("vehicles", {})
 
@@ -353,6 +353,8 @@ class EvccInterface:
                 if sum_mode_priority < CHARGING_MODE_PRIORITY[mode]:
                     sum_mode_priority = CHARGING_MODE_PRIORITY[mode]
                     sum_charging_mode = mode
+                if entry.get("smartCostActive", False):
+                    sum_smart_cost_active = True
         # if no loadpoints are charging, set charging mode to the first one
         if sum_charging_state is False:
             sum_charging_mode = (
@@ -363,10 +365,10 @@ class EvccInterface:
             ):
                 sum_charging_mode = sum_charging_mode + "+now"
 
-            logger.debug(
-                "[EVCC] No charging loadpoints found."
-                + " Setting charging mode to first connected loadpoint."
-            )
+            # logger.debug(
+            #     "[EVCC] No charging loadpoints found."
+            #     + " Setting charging mode to first connected loadpoint."
+            # )
 
         # Check if the charging state has changed
         if sum_charging_state != self.last_known_charging_state:
@@ -376,12 +378,12 @@ class EvccInterface:
             if self.on_charging_state_change:
                 self.on_charging_state_change(sum_charging_state)
 
-        logger.debug(
-            "[EVCC] SUM Charging state: %s - Charging mode: %s - SmartCostActive: %s",
-            sum_charging_state,
-            sum_charging_mode,
-            sum_smart_cost_active,
-        )
+        # logger.debug(
+        #     "[EVCC] SUM Charging state: %s - Charging mode: %s - SmartCostActive: %s",
+        #     sum_charging_state,
+        #     sum_charging_mode,
+        #     sum_smart_cost_active,
+        # )
         # Check if the charging state has changed
         if sum_charging_mode != self.last_known_charging_mode:
             logger.info("[EVCC] SUM Charging mode changed to: %s", sum_charging_mode)
@@ -436,7 +438,7 @@ class EvccInterface:
                   or None if the request fails or times out.
         """
         evcc_url = self.url + "/api/state"
-        logger.debug("[EVCC] fetching evcc state with url: %s", evcc_url)
+        # logger.debug("[EVCC] fetching evcc state with url: %s", evcc_url)
         try:
             response = requests.get(evcc_url, timeout=6)
             response.raise_for_status()

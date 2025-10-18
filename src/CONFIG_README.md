@@ -20,6 +20,7 @@
     - [Full Config Example (will be generated at first startup)](#full-config-example-will-be-generated-at-first-startup)
     - [Minimal possible Config Example](#minimal-possible-config-example)
     - [Example: Using EVCC for PV Forecasts](#example-using-evcc-for-pv-forecasts)
+    - [Example: Using Solcast for PV Forecasts](#example-using-solcast-for-pv-forecasts)
 <!-- /TOC -->
 
 # Configuration
@@ -96,6 +97,12 @@ A default config file will be created with the first start, if there is no `conf
 
 - **`price.token`**:  
   Token for accessing electricity price data. (If not needed, set to `token: ""`)
+
+- **`fixed_price_adder_ct`**:
+  Describes the fixed cost addition in ct per kWh. Only applied to source default (akkudoktor).
+  
+- **`relative_price_multiplier`**:
+  Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%). Only applied to source default (akkudoktor).
 
 - **`price.fixed_24h_array`**:
   24 hours array with fixed end customer prices in ct/kWh over the day.
@@ -176,6 +183,7 @@ This section contains two subsections:
 - `openmeteo` - https://open-meteo.com/en/docs - uses the [open-meteo-solar-forecast](https://github.com/rany2/open-meteo-solar-forecast) (no horizon possible by the lib at this time)
 - `openmeteo_local` - https://open-meteo.com/en/docs - gathering radiation and cloudcover data and calculating locally with an own model - still in dev to improve the calculation
 - `forecast_solar` - https://doc.forecast.solar/api - direct request and results
+- `solcast` - https://solcast.com/ - high-precision solar forecasting using satellite data and machine learning models. Requires creating a rooftop site in your Solcast account and using the resource_id (not location coordinates). Free API key provides up to 10 calls per day.
 - `evcc` - retrieves forecasts from an existing EVCC installation via API - requires EVCC section to be configured
 default is uses akkudoktor
 
@@ -185,7 +193,8 @@ default is uses akkudoktor
 
 ```yaml
 pv_forecast_source:
-  source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, default (default uses akkudoktor)
+  source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default (default uses akkudoktor)
+  api_key: "" # API key for Solcast (required only when source is 'solcast')
 pv_forecast:
   - name: myPvInstallation1  # User-defined identifier for the PV installation, must be unique if you use multiple installations
     lat: 47.5  # Latitude for PV forecast @ Akkudoktor API
@@ -196,6 +205,7 @@ pv_forecast:
     powerInverter: 5000  # Power Inverter for PV forecast @ Akkudoktor API
     inverterEfficiency: 0.9  # Inverter Efficiency for PV forecast @ Akkudoktor API
     horizon: 10,20,10,15  # Horizon to calculate shading, up to 360 values to describe the shading situation for your PV.
+    resource_id: "" # Resource ID for Solcast (required only when source is 'solcast')
 ```
 
 #### Parameters
@@ -233,6 +243,26 @@ pv_forecast:
   (Optional) A list of up to 36 values describing the shading situation for the PV installation. The list always covers 360° – 4 entries will represent 90° steps, e.g.
   - 10,20,10,15 – 0–90° is shadowed if sun elevation is below 10°, and so on.
   - 0,0,0,0,0,0,0,0,50,70,0,0,0,0,0,0,0,0 – 18 entries → 20° steps; here, 180°–200° requires 50° of sun elevation, otherwise the panel is shadowed.
+
+- **`resource_id`**:  
+  (Solcast only) The resource ID from your Solcast rooftop site configuration. Required when using Solcast as the PV forecast source. Not used by other providers.
+
+
+**Special Configuration for Solcast:**
+
+When using `source: solcast`, the configuration requirements are different:
+
+- **`api_key`** (in `pv_forecast_source`): Required. Your Solcast API key obtained from your Solcast account.
+- **`resource_id`** (in each `pv_forecast` entry): Required. The resource ID from your Solcast rooftop site configuration.
+- **Location parameters for temperature forecasts**: While `azimuth`, `tilt`, and `horizon` are configured in your Solcast dashboard and ignored by EOS Connect, **`lat` and `lon` are still required** for fetching temperature forecasts that EOS needs for accurate optimization calculations.
+- **`power`, `powerInverter`, `inverterEfficiency`**: Still required for system scaling and efficiency calculations.
+
+**Setting up Solcast:**
+1. Create a free account at [solcast.com](https://solcast.com/)
+2. Configure a "Rooftop Site" with your PV system details (location, tilt, azimuth, capacity)
+3. Copy the Resource ID from your rooftop site
+4. Get your API key from the account settings
+5. Use these values in your EOS Connect configuration (including lat/lon for temperature forecasts)
 
 ---
 
@@ -356,6 +386,8 @@ eos:
 price:
   source: default  # data source for electricity price tibber, smartenergy_at, fixed_24h, default (default uses akkudoktor)
   token: tibberBearerToken # Token for electricity price
+  fixed_price_adder_ct: 2.5 # Describes the fixed cost addition in ct per kWh.
+  relative_price_multiplier: 0.05 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
   fixed_24h_array: 10.41, 10.42, 10.42, 10.42, 10.42, 23.52, 28.17, 28.17, 28.17, 28.17, 28.17, 23.52, 23.52, 23.52, 23.52, 28.17, 28.17, 34.28, 34.28, 34.28, 34.28, 34.28, 28.17, 23.52 # 24 hours array with fixed prices over the day
   feed_in_price: 0.0 # feed in price for the grid in €/kWh
   negative_price_switch: false # switch for no payment if negative stock price is given
@@ -375,9 +407,10 @@ battery:
   charging_curve_enabled: true # enable dynamic charging curve for battery
 # List of PV forecast source configuration
 pv_forecast_source:
-  source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, forecast_solar, default (default uses akkudoktor)
+  source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default (default uses akkudoktor)
+  api_key: "" # API key for Solcast (required only when source is 'solcast')
 # List of PV forecast configurations. Add multiple entries as needed.
-# See Akkudoktor API (https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast) for more details.
+# See Akkudtor API (https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast) for more details.
 pv_forecast:
   - name: myPvInstallation1  # User-defined identifier for the PV installation, have to be unique if you use more installations
     lat: 47.5 # Latitude for PV forecast @ Akkudoktor API
@@ -388,6 +421,7 @@ pv_forecast:
     powerInverter: 5000 # Power Inverter for PV forecast @ Akkudoktor API
     inverterEfficiency: 0.9 # Inverter Efficiency for PV forecast @ Akkudoktor API
     horizon: 10,20,10,15 # Horizon to calculate shading up to 360 values to describe shading situation for your PV.
+    resource_id: "" # Resource ID for Solcast (required only when source is 'solcast')
 # Inverter configuration
 inverter:
   type: default  # Type of inverter - fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
@@ -432,6 +466,8 @@ eos:
 # Electricity price configuration
 price:
   source: default  # data source for electricity price tibber, smartenergy_at, fixed_24h, default (default uses akkudoktor)
+  fixed_price_adder_ct: 0 # Describes the fixed cost addition in ct per kWh.
+  relative_price_multiplier: 0 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
 # battery configuration
 battery:
   source: default  # Data source for battery soc - openhab, homeassistant, default
@@ -445,9 +481,10 @@ battery:
   charging_curve_enabled: true # enable dynamic charging curve for battery
 # List of PV forecast source configuration
 pv_forecast_source:
-  source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, forecast_solar, default (default uses akkudoktor)
+  source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default (default uses akkudoktor)
+  api_key: "" # API key for Solcast (required only when source is 'solcast')
 # List of PV forecast configurations. Add multiple entries as needed.
-# See Akkudoktor API (https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast) for more details.
+# See Akkudtor API (https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast) for more details.
 pv_forecast:
   - name: myPvInstallation1  # User-defined identifier for the PV installation, have to be unique if you use more installations
     lat: 47.5 # Latitude for PV forecast @ Akkudoktor API
@@ -482,7 +519,11 @@ When using EVCC as your PV forecast source, the configuration is simplified as E
 # PV forecast source configuration - using EVCC
 pv_forecast_source:
   source: evcc # Use EVCC for PV forecasts
-pv_forecast: [] # Can be left empty when using EVCC
+pv_forecast:
+  - name: "Location for Temperature" # At least one entry needed for temperature forecasts
+    lat: 47.5 # Required for temperature forecasts used by EOS optimization
+    lon: 8.5 # Required for temperature forecasts used by EOS optimization
+    # Other parameters (azimuth, tilt, power, etc.) not used for PV forecasts but can be included
 # EVCC configuration - REQUIRED when using evcc as pv_forecast_source
 evcc:
   url: http://192.168.1.100:7070  # URL to your EVCC installation
@@ -490,6 +531,47 @@ evcc:
 
 In this configuration:
 - EVCC handles all PV installation details and provides aggregated forecasts
-- The `pv_forecast` section can be empty, but adding location coordinates improves temperature forecasts
+- The `pv_forecast` section requires at least one entry with valid `lat` and `lon` coordinates for temperature forecasts that EOS needs for accurate optimization
 - The `evcc.url` must point to a reachable EVCC instance with API access enabled
-- Better temperature forecasts lead to more accurate energy optimization results
+- Temperature forecasts are essential for EOS optimization calculations, regardless of PV forecast source
+
+### Example: Using Solcast for PV Forecasts
+
+When using Solcast as your PV forecast source, you need to configure your rooftop sites in the Solcast dashboard first:
+
+```yaml
+# PV forecast source configuration - using Solcast
+pv_forecast_source:
+  source: solcast # Use Solcast for PV forecasts
+  api_key: "your_solcast_api_key_here" # Your Solcast API key (required)
+
+# PV forecast configurations using Solcast resource IDs
+pv_forecast:
+  - name: "Main Roof South"
+    resource_id: "abcd-efgh-1234-5678" # Resource ID from Solcast dashboard
+    lat: 47.5 # Required for temperature forecasts used by EOS optimization
+    lon: 8.5 # Required for temperature forecasts used by EOS optimization
+    power: 5000 # Still needed for system scaling
+    powerInverter: 5000
+    inverterEfficiency: 0.95
+    # azimuth, tilt, horizon not used for PV forecasts - configured in Solcast dashboard
+  - name: "Garage East"
+    resource_id: "ijkl-mnop-9999-0000" # Different resource ID for second installation
+    lat: 47.5 # Same location coordinates can be used for multiple installations
+    lon: 8.5
+    power: 2500
+    powerInverter: 3000
+    inverterEfficiency: 0.92
+```
+
+**Important Solcast Rate Limiting Information:**
+
+- Each PV installation requires a separate rooftop site configured in your Solcast account
+- Physical PV parameters (tilt, azimuth) are configured in the Solcast dashboard, not in EOS Connect
+- **Location coordinates (lat, lon) are still required** for temperature forecasts that EOS uses for optimization calculations
+- The `resource_id` is obtained from your Solcast rooftop site configuration
+- `power`, `powerInverter`, and `inverterEfficiency` are still required for proper system scaling
+- **Free Solcast accounts are limited to 10 API calls per day**
+- **EOS Connect automatically extends update intervals to 2.5 hours when using Solcast** to stay within the 10 calls/day limit (9.6 calls/day actual usage)
+- Multiple PV installations will result in multiple API calls per update cycle - consider this when planning your configuration
+- If you exceed rate limits, EOS Connect will use the previous forecast data until the next successful API call

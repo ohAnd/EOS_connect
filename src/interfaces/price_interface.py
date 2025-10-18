@@ -32,7 +32,10 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import json
 import logging
+import threading
 import requests
+
+
 
 logger = logging.getLogger("__main__")
 logger.info("[PRICE-IF] loading module ")
@@ -88,6 +91,8 @@ class PriceInterface:
     ):
         self.src = config["source"]
         self.access_token = config.get("token", "")
+        self.fixed_price_adder_ct = config.get("fixed_price_adder_ct", 0.0)
+        self.relative_price_multiplier = config.get("relative_price_multiplier", 0.0)
         self.fixed_24h_array = config.get("fixed_24h_array", False)
         # for HA addon config - if string, convert to list of floats
         if isinstance(self.fixed_24h_array, str) and self.fixed_24h_array != "":
@@ -104,6 +109,17 @@ class PriceInterface:
         self.current_feedin = []
         self.default_prices = [0.0001] * 48  # if external data are not available
 
+        # Add retry mechanism attributes
+        self.last_successful_prices = []
+        self.last_successful_prices_direct = []
+        self.consecutive_failures = 0
+        self.max_failures = 24  # Max consecutive failures before using default prices
+
+        # Background thread attributes
+        self._update_thread = None
+        self._stop_event = threading.Event()
+        self.update_interval = 900  # 15 minutes in seconds
+
         self.__check_config()  # Validate configuration parameters
         logger.info(
             "[PRICE-IF] Initialized with"
@@ -112,6 +128,68 @@ class PriceInterface:
             self.feed_in_tariff_price,
             self.negative_price_switch,
         )
+
+        # Start the background update service
+        self.__start_update_service()
+
+    def __start_update_service(self):
+        """
+        Starts the background thread to periodically update prices.
+        """
+        if self._update_thread is None or not self._update_thread.is_alive():
+            self._stop_event.clear()
+            self._update_thread = threading.Thread(
+                target=self.__update_prices_loop, daemon=True
+            )
+            self._update_thread.start()
+            logger.info("[PRICE-IF] Background price update service started")
+
+    def shutdown(self):
+        """
+        Stops the background thread and shuts down the update service.
+        """
+        if self._update_thread and self._update_thread.is_alive():
+            logger.info("[PRICE-IF] Shutting down background price update service")
+            self._stop_event.set()
+            self._update_thread.join(timeout=5)
+            if self._update_thread.is_alive():
+                logger.warning(
+                    "[PRICE-IF] Background thread did not shut down gracefully"
+                )
+            else:
+                logger.info("[PRICE-IF] Background price update service stopped")
+
+    def __update_prices_loop(self):
+        """
+        The loop that runs in the background thread to update prices periodically.
+        """
+        # Initial update
+        try:
+            self.update_prices(48, datetime.now(self.time_zone).replace(hour=0, minute=0, second=0, microsecond=0))  # Get 48 hours of price data
+            logger.info("[PRICE-IF] Initial price update completed")
+        except Exception as e:
+            logger.error("[PRICE-IF] Error during initial price update: %s", e)
+
+        while not self._stop_event.is_set():
+            try:
+                # Wait for the update interval or until stop event is set
+                if self._stop_event.wait(timeout=self.update_interval):
+                    break  # Stop event was set
+
+                # Perform price update
+                self.update_prices(48, datetime.now(self.time_zone).replace(hour=0, minute=0, second=0, microsecond=0))  # Get 48 hours of price data
+                logger.debug("[PRICE-IF] Periodic price update completed")
+
+            except Exception as e:
+                logger.error("[PRICE-IF] Error during periodic price update: %s", e)
+                # Continue the loop even if update fails
+
+        # Restart the service if it wasn't intentionally stopped
+        if not self._stop_event.is_set():
+            logger.warning(
+                "[PRICE-IF] Background price update thread stopped unexpectedly, restarting..."
+            )
+            self.__start_update_service()
 
     def __check_config(self):
         """
@@ -135,7 +213,7 @@ class PriceInterface:
                 + " Usiung default price source."
             )
 
-    def update_prices(self, tgt_duration, start_time):
+    def update_prices(self, tgt_duration, start_time=None):
         """
         Updates the current prices and feed-in prices based on the target duration
         and start time provided.
@@ -152,9 +230,17 @@ class PriceInterface:
         Logs:
             Logs a debug message indicating that prices have been updated.
         """
+        if start_time is None:
+            start_time = datetime.now(self.time_zone).replace(
+                minute=0, second=0, microsecond=0
+            )
         self.current_prices = self.__retrieve_prices(tgt_duration, start_time)
         self.current_feedin = self.__create_feedin_prices()
-        logger.info("[PRICE-IF] Prices updated")
+        logger.debug(
+            "[PRICE-IF] Prices updated for %d hours starting from %s",
+            tgt_duration,
+            start_time.strftime("%Y-%m-%d %H:%M"),
+        )
 
     def get_current_prices(self):
         """
@@ -254,11 +340,50 @@ class PriceInterface:
             )
 
         if not prices:
-            logger.error(
-                "[PRICE-IF] No prices retrieved. Using default prices (0,10 ct/kWh)."
-            )
-            prices = self.default_prices
-            self.current_prices_direct = self.default_prices.copy()
+            self.consecutive_failures += 1
+
+            if (
+                self.consecutive_failures <= self.max_failures
+                and len(self.last_successful_prices) > 0  # Changed condition
+            ):
+                logger.warning(
+                    "[PRICE-IF] No prices retrieved (failure %d/%d). Using last successful prices.",
+                    self.consecutive_failures,
+                    self.max_failures,
+                )
+                prices = self.last_successful_prices[:tgt_duration]
+                self.current_prices_direct = self.last_successful_prices_direct[
+                    :tgt_duration
+                ]
+
+                # Extend if needed
+                if len(prices) < tgt_duration:
+                    remaining_hours = tgt_duration - len(prices)
+                    prices.extend(self.last_successful_prices[:remaining_hours])
+                    self.current_prices_direct.extend(
+                        self.last_successful_prices_direct[:remaining_hours]
+                    )
+            else:
+                if len(self.last_successful_prices) == 0:
+                    logger.error(
+                        "[PRICE-IF] No prices retrieved (failure %d) and no previous"
+                        + " successful prices available. Using default prices (0.10 ct/kWh).",
+                        self.consecutive_failures,
+                    )
+                else:
+                    logger.error(
+                        "[PRICE-IF] No prices retrieved after %d consecutive failures."
+                        + " Using default prices (0.10 ct/kWh).",
+                        self.consecutive_failures,
+                    )
+                prices = self.default_prices[:tgt_duration]
+                self.current_prices_direct = self.default_prices[:tgt_duration].copy()
+        else:
+            # Success - reset failure counter and store successful prices
+            self.consecutive_failures = 0
+            self.last_successful_prices = prices.copy()
+            self.last_successful_prices_direct = self.current_prices_direct.copy()
+            logger.debug("[PRICE-IF] Prices retrieved successfully. Stored as backup.")
 
         return prices
 
@@ -284,7 +409,7 @@ class PriceInterface:
                 "[PRICE-IF] Price source %s currently not supported. Default prices will be used.",
                 self.src,
             )
-            return self.default_prices
+            return []
         logger.debug("[PRICE-IF] Fetching prices from akkudoktor ...")
         if start_time is None:
             start_time = datetime.now(self.time_zone).replace(
@@ -306,26 +431,25 @@ class PriceInterface:
         except requests.exceptions.Timeout:
             logger.error(
                 "[PRICE-IF] Request timed out while fetching prices from akkudoktor."
-                + " Default prices will be used."
             )
-            self.current_prices_direct = self.default_prices.copy()
-            return self.default_prices
+            return []
         except requests.exceptions.RequestException as e:
             logger.error(
-                "[PRICE-IF] Request failed while fetching prices from akkudoktor: %s"
-                + " Default prices will be used.",
+                "[PRICE-IF] Request failed while fetching prices from akkudoktor: %s",
                 e,
             )
-            self.current_prices_direct = self.default_prices.copy()
-            return self.default_prices
+            return []
 
         prices = []
         for price in data["values"]:
-            prices.append(round(price["marketpriceEurocentPerKWh"] / 100000, 9))
-            # logger.debug(
-            #     "[Main] day 1 - price for %s -> %s", price["marketpriceEurocentPerKWh"],
-            #       price["start"]
-            # )
+            price_with_fixed = (
+                round(price["marketpriceEurocentPerKWh"] / 100000, 9)
+                + self.fixed_price_adder_ct / 100000
+            )
+            price_final = round(
+                price_with_fixed * (1 + self.relative_price_multiplier), 9
+            )
+            prices.append(price_final)
 
         if start_time is None:
             start_time = datetime.now(self.time_zone).replace(
@@ -363,7 +487,7 @@ class PriceInterface:
             logger.error(
                 "[PRICE-IF] Price source '%s' currently not supported.", self.src
             )
-            return self.default_prices
+            return []  # Changed from self.default_prices to []
         headers = {
             "Authorization": self.access_token,
             "Content-Type": "application/json",
@@ -398,16 +522,14 @@ class PriceInterface:
         except requests.exceptions.Timeout:
             logger.error(
                 "[PRICE-IF] Request timed out while fetching prices from Tibber."
-                + " Default prices will be used."
             )
-            return self.default_prices
+            return []  # Changed from self.default_prices to []
         except requests.exceptions.RequestException as e:
             logger.error(
-                "[PRICE-IF] Request failed while fetching prices from Tibber: %s"
-                + " Default prices will be used.",
+                "[PRICE-IF] Request failed while fetching prices from Tibber: %s",
                 e,
             )
-            return self.default_prices
+            return []  # Changed from self.default_prices to []
 
         response.raise_for_status()
         data = response.json()
@@ -475,11 +597,10 @@ class PriceInterface:
         logger.debug("[PRICE-IF] Prices fetching from SMARTENERGY_AT started")
         if self.src != "smartenergy_at":
             logger.error(
-                "[PRICE-IF] Price source '%s' currently not supported."
-                + " Default prices will be used.",
+                "[PRICE-IF] Price source '%s' currently not supported.",
                 self.src,
             )
-            return self.default_prices
+            return []
         if start_time is None:
             start_time = datetime.now(self.time_zone).replace(
                 minute=0, second=0, microsecond=0
@@ -495,21 +616,18 @@ class PriceInterface:
         except requests.exceptions.Timeout:
             logger.error(
                 "[PRICE-IF] Request timed out while fetching prices from SMARTENERGY_AT."
-                + " Default prices will be used."
             )
-            return self.default_prices
+            return []
         except requests.exceptions.RequestException as e:
             logger.error(
-                "[PRICE-IF] Request failed while fetching prices from SMARTENERGY_AT: %s"
-                + " Default prices will be used.",
+                "[PRICE-IF] Request failed while fetching prices from SMARTENERGY_AT: %s",
                 e,
             )
-            return self.default_prices
+            return []
 
         # Summarize to hourly averages
         hourly = defaultdict(list)
         for entry in data["data"]:
-            # Parse the hour from the ISO date string
             hour = datetime.fromisoformat(entry["date"]).hour
             hourly[hour].append(entry["value"] / 100000)  # Convert to euro/wh
         # Compute the average for each hour (0-23)
@@ -517,13 +635,18 @@ class PriceInterface:
         for hour in range(24):
             values = hourly.get(hour, [])
             avg = sum(values) / len(values) if values else 0
-            hourly_prices.append(round(avg, 6))
+            hourly_prices.append(round(avg, 9))
 
         # Optionally extend to tgt_duration if needed
         extended_prices = hourly_prices
         if len(extended_prices) < tgt_duration:
             remaining_hours = tgt_duration - len(extended_prices)
             extended_prices.extend(hourly_prices[:remaining_hours])
+
+        # Catch case where all prices are zero (or data is empty)
+        if not any(extended_prices):
+            logger.error("[PRICE-IF] SMARTENERGY_AT API returned only zero prices or empty data.")
+            return []
 
         logger.debug("[PRICE-IF] Prices from SMARTENERGY_AT fetched successfully.")
         self.current_prices_direct = extended_prices.copy()
@@ -543,26 +666,15 @@ class PriceInterface:
         Returns:
             list: A list of fixed prices for the specified duration.
         """
-        # if start_time is None:
-        #     start_time = datetime.now(self.time_zone).replace(
-        #         minute=0, second=0, microsecond=0
-        #     )
-        # current_hour = start_time.hour
         if not self.fixed_24h_array:
             logger.error(
                 "[PRICE-IF] fixed_24h is configured,"
                 + " but no 'fixed_24h_array' is provided."
-                + " Default prices will be used."
             )
-            self.current_prices_direct = self.default_prices
-            return self.default_prices
+            return []
         if len(self.fixed_24h_array) != 24:
-            logger.error(
-                "[PRICE-IF] fixed_24h_array must contain exactly 24 entries."
-                + " Default prices will be used."
-            )
-            self.current_prices_direct = self.default_prices
-            return self.default_prices
+            logger.error("[PRICE-IF] fixed_24h_array must contain exactly 24 entries.")
+            return []
         # Convert each entry in fixed_24h_array from ct/kWh to €/Wh (divide by 100000)
         extended_prices = [round(price / 100000, 9) for price in self.fixed_24h_array]
         # Extend to tgt_duration if needed

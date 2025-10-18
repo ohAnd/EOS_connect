@@ -1,10 +1,16 @@
 name: Develop - build image and push
-# This workflow builds and pushes a Docker image to GitHub Container Registry.
+# This workflow builds, tests, and pushes a Docker image to GitHub Container Registry.
 # It is triggered on pushes and pull requests to the "develop" branch, and can also be triggered manually.
 # The image is tagged with "develop" and a version string based on the workflow run number.
 # For pull requests, the Docker image is uploaded as an artifact instead of being pushed to the registry.
-# Old Docker images with the "develop" version prefix are cleaned up to save space.
+# After publishing, old Docker images with the "develop" version suffix are cleaned up to save space.
 # The workflow uses the GITHUB_TOKEN secret for authentication with GitHub Container Registry.
+
+# Jobs:
+# - pytest: Runs unit and regression tests using pytest.
+# - build_image: Builds the Docker image, tags it, and uploads it as an artifact for PRs.
+# - publish_image: Downloads the image artifact and pushes it to GitHub Container Registry (on push events).
+# - cleanup_old_develops: Cleans up old "develop" Docker images in the registry (on push events).
 
 on:
   push:
@@ -14,12 +20,33 @@ on:
   workflow_dispatch: # allows manual triggering of the workflow
 
 env:
-  VERSION_PREFIX: 0.1.23.
+  VERSION_PREFIX: 0.2.01.
   VERSION_SUFFIX: -develop
 
 jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run unit and regression tests
+        run: python -m pytest -v tests/
+      
   publish_image:
     runs-on: ubuntu-latest
+    needs: pytest
     steps:
       - name: Checkout
         uses: actions/checkout@v4

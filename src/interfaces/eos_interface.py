@@ -22,7 +22,7 @@ Usage:
 import logging
 import time
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import pandas as pd
 import numpy as np
@@ -71,8 +71,31 @@ class EosInterface:
         self.last_start_solution = None
         self.home_appliance_released = False
         self.home_appliance_start_hour = None
-        self.eos_version = None
+        self.eos_version = (
+            ">=2025-04-09"  # use as default value in case version check fails
+        )
         self.eos_version = self.__retrieve_eos_version()
+
+        self.last_control_data = [
+            {
+                "ac_charge_demand": 0,
+                "dc_charge_demand": 0,
+                "discharge_allowed": False,
+                "error": 0,
+                "hour": -1,
+            },
+            {
+                "ac_charge_demand": 0,
+                "dc_charge_demand": 0,
+                "discharge_allowed": False,
+                "error": 0,
+                "hour": -1,
+            },
+        ]
+
+        self.last_optimization_runtimes = [0] * 5  # list to store last 5 runtimes
+        self.last_optimization_runtime_number = 0  # index for circular list
+        self.is_first_run = True  # Add flag to track first run
 
     # EOS basic API helper
     def set_config_value(self, key, value):
@@ -132,6 +155,7 @@ class EosInterface:
             request_url,
             timeout,
         )
+        response = None  # Initialize response variable
         try:
             start_time = time.time()
             response = requests.post(
@@ -141,31 +165,59 @@ class EosInterface:
             elapsed_time = end_time - start_time
             minutes, seconds = divmod(elapsed_time, 60)
             logger.info(
-                "[EOS] OPTIMIZE response retrieved successfully in %d min %.2f sec",
+                "[EOS] OPTIMIZE response retrieved successfully in %d min %.2f sec for current run",
                 int(minutes),
                 seconds,
             )
             response.raise_for_status()
-            return response.json()
+            # Check if the array is still filled with zeros
+            if all(runtime == 0 for runtime in self.last_optimization_runtimes):
+                # Fill all entries with the first real value
+                self.last_optimization_runtimes = [elapsed_time] * 5
+            else:
+                # Store the runtime in the circular list only if successful
+                self.last_optimization_runtimes[
+                    self.last_optimization_runtime_number
+                ] = elapsed_time
+            self.last_optimization_runtime_number = (
+                self.last_optimization_runtime_number + 1
+            ) % 5
+            # logger.debug(
+            #     "[EOS] OPTIMIZE Last 5 runtimes in seconds: %s",
+            #     self.last_optimization_runtimes,
+            # )
+            avg_runtime = sum(self.last_optimization_runtimes) / 5
+            return response.json(), avg_runtime
         except requests.exceptions.Timeout:
             logger.error("[EOS] OPTIMIZE Request timed out after %s seconds", timeout)
             return {"error": "Request timed out - trying again with next run"}
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.ConnectionError as e:
             logger.error(
-                "[EOS] OPTIMIZE Request failed: %s - response: %s", e, response
+                "[EOS] OPTIMIZE Connection error - EOS server not reachable at %s "
+                + "will try again with next cycle - error: %s",
+                request_url,
+                str(e),
             )
+            return {
+                "error": f"EOS server not reachable at {self.base_url} "
+                + "will try again with next cycle"
+            }
+        except requests.exceptions.RequestException as e:
+            logger.error("[EOS] OPTIMIZE Request failed: %s", e)
+            if response is not None:
+                logger.error("[EOS] OPTIMIZE Response status: %s", response.status_code)
+                logger.debug(
+                    "[EOS] OPTIMIZE ERROR - response of EOS is:"
+                    + "\n---RESPONSE-------------------------------------------------\n %s"
+                    + "\n------------------------------------------------------------",
+                    response.text,
+                )
             logger.debug(
-                "[EOS] OPTIMIZE ERROR - payload for the request was:"+
-                "\n---REQUEST--------------------------------------------------\n %s"+
-                "\n------------------------------------------------------------",
-                payload
+                "[EOS] OPTIMIZE ERROR - payload for the request was:"
+                + "\n---REQUEST--------------------------------------------------\n %s"
+                + "\n------------------------------------------------------------",
+                payload,
             )
-            logger.debug(
-                "[EOS] OPTIMIZE ERROR - response of EOS is:"+
-                "\n---RESPONSE-------------------------------------------------\n %s"+
-                "\n------------------------------------------------------------",
-                 response.text
-            )            
             return {"error": str(e)}
 
     def examine_response_to_control_data(self, optimized_response_in):
@@ -198,9 +250,14 @@ class EosInterface:
         # ecar_response = None
         if "ac_charge" in optimized_response_in:
             ac_charge_demand_relative = optimized_response_in["ac_charge"]
+            self.last_control_data[0]["ac_charge_demand"] = ac_charge_demand_relative[
+                current_hour
+            ]
+            self.last_control_data[1]["ac_charge_demand"] = ac_charge_demand_relative[
+                current_hour + 1 if current_hour < 23 else 0
+            ]
             # getting entry for current hour
             ac_charge_demand_relative = ac_charge_demand_relative[current_hour]
-
             logger.debug(
                 "[EOS] RESPONSE AC charge demand for current hour %s:00 -> %s %%",
                 current_hour,
@@ -208,6 +265,13 @@ class EosInterface:
             )
         if "dc_charge" in optimized_response_in:
             dc_charge_demand_relative = optimized_response_in["dc_charge"]
+            self.last_control_data[0]["dc_charge_demand"] = dc_charge_demand_relative[
+                current_hour
+            ]
+            self.last_control_data[1]["dc_charge_demand"] = dc_charge_demand_relative[
+                current_hour + 1 if current_hour < 23 else 0
+            ]
+
             # getting entry for current hour
             dc_charge_demand_relative = dc_charge_demand_relative[current_hour]
             logger.debug(
@@ -217,6 +281,12 @@ class EosInterface:
             )
         if "discharge_allowed" in optimized_response_in:
             discharge_allowed = optimized_response_in["discharge_allowed"]
+            self.last_control_data[0]["discharge_allowed"] = discharge_allowed[
+                current_hour
+            ]
+            self.last_control_data[1]["discharge_allowed"] = discharge_allowed[
+                current_hour + 1 if current_hour < 23 else 0
+            ]
             # getting entry for current hour
             discharge_allowed = bool(discharge_allowed[current_hour])
             logger.debug(
@@ -241,6 +311,11 @@ class EosInterface:
             logger.error("[EOS] RESPONSE No control data in optimized response")
             response_error = True
 
+        self.last_control_data[0]["error"] = int(response_error)
+        self.last_control_data[1]["error"] = int(response_error)
+        self.last_control_data[0]["hour"] = current_hour
+        self.last_control_data[1]["hour"] = current_hour + 1 if current_hour < 23 else 0
+
         if "washingstart" in optimized_response_in:
             self.home_appliance_start_hour = optimized_response_in["washingstart"]
             if self.home_appliance_start_hour == current_hour:
@@ -248,7 +323,8 @@ class EosInterface:
             else:
                 self.home_appliance_released = False
             logger.debug(
-                "[EOS] RESPONSE Home appliance - current hour %s:00 - start hour %s - is Released: %s",
+                "[EOS] RESPONSE Home appliance - current hour %s:00"
+                + " - start hour %s - is Released: %s",
                 current_hour,
                 self.home_appliance_start_hour,
                 self.home_appliance_released,
@@ -287,6 +363,15 @@ class EosInterface:
                 e,
             )
 
+    def get_last_control_data(self):
+        """
+        Get the last control data for the EOS interface.
+
+        Returns:
+            list: The last control data.
+        """
+        return self.last_control_data
+
     def set_last_start_solution(self, last_start_solution):
         """
         Set the last start solution for the EOS interface.
@@ -297,14 +382,12 @@ class EosInterface:
         self.last_start_solution = last_start_solution
 
     def get_last_start_solution(self):
-        '''
         """
         Get the last start solution for the EOS interface.
 
         Returns:
             str: The last start solution.
         """
-        '''
         return self.last_start_solution
 
     def get_home_appliance_released(self):
@@ -315,7 +398,7 @@ class EosInterface:
             bool: True if the home appliance is released, False otherwise.
         """
         return self.home_appliance_released
-    
+
     def get_home_appliance_start_hour(self):
         """
         Get the home appliance start hour.
@@ -389,28 +472,42 @@ class EosInterface:
                 return eos_version
             else:
                 logger.error(
-                    "[EOS] HTTP error occurred while getting EOS version: %s", e
+                    "[EOS] HTTP error occurred while getting EOS version"
+                    + " - use preset version: %s : %s - Response: %s",
+                    self.eos_version,
+                    e,
+                    e.response.text if e.response else "No response",
                 )
-            return None
+                return self.eos_version  # return preset version if error occurs
         except requests.exceptions.ConnectTimeout:
             logger.error(
-                "[EOS] Failed to get EOS version - Server not reachable:"+
-                " Connection to %s timed out",
+                "[EOS] Failed to get EOS version  - use preset version: '%s'"
+                + " - Server not reachable: Connection to %s timed out",
+                self.eos_version,
                 self.base_url,
             )
-            return "Server not reachable"
+            return self.eos_version  # return preset version if error occurs
         except requests.exceptions.ConnectionError as e:
             logger.error(
-                "[EOS] Failed to get EOS version - Server not reachable: Connection error: %s",
+                "[EOS] Failed to get EOS version - use preset version: '%s' - Connection error: %s",
+                self.eos_version,
                 e,
             )
-            return "Server not reachable"
+            return self.eos_version  # return preset version if error occurs
         except requests.exceptions.RequestException as e:
-            logger.error("[EOS] Failed to get EOS version - Error: %s", e)
-            return None
+            logger.error(
+                "[EOS] Failed to get EOS version - use preset version: '%s' - Error: %s ",
+                self.eos_version,
+                e,
+            )
+            return self.eos_version  # return preset version if error occurs
         except json.JSONDecodeError as e:
-            logger.error("[EOS] Failed to decode EOS version response: %s", e)
-            return None
+            logger.error(
+                "[EOS] Failed to decode EOS version - use preset version: '%s' - response: %s ",
+                self.eos_version,
+                e,
+            )
+            return self.eos_version  # return preset version if error occurs
 
     def get_eos_version(self):
         """
@@ -420,3 +517,80 @@ class EosInterface:
             str: The EOS version.
         """
         return self.eos_version
+
+    def calculate_next_run_time(self, current_time, avg_runtime, update_interval):
+        """
+        Calculate the next run time prioritizing quarter-hour alignment with improved gap filling.
+        """
+        # Calculate minimum time between runs
+        min_gap_seconds = max((update_interval + avg_runtime) * 0.7, 30)
+
+        # Find next quarter-hour from current time
+        next_quarter = current_time.replace(second=0, microsecond=0)
+        current_minute = next_quarter.minute
+
+        minutes_past_quarter = current_minute % 15
+        if minutes_past_quarter == 0 and current_time.second > 0:
+            minutes_to_add = 15
+        elif minutes_past_quarter == 0:
+            minutes_to_add = 15
+        else:
+            minutes_to_add = 15 - minutes_past_quarter
+
+        next_quarter += timedelta(minutes=minutes_to_add)
+
+        quarter_aligned_start = next_quarter - timedelta(seconds=avg_runtime)
+
+        # **BUG FIX**: Check if quarter_aligned_start is in the past
+        if quarter_aligned_start <= current_time:
+            # Move to the next quarter-hour
+            next_quarter += timedelta(minutes=15)
+            quarter_aligned_start = next_quarter - timedelta(seconds=avg_runtime)
+            logger.debug(
+                "[OPTIMIZATION] Quarter start was in past, moved to next: %s",
+                next_quarter.strftime("%H:%M:%S"),
+            )
+
+        time_until_quarter_start = (
+            quarter_aligned_start - current_time
+        ).total_seconds()
+
+        # Debug logging
+        logger.debug(
+            "[OPTIMIZATION] Debug: current=%s, next_quarter=%s, quarter_start=%s, time_until=%.1fs",
+            current_time.strftime("%H:%M:%S"),
+            next_quarter.strftime("%H:%M:%S"),
+            quarter_aligned_start.strftime("%H:%M:%S"),
+            time_until_quarter_start,
+        )
+
+        # More aggressive gap-filling: if we have at least 2x the update interval,
+        # try a gap-fill run
+        if (
+            time_until_quarter_start >= (2 * update_interval)
+            and time_until_quarter_start >= min_gap_seconds
+        ):
+            normal_next_start = current_time + timedelta(seconds=update_interval)
+            logger.info(
+                "[OPTIMIZATION] Gap-fill run: start %s (quarter-aligned run follows at %s)",
+                normal_next_start.strftime("%H:%M:%S"),
+                next_quarter.strftime("%H:%M:%S"),
+            )
+            return normal_next_start
+
+        # Otherwise, use quarter-aligned timing
+        absolute_min_seconds = max(avg_runtime * 0.5, 30)
+        if time_until_quarter_start < absolute_min_seconds:
+            next_quarter += timedelta(minutes=15)
+            quarter_aligned_start = next_quarter - timedelta(seconds=avg_runtime)
+            logger.debug(
+                "[OPTIMIZATION] Quarter too close, moved to next: %s",
+                next_quarter.strftime("%H:%M:%S"),
+            )
+
+        logger.info(
+            "[OPTIMIZATION] Quarter-hour aligned run: start %s, finish at %s",
+            quarter_aligned_start.strftime("%H:%M:%S"),
+            next_quarter.strftime("%H:%M:%S"),
+        )
+        return quarter_aligned_start

@@ -1,0 +1,87 @@
+{
+    "current_states": {
+        "current_ac_charge_demand": 0,
+        "current_dc_charge_demand": 3200,
+        "current_discharge_allowed": true,
+        "inverter_mode": "MODE_AVOID_DISCHARGE_EVCC_FAST",
+        "inverter_mode_num": 3,
+        "override_active": false,
+        "override_end_time": 0
+    },
+    "evcc": {
+        "charging_state": true,
+        "charging_mode": "pv",
+        "current_sessions": [
+            {
+                "connected": true,
+                "charging": true,
+                "vehicleName": "Model Y Performance",
+                "vehicleSoc": 45.2,
+                "vehicleRange": 185,
+                "vehicleOdometer": 28934,
+                "chargedEnergy": 8200,
+                "chargeRemainingEnergy": 15800,
+                "chargeDuration": 2850,
+                "chargeRemainingDuration": 8750,
+                "mode": "now",
+                "targetSoc": 80,
+                "chargePower": 3200
+            },
+            {
+                "connected": true,
+                "charging": true,
+                "vehicleName": "Model 3 Standard",
+                "vehicleSoc": 89.1,
+                "vehicleRange": 412,
+                "vehicleOdometer": 67821,
+                "chargedEnergy": 22100,
+                "chargeRemainingEnergy": 1900,
+                "chargeDuration": 0,
+                "chargeRemainingDuration": 0,
+                "mode": "pv",
+                "targetSoc": 90,
+                "chargePower": 0
+            },
+            {
+                "connected": false,
+                "charging": false,
+                "vehicleName": "Model S Plaid",
+                "vehicleSoc": 0,
+                "vehicleRange": 0,
+                "vehicleOdometer": 15642,
+                "chargedEnergy": 0,
+                "chargeRemainingEnergy": 0,
+                "chargeDuration": 0,
+                "chargeRemainingDuration": 0,
+                "mode": "off",
+                "targetSoc": 85,
+                "chargePower": 0
+            }
+        ]
+    },
+    "battery": {
+        "soc": 45.2,
+        "usable_capacity": 9500,
+        "max_charge_power_dyn": 3300,
+        "max_grid_charge_rate": 5000
+    },
+    "inverter": {
+        "inverter_special_data": {
+            "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": 22.1,
+            "MODULE_TEMPERATURE_MEAN_01_F32": 24.5,
+            "MODULE_TEMPERATURE_MEAN_03_F32": 23.8,
+            "MODULE_TEMPERATURE_MEAN_04_F32": 21.2,
+            "FANCONTROL_PERCENT_01_F32": 25.8,
+            "FANCONTROL_PERCENT_02_F32": 28.4
+        }
+    },
+    "state": {
+        "request_state": "response received",
+        "last_request_timestamp": "2024-10-03T14:29:45.123Z",
+        "last_response_timestamp": "2024-10-03T14:30:00.456Z",
+        "next_run": "2024-10-03T14:35:00.000Z"
+    },
+    "eos_connect_version": "0.2.1",
+    "timestamp": "2024-10-03T14:30:15.789Z",
+    "api_version": "0.0.1"
+}

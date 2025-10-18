@@ -27,10 +27,12 @@ import threading
 import logging
 import time
 import asyncio
+import math
+import sys
+from collections import defaultdict
 import aiohttp
 import pytz
 import requests
-import pvlib
 import pandas as pd
 import numpy as np
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
@@ -59,13 +61,10 @@ class PvInterface:
         self.config_source = config_source
         self.config_special = config_special
         logger.debug(
-            "[PV-IF] Initializing with 1st source: %s"
-            # + " and 2nd source: %s"
-            ,
+            "[PV-IF] Initializing with 1st source: %s",
             self.config_source.get("source", "akkudoktor"),
             # self.config_source.get("second_source", "openmeteo"),
         )
-        self.__check_config()  # Validate configuration parameters
 
         self.pv_forcast_array = []
         self.pv_forcast_request_error = {
@@ -79,7 +78,24 @@ class PvInterface:
 
         self._update_thread = None
         self._stop_event = threading.Event()
-        self.update_interval = 15 * 60  # Update 15 minutes (in seconds)
+        # Adjust update interval based on provider
+        if self.config_source.get("source") == "solcast":
+            self.update_interval = (
+                2.5 * 60 * 60
+            )  # 2.5 hours (9.6 calls/day - under the 10 limit)
+            logger.info("[PV-IF] Using extended update interval for Solcast: 2.5 hours")
+        else:
+            self.update_interval = 15 * 60  # Standard 15 minutes
+
+        try:
+            self.__check_config()  # Validate configuration parameters
+            self.configuration_valid = True
+            logger.info("[PV-IF] Configuration validation successful")
+        except ValueError as e:
+            logger.error("[PV-IF] PV Interface configuration error: %s", str(e))
+            logger.error("[PV-IF] We have to exit now ...")
+            sys.exit(1)  # Exit if configuration is invalid
+
         logger.info("[PV-IF] Initialized")
         self.__start_update_service()  # Start the background thread for periodic updates
 
@@ -95,39 +111,86 @@ class PvInterface:
         """
         if not len(self.config) > 0:
             logger.error("[PV-IF] Initialize - No pv entries found")
-        else:
-            logger.debug("[PV-IF] Initialize - pv entries found: %s", len(self.config))
-            for config_entry in self.config:
-                # check for each entries the mandatory params
-                if config_entry.get("name", ""):
-                    logger.debug(
-                        "[PV-IF] Initialize - config entry name: %s",
-                        config_entry.get("name", ""),
+            return
+
+        logger.debug("[PV-IF] Initialize - pv entries found: %s", len(self.config))
+
+        for config_entry in self.config:
+            entry_name = config_entry.get("name", "unnamed")
+            logger.debug("[PV-IF] Initialize - config entry name: %s", entry_name)
+
+            # Check for Solcast-specific requirements
+            if self.config_source.get("source") == "solcast":
+                # Check API key
+                if not self.config_source.get("api_key", "").strip():
+                    logger.error(
+                        "[PV-IF] Solcast API key missing in pv_forecast_source section"
                     )
-                else:
-                    logger.debug("[PV-IF] Init - config entry name not found")
-                if config_entry.get("lat", None) is None:
-                    raise ValueError("[PV-IF] Init - lat not found in config entry")
-                if config_entry.get("lon", None) is None:
-                    raise ValueError("[PV-IF] Init - lon not found in config entry")
-                if config_entry.get("azimuth", None) is None:
-                    raise ValueError("[PV-IF] Init - azimuth not found in config entry")
-                if config_entry.get("tilt", None) is None:
-                    raise ValueError("[PV-IF] Init - tilt not found in config entry")
-                if config_entry.get("power", None) is None:
-                    raise ValueError("[PV-IF] Init - power not found in config entry")
-                if config_entry.get("powerInverter", None) is None:
+                    logger.error(
+                        '[PV-IF] Please add: api_key: "your_solcast_api_key" in config.yaml'
+                    )
                     raise ValueError(
-                        "[PV-IF] Init - powerInverter not found in config entry"
+                        "[PV-IF] Solcast API key required - see CONFIG_README.md"
+                        + " for setup instructions"
                     )
-                if config_entry.get("inverterEfficiency", None) is None:
+
+                # Check resource_id
+                if not config_entry.get("resource_id", "").strip():
+                    logger.error(
+                        "[PV-IF] Resource ID missing for '%s' - required for Solcast",
+                        entry_name,
+                    )
+                    logger.error(
+                        '[PV-IF] Please add: resource_id: "your_resource_id" in config.yaml'
+                    )
                     raise ValueError(
-                        "[PV-IF] Init - inverterEfficiency not found in config entry"
+                        f"[PV-IF] Solcast resource_id required for '{entry_name}' - see"
+                        + " CONFIG_README.md for setup instructions"
                     )
-                # if config_entry.get("horizon", None) is None:
-                #     config_entry["horizon"] = ""
-                #     logger.debug("[PV-IF] Init - horizon not found in config entry,"+
-                # "using default empty value")
+
+                logger.debug("[PV-IF] Solcast config validated for '%s'", entry_name)
+            else:
+                # Standard parameter validation for other sources
+                missing = []
+                if config_entry.get("lat") is None:
+                    missing.append("lat")
+                if config_entry.get("lon") is None:
+                    missing.append("lon")
+                if config_entry.get("azimuth") is None:
+                    missing.append("azimuth")
+                if config_entry.get("tilt") is None:
+                    missing.append("tilt")
+
+                if missing:
+                    logger.error(
+                        "[PV-IF] Missing parameters for '%s': %s",
+                        entry_name,
+                        ", ".join(missing),
+                    )
+                    raise ValueError(
+                        "[PV-IF] Missing required parameters "
+                        + f"for '{entry_name}': {', '.join(missing)}"
+                    )
+
+            # Common parameters for all sources
+            missing_common = []
+            if config_entry.get("power") is None:
+                missing_common.append("power")
+            if config_entry.get("powerInverter") is None:
+                missing_common.append("powerInverter")
+            if config_entry.get("inverterEfficiency") is None:
+                missing_common.append("inverterEfficiency")
+
+            if missing_common:
+                logger.error(
+                    "[PV-IF] Missing common parameters for '%s': %s",
+                    entry_name,
+                    ", ".join(missing_common),
+                )
+                raise ValueError(
+                    "[PV-IF] Missing required parameters"
+                    + f" for '{entry_name}': {', '.join(missing_common)}"
+                )
 
     def __start_update_service(self):
         """
@@ -177,9 +240,23 @@ class PvInterface:
                 )
             # special temp forecast if pv config is not given in detail
             if self.config and self.config[0]:
-                self.temp_forecast_array = self.__get_pv_forecast_akkudoktor_api(
-                    tgt_value="temperature", pv_config_entry=self.config[0], tgt_duration=48
+                temp_result = self.__get_pv_forecast_akkudoktor_api(
+                    tgt_value="temperature",
+                    pv_config_entry=self.config[0],
+                    tgt_duration=48,
                 )
+                if not temp_result:  # If empty array or None due to API error
+                    logger.warning(
+                        "[PV-IF] Temperature forecast API failed - using default"
+                        + " temperature forecast"
+                    )
+                    self.temp_forecast_array = self.__get_default_temperature_forecast()
+                else:
+                    self.temp_forecast_array = temp_result
+                    # logger.debug(
+                    #     "[PV-IF] Temperature forecast updated with %d values",
+                    #     len(temp_result),
+                    # )
             else:
                 self.temp_forecast_array = self.__get_default_temperature_forecast()
             logger.info("[PV-IF] PV and Temperature updated")
@@ -304,7 +381,7 @@ class PvInterface:
 
         Notes:
             - Supported sources: "akkudoktor", "openmeteo", "forecast_solar",
-              "default".
+              "solcast", "default".
             - Logs a warning if the default source is used.
             - Logs an error and falls back to the default forecast if no valid
               source is configured.
@@ -315,13 +392,15 @@ class PvInterface:
             )
         elif self.config_source.get("source") == "openmeteo":
             # return self.__get_pv_forecast_openmeteo_api(config_entry, tgt_duration)
-            return self.__get_pv_forecast_openmeteo_lib(config_entry, tgt_duration)
+            return self.__get_pv_forecast_openmeteo_lib(config_entry)
         elif self.config_source.get("source") == "openmeteo_local":
             return self.__get_pv_forecast_openmeteo_api(config_entry, tgt_duration)
         elif self.config_source.get("source") == "forecast_solar":
-            return self.__get_pv_forecast_forecast_solar_api(config_entry, tgt_duration)
+            return self.__get_pv_forecast_forecast_solar_api(config_entry)
         elif self.config_source.get("source") == "evcc":
             return self.__get_pv_forecast_evcc_api(config_entry, tgt_duration)
+        elif self.config_source.get("source") == "solcast":
+            return self.__get_pv_forecast_solcast_api(config_entry, tgt_duration)
         elif self.config_source.get("source") == "default":
             logger.warning("[PV-IF] Using default PV forecast source")
             return self.__get_default_pv_forcast(config_entry["power"])
@@ -359,119 +438,110 @@ class PvInterface:
         power and temperature values for the specified duration starting from the current hour.
         """
         if pv_config_entry is None:
-            logger.error(
-                "[PV-IF][akkudoktor] No PV config entry provided for target: %s",
-                tgt_value,
+            return self._handle_interface_error(
+                "config_error",
+                f"No PV config entry provided for target: {tgt_value}",
+                {},
+                "akkudoktor",
             )
-            return []
+
         forecast_request_payload = self.__create_forecast_request(pv_config_entry)
-        # print(forecast_request_payload)
-        recv_error = False
-        try:
+
+        def request_func():
             response = requests.get(forecast_request_payload, timeout=5)
             response.raise_for_status()
             day_values = response.json()
-            day_values = day_values["values"]
-        except requests.exceptions.Timeout:
-            logger.error(
-                "[PV-IF][akkudoktor] Request timed out while fetching PV forecast. (%s)",
-                tgt_value,
-            )
-            recv_error = True
-        except requests.exceptions.RequestException as e:
-            logger.error(
-                "[PV-IF][akkudoktor] Request failed while fetching PV forecast (%s): %s",
-                tgt_value,
-                e,
-            )
-            recv_error = True
-        if recv_error:
-            if tgt_value == "power":
-                logger.info(
-                    "[PV-IF][akkudoktor] Using default PV forecast with max %s W for %s",
-                    pv_config_entry["power"],
-                    pv_config_entry["name"],
-                )
-                # return a default forecast with 0% at night and 100% at noon
-                return self.__get_default_pv_forcast(pv_config_entry["power"])
-            else:
-                logger.info(
-                    "[PV-IF][akkudoktor] Using default temperature forecast for %s",
-                    pv_config_entry["name"],
-                )
-                # return a default temperature forecast with 0% at night and 100% at noon
-                return self.__get_default_temperature_forecast()
+            return day_values["values"]
 
-        forecast_values = []
-        tz = pytz.timezone(self.time_zone)
-        current_time = tz.localize(
-            datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        )
-        end_time = current_time + timedelta(hours=tgt_duration)
-        # logger.debug(
-        #     "[PV-IF] Fetching %s forecast for %s from %s to %s",
-        #     tgt_value,
-        #     pv_config_entry["name"],
-        #     current_time.isoformat(),
-        #     end_time.isoformat(),
-        # )
+        def error_handler(error_type, exception):
+            return self._handle_interface_error(
+                error_type,
+                f"Akkudoktor API error for {tgt_value}: {exception}",
+                pv_config_entry,
+                "akkudoktor",
+            )
 
-        for forecast_entry in day_values:
-            for forecast in forecast_entry:
-                entry_time = datetime.fromisoformat(forecast["datetime"])
-                if entry_time.tzinfo is None:
-                    # If datetime is naive, localize it
-                    entry_time = pytz.timezone(self.time_zone).localize(entry_time)
+        day_values = self._retry_request(request_func, error_handler)
+
+        # Data processing
+        try:
+            forecast_values = []
+            tz = pytz.timezone(self.time_zone)
+            current_time = tz.localize(
+                datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            )
+            end_time = current_time + timedelta(hours=tgt_duration)
+
+            for forecast_entry in day_values:
+                for forecast in forecast_entry:
+                    entry_time = datetime.fromisoformat(forecast["datetime"])
+                    if entry_time.tzinfo is None:
+                        # If datetime is naive, localize it
+                        entry_time = pytz.timezone(self.time_zone).localize(entry_time)
+                    else:
+                        # Convert to configured timezone
+                        entry_time = entry_time.astimezone(
+                            pytz.timezone(self.time_zone)
+                        )
+                    if current_time <= entry_time < end_time:
+                        value = forecast.get(tgt_value, 0)
+                        # if power is negative, set it to 0 (fixing wrong values from api)
+                        if tgt_value == "power" and value < 0:
+                            value = 0
+                        forecast_values.append(value)
+
+            # workaround for wrong time points in the forecast from akkudoktor
+            # remove first entry and append 0 to the end
+            if forecast_values:
+                forecast_values.pop(0)
+                forecast_values.append(0)
+
+            # fix for time changes e.g. western europe then fill or reduce
+            # the array to target duration
+            if len(forecast_values) > tgt_duration:
+                forecast_values = forecast_values[:tgt_duration]
+                logger.debug(
+                    "[PV-IF][akkudoktor] Day of time change - values reduced to %s for %s",
+                    tgt_duration,
+                    pv_config_entry.get("name", "unknown"),
+                )
+            elif len(forecast_values) < tgt_duration:
+                if forecast_values:
+                    forecast_values.extend(
+                        [forecast_values[-1]] * (tgt_duration - len(forecast_values))
+                    )
                 else:
-                    # Convert to configured timezone
-                    entry_time = entry_time.astimezone(pytz.timezone(self.time_zone))
-                if current_time <= entry_time < end_time:
-                    value = forecast.get(tgt_value, 0)
+                    forecast_values = [0] * tgt_duration
+                logger.debug(
+                    "[PV-IF][akkudoktor] Day of time change - values extended to %s for %s",
+                    tgt_duration,
+                    pv_config_entry.get("name", "unknown"),
+                )
 
-                    # logger.debug(
-                    #     "[PV-IF] Processing forecast entry at %s (%s) for value:  %s",
-                    #     entry_time.isoformat(), forecast["datetime"],
-                    #     value,
-                    # )
-                    # if power is negative, set it to 0 (fixing wrong values form api)
-                    if tgt_value == "power" and value < 0:
-                        value = 0
-                    forecast_values.append(value)
-        # workaround for wrong time points in the forecast from akkudoktor
-        # remove first entry and append 0 to the end
-        forecast_values.pop(0)
-        forecast_values.append(0)
+            # Clear any previous errors on success
+            self.pv_forcast_request_error["error"] = None
 
-        request_type = "PV forecast"
-        pv_config_name = "for " + pv_config_entry["name"]
-        if tgt_value == "temperature":
-            request_type = "Temperature forecast"
-            pv_config_name = ""
-        logger.debug(
-            "[PV-IF] %s fetched successfully %s",
-            request_type,
-            pv_config_name,
-        )
-        # fix for time changes e.g. western europe then fill or reduce the array to 48 values
-        if len(forecast_values) > tgt_duration:
-            forecast_values = forecast_values[:tgt_duration]
-            logger.debug(
-                "[PV-IF][akkudoktor] Day of time change %s values reduced to %s for %s",
-                request_type,
-                tgt_duration,
-                pv_config_name,
+            request_type = (
+                "PV forecast" if tgt_value == "power" else "Temperature forecast"
             )
-        elif len(forecast_values) < tgt_duration:
-            forecast_values.extend(
-                [forecast_values[-1]] * (tgt_duration - len(forecast_values))
+            pv_config_name = (
+                f"for {pv_config_entry.get('name', 'unknown')}"
+                if tgt_value == "power"
+                else ""
             )
             logger.debug(
-                "[PV-IF][akkudoktor] Day of time change %s values extended to %s for %s",
-                request_type,
-                tgt_duration,
-                pv_config_name,
+                "[PV-IF] %s fetched successfully %s", request_type, pv_config_name
             )
-        return forecast_values
+
+            return forecast_values
+
+        except (ValueError, TypeError, AttributeError, KeyError) as e:
+            return self._handle_interface_error(
+                "processing_error",
+                f"Error processing {tgt_value} forecast data: {e}",
+                pv_config_entry,
+                "akkudoktor",
+            )
 
     def __get_horizon_elevation(self, sun_azimuth, horizon):
 
@@ -542,47 +612,61 @@ class PvInterface:
             f"&forecast_days={int(np.ceil(hours/24))}"
             f"&timezone={timezone}"
         )
-        response = requests.get(url, timeout=5)
-        data = response.json()
+
+        def request_func():
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            return response
+
+        def error_handler(error_type, exception):
+            return self._handle_interface_error(
+                error_type,
+                f"Open-Meteo API error for {pv_config_entry['name']}: {exception}",
+                pv_config_entry,
+                "openmeteo_api",
+            )
+
+        response = self._retry_request(request_func, error_handler)
+
+        def json_func():
+            return response.json()
+
+        data = self._retry_request(json_func, error_handler)
 
         radiation = data["hourly"]["shortwave_radiation"][:hours]  # W/m²
         cloudcover = data["hourly"]["cloudcover"][:hours]  # %
 
-        # logger.debug(
-        #     "[PV-IF] Open-Meteo radiation: %s", radiation
-        # )
-
-        # Prepare time index for pvlib
-        times = pd.date_range(
-            start=data["hourly"]["time"][0], periods=hours, freq="h", tz=timezone
+        # Prepare time index - create datetime objects instead of pandas DatetimeIndex
+        start_time = datetime.fromisoformat(
+            data["hourly"]["time"][0].replace("Z", "+00:00")
         )
+        times = [start_time + timedelta(hours=i) for i in range(hours)]
 
-        # Get sun position
-        solpos = pvlib.solarposition.get_solarposition(times, latitude, longitude)
-        logger.debug("[PV-IF] Open-Meteo solar position calculated solpos - %s", solpos)
-
-        # Calculate angle of incidence (AOI)
-        aoi = pvlib.irradiance.aoi(
-            surface_tilt=tilt,
-            surface_azimuth=azimuth,
-            solar_zenith=solpos["apparent_zenith"],
-            solar_azimuth=solpos["azimuth"],
+        # Get sun position using our custom function
+        solpos = self._solar_position(times, latitude, longitude)
+        logger.debug(
+            "[PV-IF] Open-Meteo solar position calculated - first entry: %s", solpos[0]
         )
 
         # Calculate PV forecast
         pv_forecast = []
-        for rad, cc, angle, sun_az, sun_el in zip(
-            radiation,
-            cloudcover,
-            aoi,
-            solpos["azimuth"],
-            90 - solpos["apparent_zenith"],
-        ):
+        for i, (rad, cc) in enumerate(zip(radiation, cloudcover)):
+            # Calculate angle of incidence (AOI) using our custom function
+            aoi = self._angle_of_incidence(
+                surface_tilt=tilt,
+                surface_azimuth=azimuth,
+                solar_zenith=solpos[i]["apparent_zenith"],
+                solar_azimuth=solpos[i]["azimuth"],
+            )
+
+            sun_az = solpos[i]["azimuth"]
+            sun_el = 90 - solpos[i]["apparent_zenith"]
+
             # Adjust radiation for cloud cover
             eff_rad = rad * (1 - cc / 100) + rad * cloud_factor * (cc / 100)
 
             # Project radiation onto panel
-            projection = max(np.cos(np.radians(angle)), 0)
+            projection = max(math.cos(math.radians(aoi)), 0)
 
             # Adjust for panel efficiency (22,5% is a common value)
             eff_rad_panel = eff_rad * projection * 0.225
@@ -590,12 +674,6 @@ class PvInterface:
             # --- Horizon check ---
             horizon_elev = self.__get_horizon_elevation(sun_az, horizon)
             if sun_el < horizon_elev:
-                # logger.debug(
-                #     "[PV-IF] Sun elevation %s° is below horizon elevation %s° at azimuth %s°",
-                #     sun_el,
-                #     horizon_elev,
-                #     sun_az,
-                # )
                 eff_rad_panel = (
                     eff_rad_panel * 0.25
                 )  # Sun is behind local horizon - 25% of radiation
@@ -606,12 +684,6 @@ class PvInterface:
             )  # Assuming 220 W/m² as average panel efficiency for area estimation
             energy_wh = max(0, energy_wh)  # Ensure no negative values
 
-            # logger.debug(
-            #     "[PV-IF] Radiation: %s W/m², Cloud cover: %s%%, AOI: %s°, "
-            #     "Sun azimuth: %s°, Sun elevation: %s° -> Energy output: %s Wh",
-            #     round(rad, 2), round(cc, 2), round(angle, 2),
-            #     round(sun_az, 2), round(sun_el, 2), round(energy_wh, 2)
-            # )
             pv_forecast.append(round(energy_wh, 1))
 
         pv_forecast = [float(x) for x in pv_forecast]
@@ -623,17 +695,15 @@ class PvInterface:
 
         return pv_forecast
 
-    def __get_pv_forecast_openmeteo_lib(self, pv_config_entry, hours=48):
+    def __get_pv_forecast_openmeteo_lib(self, pv_config_entry):
         """
         Synchronous wrapper for the async OpenMeteoSolarForecast.
         """
-        return asyncio.run(
-            self.__get_pv_forecast_openmeteo_lib_async(pv_config_entry, hours)
-        )
+        return asyncio.run(self.__get_pv_forecast_openmeteo_lib_async(pv_config_entry))
 
-    async def __get_pv_forecast_openmeteo_lib_async(self, pv_config_entry, hours=48):
+    async def __get_pv_forecast_openmeteo_lib_async(self, pv_config_entry):
         """
-        Fetches PV forecast from Forecast.Solar LIB.
+        Fetches PV forecast from OpenMeteo Solar Forecast library.
         """
         try:
             async with OpenMeteoSolarForecast(
@@ -646,59 +716,78 @@ class PvInterface:
             ) as forecast:
                 estimate = await forecast.estimate()
 
-                # Build an array of hourly values from now (hour=0) up
-                # to tomorrow midnight (48 hours)
-                pv_forecast = []
-                # Calculate the number of hours remaining until tomorrow midnight
-                # Use the current time in the forecast's timezone
-                # Always use the start of the current hour in the forecast's timezone
-                now = datetime.now(estimate.timezone).replace(
-                    minute=0, second=0, microsecond=0
-                )
-                # Find tomorrow's midnight in the forecast's timezone
-                tomorrow_midnight = (now + timedelta(days=2)).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
-                hours_until_tomorrow_midnight = int(
-                    (tomorrow_midnight - now).total_seconds() // 3600
-                )
-                hours_from_today_midnight = int(
-                    (
-                        now - now.replace(hour=0, minute=0, second=0, microsecond=0)
-                    ).total_seconds()
-                    // 3600
-                )
-
-                for hour in range(
-                    -1 * hours_from_today_midnight, hours_until_tomorrow_midnight
-                ):
-                    current_hour_energy = 0
-                    for minute in range(59):
-                        current_hour_energy += estimate.power_production_at_time(
-                            now + timedelta(hours=hour, minutes=minute)
-                        )
-                    current_hour_energy = round(current_hour_energy / 60, 1)
-                    # time_point = now + timedelta(hours=hour, minutes=0)
-                    # logger.debug("TEST - : %s - %s", current_hour_energy, time_point)
-                    pv_forecast.append(current_hour_energy)
-
-                logger.debug(
-                    "[PV-IF] Openmeteo Lib PV forecast (Wh) (length: %s): %s",
-                    len(pv_forecast),
-                    pv_forecast,
-                )
-                return pv_forecast
         except (aiohttp.ClientError, ConnectionError) as e:
-            logger.error("[PV-IF] OpenMeteoLib SolarForecast connection error: %s", e)
-            # Return a default or empty forecast to avoid crashing the thread
-            return self.__get_default_pv_forcast(pv_config_entry.get("power", 200))
-        except (ValueError, KeyError, AttributeError, TypeError) as e:
-            logger.error(
-                "[PV-IF] Unexpected error in OpenMeteoLib SolarForecast: %s", e
+            return self._handle_interface_error(
+                "connection_error",
+                f"OpenMeteo Solar Forecast connection error: {e}",
+                pv_config_entry,
+                "openmeteo_lib",
             )
-            return self.__get_default_pv_forcast(pv_config_entry.get("power", 200))
+        except (ValueError, KeyError, AttributeError, TypeError) as e:
+            return self._handle_interface_error(
+                "api_error",
+                f"OpenMeteo Solar Forecast API error: {e}",
+                pv_config_entry,
+                "openmeteo_lib",
+            )
 
-    def __get_pv_forecast_forecast_solar_api(self, pv_config_entry, hours=48):
+        # Data processing
+        try:
+            # Build an array of hourly values from now (hour=0) up
+            # to tomorrow midnight (48 hours)
+            pv_forecast = []
+            # Calculate the number of hours remaining until tomorrow midnight
+            # Use the current time in the forecast's timezone
+            # Always use the start of the current hour in the forecast's timezone
+            now = datetime.now(estimate.timezone).replace(
+                minute=0, second=0, microsecond=0
+            )
+            # Find tomorrow's midnight in the forecast's timezone
+            tomorrow_midnight = (now + timedelta(days=2)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            hours_until_tomorrow_midnight = int(
+                (tomorrow_midnight - now).total_seconds() // 3600
+            )
+            hours_from_today_midnight = int(
+                (
+                    now - now.replace(hour=0, minute=0, second=0, microsecond=0)
+                ).total_seconds()
+                // 3600
+            )
+
+            for hour in range(
+                -1 * hours_from_today_midnight, hours_until_tomorrow_midnight
+            ):
+                current_hour_energy = 0
+                for minute in range(59):
+                    current_hour_energy += estimate.power_production_at_time(
+                        now + timedelta(hours=hour, minutes=minute)
+                    )
+                current_hour_energy = round(current_hour_energy / 60, 1)
+                # time_point = now + timedelta(hours=hour, minutes=0)
+                # logger.debug("TEST - : %s - %s", current_hour_energy, time_point)
+                pv_forecast.append(current_hour_energy)
+
+            # Clear any previous errors on success
+            self.pv_forcast_request_error["error"] = None
+
+            logger.debug(
+                "[PV-IF] OpenMeteo Lib PV forecast (Wh) (length: %s): %s",
+                len(pv_forecast),
+                pv_forecast,
+            )
+            return pv_forecast
+
+        except (ValueError, TypeError, AttributeError) as e:
+            return self._handle_interface_error(
+                "processing_error",
+                f"Error processing OpenMeteo forecast data: {e}",
+                pv_config_entry,
+                "openmeteo_lib",
+            )
+
+    def __get_pv_forecast_forecast_solar_api(self, pv_config_entry):
         """
         Fetches PV forecast from Forecast.Solar API.
         """
@@ -721,7 +810,6 @@ class PvInterface:
                 ]
                 # Ensure the list has 24 values, repeating if necessary
                 horizon = (horizon * (24 // len(horizon) + 1))[:24]
-                # logger.debug("[PV-IF] Horizon values: %s", horizon)
             else:
                 logger.debug(
                     "[PV-IF] No horizon values provided, using default empty list"
@@ -733,66 +821,70 @@ class PvInterface:
             f"?horizon={','.join(map(str, horizon))}"
         )
         logger.debug("[PV-IF] Fetching PV forecast from Forecast.Solar API: %s", url)
-        try:
+
+        def request_func():
             response = requests.get(url, timeout=5)
             response.raise_for_status()
-            self.pv_forcast_request_error["error"] = None
-        except requests.exceptions.Timeout:
-            logger.error("[PV-IF] Forecast.Solar API request timed out.")
-            self.pv_forcast_request_error["error"] = "timeout"
-            self.pv_forcast_request_error["timestamp"] = datetime.now().isoformat()
-            self.pv_forcast_request_error["message"] = (
-                "Forecast.Solar API request timed out."
-            )
-            self.pv_forcast_request_error["config_entry"] = pv_config_entry
-            self.pv_forcast_request_error["source"] = "forecast_solar"
-            return []
-        except requests.exceptions.RequestException as e:
-            logger.error("[PV-IF] Forecast.Solar API request failed: %s", e)
-            # logger.error("[PV-IF] Forecast.Solar API error response: %s", response.json())
-            self.pv_forcast_request_error["error"] = "request_failed"
-            self.pv_forcast_request_error["timestamp"] = datetime.now().isoformat()
-            self.pv_forcast_request_error["message"] = (
-                f"Forecast.Solar API request failed: {e}"
-            )
-            self.pv_forcast_request_error["config_entry"] = pv_config_entry
-            self.pv_forcast_request_error["source"] = "forecast_solar"
-            return []
-        data = response.json()
-        # logger.debug("[PV-IF] Forecast.Solar API response: %s", data)
-        watt_hours_period = data.get("result", {}).get("watt_hours_period", {})
+            return response
 
+        def error_handler(error_type, exception):
+            return self._handle_interface_error(
+                error_type,
+                f"Forecast.Solar API error: {exception}",
+                pv_config_entry,
+                "forecast_solar",
+            )
+
+        response = self._retry_request(request_func, error_handler)
+
+        def json_func():
+            data = response.json()
+            watt_hours_period = data.get("result", {}).get("watt_hours_period", {})
+            return watt_hours_period
+
+        watt_hours_period = self._retry_request(json_func, error_handler)
+
+        # Data validation
         if not watt_hours_period:
-            logger.error("[PV-IF] No valid watt_hours_period data found.")
-            self.pv_forcast_request_error["error"] = "no_valid_data"
-            self.pv_forcast_request_error["timestamp"] = datetime.now().isoformat()
-            self.pv_forcast_request_error["message"] = (
-                "No valid watt_hours_period data found."
+            return self._handle_interface_error(
+                "no_valid_data",
+                "No valid watt_hours_period data found.",
+                pv_config_entry,
+                "forecast_solar",
             )
-            self.pv_forcast_request_error["config_entry"] = pv_config_entry
-            self.pv_forcast_request_error["source"] = "forecast_solar"
-            return []
 
-        parsed = [
-            (datetime.strptime(ts, "%Y-%m-%d %H:%M:%S"), v)
-            for ts, v in watt_hours_period.items()
-        ]
-        min_time = min(dt for dt, _ in parsed)
-        # Align to midnight of the first day
-        midnight = min_time.replace(hour=0, minute=0, second=0, microsecond=0)
-        # Build list of 48 hourly timestamps
-        hours = [midnight + timedelta(hours=i) for i in range(48)]
-        # Build a lookup dict for fast access
-        lookup = {dt: v for dt, v in parsed}
-        # Fill the forecast array
-        forecast_wh = []
-        for h in hours:
-            # Use value if exact hour exists, else 0
-            forecast_wh.append(lookup.get(h, 0))
+        # Data processing
+        try:
+            parsed = [
+                (datetime.strptime(ts, "%Y-%m-%d %H:%M:%S"), v)
+                for ts, v in watt_hours_period.items()
+            ]
+            min_time = min(dt for dt, _ in parsed)
+            # Align to midnight of the first day
+            midnight = min_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            # Build list of 48 hourly timestamps
+            hours_list = [midnight + timedelta(hours=i) for i in range(48)]
+            # Build a lookup dict for fast access
+            lookup = {dt: v for dt, v in parsed}
+            # Fill the forecast array
+            forecast_wh = []
+            for h in hours_list:
+                # Use value if exact hour exists, else 0
+                forecast_wh.append(lookup.get(h, 0))
 
-        pv_forecast = forecast_wh
-        # logger.debug("[PV-IF] Forecast.Solar PV forecast (Wh): %s", pv_forecast)
-        return pv_forecast
+            # Clear any previous errors on success
+            self.pv_forcast_request_error["error"] = None
+
+            pv_forecast = forecast_wh
+            return pv_forecast
+
+        except (ValueError, TypeError, AttributeError) as e:
+            return self._handle_interface_error(
+                "processing_error",
+                f"Error processing forecast data: {e}",
+                pv_config_entry,
+                "forecast_solar",
+            )
 
     def __get_pv_forecast_evcc_api(self, pv_config_entry, hours=48):
         """
@@ -800,63 +892,318 @@ class PvInterface:
         """
         if self.config_special.get("url", "") == "":
             logger.error(
-                "[PV-IF] No EVCC URL configured for EVCC PV forecast - using default"
+                "[PV-IF] No EVCC URL configured for EVCC PV forecast - using default PV forecast"
             )
             return self.__get_default_pv_forcast(pv_config_entry.get("power", 200))
 
         url = self.config_special.get("url", "").rstrip("/") + "/api/state"
         logger.debug("[PV-IF] Fetching PV forecast from EVCC API: %s", url)
-        try:
+
+        def request_func():
             response = requests.get(url, timeout=5)
             response.raise_for_status()
-            self.pv_forcast_request_error["error"] = None
-        except requests.exceptions.Timeout:
-            logger.error("[PV-IF] EVCC API request timed out.")
-            self.pv_forcast_request_error["error"] = "timeout"
-            self.pv_forcast_request_error["timestamp"] = datetime.now().isoformat()
-            self.pv_forcast_request_error["message"] = "EVCC API request timed out."
-            self.pv_forcast_request_error["config_entry"] = pv_config_entry
-            self.pv_forcast_request_error["source"] = "evcc"
-            return []
-        except requests.exceptions.RequestException as e:
-            logger.error("[PV-IF] EVCC API request failed: %s", e)
-            self.pv_forcast_request_error["error"] = "request_failed"
-            self.pv_forcast_request_error["timestamp"] = datetime.now().isoformat()
-            self.pv_forcast_request_error["message"] = f"EVCC API request failed: {e}"
-            self.pv_forcast_request_error["config_entry"] = pv_config_entry
-            self.pv_forcast_request_error["source"] = "evcc"
-            return []
-        data = response.json()
-        # print("raw evcc api data: %s", data)
-        solar_forecast_all = data.get("forecast", []).get("solar", [])
-        solar_forecast_scale = solar_forecast_all.get("scale", "unknown")
-        logger.debug(
-            "[PV-IF] EVCC API solar forecast received with scale: %s",
-            solar_forecast_scale,
-        )
-        solar_forecast = solar_forecast_all.get("timeseries", [])
+            return response
 
+        def error_handler(error_type, exception):
+            return self._handle_interface_error(
+                error_type,
+                f"EVCC API error: {exception}",
+                pv_config_entry,
+                "evcc",
+            )
 
-        if solar_forecast and isinstance(solar_forecast, list):
-            # Extract values from the timeseries format
-            pv_forecast = [item.get("val", 0) for item in solar_forecast[:hours]]
-            # Ensure the list has exactly 'hours' entries
-            if len(pv_forecast) < hours:
-                pv_forecast.extend([0] * (hours - len(pv_forecast)))
-            elif len(pv_forecast) > hours:
-                pv_forecast = pv_forecast[:hours]
+        response = self._retry_request(request_func, error_handler)
 
-            # Scale each value according to the solar_forecast_scale (e.g., 0.5 or 0.75)
+        def json_func():
+            data = response.json()
+            solar_forecast_all = data.get("forecast", {}).get("solar", {})
+            solar_forecast_scale = solar_forecast_all.get("scale", "unknown")
+            solar_forecast = solar_forecast_all.get("timeseries", [])
+            logger.debug(
+                "[PV-IF] EVCC API solar forecast received with scale: %s",
+                solar_forecast_scale,
+            )
+            return solar_forecast, solar_forecast_scale
+
+        result = self._retry_request(json_func, error_handler)
+        if not result:
+            return self._handle_interface_error(
+                "no_valid_data",
+                "No valid solar forecast data found in EVCC API.",
+                pv_config_entry,
+                "evcc",
+            )
+        solar_forecast, solar_forecast_scale = result
+
+        if not solar_forecast or not isinstance(solar_forecast, list):
+            return self._handle_interface_error(
+                "no_valid_data",
+                "No valid solar forecast data found in EVCC API.",
+                pv_config_entry,
+                "evcc",
+            )
+
+        try:
+            # Get timezone-aware current time
+            tz = pytz.timezone(self.time_zone)
+            current_time = datetime.now(tz).replace(minute=0, second=0, microsecond=0)
+            midnight_today = current_time.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            forecast_hours = [midnight_today + timedelta(hours=i) for i in range(hours)]
+            pv_forecast = [0.0] * hours  # Initialize with zeros
+
+            # with thanks for the hint from @forouher with PR #108
+            # --- AGGREGATE 15-min intervals to hourly Wh ---
+            forecast_items = []
+            for item in solar_forecast:
+                ts_str = item.get("ts", "")
+                if ts_str:
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    ts = ts.astimezone(tz)
+                    # Convert W to Wh for 15 min: Wh = W * 0.25
+                    val_wh = item.get("val", 0) * 0.25
+                    forecast_items.append((ts, val_wh))
+
+            # Group by hour and sum Wh values
+            hourly_values = defaultdict(float)
+            for ts, val_wh in forecast_items:
+                hour_ts = ts.replace(minute=0, second=0, microsecond=0)
+                hourly_values[hour_ts] += val_wh
+
+            # Fill forecast array for 48 hours from midnight
+            for i, hour in enumerate(forecast_hours):
+                pv_forecast[i] = hourly_values.get(hour, 0.0)
+
+            # Apply scaling factor
             try:
                 scale_factor = float(solar_forecast_scale)
             except (TypeError, ValueError):
                 scale_factor = 1.0
+
+            if scale_factor <= 0:
+                logger.debug(
+                    "[PV-IF] EVCC PV forecast scale factor invalid (%s) - using 1.0",
+                    scale_factor,
+                )
+                scale_factor = 1.0
+
             pv_forecast = [val * scale_factor for val in pv_forecast]
+
+            # Clear any previous errors on success
+            self.pv_forcast_request_error["error"] = None
+
             logger.debug(
                 "[PV-IF] EVCC PV forecast for given evcc pv config (Wh): %s",
                 pv_forecast,
             )
             return pv_forecast
+
+        except (TypeError, ValueError, AttributeError) as e:
+            return self._handle_interface_error(
+                "processing_error",
+                f"Error processing forecast values: {e}",
+                pv_config_entry,
+                "evcc",
+            )
+
+    def __get_pv_forecast_solcast_api(self, pv_config_entry, tgt_duration=48):
+        """
+        Fetches PV forecast from Solcast API using resource ID endpoint.
+
+        Args:
+            pv_config_entry (dict): Configuration entry containing resource_id
+            tgt_duration (int): Target duration in hours (default 48)
+
+        Returns:
+            list: PV forecast values in Wh for each hour
+        """
+        api_key = self.config_source.get("api_key")
+        resource_id = pv_config_entry.get("resource_id")
+
+        if not api_key:
+            return self._handle_interface_error(
+                "config_error",
+                "Solcast API key missing from pv_forecast_source configuration",
+                pv_config_entry,
+                "solcast",
+            )
+
+        if not resource_id:
+            return self._handle_interface_error(
+                "config_error",
+                "Resource ID missing from PV configuration for Solcast",
+                pv_config_entry,
+                "solcast",
+            )
+
+        # Solcast API endpoint for resource-based forecasts (free tier compatible)
+        url = f"https://api.solcast.com.au/rooftop_sites/{resource_id}/forecasts"
+
+        # Parameters for the API request
+        params = {
+            "hours": min(tgt_duration, 168),  # Solcast max is 168 hours (7 days)
+            "format": "json",
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        logger.debug(
+            "[PV-IF] Fetching PV forecast from Solcast API for resource: %s (hours: %d)",
+            resource_id,
+            params["hours"],
+        )
+
+        def request_func():
+            response = requests.get(url, params=params, headers=headers, timeout=15)
+            logger.debug("[PV-IF] Solcast API response status: %d", response.status_code)
+            if response.status_code == 429:
+                raise requests.exceptions.RequestException("rate_limit")
+            elif response.status_code == 403:
+                raise requests.exceptions.RequestException("auth_error")
+            elif response.status_code == 404:
+                raise requests.exceptions.RequestException("not_found")
+            elif response.status_code == 400:
+                raise requests.exceptions.RequestException("bad_request")
+            response.raise_for_status()
+            return response
+
+        def error_handler(error_type, exception):
+            # Map custom error codes to messages
+            error_map = {
+                "rate_limit": "Solcast API rate limit exceeded",
+                "auth_error": "Solcast API authentication failed (403) - check API key and resource ID access.",
+                "not_found": f"Solcast resource ID '{resource_id}' not found - check resource ID",
+                "bad_request": "Solcast API bad request - check parameters",
+            }
+            msg = error_map.get(str(exception), f"Solcast API error: {exception}")
+            return self._handle_interface_error(
+                error_type,
+                msg,
+                pv_config_entry,
+                "solcast",
+            )
+
+        response = self._retry_request(request_func, error_handler)
+
+        def json_func():
+            return response.json()
+
+        data = self._retry_request(json_func, error_handler)
+
+        # Data processing
+        try:
+            forecasts = data.get("forecasts", [])
+            if not forecasts:
+                return self._handle_interface_error(
+                    "no_valid_data",
+                    "No forecast data received from Solcast API",
+                    pv_config_entry,
+                    "solcast",
+                )
+
+            # Get timezone-aware current time
+            tz = pytz.timezone(self.time_zone)
+            current_time = datetime.now(tz).replace(minute=0, second=0, microsecond=0)
+
+            # Calculate midnight of today
+            midnight_today = current_time.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+
+            # Create forecast array for target duration starting from midnight today
+            forecast_hours = [
+                midnight_today + timedelta(hours=i) for i in range(tgt_duration)
+            ]
+            pv_forecast = [0.0] * tgt_duration  # Initialize with zeros
+
+            # Create hourly aggregation dictionary
+            hourly_power = {}
+
+            # Process Solcast data (30-minute intervals)
+            for forecast_item in forecasts:
+                try:
+                    # Parse timestamp from Solcast (ISO format with timezone)
+                    period_end = forecast_item.get("period_end", "")
+                    if not period_end:
+                        continue
+
+                    # Convert to datetime - Solcast uses ISO format
+                    if period_end.endswith("Z"):
+                        forecast_time = datetime.fromisoformat(
+                            period_end.replace("Z", "+00:00")
+                        )
+                    else:
+                        forecast_time = datetime.fromisoformat(period_end)
+
+                    # Convert to configured timezone
+                    forecast_time = forecast_time.astimezone(tz)
+
+                    # IMPORTANT: period_end is the END of a 30-minute period
+                    # We need to map it to the hour it belongs to
+                    # For example: 06:30 period_end belongs to hour 06:00-07:00
+                    # So we subtract 30 minutes to get the start of the period
+                    period_start = forecast_time - timedelta(minutes=30)
+
+                    # Round down to the hour for aggregation
+                    hour_key = period_start.replace(minute=0, second=0, microsecond=0)
+
+                    # Get PV power estimate - Solcast provides kW values for the
+                    # system capacity you configured
+                    pv_estimate_kw = forecast_item.get("pv_estimate", 0)
+
+                    # Convert kW to Wh for 30-minute period
+                    # kW * 0.5 hours = kWh, then * 1000 to get Wh
+                    pv_estimate_wh = (
+                        pv_estimate_kw * 500
+                    )  # kW * 0.5h * 1000W/kW = Wh for 30min
+
+                    # Aggregate 30-minute values into hourly values
+                    if hour_key in hourly_power:
+                        hourly_power[hour_key] += pv_estimate_wh
+                    else:
+                        hourly_power[hour_key] = pv_estimate_wh
+
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.warning(
+                        "[PV-IF] Error processing Solcast forecast item: %s", e
+                    )
+                    continue
+
+            # Fill forecast array with aggregated hourly values
+            for i, forecast_hour in enumerate(forecast_hours):
+                if forecast_hour in hourly_power:
+                    power_wh = hourly_power[forecast_hour]
+
+                    # Apply inverter efficiency if configured
+                    inverter_efficiency = pv_config_entry.get("inverterEfficiency", 1.0)
+                    power_wh *= inverter_efficiency
+
+                    pv_forecast[i] = round(power_wh, 1)
+
+            # Clear any previous errors on success
+            self.pv_forcast_request_error["error"] = None
+
+            logger.debug(
+                "[PV-IF] Solcast PV forecast for resource '%s' received %d forecast points,"
+                + " first 12h (Wh): %s",
+                resource_id,
+                len(forecasts),
+                pv_forecast[:12],  # Log first 12 hours to avoid spam
+            )
+
+            return pv_forecast
+
+        except (ValueError, TypeError, AttributeError, KeyError) as e:
+            return self._handle_interface_error(
+                "processing_error",
+                f"Error processing Solcast forecast data: {e}",
+                pv_config_entry,
+                "solcast",
+            )
 
     def test_output(self):
         """
@@ -905,3 +1252,154 @@ class PvInterface:
         logger.info(
             "[PV-IF] PV forecast test output saved to pv_forecast_test_output_2.csv"
         )
+
+    # Add these helper functions to replace pvlib functionality
+    def _solar_position(self, times, latitude, longitude):
+        """
+        Calculate solar position (zenith and azimuth) for given times and location.
+        Simplified version of pvlib.solarposition.get_solarposition
+        """
+        lat_rad = math.radians(latitude)
+        results = []
+
+        for t in times:
+            # Convert to Julian day number
+            a = (14 - t.month) // 12
+            y = t.year - a
+            m = t.month + 12 * a - 3
+            jdn = (
+                t.day
+                + (153 * m + 2) // 5
+                + 365 * y
+                + y // 4
+                - y // 100
+                + y // 400
+                - 32045
+            )
+
+            # Add fraction of day
+            hour_fraction = (t.hour + t.minute / 60 + t.second / 3600) / 24
+            jd = jdn + hour_fraction - 0.5
+
+            # Number of days since J2000.0
+            n = jd - 2451545.0
+
+            # Mean longitude of sun
+            long_of_sun = (280.460 + 0.9856474 * n) % 360
+
+            # Mean anomaly of sun
+            g = math.radians((357.528 + 0.9856003 * n) % 360)
+
+            # Ecliptic longitude of sun
+            lambda_sun = math.radians(
+                long_of_sun + 1.915 * math.sin(g) + 0.020 * math.sin(2 * g)
+            )
+
+            # Obliquity of ecliptic
+            epsilon = math.radians(23.439 - 0.0000004 * n)
+
+            # Right ascension and declination
+            alpha = math.atan2(
+                math.cos(epsilon) * math.sin(lambda_sun), math.cos(lambda_sun)
+            )
+            delta = math.asin(math.sin(epsilon) * math.sin(lambda_sun))
+
+            # Greenwich mean sidereal time
+            gmst = (18.697375 + 24.06570982441908 * n) % 24
+
+            # Local sidereal time
+            lst = gmst + longitude / 15
+
+            # Hour angle
+            h = math.radians(15 * (lst - math.degrees(alpha) / 15))
+
+            # Solar zenith and azimuth
+            sin_alt = math.sin(lat_rad) * math.sin(delta) + math.cos(
+                lat_rad
+            ) * math.cos(delta) * math.cos(h)
+            altitude = math.asin(max(-1, min(1, sin_alt)))
+            zenith = math.degrees(math.pi / 2 - altitude)
+
+            cos_az = (math.sin(delta) - math.sin(altitude) * math.sin(lat_rad)) / (
+                math.cos(altitude) * math.cos(lat_rad)
+            )
+            azimuth = math.degrees(math.acos(max(-1, min(1, cos_az))))
+
+            if math.sin(h) > 0:
+                azimuth = 360 - azimuth
+
+            results.append({"apparent_zenith": zenith, "azimuth": azimuth})
+
+        return results
+
+    def _angle_of_incidence(
+        self, surface_tilt, surface_azimuth, solar_zenith, solar_azimuth
+    ):
+        """
+        Calculate angle of incidence between sun and tilted surface.
+        Simplified version of pvlib.irradiance.aoi
+        """
+        # Convert to radians
+        surf_tilt_rad = math.radians(surface_tilt)
+        surf_az_rad = math.radians(surface_azimuth)
+        sun_zen_rad = math.radians(solar_zenith)
+        sun_az_rad = math.radians(solar_azimuth)
+
+        # Calculate angle of incidence
+        cos_aoi = math.sin(sun_zen_rad) * math.sin(surf_tilt_rad) * math.cos(
+            sun_az_rad - surf_az_rad
+        ) + math.cos(sun_zen_rad) * math.cos(surf_tilt_rad)
+
+        # Ensure value is within valid range for acos
+        cos_aoi = max(-1, min(1, cos_aoi))
+        aoi = math.degrees(math.acos(cos_aoi))
+
+        return aoi
+
+    def _retry_request(self, request_func, error_handler, max_retries=3, delay=1):
+        """
+        Centralized retry logic for API requests.
+
+        Args:
+            request_func (callable): Function that performs the request and returns the result.
+            error_handler (callable): Function to call on final failure.
+            max_retries (int): Number of retries before error handler is called.
+            delay (int): Delay in seconds between retries.
+
+        Returns:
+            The result of request_func, or error_handler on failure.
+        """
+        for attempt in range(max_retries):
+            try:
+                return request_func()
+            except requests.exceptions.Timeout as e:
+                if attempt == max_retries - 1:
+                    return error_handler("timeout", e)
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    return error_handler("request_failed", e)
+            except (ValueError, TypeError) as e:
+                if attempt == max_retries - 1:
+                    return error_handler("invalid_json", e)
+            except (KeyError, AttributeError) as e:
+                if attempt == max_retries - 1:
+                    return error_handler("parsing_error", e)
+            time.sleep(delay)
+
+    def _handle_interface_error(
+        self, error_type, message, pv_config_entry, source="unknown"
+    ):
+        """
+        Centralized error handling for all API errors.
+        """
+        logger.error("[PV-IF] %s", message)
+        self.pv_forcast_request_error.update(
+            {
+                "error": error_type,
+                "timestamp": datetime.now().isoformat(),
+                "message": message,
+                "config_entry": pv_config_entry,
+                "source": source,
+            }
+        )
+        return []

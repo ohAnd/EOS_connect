@@ -1,0 +1,41 @@
+{
+    "current_states": {
+        "current_ac_charge_demand": 5500,
+        "current_dc_charge_demand": 1800,
+        "current_discharge_allowed": true,
+        "inverter_mode": "MODE_CHARGE_FROM_GRID",
+        "inverter_mode_num": 0,
+        "override_active": true,
+        "override_end_time": 1759793659
+    },
+    "evcc": {
+        "charging_state": false,
+        "charging_mode": "off",
+        "current_sessions": []
+    },
+    "battery": {
+        "soc": 85.7,
+        "usable_capacity": 9500,
+        "max_charge_power_dyn": 3300,
+        "max_grid_charge_rate": 5000
+    },
+    "inverter": {
+        "inverter_special_data": {
+            "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": 19.8,
+            "MODULE_TEMPERATURE_MEAN_01_F32": 21.2,
+            "MODULE_TEMPERATURE_MEAN_03_F32": 20.5,
+            "MODULE_TEMPERATURE_MEAN_04_F32": 18.9,
+            "FANCONTROL_PERCENT_01_F32": 8.2,
+            "FANCONTROL_PERCENT_02_F32": 10.1
+        }
+    },
+    "state": {
+        "request_state": "response received",
+        "last_request_timestamp": "2024-10-03T14:29:45.123Z",
+        "last_response_timestamp": "2024-10-03T14:30:00.456Z",
+        "next_run": "2024-10-03T14:35:00.000Z"
+    },
+    "eos_connect_version": "0.2.1",
+    "timestamp": "2024-10-03T14:30:15.789Z",
+    "api_version": "0.0.1"
+}

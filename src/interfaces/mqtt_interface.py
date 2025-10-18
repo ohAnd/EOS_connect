@@ -56,7 +56,7 @@ class MqttInterface:
         password = config_mqtt.get("password", "")
         self.tls = config_mqtt.get("tls", False)
         self.base_topic = "eos_connect"
-        self.ha_auto_discovery = config_mqtt.get("ha_mqtt_auto_discovery", False)
+        self.ha_auto_discovery = config_mqtt.get("ha_mqtt_auto_discovery", True)
         self.auto_discover_topic = config_mqtt.get(
             "ha_mqtt_auto_discovery_prefix", "homeassistant"
         )
@@ -573,7 +573,7 @@ class MqttInterface:
         :param qos: Quality of Service level (default: 0)
         :param retain: Retain the message (default: False)
         """
-        logger.debug("[MQTT] Publishing message to topic '%s': %s", topic, payload)
+        # logger.debug("[MQTT] Publishing message to topic '%s': %s", topic, payload)
         self.client.publish(topic, payload, qos=qos, retain=retain)
 
     def __subscribe(self, topic, qos=0):
