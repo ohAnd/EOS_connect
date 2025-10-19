@@ -7,9 +7,12 @@ load profiles based on historical energy consumption data.
 from datetime import datetime, timedelta, timezone
 import logging
 from urllib.parse import quote
-import zoneinfo
+import time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import random
 import requests
 import pytz
+
 
 logger = logging.getLogger("__main__")
 logger.info("[LOAD-IF] loading module ")
@@ -34,25 +37,34 @@ class LoadInterface:
         self.additional_load_1_sensor = config.get("additional_load_1_sensor", "")
         self.access_token = config.get("access_token", "")
 
+        # retry config
+        self.max_retries = config.get("max_retries", 5)
+        self.retry_backoff = config.get("retry_backoff", 1)  # base seconds for backoff
+        # optional warning threshold (when to escalate to error)
+        self.warning_threshold = config.get(
+            "warning_threshold", max(1, self.max_retries - 1)
+        )
+
+        self.time_zone = None
+
         # Handle timezone properly
         if tz_name == "UTC" or tz_name is None:
             self.time_zone = None  # Use local timezone
         elif isinstance(tz_name, str):
             # Try to convert string timezone to proper timezone object
             try:
-                self.time_zone = zoneinfo.ZoneInfo(tz_name)
-            except ImportError:
-                # Fallback for older Python versions
+                # zoneinfo.ZoneInfo may raise ZoneInfoNotFoundError
+                self.time_zone = ZoneInfo(tz_name)
+            except ZoneInfoNotFoundError:
+                # fallback to pytz if available, otherwise use local (None)
                 try:
                     self.time_zone = pytz.timezone(tz_name)
-                except ImportError:
+                except pytz.UnknownTimeZoneError:
                     logger.warning(
                         "[LOAD-IF] Cannot parse timezone '%s', using local time",
                         tz_name,
                     )
                     self.time_zone = None
-        else:
-            self.time_zone = tz_name
 
         self.__check_config()
 
@@ -93,6 +105,70 @@ class LoadInterface:
             logger.debug("[LOAD-IF] Using default load profile.")
         return True
 
+    def __log_request_failure(self, url, attempt, max_retries, error, item_label=""):
+        """
+        Centralized logging for request failures.
+        Logs a warning for intermediate failed attempts and an error when all attempts exhausted.
+        """
+        # Only log warning for the pre-last attempt, error for the last
+        if attempt == max_retries - 1:
+            logger.warning(
+                "[LOAD-IF] Request attempt %d/%d failed for %s %s: %s",
+                attempt,
+                max_retries,
+                url,
+                f"({item_label})" if item_label else "",
+                str(error),
+            )
+        elif attempt == max_retries:
+            logger.error(
+                "[LOAD-IF] Request failed after %d attempts for %s %s: %s",
+                max_retries,
+                url,
+                f"({item_label})" if item_label else "",
+                str(error),
+            )
+        else:
+            logger.debug(
+                "[LOAD-IF] Request attempt %d/%d failed for %s %s: %s",
+                attempt,
+                max_retries,
+                url,
+                f"({item_label})" if item_label else "",
+                str(error),
+            )
+
+    def __request_with_retries(
+        self, method, url, params=None, headers=None, timeout=10, item_label=""
+    ):
+        """
+        Perform an HTTP request with retries and exponential backoff.
+        Returns the requests.Response on success, or None on final failure.
+        """
+        attempt = 0
+        while attempt < self.max_retries:
+            attempt += 1
+            try:
+                if method.lower() == "get":
+                    response = requests.get(
+                        url, params=params, headers=headers, timeout=timeout
+                    )
+                else:
+                    response = requests.request(
+                        method, url, params=params, headers=headers, timeout=timeout
+                    )
+                response.raise_for_status()
+                return response
+            except requests.exceptions.RequestException as e:
+                self.__log_request_failure(
+                    url, attempt, self.max_retries, e, item_label
+                )
+                if attempt == self.max_retries:
+                    return None
+                sleep_seconds = self.retry_backoff * (2 ** (attempt - 1))
+                sleep_seconds = sleep_seconds + random.uniform(0, sleep_seconds * 0.5)
+                time.sleep(sleep_seconds)
+
     # get load data from url persistance source
     def __fetch_historical_energy_data_from_openhab(
         self, openhab_item, start_time, end_time
@@ -101,20 +177,17 @@ class LoadInterface:
         Fetch energy data from the specified OpenHAB item URL within the given time range.
         """
         if openhab_item == "":
-            return {"data": []}
+            return []
         openhab_item_url = self.url + "/rest/persistence/items/" + openhab_item
         params = {"starttime": start_time.isoformat(), "endtime": end_time.isoformat()}
+        response = self.__request_with_retries(
+            "get", openhab_item_url, params=params, timeout=10, item_label=openhab_item
+        )
+        if response is None:
+            # Do not log error here; already logged in __request_with_retries
+            return []
         try:
-            response = requests.get(openhab_item_url, params=params, timeout=10)
-            response.raise_for_status()
-            # logger.debug(
-            #     "[LOAD-IF] OPENHAB - Fetched data from %s to %s",
-            #     start_time.isoformat(),
-            #     end_time.isoformat()
-            # )
-
             historical_data = (response.json())["data"]
-            # Extract only 'state' and 'last_updated' from the historical data
             filtered_data = [
                 {
                     "state": entry["state"],
@@ -125,16 +198,10 @@ class LoadInterface:
                 for entry in historical_data
             ]
             return filtered_data
-        except requests.exceptions.Timeout:
-            logger.error(
-                "[LOAD-IF] OPENHAB - Request timed out while fetching energy data."
-            )
-            return {"data": []}
-        except requests.exceptions.RequestException as e:
-            logger.error(
-                "[LOAD-IF] OPENHAB - Request failed while fetching energy data: %s", e
-            )
-            return {"data": []}
+        except (ValueError, KeyError, TypeError) as e:
+            # Only log if it's a JSON or data processing error, not a request error
+            logger.error("[LOAD-IF] OPENHAB - Failed to process energy data: %s", e)
+            return []
 
     def __fetch_historical_energy_data_from_homeassistant(
         self, entity_id, start_time, end_time
@@ -151,61 +218,67 @@ class LoadInterface:
             list: A list of historical state changes for the entity.
         """
         if entity_id == "" or entity_id is None:
-            # logger.debug("[LOAD-IF] HOMEASSISTANT get historical values"+
-            # " - No entity_id configured.")
             return []
-        # Headers for the API request
         headers = {
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json",
         }
-
-        # API endpoint to get the history of the entity
         url = f"{self.url}/api/history/period/{start_time.isoformat()}"
-
-        # Parameters for the API request
         params = {"filter_entity_id": entity_id, "end_time": end_time.isoformat()}
-
-        # Make the API request
+        response = self.__request_with_retries(
+            "get", url, params=params, headers=headers, timeout=10, item_label=entity_id
+        )
+        if response is None:
+            # Do not log error here; already logged in __request_with_retries
+            return []
         try:
-            response = requests.get(url, headers=headers, params=params, timeout=10)
-            # Check if the request was successful
-            if response.status_code == 200:
-                historical_data = response.json()
-                # Extract only 'state' and 'last_updated' from the historical data
-                filtered_data = [
-                    {"state": entry["state"], "last_updated": entry["last_updated"]}
-                    for sublist in historical_data
-                    for entry in sublist
-                ]
-                return filtered_data
+            historical_data = response.json()
+            filtered_data = [
+                {"state": entry["state"], "last_updated": entry["last_updated"]}
+                for sublist in historical_data
+                for entry in sublist
+            ]
+            return filtered_data
+        except (ValueError, KeyError, TypeError) as e:
             logger.error(
-                "[LOAD-IF] HOMEASSISTANT - Failed to retrieve"
-                + " historical data for '%s' - error: %s - error message: %s",
+                "[LOAD-IF] HOMEASSISTANT - Failed to process energy data for '%s': %s",
                 entity_id,
-                response.status_code,
-                response.text
-            )
-            return []
-        except requests.exceptions.Timeout:
-            logger.error(
-                "[LOAD-IF] HOMEASSISTANT - Request timed out"
-                + " while fetching historical energy data for '%s'.",
-                entity_id,
-            )
-            return []
-        except requests.exceptions.RequestException as e:
-            logger.error(
-                "[LOAD-IF] HOMEASSISTANT - Request failed while fetching"
-                + " historical energy data for '%s' - error: %s",
-                entity_id,
-                e,
+                str(e),
             )
             return []
 
     def __process_energy_data(self, data, debug_sensor=None):
         """
-        Processes energy data to calculate the average energy consumption based on timestamps.
+        Calculate the average power (in W) from a sequence of historical sensor samples.
+
+        The function expects `data` to be a dict with a "data" key containing a list of
+        timestamped samples. Each sample is a dict with at least:
+            - "state": numeric or numeric-string sensor value (power in W)
+            - "last_updated": ISO 8601 timestamp string
+
+        Important expectations and behavior:
+        - The list must be time-ordered with the most recent entry first (index 0) and
+          older entries later (index n-1). The algorithm computes values using consecutive
+          pairs (current, next) from the list.
+        - For each consecutive pair the duration in seconds is computed from their
+          timestamps and the product state * duration (W * s) is accumulated.
+        - The returned value is an average power in watts (W). This is computed as:
+            average_W = (sum over intervals of state * duration) / (total duration)
+          and rounded to 4 decimal places.
+        - Entries with missing keys, non-numeric states, or states equal to "unavailable"
+          are skipped. Parsing errors are logged; when the source is Home Assistant a
+          helpful debug URL fragment is generated if possible using `debug_sensor`.
+        - If the total measured duration is less than one hour (3600 s), the code
+          extrapolates the last known state forward (up to the next hour boundary) to avoid
+          extremely short-sample bias.
+        - If no valid duration was accumulated, the function returns 0.0.
+
+        Args:
+            data (dict): {"data": [ {"state": str|float, "last_updated": ISOtimestamp}, ... ]}
+            debug_sensor (str|None): optional sensor id used to build debug URLs when logging.
+
+        Returns:
+            float: average power in watts (W), rounded to 4 decimals. Returns 0.0 if no valid data.
         """
         total_energy = 0.0
         total_duration = 0.0
@@ -217,16 +290,11 @@ class LoadInterface:
         for i in range(len(data["data"]) - 1):
             # check if data are available
             if (
-                data["data"][i + 1]["state"] == "unavailable"
-                or data["data"][i]["state"] == "unavailable"
+                "state" not in data["data"][i + 1]
+                or "state" not in data["data"][i]
+                or data["data"][i + 1].get("state") == "unavailable"
+                or data["data"][i].get("state") == "unavailable"
             ):
-                # if debug_name != "add_load_1":
-                #     logger.error(
-                #         "[LOAD-IF] state 'unavailable' in data '%s' at index %d: %s",
-                #         debug_name if debug_name is not None else '',
-                #         i,
-                #         data["data"][i],
-                #     )
                 continue
             try:
                 current_state = float(data["data"][i]["state"])
