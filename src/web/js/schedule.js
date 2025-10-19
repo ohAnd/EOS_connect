@@ -110,7 +110,7 @@ class ScheduleManager {
             // prep SOC cell
             const socVal = Number(socData[index]);
             const socStr = socVal.toFixed(1);
-            const socColor = (soc_before !== null && socVal > soc_before) ? COLOR_MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV : (soc_before !== null && socVal < soc_before) ? COLOR_MODE_AVOID_DISCHARGE_EVCC_FAST : 'rgba(131, 131, 131, 1)';
+            const socColor = (soc_before !== null && socVal > soc_before) ? 'darkgrey' : (soc_before !== null && socVal < soc_before) ? 'white' : 'lightgray';
 
             // store for next iteration
             soc_before = socVal; // store for next iteration
