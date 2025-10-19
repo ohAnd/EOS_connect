@@ -45,6 +45,11 @@ class EVCCManager {
             if (evcc_state) {
                 color = COLOR_MODE_AVOID_DISCHARGE_EVCC_FAST;
             }
+        } else if (evcc_mode === "pv+plan" || evcc_mode === "minpv+plan") {
+            text = "Planned Fast";
+            if (evcc_state) {
+                color = COLOR_MODE_AVOID_DISCHARGE_EVCC_FAST;
+            }
         }
 
         return { color, text };
@@ -57,19 +62,19 @@ class EVCCManager {
         const singleTable = document.getElementById('ecar_charging_table_single');
         const multipleTable = document.getElementById('ecar_charging_table_multiple');
         const offTable = document.getElementById('ecar_charging_table_off');
-        
+
         if (singleTable) singleTable.style.display = "";
         if (multipleTable) multipleTable.style.display = "none";
         if (offTable) offTable.style.display = "none";
 
         const displayName = session["vehicleName"] || "Unknown Vehicle";
-        
+
         // Update UI elements if they exist - based on legacy implementation
         const vehicleNameElement = document.getElementById('vehicle_name');
         if (vehicleNameElement) {
             vehicleNameElement.innerText = displayName;
         }
-        
+
         // Update all single vehicle elements - based on legacy implementation
         if (session["vehicleName"]) {
             let displayName = session["vehicleName"] || "Unknown Vehicle";
@@ -77,34 +82,34 @@ class EVCCManager {
                 displayName = displayName.substring(0, 25) + "...";
             writeIfValueChanged('ecar_charging_name', displayName);
         }
-        
+
         if (session["vehicleSoc"] !== undefined) {
             writeIfValueChanged('ecar_charging_soc', (session["vehicleSoc"]).toFixed(1) + " %");
         }
-        
+
         if (session["vehicleOdometer"] !== undefined) {
             writeIfValueChanged('ecar_charging_odometer', session["vehicleOdometer"] + " km");
         }
-        
+
         if (session["vehicleRange"] !== undefined) {
             writeIfValueChanged('ecar_charging_range', session["vehicleRange"] + " km");
         }
-        
+
         if (session["chargedEnergy"] !== undefined) {
             writeIfValueChanged('ecar_charging_charged', (session["chargedEnergy"] / 1000).toFixed(1) + " kWh");
         }
-        
+
         if (session["chargeRemainingEnergy"] !== undefined) {
             writeIfValueChanged('ecar_charging_charged_remain', (session["chargeRemainingEnergy"] / 1000).toFixed(1) + " kWh");
         }
-        
+
         if (session["chargeDuration"] !== undefined) {
             let chargeDuration = session["chargeDuration"];
             let hours = Math.floor(chargeDuration / 3600);
             let minutes = Math.floor((chargeDuration % 3600) / 60);
             writeIfValueChanged('ecar_charging_duration', hours.toString().padStart(2, '0') + ":" + minutes.toString().padStart(2, '0'));
         }
-        
+
         if (session["chargeRemainingDuration"] !== undefined) {
             let chargeRemainingDuration = session["chargeRemainingDuration"];
             let remainingHours = Math.floor(chargeRemainingDuration / 3600);
@@ -124,7 +129,7 @@ class EVCCManager {
         this.updateEVCCStatus(evcc_mode, evcc_state);
 
         let numOfConnectedVehicles = data_controls["evcc"]["current_sessions"].filter(session => session["connected"]).length;
-        
+
         if (numOfConnectedVehicles > 1) {
             this.showMultipleLoadpoints(data_controls["evcc"]["current_sessions"]);
         } else if (numOfConnectedVehicles == 1) {
@@ -186,12 +191,12 @@ class EVCCManager {
                 }
             }
         });
-        
+
         // cleanup, remove rows for vehicles that are not connected anymore
         let connectedVehicles = sessions
             .filter(session => session["connected"])
             .map(session => (session["vehicleName"] || "Unknown Vehicle").replace(/[^a-zA-Z0-9_]/g, '_'));
-        
+
         let rows = document.querySelectorAll('#ecar_charging_table_multiple tr');
         rows.forEach(row => {
             // check if the row id starts with 'ecar_charging_row_' and if the vehicle is not connected anymore
@@ -201,7 +206,7 @@ class EVCCManager {
                 row.remove();
             }
         });
-        
+
         if (rows.length === 0) {
             this.showNoConnectedVehicles();
         }
@@ -221,15 +226,15 @@ class EVCCManager {
      */
     updateEVCCStatus(evcc_mode, evcc_state) {
         const { color, text } = this.getChargingColorAndText(evcc_mode, evcc_state);
-        
+
         const modeElement = document.getElementById('evcc_mode');
         const stateElement = document.getElementById('evcc_state');
-        
+
         if (modeElement) {
             modeElement.innerText = text;
             modeElement.style.color = color;
         }
-        
+
         if (stateElement) {
             stateElement.innerText = evcc_state ? "Charging" : "Idle";
             stateElement.style.color = color;

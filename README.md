@@ -381,7 +381,8 @@ Get current system control states and battery information.
                 "vehicleRange": 0,
                 "vehicleOdometer": 0,
                 "vehicleName": "",
-                "smartCostActive": false
+                "smartCostActive": false,
+                "planActive": false,
             }
         ]
     },

@@ -52,7 +52,7 @@ const TEST_SCENARIOS = {
     OVERRIDE_1: 'override_1',
     OVERRIDE_2: 'override_2',
     SINGLE_EVCC: 'single_evcc',
-    MULTI_EVCC: 'multi_evcc', 
+    MULTI_EVCC: 'multi_evcc',
     NO_EVCC: 'no_evcc'
 };
 
