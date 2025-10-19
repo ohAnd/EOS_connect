@@ -1221,7 +1221,7 @@ def get_controls():
         "state": optimization_scheduler.get_current_state(),
         "eos_connect_version": __version__,
         "timestamp": datetime.now(time_zone).isoformat(),
-        "api_version": "0.0.1",
+        "api_version": "0.0.2",
     }
     return Response(
         json.dumps(response_data, indent=4), content_type="application/json"

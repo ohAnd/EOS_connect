@@ -315,13 +315,21 @@ class BaseControl:
             # new_state == MODE_DISCHARGE_ALLOWED
             # and
             self.current_evcc_charging_state
-            and self.current_evcc_charging_mode in ("now", "pv+now", "minpv+now")
+            and self.current_evcc_charging_mode
+            in (
+                "now",
+                "pv+now",
+                "minpv+now",
+                "pv+plan",
+                "minpv+plan",
+            )
         ):
             new_state = MODE_AVOID_DISCHARGE_EVCC_FAST
-            logger.info(
-                "[BASE-CTRL] EVCC charging state is active,"
-                + " setting overall state to MODE_AVOID_DISCHARGE_EVCC_FAST"
-            )
+            if self.current_overall_state != new_state:
+                logger.info(
+                    "[BASE-CTRL] EVCC charging state is active,"
+                    + " setting overall state to MODE_AVOID_DISCHARGE_EVCC_FAST"
+                )
 
         # override overall state if EVCC charging state is active and
         # in mode pv charge and discharge is allowed
@@ -332,10 +340,11 @@ class BaseControl:
             and self.current_evcc_charging_mode == "pv"
         ):
             new_state = MODE_DISCHARGE_ALLOWED_EVCC_PV
-            logger.info(
-                "[BASE-CTRL] EVCC charging state is active,"
-                + " setting overall state to MODE_DISCHARGE_ALLOWED_EVCC_PV"
-            )
+            if self.current_overall_state != new_state:
+                logger.info(
+                    "[BASE-CTRL] EVCC charging state is active,"
+                    + " setting overall state to MODE_DISCHARGE_ALLOWED_EVCC_PV"
+                )
 
         # override overall state if EVCC charging state is active and
         # in mode pv charge and discharge is allowed
@@ -346,10 +355,11 @@ class BaseControl:
             and self.current_evcc_charging_mode == "minpv"
         ):
             new_state = MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV
-            logger.info(
-                "[BASE-CTRL] EVCC charging state is active,"
-                + " setting overall state to MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV"
-            )
+            if self.current_overall_state != new_state:
+                logger.info(
+                    "[BASE-CTRL] EVCC charging state is active,"
+                    + " setting overall state to MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV"
+                )
 
         if (
             new_state != self.current_overall_state
