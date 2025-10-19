@@ -26,10 +26,10 @@
             <div
                 style="border: 4px solid white; border-top: 4px solid gray; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto;">
             </div>
-            
+
             <!-- Startup Log Access Button -->
-            <button id="startup-logs-btn" onclick="if(typeof loggingManager !== 'undefined') { loggingManager.showLogsPanel(); }" 
-                style="
+            <button id="startup-logs-btn"
+                onclick="if(typeof loggingManager !== 'undefined') { loggingManager.showLogsPanel(); }" style="
                     background-color: rgba(255, 255, 255, 0.1);
                     color: white;
                     border: 2px solid rgba(255, 255, 255, 0.3);
@@ -80,10 +80,13 @@
     </style>
 
     <!-- Test Control Panel -->
-    <div id="test_control_panel" style="position: fixed; top: 10px; right: 10px; background: rgba(0,0,0,0.8); color: white; padding: 10px; border-radius: 5px; z-index: 999; display: none; font-size: 12px;">
-        <div style="margin-bottom: 10px; font-weight: bold; cursor: pointer;" onclick="toggleTestPanel()">🧪 Test Mode</div>
+    <div id="test_control_panel"
+        style="position: fixed; top: 10px; right: 10px; background: rgba(0,0,0,0.8); color: white; padding: 10px; border-radius: 5px; z-index: 999; display: none; font-size: 12px;">
+        <div style="margin-bottom: 10px; font-weight: bold; cursor: pointer;" onclick="toggleTestPanel()">🧪 Test Mode
+        </div>
         <div id="test_controls" style="display: none;">
-            <select id="test_scenario_select" onchange="switchTestScenario()" style="width: 100%; margin-bottom: 5px; padding: 2px; background: #333; color: white; border: 1px solid #666;">
+            <select id="test_scenario_select" onchange="switchTestScenario()"
+                style="width: 100%; margin-bottom: 5px; padding: 2px; background: #333; color: white; border: 1px solid #666;">
                 <option value="live">Central Test Data</option>
                 <option value="override_0">Override Mode 0</option>
                 <option value="override_1">Override Mode 1</option>
@@ -92,7 +95,8 @@
                 <option value="multi_evcc">Multiple EVCC</option>
                 <option value="no_evcc">No EVCC</option>
             </select>
-            <button onclick="refreshTestData()" style="width: 100%; padding: 3px; background: #444; color: white; border: 1px solid #666; cursor: pointer;">Refresh</button>
+            <button onclick="refreshTestData()"
+                style="width: 100%; padding: 3px; background: #444; color: white; border: 1px solid #666; cursor: pointer;">Refresh</button>
         </div>
     </div>
 
@@ -108,7 +112,7 @@
                 <div class="content">
                     <table style="width: 100%; text-align: left;padding-top: 10px;">
                         <tr>
-                            <th style="text-align: left;">Overall State</th>
+                            <th class="top_box_info_text_head" style="text-align: left;">Overall State</th>
                             <th style="text-align: right;" id="control_overall"></th>
                         </tr>
                         <tr>
@@ -117,15 +121,15 @@
                             </td>
                         </tr>
                         <tr>
-                            <td id="control_ac_charge_desc">AC Charge</td>
+                            <td class="top_box_info_text" id="control_ac_charge_desc">AC Charge</td>
                             <td style="text-align: right;" id="control_ac_charge">--</td>
                         </tr>
                         <tr>
-                            <td id="control_dc_charge_desc">DC Charge</td>
+                            <td class="top_box_info_text" id="control_dc_charge_desc">DC Charge</td>
                             <td style="text-align: right;" id="control_dc_charge">--</td>
                         </tr>
                         <tr>
-                            <td id="control_discharge_allowed_desc">Discharge Allowed</td>
+                            <td class="top_box_info_text" id="control_discharge_allowed_desc">Discharge Allowed</td>
                             <td style="text-align: right;" id="control_discharge_allowed">--</td>
                         </tr>
                     </table>
@@ -140,7 +144,7 @@
                 <div class="content">
                     <table style="width: 100%; text-align: left;padding-top: 10px;">
                         <tr id="next_charge_header">
-                            <th style="text-align: left;">Next AC Charge</th>
+                            <th class="top_box_info_text_head" style="text-align: left;">Next AC Charge</th>
                             <th style="text-align: right;" id="next_charge_time">... next charge time</th>
                         </tr>
                         <tr>
@@ -149,17 +153,17 @@
                             </td>
                         </tr>
                         <tr id="next_charge_summary">
-                            <td>Needed Energy</td>
+                            <td class="top_box_info_text">Needed Energy</td>
                             <td colspan="2" style="text-align: right;"><span id="next_charge_amount">... kWh</span> /
                                 <span id="next_charge_sum_price">... €</span>
                             </td>
                         </tr>
                         <tr id="next_charge_summary_2">
-                            <td>Avg AC Charging Price</td>
+                            <td class="top_box_info_text">Avg AC Charging Price</td>
                             <td colspan="2" style="text-align: right;" id="next_charge_avg_price">... kWh</td>
                         </tr>
                         <tr>
-                            <td><i>Dynamic Max AC+DC Charge Power</i></td>
+                            <td class="top_box_info_text"><i>Dynamic Max AC+DC Charge Power</i></td>
                             <td colspan="2" style="text-align: right;" id="current_max_charge_dyn">--</td>
                         </tr>
                     </table>
@@ -175,8 +179,9 @@
                     <table style="width: 100%; text-align: left;padding-top: 10px;" id="ecar_charging_table_single">
                         <tr>
                             <!-- <th style="text-align: left;">Vehicle</th> -->
-                            <th style="text-align: left; cursor: help;" colspan="2" title="name of vehicle in EVCC"><i
-                                    class="fa-solid fa-car"></i> <span id="ecar_charging_name">...</span></th>
+                            <th class="top_box_info_text_head" style="text-align: left; cursor: help;" colspan="2"
+                                title="name of vehicle in EVCC"><i class="fa-solid fa-car"></i> <span
+                                    id="ecar_charging_name">...</span></th>
                             <!-- <th style="text-align: right;">SOC </th> -->
                             <th class="valueChange" style="text-align: right; cursor: help;" colspan="2"
                                 title="eCar SOC"><span id="ecar_charging_soc">--.- %</span> <i
@@ -233,7 +238,7 @@
                 <div class="content">
                     <table style="width: 100%; text-align: left;padding-top: 10px;">
                         <tr>
-                            <th style="text-align: left;">Expense (rest of the day)</th>
+                            <th class="top_box_info_text_head" style="text-align: left;">Expense (rest of the day)</th>
                             <th style="text-align: right;" id="expense_summary"> 0.00 €</th>
                         </tr>
                         <tr>
@@ -242,11 +247,11 @@
                             </td>
                         </tr>
                         <tr>
-                            <td>Income</td>
+                            <td class="top_box_info_text">Income</td>
                             <td colspan="2" style="text-align: right;" id="income_summary">0.00 €</td>
                         </tr>
                         <tr>
-                            <td>Feed In</td>
+                            <td class="top_box_info_text">Feed In</td>
                             <td colspan="2" style="text-align: right;" id="feed_in_summary">0.0 kWh</td>
                         </tr>
                     </table>
@@ -325,4 +330,5 @@
     <script src="js/main.js"></script>
 
 </body>
+
 </html>
