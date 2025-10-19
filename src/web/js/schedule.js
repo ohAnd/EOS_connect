@@ -30,18 +30,17 @@ class ScheduleManager {
         var manual_override_active_until = data_controls["current_states"]["override_end_time"];
         var max_charge_power_w = data_request["pv_akku"] && data_request["pv_akku"].hasOwnProperty("max_ladeleistung_w") ? data_request["pv_akku"]["max_ladeleistung_w"] : data_request["pv_akku"] ? data_request["pv_akku"]["max_charge_power_w"] : 0;
 
-        // Add timezone indicator to schedule header
-        document.getElementById('load_schedule_header').innerHTML =
-            ` Schedule next 24 hours <small>(Local Time)</small>`;
-
         ac_charge = ac_charge.map((value, index) => value * max_charge_power_w);
         var priceData = data_response["result"]["Electricity_price"];
+        var socData = data_response["result"]["akku_soc_pro_stunde"];
         var expenseData = data_response["result"]["Kosten_Euro_pro_Stunde"];
         var incomeData = data_response["result"]["Einnahmen_Euro_pro_Stunde"];
 
         // clear all entries in div discharge_scheduler
         var tableBody = document.querySelector("#discharge_scheduler .table-body");
         tableBody.innerHTML = '';
+
+        var soc_before = null;
 
         priceData.forEach((value, index) => {
             if (index > 23) return;
@@ -108,6 +107,22 @@ class ScheduleManager {
                 }
             }
 
+            // prep SOC cell
+            const socVal = Number(socData[index]);
+            const socStr = socVal.toFixed(1);
+            const socColor = (soc_before !== null && socVal > soc_before) ? COLOR_MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV : (soc_before !== null && socVal < soc_before) ? COLOR_MODE_AVOID_DISCHARGE_EVCC_FAST : 'rgba(131, 131, 131, 1)';
+
+            // store for next iteration
+            soc_before = socVal; // store for next iteration
+
+            // prep expensse / income cell
+            const expenseVal = Number(expenseData[index]);
+            const incomeVal = Number(incomeData[index]);
+            const expenseStr = expenseVal.toFixed(2);
+            const incomeStr = incomeVal.toFixed(2);
+            const expenseColor = expenseVal > 0 ? COLOR_MODE_CHARGE_FROM_GRID : 'rgba(131, 131, 131, 1)';
+            const incomeColor = incomeVal > 0 ? COLOR_MODE_DISCHARGE_ALLOWED : 'rgba(131, 131, 131, 1)';
+            const in_out_text = `<span style="color: ${expenseColor}">${expenseStr}</span> / <span style="color: ${incomeColor}">${incomeStr}</span>`;
 
             cell2.appendChild(buttonDiv);
             cell2.style.textAlign = "center";
@@ -121,13 +136,13 @@ class ScheduleManager {
 
             var cell4 = document.createElement('div');
             cell4.className = 'table-cell';
-            cell4.innerHTML = (expenseData[index]).toFixed(2);
+            cell4.innerHTML = in_out_text;
             cell4.style.textAlign = "center";
             row.appendChild(cell4);
 
             var cell5 = document.createElement('div');
             cell5.className = 'table-cell';
-            cell5.innerHTML = (incomeData[index]).toFixed(2);
+            cell5.innerHTML = '<span style="color: ' + socColor + '">' + socStr + '</span>';
             cell5.style.textAlign = "center";
             row.appendChild(cell5);
 
