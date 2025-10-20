@@ -6,6 +6,7 @@ Supported sources:
     - Akkudoktor API (default)
     - Tibber API
     - SmartEnergy AT API
+    - Stromligning.dk API
     - Fixed 24-hour price array
 
 Features:
@@ -42,6 +43,7 @@ logger.info("[PRICE-IF] loading module ")
 AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
 TIBBER_API = "https://api.tibber.com/v1-beta/gql"
 SMARTENERGY_API = "https://apis.smartenergy.at/market/v1/price"
+STROMLIGNING_API_BASE = "https://stromligning.dk/api/prices?lean=true"
 
 
 class PriceInterface:
@@ -51,7 +53,7 @@ class PriceInterface:
 
     Attributes:
         src (str): Source of the price data
-                   (e.g., 'tibber', 'default', 'smartenergy_at', 'fixed_24h').
+                   (e.g., 'tibber', 'stromligning', 'smartenergy_at', 'fixed_24h', 'default').
         access_token (str): Access token for authenticating with the price source.
         fixed_24h_array (list): Optional fixed 24-hour price array.
         feed_in_tariff_price (float): Feed-in tariff price in cents per kWh.
@@ -79,6 +81,8 @@ class PriceInterface:
             Fetches prices from the Tibber API.
         __retrieve_prices_from_smartenergy_at(tgt_duration, start_time=None):
             Fetches prices from the SmartEnergy AT API.
+        __retrieve_prices_from_stromligning(tgt_duration, start_time=None):
+            Fetches prices from the Stromligning.dk API.
         __retrieve_prices_from_fixed24h_array(tgt_duration, start_time=None):
             Returns prices from a fixed 24-hour array.
     """
@@ -90,6 +94,8 @@ class PriceInterface:
     ):
         self.src = config["source"]
         self.access_token = config.get("token", "")
+        self.stromligning_query = config.get("stromligning_url", "")
+        self._stromligning_url = None
         self.fixed_price_adder_ct = config.get("fixed_price_adder_ct", 0.0)
         self.relative_price_multiplier = config.get("relative_price_multiplier", 0.0)
         self.fixed_24h_array = config.get("fixed_24h_array", False)
@@ -222,6 +228,25 @@ class PriceInterface:
                 "[PRICE-IF] Access token is required for Tibber source but not provided."
                 + " Usiung default price source."
             )
+        if self.src == "stromligning" and not self.stromligning_query:
+            self.src = "default"
+            logger.error(
+                "[PRICE-IF] stromligning_url must be provided when using the Stromligning source. "
+                "Falling back to default prices."
+            )
+        if self.src == "stromligning":
+            query_str = (self.stromligning_query or "").strip().lstrip("?&")
+            if not query_str:
+                self.src = "default"
+                self._stromligning_url = None
+                logger.error(
+                    "[PRICE-IF] stromligning_url is empty after trimming. "
+                    "Falling back to default prices."
+                )
+            else:
+                self._stromligning_url = f"{STROMLIGNING_API_BASE}&{query_str}"
+        else:
+            self._stromligning_url = None
 
     def update_prices(self, tgt_duration, start_time=None):
         """
@@ -344,6 +369,8 @@ class PriceInterface:
             prices = self.__retrieve_prices_from_smartenergy_at(
                 tgt_duration, start_time
             )
+        elif self.src == "stromligning":
+            prices = self.__retrieve_prices_from_stromligning(tgt_duration, start_time)
         elif self.src == "fixed_24h":
             prices = self.__retrieve_prices_from_fixed24h_array(
                 tgt_duration, start_time
@@ -644,6 +671,137 @@ class PriceInterface:
         self.current_prices_direct = extended_prices_direct.copy()
         logger.debug("[PRICE-IF] Prices from TIBBER fetched successfully.")
         return extended_prices
+
+    def __retrieve_prices_from_stromligning(self, tgt_duration, start_time=None):
+        logger.debug("[PRICE-IF] Prices fetching from STROMLIGNING started")
+        if self.src != "stromligning":
+            logger.error(
+                "[PRICE-IF] Price source '%s' currently not supported.",
+                self.src,
+            )
+            return []
+
+        if start_time is None:
+            start_time = datetime.now(self.time_zone).replace(
+                minute=0, second=0, microsecond=0
+            )
+
+        if start_time.tzinfo is None and hasattr(self.time_zone, "localize"):
+            start_time = self.time_zone.localize(start_time)
+
+        headers = {"accept": "application/json"}
+        try:
+            response = requests.get(self._stromligning_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+        except requests.exceptions.Timeout:
+            logger.error(
+                "[PRICE-IF] Request timed out while fetching prices from STROMLIGNING."
+            )
+            return []
+        except requests.exceptions.RequestException as e:
+            logger.error(
+                "[PRICE-IF] Request failed while fetching prices from STROMLIGNING: %s",
+                e,
+            )
+            return []
+        except ValueError as e:
+            logger.error(
+                "[PRICE-IF] Failed to parse STROMLIGNING response as JSON: %s",
+                e,
+            )
+            return []
+
+        if not isinstance(data, list) or len(data) == 0:
+            logger.error("[PRICE-IF] STROMLIGNING API returned no price entries.")
+            return []
+
+        tzinfo = start_time.tzinfo
+        horizon_end = start_time + timedelta(hours=tgt_duration)
+
+        processed_entries = []
+        for entry in data:
+            try:
+                price_value = float(entry["price"])
+                entry_start = entry["date"]
+                resolution_value = str(entry.get("resolution", "15m")).lower()
+            except (KeyError, TypeError, ValueError):
+                logger.debug(
+                    "[PRICE-IF] Skipping malformed STROMLIGNING entry: %s", entry
+                )
+                continue
+
+            try:
+                entry_start_dt = datetime.fromisoformat(
+                    entry_start.replace("Z", "+00:00")
+                )
+            except ValueError:
+                logger.debug(
+                    "[PRICE-IF] Skipping STROMLIGNING entry with invalid datetime: %s",
+                    entry_start,
+                )
+                continue
+
+            if tzinfo is not None:
+                entry_start_dt = entry_start_dt.astimezone(tzinfo)
+
+            resolution_map = {"15m": 15, "30m": 30, "60m": 60}
+            minutes = resolution_map.get(resolution_value, 15)
+            entry_end_dt = entry_start_dt + timedelta(minutes=minutes)
+
+            if entry_end_dt <= start_time or entry_start_dt >= horizon_end:
+                continue
+
+            processed_entries.append(
+                (entry_start_dt, entry_end_dt, price_value / 1000.0)
+            )
+
+        if not processed_entries:
+            logger.error(
+                "[PRICE-IF] No relevant STROMLIGNING price entries found within horizon."
+            )
+            return []
+
+        processed_entries.sort(key=lambda item: item[0])
+
+        hourly_prices = []
+        current_slot_start = start_time
+        coverage_warning = False
+
+        while current_slot_start < horizon_end:
+            current_slot_end = current_slot_start + timedelta(hours=1)
+            weighted_sum = 0.0
+            covered_seconds = 0.0
+
+            for entry_start, entry_end, price_per_wh in processed_entries:
+                overlap_start = max(entry_start, current_slot_start)
+                overlap_end = min(entry_end, current_slot_end)
+                if overlap_start >= overlap_end:
+                    continue
+                duration = (overlap_end - overlap_start).total_seconds()
+                weighted_sum += price_per_wh * duration
+                covered_seconds += duration
+
+            if covered_seconds == 0:
+                coverage_warning = True
+                if hourly_prices:
+                    hourly_prices.append(hourly_prices[-1])
+                else:
+                    hourly_prices.append(processed_entries[0][2])
+            else:
+                hourly_prices.append(round(weighted_sum / covered_seconds, 9))
+
+            current_slot_start = current_slot_end
+
+        if coverage_warning:
+            logger.warning(
+                "[PRICE-IF] Incomplete STROMLIGNING price coverage detected; "
+                "missing intervals reused the prior value."
+            )
+
+        self.current_prices_direct = hourly_prices.copy()
+        logger.debug("[PRICE-IF] Prices from STROMLIGNING fetched successfully.")
+        return hourly_prices
 
     def __retrieve_prices_from_smartenergy_at(self, tgt_duration, start_time=None):
         logger.debug("[PRICE-IF] Prices fetching from SMARTENERGY_AT started")
