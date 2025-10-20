@@ -120,8 +120,8 @@ class ScheduleManager {
             const incomeVal = Number(incomeData[index]);
             const expenseStr = expenseVal.toFixed(2);
             const incomeStr = incomeVal.toFixed(2);
-            const expenseColor = expenseVal > 0 ? 'lightgray' : 'rgba(131, 131, 131, 1)';
-            const incomeColor = incomeVal > 0 ? 'lightgray' : 'rgba(131, 131, 131, 1)';
+            const expenseColor = expenseVal >= 0.005 ? 'lightgray' : 'rgba(131, 131, 131, 1)';
+            const incomeColor = incomeVal >= 0.005 ? 'lightgray' : 'rgba(131, 131, 131, 1)';
             const in_out_text = `<span style="color: ${expenseColor}">${expenseStr}</span> / <span style="color: ${incomeColor}">${incomeStr}</span>`;
 
             cell2.appendChild(buttonDiv);
