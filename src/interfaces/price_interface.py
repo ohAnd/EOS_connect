@@ -31,7 +31,6 @@ Usage:
 
 from datetime import datetime, timedelta
 from collections import defaultdict
-from urllib.parse import parse_qsl, urlencode
 import json
 import logging
 import threading
@@ -45,7 +44,7 @@ logger.info("[PRICE-IF] loading module ")
 AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
 TIBBER_API = "https://api.tibber.com/v1-beta/gql"
 SMARTENERGY_API = "https://apis.smartenergy.at/market/v1/price"
-STROMLIGNING_API_BASE = "https://stromligning.dk/api/prices"
+STROMLIGNING_API_BASE = "https://stromligning.dk/api/prices?lean=true"
 
 
 class PriceInterface:
@@ -97,6 +96,7 @@ class PriceInterface:
         self.src = config["source"]
         self.access_token = config.get("token", "")
         self.stromligning_query = config.get("stromligning_url", "")
+        self._stromligning_url = None
         self.fixed_price_adder_ct = config.get("fixed_price_adder_ct", 0.0)
         self.relative_price_multiplier = config.get("relative_price_multiplier", 0.0)
         self.fixed_24h_array = config.get("fixed_24h_array", False)
@@ -224,6 +224,19 @@ class PriceInterface:
                 "[PRICE-IF] stromligning_url must be provided when using the Stromligning source. "
                 "Falling back to default prices."
             )
+        if self.src == "stromligning":
+            query_str = (self.stromligning_query or "").strip().lstrip("?&")
+            if not query_str:
+                self.src = "default"
+                self._stromligning_url = None
+                logger.error(
+                    "[PRICE-IF] stromligning_url is empty after trimming. "
+                    "Falling back to default prices."
+                )
+            else:
+                self._stromligning_url = f"{STROMLIGNING_API_BASE}&{query_str}"
+        else:
+            self._stromligning_url = None
 
     def update_prices(self, tgt_duration, start_time=None):
         """
@@ -626,16 +639,9 @@ class PriceInterface:
         if start_time.tzinfo is None and hasattr(self.time_zone, "localize"):
             start_time = self.time_zone.localize(start_time)
 
-        query_str = (self.stromligning_query or "").strip()
-        if query_str.startswith("?"):
-            query_str = query_str[1:]
-        params = dict(parse_qsl(query_str, keep_blank_values=True))
-        params["lean"] = "true"
-        full_url = f"{STROMLIGNING_API_BASE}?{urlencode(params)}"
-
         headers = {"accept": "application/json"}
         try:
-            response = requests.get(full_url, headers=headers, timeout=10)
+            response = requests.get(self._stromligning_url, headers=headers, timeout=10)
             response.raise_for_status()
             data = response.json()
         except requests.exceptions.Timeout:
