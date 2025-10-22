@@ -98,6 +98,11 @@ A default config file will be created with the first start, if there is no `conf
 - **`price.token`**:  
   Token for accessing electricity price data. (If not needed, set to `token: ""`)
 
+- **`price.stromligning_url`**:  
+  Query string parameters for Stromligning.dk (e.g., `productId=...&supplierId=...&customerGroupId=...`).  
+  - Only required when `price.source` is set to `stromligning`.  
+  - The integration automatically appends `lean=true` and prefixes the official API endpoint.
+
 - **`fixed_price_adder_ct`**:
   Describes the fixed cost addition in ct per kWh. Only applied to source default (akkudoktor).
   
@@ -386,6 +391,7 @@ eos:
 price:
   source: default  # data source for electricity price tibber, smartenergy_at, fixed_24h, default (default uses akkudoktor)
   token: tibberBearerToken # Token for electricity price
+  stromligning_url: productId=velkommen_gron_el&supplierId=radius_c&customerGroupId=c # Query string for Stromligning.dk (used when source: stromligning)
   fixed_price_adder_ct: 2.5 # Describes the fixed cost addition in ct per kWh.
   relative_price_multiplier: 0.05 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
   fixed_24h_array: 10.41, 10.42, 10.42, 10.42, 10.42, 23.52, 28.17, 28.17, 28.17, 28.17, 28.17, 23.52, 23.52, 23.52, 23.52, 28.17, 28.17, 34.28, 34.28, 34.28, 34.28, 34.28, 28.17, 23.52 # 24 hours array with fixed prices over the day
@@ -466,6 +472,7 @@ eos:
 # Electricity price configuration
 price:
   source: default  # data source for electricity price tibber, smartenergy_at, fixed_24h, default (default uses akkudoktor)
+  stromligning_url: productId=velkommen_gron_el&supplierId=radius_c&customerGroupId=c # Query string for Stromligning.dk (used when source: stromligning)
   fixed_price_adder_ct: 0 # Describes the fixed cost addition in ct per kWh.
   relative_price_multiplier: 0 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
 # battery configuration
