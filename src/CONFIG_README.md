@@ -93,7 +93,7 @@ A default config file will be created with the first start, if there is no `conf
 **Important: All price values must use the same base - either all prices include taxes and fees, or all prices exclude taxes and fees. Mixing different bases will lead to incorrect optimization results.**
 
 - **`price.source`**:  
-  Data source for electricity prices. Possible values: `tibber`, `smartenergy_at`,`fixed_24h`,`default` (default uses akkudoktor API).
+  Data source for electricity prices. Possible values: `tibber`, `smartenergy_at`, `stromligning`, `fixed_24h`, `default` (default uses akkudoktor API).
 
 - **`price.token`**:  
   Token for accessing electricity price data. (If not needed, set to `token: ""`)
@@ -101,7 +101,8 @@ A default config file will be created with the first start, if there is no `conf
 - **`price.stromligning_url`**:  
   Query string parameters for Stromligning.dk (e.g., `productId=...&supplierId=...&customerGroupId=...`).  
   - Only required when `price.source` is set to `stromligning`.  
-  - The integration automatically appends `lean=true` and prefixes the official API endpoint.
+  - The integration automatically appends `lean=true` and prefixes the official API endpoint.  
+  - Refer to the Stromligning API schema for available parameters: https://stromligning.dk/api/docs/swagger.json#/Prices/get_api_prices
 
 - **`fixed_price_adder_ct`**:
   Describes the fixed cost addition in ct per kWh. Only applied to source default (akkudoktor).
@@ -389,7 +390,7 @@ eos:
   timeout: 180 # timeout for EOS optimize request in seconds - default: 180
 # Electricity price configuration
 price:
-  source: default  # data source for electricity price tibber, smartenergy_at, fixed_24h, default (default uses akkudoktor)
+  source: default  # data source for electricity price tibber, smartenergy_at, stromligning, fixed_24h, default (default uses akkudoktor)
   token: tibberBearerToken # Token for electricity price
   stromligning_url: productId=velkommen_gron_el&supplierId=radius_c&customerGroupId=c # Query string for Stromligning.dk (used when source: stromligning)
   fixed_price_adder_ct: 2.5 # Describes the fixed cost addition in ct per kWh.
@@ -471,7 +472,7 @@ eos:
   timeout: 180 # timeout for EOS optimize request in seconds - default: 180
 # Electricity price configuration
 price:
-  source: default  # data source for electricity price tibber, smartenergy_at, fixed_24h, default (default uses akkudoktor)
+  source: default  # data source for electricity price tibber, smartenergy_at, stromligning, fixed_24h, default (default uses akkudoktor)
   stromligning_url: productId=velkommen_gron_el&supplierId=radius_c&customerGroupId=c # Query string for Stromligning.dk (used when source: stromligning)
   fixed_price_adder_ct: 0 # Describes the fixed cost addition in ct per kWh.
   relative_price_multiplier: 0 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).

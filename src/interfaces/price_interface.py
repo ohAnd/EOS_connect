@@ -55,7 +55,7 @@ class PriceInterface:
 
     Attributes:
         src (str): Source of the price data
-                   (e.g., 'tibber', 'default', 'smartenergy_at', 'fixed_24h').
+                   (e.g., 'tibber', 'stromligning', 'smartenergy_at', 'fixed_24h', 'default').
         access_token (str): Access token for authenticating with the price source.
         fixed_24h_array (list): Optional fixed 24-hour price array.
         feed_in_tariff_price (float): Feed-in tariff price in cents per kWh.

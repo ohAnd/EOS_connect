@@ -14,7 +14,7 @@ EOS Connect fetches real-time and forecast data (PV, load, prices), processes it
 - **Dynamic Web Dashboard:**  
   Provides live monitoring, manual control, and visualization of your energy system.
 - **Cost Optimization:**  
-  Aligns energy usage with dynamic electricity prices (e.g., Tibber, smartenergy.at).
+  Aligns energy usage with dynamic electricity prices (e.g., Tibber, smartenergy.at, Stromligning.dk).
 - **Flexible Configuration:**  
   Easy to set up and extend for a wide range of energy systems and user needs.
 
@@ -83,7 +83,7 @@ EOS Connect helps you get the most out of your solar and storage systems—wheth
   - **Dynamic Charging Curve**:
     - If enabled, EOS Connect automatically adjusts the maximum battery charging power based on the current state of charge (SOC). This helps to optimize battery health and efficiency by reducing charge power as the battery approaches full capacity.
 - **Cost and Solar Optimization**:
-  - Aligns energy usage with real-time electricity prices (e.g., from Tibber or [smartenergy.at](https://www.smartenergy.at/)) to minimize costs.
+  - Aligns energy usage with real-time electricity prices (e.g., from Tibber, [smartenergy.at](https://www.smartenergy.at/), or [Stromligning.dk](https://stromligning.dk/)) to minimize costs.
   - Incorporates PV forecasts to prioritize charging during periods of high solar output.
   - Reduces grid dependency and maximizes self-consumption by combining cost and solar production data.
 - **Energy Optimization Scheduling**:
