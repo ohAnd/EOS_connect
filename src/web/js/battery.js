@@ -48,7 +48,7 @@ class BatteryManager {
                     foundFirst = true;
                 }
                 let current_hour_amount = value * max_charge_power_w;
-                let current_hour_price = price_data[index] * current_hour_amount; // Convert to ct/kWh
+                let current_hour_price = price_data[index] * current_hour_amount; // Convert to minor unit per kWh
                 total_price += current_hour_price;
                 total_price_count += 1;
                 next_charge_amount += value * max_charge_power_w;
@@ -71,13 +71,13 @@ class BatteryManager {
             // Set total price
             const sumPriceElement = document.getElementById('next_charge_sum_price');
             if (sumPriceElement) {
-                sumPriceElement.innerText = total_price.toFixed(2) + " €";
+                sumPriceElement.innerText = total_price.toFixed(2) + " " + PRICE_INFO.symbol;
             }
             
             // Set average price if element exists
             const avgPriceElement = document.getElementById('next_charge_avg_price');
             if (avgPriceElement && !isNaN(next_charge_avg_price) && isFinite(next_charge_avg_price)) {
-                avgPriceElement.innerText = next_charge_avg_price.toFixed(1) + " ct/kWh";
+                avgPriceElement.innerText = next_charge_avg_price.toFixed(1) + " " + PRICE_INFO.minorUnit;
             }
             
             // Display charge summary elements

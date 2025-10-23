@@ -108,6 +108,7 @@ class PriceInterface:
         self.current_prices_direct = []  # without tax
         self.current_feedin = []
         self.default_prices = [0.0001] * 48  # if external data are not available
+        self.price_currency = self.__determine_price_currency()
 
         # Add retry mechanism attributes
         self.last_successful_prices = []
@@ -270,6 +271,15 @@ class PriceInterface:
         # )
         return self.current_feedin
 
+    def get_price_currency(self):
+        """
+        Return the currency identifier for the currently configured price source.
+
+        Returns:
+            str: ISO 4217 currency code (e.g. 'EUR', 'DKK').
+        """
+        return self.price_currency
+
     def __create_feedin_prices(self):
         """
         Creates feed-in prices based on the current prices.
@@ -387,6 +397,26 @@ class PriceInterface:
 
         return prices
 
+    def __determine_price_currency(self):
+        """
+        Determine the currency used by the configured price source.
+
+        Returns:
+            str: ISO 4217 currency code.
+        """
+        if self.src == "stromligning":
+            return "DKK"
+        if self.src == "smartenergy_at":
+            return "EUR"
+        if self.src == "fixed_24h":
+            return "EUR"
+        if self.src == "tibber":
+            # Tibber exposes prices in the account currency; default to EUR.
+            return "EUR"
+        if self.src == "default":
+            return "EUR"
+        return "EUR"
+
     def __retrieve_prices_from_akkudoktor(self, tgt_duration, start_time=None):
         """
         Fetches and processes electricity prices for today and tomorrow.
@@ -502,6 +532,7 @@ class PriceInterface:
                                 total
                                 energy
                                 startsAt
+                                currency
                             }
                             tomorrow {
                                 total
@@ -550,6 +581,18 @@ class PriceInterface:
                 "tomorrow"
             ]
         )
+        try:
+            self.price_currency = (
+                (
+                    data["data"]["viewer"]["homes"][0]["currentSubscription"][
+                        "priceInfo"
+                    ]["today"][0]["currency"]
+                )
+                .strip()
+                .upper()
+            )
+        except (KeyError, IndexError, TypeError):
+            pass
 
         today_prices_json = json.loads(today_prices)
         tomorrow_prices_json = json.loads(tomorrow_prices)

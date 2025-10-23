@@ -14,6 +14,11 @@
 </head>
 
 <body>
+    <script>
+        window.SERVER_PRICE_CURRENCY = "__PRICE_CURRENCY__";
+        window.SERVER_PRICE_SYMBOL = "__PRICE_CURRENCY_SYMBOL__";
+        window.SERVER_PRICE_MINOR = "__PRICE_MINOR_UNIT__";
+    </script>
     <div id="overlay"
         style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.8); color: white; display: flex; justify-content: center; align-items: center; z-index: 1000;">
         <div style="text-align: center; padding: 2em;">
@@ -109,7 +114,7 @@
                         <tr id="next_charge_summary">
                             <td>Needed Energy</td>
                             <td colspan="2" style="text-align: right;"><span id="next_charge_amount">... kWh</span> /
-                                <span id="next_charge_sum_price">... €</span>
+                                <span id="next_charge_sum_price">... __PRICE_CURRENCY_SYMBOL__</span>
                             </td>
                         </tr>
                         <tr id="next_charge_summary_2">
@@ -192,7 +197,7 @@
                     <table style="width: 100%; text-align: left;padding-top: 10px;">
                         <tr>
                             <th style="text-align: left;">Expense (rest of the day)</th>
-                            <th style="text-align: right;" id="expense_summary"> 0.00 €</th>
+                            <th style="text-align: right;" id="expense_summary"> 0.00 __PRICE_CURRENCY_SYMBOL__</th>
                         </tr>
                         <tr>
                             <td colspan="3">
@@ -201,7 +206,7 @@
                         </tr>
                         <tr>
                             <td>Income</td>
-                            <td colspan="2" style="text-align: right;" id="income_summary">0.00 €</td>
+                            <td colspan="2" style="text-align: right;" id="income_summary">0.00 __PRICE_CURRENCY_SYMBOL__</td>
                         </tr>
                         <tr>
                             <td>Feed In</td>
@@ -237,9 +242,9 @@
                                 <div class="table-cell">time</div>
                                 <div class="table-cell">Control<br><i style="font-size: smaller;"></i>target state</i>
                                 </div>
-                                <div class="table-cell">Price<br><i style="font-size: smaller;">ct/kWh</i></div>
-                                <div class="table-cell">Expense<br><i style="font-size: smaller;">€</i></div>
-                                <div class="table-cell">Income<br><i style="font-size: smaller;">€</i></div>
+                                <div class="table-cell">Price<br><i style="font-size: smaller;">__PRICE_MINOR_UNIT__</i></div>
+                                <div class="table-cell">Expense<br><i style="font-size: smaller;">__PRICE_CURRENCY_SYMBOL__</i></div>
+                                <div class="table-cell">Income<br><i style="font-size: smaller;">__PRICE_CURRENCY_SYMBOL__</i></div>
                             </div>
                         </div>
                         <div class="table-row">
@@ -475,7 +480,7 @@
                 options: {
                     scales: {
                         y: { beginAtZero: true, title: { display: true, text: 'Energy (kWh)', color: 'lightgray' }, grid: { color: 'rgb(54, 54, 54)' }, ticks: { color: 'lightgray' } },
-                        y1: { beginAtZero: true, position: 'right', title: { display: true, text: 'Price (€)', color: 'lightgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'lightgray', callback: value => value.toFixed(2) } },
+                        y1: { beginAtZero: true, position: 'right', title: { display: true, text: 'Price (__PRICE_CURRENCY_SYMBOL__/kWh)', color: 'lightgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'lightgray', callback: value => value.toFixed(2) } },
                         y2: { beginAtZero: true, position: 'right', title: { display: true, text: 'Akku SOC (%)', color: 'darkgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'darkgray', callback: value => value.toFixed(0) } },
                         y3: { beginAtZero: true, position: 'right', display: false, title: { display: true, text: 'AC Charge', color: 'darkgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'darkgray', callback: value => value.toFixed(2) } },
                         x: { grid: { color: 'rgb(54, 54, 54)' }, ticks: { color: 'lightgray', font: { size: 10 } } }
@@ -518,7 +523,7 @@
                         foundFirst = true;
                     }
                     let current_hour_amount = value * max_charge_power_w;
-                    let current_hour_price = price_data[index] * current_hour_amount; // Convert to ct/kWh
+                    let current_hour_price = price_data[index] * current_hour_amount; // Convert to minor unit per kWh
                     total_price += current_hour_price;
                     total_price_count += 1;
                     next_charge_amount += value * max_charge_power_w;
@@ -538,10 +543,10 @@
             } else {
                 document.getElementById('next_charge_amount').innerText = (next_charge_amount / 1000).toFixed(1) + " kWh";
                 // next_charge_sum_price
-                document.getElementById('next_charge_sum_price').innerText = total_price.toFixed(2) + " €";
+                document.getElementById('next_charge_sum_price').innerText = total_price.toFixed(2) + " " + window.SERVER_PRICE_SYMBOL;
 
                 if (next_charge_time !== -1) {
-                    document.getElementById('next_charge_avg_price').innerText = (next_charge_avg_price).toFixed(1) + " ct/kWh";
+                    document.getElementById('next_charge_avg_price').innerText = (next_charge_avg_price).toFixed(1) + " " + window.SERVER_PRICE_MINOR;
                 }
 
                 document.getElementById('next_charge_header').style.display = "";
@@ -951,12 +956,12 @@
 
             let currentHour = new Date(data_response["timestamp"]).getHours(); // ✅ Use server time
             let expense_today = expense_data.slice(0, 24 - currentHour).reduce((acc, value) => acc + value, 0).toFixed(2);
-            document.getElementById('expense_summary').innerText = expense_today + " €";
+            document.getElementById('expense_summary').innerText = expense_today + " " + window.SERVER_PRICE_SYMBOL;
             document.getElementById('expense_summary').title = "Expense for the rest of the day";
 
             // set income for rest of the day
             let income_today = income_data.slice(0, 24 - currentHour).reduce((acc, value) => acc + value, 0).toFixed(2);
-            document.getElementById('income_summary').innerText = income_today + " €";
+            document.getElementById('income_summary').innerText = income_today + " " + window.SERVER_PRICE_SYMBOL;
             document.getElementById('income_summary').title = "Income for the rest of the day";
 
             // set feed in for rest of the day
