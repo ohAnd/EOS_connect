@@ -59,15 +59,15 @@ const TEST_SCENARIOS = {
 let currentTestScenario = TEST_SCENARIOS.LIVE;
 
 const PRICE_INFO = Object.freeze(
-        typeof window !== 'undefined' ? {
+        typeof window !== 'object' ? {
             currency: "EUR",
             symbol: "€",
             minorUnit: "ct/kWh",
         } :
         {
-            currency: globalWindow.SERVER_PRICE_CURRENCY,
-            symbol: globalWindow.SERVER_PRICE_SYMBOL,
-            minorUnit: globalWindow.SERVER_PRICE_MINOR,
+            currency: window.SERVER_PRICE_CURRENCY,
+            symbol: window.SERVER_PRICE_SYMBOL,
+            minorUnit: window.SERVER_PRICE_MINOR,
         });
 
 // Chart configuration constants
