@@ -48,7 +48,9 @@ def test_stromligning_hourly_aggregation(monkeypatch):
     )
 
     def fake_get(url, headers=None, timeout=None):
-        assert url == expected_url
+        assert url.startswith(f"{expected_url}&forecast=true&to=")
+        to_segment = url.split("&to=", 1)[1]
+        datetime.strptime(to_segment, "%Y-%m-%dT%H:%M")
         return DummyResponse(sample_payload)
 
     monkeypatch.setattr(

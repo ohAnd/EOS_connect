@@ -99,10 +99,15 @@ A default config file will be created with the first start, if there is no `conf
   Token for accessing electricity price data. (If not needed, set to `token: ""`)
 
 - **`price.stromligning_url`**:  
-  Query string parameters for Stromligning.dk (e.g., `productId=...&supplierId=...&customerGroupId=...`).  
+  Query string parameters for Stromligning.dk (e.g., `productId=...&supplierId=...`).  
   - Only required when `price.source` is set to `stromligning`.  
-  - The integration automatically appends `lean=true` and prefixes the official API endpoint.  
-  - Refer to the Stromligning API schema for available parameters: https://stromligning.dk/api/docs/swagger.json#/Prices/get_api_prices
+  - The integration automatically appends `lean`, `to` and `forecast` parameters
+
+  Examples:
+  - `productId=velkommen_gron_el&supplierId=radius_c&customerGroupId=c`
+  - `productId=forsyningen&supplierId=nke-elnet`
+
+  You can find the appropraite `productId` and `supplierId` from the [Strømligning site](https://stromligning.dk/live) or [the API](https://stromligning.dk/api/docs/swagger.json#/Prices/get_api_prices). On the site, you can pick the appopriate "netselskab" and supplier/product with the dropdowns. When you're happy, look in the address bar of your browser: copy the `netselskab` value to `supplierId` and `produkt` to `productId`.
 
 - **`fixed_price_adder_ct`**:
   Describes the fixed cost addition in ct per kWh. Only applied to source default (akkudoktor).

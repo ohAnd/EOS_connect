@@ -690,8 +690,15 @@ class PriceInterface:
             start_time = self.time_zone.localize(start_time)
 
         headers = {"accept": "application/json"}
+
+        request_url = self._stromligning_url
+        to_param = (start_time + timedelta(hours=tgt_duration)).strftime(
+            "%Y-%m-%dT%H:%M"
+        )
+        request_url = f"{request_url}&forecast=true&to={to_param}"
+
         try:
-            response = requests.get(self._stromligning_url, headers=headers, timeout=10)
+            response = requests.get(request_url, headers=headers, timeout=10)
             response.raise_for_status()
             data = response.json()
         except requests.exceptions.Timeout:
