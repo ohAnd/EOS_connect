@@ -294,6 +294,8 @@ class LoadInterface:
                 or "state" not in data["data"][i]
                 or data["data"][i + 1].get("state") == "unavailable"
                 or data["data"][i].get("state") == "unavailable"
+                or data["data"][i + 1].get("state") == "unknown"
+                or data["data"][i].get("state") == "unknown"
             ):
                 continue
             try:
