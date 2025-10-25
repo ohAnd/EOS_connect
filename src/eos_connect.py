@@ -482,6 +482,14 @@ def create_optimize_request():
     return payload
 
 
+last_control_data = {
+    "current_soc": None,
+    "ac_charge_demand": None,
+    "dc_charge_demand": None,
+    "discharge_allowed": None,
+}
+
+
 def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_allowed):
     """
     Process the optimized response from EOS and update the load interface.
@@ -495,15 +503,24 @@ def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_a
     current_soc = battery_interface.get_current_soc()
     max_soc = config_manager.config["battery"]["max_soc_percentage"]
 
-    if current_soc >= max_soc and ac_charge_demand_rel > 0:
-        logger.warning(
-            "[Main] EOS requested AC charging (%s) but battery SoC (%s%%)"
-            + " at/above maximum (%s%%) - overriding to 0",
-            ac_charge_demand_rel,
-            current_soc,
-            max_soc,
-        )
-        ac_charge_demand_rel = 0  # Override EOS decision for safety
+    if (
+        last_control_data["current_soc"] is not None
+        and last_control_data["ac_charge_demand"] is not None
+    ):
+        if (
+            current_soc >= max_soc
+            and ac_charge_demand_rel > 0
+            and last_control_data["current_soc"] != current_soc
+            and last_control_data["ac_charge_demand"] != ac_charge_demand_rel
+        ):
+            logger.warning(
+                "[Main] EOS requested AC charging (%s) but battery SoC (%s%%)"
+                + " at/above maximum (%s%%) - overriding to 0",
+                ac_charge_demand_rel,
+                current_soc,
+                max_soc,
+            )
+            ac_charge_demand_rel = 0  # Override EOS decision for safety
 
     base_control.set_current_ac_charge_demand(ac_charge_demand_rel)
     base_control.set_current_dc_charge_demand(dc_charge_demand_rel)
@@ -526,6 +543,11 @@ def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_a
     # getting the current charging state from evcc
     base_control.set_current_evcc_charging_state(evcc_interface.get_charging_state())
     base_control.set_current_evcc_charging_mode(evcc_interface.get_charging_mode())
+
+    last_control_data["current_soc"] = current_soc
+    last_control_data["ac_charge_demand"] = ac_charge_demand_rel
+    last_control_data["dc_charge_demand"] = dc_charge_demand_rel
+    last_control_data["discharge_allowed"] = discharge_allowed
 
 
 class OptimizationScheduler:
