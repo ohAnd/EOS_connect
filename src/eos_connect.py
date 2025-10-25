@@ -4,7 +4,7 @@ This module fetches energy data from OpenHAB, processes it, and creates a load p
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import logging
 import json
@@ -288,15 +288,101 @@ def create_optimize_request():
         dict: A dictionary containing the payload for the optimization request.
     """
 
-    def get_ems_data():
+    def get_dst_change_in_next_48(tz, start_dt=None):
+        """
+        Returns:
+            0 if no DST change in next 48 hours,
+            +N if DST fallback (extra hour) at Nth hour from now,
+            -N if DST spring forward (missing hour) at Nth hour from now.
+        """
+        if start_dt is None:
+            start_dt = datetime.now(tz)
+        if start_dt.tzinfo is None:
+            start_dt = tz.localize(start_dt)
+        prev_offset = start_dt.utcoffset()
+        for i in range(1, 49):
+            check_dt = tz.normalize(start_dt + timedelta(hours=i))
+            offset = check_dt.utcoffset()
+            if offset != prev_offset:
+                # DST change detected
+                if offset > prev_offset:
+                    logger.debug("[DST] Spring forward detected at hour %s: -%s", i, i)
+                    return -i  # hour lost
+                logger.debug("[DST] Fall back detected at hour %s: +%s", i, i)
+                return i  # hour gained
+            prev_offset = offset
+        logger.debug("[DST] No DST change detected in next 48 hours (0)")
+        return 0
+
+    # def adjust_forecast_array_for_dst(data_array, dst_change_detected):
+    #     """
+    #     Adjusts the forecast array for Daylight Saving Time (DST) changes.
+
+    #     Args:
+    #         data_array (list): The original forecast array.
+    #         dst_change_detected (int): The DST change detected (positive for fall back,
+    #                                     negative for spring forward).
+    #     Returns:
+    #         list: The adjusted forecast array.
+    #     """
+    #     arr = list(data_array)  # Make a copy so the original is not modified
+    #     if dst_change_detected != 0:
+    #         hour_index = abs(dst_change_detected) - 1
+
+    #         # Validate computed index to avoid IndexError
+    #         if hour_index < 0 or hour_index >= len(arr):
+    #             logger.warning(
+    #                 "[DST] Computed hour index %s out of range for array length %s"
+    #                 + " - skipping DST adjustment",
+    #                 hour_index,
+    #                 len(arr),
+    #             )
+    #             return arr
+
+    #         if dst_change_detected > 0:
+    #             # Fall back - repeat hour
+    #             arr.insert(hour_index, arr[hour_index])  # duplicate hour
+    #             logger.debug(
+    #                 "[DST] Adjusted forecast for fall back at hour %s",
+    #                 hour_index + 1,
+    #             )
+    #         else:
+    #             # Spring forward - remove hour
+    #             removed_value = arr.pop(hour_index)
+    #             logger.debug(
+    #                 "[DST] Adjusted forecast for spring forward at hour %s (removed %s Wh)",
+    #                 hour_index + 1,
+    #                 removed_value,
+    #             )
+    #     return arr
+
+    def get_ems_data(dst_change_detected):
+
+        pv_prognose_wh = pv_interface.get_current_pv_forecast()
+        strompreis_euro_pro_wh = price_interface.get_current_prices()
+        einspeiseverguetung_euro_pro_wh = price_interface.get_current_feedin_prices()
+        gesamtlast = load_interface.get_load_profile(EOS_TGT_DURATION)
+
+        # if dst_change_detected != 0:
+        #     pv_prognose_wh = adjust_forecast_array_for_dst(
+        #         pv_prognose_wh, dst_change_detected
+        #     )
+        #     strompreis_euro_pro_wh = adjust_forecast_array_for_dst(
+        #         strompreis_euro_pro_wh, dst_change_detected
+        #     )
+        #     einspeiseverguetung_euro_pro_wh = adjust_forecast_array_for_dst(
+        #         einspeiseverguetung_euro_pro_wh, dst_change_detected
+        #     )
+        #     gesamtlast = adjust_forecast_array_for_dst(gesamtlast, dst_change_detected)
+
         return {
-            "pv_prognose_wh": pv_interface.get_current_pv_forecast(),
-            "strompreis_euro_pro_wh": price_interface.get_current_prices(),
-            "einspeiseverguetung_euro_pro_wh": price_interface.get_current_feedin_prices(),
+            "pv_prognose_wh": pv_prognose_wh,
+            "strompreis_euro_pro_wh": strompreis_euro_pro_wh,
+            "einspeiseverguetung_euro_pro_wh": einspeiseverguetung_euro_pro_wh,
             "preis_euro_pro_wh_akku": config_manager.config["battery"][
                 "price_euro_per_wh_accu"
             ],
-            "gesamtlast": load_interface.get_load_profile(EOS_TGT_DURATION),
+            "gesamtlast": gesamtlast,
         }
 
     def get_pv_akku_data():
@@ -366,13 +452,28 @@ def create_optimize_request():
             dishwasher_object = {"device_id": "additional_load_1", **dishwasher_object}
         return dishwasher_object
 
+    dst_change_detected = get_dst_change_in_next_48(time_zone)
+
+    temperature_forecast = pv_interface.get_current_temp_forecast()
+    if dst_change_detected != 0:
+        logger.info(
+            "[Main] DST change detected: in %s hours there will be a shift with %s - please check"
+            + " https://github.com/ohAnd/EOS_connect/issues/130#issuecomment-3444749335"
+            + " for details.",
+            abs(dst_change_detected),
+            "1 hour plus" if dst_change_detected > 0 else "1 hour minus",
+        )
+    #     temperature_forecast = adjust_forecast_array_for_dst(
+    #         temperature_forecast, dst_change_detected
+    #     )
+
     payload = {
-        "ems": get_ems_data(),
+        "ems": get_ems_data(dst_change_detected),
         "pv_akku": get_pv_akku_data(),
         "inverter": get_wechselrichter_data(),
         "eauto": get_eauto_data(),
         "dishwasher": get_dishwasher_data(),
-        "temperature_forecast": pv_interface.get_current_temp_forecast(),
+        "temperature_forecast": temperature_forecast,
         "start_solution": eos_interface.get_last_start_solution(),
     }
     logger.debug(
@@ -739,7 +840,8 @@ class OptimizationScheduler:
 
         if error is not True:
             # logger.debug(
-            #     "[Main] Optimization fast control loop - current state: %s (Num: %s) -> ac_charge_demand: %s, dc_charge_demand: %s, discharge_allowed: %s",
+            #     "[Main] Optimization fast control loop - current state: %s (Num: %s) "+
+            #     "-> ac_charge_demand: %s, dc_charge_demand: %s, discharge_allowed: %s",
             #     base_control.get_current_overall_state(),
             #     base_control.get_current_overall_state_number(),
             #     ac_charge_demand,
