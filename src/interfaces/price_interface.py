@@ -36,7 +36,6 @@ import threading
 import requests
 
 
-
 logger = logging.getLogger("__main__")
 logger.info("[PRICE-IF] loading module ")
 
@@ -108,6 +107,7 @@ class PriceInterface:
         self.current_prices_direct = []  # without tax
         self.current_feedin = []
         self.default_prices = [0.0001] * 48  # if external data are not available
+        self.price_currency = self.__determine_price_currency()
 
         # Add retry mechanism attributes
         self.last_successful_prices = []
@@ -165,9 +165,14 @@ class PriceInterface:
         """
         # Initial update
         try:
-            self.update_prices(48, datetime.now(self.time_zone).replace(hour=0, minute=0, second=0, microsecond=0))  # Get 48 hours of price data
+            self.update_prices(
+                48,
+                datetime.now(self.time_zone).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ),
+            )  # Get 48 hours of price data
             logger.info("[PRICE-IF] Initial price update completed")
-        except Exception as e:
+        except RuntimeError as e:
             logger.error("[PRICE-IF] Error during initial price update: %s", e)
 
         while not self._stop_event.is_set():
@@ -177,7 +182,12 @@ class PriceInterface:
                     break  # Stop event was set
 
                 # Perform price update
-                self.update_prices(48, datetime.now(self.time_zone).replace(hour=0, minute=0, second=0, microsecond=0))  # Get 48 hours of price data
+                self.update_prices(
+                    48,
+                    datetime.now(self.time_zone).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    ),
+                )  # Get 48 hours of price data
                 logger.debug("[PRICE-IF] Periodic price update completed")
 
             except Exception as e:
@@ -269,6 +279,15 @@ class PriceInterface:
         #     "[PRICE-IF] Returning current feed-in prices: %s", self.current_feedin
         # )
         return self.current_feedin
+
+    def get_price_currency(self):
+        """
+        Return the currency identifier for the currently configured price source.
+
+        Returns:
+            str: ISO 4217 currency code (e.g. 'EUR', 'DKK').
+        """
+        return self.price_currency
 
     def __create_feedin_prices(self):
         """
@@ -387,6 +406,26 @@ class PriceInterface:
 
         return prices
 
+    def __determine_price_currency(self):
+        """
+        Determine the currency used by the configured price source.
+
+        Returns:
+            str: ISO 4217 currency code.
+        """
+        if self.src == "stromligning":
+            return "DKK"
+        if self.src == "smartenergy_at":
+            return "EUR"
+        if self.src == "fixed_24h":
+            return "EUR"
+        if self.src == "tibber":
+            # Tibber exposes prices in the account currency; default to EUR.
+            return "EUR"
+        if self.src == "default":
+            return "EUR"
+        return "EUR"
+
     def __retrieve_prices_from_akkudoktor(self, tgt_duration, start_time=None):
         """
         Fetches and processes electricity prices for today and tomorrow.
@@ -502,6 +541,7 @@ class PriceInterface:
                                 total
                                 energy
                                 startsAt
+                                currency
                             }
                             tomorrow {
                                 total
@@ -550,6 +590,18 @@ class PriceInterface:
                 "tomorrow"
             ]
         )
+        try:
+            self.price_currency = (
+                (
+                    data["data"]["viewer"]["homes"][0]["currentSubscription"][
+                        "priceInfo"
+                    ]["today"][0]["currency"]
+                )
+                .strip()
+                .upper()
+            )
+        except (KeyError, IndexError, TypeError):
+            pass
 
         today_prices_json = json.loads(today_prices)
         tomorrow_prices_json = json.loads(tomorrow_prices)
@@ -645,7 +697,9 @@ class PriceInterface:
 
         # Catch case where all prices are zero (or data is empty)
         if not any(extended_prices):
-            logger.error("[PRICE-IF] SMARTENERGY_AT API returned only zero prices or empty data.")
+            logger.error(
+                "[PRICE-IF] SMARTENERGY_AT API returned only zero prices or empty data."
+            )
             return []
 
         logger.debug("[PRICE-IF] Prices from SMARTENERGY_AT fetched successfully.")

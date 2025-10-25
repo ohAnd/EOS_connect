@@ -15,6 +15,7 @@ from flask import Flask, Response, render_template_string, request, send_from_di
 from version import __version__
 from config import ConfigManager
 from log_handler import MemoryLogHandler
+from constants import CURRENCY_SYMBOL_MAP, CURRENCY_MINOR_UNIT_MAP
 from interfaces.base_control import BaseControl
 from interfaces.load_interface import LoadInterface
 from interfaces.battery_interface import BatteryInterface
@@ -1311,6 +1312,10 @@ def get_controls():
     current_inverter_mode = base_control.get_current_overall_state()
     current_inverter_mode_num = base_control.get_current_overall_state_number()
 
+    currency = price_interface.get_price_currency()
+    currency_symbol = CURRENCY_SYMBOL_MAP.get(currency, currency)
+    currency_minor_unit = CURRENCY_MINOR_UNIT_MAP.get(currency, f"{currency}")
+
     response_data = {
         "current_states": {
             "current_ac_charge_demand": current_ac_charge_demand,
@@ -1341,6 +1346,11 @@ def get_controls():
                 and inverter_interface is not None
                 else None
             )
+        },
+        "localization": {
+            "currency": currency,
+            "currency_symbol": currency_symbol,
+            "currency_minor_unit": currency_minor_unit,
         },
         "state": optimization_scheduler.get_current_state(),
         "eos_connect_version": __version__,
