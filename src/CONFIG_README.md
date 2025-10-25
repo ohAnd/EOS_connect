@@ -96,9 +96,14 @@ A default config file will be created with the first start, if there is no `conf
   Data source for electricity prices. Possible values: `tibber`, `smartenergy_at`, `stromligning`, `fixed_24h`, `default` (default uses akkudoktor API).
 
 - **`price.token`**:  
-  Token for accessing electricity price data. (If not needed, set to `token: ""`)  
-  - Used for Tibber and other APIs just like before.  
-  - **Strømligning integration**: provide the token as `supplierId/productId[/customerGroupId]` (customer group is optional).  
+  Token for accessing electricity price data. (If not needed, set to `token: ""`)
+
+  When used with **Tibber**:
+
+  Provide your token
+
+  When used with **Strømligning**:
+  - Use the format: `supplierId/productId[/customerGroupId]` (customer group is optional).  
     - Example with customer group: `radius_c/velkommen_gron_el/c`  
     - Example without customer group: `nke-elnet/forsyningen`  
   - You can find the appropriate values on the [Strømligning live page](https://stromligning.dk/live) or via the [API docs](https://stromligning.dk/api/docs/swagger.json#/Prices/get_api_prices). On the site, select the desired "netselskab" and supplier/product; copy the `netselskab` part to `supplierId`, the `produkt` part to `productId`, and the optional group to `customerGroupId`.
