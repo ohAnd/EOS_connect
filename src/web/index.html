@@ -14,11 +14,6 @@
 </head>
 
 <body>
-    <script>
-        window.SERVER_PRICE_CURRENCY = "__PRICE_CURRENCY__";
-        window.SERVER_PRICE_SYMBOL = "__PRICE_CURRENCY_SYMBOL__";
-        window.SERVER_PRICE_MINOR = "__PRICE_MINOR_UNIT__";
-    </script>
     <div id="overlay"
         style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.8); color: white; display: flex; justify-content: center; align-items: center; z-index: 1000;">
         <div style="text-align: center; padding: 2em; position: relative;">
@@ -159,13 +154,15 @@
                         </tr>
                         <tr id="next_charge_summary">
                             <td class="top_box_info_text">Needed Energy</td>
-                            <td colspan="2" style="text-align: right;"><span id="next_charge_amount">... kWh</span> /
-                                <span id="next_charge_sum_price">... __PRICE_CURRENCY_SYMBOL__</span>
+                            <td colspan="2" style="text-align: right;"><span
+                                    id="next_charge_amount">initializing...</span> /
+                                <span id="next_charge_sum_price">... </span>
                             </td>
                         </tr>
                         <tr id="next_charge_summary_2">
                             <td class="top_box_info_text">Avg AC Charging Price</td>
-                            <td colspan="2" style="text-align: right;" id="next_charge_avg_price">... __PRICE_MINOR_UNIT__</td>
+                            <td colspan="2" style="text-align: right;" id="next_charge_avg_price">initializing...
+                            </td>
                         </tr>
                         <tr>
                             <td class="top_box_info_text"><i>Dynamic Max AC+DC Charge Power</i></td>
@@ -244,7 +241,7 @@
                     <table style="width: 100%; text-align: left;padding-top: 10px;">
                         <tr>
                             <th class="top_box_info_text_head" style="text-align: left;">Expense (rest of the day)</th>
-                            <th style="text-align: right;" id="expense_summary">0.00 __PRICE_CURRENCY_SYMBOL__</th>
+                            <th style="text-align: right;" id="expense_summary">0.00 ...</th>
                         </tr>
                         <tr>
                             <td colspan="3">
@@ -253,7 +250,8 @@
                         </tr>
                         <tr>
                             <td class="top_box_info_text">Income</td>
-                            <td colspan="2" style="text-align: right;" id="income_summary">0.00 __PRICE_CURRENCY_SYMBOL__</td>
+                            <td colspan="2" style="text-align: right;" id="income_summary">0.00
+                                ...</td>
                         </tr>
                         <tr>
                             <td class="top_box_info_text">Feed In</td>
@@ -289,10 +287,12 @@
                                 <div class="table-cell">time</div>
                                 <div class="table-cell">Control<br><i style="font-size: smaller;"></i>target state</i>
                                 </div>
-                                <div class="table-cell">Price<br><i style="font-size: smaller;" id="price_minor_unit_label">__PRICE_MINOR_UNIT__</i></div>
+                                <div class="table-cell">Price<br><i style="font-size: smaller;"
+                                        id="price_minor_unit_label">.../kWh</i></div>
                                 <div class="table-cell"
                                     title="Shows your cost (Pay) and income (Earn) for this time slot. Format: Pay / Earn in your configured currency.">
-                                    Pay/ Earn<br><i style="font-size: smaller;" id="schedule_currency_symbol">__PRICE_CURRENCY_SYMBOL__</i></div>
+                                    Pay/ Earn<br><i style="font-size: smaller;" id="schedule_currency_symbol">...</i>
+                                </div>
                                 <div class="table-cell">SOC<br><i style="font-size: smaller;">%</i></div>
                             </div>
                         </div>

@@ -35,18 +35,12 @@ class ScheduleManager {
         var socData = data_response["result"]["akku_soc_pro_stunde"];
         var expenseData = data_response["result"]["Kosten_Euro_pro_Stunde"];
         var incomeData = data_response["result"]["Einnahmen_Euro_pro_Stunde"];
-        const currencyHeader = document.getElementById('schedule_currency_symbol');
-        if (currencyHeader) {
-            currencyHeader.innerText = PRICE_INFO.symbol;
-        }
-        const priceUnitElement = document.getElementById('price_minor_unit_label');
-        if (priceUnitElement) {
-            priceUnitElement.innerText = PRICE_INFO.minorUnit;
-        }
-        const payEarnHeader = document.querySelector('#discharge_scheduler .table-header .table-cell[title]');
-        if (payEarnHeader) {
-            payEarnHeader.title = `Shows your cost (Pay) and income (Earn) for this time slot. Format: Pay / Earn in ${PRICE_INFO.symbol}.`;
-        }
+        document.getElementById('schedule_currency_symbol').innerText = localization.currency_symbol;
+        document.getElementById('price_minor_unit_label').innerText = `${localization.currency_minor_unit}/kWh`;
+        document.querySelector('#discharge_scheduler .table-header .table-cell[title]').setAttribute(
+            'title',
+            `Shows your cost (Pay) and income (Earn) for this time slot. Format: Pay / Earn in ${localization.currency_symbol}.`
+        );
 
         // clear all entries in div discharge_scheduler
         var tableBody = document.querySelector("#discharge_scheduler .table-body");
@@ -134,7 +128,7 @@ class ScheduleManager {
             const incomeStr = incomeVal.toFixed(2);
             const expenseColor = expenseVal >= 0.005 ? 'lightgray' : 'rgba(131, 131, 131, 1)';
             const incomeColor = incomeVal >= 0.005 ? 'lightgray' : 'rgba(131, 131, 131, 1)';
-            const in_out_text = `<span style="color: ${expenseColor}">${expenseStr} ${PRICE_INFO.symbol}</span> / <span style="color: ${incomeColor}">${incomeStr} ${PRICE_INFO.symbol}</span>`;
+            const in_out_text = `<span style="color: ${expenseColor}">${expenseStr} ${localization.currency_symbol}</span> / <span style="color: ${incomeColor}">${incomeStr} ${localization.currency_symbol}</span>`;
 
             cell2.appendChild(buttonDiv);
             cell2.style.textAlign = "center";

@@ -15,6 +15,7 @@ from flask import Flask, Response, render_template_string, request, send_from_di
 from version import __version__
 from config import ConfigManager
 from log_handler import MemoryLogHandler
+from constants import CURRENCY_SYMBOL_MAP, CURRENCY_MINOR_UNIT_MAP
 from interfaces.base_control import BaseControl
 from interfaces.load_interface import LoadInterface
 from interfaces.battery_interface import BatteryInterface
@@ -1037,44 +1038,6 @@ mqtt_interface.on_mqtt_command = mqtt_control_callback
 # web server
 app = Flask(__name__)
 
-CURRENCY_SYMBOL_MAP = {
-    "EUR": "€",
-    "DKK": "kr",
-    "NOK": "kr",
-    "SEK": "kr",
-    "USD": "$",
-    "GBP": "£",
-    "CHF": "CHF",
-    "CZK": "Kč",
-}
-
-CURRENCY_MINOR_UNIT_MAP = {
-    "EUR": "ct/kWh",
-    "DKK": "øre/kWh",
-    "NOK": "øre/kWh",
-    "SEK": "öre/kWh",
-    "USD": "¢/kWh",
-    "GBP": "p/kWh",
-    "CHF": "Rp./kWh",
-    "CZK": "haléř/kWh",
-}
-
-
-def _render_web_template(filename):
-    with open(
-        os.path.join(base_path, "web", filename), "r", encoding="utf-8"
-    ) as html_file:
-        content = html_file.read()
-    price_currency = price_interface.get_price_currency()
-    price_symbol = CURRENCY_SYMBOL_MAP.get(price_currency, price_currency)
-    minor_unit = CURRENCY_MINOR_UNIT_MAP.get(price_currency, f"{price_currency}/kWh")
-    content = (
-        content.replace("__PRICE_CURRENCY__", price_currency)
-        .replace("__PRICE_CURRENCY_SYMBOL__", price_symbol)
-        .replace("__PRICE_MINOR_UNIT__", minor_unit)
-    )
-    return render_template_string(content)
-
 
 # legacy web site support
 @app.route("/index_legacy.html", methods=["GET"])
@@ -1085,7 +1048,8 @@ def main_page_legacy():
     This function reads the content of the 'index.html' file located in the 'web' directory
     and returns it as a rendered template string.
     """
-    return _render_web_template("index_legacy.html")
+    with open(base_path + "/web/index_legacy.html", "r", encoding="utf-8") as html_file:
+        return render_template_string(html_file.read())
 
 
 # new web site support
@@ -1099,7 +1063,8 @@ def main_page():
     This function reads the content of the 'index.html' file located in the 'web' directory
     and returns it as a rendered template string.
     """
-    return _render_web_template("index.html")
+    with open(base_path + "/web/index.html", "r", encoding="utf-8") as html_file:
+        return render_template_string(html_file.read())
 
 
 @app.route("/js/<filename>")
@@ -1223,6 +1188,10 @@ def get_controls():
     current_inverter_mode = base_control.get_current_overall_state()
     current_inverter_mode_num = base_control.get_current_overall_state_number()
 
+    currency = price_interface.get_price_currency()
+    currency_symbol = CURRENCY_SYMBOL_MAP.get(currency, currency)
+    currency_minor_unit = CURRENCY_MINOR_UNIT_MAP.get(currency, f"{currency}")
+
     response_data = {
         "current_states": {
             "current_ac_charge_demand": current_ac_charge_demand,
@@ -1253,6 +1222,11 @@ def get_controls():
                 and inverter_interface is not None
                 else None
             )
+        },
+        "localization": {
+            "currency": currency,
+            "currency_symbol": currency_symbol,
+            "currency_minor_unit": currency_minor_unit,
         },
         "state": optimization_scheduler.get_current_state(),
         "eos_connect_version": __version__,

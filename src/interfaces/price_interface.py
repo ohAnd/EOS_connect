@@ -36,7 +36,6 @@ import threading
 import requests
 
 
-
 logger = logging.getLogger("__main__")
 logger.info("[PRICE-IF] loading module ")
 
@@ -166,9 +165,14 @@ class PriceInterface:
         """
         # Initial update
         try:
-            self.update_prices(48, datetime.now(self.time_zone).replace(hour=0, minute=0, second=0, microsecond=0))  # Get 48 hours of price data
+            self.update_prices(
+                48,
+                datetime.now(self.time_zone).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ),
+            )  # Get 48 hours of price data
             logger.info("[PRICE-IF] Initial price update completed")
-        except Exception as e:
+        except RuntimeError as e:
             logger.error("[PRICE-IF] Error during initial price update: %s", e)
 
         while not self._stop_event.is_set():
@@ -178,7 +182,12 @@ class PriceInterface:
                     break  # Stop event was set
 
                 # Perform price update
-                self.update_prices(48, datetime.now(self.time_zone).replace(hour=0, minute=0, second=0, microsecond=0))  # Get 48 hours of price data
+                self.update_prices(
+                    48,
+                    datetime.now(self.time_zone).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    ),
+                )  # Get 48 hours of price data
                 logger.debug("[PRICE-IF] Periodic price update completed")
 
             except Exception as e:
@@ -688,7 +697,9 @@ class PriceInterface:
 
         # Catch case where all prices are zero (or data is empty)
         if not any(extended_prices):
-            logger.error("[PRICE-IF] SMARTENERGY_AT API returned only zero prices or empty data.")
+            logger.error(
+                "[PRICE-IF] SMARTENERGY_AT API returned only zero prices or empty data."
+            )
             return []
 
         logger.debug("[PRICE-IF] Prices from SMARTENERGY_AT fetched successfully.")

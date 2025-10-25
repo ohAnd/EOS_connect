@@ -35,12 +35,12 @@ class StatisticsManager {
 
         let currentHour = new Date(data_response["timestamp"]).getHours(); // ✅ Use server time
         let expense_today = expense_data.slice(0, 24 - currentHour).reduce((acc, value) => acc + value, 0).toFixed(2);
-        document.getElementById('expense_summary').innerText = expense_today + " " + PRICE_INFO.symbol;
+        document.getElementById('expense_summary').innerText = expense_today + " " + localization.currency_symbol;
         document.getElementById('expense_summary').title = "Expense for the rest of the day";
 
         // set income for rest of the day
         let income_today = income_data.slice(0, 24 - currentHour).reduce((acc, value) => acc + value, 0).toFixed(2);
-        document.getElementById('income_summary').innerText = income_today + " " + PRICE_INFO.symbol;
+        document.getElementById('income_summary').innerText = income_today + " " + localization.currency_symbol;
         document.getElementById('income_summary').title = "Income for the rest of the day";
 
         // set feed in for rest of the day

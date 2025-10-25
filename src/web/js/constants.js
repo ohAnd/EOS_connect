@@ -58,18 +58,6 @@ const TEST_SCENARIOS = {
 
 let currentTestScenario = TEST_SCENARIOS.LIVE;
 
-const PRICE_INFO = Object.freeze(
-        typeof window !== 'object' ? {
-            currency: "EUR",
-            symbol: "€",
-            minorUnit: "ct/kWh",
-        } :
-        {
-            currency: window.SERVER_PRICE_CURRENCY,
-            symbol: window.SERVER_PRICE_SYMBOL,
-            minorUnit: window.SERVER_PRICE_MINOR,
-        });
-
 // Chart configuration constants
 const CHART_CONFIG = {
     responsive: true,
@@ -109,7 +97,6 @@ if (typeof module !== 'undefined' && module.exports) {
         COLOR_MODE_AVOID_DISCHARGE_EVCC_FAST,
         COLOR_MODE_DISCHARGE_ALLOWED_EVCC_PV,
         COLOR_MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV,
-        CHART_CONFIG,
-        PRICE_INFO,
+        CHART_CONFIG
     };
 }

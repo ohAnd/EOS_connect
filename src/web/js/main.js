@@ -21,6 +21,11 @@ let inverter_mode_num = -1;
 let chartInstance = null;
 let menuControlEventListener = null;
 let data_controls = null; // Global data_controls for use across modules
+let localization = {
+    "currency": "EUR*",
+    "currency_symbol": "\u20ac*",
+    "currency_minor_unit": "ct*"
+}
 
 // Set up chart resize handler
 window.addEventListener('resize', () => {
@@ -90,33 +95,33 @@ async function showCurrentData() {
     document.getElementById('version_overlay').innerText = "EOS connect version: " + data_controls["eos_connect_version"];
 
     const menuElement = document.getElementById('current_header_left');
-    
+
     // Only update menu element if it doesn't have the correct icon already
     const expectedIcon = '<i class="fa-solid fa-bars" style="color: #cccccc;"></i>';
     const currentIcon = menuElement.querySelector('i.fa-solid.fa-bars');
-    
+
     if (!currentIcon || currentIcon.outerHTML !== expectedIcon) {
         // Preserve any existing notification dot
         const existingDot = menuElement.querySelector('.notification-dot');
-        
+
         // Update the icon
         menuElement.innerHTML = expectedIcon;
         menuElement.title = "Menu";
-        
+
         // Restore notification dot if it existed
         if (existingDot) {
             menuElement.appendChild(existingDot);
         }
-        
+
         // Remove any existing event listeners by cloning the element
         const newMenuElement = menuElement.cloneNode(true);
         menuElement.parentNode.replaceChild(newMenuElement, menuElement);
-        
+
         // Add single event listener
         newMenuElement.addEventListener('click', function () {
             showMainMenu(data_controls["eos_connect_version"]);
         });
-        
+
         console.log('[Main] Updated menu element and preserved notification dot');
     }
 }
@@ -177,6 +182,11 @@ async function init() {
         max_charge_power_w = data_request["pv_akku"] && data_request["pv_akku"].hasOwnProperty("max_ladeleistung_w")
             ? data_request["pv_akku"]["max_ladeleistung_w"]
             : data_request["pv_akku"] ? data_request["pv_akku"]["max_charge_power_w"] : 0;
+
+        // localization settings from server
+        localization["currency"] = data_controls["localization"]["currency"] || "EUR*";
+        localization["currency_symbol"] = data_controls["localization"]["currency_symbol"] || "\u20ac*";
+        localization["currency_minor_unit"] = data_controls["localization"]["currency_minor_unit"] || "ct*";
 
         // Initialize controls manager if not done yet (check if it exists first)
         if (typeof controlsManager !== 'undefined' && !controlsManager.initialized) {

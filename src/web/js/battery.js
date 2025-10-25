@@ -67,19 +67,19 @@ class BatteryManager {
             if (nextChargeSummary2) nextChargeSummary2.style.display = "none";
         } else {
             document.getElementById('next_charge_amount').innerText = (next_charge_amount / 1000).toFixed(1) + " kWh";
-            
+
             // Set total price
             const sumPriceElement = document.getElementById('next_charge_sum_price');
             if (sumPriceElement) {
-                sumPriceElement.innerText = total_price.toFixed(2) + " " + PRICE_INFO.symbol;
+                sumPriceElement.innerText = total_price.toFixed(2) + " " + localization.currency_symbol;
             }
-            
+
             // Set average price if element exists
             const avgPriceElement = document.getElementById('next_charge_avg_price');
             if (avgPriceElement && !isNaN(next_charge_avg_price) && isFinite(next_charge_avg_price)) {
-                avgPriceElement.innerText = next_charge_avg_price.toFixed(1) + " " + PRICE_INFO.minorUnit;
+                avgPriceElement.innerText = next_charge_avg_price.toFixed(1) + " " + localization.currency_minor_unit + "/kWh";
             }
-            
+
             // Display charge summary elements
             const nextChargeHeader = document.getElementById('next_charge_header');
             const nextChargeSummary = document.getElementById('next_charge_summary');
