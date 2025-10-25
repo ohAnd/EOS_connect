@@ -94,7 +94,6 @@ class PriceInterface:
     ):
         self.src = config["source"]
         self.access_token = config.get("token", "")
-        self.stromligning_query = config.get("stromligning_url", "")
         self._stromligning_url = None
         self.fixed_price_adder_ct = config.get("fixed_price_adder_ct", 0.0)
         self.relative_price_multiplier = config.get("relative_price_multiplier", 0.0)
@@ -228,25 +227,65 @@ class PriceInterface:
                 "[PRICE-IF] Access token is required for Tibber source but not provided."
                 + " Usiung default price source."
             )
-        if self.src == "stromligning" and not self.stromligning_query:
-            self.src = "default"
-            logger.error(
-                "[PRICE-IF] stromligning_url must be provided when using the Stromligning source. "
-                "Falling back to default prices."
-            )
         if self.src == "stromligning":
-            query_str = (self.stromligning_query or "").strip().lstrip("?&")
-            if not query_str:
+            try:
+                (
+                    supplier_id,
+                    product_id,
+                    customer_group_id,
+                ) = self._parse_stromligning_token(self.access_token)
+            except ValueError as exc:
                 self.src = "default"
                 self._stromligning_url = None
                 logger.error(
-                    "[PRICE-IF] stromligning_url is empty after trimming. "
-                    "Falling back to default prices."
+                    "[PRICE-IF] Invalid Stromligning token: %s. Falling back to default prices.",
+                    exc,
                 )
             else:
-                self._stromligning_url = f"{STROMLIGNING_API_BASE}&{query_str}"
+                query_parts = [
+                    f"productId={product_id}",
+                    f"supplierId={supplier_id}",
+                ]
+                if customer_group_id:
+                    query_parts.append(f"customerGroupId={customer_group_id}")
+                self._stromligning_url = (
+                    f"{STROMLIGNING_API_BASE}&{'&'.join(query_parts)}"
+                )
         else:
             self._stromligning_url = None
+
+    @staticmethod
+    def _parse_stromligning_token(token):
+        """
+        Parses the Stromligning token into its components.
+
+        Args:
+            token (str): The Stromligning token in the format
+                         'supplierId/productId' or 'supplierId/productId/groupId'.
+
+        Returns:
+            tuple: A tuple containing supplierId, productId, and optionally customerGroupId.
+
+        Raises:
+            ValueError: If the token is missing, not a string, or not in the expected format.
+        """
+        if not token or not isinstance(token, str):
+            raise ValueError("token must be provided for Stromligning.")
+
+        parts = [segment.strip() for segment in token.strip().split("/")]
+        if any(part == "" for part in parts):
+            raise ValueError(
+                "token segments must be non-empty when using Stromligning."
+            )
+
+        if len(parts) not in (2, 3):
+            raise ValueError(
+                "token must contain two or three segments separated by '/'."
+            )
+
+        supplier_id, product_id = parts[0], parts[1]
+        customer_group_id = parts[2] if len(parts) == 3 else None
+        return supplier_id, product_id, customer_group_id
 
     def update_prices(self, tgt_duration, start_time=None):
         """

@@ -63,8 +63,7 @@ class ConfigManager:
                 "price": CommentedMap(
                     {
                         "source": "default",
-                        "token": "tibberBearerToken",  # token for electricity price
-                        "stromligning_url": "productId=velkommen_gron_el&supplierId=radius_c&customerGroupId=c",
+                        "token": "tibberBearerToken",  # token for electricity price (e.g. Tibber bearer token or Stromligning supplier/product/group)
                         "fixed_price_adder_ct": 0.0,  # Describes the fixed cost addition in ct per kWh.
                         "relative_price_multiplier": 0.00,  # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
                         # 24 hours array with fixed end customer prices in ct/kWh over the day
@@ -211,10 +210,9 @@ class ConfigManager:
             + " fixed_24h, default (default uses akkudoktor)",
             "source",
         )
-        config["price"].yaml_add_eol_comment("Token for electricity price", "token")
         config["price"].yaml_add_eol_comment(
-            "Query parameters for Stromligning source (e.g. productId=...&supplierId=...)",
-            "stromligning_url",
+            "Token for electricity price. For Stromligning use supplierId/productId[/groupId].",
+            "token",
         )
         config["price"].yaml_add_eol_comment(
             "fixed cost addition in ct per kWh", "fixed_price_adder_ct"

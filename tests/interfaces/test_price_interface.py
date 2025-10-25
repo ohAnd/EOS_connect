@@ -66,7 +66,7 @@ def test_stromligning_hourly_aggregation(monkeypatch):
     price_interface = PriceInterface(
         {
             "source": "stromligning",
-            "stromligning_url": "productId=velkommen_gron_el&supplierId=radius_c&customerGroupId=c",
+            "token": "radius_c/velkommen_gron_el/c",
             "feed_in_price": 0,
             "negative_price_switch": False,
         },
@@ -93,3 +93,68 @@ def test_stromligning_hourly_aggregation(monkeypatch):
         expected_hourly_prices, rel=1e-9
     )
     assert price_interface.get_current_feedin_prices() == [0.0] * 4
+
+
+@pytest.mark.parametrize(
+    "token,expected_query",
+    [
+        (
+            "radius_c/velkommen_gron_el/c",
+            "productId=velkommen_gron_el&supplierId=radius_c&customerGroupId=c",
+        ),
+        (
+            "nke-elnet/forsyningen",
+            "productId=forsyningen&supplierId=nke-elnet",
+        ),
+    ],
+)
+def test_stromligning_token_parsing(monkeypatch, token, expected_query):
+    monkeypatch.setattr(
+        PriceInterface,
+        "_PriceInterface__start_update_service",
+        lambda self: None,
+    )
+
+    price_interface = PriceInterface(
+        {
+            "source": "stromligning",
+            "token": token,
+            "feed_in_price": 0,
+            "negative_price_switch": False,
+        },
+        timezone=timezone.utc,
+    )
+
+    assert price_interface._stromligning_url == (
+        f"{STROMLIGNING_API_BASE}&{expected_query}"
+    )
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "",
+        "radius_c",
+        "radius_c/velkommen_gron_el/extra/segment",
+        "radius_c//velkommen_gron_el",
+    ],
+)
+def test_stromligning_token_parsing_invalid(monkeypatch, token):
+    monkeypatch.setattr(
+        PriceInterface,
+        "_PriceInterface__start_update_service",
+        lambda self: None,
+    )
+
+    price_interface = PriceInterface(
+        {
+            "source": "stromligning",
+            "token": token,
+            "feed_in_price": 0,
+            "negative_price_switch": False,
+        },
+        timezone=timezone.utc,
+    )
+
+    assert price_interface.src == "default"
+    assert price_interface._stromligning_url is None
