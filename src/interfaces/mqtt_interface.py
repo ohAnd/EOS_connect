@@ -97,11 +97,11 @@ class MqttInterface:
                     "{% elif value == '-1' %}StartUp"
                     "{% elif value == '0' %}Charge from Grid"
                     "{% elif value == '1' %}Avoid Discharge"
-                    "{% elif value == '2' %}Discharge Allowed"
-                    "{% elif value == '3' %}Avoid Discharge EVCC FAST"
-                    "{% elif value == '4' %}Avoid Discharge EVCC PV"
-                    "{% elif value == '5' %}Avoid Discharge EVCC MIN+PV"
-                    "{% else %}Unknown{% endif %}"
+                    "{% elif value >= '2' %}Discharge Allowed"
+                    # "{% elif value == '3' %}Avoid Discharge EVCC FAST"
+                    # "{% elif value == '4' %}Avoid Discharge EVCC PV"
+                    # "{% elif value == '5' %}Avoid Discharge EVCC MIN+PV"
+                    # "{% else %}Unknown{% endif %}"
                 ),
                 "command_template": (
                     "{% if value == 'Auto' %}-2"
@@ -114,6 +114,7 @@ class MqttInterface:
                     "{% else %}2{% endif %}"
                 ),
                 "options": [
+                    "StartUp",
                     "Charge from Grid",
                     "Avoid Discharge",
                     "Discharge Allowed",
