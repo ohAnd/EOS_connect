@@ -128,7 +128,7 @@ class ScheduleManager {
             const incomeStr = incomeVal.toFixed(2);
             const expenseColor = expenseVal >= 0.005 ? 'lightgray' : 'rgba(131, 131, 131, 1)';
             const incomeColor = incomeVal >= 0.005 ? 'lightgray' : 'rgba(131, 131, 131, 1)';
-            const in_out_text = `<span style="color: ${expenseColor}">${expenseStr} ${localization.currency_symbol}</span> / <span style="color: ${incomeColor}">${incomeStr} ${localization.currency_symbol}</span>`;
+            const in_out_text = `<span style="color: ${expenseColor}">${expenseStr}</span> / <span style="color: ${incomeColor}">${incomeStr}</span>`;
 
             cell2.appendChild(buttonDiv);
             cell2.style.textAlign = "center";
