@@ -97,6 +97,8 @@ class ScheduleManager {
                     buttonDiv.innerHTML = " <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[2].icon + "'></i> ";
                 } else if (inverter_mode_num === 5) { //MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV
                     buttonDiv.innerHTML = " <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[2].icon + "'></i> ";
+                } else if (inverter_mode_num === 6) { //MODE_CHARGE_FROM_GRID_EVCC_FAST
+                    buttonDiv.innerHTML = " <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[0].icon + "'></i> ";
                 }
             }
             // 30 minutes in seconds = 30 * 60 = 1800

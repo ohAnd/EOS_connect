@@ -29,6 +29,11 @@
             "FANCONTROL_PERCENT_02_F32": 10.1
         }
     },
+    "localization": {
+        "currency": "EUR",
+        "currency_symbol": "\u20ac",
+        "currency_minor_unit": "ct"
+    },
     "state": {
         "request_state": "response received",
         "last_request_timestamp": "2024-10-03T14:29:45.123Z",

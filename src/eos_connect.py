@@ -1140,6 +1140,17 @@ def change_control_state():
                 "[Main] Inverter mode set to %s (_____+-+-+_____)",
                 current_overall_state_text,
             )
+        # MODE_CHARGE_FROM_GRID_EVCC_FAST
+        elif current_overall_state == 6:
+            if inverter_fronius_en:
+                inverter_interface.set_mode_force_charge(tgt_ac_charge_power)
+            elif inverter_evcc_en:
+                evcc_interface.set_external_battery_mode("force_charge")
+            logger.info(
+                "[Main] Inverter mode set to %s with %s W (_____|---|_____)",
+                current_overall_state_text,
+                tgt_ac_charge_power,
+            )
         elif current_overall_state < 0:
             logger.warning("[Main] Inverter mode not initialized yet")
         return True

@@ -18,6 +18,7 @@ MODE_DISCHARGE_ALLOWED = 2
 MODE_AVOID_DISCHARGE_EVCC_FAST = 3
 MODE_DISCHARGE_ALLOWED_EVCC_PV = 4
 MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV = 5
+MODE_CHARGE_FROM_GRID_EVCC_FAST = 6
 
 state_mapping = {
     -2: "BACK TO AUTO",
@@ -28,6 +29,7 @@ state_mapping = {
     3: "MODE AVOID DISCHARGE EVCC FAST",
     4: "MODE DISCHARGE ALLOWED EVCC PV",
     5: "MODE DISCHARGE ALLOWED EVCC MIN+PV",
+    6: "MODE CHARGE FROM GRID EVCC FAST",
 }
 
 
@@ -290,6 +292,8 @@ class BaseControl:
                 self.clear_mode_override()
                 return
             return
+
+        # Determine base state
         if self.current_ac_charge_demand > 0:
             new_state = MODE_CHARGE_FROM_GRID
         elif self.current_discharge_allowed > 0:
@@ -298,107 +302,79 @@ class BaseControl:
             new_state = MODE_AVOID_DISCHARGE
         else:
             new_state = -1
-        # check if the grid charge demand has changed
-        grid_charge_value_changed = (
-            self.current_ac_charge_demand != self.last_ac_charge_demand
-        )
-        dc_charge_value_changed = (
-            self.current_dc_charge_demand != self.last_dc_charge_demand
-        )
-        bat_charge_max_value_changed = (
-            self.current_bat_charge_max != self.last_bat_charge_max
-        )
 
-        # override overall state if EVCC charging state is active and
-        # in mode fast charge and discharge is allowed
-        if (
-            # new_state == MODE_DISCHARGE_ALLOWED
-            # and
-            self.current_evcc_charging_state
-            and self.current_evcc_charging_mode
-            in (
-                "now",
-                "pv+now",
-                "minpv+now",
-                "pv+plan",
-                "minpv+plan",
-            )
-        ):
-            new_state = MODE_AVOID_DISCHARGE_EVCC_FAST
-            if self.current_overall_state != new_state:
-                logger.info(
-                    "[BASE-CTRL] EVCC charging state is active,"
-                    + " setting overall state to MODE_AVOID_DISCHARGE_EVCC_FAST"
-                )
+        # EVCC override mapping
+        evcc_override = {
+            "now": MODE_AVOID_DISCHARGE_EVCC_FAST,
+            "pv+now": MODE_AVOID_DISCHARGE_EVCC_FAST,
+            "minpv+now": MODE_AVOID_DISCHARGE_EVCC_FAST,
+            "pv+plan": MODE_AVOID_DISCHARGE_EVCC_FAST,
+            "minpv+plan": MODE_AVOID_DISCHARGE_EVCC_FAST,
+            "pv": MODE_DISCHARGE_ALLOWED_EVCC_PV,
+            "minpv": MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV,
+        }
 
-        # override overall state if EVCC charging state is active and
-        # in mode pv charge and discharge is allowed
-        if (
-            # new_state == MODE_DISCHARGE_ALLOWED
-            # and
-            self.current_evcc_charging_state
-            and self.current_evcc_charging_mode == "pv"
-        ):
-            new_state = MODE_DISCHARGE_ALLOWED_EVCC_PV
-            if self.current_overall_state != new_state:
-                logger.info(
-                    "[BASE-CTRL] EVCC charging state is active,"
-                    + " setting overall state to MODE_DISCHARGE_ALLOWED_EVCC_PV"
-                )
+        if self.current_evcc_charging_state:
+            mode = self.current_evcc_charging_mode
+            if mode in evcc_override:
+                # Fast charge overrides grid charge
+                if new_state == MODE_CHARGE_FROM_GRID and mode in (
+                    "now",
+                    "pv+now",
+                    "minpv+now",
+                    "pv+plan",
+                    "minpv+plan",
+                ):
+                    new_state = MODE_CHARGE_FROM_GRID_EVCC_FAST
+                    if self.current_overall_state != new_state:
+                        logger.info(
+                            "[BASE-CTRL] EVCC charging state is active, setting overall state to MODE_CHARGE_FROM_GRID_EVCC_FAST"
+                        )
+                else:
+                    new_state = evcc_override[mode]
+                    if self.current_overall_state != new_state:
+                        logger.info(
+                            "[BASE-CTRL] EVCC charging state is active, setting overall state to %s",
+                            state_mapping.get(new_state, "unknown state"),
+                        )
 
-        # override overall state if EVCC charging state is active and
-        # in mode pv charge and discharge is allowed
-        if (
-            # new_state == MODE_DISCHARGE_ALLOWED
-            # and
-            self.current_evcc_charging_state
-            and self.current_evcc_charging_mode == "minpv"
-        ):
-            new_state = MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV
-            if self.current_overall_state != new_state:
-                logger.info(
-                    "[BASE-CTRL] EVCC charging state is active,"
-                    + " setting overall state to MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV"
-                )
+        # Check for changes
+        changes = [
+            (
+                "AC charge demand",
+                self.current_ac_charge_demand,
+                self.last_ac_charge_demand,
+            ),
+            (
+                "DC charge demand",
+                self.current_dc_charge_demand,
+                self.last_dc_charge_demand,
+            ),
+            (
+                "Battery charge max",
+                self.current_bat_charge_max,
+                self.last_bat_charge_max,
+            ),
+        ]
+        value_changed = any(curr != last for _, curr, last in changes)
 
-        if (
-            new_state != self.current_overall_state
-            or grid_charge_value_changed
-            or dc_charge_value_changed
-            or bat_charge_max_value_changed
-        ):
+        if new_state != self.current_overall_state or value_changed:
             self._state_change_timestamps.append(time.time())
-            # Limit the size of the state change timestamps to avoid memory overrun
-            max_timestamps = 1000  # Adjust this value as needed
-            if len(self._state_change_timestamps) > max_timestamps:
+            if len(self._state_change_timestamps) > 1000:
                 self._state_change_timestamps.pop(0)
-            if grid_charge_value_changed:
-                logger.info(
-                    "[BASE-CTRL] AC charge demand changed to %s W",
-                    self.current_ac_charge_demand,
-                )
-            elif dc_charge_value_changed:
-                logger.info(
-                    "[BASE-CTRL] DC charge demand changed to %s W",
-                    self.current_dc_charge_demand,
-                )
-            elif bat_charge_max_value_changed:
-                logger.info(
-                    "[BASE-CTRL] Battery charge max changed to %s W",
-                    self.current_bat_charge_max,
-                )
-            else:
+            for name, curr, last in changes:
+                if curr != last:
+                    logger.info("[BASE-CTRL] %s changed to %s W", name, curr)
+            if not value_changed:
                 logger.debug(
                     "[BASE-CTRL] overall state changed to %s",
                     state_mapping.get(new_state, "unknown state"),
                 )
-        # store the last AC charge demand for comparison
-        self.last_ac_charge_demand = self.current_ac_charge_demand
-        # store the last DC charge demand for comparison
-        self.last_dc_charge_demand = self.current_dc_charge_demand
-        # store the last battery charge max for comparison
-        self.last_bat_charge_max = self.current_bat_charge_max
 
+        # Update last values and state
+        self.last_ac_charge_demand = self.current_ac_charge_demand
+        self.last_dc_charge_demand = self.current_dc_charge_demand
+        self.last_bat_charge_max = self.current_bat_charge_max
         self.current_overall_state = new_state
 
     def set_current_battery_soc(self, value):
