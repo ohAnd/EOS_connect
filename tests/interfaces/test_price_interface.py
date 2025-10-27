@@ -1,11 +1,17 @@
+"""Tests for the Stromligning price interface integration."""
+
 from datetime import datetime, timezone
 
 import pytest
 
 from src.interfaces.price_interface import PriceInterface, STROMLIGNING_API_BASE
 
+# Accessing protected members is fine in white-box tests.
+# pylint: disable=protected-access
+
 
 def _build_sample_response():
+    """Create a minimal Stromligning payload fixture."""
     # First 16 entries (4 hours) from sample_response.json
     base = [
         ("2025-10-20T22:00:00.000Z", 2.132412),
@@ -29,6 +35,8 @@ def _build_sample_response():
 
 
 class DummyResponse:
+    """Minimal requests.Response stub for tests."""
+
     def __init__(self, payload):
         self._payload = payload
 
@@ -48,6 +56,7 @@ def test_stromligning_hourly_aggregation(monkeypatch):
     )
 
     def fake_get(url, headers=None, timeout=None):
+        # pylint: disable=unused-argument
         assert url.startswith(f"{expected_url}&forecast=true&to=")
         to_segment = url.split("&to=", 1)[1]
         datetime.strptime(to_segment, "%Y-%m-%dT%H:%M")
@@ -109,6 +118,7 @@ def test_stromligning_hourly_aggregation(monkeypatch):
     ],
 )
 def test_stromligning_token_parsing(monkeypatch, token, expected_query):
+    """Validate that the token config param for Stromligning becomes the expected query string."""
     monkeypatch.setattr(
         PriceInterface,
         "_PriceInterface__start_update_service",
@@ -140,6 +150,7 @@ def test_stromligning_token_parsing(monkeypatch, token, expected_query):
     ],
 )
 def test_stromligning_token_parsing_invalid(monkeypatch, token):
+    """Invalid token value for Stromligning should trigger the default price source."""
     monkeypatch.setattr(
         PriceInterface,
         "_PriceInterface__start_update_service",
