@@ -93,10 +93,20 @@ A default config file will be created with the first start, if there is no `conf
 **Important: All price values must use the same base - either all prices include taxes and fees, or all prices exclude taxes and fees. Mixing different bases will lead to incorrect optimization results.**
 
 - **`price.source`**:  
-  Data source for electricity prices. Possible values: `tibber`, `smartenergy_at`,`fixed_24h`,`default` (default uses akkudoktor API).
+  Data source for electricity prices. Possible values: `tibber`, `smartenergy_at`, `stromligning`, `fixed_24h`, `default` (default uses akkudoktor API).
 
 - **`price.token`**:  
   Token for accessing electricity price data. (If not needed, set to `token: ""`)
+
+  When used with **Tibber**:
+
+  Provide your token
+
+  When used with **Strømligning**:
+  - Use the format: `supplierId/productId[/customerGroupId]` (customer group is optional).  
+    - Example with customer group: `radius_c/velkommen_gron_el/c`  
+    - Example without customer group: `nke-elnet/forsyningen`  
+  - You can find the appropriate values on the [Strømligning live page](https://stromligning.dk/live) or via the [API docs](https://stromligning.dk/api/docs/swagger.json#/Prices/get_api_prices). On the site, select the desired "netselskab" and supplier/product; copy the `netselskab` part to `supplierId`, the `produkt` part to `productId`, and the optional group to `customerGroupId`.
 
 - **`fixed_price_adder_ct`**:
   Describes the fixed cost addition in ct per kWh. Only applied to source default (akkudoktor).
@@ -384,8 +394,8 @@ eos:
   timeout: 180 # timeout for EOS optimize request in seconds - default: 180
 # Electricity price configuration
 price:
-  source: default  # data source for electricity price tibber, smartenergy_at, fixed_24h, default (default uses akkudoktor)
-  token: tibberBearerToken # Token for electricity price
+  source: default  # data source for electricity price tibber, smartenergy_at, stromligning, fixed_24h, default (default uses akkudoktor)
+  token: tibberBearerToken # Token for electricity price (for Stromligning use supplierId/productId[/customerGroupId])
   fixed_price_adder_ct: 2.5 # Describes the fixed cost addition in ct per kWh.
   relative_price_multiplier: 0.05 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
   fixed_24h_array: 10.41, 10.42, 10.42, 10.42, 10.42, 23.52, 28.17, 28.17, 28.17, 28.17, 28.17, 23.52, 23.52, 23.52, 23.52, 28.17, 28.17, 34.28, 34.28, 34.28, 34.28, 34.28, 28.17, 23.52 # 24 hours array with fixed prices over the day
@@ -465,7 +475,8 @@ eos:
   timeout: 180 # timeout for EOS optimize request in seconds - default: 180
 # Electricity price configuration
 price:
-  source: default  # data source for electricity price tibber, smartenergy_at, fixed_24h, default (default uses akkudoktor)
+  source: default  # data source for electricity price tibber, smartenergy_at, stromligning, fixed_24h, default (default uses akkudoktor)
+  token: "" # Provide Tibber token or Stromligning supplierId/productId[/customerGroupId] when needed
   fixed_price_adder_ct: 0 # Describes the fixed cost addition in ct per kWh.
   relative_price_multiplier: 0 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
 # battery configuration
