@@ -93,36 +93,42 @@ class MqttInterface:
                 "device_class": None,
                 "icon": "mdi:state-machine",
                 "value_template": (
-                    "{% if value == '-2' %}Auto"
-                    "{% elif value == '-1' %}StartUp"
-                    "{% elif value == '0' %}Charge from Grid"
-                    "{% elif value == '1' %}Avoid Discharge"
-                    "{% elif value >= '2' %}Discharge Allowed"
-                    # "{% elif value == '3' %}Avoid Discharge EVCC FAST"
-                    # "{% elif value == '4' %}Avoid Discharge EVCC PV"
-                    # "{% elif value == '5' %}Avoid Discharge EVCC MIN+PV"
-                    # "{% else %}Unknown{% endif %}"
+                    "{% set v = value|int %}"
+                    "{% if v == -2 %}Auto"
+                    "{% elif v == -1 %}StartUp"
+                    "{% elif v == 0 %}Charge from Grid"
+                    "{% elif v == 1 %}Avoid Discharge"
+                    "{% elif v == 2 %}Discharge Allowed"
+                    "{% elif v == 3 %}Avoid Discharge EVCC FAST"
+                    "{% elif v == 4 %}Avoid Discharge EVCC PV"
+                    "{% elif v == 5 %}Avoid Discharge EVCC MIN+PV"
+                    "{% elif v == 6 %}Charge from Grid EVCC FAST"
+                    "{% else %}Unknown{% endif %}"
                 ),
                 "command_template": (
-                    "{% if value == 'Auto' %}-2"
-                    "{% elif value == 'Charge from Grid' %}0"
-                    "{% elif value == 'Avoid Discharge' %}1"
-                    "{% elif value == 'Discharge Allowed' %}2"
-                    # "{% elif value == 'Avoid Discharge EVCC FAST' %}3"
-                    # "{% elif value == 'Avoid Discharge EVCC PV' %}4"
-                    # "{% elif value == 'Avoid Discharge EVCC MIN+PV' %}5"
-                    "{% else %}2{% endif %}"
+                    "{% set labels = {"
+                    "'Auto': -2, "
+                    "'StartUp': -2, "
+                    "'Charge from Grid': 0, "
+                    "'Avoid Discharge': 1, "
+                    "'Discharge Allowed': 2, "
+                    "'Avoid Discharge EVCC FAST': -2, "
+                    "'Avoid Discharge EVCC PV': -2, "
+                    "'Avoid Discharge EVCC MIN+PV': -2, "
+                    "'Charge from Grid EVCC FAST': -2"
+                    "} %}"
+                    "{% if value is not none and (value|int(0)|string) == (value|string) %}{{ value|int(0) }}{% elif value in labels %}{{ labels[value] }}{% else %}-2{% endif %}"
                 ),
                 "options": [
+                    "Auto",
                     "StartUp",
                     "Charge from Grid",
                     "Avoid Discharge",
                     "Discharge Allowed",
-                    # "Avoid Discharge EVCC FAST",
-                    # "Avoid Discharge EVCC PV",
-                    # "Avoid Discharge EVCC MIN+PV",
-                    "Auto",
-                    # "StartUp"
+                    "Avoid Discharge EVCC FAST",
+                    "Avoid Discharge EVCC PV",
+                    "Avoid Discharge EVCC MIN+PV",
+                    "Charge from Grid EVCC FAST",
                 ],
             },
             "control/eos_ac_charge_demand": {
