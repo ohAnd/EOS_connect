@@ -1059,7 +1059,9 @@ class PvInterface:
 
         def request_func():
             response = requests.get(url, params=params, headers=headers, timeout=15)
-            logger.debug("[PV-IF] Solcast API response status: %d", response.status_code)
+            logger.debug(
+                "[PV-IF] Solcast API response status: %d", response.status_code
+            )
             if response.status_code == 429:
                 raise requests.exceptions.RequestException("rate_limit")
             elif response.status_code == 403:

@@ -97,6 +97,8 @@ class ScheduleManager {
                     buttonDiv.innerHTML = " <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[2].icon + "'></i> ";
                 } else if (inverter_mode_num === 5) { //MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV
                     buttonDiv.innerHTML = " <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[2].icon + "'></i> ";
+                } else if (inverter_mode_num === 6) { //MODE_CHARGE_FROM_GRID_EVCC_FAST
+                    buttonDiv.innerHTML = " <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[0].icon + "'></i> ";
                 }
             }
             // 30 minutes in seconds = 30 * 60 = 1800
@@ -128,7 +130,7 @@ class ScheduleManager {
             const incomeStr = incomeVal.toFixed(2);
             const expenseColor = expenseVal >= 0.005 ? 'lightgray' : 'rgba(131, 131, 131, 1)';
             const incomeColor = incomeVal >= 0.005 ? 'lightgray' : 'rgba(131, 131, 131, 1)';
-            const in_out_text = `<span style="color: ${expenseColor}">${expenseStr} ${localization.currency_symbol}</span> / <span style="color: ${incomeColor}">${incomeStr} ${localization.currency_symbol}</span>`;
+            const in_out_text = `<span style="color: ${expenseColor}">${expenseStr}</span> / <span style="color: ${incomeColor}">${incomeStr}</span>`;
 
             cell2.appendChild(buttonDiv);
             cell2.style.textAlign = "center";
