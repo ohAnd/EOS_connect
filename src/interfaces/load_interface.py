@@ -234,10 +234,27 @@ class LoadInterface:
         try:
             historical_data = response.json()
             filtered_data = [
-                {"state": entry["state"], "last_updated": entry["last_updated"]}
+                {
+                    "state": entry["state"],
+                    "last_updated": entry["last_updated"],
+                    "attributes": entry.get("attributes", {}),
+                }
                 for sublist in historical_data
                 for entry in sublist
             ]
+            # check if the data are delivered with unit kW and convert to W
+            if (
+                filtered_data
+                and "attributes" in filtered_data[0]
+                and "unit_of_measurement" in filtered_data[0]["attributes"]
+            ):
+                unit = filtered_data[0]["attributes"]["unit_of_measurement"]
+                if unit == "kW":
+                    for entry in filtered_data:
+                        try:
+                            entry["state"] = float(entry["state"]) * 1000
+                        except ValueError:
+                            continue
             return filtered_data
         except (ValueError, KeyError, TypeError) as e:
             logger.error(
