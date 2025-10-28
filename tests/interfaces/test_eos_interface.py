@@ -88,7 +88,12 @@ def test_calculate_next_run_time_combinations(
     Test the algorithm's actual behavior without trying to predict the exact timing.
     Just validate that the output is reasonable and consistent.
     """
-    ei = EosInterface("localhost", 1234, None)
+    config = {
+        "source": "eos_server",
+        "server": "localhost",
+        "port": 8503,
+    }
+    ei = EosInterface(config, None)
     ei.is_first_run = is_first_run
 
     start = time.perf_counter()
@@ -150,8 +155,12 @@ def test_calculate_next_run_time_patterns(scenario):
     Test patterns over multiple runs without being too prescriptive about exact behavior.
     """
     current_time, update_interval, avg_runtime, expected_pattern = scenario
-
-    ei = EosInterface("localhost", 1234, None)
+    config = {
+        "source": "eos_server",
+        "server": "localhost",
+        "port": 8503,
+    }
+    ei = EosInterface(config, None)
 
     # Simulate multiple runs to see the pattern
     runs = []
@@ -216,7 +225,12 @@ def test_simulation_over_time():
     """
     Show how the algorithm behaves over several consecutive runs.
     """
-    ei = EosInterface("localhost", 1234, None)
+    config = {
+        "source": "eos_server",
+        "server": "localhost",
+        "port": 8503,
+    }
+    ei = EosInterface(config, None)
 
     scenarios = [
         ("1min", 60),

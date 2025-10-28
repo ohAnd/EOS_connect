@@ -1,8 +1,8 @@
 # EOS Connect
 
 **EOS Connect** is an open-source tool for intelligent energy management and optimization.  
-It connects to various smart home platforms (like Home Assistant and OpenHAB) to monitor, forecast, and control your energy flows.  
-EOS Connect fetches real-time and forecast data (PV, load, prices), processes it via the [EOS (Energy Optimization System)](https://github.com/Akkudoktor-EOS/EOS), and automatically controls devices (such as Fronius inverters or batteries supported by [evcc](https://docs.evcc.io/docs/devices/meters)) to optimize your energy usage and costs.
+It supports two optimization backends: the full-featured Akkudoktor EOS (default) and the lightweight EVCC Opt (optional, very fast).  
+EOS Connect fetches real-time and forecast data, processes it via your chosen optimizer, and controls devices to optimize your energy usage and costs.
 
 **Key Features:**
 - **Automated Energy Optimization:**  
