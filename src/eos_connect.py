@@ -107,8 +107,7 @@ logger.info(
 )
 # initialize eos interface
 eos_interface = EosInterface(
-    eos_server=config_manager.config["eos"]["server"],
-    eos_port=config_manager.config["eos"]["port"],
+    config=config_manager.config["eos"],
     timezone=time_zone,
 )
 # initialize base control
