@@ -635,8 +635,6 @@ class EosInterface:
         with open(debug_path, "w", encoding="utf-8") as fh:
             json.dump(evcc_opt_request, fh, indent=2, ensure_ascii=False)
         payload = evcc_opt_request
-        # -> http://homeassistant:7050/optimize/charge-schedule
-        self.base_url = "http://homeassistant:7050"
         request_url = self.base_url + "/optimize/charge-schedule"
         logger.info(
             "[EOS] EVCC OPT request optimization with: %s - and with timeout: %s",
