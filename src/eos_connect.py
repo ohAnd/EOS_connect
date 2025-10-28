@@ -1363,6 +1363,9 @@ def get_controls():
             "currency_minor_unit": currency_minor_unit,
         },
         "state": optimization_scheduler.get_current_state(),
+        "used_optimization_source": config_manager.config.get("eos", {}).get(
+            "source", "eos_server"
+        ),
         "eos_connect_version": __version__,
         "timestamp": datetime.now(time_zone).isoformat(),
         "api_version": "0.0.2",
