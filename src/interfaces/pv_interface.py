@@ -148,49 +148,107 @@ class PvInterface:
                         + " CONFIG_README.md for setup instructions"
                     )
 
+                if config_entry.get("azimuth") is None:
+                    config_entry["azimuth"] = 0
+                    logger.debug(
+                        "[PV-IF] Solcast config - setting default azimuth for '%s'",
+                        entry_name,
+                    )
+                if config_entry.get("tilt") is None:
+                    config_entry["tilt"] = 0
+                    logger.debug(
+                        "[PV-IF] Solcast config - setting default tilt for '%s'",
+                        entry_name,
+                    )
+
                 logger.debug("[PV-IF] Solcast config validated for '%s'", entry_name)
+            # lat, long - only evcc not required
+            missing = []
+            if config_entry.get("lat") is None:
+                missing.append("lat")
+            if config_entry.get("lon") is None:
+                missing.append("lon")
+            if missing:
+                raise ValueError(
+                    "[PV-IF] Missing required parameters "
+                    + f"for '{entry_name}': {', '.join(missing)}"
+                )
+            # azimuth, tilt - only solcast and evcc not required but have defaults
+            if self.config_source.get("source") in ("solcast", "evcc"):
+                if config_entry.get("azimuth") is None:
+                    config_entry["azimuth"] = 0
+                    logger.debug(
+                        "[PV-IF] Solcast config - setting default azimuth for '%s'",
+                        entry_name,
+                    )
+                if config_entry.get("tilt") is None:
+                    config_entry["tilt"] = 0
+                    logger.debug(
+                        "[PV-IF] Solcast config - setting default tilt for '%s'",
+                        entry_name,
+                    )
             else:
-                # Standard parameter validation for other sources
                 missing = []
-                if config_entry.get("lat") is None:
-                    missing.append("lat")
-                if config_entry.get("lon") is None:
-                    missing.append("lon")
                 if config_entry.get("azimuth") is None:
                     missing.append("azimuth")
                 if config_entry.get("tilt") is None:
                     missing.append("tilt")
-
                 if missing:
-                    logger.error(
-                        "[PV-IF] Missing parameters for '%s': %s",
-                        entry_name,
-                        ", ".join(missing),
-                    )
                     raise ValueError(
                         "[PV-IF] Missing required parameters "
                         + f"for '{entry_name}': {', '.join(missing)}"
                     )
+            # power - only evcc not required
+            if self.config_source.get("source") not in ("evcc", "solcast"):
+                missing_common = []
+                if config_entry.get("power") is None:
+                    missing_common.append("power")
+                if missing_common:
+                    raise ValueError(
+                        "[PV-IF] Missing required parameters"
+                        + f" for '{entry_name}': {', '.join(missing_common)}"
+                    )
+            else:  # to get a working temperature forecast we set dummy values here
+                config_entry["power"] = 0
+            # powerInverter, inverterEfficiency - only evcc, forecast_solar not required
+            if self.config_source.get("source") not in (
+                "evcc",
+                "forecast_solar",
+                "solcast",
+            ):
+                missing_common = []
+                if config_entry.get("powerInverter") is None:
+                    missing_common.append("powerInverter")
+                if config_entry.get("inverterEfficiency") is None:
+                    missing_common.append("inverterEfficiency")
 
-            # Common parameters for all sources
-            missing_common = []
-            if config_entry.get("power") is None:
-                missing_common.append("power")
-            if config_entry.get("powerInverter") is None:
-                missing_common.append("powerInverter")
-            if config_entry.get("inverterEfficiency") is None:
-                missing_common.append("inverterEfficiency")
+                if missing_common:
+                    raise ValueError(
+                        "[PV-IF] Missing required parameters"
+                        + f" for '{entry_name}': {', '.join(missing_common)}"
+                    )
+            else:  # to get a working temperature forecast we set dummy values here
+                config_entry["powerInverter"] = 0
+                config_entry["inverterEfficiency"] = 0
 
-            if missing_common:
-                logger.error(
-                    "[PV-IF] Missing common parameters for '%s': %s",
-                    entry_name,
-                    ", ".join(missing_common),
-                )
-                raise ValueError(
-                    "[PV-IF] Missing required parameters"
-                    + f" for '{entry_name}': {', '.join(missing_common)}"
-                )
+            # horizon parameter check for specific sources
+            if self.config_source.get("source") in [
+                "openmeteo_local",
+                "forecast_solar",
+            ]:
+                for config_entry in self.config:
+                    if "horizon" not in config_entry or not config_entry["horizon"]:
+                        logger.warning(
+                            "[PV-IF] 'horizon' parameter missing for '%s' "
+                            + "- using default (no shading)",
+                            config_entry.get("name", "unnamed"),
+                        )
+                        # For forecast_solar, default is 24 values
+                        config_entry["horizon"] = [0] * (
+                            24
+                            if self.config_source.get("source") == "forecast_solar"
+                            else 36
+                        )
 
     def __start_update_service(self):
         """
@@ -296,7 +354,7 @@ class PvInterface:
         Creates a forecast request URL for the EOS server.
         """
         horizon_string = ""
-        if pv_config_entry["horizon"] != "":
+        if pv_config_entry.get("horizon", "") != "":
             horizon_string = "&horizont=" + str(pv_config_entry["horizon"])
         return (
             EOS_API_GET_PV_FORECAST
@@ -543,39 +601,39 @@ class PvInterface:
                 "akkudoktor",
             )
 
-    def __get_horizon_elevation(self, sun_azimuth, horizon):
+    def __get_horizon_elevation(self, sun_azimuth, horizon_for_elev):
 
-        if not horizon or len(horizon) == 0:
-            horizon = [0] * 36
+        if not horizon_for_elev or len(horizon_for_elev) == 0:
+            horizon_for_elev = [0] * 36
 
-        # Normalize horizon string to a list of integers (handle '50t0.4' as 50)
-        if isinstance(horizon, str):
-            horizon = [
+        # Normalize horizon_for_elev string to a list of integers (handle '50t0.4' as 50)
+        if isinstance(horizon_for_elev, str):
+            horizon_for_elev = [
                 int(float(x.split("t")[0])) if "t" in x else int(float(x))
-                for x in horizon.split(",")
+                for x in horizon_for_elev.split(",")
                 if x.strip()
             ]
         else:
-            horizon = [int(float(x)) for x in horizon]
-        # Expand horizon to 36 values by linear interpolation if needed
-        if len(horizon) != 36:
+            horizon_for_elev = [int(float(x)) for x in horizon_for_elev]
+        # Expand horizon_for_elev to 36 values by linear interpolation if needed
+        if len(horizon_for_elev) != 36:
             # Interpolate to 36 values (full circle)
-            x_old = np.linspace(0, 360, num=len(horizon), endpoint=False)
+            x_old = np.linspace(0, 360, num=len(horizon_for_elev), endpoint=False)
             x_new = np.linspace(0, 360, num=36, endpoint=False)
-            horizon = np.interp(x_new, x_old, horizon).tolist()
+            horizon_for_elev = np.interp(x_new, x_old, horizon_for_elev).tolist()
         # logger.debug(
         #     "[PV-IF] Horizon elevation values normalized to 36 values: %s",
-        #     horizon
+        #     horizon_for_elev
         # )
 
         idx = int((sun_azimuth / 10))  # Convert azimuth to index (0-35)
         # logger.debug(
-        #     "[PV-IF] azimuth %s° to horizon index %s - elevation: %s°",
+        #     "[PV-IF] azimuth %s° to horizon_for_elev index %s - elevation: %s°",
         #     round(sun_azimuth,2),
         #     idx,
-        #     horizon[idx]
+        #     horizon_for_elev[idx]
         # )
-        return horizon[idx]
+        return horizon_for_elev[idx]
 
     def __get_pv_forecast_openmeteo_api(self, pv_config_entry, hours=48):
         """
@@ -589,7 +647,9 @@ class PvInterface:
         installed_power_watt = pv_config_entry.get(
             "power", 200
         )  # value in config is in watts
-        horizon = pv_config_entry.get("horizon", [0] * 36)  # default: no shading
+        horizon_openmeteo_api = pv_config_entry.get(
+            "horizon", [0] * 36
+        )  # default: no shading
         pv_efficiency = pv_config_entry.get("inverterEfficiency", 0.85)
         cloud_factor = 0.3  # factor to adjust radiation based on cloud cover
         timezone = self.time_zone
@@ -601,7 +661,7 @@ class PvInterface:
             tilt,
             azimuth,
             installed_power_watt,
-            horizon,
+            horizon_openmeteo_api,
         )
 
         # Fetch weather data
@@ -672,7 +732,7 @@ class PvInterface:
             eff_rad_panel = eff_rad * projection * 0.225
 
             # --- Horizon check ---
-            horizon_elev = self.__get_horizon_elevation(sun_az, horizon)
+            horizon_elev = self.__get_horizon_elevation(sun_az, horizon_openmeteo_api)
             if sun_el < horizon_elev:
                 eff_rad_panel = (
                     eff_rad_panel * 0.25
@@ -797,28 +857,32 @@ class PvInterface:
         azimuth = pv_config_entry.get("azimuth", 180)
         # Convert to kW for API and round to 4 decimal places
         installed_power_watt = round(pv_config_entry.get("power", 200) / 1000, 4)
-        horizon = ""
+        horizon_forecast_solar_api = ""
         if pv_config_entry.get("horizon", None) is not None:
-            horizon = pv_config_entry.get("horizon", "")
-            if horizon:
-                # Convert horizon string to a list of floats
-                # Handle entries like '50t0.4' by taking only the value before 't'
-                horizon = [
+            horizon_forecast_solar_api = pv_config_entry.get("horizon", [0] * 24)
+            if isinstance(horizon_forecast_solar_api, str):
+                # Convert horizon string to list of floats
+                horizon_forecast_solar_api = [
                     float(x.split("t")[0]) if "t" in x else float(x)
-                    for x in horizon.split(",")
+                    for x in horizon_forecast_solar_api.split(",")
                     if x.strip()
                 ]
-                # Ensure the list has 24 values, repeating if necessary
-                horizon = (horizon * (24 // len(horizon) + 1))[:24]
+            elif isinstance(horizon_forecast_solar_api, list):
+                # Use the list directly
+                pass
             else:
-                logger.debug(
-                    "[PV-IF] No horizon values provided, using default empty list"
-                )
+                # Fallback to default
+                horizon_forecast_solar_api = [0] * 24
+
+            # Ensure the list has 24 values, repeating if necessary
+            horizon_forecast_solar_api = (
+                horizon_forecast_solar_api * (24 // len(horizon_forecast_solar_api) + 1)
+            )[:24]
 
         url = (
             f"https://api.forecast.solar/estimate/"
             f"{latitude}/{longitude}/{tilt}/{azimuth}/{installed_power_watt}"
-            f"?horizon={','.join(map(str, horizon))}"
+            f"?horizon={','.join(map(str, horizon_forecast_solar_api))}"
         )
         logger.debug("[PV-IF] Fetching PV forecast from Forecast.Solar API: %s", url)
 
@@ -1077,7 +1141,8 @@ class PvInterface:
             # Map custom error codes to messages
             error_map = {
                 "rate_limit": "Solcast API rate limit exceeded",
-                "auth_error": "Solcast API authentication failed (403) - check API key and resource ID access.",
+                "auth_error": "Solcast API authentication failed (403) - check "
+                + "API key and resource ID access.",
                 "not_found": f"Solcast resource ID '{resource_id}' not found - check resource ID",
                 "bad_request": "Solcast API bad request - check parameters",
             }
