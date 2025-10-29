@@ -427,6 +427,12 @@ class ControlsManager {
 
         // Update mode icon and click handler
         this.updateModeIcon(inverterModeNum, overrideActive, controlsData.battery.max_charge_power_dyn);
+
+        if (controlsData.used_optimization_source === "evcc_opt") {
+            document.getElementById("experimental-banner").style.display = "flex";
+        } else {
+            document.getElementById("experimental-banner").style.display = "none";
+        }
     }
 
     /**
@@ -475,6 +481,7 @@ class ControlsManager {
         document.getElementById('control_discharge_allowed').innerText = states.current_discharge_allowed ? "Yes" : "No";
 
         document.getElementById('current_controls_box').style.border = "";
+
     }
 
     /**

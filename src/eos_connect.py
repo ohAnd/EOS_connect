@@ -22,7 +22,7 @@ from interfaces.battery_interface import BatteryInterface
 from interfaces.inverter_fronius import FroniusWR
 from interfaces.inverter_fronius_v2 import FroniusWRV2
 from interfaces.evcc_interface import EvccInterface
-from interfaces.eos_interface import EosInterface
+from interfaces.optimization_interface import OptimizationInterface
 from interfaces.price_interface import PriceInterface
 from interfaces.mqtt_interface import MqttInterface
 from interfaces.pv_interface import PvInterface
@@ -106,11 +106,11 @@ logger.info(
     LOGLEVEL,
 )
 # initialize eos interface
-eos_interface = EosInterface(
-    eos_server=config_manager.config["eos"]["server"],
-    eos_port=config_manager.config["eos"]["port"],
+eos_interface = OptimizationInterface(
+    config=config_manager.config["eos"],
     timezone=time_zone,
 )
+
 # initialize base control
 base_control = BaseControl(config_manager.config, time_zone)
 # initialize the inverter interface
@@ -747,7 +747,7 @@ class OptimizationScheduler:
         mqtt_interface.update_publish_topics(
             {"optimization/state": {"value": self.get_current_state()["request_state"]}}
         )
-        optimized_response, avg_runtime = eos_interface.eos_set_optimize_request(
+        optimized_response, avg_runtime = eos_interface.optimize(
             json_optimize_input, config_manager.config["eos"]["timeout"]
         )
         # Store the runtime for use in sleep calculation
@@ -1364,6 +1364,9 @@ def get_controls():
             "currency_minor_unit": currency_minor_unit,
         },
         "state": optimization_scheduler.get_current_state(),
+        "used_optimization_source": config_manager.config.get("eos", {}).get(
+            "source", "eos_server"
+        ),
         "eos_connect_version": __version__,
         "timestamp": datetime.now(time_zone).isoformat(),
         "api_version": "0.0.2",

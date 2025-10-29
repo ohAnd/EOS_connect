@@ -55,8 +55,9 @@ class ConfigManager:
                 ),
                 "eos": CommentedMap(
                     {
-                        "server": "192.168.100.100",  # Default EOS server address
-                        "port": 8503,  # Default port for EOS server
+                        "source": "default",  # EOS server source - eos_server, evcc_opt, default
+                        "server": "192.168.100.100",  # EOS or evcc opt server address
+                        "port": 8503,  # port for EOS server (8503) or evcc opt server (7050) - default: 8503
                         "timeout": 180,  # Default timeout for EOS optimize request
                     }
                 ),
@@ -194,9 +195,14 @@ class ConfigManager:
         config.yaml_set_comment_before_after_key(
             "eos", before="EOS server configuration"
         )
-        config["eos"].yaml_add_eol_comment("EOS server address", "server")
         config["eos"].yaml_add_eol_comment(
-            "port for EOS server - default: 8503", "port"
+            "EOS server source - eos_server, evcc_opt, default (default uses eos_server)",
+            "source",
+        )
+        config["eos"].yaml_add_eol_comment("EOS or evcc opt server address", "server")
+        config["eos"].yaml_add_eol_comment(
+            "port for EOS server (8503) or evcc opt server (7050) - default: 8503",
+            "port",
         )
         config["eos"].yaml_add_eol_comment(
             "timeout for EOS optimize request in seconds - default: 180", "timeout"

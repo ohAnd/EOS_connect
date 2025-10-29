@@ -1,8 +1,8 @@
 # EOS Connect
 
 **EOS Connect** is an open-source tool for intelligent energy management and optimization.  
-It connects to various smart home platforms (like Home Assistant and OpenHAB) to monitor, forecast, and control your energy flows.  
-EOS Connect fetches real-time and forecast data (PV, load, prices), processes it via the [EOS (Energy Optimization System)](https://github.com/Akkudoktor-EOS/EOS), and automatically controls devices (such as Fronius inverters or batteries supported by [evcc](https://docs.evcc.io/docs/devices/meters)) to optimize your energy usage and costs.
+It supports two optimization backends: the full-featured Akkudoktor EOS (default) and the lightweight EVCC Opt (optional, very fast).  
+EOS Connect fetches real-time and forecast data, processes it via your chosen optimizer, and controls devices to optimize your energy usage and costs.
 
 **Key Features:**
 - **Automated Energy Optimization:**  
@@ -159,8 +159,10 @@ Get up and running with EOS Connect in just a few steps!
 ### 2. Install via Home Assistant Add-on
 
 - Add the [ohAnd/ha_addons](https://github.com/ohAnd/ha_addons) repository to your Home Assistant add-on store.
-- [if needed] Add the [Duetting/ha_eos_addon](https://github.com/Duetting/ha_eos_addon) (or [thecem/ha_eos_addon](https://github.com/thecem/ha_eos_addon)) repository to your Home Assistant add-on store.
-- Install both the **EOS Add-on** and the **EOS Connect Add-on**.
+- select your preferred optimization backend:
+  - [if needed] Add the [Duetting/ha_eos_addon](https://github.com/Duetting/ha_eos_addon) (or [thecem/ha_eos_addon](https://github.com/thecem/ha_eos_addon)) repository to your Home Assistant add-on store.
+  - [if needed] Add [thecem/hassio-evopt](https://github.com/thecem/hassio-evopt) repository to your Home Assistant add-on store. ([found here](https://github.com/evcc-io/evcc/discussions/23213#3-optimizer-im-home-assistant-ha-addon-nutzen))
+- Install both the **EOS Add-on** (or **evcc opt**) and the **EOS Connect Add-on**. 
 - Configure both add-ons via the Home Assistant UI.
 - Start both add-ons.  
   The EOS Connect web dashboard will be available at [http://homeassistant.local:8081](http://homeassistant.local:8081) (or your HA IP).
