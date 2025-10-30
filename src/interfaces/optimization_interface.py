@@ -19,7 +19,7 @@ Example:
 import logging
 from datetime import datetime, timedelta
 from .optimization_backends.optimization_backend_eos import EOSBackend
-from .optimization_backends.optimization_backend_evcc_opt import EVCCOptBackend
+from .optimization_backends.optimization_backend_evopt import EVOptBackend
 
 logger = logging.getLogger("__main__")
 
@@ -39,7 +39,7 @@ class OptimizationInterface:
         self.time_zone = timezone
 
         if self.eos_source == "evcc_opt":
-            self.backend = EVCCOptBackend(self.base_url, self.time_zone)
+            self.backend = EVOptBackend(self.base_url, self.time_zone)
             self.backend_type = "evcc_opt"
             logger.info("[OPT] Using EVopt backend")
         elif self.eos_source == "eos_server":

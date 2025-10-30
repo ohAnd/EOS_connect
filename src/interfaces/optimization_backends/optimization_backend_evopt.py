@@ -23,7 +23,7 @@ import requests
 logger = logging.getLogger("__main__")
 
 
-class EVCCOptBackend:
+class EVOptBackend:
     """
     Backend for EVopt optimization.
     Accepts EOS-format requests, transforms to EVopt format, and returns EOS-format responses.
@@ -49,7 +49,7 @@ class EVCCOptBackend:
             "..",
             "..",
             "json",
-            "optimize_request_evcc_opt.json",
+            "optimize_request_evopt.json",
         )
         debug_path = os.path.abspath(debug_path)
         try:
@@ -92,6 +92,22 @@ class EVCCOptBackend:
             ) % 5
             avg_runtime = sum(self.last_optimization_runtimes) / 5
             evcc_response = response.json()
+
+            # Optionally, write transformed payload to json file for debugging
+            debug_path = os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "..",
+                "json",
+                "optimize_response_evopt.json",
+            )
+            debug_path = os.path.abspath(debug_path)
+            try:
+                with open(debug_path, "w", encoding="utf-8") as fh:
+                    json.dump(evcc_response, fh, indent=2, ensure_ascii=False)
+            except OSError as e:
+                logger.warning("[EVopt] Could not write debug file: %s", e)
+
             eos_response = self._transform_response_from_evcc(
                 evcc_response, evcc_request
             )
@@ -391,9 +407,11 @@ class EVCCOptBackend:
             d_max = d_max or 1.0
 
         ac_charge = []
-        for v in charging_power:
+        for i, v in enumerate(charging_power):
+            # Use grid import if charging_power exceeds grid_import
+            charge_from_grid = min(float(v), float(grid_import[i]))
             try:
-                frac = float(v) / float(c_max) if float(c_max) > 0 else 0.0
+                frac = charge_from_grid / float(c_max) if float(c_max) > 0 else 0.0
             except (ValueError, TypeError):
                 frac = 0.0
             if frac != frac:
