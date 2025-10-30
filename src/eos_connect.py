@@ -406,7 +406,10 @@ def create_optimize_request():
                 "max_soc_percentage"
             ],
         }
-        if eos_interface.get_eos_version() == ">=2025-04-09":
+        if (
+            eos_interface.get_eos_version() == ">=2025-04-09"
+            or eos_interface.get_eos_version() == "0.1.0+dev"
+        ):
             akku_object = {"device_id": "battery1", **akku_object}
         return akku_object
 
@@ -414,7 +417,10 @@ def create_optimize_request():
         wechselrichter_object = {
             "max_power_wh": config_manager.config["inverter"]["max_pv_charge_rate"],
         }
-        if eos_interface.get_eos_version() == ">=2025-04-09":
+        if (
+            eos_interface.get_eos_version() == ">=2025-04-09"
+            or eos_interface.get_eos_version() == "0.1.0+dev"
+        ):
             wechselrichter_object = {
                 "device_id": "inverter1",
                 **wechselrichter_object,
@@ -432,7 +438,10 @@ def create_optimize_request():
             "min_soc_percentage": 5,
             "max_soc_percentage": 100,
         }
-        if eos_interface.get_eos_version() == ">=2025-04-09":
+        if (
+            eos_interface.get_eos_version() == ">=2025-04-09"
+            or eos_interface.get_eos_version() == "0.1.0+dev"
+        ):
             eauto_object = {"device_id": "ev1", **eauto_object}
         return eauto_object
 
@@ -449,8 +458,14 @@ def create_optimize_request():
             "consumption_wh": consumption_wh,
             "duration_h": duration_h,
         }
-        if eos_interface.get_eos_version() == ">=2025-04-09":
+        if (
+            eos_interface.get_eos_version() == ">=2025-04-09"
+            or eos_interface.get_eos_version() == "0.1.0+dev"
+        ):
             dishwasher_object = {"device_id": "additional_load_1", **dishwasher_object}
+        # if eos_interface.get_eos_version() == "0.1.0+dev":
+        #     time_windows = [{"duration": "2", "start_time": "10:00"}]
+        #     dishwasher_object = {"time_windows": time_windows, **dishwasher_object}
         return dishwasher_object
 
     dst_change_detected = get_dst_change_in_next_48(time_zone)

@@ -5,6 +5,7 @@ measurement data.
 """
 
 import logging
+import sys
 import time
 import json
 from datetime import datetime
@@ -27,7 +28,64 @@ class EOSBackend:
         self.last_optimization_runtimes = [0] * 5
         self.last_optimization_runtime_number = 0
         self.eos_version = ">=2025-04-09"  # default
-        self.eos_version = self._retrieve_eos_version()
+        try:
+            self.eos_version = self._retrieve_eos_version()
+            if self.eos_version == "0.1.0+dev":
+                # check config for needed values
+                config_optimization = self.__get_config_path("optimization")
+                config_optimization_upodate_needed = False
+                if config_optimization.get("horizon_hours", 0) != 48:
+                    config_optimization["horizon_hours"] = 48
+                    config_optimization_upodate_needed = True
+                if config_optimization.get("genetic", None) is None:
+                    config_optimization["genetic"] = {
+                        "individuals": 300,
+                        "generations": 400,
+                    }
+                    config_optimization_upodate_needed = True
+                if config_optimization_upodate_needed:
+                    self.__set_config_path("optimization", config_optimization)
+                    logger.warning(
+                        "[EOS] Detected EOS version 0.1.0+dev - config updated with "
+                        + ": %s",
+                        config_optimization,
+                    )
+                else:
+                    logger.info(
+                        "[EOS] Detected EOS version 0.1.0+dev - config optimization values OK"
+                    )
+
+                config_devices = self.__get_config_path("devices/electric_vehicles")
+                if config_devices is None:
+                    # if config_devices[0].get("charge_rates", None) is None:
+                    config_devices = [{}]
+                    config_devices[0]["charge_rates"] = sorted(
+                        [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+                    )
+                    self.__set_config_path("devices/electric_vehicles", config_devices)
+                    logger.warning(
+                        "[EOS] Detected EOS version 0.1.0+dev - config updated with charge "
+                        + "rates for electric vehicles"
+                    )
+                elif "charge_rates" not in config_devices[0]:
+                    config_devices[0]["charge_rates"] = sorted(
+                        [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+                    )
+                    self.__set_config_path("devices/electric_vehicles", config_devices)
+                    logger.warning(
+                        "[EOS] Detected EOS version 0.1.0+dev - config updated with charge "
+                        + "rates for electric vehicles"
+                    )
+                else:
+                    logger.info(
+                        "[EOS] Detected EOS version 0.1.0+dev - config charge rates for "
+                        + "electric vehicles OK"
+                    )
+            logger.info("[EOS] Configuration validation successful")
+        except ValueError as e:
+            logger.error("[EOS] EOS backend configuration error: %s", str(e))
+            logger.error("[EOS] We have to exit now ...")
+            sys.exit(1)  # Exit if configuration is invalid
 
     def optimize(self, eos_request, timeout=180):
         """
@@ -101,20 +159,49 @@ class EOSBackend:
             )
             return {"error": str(e)}, None
 
-    def set_config_value(self, key, value):
+    def __get_config_path(self, path):
+        """
+        Get a configuration value from the EOS server.
+        """
+        # Always specify a timeout to avoid hanging indefinitely
+        response = requests.get(self.base_url + "/v1/config/" + path, timeout=10)
+        response.raise_for_status()
+        config_value = response.json()
+        return config_value
+
+    def __set_config_path(self, path, value):
         """
         Set a configuration value on the EOS server.
+
+        Args:
+            path (str): The configuration path.
+            value (dict or list): The configuration value as a JSON-serializable
+            object or a list of such objects.
         """
-        if isinstance(value, list):
-            value = json.dumps(value)
-        params = {"key": key, "value": value}
-        response = requests.put(
-            self.base_url + "/v1/config/value", params=params, timeout=10
-        )
-        response.raise_for_status()
-        logger.info(
-            "[EOS] Config value set successfully. Key: %s => Value: %s", key, value
-        )
+
+        def convert_sets(obj):
+            """Recursively convert sets to lists in a dict or list."""
+            if isinstance(obj, dict):
+                return {k: convert_sets(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_sets(v) for v in obj]
+            elif isinstance(obj, set):
+                return list(obj)
+            else:
+                return obj
+
+        headers = {"Content-Type": "application/json"}
+        try:
+            value_serializable = convert_sets(value)
+            response = requests.put(
+                self.base_url + "/v1/config/" + path,
+                data=json.dumps(value_serializable),
+                headers=headers,
+                timeout=10,
+            )
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            logger.error("[EOS] Failed to set config value for path '%s': %s", path, e)
 
     def send_measurement_to_eos(self, dataframe):
         """
@@ -177,8 +264,14 @@ class EOSBackend:
             response = requests.get(self.base_url + "/v1/health", timeout=10)
             response.raise_for_status()
             eos_version = response.json().get("status")
-            if eos_version == "alive":
+            eos_version_real = response.json().get("version", "unknown")
+            if eos_version == "alive" and eos_version_real == "unknown":
                 eos_version = ">=2025-04-09"
+            else:
+                eos_version = eos_version_real
+                # raise ValueError(
+                #     f"EOS version {eos_version_real} currently not supported!"
+                # )
             logger.info("[EOS] Getting EOS version: %s", eos_version)
             return eos_version
         except requests.exceptions.HTTPError as e:
