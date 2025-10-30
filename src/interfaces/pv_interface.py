@@ -149,20 +149,21 @@ class PvInterface:
                     )
 
                 if config_entry.get("azimuth") is None:
-                    config_entry["azimuth"] = 0
+                    config_entry["azimuth"] = 180
                     logger.debug(
                         "[PV-IF] Solcast config - setting default azimuth for '%s'",
                         entry_name,
                     )
                 if config_entry.get("tilt") is None:
-                    config_entry["tilt"] = 0
+                    config_entry["tilt"] = 25
                     logger.debug(
                         "[PV-IF] Solcast config - setting default tilt for '%s'",
                         entry_name,
                     )
 
                 logger.debug("[PV-IF] Solcast config validated for '%s'", entry_name)
-            # lat, long - only evcc not required
+
+            # lat, long - required for all sources for temperature forecast
             missing = []
             if config_entry.get("lat") is None:
                 missing.append("lat")
@@ -176,13 +177,13 @@ class PvInterface:
             # azimuth, tilt - only solcast and evcc not required but have defaults
             if self.config_source.get("source") in ("solcast", "evcc"):
                 if config_entry.get("azimuth") is None:
-                    config_entry["azimuth"] = 0
+                    config_entry["azimuth"] = 180
                     logger.debug(
                         "[PV-IF] Solcast config - setting default azimuth for '%s'",
                         entry_name,
                     )
                 if config_entry.get("tilt") is None:
-                    config_entry["tilt"] = 0
+                    config_entry["tilt"] = 25
                     logger.debug(
                         "[PV-IF] Solcast config - setting default tilt for '%s'",
                         entry_name,
@@ -198,7 +199,7 @@ class PvInterface:
                         "[PV-IF] Missing required parameters "
                         + f"for '{entry_name}': {', '.join(missing)}"
                     )
-            # power - only evcc not required
+            # power - only evcc, solcast not required
             if self.config_source.get("source") not in ("evcc", "solcast"):
                 missing_common = []
                 if config_entry.get("power") is None:
@@ -209,7 +210,7 @@ class PvInterface:
                         + f" for '{entry_name}': {', '.join(missing_common)}"
                     )
             else:  # to get a working temperature forecast we set dummy values here
-                config_entry["power"] = 0
+                config_entry["power"] = 1000
             # powerInverter, inverterEfficiency - only evcc, forecast_solar not required
             if self.config_source.get("source") not in (
                 "evcc",
@@ -228,8 +229,8 @@ class PvInterface:
                         + f" for '{entry_name}': {', '.join(missing_common)}"
                     )
             else:  # to get a working temperature forecast we set dummy values here
-                config_entry["powerInverter"] = 0
-                config_entry["inverterEfficiency"] = 0
+                config_entry["powerInverter"] = 1000
+                config_entry["inverterEfficiency"] = 100
 
             # horizon parameter check for specific sources
             if self.config_source.get("source") in [
