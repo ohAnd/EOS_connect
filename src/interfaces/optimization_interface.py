@@ -41,7 +41,7 @@ class OptimizationInterface:
         if self.eos_source == "evcc_opt":
             self.backend = EVCCOptBackend(self.base_url, self.time_zone)
             self.backend_type = "evcc_opt"
-            logger.info("[OPT] Using EVCC Opt backend")
+            logger.info("[OPT] Using EVopt backend")
         elif self.eos_source == "eos_server":
             self.backend = EOSBackend(self.base_url, self.time_zone)
             self.backend_type = "eos_server"

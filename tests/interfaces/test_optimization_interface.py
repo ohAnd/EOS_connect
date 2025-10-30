@@ -1,23 +1,23 @@
 """
 Unit tests for the OptimizationInterface class, which provides an abstraction layer for optimization
-backends such as EOS and EVCC Opt. These tests validate correct integration, response handling, and
+backends such as EOS and EVopt. These tests validate correct integration, response handling, and
 configuration management for different backend sources.
 Fixtures:
     - eos_server_config: Supplies a sample configuration dictionary for the EOS backend.
-    - evcc_opt_config: Supplies a sample configuration dictionary for the EVCC Opt backend.
+    - evcc_opt_config: Supplies a sample configuration dictionary for the EVopt backend.
     - berlin_timezone: Provides a pytz timezone object for Europe/Berlin.
     - sample_eos_request: Supplies a representative optimization request payload in EOS format.
 Test Cases:
     - test_eos_server_optimize: Verifies optimization with the EOS backend, ensuring the response
       structure and runtime value are as expected.
-    - test_evcc_opt_optimize: Verifies optimization with the EVCC Opt backend, checking response
+    - test_evcc_opt_optimize: Verifies optimization with the EVopt backend, checking response
       structure and runtime value.
     - test_control_data_tracking: Checks the extraction and type correctness of control data from
       optimization responses.
     - test_get_eos_version: Ensures the EOS backend version retrieval returns the expected version
       string.
     - test_backend_selection_eos: Verifies that the correct backend is selected for the EOS server.
-    - test_backend_selection_evcc: Verifies that the correct backend is selected for the EVCC Opt.
+    - test_backend_selection_evcc: Verifies that the correct backend is selected for the EVopt.
     - test_backend_selection_unknown: Confirms that an error is raised for an unknown backend
         source.
 Mocks:
@@ -52,9 +52,9 @@ def fixture_eos_server_config():
 @pytest.fixture(name="evcc_opt_config")
 def fixture_evcc_opt_config():
     """
-    Provides a sample EVCC Opt server configuration dictionary.
+    Provides a sample EVopt server configuration dictionary.
     Returns:
-        dict: Configuration for EVCC Opt backend.
+        dict: Configuration for EVopt backend.
     """
     return {
         "source": "evcc_opt",
@@ -127,7 +127,7 @@ def test_eos_server_optimize(eos_server_config, berlin_timezone, sample_eos_requ
 
 def test_evcc_opt_optimize(evcc_opt_config, berlin_timezone, sample_eos_request):
     """
-    Test optimization with EVCC Opt backend.
+    Test optimization with EVopt backend.
     Ensures the response is a dict and contains expected keys.
     """
     with patch(

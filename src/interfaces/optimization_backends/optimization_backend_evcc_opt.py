@@ -1,12 +1,12 @@
 """
 Module: optimization_backend_evcc_opt
-This module provides the EVCCOptBackend class, which acts as a backend for EVCC Opt optimization.
-It accepts EOS-format optimization requests, transforms them into the EVCC Opt format, sends them
-to the EVCC Opt server,
+This module provides the EVCCOptBackend class, which acts as a backend for EVopt optimization.
+It accepts EOS-format optimization requests, transforms them into the EVopt format, sends them
+to the EVopt server,
 and transforms the responses back into EOS-format responses.
 Classes:
     EVCCOptBackend: Handles the transformation, communication, and response processing for
-    EVCC Opt optimization.
+    EVopt optimization.
 Typical usage example:
     backend = EVCCOptBackend(base_url="http://evcc-opt-server",
     time_zone=pytz.timezone("Europe/Berlin"))
@@ -25,8 +25,8 @@ logger = logging.getLogger("__main__")
 
 class EVCCOptBackend:
     """
-    Backend for EVCC Opt optimization.
-    Accepts EOS-format requests, transforms to EVCC Opt format, and returns EOS-format responses.
+    Backend for EVopt optimization.
+    Accepts EOS-format requests, transforms to EVopt format, and returns EOS-format responses.
     """
 
     def __init__(self, base_url, time_zone):
@@ -37,12 +37,12 @@ class EVCCOptBackend:
 
     def optimize(self, eos_request, timeout=180):
         """
-        Accepts EOS-format request, transforms to EVCC Opt format, sends request,
+        Accepts EOS-format request, transforms to EVopt format, sends request,
         transforms response back to EOS-format, and returns (response_json, avg_runtime).
         """
         evcc_request, errors = self._transform_request_to_evcc(eos_request)
         if errors:
-            logger.error("[EVCC OPT] Request transformation errors: %s", errors)
+            logger.error("[EVopt] Request transformation errors: %s", errors)
         # Optionally, write transformed payload to json file for debugging
         debug_path = os.path.join(
             os.path.dirname(__file__),
@@ -56,11 +56,11 @@ class EVCCOptBackend:
             with open(debug_path, "w", encoding="utf-8") as fh:
                 json.dump(evcc_request, fh, indent=2, ensure_ascii=False)
         except OSError as e:
-            logger.warning("[EVCC OPT] Could not write debug file: %s", e)
+            logger.warning("[EVopt] Could not write debug file: %s", e)
 
         request_url = self.base_url + "/optimize/charge-schedule"
         logger.info(
-            "[EVCC OPT] Request optimization with: %s - and with timeout: %s",
+            "[EVopt] Request optimization with: %s - and with timeout: %s",
             request_url,
             timeout,
         )
@@ -75,7 +75,7 @@ class EVCCOptBackend:
             elapsed_time = end_time - start_time
             minutes, seconds = divmod(elapsed_time, 60)
             logger.info(
-                "[EVCC OPT] Response retrieved successfully in %d min %.2f sec for current run",
+                "[EVopt] Response retrieved successfully in %d min %.2f sec for current run",
                 int(minutes),
                 seconds,
             )
@@ -97,29 +97,29 @@ class EVCCOptBackend:
             )
             return eos_response, avg_runtime
         except requests.exceptions.Timeout:
-            logger.error("[EVCC OPT] Request timed out after %s seconds", timeout)
+            logger.error("[EVopt] Request timed out after %s seconds", timeout)
             return {"error": "Request timed out - trying again with next run"}, None
         except requests.exceptions.ConnectionError as e:
             logger.error(
-                "[EVCC OPT] Connection error - server not reachable at %s "
+                "[EVopt] Connection error - server not reachable at %s "
                 "will try again with next cycle - error: %s",
                 request_url,
                 str(e),
             )
             return {
-                "error": f"EVCC OPT server not reachable at {self.base_url} "
+                "error": f"EVopt server not reachable at {self.base_url} "
                 "will try again with next cycle"
             }, None
         except requests.exceptions.RequestException as e:
-            logger.error("[EVCC OPT] Request failed: %s", e)
+            logger.error("[EVopt] Request failed: %s", e)
             if response is not None:
-                logger.error("[EVCC OPT] Response status: %s", response.status_code)
+                logger.error("[EVopt] Response status: %s", response.status_code)
                 logger.debug(
-                    "[EVCC OPT] ERROR - response of server is:\n%s",
+                    "[EVopt] ERROR - response of server is:\n%s",
                     response.text,
                 )
             logger.debug(
-                "[EVCC OPT] ERROR - payload for the request was:\n%s",
+                "[EVopt] ERROR - payload for the request was:\n%s",
                 evcc_request,
             )
             return {"error": str(e)}, None
@@ -235,7 +235,7 @@ class EVCCOptBackend:
 
     def _transform_response_from_evcc(self, evcc_resp, evcc_req=None):
         """
-        Translate EVCC optimizer response -> EOS-style optimize response.
+        Translate EVoptimizer response -> EOS-style optimize response.
 
         Produces a fuller EOS-shaped response using the sample `src/json/optimize_response.json`
         as guidance. The mapping is conservative and uses available EVCC fields:
@@ -587,7 +587,7 @@ class EVCCOptBackend:
 
     def _validate_evcc_request(self, evcc_req):
         """
-        Validate EVCC Opt-format optimization request.
+        Validate EVopt-format optimization request.
         Returns: (bool, list[str]) - valid, errors
         """
         errors = []

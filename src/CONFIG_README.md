@@ -84,10 +84,10 @@ A default config file will be created with the first start, if there is no `conf
   EOS server source - eos_server, evcc_opt, default (default uses eos_server)
 
 - **`eos.server`**:  
-  EOS or evcc opt server address (e.g., `192.168.1.94`). (Mandatory)
+  EOS or EVopt server address (e.g., `192.168.1.94`). (Mandatory)
 
 - **`eos.port`**:  
-  port for EOS server (8503) or evcc opt server (7050) - default: `8503` (Mandatory)
+  port for EOS server (8503) or EVopt server (7050) - default: `8503` (Mandatory)
 
 - **`timeout`**:  
   Timeout for EOS optimization requests, in seconds. Default: `180`. (Mandatory)
