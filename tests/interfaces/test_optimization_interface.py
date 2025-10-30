@@ -131,7 +131,7 @@ def test_evcc_opt_optimize(evcc_opt_config, berlin_timezone, sample_eos_request)
     Ensures the response is a dict and contains expected keys.
     """
     with patch(
-        "src.interfaces.optimization_backends.optimization_backend_evcc_opt.EVCCOptBackend.optimize"
+        "src.interfaces.optimization_backends.optimization_backend_evopt.EVOptBackend.optimize"
     ) as mock_opt:
         mock_opt.return_value = (
             {
