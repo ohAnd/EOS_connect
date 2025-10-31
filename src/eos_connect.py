@@ -112,7 +112,7 @@ eos_interface = OptimizationInterface(
 )
 
 # initialize base control
-base_control = BaseControl(config_manager.config, time_zone)
+base_control = BaseControl(config_manager.config, time_zone, 3600)
 # initialize the inverter interface
 inverter_interface = None
 
@@ -1076,7 +1076,7 @@ def change_control_state():
     # get the current ac/dc charge demand and for setting to inverter according
     # to the max dynamic charge power of the battery based on SOC
     tgt_ac_charge_power = min(
-        base_control.get_current_ac_charge_demand(),
+        base_control.get_needed_ac_charge_power(),
         round(battery_interface.get_max_charge_power()),
     )
     tgt_dc_charge_power = min(

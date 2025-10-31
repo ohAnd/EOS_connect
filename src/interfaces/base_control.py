@@ -41,9 +41,10 @@ class BaseControl:
     MODE_CHARGE_FROM_GRID, MODE_AVOID_DISCHARGE, or MODE_DISCHARGE_ALLOWED.
     """
 
-    def __init__(self, config, timezone):
+    def __init__(self, config, timezone, time_frame_base):
         self.current_ac_charge_demand = 0
         self.last_ac_charge_demand = 0
+        self.last_ac_charge_power = 0
         self.current_ac_charge_demand_no_override = 0
         self.current_dc_charge_demand = 0
         self.last_dc_charge_demand = 0
@@ -53,6 +54,8 @@ class BaseControl:
         self.current_discharge_allowed = -1
         self.current_evcc_charging_state = False
         self.current_evcc_charging_mode = False
+        # 1 hour = 3600 seconds / 900 for 15 minutes
+        self.time_frame_base = time_frame_base
         # startup with None to force a writing to the inverter
         self.current_overall_state = -1
         self.override_active = False
@@ -280,6 +283,43 @@ class BaseControl:
         self.current_evcc_charging_mode = value
         # logger.debug("[BASE-CTRL] set current EVCC charging mode to %s", value)
         self.__set_current_overall_state()
+
+    def get_needed_ac_charge_power(self):
+        """
+        Calculates the required AC charge power to deliver the target energy
+        within the remaining time frame.
+        """
+        current_time = datetime.now(self.time_zone)
+        # Calculate the seconds elapsed in the current time frame with time_frame_base
+        seconds_elapsed = (
+            current_time.hour * 3600 + current_time.minute * 60 + current_time.second
+        ) % self.time_frame_base
+
+        # Calculate the remaining seconds in the current time frame
+        seconds_to_end_of_current_time_frame = self.time_frame_base - seconds_elapsed
+
+        # Calculate the required AC charge power to deliver the target energy within
+        # the remaining time frame.
+        # tgt_ac_charge_demand is the total energy (in Wh) needed in the current time frame.
+        # seconds_to_end_of_current_time_frame is the remaining seconds in the time frame.
+        # The needed power (in W) is calculated as energy divided by time (in hours).
+        if seconds_to_end_of_current_time_frame > 0:
+            needed_ac_charge_power = round(
+                self.current_ac_charge_demand
+                / (seconds_to_end_of_current_time_frame / 3600),
+                0,
+            )
+            logger.debug(
+                "[BASE-CTRL] needed AC charge power to reach target %s W in current time frame",
+                needed_ac_charge_power,
+            )
+        else:
+            # No time left in the current time frame - use last value
+            needed_ac_charge_power = self.last_ac_charge_power
+
+        self.last_ac_charge_power = needed_ac_charge_power
+
+        return needed_ac_charge_power
 
     def __set_current_overall_state(self):
         """
