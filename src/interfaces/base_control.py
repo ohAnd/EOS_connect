@@ -309,10 +309,10 @@ class BaseControl:
                 / (seconds_to_end_of_current_time_frame / 3600),
                 0,
             )
-            logger.debug(
-                "[BASE-CTRL] needed AC charge power to reach target %s W in current time frame",
-                needed_ac_charge_power,
-            )
+            # logger.debug(
+            #     "[BASE-CTRL] needed AC charge power to reach target %s W in current time frame",
+            #     needed_ac_charge_power,
+            # )
         else:
             # No time left in the current time frame - use last value
             needed_ac_charge_power = self.last_ac_charge_power
