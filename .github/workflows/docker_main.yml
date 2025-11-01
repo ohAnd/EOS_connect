@@ -109,21 +109,3 @@ jobs:
           name: eos_connect_image-${{ env.VERSION }}
           path: eos_connect_${{ env.VERSION }}.tar.gz
 
-      # Only run tagging and pushing tasks for "push" events
-      - name: Log in to GitHub Container Registry
-        if: github.event_name == 'push'
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Tag image with release version
-        if: github.event_name == 'push'
-        run: docker tag ghcr.io/${{ env.owner }}/eos_connect:release ghcr.io/${{ env.owner }}/eos_connect:${{ env.VERSION }}
-
-      - name: Tag image with latest
-        if: github.event_name == 'push'
-        run: docker tag ghcr.io/${{ env.owner }}/eos_connect:release ghcr.io/${{ env.owner }}/eos_connect:latest
-
-      - name: Push Docker image to GitHub Container Registry
-        if: github.event_name == 'push'
-        run: |
-          docker push ghcr.io/${{ env.owner }}/eos_connect:${{ env.VERSION }}
-          docker push ghcr.io/${{ env.owner }}/eos_connect:latest
