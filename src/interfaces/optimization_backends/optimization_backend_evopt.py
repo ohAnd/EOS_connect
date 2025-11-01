@@ -1,6 +1,6 @@
 """
 Module: optimization_backend_evopt
-This module provides the EVCCOptBackend class, which acts as a backend for EVopt optimization.
+This module provides the EVOptBackend class, which acts as a backend for EVopt optimization.
 It accepts EOS-format optimization requests, transforms them into the EVopt format, sends them
 to the EVopt server,
 and transforms the responses back into EOS-format responses.
@@ -41,7 +41,7 @@ class EVOptBackend:
         Accepts EOS-format request, transforms to EVopt format, sends request,
         transforms response back to EOS-format, and returns (response_json, avg_runtime).
         """
-        evcc_request, errors = self._transform_request_to_evcc(eos_request)
+        evcc_request, errors = self._transform_request_from_eos_to_evopt(eos_request)
         if errors:
             logger.error("[EVopt] Request transformation errors: %s", errors)
         # Optionally, write transformed payload to json file for debugging
@@ -141,10 +141,10 @@ class EVOptBackend:
             )
             return {"error": str(e)}, None
 
-    def _transform_request_to_evcc(self, eos_request):
+    def _transform_request_from_eos_to_evopt(self, eos_request):
         """
         Translate EOS request -> EVCC request.
-        Returns (evcc_req: dict, external_errors: list[str])
+        Returns (evopt: dict, external_errors: list[str])
         """
         eos_request = eos_request or {}
         errors = []
@@ -236,7 +236,7 @@ class EVOptBackend:
         )
         dt_series = [dt_first_entry] + [self.time_frame_base] * (n - 1)
 
-        evcc_req = {
+        evopt = {
             "strategy": {
                 "charging_strategy": "charge_before_export",
                 "discharging_strategy": "discharge_before_import",
@@ -258,9 +258,9 @@ class EVOptBackend:
             "eta_d": batt_eta_d if batt_capacity_wh > 0 else 0.95,
         }
 
-        return evcc_req, errors
+        return evopt, errors
 
-    def _transform_response_from_evcc(self, evcc_resp, evcc_req=None):
+    def _transform_response_from_evcc(self, evcc_resp, evopt=None):
         """
         Translate EVoptimizer response -> EOS-style optimize response.
 
@@ -277,7 +277,7 @@ class EVOptBackend:
         - eauto_obj, washingstart, timestamp
 
         evcc_resp: dict (raw EVCC JSON) or {"response": {...}}.
-        evcc_req: optional EVCC request dict (used to read p_N, p_E, eta_c, eta_d,
+        evopt: optional EVCC request dict (used to read p_N, p_E, eta_c, eta_d,
             battery s_max/c_max).
         """
         # defensive guard
@@ -323,12 +323,12 @@ class EVOptBackend:
         grid_import = list(resp.get("grid_import") or [0.0] * n)[:n]
         grid_export = list(resp.get("grid_export") or [0.0] * n)[:n]
 
-        # harvest pricing from evcc_req when available (per-Wh units)
+        # harvest pricing from evopt when available (per-Wh units)
         p_n = None
         p_e = None
         electricity_price = [None] * n
-        if isinstance(evcc_req, dict):
-            ts = evcc_req.get("time_series", {}) or {}
+        if isinstance(evopt, dict):
+            ts = evopt.get("time_series", {}) or {}
             p_n = ts.get("p_N")
             p_e = ts.get("p_E")
             # if p_N/p_E are lists, normalize length
@@ -363,8 +363,8 @@ class EVOptBackend:
         s_max_req = None
         eta_c = None
         eta_d = None
-        if isinstance(evcc_req, dict):
-            breq = evcc_req.get("batteries")
+        if isinstance(evopt, dict):
+            breq = evopt.get("batteries")
             if isinstance(breq, list) and len(breq) > 0:
                 b0r = breq[0]
                 try:
@@ -372,11 +372,11 @@ class EVOptBackend:
                 except (ValueError, TypeError):
                     s_max_req = None
                 try:
-                    eta_c = float(evcc_req.get("eta_c", b0r.get("eta_c", 0.95) or 0.95))
+                    eta_c = float(evopt.get("eta_c", b0r.get("eta_c", 0.95) or 0.95))
                 except (ValueError, TypeError):
                     eta_c = 0.95
                 try:
-                    eta_d = float(evcc_req.get("eta_d", b0r.get("eta_d", 0.95) or 0.95))
+                    eta_d = float(evopt.get("eta_d", b0r.get("eta_d", 0.95) or 0.95))
                 except (ValueError, TypeError):
                     eta_d = 0.95
         # Set defaults
@@ -388,8 +388,8 @@ class EVOptBackend:
         # or observed max
         c_max = None
         d_max = None
-        if isinstance(evcc_req, dict):
-            breq = evcc_req.get("batteries")
+        if isinstance(evopt, dict):
+            breq = evopt.get("batteries")
             if isinstance(breq, list) and len(breq) > 0:
                 try:
                     c_max = float(breq[0].get("c_max", 0.0))
@@ -535,8 +535,8 @@ class EVOptBackend:
         # Prefer household load ('gt') from the EVCC request if available,
         # otherwise fall back to EVCC response grid_import (parity with previous behavior).
         last_wh = None
-        if isinstance(evcc_req, dict):
-            ts = evcc_req.get("time_series", {}) or {}
+        if isinstance(evopt, dict):
+            ts = evopt.get("time_series", {}) or {}
             gt = ts.get("gt")
             if isinstance(gt, list) and len(gt) > 0:
                 # normalize/trim/pad gt to length n (similar to other normalizations)
@@ -614,17 +614,17 @@ class EVOptBackend:
 
         return eos_resp
 
-    def _validate_evcc_request(self, evcc_req):
+    def _validate_evcc_request(self, evopt):
         """
         Validate EVopt-format optimization request.
         Returns: (bool, list[str]) - valid, errors
         """
         errors = []
-        if not isinstance(evcc_req, dict):
+        if not isinstance(evopt, dict):
             errors.append("EVCC request must be a dictionary.")
         # Example: check required keys
         required_keys = ["strategy", "grid", "batteries", "time_series"]
         for key in required_keys:
-            if key not in evcc_req:
+            if key not in evopt:
                 errors.append(f"Missing required key: {key}")
         return len(errors) == 0, errors
