@@ -430,6 +430,24 @@ def create_optimize_request():
         einspeiseverguetung_euro_pro_wh = price_interface.get_current_feedin_prices()
         gesamtlast = load_interface.get_load_profile(EOS_TGT_DURATION)
 
+        if config_manager.config.get("eos", {}).get("source", "eos_server") == "evopt":
+            now = datetime.now(time_zone)
+            seconds_since_midnight = now.hour * 3600 + now.minute * 60 + now.second
+            scale_factor = (
+                time_frame_base - (seconds_since_midnight % time_frame_base)
+            ) / time_frame_base
+
+            current_hour = now.hour
+            for ts in (pv_prognose_wh, gesamtlast):
+                if ts and len(ts) > current_hour:
+                    ts[current_hour] *= scale_factor
+                    logger.debug(
+                        "[EOS_Request] Adjusted forecast for hour %d to %.2f Wh "
+                        + "due to partial hour",
+                        current_hour + 1,
+                        ts[current_hour],
+                    )
+
         # if dst_change_detected != 0:
         #     pv_prognose_wh = adjust_forecast_array_for_dst(
         #         pv_prognose_wh, dst_change_detected
