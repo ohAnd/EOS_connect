@@ -195,12 +195,12 @@ def battery_state_callback():
 
 
 # callback function for mqtt interface
-def mqtt_control_callback(command):
+def mqtt_control_callback(mqtt_cmd):
     """
     Handles MQTT control commands by parsing the command dictionary and updating the system's state.
 
     Args:
-        command (dict): Contains "duration" (str, "HH:MM"), "mode" (str/int),
+        mqtt_cmd (dict): Contains "duration" (str, "HH:MM"), "mode" (str/int),
         and "grid_charge_power" (str/int).
 
     Side Effects:
@@ -208,33 +208,94 @@ def mqtt_control_callback(command):
         - Publishes updated control topics to MQTT.
         - Logs the event and triggers a control state change.
     """
-    # Default to "02:00" if empty or None
-    duration_string = command.get("duration", "02:00") or "02:00"
-    duration_hh = duration_string.split(":")[0]
-    duration_mm = duration_string.split(":")[1]
-    duration = int(duration_hh) * 60 + int(duration_mm)
-    # Default to 0 if empty or None
-    charge_power = command.get("charge_power", 0) or 0
-    charge_power = int(charge_power) / 1000  # convert to kW
-    # update the base control with the new charging state
-    base_control.set_mode_override(int(command["mode"]), duration, charge_power)
-    mqtt_interface.update_publish_topics(
-        {
-            "control/override_charge_power": {"value": charge_power * 1000},
-            "control/override_active": {
-                "value": base_control.get_override_active_and_endtime()[0]
-            },
-            "control/override_end_time": {
-                "value": (
-                    datetime.fromtimestamp(
-                        base_control.get_override_active_and_endtime()[1], time_zone
-                    )
-                ).isoformat()
-            },
-        }
-    )
-    logger.info("[MAIN] MQTT Event - control command to: %s", command["mode"])
-    change_control_state()
+    logger.info("[MAIN] MQTT Event - control command received: %s", mqtt_cmd)
+
+    if "charge_power" in mqtt_cmd:
+        # Default to 0 if empty or None
+        charge_power = mqtt_cmd.get("charge_power", 0) or 0
+        charge_power = int(charge_power) / 1000  # convert to kW
+        base_control.set_override_charge_rate(charge_power)
+        # update mqtt topics
+        mqtt_interface.update_publish_topics(
+            {
+                "control/override_charge_power": {"value": charge_power * 1000},
+            }
+        )
+        logger.info(
+            "[MAIN] MQTT Event - charge_power command to: %s", mqtt_cmd["charge_power"]
+        )
+
+    if "duration" in mqtt_cmd:
+        # Default to "02:00" if empty or None
+        duration_string = mqtt_cmd.get("duration", "02:00") or "02:00"
+        duration_hh = duration_string.split(":")[0]
+        duration_mm = duration_string.split(":")[1]
+        duration = int(duration_hh) * 60 + int(duration_mm)
+
+        # update the base control with the new charging state
+        base_control.set_override_duration(duration)
+        # update mqtt topics
+        mqtt_interface.update_publish_topics(
+            {
+                "control/override_end_time": {
+                    "value": (
+                        datetime.fromtimestamp(
+                            base_control.get_override_active_and_endtime()[1], time_zone
+                        )
+                    ).isoformat()
+                },
+            }
+        )
+        logger.info("[MAIN] MQTT Event - duration command to: %s", mqtt_cmd["duration"])
+
+    if "mode" in mqtt_cmd:
+        # mode
+        mode_value = mqtt_cmd.get("mode")
+        if mode_value is None:
+            mode_value = base_control.get_current_overall_state_number()
+        # update the base control with the new charging state
+        base_control.set_mode_override(int(mode_value))
+        # update mqtt topics
+        mqtt_interface.update_publish_topics(
+            {
+                "control/override_charge_power": {
+                    "value": base_control.get_override_charge_rate() * 1000
+                },
+                "control/override_active": {
+                    "value": base_control.get_override_active_and_endtime()[0]
+                },
+                "control/override_end_time": {
+                    "value": (
+                        datetime.fromtimestamp(
+                            base_control.get_override_active_and_endtime()[1], time_zone
+                        )
+                    ).isoformat()
+                },
+            }
+        )
+        logger.info("[MAIN] MQTT Event - control command to: %s", mqtt_cmd["mode"])
+        change_control_state()
+    # Check for battery SOC limit keys
+    if "soc_min" in mqtt_cmd:
+        soc_min = int(mqtt_cmd.get("soc_min", battery_interface.get_min_soc()))
+        battery_interface.set_min_soc(soc_min)
+
+        mqtt_interface.update_publish_topics(
+            {
+                "battery/soc_min": {"value": battery_interface.get_min_soc()},
+            }
+        )
+        logger.info("[MAIN] MQTT Event - battery soc limit command: %s", mqtt_cmd)
+    if "soc_max" in mqtt_cmd:
+        soc_max = int(mqtt_cmd.get("soc_max", battery_interface.get_max_soc()))
+        battery_interface.set_max_soc(soc_max)
+
+        mqtt_interface.update_publish_topics(
+            {
+                "battery/soc_max": {"value": battery_interface.get_max_soc()},
+            }
+        )
+        logger.info("[MAIN] MQTT Event - battery soc limit command: %s", mqtt_cmd)
 
 
 mqtt_interface = MqttInterface(
@@ -399,12 +460,8 @@ def create_optimize_request():
                 "max_charge_power_w"
             ],
             "initial_soc_percentage": round(battery_interface.get_current_soc()),
-            "min_soc_percentage": config_manager.config["battery"][
-                "min_soc_percentage"
-            ],
-            "max_soc_percentage": config_manager.config["battery"][
-                "max_soc_percentage"
-            ],
+            "min_soc_percentage": battery_interface.get_min_soc(),
+            "max_soc_percentage": battery_interface.get_max_soc(),
         }
         if (
             eos_interface.get_eos_version() == ">=2025-04-09"
@@ -1069,6 +1126,8 @@ def change_control_state():
             "battery/dyn_max_charge_power": {
                 "value": battery_interface.get_max_charge_power()
             },
+            "battery/soc_min": {"value": battery_interface.get_min_soc()},
+            "battery/soc_max": {"value": battery_interface.get_max_soc()},
             "status": {"value": "online"},
         }
     )
@@ -1515,7 +1574,9 @@ def handle_mode_override():
             )
 
         # Apply the override
-        base_control.set_mode_override(mode, duration, grid_charge_power)
+        base_control.set_override_charge_rate(grid_charge_power)
+        base_control.set_override_duration(duration)
+        base_control.set_mode_override(mode)
         change_control_state()
         if mode == -1:
             logger.info("[Main] Mode override deactivated")
