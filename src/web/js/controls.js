@@ -428,7 +428,7 @@ class ControlsManager {
         // Update mode icon and click handler
         this.updateModeIcon(inverterModeNum, overrideActive, controlsData.battery.max_charge_power_dyn);
 
-        if (controlsData.used_optimization_source === "evcc_opt") {
+        if (controlsData.used_optimization_source === "evopt") {
             document.getElementById("experimental-banner").style.display = "flex";
         } else {
             document.getElementById("experimental-banner").style.display = "none";

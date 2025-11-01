@@ -204,10 +204,10 @@ async function init() {
 
         // Update or create chart using chartManager
         if (chartManager.chartInstance) {
-            chartManager.updateChart(data_request, data_response);
+            chartManager.updateChart(data_request, data_response, data_controls);
             document.getElementById('overlay').style.display = 'none';
         } else {
-            chartManager.createChart(data_request, data_response);
+            chartManager.createChart(data_request, data_response, data_controls);
             document.getElementById('overlay').style.display = 'none';
         }
 

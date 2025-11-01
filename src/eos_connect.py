@@ -86,6 +86,10 @@ time_zone = pytz.timezone(config_manager.config["time_zone"])
 LOGLEVEL = config_manager.config["log_level"].upper()
 logger.setLevel(LOGLEVEL)
 
+# global time frame base
+# time_frame_base = config_manager.config.get("timeframe_base", 3600)
+time_frame_base = 3600  # prep for future config entry
+
 # Now upgrade to timezone-aware formatter after config is loaded
 timezone_formatter = TimezoneFormatter(
     "%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S", tz=time_zone
@@ -108,11 +112,12 @@ logger.info(
 # initialize eos interface
 eos_interface = OptimizationInterface(
     config=config_manager.config["eos"],
+    time_frame_base=time_frame_base,
     timezone=time_zone,
 )
 
 # initialize base control
-base_control = BaseControl(config_manager.config, time_zone, 3600)
+base_control = BaseControl(config_manager.config, time_zone, time_frame_base)
 # initialize the inverter interface
 inverter_interface = None
 

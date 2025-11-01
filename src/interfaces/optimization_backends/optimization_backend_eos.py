@@ -22,8 +22,9 @@ class EOSBackend:
     Accepts and returns EOS-format requests/responses.
     """
 
-    def __init__(self, base_url, time_zone):
+    def __init__(self, base_url, time_frame_base, time_zone):
         self.base_url = base_url
+        self.time_frame_base = time_frame_base
         self.time_zone = time_zone
         self.last_optimization_runtimes = [0] * 5
         self.last_optimization_runtime_number = 0

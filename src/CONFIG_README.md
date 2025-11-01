@@ -81,7 +81,7 @@ A default config file will be created with the first start, if there is no `conf
 ### EOS Server Configuration
 
 - **`eos.source`**:  
-  EOS server source - eos_server, evcc_opt, default (default uses eos_server)
+  EOS server source - eos_server, evopt, default (default uses eos_server)
 
 - **`eos.server`**:  
   EOS or EVopt server address (e.g., `192.168.1.94`). (Mandatory)
@@ -397,7 +397,7 @@ load:
   additional_load_1_consumption: 1500 # consumption for additional load 1 in Wh - default: 0 (If not needed set to `additional_load_1_sensor: ""`)
 # EOS server configuration
 eos:
-  source: eos_server  # EOS server source - eos_server, evcc_opt, default (default uses eos_server)
+  source: eos_server  # EOS server source - eos_server, evopt, default (default uses eos_server)
   server: 192.168.1.94  # EOS server address
   port: 8503 # port for EOS server - default: 8503
   timeout: 180 # timeout for EOS optimize request in seconds - default: 180
@@ -479,7 +479,7 @@ load:
   car_charge_load_sensor: Wallbox_Power # item / entity for wallbox power data in watts. (If not needed, set to `load.car_charge_load_sensor: ""`)
 # EOS server configuration
 eos:
-  source: eos_server  # EOS server source - eos_server, evcc_opt, default (default uses eos_server)
+  source: eos_server  # EOS server source - eos_server, evopt, default (default uses eos_server)
   server: 192.168.1.94  # EOS server address
   port: 8503 # port for EOS server - default: 8503
   timeout: 180 # timeout for EOS optimize request in seconds - default: 180

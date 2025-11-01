@@ -4,13 +4,13 @@ backends such as EOS and EVopt. These tests validate correct integration, respon
 configuration management for different backend sources.
 Fixtures:
     - eos_server_config: Supplies a sample configuration dictionary for the EOS backend.
-    - evcc_opt_config: Supplies a sample configuration dictionary for the EVopt backend.
+    - evopt_config: Supplies a sample configuration dictionary for the EVopt backend.
     - berlin_timezone: Provides a pytz timezone object for Europe/Berlin.
     - sample_eos_request: Supplies a representative optimization request payload in EOS format.
 Test Cases:
     - test_eos_server_optimize: Verifies optimization with the EOS backend, ensuring the response
       structure and runtime value are as expected.
-    - test_evcc_opt_optimize: Verifies optimization with the EVopt backend, checking response
+    - test_evopt_optimize: Verifies optimization with the EVopt backend, checking response
       structure and runtime value.
     - test_control_data_tracking: Checks the extraction and type correctness of control data from
       optimization responses.
@@ -51,18 +51,29 @@ def fixture_eos_server_config():
     }
 
 
-@pytest.fixture(name="evcc_opt_config")
-def fixture_evcc_opt_config():
+@pytest.fixture(name="evopt_config")
+def fixture_evopt_config():
     """
     Provides a sample EVopt server configuration dictionary.
     Returns:
         dict: Configuration for EVopt backend.
     """
     return {
-        "source": "evcc_opt",
+        "source": "evopt",
         "server": "localhost",
         "port": 7050,
     }
+
+
+@pytest.fixture(name="time_frame_base")
+def fixture_time_frame_base():
+    """
+    Provides a timezone object for Europe/Berlin.
+    Returns:
+        pytz.timezone: Timezone object.
+    """
+
+    return 3600
 
 
 @pytest.fixture(name="berlin_timezone")
@@ -103,7 +114,9 @@ def fixture_sample_eos_request():
     }
 
 
-def test_eos_server_optimize(eos_server_config, berlin_timezone, sample_eos_request):
+def test_eos_server_optimize(
+    eos_server_config, time_frame_base, berlin_timezone, sample_eos_request
+):
     """
     Test optimization with EOS backend.
     Ensures the response is a dict and contains expected keys.
@@ -120,14 +133,18 @@ def test_eos_server_optimize(eos_server_config, berlin_timezone, sample_eos_requ
             },
             1.0,
         )
-        interface = OptimizationInterface(eos_server_config, berlin_timezone)
+        interface = OptimizationInterface(
+            eos_server_config, time_frame_base, berlin_timezone
+        )
         response, avg_runtime = interface.optimize(sample_eos_request)
         assert isinstance(response, dict)
         assert avg_runtime == 1.0
         assert "ac_charge" in response
 
 
-def test_evcc_opt_optimize(evcc_opt_config, berlin_timezone, sample_eos_request):
+def test_evopt_optimize(
+    evopt_config, time_frame_base, berlin_timezone, sample_eos_request
+):
     """
     Test optimization with EVopt backend.
     Ensures the response is a dict and contains expected keys.
@@ -144,14 +161,18 @@ def test_evcc_opt_optimize(evcc_opt_config, berlin_timezone, sample_eos_request)
             },
             1.0,
         )
-        interface = OptimizationInterface(evcc_opt_config, berlin_timezone)
+        interface = OptimizationInterface(
+            evopt_config, time_frame_base, berlin_timezone
+        )
         response, avg_runtime = interface.optimize(sample_eos_request)
         assert isinstance(response, dict)
         assert avg_runtime == 1.0
         assert "ac_charge" in response
 
 
-def test_control_data_tracking(eos_server_config, berlin_timezone, sample_eos_request):
+def test_control_data_tracking(
+    eos_server_config, time_frame_base, berlin_timezone, sample_eos_request
+):
     """
     Test control data tracking and response examination.
     Ensures correct types for control values.
@@ -168,7 +189,9 @@ def test_control_data_tracking(eos_server_config, berlin_timezone, sample_eos_re
             },
             1.0,
         )
-        interface = OptimizationInterface(eos_server_config, berlin_timezone)
+        interface = OptimizationInterface(
+            eos_server_config, time_frame_base, berlin_timezone
+        )
         response, _ = interface.optimize(sample_eos_request)
         ac, dc, discharge, error = interface.examine_response_to_control_data(response)
         assert isinstance(ac, float)
@@ -177,7 +200,7 @@ def test_control_data_tracking(eos_server_config, berlin_timezone, sample_eos_re
         assert isinstance(error, bool) or isinstance(error, int)
 
 
-def test_get_eos_version(eos_server_config, berlin_timezone):
+def test_get_eos_version(eos_server_config, time_frame_base, berlin_timezone):
     """
     Test EOS version retrieval from the backend.
     Ensures the correct version string is returned.
@@ -186,40 +209,46 @@ def test_get_eos_version(eos_server_config, berlin_timezone):
         "src.interfaces.optimization_backends.optimization_backend_eos.EOSBackend.get_eos_version"
     ) as mock_ver:
         mock_ver.return_value = "2025-04-09"
-        interface = OptimizationInterface(eos_server_config, berlin_timezone)
+        interface = OptimizationInterface(
+            eos_server_config, time_frame_base, berlin_timezone
+        )
         assert interface.get_eos_version() == "2025-04-09"
 
 
-def test_backend_selection_eos(eos_server_config, berlin_timezone):
+def test_backend_selection_eos(eos_server_config, time_frame_base, berlin_timezone):
     """
     Test that EOSBackend is selected for 'eos_server' source.
     """
-    interface = OptimizationInterface(eos_server_config, berlin_timezone)
+    interface = OptimizationInterface(
+        eos_server_config, time_frame_base, berlin_timezone
+    )
     assert interface.backend_type == "eos_server"
 
 
-def test_backend_selection_evcc(evcc_opt_config, berlin_timezone):
+def test_backend_selection_evcc(evopt_config, time_frame_base, berlin_timezone):
     """
-    Test that EVCCOptBackend is selected for 'evcc_opt' source.
+    Test that EVCCOptBackend is selected for 'evopt' source.
     """
-    interface = OptimizationInterface(evcc_opt_config, berlin_timezone)
-    assert interface.backend_type == "evcc_opt"
+    interface = OptimizationInterface(evopt_config, time_frame_base, berlin_timezone)
+    assert interface.backend_type == "evopt"
 
 
-def test_backend_selection_unknown(berlin_timezone):
+def test_backend_selection_unknown(time_frame_base, berlin_timezone):
     """
     Test that an unknown backend source raises an error or uses a default.
     """
     unknown_config = {"source": "unknown_backend", "server": "localhost", "port": 9999}
     with pytest.raises(Exception):
-        OptimizationInterface(unknown_config, berlin_timezone)
+        OptimizationInterface(unknown_config, time_frame_base, berlin_timezone)
 
 
-def test_interface_methods_exist(eos_server_config, berlin_timezone):
+def test_interface_methods_exist(eos_server_config, time_frame_base, berlin_timezone):
     """
     Test that OptimizationInterface exposes required methods.
     """
-    interface = OptimizationInterface(eos_server_config, berlin_timezone)
+    interface = OptimizationInterface(
+        eos_server_config, time_frame_base, berlin_timezone
+    )
     for method in [
         "optimize",
         "examine_response_to_control_data",
@@ -245,8 +274,9 @@ class DummyBackend:
             Simulates an optimization process and returns dummy results.
     """
 
-    def __init__(self, base_url, time_zone):
+    def __init__(self, base_url, time_frame_base, time_zone):
         self.base_url = base_url
+        self.time_frame_base = time_frame_base
         self.time_zone = time_zone
         self.backend_type = "dummy"
 
@@ -268,7 +298,7 @@ class DummyBackend:
         return {"ac_charge": [0.5] * 48}, 0.5
 
 
-def test_dummy_backend_integration(monkeypatch, berlin_timezone):
+def test_dummy_backend_integration(monkeypatch, time_frame_base, berlin_timezone):
     """
     Test that a new backend can be integrated without breaking the interface.
     """
@@ -277,17 +307,20 @@ def test_dummy_backend_integration(monkeypatch, berlin_timezone):
 
     orig_init = OptimizationInterface.__init__
 
-    def patched_init(self, config, timezone):
+    def patched_init(self, config, time_frame_base, timezone):
         self.eos_source = config.get("source", "eos_server")
         self.base_url = (
             f"http://{config.get('server', 'localhost')}:{config.get('port', 8503)}"
         )
+        self.time_frame_base = time_frame_base
         self.time_zone = timezone
         if self.eos_source == "dummy":
-            self.backend = DummyBackend(self.base_url, self.time_zone)
+            self.backend = DummyBackend(
+                self.base_url, self.time_frame_base, self.time_zone
+            )
             self.backend_type = "dummy"
         else:
-            orig_init(self, config, timezone)
+            orig_init(self, config, time_frame_base, timezone)
         self.last_start_solution = None
         self.home_appliance_released = False
         self.home_appliance_start_hour = None
@@ -309,13 +342,13 @@ def test_dummy_backend_integration(monkeypatch, berlin_timezone):
         ]
 
     monkeypatch.setattr(OptimizationInterface, "__init__", patched_init)
-    interface = OptimizationInterface(config, berlin_timezone)
+    interface = OptimizationInterface(config, time_frame_base, berlin_timezone)
     response, avg_runtime = interface.optimize({})
     assert response["ac_charge"][0] == 0.5
     assert avg_runtime == 0.5
 
 
-def test_backend_error_handling(eos_server_config, berlin_timezone):
+def test_backend_error_handling(eos_server_config, time_frame_base, berlin_timezone):
     """
     Test that backend errors are handled and do not crash the interface.
     """
@@ -323,7 +356,9 @@ def test_backend_error_handling(eos_server_config, berlin_timezone):
         "src.interfaces.optimization_backends.optimization_backend_eos.EOSBackend.optimize"
     ) as mock_opt:
         mock_opt.side_effect = Exception("Backend error")
-        interface = OptimizationInterface(eos_server_config, berlin_timezone)
+        interface = OptimizationInterface(
+            eos_server_config, time_frame_base, berlin_timezone
+        )
         with pytest.raises(Exception):
             interface.optimize({})
 
@@ -439,7 +474,7 @@ def test_calculate_next_run_time_patterns(scenario):
     current_time, update_interval, avg_runtime, expected_pattern = scenario
 
     config = {"source": "eos_server", "server": "localhost", "port": 1234}
-    ei = OptimizationInterface(config, None)
+    ei = OptimizationInterface(config, 3600, None)
 
     # Simulate multiple runs to see the pattern
     runs = []
@@ -505,7 +540,7 @@ def test_simulation_over_time():
     Show how the algorithm behaves over several consecutive runs.
     """
     config = {"source": "eos_server", "server": "localhost", "port": 1234}
-    ei = OptimizationInterface(config, None)
+    ei = OptimizationInterface(config, 3600, None)
 
     scenarios = [
         ("1min", 60),

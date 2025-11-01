@@ -30,6 +30,8 @@ class ScheduleManager {
         var manual_override_active_until = data_controls["current_states"]["override_end_time"];
         var max_charge_power_w = data_request["pv_akku"] && data_request["pv_akku"].hasOwnProperty("max_ladeleistung_w") ? data_request["pv_akku"]["max_ladeleistung_w"] : data_request["pv_akku"] ? data_request["pv_akku"]["max_charge_power_w"] : 0;
 
+        const evopt_in_charge = data_controls["used_optimization_source"] === "evopt";
+
         ac_charge = ac_charge.map((value, index) => value * max_charge_power_w);
         var priceData = data_response["result"]["Electricity_price"];
         var socData = data_response["result"]["akku_soc_pro_stunde"];
@@ -70,9 +72,13 @@ class ScheduleManager {
 
             var cell1 = document.createElement('div');
             cell1.className = 'table-cell';
-            // cell1.innerHTML = ((index + currentHour) % 24) + ":00";
             const labelTime = new Date(serverTime.getTime() + (index * 60 * 60 * 1000));
-            cell1.innerHTML = labelTime.getHours().toString().padStart(2, '0') + ":00";
+            if (evopt_in_charge && index === 0) {
+                cell1.innerHTML = labelTime.getHours().toString().padStart(2, '0') + ":" +
+                    labelTime.getMinutes().toString().padStart(2, '0');
+            } else {
+                cell1.innerHTML = labelTime.getHours().toString().padStart(2, '0') + ":00";
+            }
 
             cell1.style.textAlign = "right";
             row.appendChild(cell1);

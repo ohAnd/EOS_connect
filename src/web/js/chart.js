@@ -20,7 +20,7 @@ class ChartManager {
     /**
      * Update existing chart with new data
      */
-    updateChart(data_request, data_response) {
+    updateChart(data_request, data_response, data_controls) {
         if (!this.chartInstance) {
             console.warn('[ChartManager] No chart instance to update');
             return;
@@ -30,14 +30,25 @@ class ChartManager {
         const serverTime = new Date(data_response["timestamp"]);
         const currentHour = serverTime.getHours();
 
+        const evopt_in_charge = data_controls["used_optimization_source"] === "evopt";
+
         // Create labels in user's local timezone - showing only hours with :00
-        this.chartInstance.data.labels = Array.from({ length: data_response["result"]["Last_Wh_pro_Stunde"].length },
+        this.chartInstance.data.labels = Array.from(
+            { length: data_response["result"]["Last_Wh_pro_Stunde"].length },
             (_, i) => {
-                // Create a new date object for each hour label in user's timezone
                 const labelTime = new Date(serverTime.getTime() + (i * 60 * 60 * 1000));
-                const hour = labelTime.getHours();
-                return `${hour.toString().padStart(2, '0')}:00`;
-            });
+                if (evopt_in_charge && i === 0) {
+                    // Show current time as HH:MM for the first entry
+                    const hour = labelTime.getHours();
+                    const minute = labelTime.getMinutes();
+                    return `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+                } else {
+                    // Show HH:00 for all other entries
+                    const hour = labelTime.getHours();
+                    return `${hour.toString().padStart(2, '0')}:00`;
+                }
+            }
+        );
 
         // Calculate consumption (excluding home appliances)
         this.chartInstance.data.datasets[0].data = data_response["result"]["Last_Wh_pro_Stunde"].map((value, index) => {
@@ -98,7 +109,7 @@ class ChartManager {
     /**
      * Create new chart instance
      */
-    createChart(data_request, data_response) {
+    createChart(data_request, data_response, data_controls) {
         const ctx = document.getElementById('energyChart').getContext('2d');
         this.chartInstance = new Chart(ctx, {
             type: 'bar',
@@ -134,7 +145,7 @@ class ChartManager {
         // Set global reference for legacy compatibility
         chartInstance = this.chartInstance;
 
-        this.updateChart(data_request, data_response); // Feed the content immediately after creation
+        this.updateChart(data_request, data_response, data_controls); // Feed the content immediately after creation
     }
 
     /**
@@ -169,15 +180,15 @@ class ChartManager {
 }
 
 // Legacy compatibility functions
-function createChart(data_request, data_response) {
+function createChart(data_request, data_response, data_controls) {
     if (chartManager) {
-        chartManager.createChart(data_request, data_response);
+        chartManager.createChart(data_request, data_response, data_controls);
     }
 }
 
-function updateChart(data_request, data_response) {
+function updateChart(data_request, data_response, data_controls) {
     if (chartManager) {
-        chartManager.updateChart(data_request, data_response);
+        chartManager.updateChart(data_request, data_response, data_controls);
     }
 }
 

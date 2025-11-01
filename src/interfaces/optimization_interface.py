@@ -31,19 +31,24 @@ class OptimizationInterface:
     Handles backend selection and delegates all transformation logic to the backend.
     """
 
-    def __init__(self, config, timezone):
+    def __init__(self, config, time_frame_base, timezone):
         self.eos_source = config.get("source", "eos_server")
         self.base_url = (
             f"http://{config.get('server', '192.168.1.1')}:{config.get('port', 8503)}"
         )
+        self.time_frame_base = time_frame_base
         self.time_zone = timezone
 
-        if self.eos_source == "evcc_opt":
-            self.backend = EVOptBackend(self.base_url, self.time_zone)
-            self.backend_type = "evcc_opt"
+        if self.eos_source == "evopt":
+            self.backend = EVOptBackend(
+                self.base_url, self.time_frame_base, self.time_zone
+            )
+            self.backend_type = "evopt"
             logger.info("[OPT] Using EVopt backend")
         elif self.eos_source == "eos_server":
-            self.backend = EOSBackend(self.base_url, self.time_zone)
+            self.backend = EOSBackend(
+                self.base_url, self.time_frame_base, self.time_zone
+            )
             self.backend_type = "eos_server"
             logger.info("[OPT] Using EOS Server backend")
         else:

@@ -1,5 +1,5 @@
 """
-Module: optimization_backend_evcc_opt
+Module: optimization_backend_evopt
 This module provides the EVCCOptBackend class, which acts as a backend for EVopt optimization.
 It accepts EOS-format optimization requests, transforms them into the EVopt format, sends them
 to the EVopt server,
@@ -29,8 +29,9 @@ class EVOptBackend:
     Accepts EOS-format requests, transforms to EVopt format, and returns EOS-format responses.
     """
 
-    def __init__(self, base_url, time_zone):
+    def __init__(self, base_url, time_frame_base, time_zone):
         self.base_url = base_url
+        self.time_frame_base = time_frame_base
         self.time_zone = time_zone
         self.last_optimization_runtimes = [0] * 5
         self.last_optimization_runtime_number = 0
@@ -225,6 +226,16 @@ class EVOptBackend:
         p_max_imp = 10000
         p_max_exp = 10000
 
+        # Compute dt series based on time_frame_base
+        # Each entry corresponds to the time frame in seconds
+        # first entry may be shorter to align with time_frame_base
+        now = datetime.now(self.time_zone)
+        seconds_since_midnight = now.hour * 3600 + now.minute * 60 + now.second
+        dt_first_entry = self.time_frame_base - (
+            seconds_since_midnight % self.time_frame_base
+        )
+        dt_series = [dt_first_entry] + [self.time_frame_base] * (n - 1)
+
         evcc_req = {
             "strategy": {
                 "charging_strategy": "charge_before_export",
@@ -237,7 +248,7 @@ class EVOptBackend:
             },
             "batteries": batteries,
             "time_series": {
-                "dt": [3600.0] * n,
+                "dt": dt_series,
                 "gt": [float(x) for x in load_ts],
                 "ft": [float(x) for x in pv_ts],
                 "p_N": [float(x) for x in price_ts],
