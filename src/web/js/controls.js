@@ -481,6 +481,7 @@ class ControlsManager {
         document.getElementById('control_discharge_allowed').innerText = states.current_discharge_allowed ? "Yes" : "No";
 
         document.getElementById('current_controls_box').style.border = "";
+
     }
 
     /**

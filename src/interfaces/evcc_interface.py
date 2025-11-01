@@ -359,8 +359,6 @@ class EvccInterface:
                 if sum_mode_priority < CHARGING_MODE_PRIORITY[mode]:
                     sum_mode_priority = CHARGING_MODE_PRIORITY[mode]
                     sum_charging_mode = mode
-                if entry.get("smartCostActive", False):
-                    sum_smart_cost_active = True
         # if no loadpoints are charging, set charging mode to the first one
         if sum_charging_state is False:
             sum_charging_mode = (
