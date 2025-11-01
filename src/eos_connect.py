@@ -4,13 +4,14 @@ This module fetches energy data from OpenHAB, processes it, and creates a load p
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 import logging
 import json
 import threading
 import pytz
 import requests
+from flask import Flask, Response, render_template_string, request, send_from_directory
 from flask import Flask, Response, render_template_string, request, send_from_directory
 from version import __version__
 from config import ConfigManager
@@ -30,6 +31,11 @@ from interfaces.port_interface import PortInterface
 
 # Check Python version early
 if sys.version_info < (3, 11):
+    sys.stderr.write(
+        f"ERROR: Python 3.11 or higher is required. "
+        f"You are running Python {sys.version_info.major}.{sys.version_info.minor}\n"
+    )
+    sys.stderr.write("Please upgrade your Python installation.\n")
     sys.stderr.write(
         f"ERROR: Python 3.11 or higher is required. "
         f"You are running Python {sys.version_info.major}.{sys.version_info.minor}\n"
@@ -58,8 +64,12 @@ class TimezoneFormatter(logging.Formatter):
 
 
 ##################################################################################################
+##################################################################################################
 LOGLEVEL = logging.DEBUG  # start before reading the config file
 logger = logging.getLogger(__name__)
+
+# Basic formatter for startup logging (before config/timezone is available)
+basic_formatter = logging.Formatter(
 
 # Basic formatter for startup logging (before config/timezone is available)
 basic_formatter = logging.Formatter(
@@ -67,9 +77,11 @@ basic_formatter = logging.Formatter(
 )
 streamhandler = logging.StreamHandler(sys.stdout)
 streamhandler.setFormatter(basic_formatter)
+streamhandler.setFormatter(basic_formatter)
 logger.addHandler(streamhandler)
 logger.setLevel(LOGLEVEL)
 logger.info("[Main] Starting eos_connect - version: %s", __version__)
+
 
 ###################################################################################################
 base_path = os.path.dirname(os.path.abspath(__file__))
@@ -78,6 +90,7 @@ if len(sys.argv) > 1:
     current_dir = sys.argv[1]
 else:
     current_dir = base_path
+
 
 ###################################################################################################
 config_manager = ConfigManager(current_dir)
@@ -94,6 +107,16 @@ time_frame_base = 3600  # prep for future config entry
 timezone_formatter = TimezoneFormatter(
     "%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S", tz=time_zone
 )
+streamhandler.setFormatter(timezone_formatter)
+
+memory_handler = MemoryLogHandler(
+    max_records=10000,  # All log entries (mixed levels)
+    max_alerts=2000,  # Dedicated alert buffer (WARNING/ERROR/CRITICAL only)
+)
+memory_handler.setFormatter(timezone_formatter)  # Use timezone formatter for web logs
+logger.addHandler(memory_handler)
+logger.debug("[Main] Memory log handler initialized successfully")
+
 streamhandler.setFormatter(timezone_formatter)
 
 memory_handler = MemoryLogHandler(
@@ -325,6 +348,7 @@ battery_interface = BatteryInterface(
     on_bat_max_changed=None,
 )
 
+price_interface = PriceInterface(config_manager.config["price"], time_zone)
 price_interface = PriceInterface(config_manager.config["price"], time_zone)
 
 pv_interface = PvInterface(
@@ -655,11 +679,15 @@ class OptimizationScheduler:
         update_interval (int): The interval in seconds between optimization runs.
         _update_thread_optimization_loop (threading.Thread): The background thread
             running the optimization loop.
+        _update_thread_optimization_loop (threading.Thread): The background thread
+            running the optimization loop.
         _stop_event (threading.Event): An event used to signal the thread to stop.
     Methods:
         __start_update_service_optimization_loop():
+        __start_update_service_optimization_loop():
         shutdown():
         _update_state_loop():
+        __run_optimization_loop():
         __run_optimization_loop():
     """
 
@@ -691,7 +719,16 @@ class OptimizationScheduler:
             "next_run": None,
         }
         self._update_thread_optimization_loop = None
+        self._update_thread_optimization_loop = None
         self._stop_event = threading.Event()
+        self._last_avg_runtime = 120  # Initialize with a default value
+        self.__start_update_service_optimization_loop()
+        self._update_thread_control_loop = None
+        self._stop_event_control_loop = threading.Event()
+        self.__start_update_service_control_loop()
+        self._update_thread_data_loop = None
+        self._stop_event_data_loop = threading.Event()
+        self.__start_update_service_data_loop()
         self._last_avg_runtime = 120  # Initialize with a default value
         self.__start_update_service_optimization_loop()
         self._update_thread_control_loop = None
@@ -738,6 +775,7 @@ class OptimizationScheduler:
         self.current_state["next_run"] = next_run_time
 
     def __start_update_service_optimization_loop(self):
+    def __start_update_service_optimization_loop(self):
         """
         Starts the background thread to periodically update the state.
         """
@@ -745,13 +783,22 @@ class OptimizationScheduler:
             self._update_thread_optimization_loop is None
             or not self._update_thread_optimization_loop.is_alive()
         ):
+        if (
+            self._update_thread_optimization_loop is None
+            or not self._update_thread_optimization_loop.is_alive()
+        ):
             self._stop_event.clear()
+            self._update_thread_optimization_loop = threading.Thread(
+                target=self.__update_state_optimization_loop, daemon=True
             self._update_thread_optimization_loop = threading.Thread(
                 target=self.__update_state_optimization_loop, daemon=True
             )
             self._update_thread_optimization_loop.start()
             logger.info("[OPTIMIZATION] Update service Optimization Run started.")
+            self._update_thread_optimization_loop.start()
+            logger.info("[OPTIMIZATION] Update service Optimization Run started.")
 
+    def __update_state_optimization_loop(self):
     def __update_state_optimization_loop(self):
         """
         The loop that runs in the background thread to update the state.
@@ -789,8 +836,43 @@ class OptimizationScheduler:
                     seconds,
                 )
 
+                self.__run_optimization_loop()
+
+                # Calculate actual sleep time based on smart scheduling
+                loop_now = datetime.now(time_zone)
+                next_eval = eos_interface.calculate_next_run_time(
+                    loop_now,
+                    getattr(self, "_last_avg_runtime", 120),  # Use last known runtime
+                    self.update_interval,
+                )
+                actual_sleep_interval = max(10, (next_eval - loop_now).total_seconds())
+                self.__set_state_next_run(next_eval.astimezone(time_zone).isoformat())
+                mqtt_interface.update_publish_topics(
+                    {
+                        "optimization/last_run": {
+                            "value": self.get_current_state()["last_response_timestamp"]
+                        },
+                        "optimization/next_run": {
+                            "value": self.get_current_state()["next_run"]
+                        },
+                    }
+                )
+                minutes, seconds = divmod(actual_sleep_interval, 60)
+                logger.info(
+                    "[Main] Next optimization at %s (based on average runtime of %.0f seconds)."
+                    + " Sleeping for %d min %.0f seconds\n",
+                    next_eval.strftime("%H:%M:%S"),
+                    getattr(self, "_last_avg_runtime", 120),
+                    minutes,
+                    seconds,
+                )
+
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:
                 logger.error("[OPTIMIZATION] Error while updating state: %s", e)
+                actual_sleep_interval = self.update_interval  # Fallback on error
+
+            # Use the calculated sleep interval instead of fixed interval
+            while actual_sleep_interval > 0:
                 actual_sleep_interval = self.update_interval  # Fallback on error
 
             # Use the calculated sleep interval instead of fixed interval
@@ -799,9 +881,13 @@ class OptimizationScheduler:
                     return  # Exit immediately if stop event is set
                 time.sleep(min(1, actual_sleep_interval))  # Sleep in 1-second chunks
                 actual_sleep_interval -= 1
+                time.sleep(min(1, actual_sleep_interval))  # Sleep in 1-second chunks
+                actual_sleep_interval -= 1
 
         # self.__start_update_service_optimization_loop()
+        # self.__start_update_service_optimization_loop()
 
+    def __run_optimization_loop(self):
     def __run_optimization_loop(self):
         """
         Executes the optimization process by creating an optimization request,
@@ -830,6 +916,10 @@ class OptimizationScheduler:
         #     EOS_TGT_DURATION,
         #     datetime.now(time_zone).replace(hour=0, minute=0, second=0, microsecond=0),
         # )
+        # price_interface.update_prices(
+        #     EOS_TGT_DURATION,
+        #     datetime.now(time_zone).replace(hour=0, minute=0, second=0, microsecond=0),
+        # )
         # create optimize request
         json_optimize_input = create_optimize_request()
         self.__set_state_request()
@@ -845,6 +935,8 @@ class OptimizationScheduler:
         optimized_response, avg_runtime = eos_interface.optimize(
             json_optimize_input, config_manager.config["eos"]["timeout"]
         )
+        # Store the runtime for use in sleep calculation
+        self._last_avg_runtime = avg_runtime
         # Store the runtime for use in sleep calculation
         self._last_avg_runtime = avg_runtime
 
@@ -982,40 +1074,55 @@ class OptimizationScheduler:
         # )
 
     def __start_update_service_data_loop(self):
+    def __start_update_service_data_loop(self):
         """
         Starts the background thread to periodically update the state.
         """
         if (
             self._update_thread_data_loop is None
             or not self._update_thread_data_loop.is_alive()
+            self._update_thread_data_loop is None
+            or not self._update_thread_data_loop.is_alive()
         ):
+            self._stop_event_data_loop.clear()
+            self._update_thread_data_loop = threading.Thread(
+                target=self.__update_state_loop_data_loop, daemon=True
             self._stop_event_data_loop.clear()
             self._update_thread_data_loop = threading.Thread(
                 target=self.__update_state_loop_data_loop, daemon=True
             )
             self._update_thread_data_loop.start()
             logger.info("[OPTIMIZATION] Update service Data started.")
+            self._update_thread_data_loop.start()
+            logger.info("[OPTIMIZATION] Update service Data started.")
 
+    def __update_state_loop_data_loop(self):
     def __update_state_loop_data_loop(self):
         """
         The loop that runs in the background thread to update the state.
         """
         while not self._stop_event_data_loop.is_set():
+        while not self._stop_event_data_loop.is_set():
             try:
+                self.__run_data_loop()
                 self.__run_data_loop()
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:
                 logger.error(
+                    "[OPTIMIZATION] Error while running data control loop: %s", e
                     "[OPTIMIZATION] Error while running data control loop: %s", e
                 )
                 # Break the sleep interval into smaller chunks to allow immediate shutdown
             sleep_interval = 15
             while sleep_interval > 0:
                 if self._stop_event_data_loop.is_set():
+                if self._stop_event_data_loop.is_set():
                     return  # Exit immediately if stop event is set
                 time.sleep(min(1, sleep_interval))  # Sleep in 1-second chunks
                 sleep_interval -= 1
         self.__start_update_service_data_loop()
+        self.__start_update_service_data_loop()
 
+    def __run_data_loop(self):
     def __run_data_loop(self):
         if inverter_type in ["fronius_gen24", "fronius_gen24_legacy"]:
             inverter_interface.fetch_inverter_data()
@@ -1066,7 +1173,24 @@ class OptimizationScheduler:
             self._update_thread_optimization_loop
             and self._update_thread_optimization_loop.is_alive()
         ):
+        if (
+            self._update_thread_optimization_loop
+            and self._update_thread_optimization_loop.is_alive()
+        ):
             self._stop_event.set()
+            self._update_thread_optimization_loop.join()
+            logger.info("[OPTIMIZATION] Update service Optimization Loop stopped.")
+        if (
+            self._update_thread_control_loop
+            and self._update_thread_control_loop.is_alive()
+        ):
+            self._stop_event_control_loop.set()
+            self._update_thread_control_loop.join()
+            logger.info("[OPTIMIZATION] Update service Control Loop stopped.")
+        if self._update_thread_data_loop and self._update_thread_data_loop.is_alive():
+            self._stop_event_data_loop.set()
+            self._update_thread_data_loop.join()
+            logger.info("[OPTIMIZATION] Update service Data Loop stopped.")
             self._update_thread_optimization_loop.join()
             logger.info("[OPTIMIZATION] Update service Optimization Loop stopped.")
         if (
@@ -1172,6 +1296,7 @@ def change_control_state():
 
     # Check if the overall state of the inverter was changed recently
     if base_control.was_overall_state_changed_recently():
+    if base_control.was_overall_state_changed_recently():
         logger.debug("[Main] Overall state changed recently")
         # MODE_CHARGE_FROM_GRID
         if current_overall_state == 0:
@@ -1259,6 +1384,12 @@ def change_control_state():
             + " - remaining in current state: %s  (_____OOOOO_____)",
             current_overall_state_text,
         )
+    if datetime.now().minute % 5 == 0 and datetime.now().second == 0:
+        logger.info(
+            "[Main] Overall state not changed recently"
+            + " - remaining in current state: %s  (_____OOOOO_____)",
+            current_overall_state_text,
+        )
     return False
 
 
@@ -1269,6 +1400,22 @@ mqtt_interface.on_mqtt_command = mqtt_control_callback
 
 # web server
 app = Flask(__name__)
+
+
+# legacy web site support
+@app.route("/index_legacy.html", methods=["GET"])
+def main_page_legacy():
+    """
+    Renders the main page of the web application.
+
+    This function reads the content of the 'index.html' file located in the 'web' directory
+    and returns it as a rendered template string.
+    """
+    with open(base_path + "/web/index_legacy.html", "r", encoding="utf-8") as html_file:
+        return render_template_string(html_file.read())
+
+
+# new web site support
 
 
 # legacy web site support
@@ -1301,7 +1448,41 @@ def main_page():
 
 @app.route("/js/<filename>")
 def serve_js_files(filename):
+@app.route("/js/<filename>")
+def serve_js_files(filename):
     """
+    Dynamically serve JavaScript files from the js directory.
+    This allows adding new JS modules without modifying the server code.
+    """
+    try:
+        js_directory = os.path.join(os.path.dirname(__file__), "web", "js")
+
+        # Security check: only allow .js files
+        if not filename.endswith(".js"):
+            logger.warning("[Web] Blocked attempt to serve non-JS file: %s", filename)
+            return "Not Found", 404
+
+        # Check if file exists
+        file_path = os.path.join(js_directory, filename)
+        if not os.path.exists(file_path):
+            logger.warning("[Web] JavaScript file not found: %s", filename)
+            return "Not Found", 404
+
+        # logger.debug("[Web] Serving JavaScript file: %s", filename)
+        return send_from_directory(
+            js_directory, filename, mimetype="application/javascript"
+        )
+
+    except (OSError, IOError, ValueError) as e:
+        logger.error("[Web] Error serving JavaScript file %s: %s", filename, e)
+        return "Server Error", 500
+
+
+# Also add CSS file serving for completeness
+@app.route("/css/<filename>")
+def serve_css_files(filename):
+    """
+    Dynamically serve CSS files from the web directory.
     Dynamically serve JavaScript files from the js directory.
     This allows adding new JS modules without modifying the server code.
     """
@@ -1355,6 +1536,26 @@ def serve_css_files(filename):
     except (OSError, IOError, ValueError) as e:
         logger.error("[Web] Error serving CSS file %s: %s", filename, e)
         return "Server Error", 500
+    try:
+        web_directory = os.path.join(os.path.dirname(__file__), "web", "css")
+
+        # Security check: only allow .css files
+        if not filename.endswith(".css"):
+            logger.warning("[Web] Blocked attempt to serve non-CSS file: %s", filename)
+            return "Not Found", 404
+
+        # Check if file exists
+        file_path = os.path.join(web_directory, filename)
+        if not os.path.exists(file_path):
+            logger.warning("[Web] CSS file not found: %s", filename)
+            return "Not Found", 404
+
+        # logger.debug("[Web] Serving CSS file: %s", filename)
+        return send_from_directory(web_directory, filename, mimetype="text/css")
+
+    except (OSError, IOError, ValueError) as e:
+        logger.error("[Web] Error serving CSS file %s: %s", filename, e)
+        return "Server Error", 500
 
 
 @app.route("/json/optimize_request.json", methods=["GET"])
@@ -1379,11 +1580,15 @@ def get_optimize_response():
     )
 
 
+
 @app.route("/json/optimize_request.test.json", methods=["GET"])
 def get_optimize_request_test():
     """
     Retrieves the last optimization request and returns it as a JSON response.
     """
+    with open(
+        base_path + "/json/optimize_request.test.json", "r", encoding="utf-8"
+    ) as file:
     with open(
         base_path + "/json/optimize_request.test.json", "r", encoding="utf-8"
     ) as file:
@@ -1393,11 +1598,15 @@ def get_optimize_request_test():
         )
 
 
+
 @app.route("/json/optimize_response.test.json", methods=["GET"])
 def get_optimize_response_test():
     """
     Retrieves the last optimization response and returns it as a JSON response.
     """
+    with open(
+        base_path + "/json/optimize_response.test.json", "r", encoding="utf-8"
+    ) as file:
     with open(
         base_path + "/json/optimize_response.test.json", "r", encoding="utf-8"
     ) as file:
@@ -1470,6 +1679,62 @@ def get_controls():
     }
     return Response(
         json.dumps(response_data, indent=4), content_type="application/json"
+    )
+
+
+@app.route("/json/test/<filename>")
+def serve_test_json_files(filename):
+    """
+    Dynamically serve test JSON files from the json directory.
+    This allows adding new test JSON files without modifying the server code.
+    Supports all test files like current_controls.test.json, optimize_request.test.json, etc.
+    """
+    try:
+        # Test files are in the json/test/ subdirectory
+        json_test_directory = os.path.join(os.path.dirname(__file__), "json", "test")
+
+        # Security check: only allow .json files
+        if not filename.endswith(".json"):
+            logger.warning("[Web] Blocked attempt to serve non-JSON file: %s", filename)
+            return Response(
+                '{"error": "Invalid file type"}',
+                status=400,
+                content_type="application/json",
+            )
+
+        # Additional security: only allow files with .test.json ending
+        # (all test files must follow this naming convention)
+        if not filename.endswith(".test.json"):
+            logger.warning(
+                "[Web] Blocked attempt to serve non-test JSON file: %s", filename
+            )
+            return Response(
+                '{"error": "Access denied - not a test file"}',
+                status=403,
+                content_type="application/json",
+            )
+
+        # Check if file exists in test directory
+        file_path = os.path.join(json_test_directory, filename)
+        if not os.path.exists(file_path):
+            logger.warning("[Web] Test JSON file not found: %s", filename)
+            logger.debug("[Web] Looked in directory: %s", json_test_directory)
+            return Response(
+                '{"error": "Test file not found"}',
+                status=404,
+                content_type="application/json",
+            )
+
+        # logger.info("[Web] Serving test JSON file: %s from %s", filename, json_test_directory)
+        return send_from_directory(
+            json_test_directory, filename, mimetype="application/json"
+        )
+
+    except (OSError, IOError, ValueError) as e:
+        logger.error("[Web] Error serving test JSON file %s: %s", filename, e)
+        return Response(
+            '{"error": "Server error"}', status=500, content_type="application/json"
+        )
     )
 
 
@@ -1785,6 +2050,154 @@ def get_log_stats():
         )
 
 
+@app.route("/logs", methods=["GET"])
+def get_logs():
+    """
+    Retrieve application logs with optional filtering.
+
+    Query parameters:
+    - level: Filter by log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    - limit: Maximum number of records to return (default: 100)
+    - since: ISO timestamp to get logs since that time
+    """
+    try:
+        level_filter = request.args.get("level")
+        limit = int(request.args.get("limit", 100))
+        since = request.args.get("since")
+
+        logs = memory_handler.get_logs(
+            level_filter=level_filter, limit=limit, since=since
+        )
+
+        response_data = {
+            "logs": logs,
+            "total_count": len(logs),
+            "timestamp": datetime.now(time_zone).isoformat(),
+            "filters_applied": {"level": level_filter, "limit": limit, "since": since},
+        }
+
+        return Response(
+            json.dumps(response_data, indent=2), content_type="application/json"
+        )
+
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error("[Web] Error retrieving logs: %s", e)
+        return Response(
+            json.dumps({"error": "Failed to retrieve logs"}),
+            status=500,
+            content_type="application/json",
+        )
+
+
+@app.route("/logs/alerts", methods=["GET"])
+def get_alerts():
+    """
+    Retrieve warning and error logs for alert system.
+    """
+    try:
+        alerts = memory_handler.get_alerts()
+
+        # Group alerts by level for easier processing
+        grouped_alerts = {
+            "WARNING": [a for a in alerts if a["level"] == "WARNING"],
+            "ERROR": [a for a in alerts if a["level"] == "ERROR"],
+            "CRITICAL": [a for a in alerts if a["level"] == "CRITICAL"],
+        }
+
+        response_data = {
+            "alerts": alerts,
+            "grouped_alerts": grouped_alerts,
+            "alert_counts": {
+                level: len(items) for level, items in grouped_alerts.items()
+            },
+            "timestamp": datetime.now(time_zone).isoformat(),
+        }
+
+        return Response(
+            json.dumps(response_data, indent=2), content_type="application/json"
+        )
+
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error("[Web] Error retrieving alerts: %s", e)
+        return Response(
+            json.dumps({"error": "Failed to retrieve alerts"}),
+            status=500,
+            content_type="application/json",
+        )
+
+
+@app.route("/logs/clear", methods=["POST"])
+def clear_logs():
+    """
+    Clear all stored logs from memory (file logs remain intact).
+    """
+    try:
+        memory_handler.clear_logs()
+        logger.info("[Web] Memory logs cleared via web API")
+
+        return Response(
+            json.dumps({"status": "success", "message": "Logs cleared"}),
+            content_type="application/json",
+        )
+
+    except (RuntimeError, ValueError, TypeError, KeyError) as e:
+        logger.error("[Web] Error clearing logs: %s", e)
+        return Response(
+            json.dumps({"error": "Failed to clear logs"}),
+            status=500,
+            content_type="application/json",
+        )
+
+
+@app.route("/logs/alerts/clear", methods=["POST"])
+def clear_alerts_only():
+    """
+    Clear only alert logs from memory, keeping regular logs intact.
+    """
+    try:
+        memory_handler.clear_alerts_only()
+        logger.info("[Web] Alert logs cleared via web API")
+
+        return Response(
+            json.dumps({"status": "success", "message": "Alert logs cleared"}),
+            content_type="application/json",
+        )
+
+    except (RuntimeError, ValueError, TypeError, KeyError) as e:
+        logger.error("[Web] Error clearing alert logs: %s", e)
+        return Response(
+            json.dumps({"error": "Failed to clear alert logs"}),
+            status=500,
+            content_type="application/json",
+        )
+
+
+@app.route("/logs/stats", methods=["GET"])
+def get_log_stats():
+    """
+    Get buffer usage statistics.
+    """
+    try:
+        stats = memory_handler.get_buffer_stats()
+
+        response_data = {
+            "buffer_stats": stats,
+            "timestamp": datetime.now(time_zone).isoformat(),
+        }
+
+        return Response(
+            json.dumps(response_data, indent=2), content_type="application/json"
+        )
+
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error("[Web] Error retrieving buffer stats: %s", e)
+        return Response(
+            json.dumps({"error": "Failed to retrieve buffer stats"}),
+            status=500,
+            content_type="application/json",
+        )
+
+
 if __name__ == "__main__":
     http_server = None
     try:
@@ -1817,6 +2230,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     except (OSError, ImportError) as e:
+    except (OSError, ImportError) as e:
         # Only handle truly unexpected errors (not port-related)
         logger.error("[Main] Unexpected error: %s", str(e))
         logger.error("[Main] EOS Connect cannot start. Please check the logs.")
@@ -1839,11 +2253,13 @@ if __name__ == "__main__":
             inverter_interface.shutdown()
         pv_interface.shutdown()
         price_interface.shutdown()
+        price_interface.shutdown()
         mqtt_interface.shutdown()
         evcc_interface.shutdown()
         battery_interface.shutdown()
         logger.info("[Main] Server stopped gracefully")
     finally:
+        logging.shutdown()  # This will call close() on all handlers
         logging.shutdown()  # This will call close() on all handlers
         logger.info("[Main] Cleanup complete. Goodbye!")
         sys.exit(0)

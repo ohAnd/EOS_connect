@@ -1009,7 +1009,6 @@
                 // cell1.innerHTML = ((index + currentHour) % 24) + ":00";
                 const labelTime = new Date(serverTime.getTime() + (index * 60 * 60 * 1000));
                 cell1.innerHTML = labelTime.getHours().toString().padStart(2, '0') + ":00";
-
                 cell1.style.textAlign = "right";
                 row.appendChild(cell1);
 

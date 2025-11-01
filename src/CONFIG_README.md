@@ -282,6 +282,26 @@ Refer to this table and details when editing your `config.yaml` and for troubles
 4. Get your API key from the account settings
 5. Use these values in your EOS Connect configuration (including lat/lon for temperature forecasts)
 
+- **`resource_id`**:  
+  (Solcast only) The resource ID from your Solcast rooftop site configuration. Required when using Solcast as the PV forecast source. Not used by other providers.
+
+
+**Special Configuration for Solcast:**
+
+When using `source: solcast`, the configuration requirements are different:
+
+- **`api_key`** (in `pv_forecast_source`): Required. Your Solcast API key obtained from your Solcast account.
+- **`resource_id`** (in each `pv_forecast` entry): Required. The resource ID from your Solcast rooftop site configuration.
+- **Location parameters for temperature forecasts**: While `azimuth`, `tilt`, and `horizon` are configured in your Solcast dashboard and ignored by EOS Connect, **`lat` and `lon` are still required** for fetching temperature forecasts that EOS needs for accurate optimization calculations.
+- **`power`, `powerInverter`, `inverterEfficiency`**: Still required for system scaling and efficiency calculations.
+
+**Setting up Solcast:**
+1. Create a free account at [solcast.com](https://solcast.com/)
+2. Configure a "Rooftop Site" with your PV system details (location, tilt, azimuth, capacity)
+3. Copy the Resource ID from your rooftop site
+4. Get your API key from the account settings
+5. Use these values in your EOS Connect configuration (including lat/lon for temperature forecasts)
+
 ---
 
 ### Inverter Configuration
@@ -428,7 +448,10 @@ battery:
 pv_forecast_source:
   source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default (default uses akkudoktor)
   api_key: "" # API key for Solcast (required only when source is 'solcast')
+  source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default (default uses akkudoktor)
+  api_key: "" # API key for Solcast (required only when source is 'solcast')
 # List of PV forecast configurations. Add multiple entries as needed.
+# See Akkudtor API (https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast) for more details.
 # See Akkudtor API (https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast) for more details.
 pv_forecast:
   - name: myPvInstallation1  # User-defined identifier for the PV installation, have to be unique if you use more installations
@@ -440,6 +463,7 @@ pv_forecast:
     powerInverter: 5000 # Power Inverter for PV forecast
     inverterEfficiency: 0.9 # Inverter Efficiency for PV forecast
     horizon: 10,20,10,15 # Horizon to calculate shading up to 360 values to describe shading situation for your PV.
+    resource_id: "" # Resource ID for Solcast (required only when source is 'solcast')
     resource_id: "" # Resource ID for Solcast (required only when source is 'solcast')
 # Inverter configuration
 inverter:
@@ -504,7 +528,10 @@ battery:
 pv_forecast_source:
   source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default (default uses akkudoktor)
   api_key: "" # API key for Solcast (required only when source is 'solcast')
+  source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default (default uses akkudoktor)
+  api_key: "" # API key for Solcast (required only when source is 'solcast')
 # List of PV forecast configurations. Add multiple entries as needed.
+# See Akkudtor API (https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast) for more details.
 # See Akkudtor API (https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast) for more details.
 pv_forecast:
   - name: myPvInstallation1  # User-defined identifier for the PV installation, have to be unique if you use more installations
@@ -552,6 +579,7 @@ evcc:
 
 In this configuration:
 - EVCC handles all PV installation details and provides aggregated forecasts
+- The `pv_forecast` section requires at least one entry with valid `lat` and `lon` coordinates for temperature forecasts that EOS needs for accurate optimization
 - The `pv_forecast` section requires at least one entry with valid `lat` and `lon` coordinates for temperature forecasts that EOS needs for accurate optimization
 - The `evcc.url` must point to a reachable EVCC instance with API access enabled
 - Temperature forecasts are essential for EOS optimization calculations, regardless of PV forecast source

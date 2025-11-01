@@ -117,6 +117,9 @@ class BatteryInterface:
                     "[BATTERY-IF] Detected decimal format (0.0-1.0): %s -> %s%%",
                     raw_value,
                     soc,
+                    "[BATTERY-IF] Detected decimal format (0.0-1.0): %s -> %s%%",
+                    raw_value,
+                    soc,
                 )
             else:
                 soc = raw_value  # Already in percentage format
@@ -125,11 +128,19 @@ class BatteryInterface:
                 )
             self.soc_fail_count = 0  # Reset fail count on success
             return round(soc, 1)
+                logger.debug(
+                    "[BATTERY-IF] Detected percentage format (0-100): %s%%", soc
+                )
+            self.soc_fail_count = 0  # Reset fail count on success
+            return round(soc, 1)
         except requests.exceptions.Timeout:
+            return self._handle_soc_error(
+                "openhab", "Request timed out", self.current_soc
             return self._handle_soc_error(
                 "openhab", "Request timed out", self.current_soc
             )
         except requests.exceptions.RequestException as e:
+            return self._handle_soc_error("openhab", e, self.current_soc)
             return self._handle_soc_error("openhab", e, self.current_soc)
 
     def __fetch_soc_data_from_homeassistant(self):
@@ -158,12 +169,17 @@ class BatteryInterface:
             entity_data = response.json()
             soc = float(entity_data["state"])
             self.soc_fail_count = 0  # Reset fail count on success
+            self.soc_fail_count = 0  # Reset fail count on success
             return round(soc, 1)
         except requests.exceptions.Timeout:
             return self._handle_soc_error(
                 "homeassistant", "Request timed out", self.current_soc
             )
+            return self._handle_soc_error(
+                "homeassistant", "Request timed out", self.current_soc
+            )
         except requests.exceptions.RequestException as e:
+            return self._handle_soc_error("homeassistant", e, self.current_soc)
             return self._handle_soc_error("homeassistant", e, self.current_soc)
 
     def __battery_request_current_soc(self):
@@ -172,12 +188,17 @@ class BatteryInterface:
         """
         # default value for start SOC = 5
         default = False
+        default = False
         if self.src == "default":
+            self.current_soc = 5
+            default = True
             self.current_soc = 5
             default = True
             logger.debug("[BATTERY-IF] source set to default with start SOC = 5%")
         elif self.src == "openhab":
+        elif self.src == "openhab":
             self.current_soc = self.__fetch_soc_data_from_openhab()
+        elif self.src == "homeassistant":
         elif self.src == "homeassistant":
             self.current_soc = self.__fetch_soc_data_from_homeassistant()
         else:
@@ -341,6 +362,7 @@ class BatteryInterface:
         else:
             # Logarithmic decrease of C-rate after 50% SOC
             c_rate = max(min_c_rate, max_c_rate * (1 - (soc - 50) / 60) ** 2)
+            c_rate = max(min_c_rate, max_c_rate * (1 - (soc - 50) / 60) ** 2)
 
         # Calculate the maximum charge power in watts
         max_charge_power = c_rate * battery_capacity_wh
@@ -355,6 +377,8 @@ class BatteryInterface:
         if self.max_charge_power_dyn != self.last_max_charge_power_dyn:
             self.last_max_charge_power_dyn = self.max_charge_power_dyn
             logger.info(
+                "[BATTERY-IF] Max dynamic charge power changed to %s W",
+                self.max_charge_power_dyn,
                 "[BATTERY-IF] Max dynamic charge power changed to %s W",
                 self.max_charge_power_dyn,
             )

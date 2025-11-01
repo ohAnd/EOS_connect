@@ -56,11 +56,8 @@ class ScheduleManager {
             var currentModeAtHour = (ac_charge[(index + currentHour)]) ? 0 : (discharge_allowed[(index + currentHour)] === 1) ? 2 : 1;
 
             if ((index + 1) % 4 === 0 && (index + 1) !== 0) {
-                var row = document.createElement('div');
                 row.className = 'table-row';
                 row.style.borderBottom = "1px solid #707070";
-                row.style.height = "5px";
-                tableBody.appendChild(row); // Append the row to the table body
                 var row = document.createElement('div');
                 row.className = 'table-row';
                 row.style.height = "5px";

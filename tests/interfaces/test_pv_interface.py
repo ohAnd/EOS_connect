@@ -145,7 +145,6 @@ def test_retry_request_handles_timeout():
     """
     Test that _retry_request handles timeout exceptions.
     """
-
     pv = PvInterface({}, [], {}, timezone="UTC")
     call_count = {"count": 0}
 
@@ -172,7 +171,6 @@ def test_retry_request_handles_request_exception():
     """
     Test that _retry_request handles generic request exceptions.
     """
-
     pv = PvInterface({}, [], {}, timezone="UTC")
     call_count = {"count": 0}
 

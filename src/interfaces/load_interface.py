@@ -5,6 +5,7 @@ load profiles based on historical energy consumption data.
 """
 
 from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 from urllib.parse import quote
 import time
@@ -29,6 +30,7 @@ class LoadInterface:
         self,
         config,
         tz_name=None,  # Changed default to None
+        tz_name=None,  # Changed default to None
     ):
         self.src = config.get("source", "")
         self.url = config.get("url", "")
@@ -49,7 +51,9 @@ class LoadInterface:
 
         # Handle timezone properly
         if tz_name == "UTC" or tz_name is None:
+        if tz_name == "UTC" or tz_name is None:
             self.time_zone = None  # Use local timezone
+        elif isinstance(tz_name, str):
         elif isinstance(tz_name, str):
             # Try to convert string timezone to proper timezone object
             try:
@@ -62,6 +66,7 @@ class LoadInterface:
                 except pytz.UnknownTimeZoneError:
                     logger.warning(
                         "[LOAD-IF] Cannot parse timezone '%s', using local time",
+                        tz_name,
                         tz_name,
                     )
                     self.time_zone = None
@@ -191,6 +196,8 @@ class LoadInterface:
             filtered_data = [
                 {
                     "state": entry["state"],
+                    "last_updated": datetime.fromtimestamp(
+                        entry["time"] / 1000, tz=timezone.utc
                     "last_updated": datetime.fromtimestamp(
                         entry["time"] / 1000, tz=timezone.utc
                     ).isoformat(),
@@ -337,6 +344,15 @@ class LoadInterface:
                         + quote((current_time + timedelta(hours=2)).isoformat())
                         + ")"
                     )
+                logger.info(
+                    "[LOAD-IF] Skipping invalid sensor data for '%s' at %s: state '%s' cannot be"
+                    + " processed (%s). "
+                    "This may indicate missing or corrupted data in the database. %s",
+                    debug_sensor if debug_sensor is not None else "unknown sensor",
+                    datetime.fromisoformat(data["data"][i]["last_updated"]).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                    data["data"][i]["state"],
                 logger.info(
                     "[LOAD-IF] Skipping invalid sensor data for '%s' at %s: state '%s' cannot be"
                     + " processed (%s). "
@@ -553,7 +569,9 @@ class LoadInterface:
                         + "&end_date="
                         + quote((current_time + timedelta(hours=2)).isoformat())
                         + " )"
+                        + " )"
                     )
+                logger.warning(
                 logger.warning(
                     "[LOAD-IF] DATA ERROR load smaller than car load "
                     + "- Energy for %s: %5.1f Wh (sum add energy %5.1f Wh - car load: %5.1f Wh) %s",
@@ -565,6 +583,7 @@ class LoadInterface:
                 )
             if energy == 0:
                 logger.debug(
+                logger.debug(
                     "[LOAD-IF] load = 0 ... Energy for %s: %5.1f Wh"
                     + " (sum add energy %5.1f Wh - car load: %5.1f Wh)",
                     current_hour,
@@ -573,6 +592,7 @@ class LoadInterface:
                     round(car_load_energy, 1),
                 )
 
+            load_profile.append(energy)
             load_profile.append(energy)
             logger.debug(
                 "[LOAD-IF] Energy for %s: %5.1f Wh (sum add energy %5.1f Wh - car load: %5.1f Wh)",
@@ -702,6 +722,43 @@ class LoadInterface:
                     + " will improve with collected data"
                 )
 
+
+        # Check if load profile contains useful values (not all zeros)
+        if not load_profile or all(value == 0 for value in load_profile):
+            logger.info(
+                "[LOAD-IF] No historical data available from 7 and 14 days ago. "
+                + "This is normal for new installations - using yesterday's data as fallback. "
+                + "Load profiles will improve automatically as the system collects"
+                + " more historical data."
+            )
+            # Get yesterday's load profile
+            yesterday = now.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) - timedelta(days=1)
+            yesterday_profile = self.get_load_profile_for_day(
+                yesterday, yesterday + timedelta(days=1)
+            )
+
+            # Double yesterday's profile to create 48 hours
+            if yesterday_profile and not all(value == 0 for value in yesterday_profile):
+                load_profile = yesterday_profile + yesterday_profile
+                logger.info(
+                    "[LOAD-IF] Using yesterday's consumption pattern doubled"
+                    + " for 48-hour forecast"
+                )
+            else:
+                logger.info(
+                    "[LOAD-IF] No recent consumption data available yet. "
+                    + "Using built-in default profile as temporary fallback. "
+                    + "This will automatically switch to real data as your system runs"
+                    + " and collects sensor data."
+                )
+                load_profile = self._get_default_profile()
+                logger.info(
+                    "[LOAD-IF] Temporary default profile active -"
+                    + " will improve with collected data"
+                )
+
         return load_profile
 
     def get_load_profile(self, tgt_duration, start_time=None):
@@ -722,6 +779,32 @@ class LoadInterface:
         Returns:
             list: A list of energy consumption values for the specified duration.
         """
+        if self.src == "default":
+            logger.info("[LOAD-IF] Using load source default")
+            return self._get_default_profile()[:tgt_duration]
+        if self.src in ("openhab", "homeassistant"):
+            if self.load_sensor == "" or self.load_sensor is None:
+                logger.error(
+                    "[LOAD-IF] Load sensor not configured for source '%s'. Using default.",
+                    self.src,
+                )
+                return self._get_default_profile()[:tgt_duration]
+            return self.__create_load_profile_weekdays()
+
+        logger.error(
+            "[LOAD-IF] Load source '%s' currently not supported. Using default.",
+            self.src,
+        )
+        return self._get_default_profile()[:tgt_duration]
+
+    def _get_default_profile(self):
+        """
+        Returns the default load profile that can be reused across methods.
+
+        Returns:
+            list: A list of 48 default energy consumption values.
+        """
+        return [
         if self.src == "default":
             logger.info("[LOAD-IF] Using load source default")
             return self._get_default_profile()[:tgt_duration]

@@ -121,7 +121,6 @@ async function showCurrentData() {
         newMenuElement.addEventListener('click', function () {
             showMainMenu(data_controls["eos_connect_version"]);
         });
-
         console.log('[Main] Updated menu element and preserved notification dot');
     }
 }
