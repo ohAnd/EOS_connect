@@ -86,16 +86,16 @@ class ControlsManager {
                         min-width: 150px;
                     ">
                         ${Array.from({ length: 48 }, (_, i) => {
-                            const hours = Math.floor((i + 1) / 2);
-                            const minutes = ((i + 1) % 2) * 30;
-                            const timeLabel = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-                            return `<option value="${timeLabel}" ${hours === 2 && minutes === 0 ? 'selected' : ''}>${timeLabel}</option>`;
-                        }).join('')}
+            const hours = Math.floor((i + 1) / 2);
+            const minutes = ((i + 1) % 2) * 30;
+            const timeLabel = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+            return `<option value="${timeLabel}" ${hours === 2 && minutes === 0 ? 'selected' : ''}>${timeLabel}</option>`;
+        }).join('')}
                     </select>
                 </div>
 
                 <!-- Grid Charge Power Section (Only for Mode 0) -->
-                ${ currentModeNum === 0 && overrideActive ? '' : `
+                ${currentModeNum === 0 && overrideActive ? '' : `
                 <div id="grid-power-section" style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 25px; border-left: 4px solid ${EOS_CONNECT_ICONS[0].color}; margin-bottom: 15px; ">
                     <div style="font-size: 1.1em; color: ${EOS_CONNECT_ICONS[0].color}; margin-bottom: 15px; font-weight: bold;">
                         <i class="fas fa-bolt" style="margin-right: 10px;"></i>Grid Charge Power (kW)<br> <span style="font-size: 0.75em; color: #888; font-weight: normal;">Mode '${EOS_CONNECT_ICONS[0].title}' Only</span>
@@ -166,19 +166,19 @@ class ControlsManager {
                     
                     <div style="display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; margin-bottom: 20px;">
                         ${EOS_CONNECT_ICONS.slice(0, 3).map((icon, index) => {
-                            // Mode numbers in data are 1-based (1,2,3) but our array is 0-based (0,1,2)
-                            // So we need to compare (currentModeNum - 1) with index, OR currentModeNum with (index + 1)
-                            // const isCurrentMode = overrideActive && (currentModeNum === (index + 1));
-                            const isCurrentMode = (currentModeNum === (index));
-                            const isDisabled = isCurrentMode;
-                            const buttonColor = isDisabled ? '#666' : icon.color;
-                            const bgColor = isDisabled ? 'rgba(51, 51, 51, 0.8)' : 'rgba(58, 58, 58, 0.8)';
-                            console.log(`[ControlsManager] Mode ${index} - isCurrentMode: ${isCurrentMode}, isDisabled: ${isDisabled}, currentModeNum: ${currentModeNum}, bgcolor: ${bgColor}`);
-                            // const borderColor = isDisabled ? '#444' : icon.color;
-                            const borderColor = icon.color; // show border color if Disabled it will shown with 0.5 opacity
-                            const cursor = isDisabled ? 'not-allowed' : 'pointer';
-                            
-                            return `
+            // Mode numbers in data are 1-based (1,2,3) but our array is 0-based (0,1,2)
+            // So we need to compare (currentModeNum - 1) with index, OR currentModeNum with (index + 1)
+            // const isCurrentMode = overrideActive && (currentModeNum === (index + 1));
+            const isCurrentMode = (currentModeNum === (index));
+            const isDisabled = isCurrentMode;
+            const buttonColor = isDisabled ? '#666' : icon.color;
+            const bgColor = isDisabled ? 'rgba(51, 51, 51, 0.8)' : 'rgba(58, 58, 58, 0.8)';
+            console.log(`[ControlsManager] Mode ${index} - isCurrentMode: ${isCurrentMode}, isDisabled: ${isDisabled}, currentModeNum: ${currentModeNum}, bgcolor: ${bgColor}`);
+            // const borderColor = isDisabled ? '#444' : icon.color;
+            const borderColor = icon.color; // show border color if Disabled it will shown with 0.5 opacity
+            const cursor = isDisabled ? 'not-allowed' : 'pointer';
+
+            return `
                             <button id="mode_${index}" ${isDisabled ? '' : `onclick="controlsManager.handleModeChangeFullScreen(${index})"`}
                                 ${isDisabled ? 'disabled' : ''} 
                                 style="
@@ -208,7 +208,7 @@ class ControlsManager {
                                 </span>
                             </button>
                         `;
-                        }).join('')}
+        }).join('')}
                     </div>
                     
                 </div>
@@ -341,21 +341,28 @@ class ControlsManager {
      */
     async handleModeChangeFullScreen(mode) {
         const durationElement = document.getElementById('duration_time');
+        // Only get gridChargePowerElement if mode is 0 (Grid Charge)
+        // const gridChargePowerElement = (mode === 0 || mode === "0") ? document.getElementById('grid_charge_power') : null;
         const gridChargePowerElement = document.getElementById('grid_charge_power');
 
-        if (!durationElement || !gridChargePowerElement) {
+        // Duration is always required, grid_charge_power only for mode 0
+        if (!durationElement || (mode === 0 || mode === "0") && !gridChargePowerElement) {
             console.error('[ControlsManager] Duration or grid charge power elements not found');
             return;
         }
 
         const duration = durationElement.value;
-        const gridChargePower = gridChargePowerElement.value;
-
+        const gridChargePower = gridChargePowerElement ? gridChargePowerElement.value : 0.5;
         const controlData = {
             mode: mode,
             duration: duration,
             grid_charge_power: parseFloat(gridChargePower)
         };
+
+        // Only add grid_charge_power for mode 0
+        if (gridChargePowerElement) {
+            controlData.grid_charge_power = parseFloat(gridChargePowerElement.value);
+        }
 
         console.log('[ControlsManager] Sending override control data:', controlData);
 
@@ -420,6 +427,12 @@ class ControlsManager {
 
         // Update mode icon and click handler
         this.updateModeIcon(inverterModeNum, overrideActive, controlsData.battery.max_charge_power_dyn);
+
+        if (controlsData.used_optimization_source === "evopt") {
+            document.getElementById("experimental-banner").style.display = "flex";
+        } else {
+            document.getElementById("experimental-banner").style.display = "none";
+        }
     }
 
     /**

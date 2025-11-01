@@ -55,15 +55,16 @@ class ConfigManager:
                 ),
                 "eos": CommentedMap(
                     {
-                        "server": "192.168.100.100",  # Default EOS server address
-                        "port": 8503,  # Default port for EOS server
+                        "source": "default",  # EOS server source - eos_server, evopt, default
+                        "server": "192.168.100.100",  # EOS or EVopt server address
+                        "port": 8503,  # port for EOS server (8503) or EVopt server (7050) - default: 8503
                         "timeout": 180,  # Default timeout for EOS optimize request
                     }
                 ),
                 "price": CommentedMap(
                     {
                         "source": "default",
-                        "token": "tibberBearerToken",  # token for electricity price
+                        "token": "tibberBearerToken",  # token for electricity price (e.g. Tibber bearer token or Stromligning supplier/product/group)
                         "fixed_price_adder_ct": 0.0,  # Describes the fixed cost addition in ct per kWh.
                         "relative_price_multiplier": 0.00,  # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
                         # 24 hours array with fixed end customer prices in ct/kWh over the day
@@ -95,11 +96,14 @@ class ConfigManager:
                         # openmeteo, openmeteo_local, forecast_solar, akkudoktor
                         "source": "akkudoktor",  # akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default
                         "api_key": "",  # API key for solcast (required when source is solcast)
+                        "source": "akkudoktor",  # akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default
+                        "api_key": "",  # API key for solcast (required when source is solcast)
                     }
                 ),
                 "pv_forecast": [
                     CommentedMap(
                         {
+                            "name": "myPvInstallation1",  # Placeholder for user-defined configuration name
                             "name": "myPvInstallation1",  # Placeholder for user-defined configuration name
                             "lat": 47.5,  # Latitude for PV forecast
                             "lon": 8.5,  # Longitude for PV forecast
@@ -109,6 +113,7 @@ class ConfigManager:
                             "powerInverter": 5000,  # Inverter Power
                             "inverterEfficiency": 0.9,  # Inverter Efficiency for PV forecast
                             "horizon": "10,20,10,15",  # Horizon to calculate shading
+                            "resource_id": "",  # Resource ID for Solcast (optional, only needed for Solcast)
                             "resource_id": "",  # Resource ID for Solcast (optional, only needed for Solcast)
                         }
                     )
@@ -194,9 +199,14 @@ class ConfigManager:
         config.yaml_set_comment_before_after_key(
             "eos", before="EOS server configuration"
         )
-        config["eos"].yaml_add_eol_comment("EOS server address", "server")
         config["eos"].yaml_add_eol_comment(
-            "port for EOS server - default: 8503", "port"
+            "EOS server source - eos_server, evopt, default (default uses eos_server)",
+            "source",
+        )
+        config["eos"].yaml_add_eol_comment("EOS or EVopt server address", "server")
+        config["eos"].yaml_add_eol_comment(
+            "port for EOS server (8503) or EVopt server (7050) - default: 8503",
+            "port",
         )
         config["eos"].yaml_add_eol_comment(
             "timeout for EOS optimize request in seconds - default: 180", "timeout"
@@ -206,11 +216,14 @@ class ConfigManager:
             "price", before="Electricity price configuration"
         )
         config["price"].yaml_add_eol_comment(
-            "data source for electricity price tibber, smartenergy_at,"
+            "data source for electricity price tibber, smartenergy_at, stromligning,"
             + " fixed_24h, default (default uses akkudoktor)",
             "source",
         )
-        config["price"].yaml_add_eol_comment("Token for electricity price", "token")
+        config["price"].yaml_add_eol_comment(
+            "Token for electricity price. For Stromligning use supplierId/productId[/groupId].",
+            "token",
+        )
         config["price"].yaml_add_eol_comment(
             "fixed cost addition in ct per kWh", "fixed_price_adder_ct"
         )
@@ -270,6 +283,8 @@ class ConfigManager:
         config["battery"].yaml_add_eol_comment(
             "enabling charging curve for controlled charging power"
             + " according to the SOC (default: true)",
+            "enabling charging curve for controlled charging power"
+            + " according to the SOC (default: true)",
             "charging_curve_enabled",
         )
 
@@ -280,7 +295,12 @@ class ConfigManager:
         config["pv_forecast_source"].yaml_add_eol_comment(
             "data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local,"
             + " forecast_solar, evcc, solcast, default (default uses akkudoktor)",
+            +" forecast_solar, evcc, solcast, default (default uses akkudoktor)",
             "source",
+        )
+        config["pv_forecast_source"].yaml_add_eol_comment(
+            "API key for Solcast (required only when source is 'solcast')",
+            "api_key",
         )
         config["pv_forecast_source"].yaml_add_eol_comment(
             "API key for Solcast (required only when source is 'solcast')",
@@ -331,6 +351,10 @@ class ConfigManager:
                 "Resource ID for Solcast API (optional, only needed when using Solcast provider)",
                 "resource_id",
             )
+            config["pv_forecast"][index].yaml_add_eol_comment(
+                "Resource ID for Solcast API (optional, only needed when using Solcast provider)",
+                "resource_id",
+            )
         # inverter configuration
         config.yaml_set_comment_before_after_key(
             "inverter", before="Inverter configuration"
@@ -344,12 +368,18 @@ class ConfigManager:
         config["inverter"].yaml_add_eol_comment(
             "Address of the inverter (fronius_gen24/fronius_gen24_legacy only)",
             "address",
+            "Address of the inverter (fronius_gen24/fronius_gen24_legacy only)",
+            "address",
         )
         config["inverter"].yaml_add_eol_comment(
             "Username for the inverter (fronius_gen24/fronius_gen24_legacy only)",
             "user",
+            "Username for the inverter (fronius_gen24/fronius_gen24_legacy only)",
+            "user",
         )
         config["inverter"].yaml_add_eol_comment(
+            "Password for the inverter (fronius_gen24/fronius_gen24_legacy only)",
+            "password",
             "Password for the inverter (fronius_gen24/fronius_gen24_legacy only)",
             "password",
         )

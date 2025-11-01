@@ -11,6 +11,7 @@ const COLOR_MODE_DISCHARGE_ALLOWED = "lightgreen";
 const COLOR_MODE_AVOID_DISCHARGE_EVCC_FAST = "#3399FF";
 const COLOR_MODE_DISCHARGE_ALLOWED_EVCC_PV = "lightgreen";
 const COLOR_MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV = "darkorange";
+const COLOR_MODE_CHARGE_FROM_GRID_EVCC_FAST = "rgb(255, 144, 144)";
 
 const EOS_CONNECT_ICONS = [
     { icon: "fa-plug-circle-bolt", color: COLOR_MODE_CHARGE_FROM_GRID, title: "Charge From Grid" },
@@ -18,7 +19,8 @@ const EOS_CONNECT_ICONS = [
     { icon: "fa-battery-half", color: COLOR_MODE_DISCHARGE_ALLOWED, title: "Discharge Allowed" },
     { icon: "fa-charging-station", color: COLOR_MODE_AVOID_DISCHARGE_EVCC_FAST, title: "Avoid Discharge Due to E-Car Fast Charge" },
     { icon: "fa-charging-station", color: COLOR_MODE_DISCHARGE_ALLOWED_EVCC_PV, title: "Discharge Allowed During E-Car Charging in PV Mode" },
-    { icon: "fa-charging-station", color: COLOR_MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV, title: "Discharge Allowed During E-Car Charging in Min+PV Mode" }
+    { icon: "fa-charging-station", color: COLOR_MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV, title: "Discharge Allowed During E-Car Charging in Min+PV Mode" },
+    { icon: "fa-charging-station", color: COLOR_MODE_CHARGE_FROM_GRID_EVCC_FAST, title: "Charge From Grid During E-Car Fast Charge" }
 ];
 
 // Global managers - will be initialized in main.js
@@ -52,7 +54,7 @@ const TEST_SCENARIOS = {
     OVERRIDE_1: 'override_1',
     OVERRIDE_2: 'override_2',
     SINGLE_EVCC: 'single_evcc',
-    MULTI_EVCC: 'multi_evcc', 
+    MULTI_EVCC: 'multi_evcc',
     NO_EVCC: 'no_evcc'
 };
 

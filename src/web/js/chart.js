@@ -20,7 +20,7 @@ class ChartManager {
     /**
      * Update existing chart with new data
      */
-    updateChart(data_request, data_response) {
+    updateChart(data_request, data_response, data_controls) {
         if (!this.chartInstance) {
             console.warn('[ChartManager] No chart instance to update');
             return;
@@ -30,14 +30,25 @@ class ChartManager {
         const serverTime = new Date(data_response["timestamp"]);
         const currentHour = serverTime.getHours();
 
+        const evopt_in_charge = data_controls["used_optimization_source"] === "evopt";
+
         // Create labels in user's local timezone - showing only hours with :00
-        this.chartInstance.data.labels = Array.from({ length: data_response["result"]["Last_Wh_pro_Stunde"].length },
+        this.chartInstance.data.labels = Array.from(
+            { length: data_response["result"]["Last_Wh_pro_Stunde"].length },
             (_, i) => {
-                // Create a new date object for each hour label in user's timezone
                 const labelTime = new Date(serverTime.getTime() + (i * 60 * 60 * 1000));
-                const hour = labelTime.getHours();
-                return `${hour.toString().padStart(2, '0')}:00`;
-            });
+                if (evopt_in_charge && i === 0) {
+                    // Show current time as HH:MM for the first entry
+                    const hour = labelTime.getHours();
+                    const minute = labelTime.getMinutes();
+                    return `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+                } else {
+                    // Show HH:00 for all other entries
+                    const hour = labelTime.getHours();
+                    return `${hour.toString().padStart(2, '0')}:00`;
+                }
+            }
+        );
 
         // Calculate consumption (excluding home appliances)
         this.chartInstance.data.datasets[0].data = data_response["result"]["Last_Wh_pro_Stunde"].map((value, index) => {
@@ -88,6 +99,8 @@ class ChartManager {
         this.chartInstance.data.datasets[6].data = data_response["result"]["Kosten_Euro_pro_Stunde"];
         this.chartInstance.data.datasets[7].data = data_response["result"]["Einnahmen_Euro_pro_Stunde"];
         this.chartInstance.data.datasets[8].data = data_response["result"]["Electricity_price"].map(value => value * 1000);
+        this.chartInstance.data.datasets[8].label = `Electricity Price (${localization.currency_symbol}/kWh)`;
+        this.chartInstance.options.scales.y1.title.text = `Price (${localization.currency_symbol}/kWh)`;
         this.chartInstance.data.datasets[9].data = data_response["discharge_allowed"].slice(currentHour).concat(data_response["discharge_allowed"].slice(24, 48));
 
         this.chartInstance.update('none'); // Update without animation
@@ -96,7 +109,7 @@ class ChartManager {
     /**
      * Create new chart instance
      */
-    createChart(data_request, data_response) {
+    createChart(data_request, data_response, data_controls) {
         const ctx = document.getElementById('energyChart').getContext('2d');
         this.chartInstance = new Chart(ctx, {
             type: 'bar',
@@ -111,14 +124,14 @@ class ChartManager {
                     { label: 'Akku SOC', data: [], type: 'line', backgroundColor: 'blue', borderColor: 'lightblue', borderWidth: 1, yAxisID: 'y2' },
                     { label: 'Expense', data: [], type: 'line', borderColor: 'lightgreen', backgroundColor: 'green', borderWidth: 1, yAxisID: 'y1', stepped: true, hidden: true },
                     { label: 'Income', data: [], type: 'line', borderColor: 'lightyellow', backgroundColor: 'yellow', borderWidth: 1, yAxisID: 'y1', stepped: true, hidden: true },
-                    { label: 'Electricity Price', data: [], type: 'line', borderColor: 'rgba(255, 69, 0, 0.8)', backgroundColor: 'rgba(255, 165, 0, 0.2)', borderWidth: 1, yAxisID: 'y1', stepped: true },
+                    { label: `Electricity Price (${localization.currency_symbol}/kWh)`, data: [], type: 'line', borderColor: 'rgba(255, 69, 0, 0.8)', backgroundColor: 'rgba(255, 165, 0, 0.2)', borderWidth: 1, yAxisID: 'y1', stepped: true },
                     { label: 'Discharge Allowed', data: [], type: 'line', borderColor: 'rgba(144, 238, 144, 0.3)', backgroundColor: 'rgba(144, 238, 144, 0.05)', borderWidth: 1, fill: true, yAxisID: 'y3' }
                 ]
             },
             options: {
                 scales: {
                     y: { beginAtZero: true, title: { display: true, text: 'Energy (kWh)', color: 'lightgray' }, grid: { color: 'rgb(54, 54, 54)' }, ticks: { color: 'lightgray' } },
-                    y1: { beginAtZero: true, position: 'right', title: { display: true, text: 'Price (€)', color: 'lightgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'lightgray', callback: value => value.toFixed(2) } },
+                    y1: { beginAtZero: true, position: 'right', title: { display: true, text: `Price (${localization.currency_symbol}/kWh)`, color: 'lightgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'lightgray', callback: value => value.toFixed(2) } },
                     y2: { beginAtZero: true, position: 'right', title: { display: true, text: 'Akku SOC (%)', color: 'darkgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'darkgray', callback: value => value.toFixed(0) } },
                     y3: { beginAtZero: true, position: 'right', display: false, title: { display: true, text: 'AC Charge', color: 'darkgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'darkgray', callback: value => value.toFixed(2) } },
                     x: { grid: { color: 'rgb(54, 54, 54)' }, ticks: { color: 'lightgray', font: { size: 10 } } }
@@ -128,11 +141,11 @@ class ChartManager {
                 },
             }
         });
-        
+
         // Set global reference for legacy compatibility
         chartInstance = this.chartInstance;
-        
-        this.updateChart(data_request, data_response); // Feed the content immediately after creation
+
+        this.updateChart(data_request, data_response, data_controls); // Feed the content immediately after creation
     }
 
     /**
@@ -167,15 +180,15 @@ class ChartManager {
 }
 
 // Legacy compatibility functions
-function createChart(data_request, data_response) {
+function createChart(data_request, data_response, data_controls) {
     if (chartManager) {
-        chartManager.createChart(data_request, data_response);
+        chartManager.createChart(data_request, data_response, data_controls);
     }
 }
 
-function updateChart(data_request, data_response) {
+function updateChart(data_request, data_response, data_controls) {
     if (chartManager) {
-        chartManager.updateChart(data_request, data_response);
+        chartManager.updateChart(data_request, data_response, data_controls);
     }
 }
 

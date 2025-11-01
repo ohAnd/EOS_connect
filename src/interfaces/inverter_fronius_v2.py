@@ -637,7 +637,8 @@ class FroniusWRV2:
         max_power = min(self.max_grid_charge_rate, 10000)
         charge_power = min(int(charge_power_w), max_power)
 
-        if charge_power != charge_power_w:
+        # Only warn if the value was actually limited by max_power, not just rounded
+        if charge_power_w > max_power:
             logger.warning(
                 f"[InverterV2] Charge power limited from {charge_power_w}W to {charge_power}W"
             )

@@ -37,7 +37,9 @@ CHARGING_MODE_PRIORITY = {
     "minpv": 2,
     "pv+now": 3,
     "minpv+now": 4,
-    "now": 5,
+    "pv+plan": 5,
+    "minpv+plan": 6,
+    "now": 7,
 }
 
 
@@ -102,6 +104,7 @@ class EvccInterface:
                 "vehicleOdometer": 0,
                 "vehicleName": "",
                 "smartCostActive": False,
+                "planActive": False,
             }
         ]
         self.external_battery_mode_en = ext_bat_mode
@@ -212,6 +215,7 @@ class EvccInterface:
                 "vehicleOdometer": 0,
                 "vehicleName": "",
                 "smartCostActive": False,
+                "planActive": False,
             }
         ]
 
@@ -330,6 +334,7 @@ class EvccInterface:
                             "charging": lp.get("charging", False),
                             "mode": lp.get("mode", "off"),
                             "smartCostActive": lp.get("smartCostActive", False),
+                            "planActive": lp.get("planActive", False),
                         }
                     )
         # logger.debug(
@@ -343,13 +348,14 @@ class EvccInterface:
         sum_mode_priority = 0
         sum_charging_mode = "off"
         sum_charging_state = False
-        sum_smart_cost_active = False
         for entry in collected_states_modes:
             if entry["charging"]:
                 mode = entry["mode"]
                 sum_charging_state = True
                 if mode in ("pv", "minpv") and entry.get("smartCostActive", False):
                     mode = mode + "+now"
+                if mode in ("pv", "minpv") and entry.get("planActive", False):
+                    mode = mode + "+plan"
                 if sum_mode_priority < CHARGING_MODE_PRIORITY[mode]:
                     sum_mode_priority = CHARGING_MODE_PRIORITY[mode]
                     sum_charging_mode = mode
@@ -364,6 +370,10 @@ class EvccInterface:
                 "smartCostActive", False
             ):
                 sum_charging_mode = sum_charging_mode + "+now"
+            if sum_charging_mode in ("pv", "minpv") and collected_states_modes[0].get(
+                "planActive", False
+            ):
+                sum_charging_mode = sum_charging_mode + "+plan"
 
             # logger.debug(
             #     "[EVCC] No charging loadpoints found."
@@ -406,6 +416,8 @@ class EvccInterface:
             mode = loadpoint.get("mode", "off")
             if mode in ("pv", "minpv") and loadpoint.get("smartCostActive", False):
                 mode = mode + "+now"
+            if mode in ("pv", "minpv") and loadpoint.get("planActive", False):
+                mode = mode + "+plan"
             detail_data = {
                 "connected": loadpoint.get("connected", False),
                 "charging": loadpoint.get("charging", False),
@@ -420,6 +432,7 @@ class EvccInterface:
                 "vehicleOdometer": loadpoint.get("vehicleOdometer", 0),
                 "vehicleName": vehicle_name,
                 "smartCostActive": loadpoint.get("smartCostActive", False),
+                "planActive": loadpoint.get("planActive", False),
             }
             self.current_detail_data_list.append(detail_data)
         return True

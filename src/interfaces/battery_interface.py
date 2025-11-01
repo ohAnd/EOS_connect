@@ -75,6 +75,9 @@ class BatteryInterface:
         self.current_soc = 0
         self.current_usable_capacity = 0
         self.on_bat_max_changed = on_bat_max_changed
+        self.min_soc_set = config.get("min_soc_percentage", 0)
+        self.max_soc_set = config.get("max_soc_percentage", 100)
+
         self.soc_fail_count = 0
 
         self.update_interval = 30
@@ -114,6 +117,9 @@ class BatteryInterface:
                     "[BATTERY-IF] Detected decimal format (0.0-1.0): %s -> %s%%",
                     raw_value,
                     soc,
+                    "[BATTERY-IF] Detected decimal format (0.0-1.0): %s -> %s%%",
+                    raw_value,
+                    soc,
                 )
             else:
                 soc = raw_value  # Already in percentage format
@@ -122,11 +128,19 @@ class BatteryInterface:
                 )
             self.soc_fail_count = 0  # Reset fail count on success
             return round(soc, 1)
+                logger.debug(
+                    "[BATTERY-IF] Detected percentage format (0-100): %s%%", soc
+                )
+            self.soc_fail_count = 0  # Reset fail count on success
+            return round(soc, 1)
         except requests.exceptions.Timeout:
+            return self._handle_soc_error(
+                "openhab", "Request timed out", self.current_soc
             return self._handle_soc_error(
                 "openhab", "Request timed out", self.current_soc
             )
         except requests.exceptions.RequestException as e:
+            return self._handle_soc_error("openhab", e, self.current_soc)
             return self._handle_soc_error("openhab", e, self.current_soc)
 
     def __fetch_soc_data_from_homeassistant(self):
@@ -155,12 +169,17 @@ class BatteryInterface:
             entity_data = response.json()
             soc = float(entity_data["state"])
             self.soc_fail_count = 0  # Reset fail count on success
+            self.soc_fail_count = 0  # Reset fail count on success
             return round(soc, 1)
         except requests.exceptions.Timeout:
             return self._handle_soc_error(
                 "homeassistant", "Request timed out", self.current_soc
             )
+            return self._handle_soc_error(
+                "homeassistant", "Request timed out", self.current_soc
+            )
         except requests.exceptions.RequestException as e:
+            return self._handle_soc_error("homeassistant", e, self.current_soc)
             return self._handle_soc_error("homeassistant", e, self.current_soc)
 
     def __battery_request_current_soc(self):
@@ -169,12 +188,17 @@ class BatteryInterface:
         """
         # default value for start SOC = 5
         default = False
+        default = False
         if self.src == "default":
+            self.current_soc = 5
+            default = True
             self.current_soc = 5
             default = True
             logger.debug("[BATTERY-IF] source set to default with start SOC = 5%")
         elif self.src == "openhab":
+        elif self.src == "openhab":
             self.current_soc = self.__fetch_soc_data_from_openhab()
+        elif self.src == "homeassistant":
         elif self.src == "homeassistant":
             self.current_soc = self.__fetch_soc_data_from_homeassistant()
         else:
@@ -184,7 +208,9 @@ class BatteryInterface:
                 "[BATTERY-IF] source currently not supported. Using default start SOC = 5%."
             )
         if default is False:
-            logger.debug("[BATTERY-IF] successfully fetched SOC = %s %%", self.current_soc)
+            logger.debug(
+                "[BATTERY-IF] successfully fetched SOC = %s %%", self.current_soc
+            )
         return self.current_soc
 
     def _handle_soc_error(self, source, error, last_soc):
@@ -224,6 +250,64 @@ class BatteryInterface:
         Returns the current usable capacity of the battery.
         """
         return round(self.current_usable_capacity, 2)
+
+    def get_min_soc(self):
+        """
+        Returns the minimum state of charge (SOC) percentage of the battery.
+        """
+        return self.min_soc_set
+
+    def set_min_soc(self, min_soc):
+        """
+        Sets the minimum state of charge (SOC) percentage of the battery.
+        """
+        # check that min_soc is not greater than max_soc and not less than configured min_soc
+        if min_soc > self.max_soc_set:
+            logger.warning(
+                "[BATTERY-IF] Attempted to set min SOC (%s) higher than max SOC (%s)."
+                + " Adjusting min SOC to max SOC.",
+                min_soc,
+                self.max_soc_set,
+            )
+            min_soc = self.max_soc_set - 1
+        if min_soc < self.battery_data.get("min_soc_percentage", 0):
+            logger.warning(
+                "[BATTERY-IF] Attempted to set min SOC (%s) lower than configured min SOC (%s)."
+                + " setting to configured min SOC.",
+                min_soc,
+                self.battery_data.get("min_soc_percentage", 0),
+            )
+            min_soc = self.battery_data.get("min_soc_percentage", 0)
+        self.min_soc_set = min_soc
+
+    def get_max_soc(self):
+        """
+        Returns the maximum state of charge (SOC) percentage of the battery.
+        """
+        return self.max_soc_set
+
+    def set_max_soc(self, max_soc):
+        """
+        Sets the maximum state of charge (SOC) percentage of the battery.
+        """
+        # check that max_soc is not less than min_soc and not greater than configured max_soc
+        if max_soc < self.min_soc_set:
+            logger.warning(
+                "[BATTERY-IF] Attempted to set max SOC (%s) lower than min SOC (%s)."
+                + " Adjusting max SOC to min SOC.",
+                max_soc,
+                self.min_soc_set,
+            )
+            max_soc = self.min_soc_set + 1
+        if max_soc > self.battery_data.get("max_soc_percentage", 100):
+            logger.warning(
+                "[BATTERY-IF] Attempted to set max SOC (%s) higher than configured max SOC (%s)."
+                + " setting to configured max SOC.",
+                max_soc,
+                self.battery_data.get("max_soc_percentage", 100),
+            )
+            max_soc = self.battery_data.get("max_soc_percentage", 100)
+        self.max_soc_set = max_soc
 
     def __get_max_charge_power_dyn(self, soc=None, min_charge_power=500):
         """
@@ -278,6 +362,7 @@ class BatteryInterface:
         else:
             # Logarithmic decrease of C-rate after 50% SOC
             c_rate = max(min_c_rate, max_c_rate * (1 - (soc - 50) / 60) ** 2)
+            c_rate = max(min_c_rate, max_c_rate * (1 - (soc - 50) / 60) ** 2)
 
         # Calculate the maximum charge power in watts
         max_charge_power = c_rate * battery_capacity_wh
@@ -292,6 +377,8 @@ class BatteryInterface:
         if self.max_charge_power_dyn != self.last_max_charge_power_dyn:
             self.last_max_charge_power_dyn = self.max_charge_power_dyn
             logger.info(
+                "[BATTERY-IF] Max dynamic charge power changed to %s W",
+                self.max_charge_power_dyn,
                 "[BATTERY-IF] Max dynamic charge power changed to %s W",
                 self.max_charge_power_dyn,
             )
@@ -326,15 +413,18 @@ class BatteryInterface:
         while not self._stop_event.is_set():
             try:
                 self.__battery_request_current_soc()
-                self.current_usable_capacity = max(0, (
-                    self.battery_data.get("capacity_wh", 0)
-                    * self.battery_data.get("discharge_efficiency", 1.0)
-                    * (
-                        self.current_soc
-                        - self.battery_data.get("min_soc_percentage", 0)
-                    )
-                    / 100
-                ))
+                self.current_usable_capacity = max(
+                    0,
+                    (
+                        self.battery_data.get("capacity_wh", 0)
+                        * self.battery_data.get("discharge_efficiency", 1.0)
+                        * (
+                            self.current_soc
+                            - self.battery_data.get("min_soc_percentage", 0)
+                        )
+                        / 100
+                    ),
+                )
                 self.__get_max_charge_power_dyn()
 
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:

@@ -1,10 +1,18 @@
 name: Develop - build image and push
 # This workflow builds, tests, and pushes a Docker image to GitHub Container Registry.
+# This workflow builds, tests, and pushes a Docker image to GitHub Container Registry.
 # It is triggered on pushes and pull requests to the "develop" branch, and can also be triggered manually.
 # The image is tagged with "develop" and a version string based on the workflow run number.
 # For pull requests, the Docker image is uploaded as an artifact instead of being pushed to the registry.
 # After publishing, old Docker images with the "develop" version suffix are cleaned up to save space.
+# After publishing, old Docker images with the "develop" version suffix are cleaned up to save space.
 # The workflow uses the GITHUB_TOKEN secret for authentication with GitHub Container Registry.
+
+# Jobs:
+# - pytest: Runs unit and regression tests using pytest.
+# - build_image: Builds the Docker image, tags it, and uploads it as an artifact for PRs.
+# - publish_image: Downloads the image artifact and pushes it to GitHub Container Registry (on push events).
+# - cleanup_old_develops: Cleans up old "develop" Docker images in the registry (on push events).
 
 # Jobs:
 # - pytest: Runs unit and regression tests using pytest.
@@ -20,7 +28,7 @@ on:
   workflow_dispatch: # allows manual triggering of the workflow
 
 env:
-  VERSION_PREFIX: 0.2.01.
+  VERSION_PREFIX: 0.2.25.
   VERSION_SUFFIX: -develop
 
 jobs:
@@ -43,9 +51,10 @@ jobs:
 
       - name: Run unit and regression tests
         run: python -m pytest -v tests/
-      
+  
   publish_image:
     runs-on: ubuntu-latest
+    needs: pytest
     needs: pytest
     steps:
       - name: Checkout
@@ -71,31 +80,41 @@ jobs:
       - name: Convert repository owner to lowercase
         run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
-      - name: Build image
-        run: docker build -t ghcr.io/${{ env.owner }}/eos_connect:develop .
+      # 1. Setup QEMU for ARM64 emulation
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
 
-      # Only upload the image artifact for pull_request events
+      # 2. Setup Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 3. Log in to GitHub Container Registry
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 4. Build & Push Multi-Arch Image
+      - name: Build and push multi-platform Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ env.owner }}/eos_connect:develop
+            ghcr.io/${{ env.owner }}/eos_connect:${{ env.VERSION }}
+          push: ${{ github.event_name == 'push' }}
+
       - name: Upload Docker image as artifact
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: eos_connect_image-${{ env.VERSION }}
           path: eos_connect_${{ env.VERSION }}.tar.gz
-
-      # Only run tagging and pushing tasks for "push" events
-      - name: Log in to GitHub Container Registry
-        if: github.event_name == 'push'
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Tag image with develop version
-        if: github.event_name == 'push'
-        run: docker tag ghcr.io/${{ env.owner }}/eos_connect:develop ghcr.io/${{ env.owner }}/eos_connect:${{ env.VERSION }}
-
-      - name: Push Docker image to GitHub Container Registry
-        if: github.event_name == 'push'
-        run: |
-          docker push ghcr.io/${{ env.owner }}/eos_connect:develop
-          docker push ghcr.io/${{ env.owner }}/eos_connect:${{ env.VERSION }}
 
   cleanup_old_develops:
     needs: publish_image

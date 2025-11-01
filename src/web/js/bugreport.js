@@ -15,11 +15,11 @@ class BugReportManager {
      */
     async showBugReportPopup() {
         console.log('[BugReport] Preparing bug report popup...');
-        
+
         // Get version information
         let versionInfo = 'Version unknown';
         try {
-            const response = await fetch('/json/current_controls.json');
+            const response = await fetch('json/current_controls.json');
             if (response.ok) {
                 const status = await response.json();
                 if (status.eos_connect_version) {
@@ -29,14 +29,12 @@ class BugReportManager {
         } catch (error) {
             console.warn('[BugReport] Could not fetch version info:', error);
         }
-        
         const header = `
             <div style="display: flex; align-items: center; gap: 10px;">
                 <i class="fas fa-bug" style="color: #dc3545;"></i>
                 <span>Create Bug Report</span>
             </div>
         `;
-        
         const content = `
             <div style="height: calc(100% - 20px); overflow-y: auto; overflow-x: hidden; margin-top: 10px; max-width: 100%; box-sizing: border-box; word-wrap: break-word;">
                 <form id="bugReportForm" style="display: flex; flex-direction: column; gap: 20px; max-width: 100%; box-sizing: border-box; word-wrap: break-word;">
@@ -248,32 +246,31 @@ class BugReportManager {
                 </form>
             </div>
         `;
-        
+
         showFullScreenOverlay(header, content);
-        
+
         // Enable/disable the generate buttons based on form validation
         const titleInput = document.getElementById('bugTitle');
         const descriptionInput = document.getElementById('bugDescription');
         const generateUrlBtn = document.getElementById('generateUrlBtn');
-        
+
         function updateButtonState() {
             const isValid = titleInput.value.trim() !== '' && descriptionInput.value.trim() !== '';
-            
+
             // Update Copy button
             const copyDataBtn = document.getElementById('copyDataBtn');
             copyDataBtn.disabled = !isValid;
             copyDataBtn.style.cursor = isValid ? 'pointer' : 'not-allowed';
             copyDataBtn.style.opacity = isValid ? '1' : '0.6';
-            
             // Update URL button
             generateUrlBtn.disabled = !isValid;
             generateUrlBtn.style.cursor = isValid ? 'pointer' : 'not-allowed';
             generateUrlBtn.style.opacity = isValid ? '1' : '0.6';
         }
-        
+
         titleInput.addEventListener('input', updateButtonState);
         descriptionInput.addEventListener('input', updateButtonState);
-        
+
         // Focus on title field
         setTimeout(() => titleInput.focus(), 100);
     }
@@ -287,56 +284,54 @@ class BugReportManager {
         const titleInput = document.getElementById('bugTitle');
         const descriptionInput = document.getElementById('bugDescription');
         const generateUrlBtn = document.getElementById('generateUrlBtn');
-        
         if (!titleInput.value.trim() || !descriptionInput.value.trim()) {
             alert('Please fill in both title and description fields.');
             return;
         }
-        
+
         // Show loading state
         generateUrlBtn.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right: 6px;"></i>Collecting...';
         generateUrlBtn.disabled = true;
-        
+
         try {
             // Clean and encode description for URL - keep it simple
             let issueBody = descriptionInput.value.trim();
-            
+
             // Fix markdown formatting for URL encoding
             issueBody = issueBody
                 .replace(/\*\*([^*]+)\*\*/g, '**$1**')  // Fix bold formatting
                 .replace(/##\s+/g, '## ')              // Fix header spacing
                 .replace(/\n\s*\n\s*\n/g, '\n\n')      // Remove excessive newlines
                 .replace(/\[([^\]]+)\]/g, '$1');       // Remove placeholder brackets
-            
+
             // Keep the description clean for GitHub URL
-            
+
             // Update button text
             generateUrlBtn.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right: 6px;"></i>Opening...';
-            
+
             // Open GitHub with pre-filled form and bug label
             this.openGitHubIssueURL(titleInput.value.trim(), issueBody);
-            
+
             // Close the popup after a brief delay
             setTimeout(() => {
                 closeFullScreenOverlay();
             }, 1000);
-            
+
         } catch (error) {
             console.error('[BugReport] Error generating URL bug report:', error);
-            
+
             // Show user-friendly error message
-            const errorMessage = error.message.includes('fetch') 
+            const errorMessage = error.message.includes('fetch')
                 ? 'Unable to collect system data. Opening GitHub form without system data.'
                 : 'Error collecting system data. Opening GitHub form with basic information.';
-                
+
             alert(errorMessage);
-            
+
             // Fallback: Open GitHub with just title and cleaned description
             let fallbackBody = descriptionInput.value.trim()
                 .replace(/\[([^\]]+)\]/g, '$1')  // Remove placeholder brackets
                 .replace(/\n\s*\n\s*\n/g, '\n\n'); // Clean excessive newlines
             this.openGitHubIssueURL(titleInput.value.trim(), fallbackBody);
-            
             // Close popup
             setTimeout(() => {
                 closeFullScreenOverlay();
@@ -468,11 +463,11 @@ class BugReportManager {
      */
     generateIssueBody(description, systemData) {
         let body = '';
-        
+
         // Add user description
         body += '## Description\\n\\n';
         body += description + '\\n\\n';
-        
+
         // Add system information
         body += '## System Information\\n\\n';
         if (systemData.version) {
@@ -483,12 +478,10 @@ class BugReportManager {
             body += `**Data Collection Errors:** ${systemData.errors.length} error(s) occurred\\n`;
         }
         body += '\\n';
-        
         // Add system data as collapsed sections with size monitoring
         body += '## System Data\\n\\n';
         let currentSize = body.length;
         const sizeLimit = this.maxBodySize - 1000; // Reserve space for footer and safety margin
-        
         // Helper function to add section if it fits
         const addSectionIfFits = (sectionTitle, sectionData, formatAsJson = true) => {
             let sectionContent = `<details>\\n<summary>${sectionTitle}</summary>\\n\\n`;
@@ -498,7 +491,6 @@ class BugReportManager {
                 sectionContent += '```\\n' + sectionData + '\\n```\\n\\n';
             }
             sectionContent += '</details>\\n\\n';
-            
             if (currentSize + sectionContent.length < sizeLimit) {
                 body += sectionContent;
                 currentSize += sectionContent.length;
@@ -506,7 +498,6 @@ class BugReportManager {
             }
             return false;
         };
-        
         // Current Controls (highest priority)
         if (systemData.currentControls) {
             if (!addSectionIfFits('Current Controls & States', systemData.currentControls, true)) {
@@ -520,13 +511,13 @@ class BugReportManager {
                 addSectionIfFits('Current Controls & States (Essential)', essentialControls, true);
             }
         }
-        
+
         // Recent Error/Warning Alerts (high priority) - use LoggingManager alerts
         if (systemData.alerts) {
-            const errorAlerts = systemData.alerts.filter(alert => 
+            const errorAlerts = systemData.alerts.filter(alert =>
                 alert.level === 'ERROR' || alert.level === 'WARNING'
             );
-            
+
             if (errorAlerts.length > 0) {
                 let alertText = '';
                 errorAlerts.slice(-50).forEach(alert => { // Get last 50 error/warning alerts
@@ -535,7 +526,6 @@ class BugReportManager {
                 addSectionIfFits('Recent Error/Warning Alerts', alertText, false);
             }
         }
-        
         // Recent Logs (lower priority - general logs)
         if (systemData.recentLogs && systemData.recentLogs.logs && currentSize < sizeLimit * 0.7) {
             let allLogText = '';
@@ -544,29 +534,28 @@ class BugReportManager {
             });
             addSectionIfFits('Recent Logs (Last 30 entries)', allLogText, false);
         }
-        
         // Optimization data (medium priority)
         if (systemData.optimizeResponse) {
             addSectionIfFits('Last Optimization Response', systemData.optimizeResponse, true);
         }
-        
+
         if (systemData.optimizeRequest) {
             addSectionIfFits('Last Optimization Request', systemData.optimizeRequest, true);
         }
-        
+
         // Data collection errors (if any)
         if (systemData.errors.length > 0) {
             const errorText = systemData.errors.join('\\n');
             addSectionIfFits('Data Collection Errors', errorText, false);
         }
-        
+
         // Add size information
         body += `\\n**Data Size Info:** ${Math.round(currentSize / 1024 * 10) / 10}KB / ${Math.round(sizeLimit / 1024)}KB limit\\n\\n`;
-        
+
         // Add footer
         body += '---\\n';
         body += '*This bug report was generated automatically by EOS Connect\'s built-in reporting feature.*';
-        
+
         return body;
     }
 
@@ -575,11 +564,11 @@ class BugReportManager {
      */
     generateTruncatedIssueBody(description, systemData, isUrlMode = false) {
         let body = '';
-        
+
         // Add user description
         body += '## Description\\n\\n';
         body += description + '\\n\\n';
-        
+
         // Add system information
         body += '## System Information\\n\\n';
         if (systemData.version) {
@@ -590,14 +579,14 @@ class BugReportManager {
             body += `**Data Collection Errors:** ${systemData.errors.length} error(s) occurred\\n`;
         }
         body += '\\n';
-        
+
         // Add truncated system data
         body += '## System Data (Truncated)\\n\\n';
-        const sizeNote = isUrlMode 
+        const sizeNote = isUrlMode
             ? '_Note: System data was truncated for URL length limitations. For complete data, please use the "Auto-Create Issue" option._\\n\\n'
             : '_Note: System data was truncated due to size limitations. Please check the application logs for full details._\\n\\n';
         body += sizeNote;
-        
+
         // Add basic system info only
         if (systemData.currentControls) {
             const basicInfo = {
@@ -610,13 +599,13 @@ class BugReportManager {
             body += '```json\\n' + JSON.stringify(basicInfo, null, 2) + '\\n```\\n\\n';
             body += '</details>\\n\\n';
         }
-        
+
         // Add only recent error alerts (using LoggingManager alerts)
         if (systemData.alerts && !isUrlMode) {
-            const errorAlerts = systemData.alerts.filter(alert => 
+            const errorAlerts = systemData.alerts.filter(alert =>
                 alert.level === 'ERROR' || alert.level === 'WARNING'
             ).slice(-20); // Get last 20 error/warning alerts
-            
+
             if (errorAlerts.length > 0) {
                 body += '<details>\\n<summary>Recent Error/Warning Alerts (Last 20)</summary>\\n\\n';
                 body += '```\\n';
@@ -628,15 +617,14 @@ class BugReportManager {
             }
         } else if (systemData.alerts && isUrlMode) {
             // For URL mode, only show count of errors
-            const errorAlerts = systemData.alerts.filter(alert => 
+            const errorAlerts = systemData.alerts.filter(alert =>
                 alert.level === 'ERROR' || alert.level === 'WARNING'
             );
-            
+
             if (errorAlerts.length > 0) {
                 body += `**Recent Errors:** ${errorAlerts.length} error/warning entries in alerts\\n\\n`;
             }
         }
-        
         // Add data collection errors if any
         if (systemData.errors.length > 0) {
             body += '<details>\\n<summary>Data Collection Errors</summary>\\n\\n';
@@ -647,12 +635,10 @@ class BugReportManager {
             body += '```\\n\\n';
             body += '</details>\\n\\n';
         }
-        
         // Add footer
         body += '---\\n';
         body += '*This bug report was generated automatically by EOS Connect\'s built-in reporting feature.*\\n';
         body += '*Full system data was truncated due to GitHub URL length limitations.*';
-        
         return body;
     }
 
@@ -662,30 +648,29 @@ class BugReportManager {
     async createGitHubIssue(title, body) {
         try {
             console.log('[BugReport] Attempting to create GitHub issue...');
-            
+
             // Check if we have a stored OAuth token
             let accessToken = this.getStoredGitHubToken();
-            
+
             // Try to create issue with current token (if any)
             let response = await this.attemptIssueCreation(title, body, accessToken);
-            
+
             if (response && response.ok) {
                 const result = await response.json();
                 console.log('[BugReport] GitHub issue created successfully');
                 console.log('[BugReport] Issue URL:', result.html_url);
-                
                 // Open the created issue
                 window.open(result.html_url, '_blank');
                 return true;
             }
-            
+
             // Handle authentication required
             if (response && response.status === 401) {
                 const result = await response.json();
-                
+
                 if (result.auth_required) {
                     console.log('[BugReport] Authentication required, starting OAuth flow...');
-                    
+
                     // Try OAuth authentication
                     const newToken = await this.authenticateWithGitHub();
                     if (newToken) {
@@ -700,7 +685,6 @@ class BugReportManager {
                     }
                 }
             }
-            
             // Server proxy not configured - try URL method
             if (response && response.status === 503) {
                 const result = await response.json();
@@ -709,15 +693,14 @@ class BugReportManager {
                 this.openGitHubIssueURL(title, body);
                 return true;
             }
-            
             // If we get here, API methods failed - try URL method
             console.log('[BugReport] API methods failed, trying URL method...');
             this.openGitHubIssueURL(title, body);
             return true;
-            
+
         } catch (error) {
             console.error('[BugReport] Error in createGitHubIssue:', error);
-            
+
             // Final fallback to issues overview page
             console.log('[BugReport] All methods failed, redirecting to issues overview...');
             this.openGitHubIssuesOverview();
@@ -754,15 +737,14 @@ class BugReportManager {
     async authenticateWithGitHub() {
         try {
             console.log('[BugReport] Starting GitHub Device Flow authentication...');
-            
             // Start GitHub Device Flow
             const authResponse = await fetch('/api/github/auth/start');
             if (!authResponse.ok) {
                 throw new Error('Failed to start GitHub authentication');
             }
-            
+
             const deviceData = await authResponse.json();
-            
+
             // Show device code to user
             const authPromise = new Promise((resolve) => {
                 // Create modal with device code instructions
@@ -805,18 +787,17 @@ class BugReportManager {
                         </div>
                     </div>
                 `;
-                
                 showFullScreenOverlay(
                     '<div style="display: flex; align-items: center; gap: 10px;"><i class="fab fa-github" style="color: #ffc107;"></i><span>GitHub Authentication</span></div>',
                     authModal
                 );
-                
+
                 // Start polling for authentication
                 this.pollGitHubAuth(deviceData.device_code, resolve);
             });
-            
+
             return await authPromise;
-            
+
         } catch (error) {
             console.error('[BugReport] GitHub authentication error:', error);
             return null;
@@ -830,23 +811,21 @@ class BugReportManager {
         const maxAttempts = 60; // 5 minutes with 5-second intervals
         let attempts = 0;
         let pollInterval = 5000; // Start with 5 seconds
-        
         const poll = async () => {
             if (attempts >= maxAttempts) {
                 document.getElementById('authStatus').textContent = 'Authentication timeout. Please try again.';
                 setTimeout(() => resolve(null), 2000);
                 return;
             }
-            
             try {
                 const response = await fetch('/api/github/auth/poll', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ device_code: deviceCode })
                 });
-                
+
                 const result = await response.json();
-                
+
                 if (result.status === 'success') {
                     document.getElementById('authStatus').innerHTML = '<span style="color: #28a745;"><i class="fas fa-check"></i> Authentication successful!</span>';
                     this.storeGitHubToken(result.access_token);
@@ -856,21 +835,20 @@ class BugReportManager {
                     }, 1000);
                     return;
                 }
-                
+
                 if (result.status === 'slow_down') {
                     pollInterval += 2000; // Slow down polling
                 }
-                
+
                 attempts++;
                 setTimeout(poll, pollInterval);
-                
+
             } catch (error) {
                 console.error('[BugReport] Polling error:', error);
                 attempts++;
                 setTimeout(poll, pollInterval);
             }
         };
-        
         // Start polling
         setTimeout(poll, 1000);
     }
@@ -910,16 +888,16 @@ class BugReportManager {
      */
     openGitHubIssuesOverview() {
         const issuesUrl = `https://github.com/${this.repoOwner}/${this.repoName}/issues`;
-        
+
         console.log('[BugReport] Opening GitHub issues overview due to technical difficulties...');
-        
+
         // Show user-friendly message
         alert('There was a technical issue creating the pre-filled bug report.\n\n' +
-              'You will be redirected to the GitHub issues page where you can:\n' +
-              '1. Click "New issue" to create a manual report\n' +
-              '2. Include the system data from your EOS Connect web interface\n' +
-              '3. Check the Logs section and JSON endpoints for debugging data');
-        
+            'You will be redirected to the GitHub issues page where you can:\n' +
+            '1. Click "New issue" to create a manual report\n' +
+            '2. Include the system data from your EOS Connect web interface\n' +
+            '3. Check the Logs section and JSON endpoints for debugging data');
+
         window.open(issuesUrl, '_blank');
     }
 
@@ -928,7 +906,6 @@ class BugReportManager {
      */
     openGitHubIssueURL(title, body) {
         const baseUrl = `https://github.com/${this.repoOwner}/${this.repoName}/issues/new`;
-        
         // For very large bodies, we'll create a more structured approach
         if (body.length > 8000) {
             // Create a truncated version for URL and provide instructions
@@ -938,7 +915,6 @@ class BugReportManager {
                 body: truncatedBody,
                 labels: 'bug'
             });
-            
             const githubUrl = `${baseUrl}?${params.toString()}`;
             console.log('[BugReport] Opening GitHub with truncated data due to URL limits...');
             window.open(githubUrl, '_blank');
@@ -948,7 +924,6 @@ class BugReportManager {
                 body: body,
                 labels: 'bug'
             });
-            
             const githubUrl = `${baseUrl}?${params.toString()}`;
             console.log('[BugReport] Opening GitHub issue URL...');
             window.open(githubUrl, '_blank');
@@ -960,7 +935,6 @@ class BugReportManager {
      */
     generateUrlSafeBody(title, fullBody) {
         const maxUrlBodyLength = 6000; // Conservative limit for URL
-        
         if (fullBody.length <= maxUrlBodyLength) {
             return fullBody;
         }
@@ -969,7 +943,6 @@ class BugReportManager {
         const lines = fullBody.split('\\n');
         let safebody = '';
         let currentLength = 0;
-        
         // Always include description section
         const descriptionEndIndex = lines.findIndex(line => line.startsWith('## System Information'));
         if (descriptionEndIndex > 0) {
@@ -977,12 +950,10 @@ class BugReportManager {
             safebody = descriptionLines.join('\\n') + '\\n\\n';
             currentLength = safebody.length;
         }
-        
         // Add system info
         safebody += '## System Information\\n\\n';
         safebody += '_System data was truncated due to URL length limitations._\\n';
         safebody += '_Full system data is available in EOS Connect logs and web interface._\\n\\n';
-        
         // Add instructions for full data
         safebody += '## Full System Data\\n\\n';
         safebody += 'To provide complete system data for debugging:\\n';
@@ -990,10 +961,10 @@ class BugReportManager {
         safebody += '2. Go to Logs section and export recent logs\\n';
         safebody += '3. Check JSON endpoints: `/json/current_controls.json`, `/json/optimize_request.json`, `/json/optimize_response.json`\\n';
         safebody += '4. Attach the relevant files to this issue\\n\\n';
-        
+
         safebody += '---\\n';
         safebody += '_This bug report was generated automatically by EOS Connect. Full data truncated due to URL limitations._';
-        
+
         return safebody;
     }
 
@@ -1006,7 +977,6 @@ class BugReportManager {
         if (existingModal) {
             existingModal.remove();
         }
-        
         // Create modal HTML
         const modal = document.createElement('div');
         modal.id = 'bugReportPreviewModal';
@@ -1024,7 +994,6 @@ class BugReportManager {
             padding: 20px;
             box-sizing: border-box;
         `;
-        
         modal.innerHTML = `
             <div style="
                 background: #2d2d30;
@@ -1064,10 +1033,10 @@ class BugReportManager {
                 </div>
             </div>
         `;
-        
+
         // Add to document
         document.body.appendChild(modal);
-        
+
         // Close on background click
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -1085,7 +1054,6 @@ class BugReportManager {
             title: title,
             body: body
         });
-        
         return `${baseUrl}?${params.toString()}`;
     }
 
@@ -1094,19 +1062,18 @@ class BugReportManager {
      */
     async copySystemDataToClipboard() {
         const copyBtn = document.getElementById('copyDataBtn');
-        
         try {
             // Show loading state
             copyBtn.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right: 6px;"></i>Copying...';
             copyBtn.disabled = true;
-            
+
             // Collect system data
             console.log('[BugReport] Collecting system data for clipboard...');
             const systemData = await this.collectSystemData();
-            
+
             // Generate markdown content based on selections
             const markdownContent = this.generateMarkdownFromSelections(systemData);
-            
+
             // Copy to clipboard with fallback
             let success = false;
             try {
@@ -1132,17 +1099,16 @@ class BugReportManager {
                 success = document.execCommand('copy');
                 document.body.removeChild(textArea);
             }
-            
+
             if (!success) {
                 throw new Error('All clipboard methods failed');
             }
-            
+
             // Show success state
             copyBtn.innerHTML = '<i class="fas fa-check" style="margin-right: 6px;"></i>Copied!';
             copyBtn.style.background = 'rgba(40, 167, 69, 0.2)';
             copyBtn.style.borderColor = '#28a745';
             copyBtn.style.color = '#28a745';
-            
             // Reset button after 2 seconds
             setTimeout(() => {
                 copyBtn.innerHTML = '<i class="fas fa-copy" style="margin-right: 6px;"></i>Copy to Clipboard';
@@ -1151,11 +1117,11 @@ class BugReportManager {
                 copyBtn.style.color = '#ffc107';
                 copyBtn.disabled = false;
             }, 2000);
-            
+
         } catch (error) {
             console.error('[BugReport] Error copying to clipboard:', error);
             alert('Failed to copy to clipboard. Please try again or copy manually.');
-            
+
             // Reset button
             copyBtn.innerHTML = '<i class="fas fa-copy" style="margin-right: 6px;"></i>Copy to Clipboard';
             copyBtn.disabled = false;
@@ -1167,21 +1133,20 @@ class BugReportManager {
      */
     generateMarkdownFromSelections(systemData) {
         let markdown = '\n\n---\n\n## 🔧 System Data\n\n';
-        
         // Check which items are selected
         const includeErrors = document.getElementById('include_errors').checked;
         const includeControls = document.getElementById('include_controls').checked;
         const includeOptRequest = document.getElementById('include_opt_request').checked;
         const includeOptResponse = document.getElementById('include_opt_response').checked;
         const includeLogs = document.getElementById('include_logs').checked;
-        
+
         // Add errors/warnings first (most important) - use alerts like in preview
         if (includeErrors && systemData.alerts) {
             // Use same logic as preview - filter alerts for ERROR and WARNING only
-            const errorAlerts = systemData.alerts.filter(alert => 
+            const errorAlerts = systemData.alerts.filter(alert =>
                 alert.level === 'ERROR' || alert.level === 'WARNING'
             ).slice(-10); // Get last 10 error/warning alerts
-            
+
             if (errorAlerts.length > 0) {
                 markdown += `### ⚠️ Recent Errors & Warnings (${errorAlerts.length} found)\n\n`;
                 markdown += '```\n';
@@ -1195,7 +1160,6 @@ class BugReportManager {
         } else if (includeErrors) {
             markdown += '### ❌ Recent Errors & Warnings\n\nAlerts data not available.\n\n';
         }
-        
         // Add current controls
         if (includeControls && systemData.currentControls) {
             markdown += '### 🎛️ Current System Controls & States\n\n';
@@ -1205,7 +1169,6 @@ class BugReportManager {
             markdown += '\n```\n\n';
             markdown += '</details>\n\n';
         }
-        
         // Add optimization request
         if (includeOptRequest && systemData.optimizeRequest) {
             markdown += '### 📤 Last Optimization Request\n\n';
@@ -1215,7 +1178,6 @@ class BugReportManager {
             markdown += '\n```\n\n';
             markdown += '</details>\n\n';
         }
-        
         // Add optimization response
         if (includeOptResponse && systemData.optimizeResponse) {
             markdown += '### 📥 Last Optimization Response\n\n';
@@ -1225,7 +1187,6 @@ class BugReportManager {
             markdown += '\n```\n\n';
             markdown += '</details>\n\n';
         }
-        
         // Add recent logs
         if (includeLogs && systemData.recentLogs && systemData.recentLogs.logs) {
             const recentLogs = systemData.recentLogs.logs.slice(0, 200);
@@ -1238,11 +1199,11 @@ class BugReportManager {
             markdown += '```\n\n';
             markdown += '</details>\n\n';
         }
-        
+
         // Add footer
         markdown += '---\n';
         markdown += '*This system data was generated automatically by EOS Connect bug reporting feature.*';
-        
+
         return markdown;
     }
 
@@ -1252,15 +1213,14 @@ class BugReportManager {
     async previewData(dataType) {
         try {
             console.log(`[BugReport] Previewing ${dataType} data...`);
-            
             // Collect system data if not already available
             if (!this.cachedSystemData) {
                 this.cachedSystemData = await this.collectSystemData();
             }
-            
+
             let content = '';
             let title = '';
-            
+
             switch (dataType) {
                 case 'errors':
                     title = '⚠️ Recent Errors & Warnings (Last 10)';
@@ -1269,14 +1229,14 @@ class BugReportManager {
                         if (typeof loggingManager !== 'undefined' && loggingManager.fetchAlerts) {
                             await loggingManager.fetchAlerts();
                             const alerts = loggingManager.alerts || [];
-                            
+
                             const errorAlerts = alerts
                                 .filter(alert => alert.level === 'ERROR' || alert.level === 'WARNING')
                                 .slice(-10); // Get most recent 10
-                            
+
                             if (errorAlerts.length > 0) {
                                 title = `⚠️ Recent Errors & Warnings (${errorAlerts.length} found)`;
-                                content = errorAlerts.map(alert => 
+                                content = errorAlerts.map(alert =>
                                     `<div style="margin-bottom: 8px; padding: 8px; background: rgba(255,0,0,0.1); border-radius: 4px; word-wrap: break-word;">
                                         <strong>[${alert.level}]</strong> ${alert.timestamp}<br>
                                         <span style="color: #ff6b6b; word-wrap: break-word;">${alert.message}</span>
@@ -1293,22 +1253,18 @@ class BugReportManager {
                         content = '<div style="color: #dc3545;">❌ Error loading alerts data.</div>';
                     }
                     break;
-                    
                 case 'controls':
                     title = '🎛️ Current System Controls & States';
                     content = `<pre style="background: #222; padding: 15px; border-radius: 6px; overflow: auto; max-height: 400px; color: #fff; word-wrap: break-word; white-space: pre-wrap;">${JSON.stringify(this.cachedSystemData.currentControls || {}, null, 2)}</pre>`;
                     break;
-                    
                 case 'opt_request':
                     title = '📤 Last Optimization Request';
                     content = `<pre style="background: #222; padding: 15px; border-radius: 6px; overflow: auto; max-height: 400px; color: #fff; word-wrap: break-word; white-space: pre-wrap;">${JSON.stringify(this.cachedSystemData.optimizeRequest || {}, null, 2)}</pre>`;
                     break;
-                    
                 case 'opt_response':
                     title = '📥 Last Optimization Response';
                     content = `<pre style="background: #222; padding: 15px; border-radius: 6px; overflow: auto; max-height: 400px; color: #fff; word-wrap: break-word; white-space: pre-wrap;">${JSON.stringify(this.cachedSystemData.optimizeResponse || {}, null, 2)}</pre>`;
                     break;
-                    
                 case 'logs':
                     title = '📋 Recent Log Entries (Last 200)';
                     if (this.cachedSystemData.recentLogs && this.cachedSystemData.recentLogs.logs) {
@@ -1320,15 +1276,14 @@ class BugReportManager {
                         content = '<div style="color: #999;">No log data available.</div>';
                     }
                     break;
-                    
                 default:
                     title = 'Preview';
                     content = '<div style="color: #999;">Unknown data type.</div>';
             }
-            
+
             // Show preview in smaller modal
             this.showPreviewModal(title, content);
-            
+
         } catch (error) {
             console.error(`[BugReport] Error previewing ${dataType}:`, error);
             alert(`Failed to preview ${dataType} data. Please try again.`);
@@ -1341,37 +1296,34 @@ class BugReportManager {
     async copyToClipboard(dataType) {
         try {
             console.log(`[BugReport] Copying ${dataType} to clipboard...`);
-            
             // Collect system data if not already available
             if (!this.cachedSystemData) {
                 this.cachedSystemData = await this.collectSystemData();
             }
-            
+
             let markdown = '';
-            
+
             switch (dataType) {
                 case 'controls':
                     markdown = '### 🎛️ Current System Controls & States\n\n```json\n';
                     markdown += JSON.stringify(this.cachedSystemData.currentControls || {}, null, 2);
                     markdown += '\n```';
                     break;
-                    
                 case 'opt_request':
                     markdown = '### 📤 Last Optimization Request\n\n```json\n';
                     markdown += JSON.stringify(this.cachedSystemData.optimizeRequest || {}, null, 2);
                     markdown += '\n```';
                     break;
-                    
                 case 'opt_response':
                     markdown = '### 📥 Last Optimization Response\n\n```json\n';
                     markdown += JSON.stringify(this.cachedSystemData.optimizeResponse || {}, null, 2);
                     markdown += '\n```';
                     break;
-                    
+
                 default:
                     throw new Error(`Unknown data type: ${dataType}`);
             }
-            
+
             // Copy to clipboard with fallback
             let success = false;
             try {
@@ -1397,24 +1349,22 @@ class BugReportManager {
                 success = document.execCommand('copy');
                 document.body.removeChild(textArea);
             }
-            
+
             if (!success) {
                 throw new Error('All clipboard methods failed');
             }
-            
+
             // Show visual feedback
             const button = event.target.closest('button');
             const originalContent = button.innerHTML;
             button.innerHTML = '<i class="fas fa-check"></i>';
             button.style.borderColor = '#28a745';
             button.style.color = '#28a745';
-            
             setTimeout(() => {
                 button.innerHTML = originalContent;
                 button.style.borderColor = '';
                 button.style.color = '';
             }, 1500);
-            
         } catch (error) {
             console.error(`[BugReport] Error copying ${dataType} to clipboard:`, error);
             alert(`Failed to copy ${dataType} data to clipboard. Please try again.`);

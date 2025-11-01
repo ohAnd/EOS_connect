@@ -93,35 +93,42 @@ class MqttInterface:
                 "device_class": None,
                 "icon": "mdi:state-machine",
                 "value_template": (
-                    "{% if value == '-2' %}Auto"
-                    "{% elif value == '-1' %}StartUp"
-                    "{% elif value == '0' %}Charge from Grid"
-                    "{% elif value == '1' %}Avoid Discharge"
-                    "{% elif value == '2' %}Discharge Allowed"
-                    "{% elif value == '3' %}Avoid Discharge EVCC FAST"
-                    "{% elif value == '4' %}Avoid Discharge EVCC PV"
-                    "{% elif value == '5' %}Avoid Discharge EVCC MIN+PV"
+                    "{% set v = value|int %}"
+                    "{% if v == -2 %}Auto"
+                    "{% elif v == -1 %}StartUp"
+                    "{% elif v == 0 %}Charge from Grid"
+                    "{% elif v == 1 %}Avoid Discharge"
+                    "{% elif v == 2 %}Discharge Allowed"
+                    "{% elif v == 3 %}Avoid Discharge EVCC FAST"
+                    "{% elif v == 4 %}Avoid Discharge EVCC PV"
+                    "{% elif v == 5 %}Avoid Discharge EVCC MIN+PV"
+                    "{% elif v == 6 %}Charge from Grid EVCC FAST"
                     "{% else %}Unknown{% endif %}"
                 ),
                 "command_template": (
-                    "{% if value == 'Auto' %}-2"
-                    "{% elif value == 'Charge from Grid' %}0"
-                    "{% elif value == 'Avoid Discharge' %}1"
-                    "{% elif value == 'Discharge Allowed' %}2"
-                    # "{% elif value == 'Avoid Discharge EVCC FAST' %}3"
-                    # "{% elif value == 'Avoid Discharge EVCC PV' %}4"
-                    # "{% elif value == 'Avoid Discharge EVCC MIN+PV' %}5"
-                    "{% else %}2{% endif %}"
+                    "{% set labels = {"
+                    "'Auto': -2, "
+                    "'StartUp': -2, "
+                    "'Charge from Grid': 0, "
+                    "'Avoid Discharge': 1, "
+                    "'Discharge Allowed': 2, "
+                    "'Avoid Discharge EVCC FAST': -2, "
+                    "'Avoid Discharge EVCC PV': -2, "
+                    "'Avoid Discharge EVCC MIN+PV': -2, "
+                    "'Charge from Grid EVCC FAST': -2"
+                    "} %}"
+                    "{% if value is not none and (value|int(0)|string) == (value|string) %}{{ value|int(0) }}{% elif value in labels %}{{ labels[value] }}{% else %}-2{% endif %}"
                 ),
                 "options": [
+                    "Auto",
+                    "StartUp",
                     "Charge from Grid",
                     "Avoid Discharge",
                     "Discharge Allowed",
-                    # "Avoid Discharge EVCC FAST",
-                    # "Avoid Discharge EVCC PV",
-                    # "Avoid Discharge EVCC MIN+PV",
-                    "Auto",
-                    # "StartUp"
+                    "Avoid Discharge EVCC FAST",
+                    "Avoid Discharge EVCC PV",
+                    "Avoid Discharge EVCC MIN+PV",
+                    "Charge from Grid EVCC FAST",
                 ],
             },
             "control/eos_ac_charge_demand": {
@@ -167,7 +174,7 @@ class MqttInterface:
                 "type": "binary_sensor",
                 "device_class": None,
                 "value_template": "{{ 'OFF' if 'False' in value else 'ON'}}",
-                "icon": "mdi:state-machine",
+                "icon": "mdi:heat-pump-outline",
             },
             "control/eos_homeappliance_start_hour": {
                 "value": None,
@@ -177,7 +184,7 @@ class MqttInterface:
                 "unit": "hour",
                 "type": "sensor",
                 "device_class": None,
-                "icon": "mdi:state-machine",
+                "icon": "mdi:clock-start",
             },
             "control/override_remain_time": {
                 "value": None,
@@ -189,7 +196,7 @@ class MqttInterface:
                 "unit": None,
                 "type": "select",
                 "device_class": None,
-                "icon": "mdi:clock",
+                "icon": "mdi:clock-end",
                 "options": [
                     "00:30",
                     "01:00",
@@ -230,7 +237,8 @@ class MqttInterface:
                 "max": 10000,
                 "step": 100,
                 "device_class": "power",
-                "icon": "mdi:state-machine",
+                "icon": "mdi:power-plug-battery-outline",
+                "value_template": "{{ value|int }}",  # Ensures integer display in HA
             },
             "control/override_active": {
                 "value": None,
@@ -241,7 +249,7 @@ class MqttInterface:
                 "type": "binary_sensor",
                 "device_class": None,
                 "value_template": "{{ 'OFF' if 'False' in value else 'ON'}}",
-                "icon": "mdi:state-machine",
+                "icon": "mdi:autorenew-off",
             },
             "control/override_end_time": {
                 "value": None,
@@ -251,7 +259,7 @@ class MqttInterface:
                 "unit": None,
                 "type": "sensor",
                 "device_class": "timestamp",
-                "icon": "mdi:clock",
+                "icon": "mdi:clock-end",
             },
             "optimization/last_run": {
                 "value": None,
@@ -261,7 +269,7 @@ class MqttInterface:
                 "unit": None,
                 "type": "sensor",
                 "device_class": "timestamp",
-                "icon": "mdi:clock",
+                "icon": "mdi:timer-check-outline",
             },
             "optimization/next_run": {
                 "value": None,
@@ -271,7 +279,7 @@ class MqttInterface:
                 "unit": None,
                 "type": "sensor",
                 "device_class": "timestamp",
-                "icon": "mdi:clock",
+                "icon": "mdi:timer-play-outline",
             },
             "optimization/state": {
                 "value": None,
@@ -367,7 +375,7 @@ class MqttInterface:
                 "unit": "Wh",
                 "type": "sensor",
                 "device_class": "energy",
-                "icon": "mdi:energy",
+                "icon": "mdi:home-battery-outline",
             },
             "battery/dyn_max_charge_power": {
                 "value": None,
@@ -378,6 +386,38 @@ class MqttInterface:
                 "type": "sensor",
                 "device_class": "power",
                 "icon": None,
+                "entity_category": "diagnostic",
+            },
+            "battery/soc_min": {
+                "value": None,
+                "set_value": None,
+                "command_topic": "battery/soc_min/set",
+                "name": "Battery min SOC",
+                "qos": 0,
+                "retain": True,
+                "unit": "%",
+                "type": "number",
+                "min": 0,
+                "max": 100,
+                "step": 1,
+                "device_class": None,
+                "icon": "mdi:battery-minus-outline",
+                "entity_category": "diagnostic",
+            },
+            "battery/soc_max": {
+                "value": None,
+                "set_value": None,
+                "command_topic": "battery/soc_max/set",
+                "name": "Battery max SOC",
+                "qos": 0,
+                "retain": True,
+                "unit": "%",
+                "type": "number",
+                "min": 0,
+                "max": 100,
+                "step": 1,
+                "device_class": None,
+                "icon": "mdi:battery-plus-outline",
                 "entity_category": "diagnostic",
             },
         }
@@ -491,42 +531,18 @@ class MqttInterface:
                 )
             except (TypeError, ValueError) as e:
                 logger.error("[MQTT] Error while updating publish topics: %s", e)
-            # call the callback if it is set and current topic is "control/overall_state"
-            if self.on_mqtt_command and topic == "control/overall_state":
-                self.__set_change_mode_callback(topic)
-
-    def __set_change_mode_callback(self, topic):
-        """
-        Private method to handle the change mode callback for MQTT commands.
-
-        This method logs the received MQTT topic and associated values, then
-        invokes the `on_mqtt_command` callback with a dictionary containing
-        mode, duration, and grid charge power information.
-
-        Args:
-            topic (str): The MQTT topic triggering the callback.
-
-        Logs:
-            Logs the topic, remaining time, and charge power values for debugging.
-        """
-        logger.debug(
-            "[MQTT] Calling on_mqtt_command callback with topic '%s' and "
-            + "remain time '%s' and charge power '%s'",
-            topic,
-            self.topics_publish["control/override_remain_time"]["set_value"],
-            self.topics_publish["control/override_charge_power"]["set_value"],
-        )
-        self.on_mqtt_command(
-            {
-                "mode": self.topics_publish["control/overall_state"]["set_value"],
-                "duration": self.topics_publish["control/override_remain_time"][
-                    "set_value"
-                ],
-                "charge_power": self.topics_publish["control/override_charge_power"][
-                    "set_value"
-                ],
+            # Map topics to command keys for simplified handling
+            topic_command_map = {
+                "control/overall_state": "mode",
+                "control/override_remain_time": "duration",
+                "control/override_charge_power": "charge_power",
+                "battery/soc_min": "soc_min",
+                "battery/soc_max": "soc_max",
             }
-        )
+            if self.on_mqtt_command and topic in topic_command_map:
+                self.on_mqtt_command(
+                    {topic_command_map[topic]: self.topics_publish[topic]["set_value"]}
+                )
 
     def __connect(self):
         """
@@ -667,6 +683,7 @@ class MqttInterface:
                 value["device_class"],
                 value["unit"],
                 self.base_topic + "/" + topic,
+                icon=value.get("icon") and value["icon"],
                 command_topic=value.get("command_topic")
                 and self.base_topic + "/" + value["command_topic"],
                 entity_category=value.get("entity_category")
@@ -688,6 +705,7 @@ class MqttInterface:
         device_class: str,
         unit_of_measurement: str,
         state_topic: str,
+        icon: Optional[str] = None,
         command_topic: Optional[str] = None,
         entity_category: Optional[str] = None,
         min_value=None,
@@ -723,6 +741,8 @@ class MqttInterface:
                 payload["device_class"] = device_class
             if unit_of_measurement:
                 payload["unit_of_measurement"] = unit_of_measurement
+            if icon:
+                payload["icon"] = icon
             if item_type == "number":
                 payload["min"] = min_value
                 payload["max"] = max_value

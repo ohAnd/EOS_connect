@@ -30,18 +30,25 @@ class ScheduleManager {
         var manual_override_active_until = data_controls["current_states"]["override_end_time"];
         var max_charge_power_w = data_request["pv_akku"] && data_request["pv_akku"].hasOwnProperty("max_ladeleistung_w") ? data_request["pv_akku"]["max_ladeleistung_w"] : data_request["pv_akku"] ? data_request["pv_akku"]["max_charge_power_w"] : 0;
 
-        // Add timezone indicator to schedule header
-        document.getElementById('load_schedule_header').innerHTML =
-            ` Schedule next 24 hours <small>(Local Time)</small>`;
+        const evopt_in_charge = data_controls["used_optimization_source"] === "evopt";
 
         ac_charge = ac_charge.map((value, index) => value * max_charge_power_w);
         var priceData = data_response["result"]["Electricity_price"];
+        var socData = data_response["result"]["akku_soc_pro_stunde"];
         var expenseData = data_response["result"]["Kosten_Euro_pro_Stunde"];
         var incomeData = data_response["result"]["Einnahmen_Euro_pro_Stunde"];
+        document.getElementById('schedule_currency_symbol').innerText = localization.currency_symbol;
+        document.getElementById('price_minor_unit_label').innerText = `${localization.currency_minor_unit}/kWh`;
+        document.querySelector('#discharge_scheduler .table-header .table-cell[title]').setAttribute(
+            'title',
+            `Shows your cost (Pay) and income (Earn) for this time slot. Format: Pay / Earn in ${localization.currency_symbol}.`
+        );
 
         // clear all entries in div discharge_scheduler
         var tableBody = document.querySelector("#discharge_scheduler .table-body");
         tableBody.innerHTML = '';
+
+        var soc_before = null;
 
         priceData.forEach((value, index) => {
             if (index > 23) return;
@@ -49,11 +56,8 @@ class ScheduleManager {
             var currentModeAtHour = (ac_charge[(index + currentHour)]) ? 0 : (discharge_allowed[(index + currentHour)] === 1) ? 2 : 1;
 
             if ((index + 1) % 4 === 0 && (index + 1) !== 0) {
-                var row = document.createElement('div');
                 row.className = 'table-row';
                 row.style.borderBottom = "1px solid #707070";
-                row.style.height = "5px";
-                tableBody.appendChild(row); // Append the row to the table body
                 var row = document.createElement('div');
                 row.className = 'table-row';
                 row.style.height = "5px";
@@ -65,9 +69,13 @@ class ScheduleManager {
 
             var cell1 = document.createElement('div');
             cell1.className = 'table-cell';
-            // cell1.innerHTML = ((index + currentHour) % 24) + ":00";
             const labelTime = new Date(serverTime.getTime() + (index * 60 * 60 * 1000));
-            cell1.innerHTML = labelTime.getHours().toString().padStart(2, '0') + ":00";
+            if (evopt_in_charge && index === 0) {
+                cell1.innerHTML = labelTime.getHours().toString().padStart(2, '0') + ":" +
+                    labelTime.getMinutes().toString().padStart(2, '0');
+            } else {
+                cell1.innerHTML = labelTime.getHours().toString().padStart(2, '0') + ":00";
+            }
 
             cell1.style.textAlign = "right";
             row.appendChild(cell1);
@@ -92,6 +100,8 @@ class ScheduleManager {
                     buttonDiv.innerHTML = " <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[2].icon + "'></i> ";
                 } else if (inverter_mode_num === 5) { //MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV
                     buttonDiv.innerHTML = " <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[2].icon + "'></i> ";
+                } else if (inverter_mode_num === 6) { //MODE_CHARGE_FROM_GRID_EVCC_FAST
+                    buttonDiv.innerHTML = " <i class='fa-solid " + EOS_CONNECT_ICONS[inverter_mode_num].icon + "'></i> <i class='fa-solid " + EOS_CONNECT_ICONS[0].icon + "'></i> ";
                 }
             }
             // 30 minutes in seconds = 30 * 60 = 1800
@@ -108,6 +118,22 @@ class ScheduleManager {
                 }
             }
 
+            // prep SOC cell
+            const socVal = Number(socData[index]);
+            const socStr = socVal.toFixed(1);
+            const socColor = (soc_before !== null && socVal > soc_before) ? 'darkgrey' : (soc_before !== null && socVal < soc_before) ? 'white' : 'lightgray';
+
+            // store for next iteration
+            soc_before = socVal; // store for next iteration
+
+            // prep expensse / income cell
+            const expenseVal = Number(expenseData[index]);
+            const incomeVal = Number(incomeData[index]);
+            const expenseStr = expenseVal.toFixed(2);
+            const incomeStr = incomeVal.toFixed(2);
+            const expenseColor = expenseVal >= 0.005 ? 'lightgray' : 'rgba(131, 131, 131, 1)';
+            const incomeColor = incomeVal >= 0.005 ? 'lightgray' : 'rgba(131, 131, 131, 1)';
+            const in_out_text = `<span style="color: ${expenseColor}">${expenseStr}</span> / <span style="color: ${incomeColor}">${incomeStr}</span>`;
 
             cell2.appendChild(buttonDiv);
             cell2.style.textAlign = "center";
@@ -121,13 +147,13 @@ class ScheduleManager {
 
             var cell4 = document.createElement('div');
             cell4.className = 'table-cell';
-            cell4.innerHTML = (expenseData[index]).toFixed(2);
+            cell4.innerHTML = in_out_text;
             cell4.style.textAlign = "center";
             row.appendChild(cell4);
 
             var cell5 = document.createElement('div');
             cell5.className = 'table-cell';
-            cell5.innerHTML = (incomeData[index]).toFixed(2);
+            cell5.innerHTML = '<span style="color: ' + socColor + '">' + socStr + '</span>';
             cell5.style.textAlign = "center";
             row.appendChild(cell5);
 

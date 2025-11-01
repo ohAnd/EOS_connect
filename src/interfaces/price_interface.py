@@ -6,6 +6,7 @@ Supported sources:
     - Akkudoktor API (default)
     - Tibber API
     - SmartEnergy AT API
+    - Stromligning.dk API
     - Fixed 24-hour price array
 
 Features:
@@ -33,8 +34,8 @@ from collections import defaultdict
 import json
 import logging
 import threading
+import threading
 import requests
-
 
 
 logger = logging.getLogger("__main__")
@@ -43,6 +44,7 @@ logger.info("[PRICE-IF] loading module ")
 AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
 TIBBER_API = "https://api.tibber.com/v1-beta/gql"
 SMARTENERGY_API = "https://apis.smartenergy.at/market/v1/price"
+STROMLIGNING_API_BASE = "https://stromligning.dk/api/prices?lean=true"
 
 
 class PriceInterface:
@@ -52,7 +54,7 @@ class PriceInterface:
 
     Attributes:
         src (str): Source of the price data
-                   (e.g., 'tibber', 'default', 'smartenergy_at', 'fixed_24h').
+                   (e.g., 'tibber', 'stromligning', 'smartenergy_at', 'fixed_24h', 'default').
         access_token (str): Access token for authenticating with the price source.
         fixed_24h_array (list): Optional fixed 24-hour price array.
         feed_in_tariff_price (float): Feed-in tariff price in cents per kWh.
@@ -80,6 +82,8 @@ class PriceInterface:
             Fetches prices from the Tibber API.
         __retrieve_prices_from_smartenergy_at(tgt_duration, start_time=None):
             Fetches prices from the SmartEnergy AT API.
+        __retrieve_prices_from_stromligning(tgt_duration, start_time=None):
+            Fetches prices from the Stromligning.dk API.
         __retrieve_prices_from_fixed24h_array(tgt_duration, start_time=None):
             Returns prices from a fixed 24-hour array.
     """
@@ -91,6 +95,7 @@ class PriceInterface:
     ):
         self.src = config["source"]
         self.access_token = config.get("token", "")
+        self._stromligning_url = None
         self.fixed_price_adder_ct = config.get("fixed_price_adder_ct", 0.0)
         self.relative_price_multiplier = config.get("relative_price_multiplier", 0.0)
         self.fixed_24h_array = config.get("fixed_24h_array", False)
@@ -108,6 +113,7 @@ class PriceInterface:
         self.current_prices_direct = []  # without tax
         self.current_feedin = []
         self.default_prices = [0.0001] * 48  # if external data are not available
+        self.price_currency = self.__determine_price_currency()
 
         # Add retry mechanism attributes
         self.last_successful_prices = []
@@ -165,9 +171,14 @@ class PriceInterface:
         """
         # Initial update
         try:
-            self.update_prices(48, datetime.now(self.time_zone).replace(hour=0, minute=0, second=0, microsecond=0))  # Get 48 hours of price data
+            self.update_prices(
+                48,
+                datetime.now(self.time_zone).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ),
+            )  # Get 48 hours of price data
             logger.info("[PRICE-IF] Initial price update completed")
-        except Exception as e:
+        except RuntimeError as e:
             logger.error("[PRICE-IF] Error during initial price update: %s", e)
 
         while not self._stop_event.is_set():
@@ -177,7 +188,12 @@ class PriceInterface:
                     break  # Stop event was set
 
                 # Perform price update
-                self.update_prices(48, datetime.now(self.time_zone).replace(hour=0, minute=0, second=0, microsecond=0))  # Get 48 hours of price data
+                self.update_prices(
+                    48,
+                    datetime.now(self.time_zone).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    ),
+                )  # Get 48 hours of price data
                 logger.debug("[PRICE-IF] Periodic price update completed")
 
             except Exception as e:
@@ -212,6 +228,65 @@ class PriceInterface:
                 "[PRICE-IF] Access token is required for Tibber source but not provided."
                 + " Usiung default price source."
             )
+        if self.src == "stromligning":
+            try:
+                (
+                    supplier_id,
+                    product_id,
+                    customer_group_id,
+                ) = self._parse_stromligning_token(self.access_token)
+            except ValueError as exc:
+                self.src = "default"
+                self._stromligning_url = None
+                logger.error(
+                    "[PRICE-IF] Invalid Stromligning token: %s. Falling back to default prices.",
+                    exc,
+                )
+            else:
+                query_parts = [
+                    f"productId={product_id}",
+                    f"supplierId={supplier_id}",
+                ]
+                if customer_group_id:
+                    query_parts.append(f"customerGroupId={customer_group_id}")
+                self._stromligning_url = (
+                    f"{STROMLIGNING_API_BASE}&{'&'.join(query_parts)}"
+                )
+        else:
+            self._stromligning_url = None
+
+    @staticmethod
+    def _parse_stromligning_token(token):
+        """
+        Parses the Stromligning token into its components.
+
+        Args:
+            token (str): The Stromligning token in the format
+                         'supplierId/productId' or 'supplierId/productId/groupId'.
+
+        Returns:
+            tuple: A tuple containing supplierId, productId, and optionally customerGroupId.
+
+        Raises:
+            ValueError: If the token is missing, not a string, or not in the expected format.
+        """
+        if not token or not isinstance(token, str):
+            raise ValueError("token must be provided for Stromligning.")
+
+        parts = [segment.strip() for segment in token.strip().split("/")]
+        if any(part == "" for part in parts):
+            raise ValueError(
+                "token segments must be non-empty when using Stromligning."
+            )
+
+        if len(parts) not in (2, 3):
+            raise ValueError(
+                "token must contain two or three segments separated by '/'."
+            )
+
+        supplier_id, product_id = parts[0], parts[1]
+        customer_group_id = parts[2] if len(parts) == 3 else None
+        return supplier_id, product_id, customer_group_id
 
     def update_prices(self, tgt_duration, start_time=None):
         """
@@ -234,8 +309,17 @@ class PriceInterface:
             start_time = datetime.now(self.time_zone).replace(
                 minute=0, second=0, microsecond=0
             )
+        if start_time is None:
+            start_time = datetime.now(self.time_zone).replace(
+                minute=0, second=0, microsecond=0
+            )
         self.current_prices = self.__retrieve_prices(tgt_duration, start_time)
         self.current_feedin = self.__create_feedin_prices()
+        logger.debug(
+            "[PRICE-IF] Prices updated for %d hours starting from %s",
+            tgt_duration,
+            start_time.strftime("%Y-%m-%d %H:%M"),
+        )
         logger.debug(
             "[PRICE-IF] Prices updated for %d hours starting from %s",
             tgt_duration,
@@ -269,6 +353,15 @@ class PriceInterface:
         #     "[PRICE-IF] Returning current feed-in prices: %s", self.current_feedin
         # )
         return self.current_feedin
+
+    def get_price_currency(self):
+        """
+        Return the currency identifier for the currently configured price source.
+
+        Returns:
+            str: ISO 4217 currency code (e.g. 'EUR', 'DKK').
+        """
+        return self.price_currency
 
     def __create_feedin_prices(self):
         """
@@ -325,6 +418,8 @@ class PriceInterface:
             prices = self.__retrieve_prices_from_smartenergy_at(
                 tgt_duration, start_time
             )
+        elif self.src == "stromligning":
+            prices = self.__retrieve_prices_from_stromligning(tgt_duration, start_time)
         elif self.src == "fixed_24h":
             prices = self.__retrieve_prices_from_fixed24h_array(
                 tgt_duration, start_time
@@ -384,8 +479,72 @@ class PriceInterface:
             self.last_successful_prices = prices.copy()
             self.last_successful_prices_direct = self.current_prices_direct.copy()
             logger.debug("[PRICE-IF] Prices retrieved successfully. Stored as backup.")
+            self.consecutive_failures += 1
+
+            if (
+                self.consecutive_failures <= self.max_failures
+                and len(self.last_successful_prices) > 0  # Changed condition
+            ):
+                logger.warning(
+                    "[PRICE-IF] No prices retrieved (failure %d/%d). Using last successful prices.",
+                    self.consecutive_failures,
+                    self.max_failures,
+                )
+                prices = self.last_successful_prices[:tgt_duration]
+                self.current_prices_direct = self.last_successful_prices_direct[
+                    :tgt_duration
+                ]
+
+                # Extend if needed
+                if len(prices) < tgt_duration:
+                    remaining_hours = tgt_duration - len(prices)
+                    prices.extend(self.last_successful_prices[:remaining_hours])
+                    self.current_prices_direct.extend(
+                        self.last_successful_prices_direct[:remaining_hours]
+                    )
+            else:
+                if len(self.last_successful_prices) == 0:
+                    logger.error(
+                        "[PRICE-IF] No prices retrieved (failure %d) and no previous"
+                        + " successful prices available. Using default prices (0.10 ct/kWh).",
+                        self.consecutive_failures,
+                    )
+                else:
+                    logger.error(
+                        "[PRICE-IF] No prices retrieved after %d consecutive failures."
+                        + " Using default prices (0.10 ct/kWh).",
+                        self.consecutive_failures,
+                    )
+                prices = self.default_prices[:tgt_duration]
+                self.current_prices_direct = self.default_prices[:tgt_duration].copy()
+        else:
+            # Success - reset failure counter and store successful prices
+            self.consecutive_failures = 0
+            self.last_successful_prices = prices.copy()
+            self.last_successful_prices_direct = self.current_prices_direct.copy()
+            logger.debug("[PRICE-IF] Prices retrieved successfully. Stored as backup.")
 
         return prices
+
+    def __determine_price_currency(self):
+        """
+        Determine the currency used by the configured price source.
+
+        Returns:
+            str: ISO 4217 currency code.
+        """
+        if self.src == "stromligning":
+            return "DKK"
+        if self.src == "smartenergy_at":
+            return "EUR"
+        if self.src == "fixed_24h":
+            return "EUR"
+        if self.src == "tibber":
+            # Tibber exposes prices in the account currency; default to EUR.
+            return "EUR"
+        if self.src == "default":
+            return "EUR"
+        return "EUR"
 
     def __retrieve_prices_from_akkudoktor(self, tgt_duration, start_time=None):
         """
@@ -410,6 +569,7 @@ class PriceInterface:
                 self.src,
             )
             return []
+            return []
         logger.debug("[PRICE-IF] Fetching prices from akkudoktor ...")
         if start_time is None:
             start_time = datetime.now(self.time_zone).replace(
@@ -433,15 +593,26 @@ class PriceInterface:
                 "[PRICE-IF] Request timed out while fetching prices from akkudoktor."
             )
             return []
+            return []
         except requests.exceptions.RequestException as e:
             logger.error(
+                "[PRICE-IF] Request failed while fetching prices from akkudoktor: %s",
                 "[PRICE-IF] Request failed while fetching prices from akkudoktor: %s",
                 e,
             )
             return []
+            return []
 
         prices = []
         for price in data["values"]:
+            price_with_fixed = (
+                round(price["marketpriceEurocentPerKWh"] / 100000, 9)
+                + self.fixed_price_adder_ct / 100000
+            )
+            price_final = round(
+                price_with_fixed * (1 + self.relative_price_multiplier), 9
+            )
+            prices.append(price_final)
             price_with_fixed = (
                 round(price["marketpriceEurocentPerKWh"] / 100000, 9)
                 + self.fixed_price_adder_ct / 100000
@@ -488,6 +659,7 @@ class PriceInterface:
                 "[PRICE-IF] Price source '%s' currently not supported.", self.src
             )
             return []  # Changed from self.default_prices to []
+            return []  # Changed from self.default_prices to []
         headers = {
             "Authorization": self.access_token,
             "Content-Type": "application/json",
@@ -502,6 +674,7 @@ class PriceInterface:
                                 total
                                 energy
                                 startsAt
+                                currency
                             }
                             tomorrow {
                                 total
@@ -524,11 +697,14 @@ class PriceInterface:
                 "[PRICE-IF] Request timed out while fetching prices from Tibber."
             )
             return []  # Changed from self.default_prices to []
+            return []  # Changed from self.default_prices to []
         except requests.exceptions.RequestException as e:
             logger.error(
                 "[PRICE-IF] Request failed while fetching prices from Tibber: %s",
+                "[PRICE-IF] Request failed while fetching prices from Tibber: %s",
                 e,
             )
+            return []  # Changed from self.default_prices to []
             return []  # Changed from self.default_prices to []
 
         response.raise_for_status()
@@ -550,6 +726,18 @@ class PriceInterface:
                 "tomorrow"
             ]
         )
+        try:
+            self.price_currency = (
+                (
+                    data["data"]["viewer"]["homes"][0]["currentSubscription"][
+                        "priceInfo"
+                    ]["today"][0]["currency"]
+                )
+                .strip()
+                .upper()
+            )
+        except (KeyError, IndexError, TypeError):
+            pass
 
         today_prices_json = json.loads(today_prices)
         tomorrow_prices_json = json.loads(tomorrow_prices)
@@ -593,13 +781,153 @@ class PriceInterface:
         logger.debug("[PRICE-IF] Prices from TIBBER fetched successfully.")
         return extended_prices
 
+    def __retrieve_prices_from_stromligning(self, tgt_duration, start_time=None):
+        logger.debug("[PRICE-IF] Prices fetching from STROMLIGNING started")
+        if self.src != "stromligning":
+            logger.error(
+                "[PRICE-IF] Price source '%s' currently not supported.",
+                self.src,
+            )
+            return []
+
+        if start_time is None:
+            start_time = datetime.now(self.time_zone).replace(
+                minute=0, second=0, microsecond=0
+            )
+
+        if start_time.tzinfo is None and hasattr(self.time_zone, "localize"):
+            start_time = self.time_zone.localize(start_time)
+
+        headers = {"accept": "application/json"}
+
+        request_url = self._stromligning_url
+        to_param = (start_time + timedelta(hours=tgt_duration)).strftime(
+            "%Y-%m-%dT%H:%M"
+        )
+        request_url = f"{request_url}&forecast=true&to={to_param}"
+
+        try:
+            response = requests.get(request_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+        except requests.exceptions.Timeout:
+            logger.error(
+                "[PRICE-IF] Request timed out while fetching prices from STROMLIGNING."
+            )
+            return []
+        except requests.exceptions.RequestException as e:
+            logger.error(
+                "[PRICE-IF] Request failed while fetching prices from STROMLIGNING: %s",
+                e,
+            )
+            return []
+        except ValueError as e:
+            logger.error(
+                "[PRICE-IF] Failed to parse STROMLIGNING response as JSON: %s",
+                e,
+            )
+            return []
+
+        if not isinstance(data, list) or len(data) == 0:
+            logger.error("[PRICE-IF] STROMLIGNING API returned no price entries.")
+            return []
+
+        tzinfo = start_time.tzinfo
+        horizon_end = start_time + timedelta(hours=tgt_duration)
+
+        processed_entries = []
+        for entry in data:
+            try:
+                price_value = float(entry["price"])
+                entry_start = entry["date"]
+                resolution_value = str(entry.get("resolution", "15m")).lower()
+            except (KeyError, TypeError, ValueError):
+                logger.debug(
+                    "[PRICE-IF] Skipping malformed STROMLIGNING entry: %s", entry
+                )
+                continue
+
+            try:
+                entry_start_dt = datetime.fromisoformat(
+                    entry_start.replace("Z", "+00:00")
+                )
+            except ValueError:
+                logger.debug(
+                    "[PRICE-IF] Skipping STROMLIGNING entry with invalid datetime: %s",
+                    entry_start,
+                )
+                continue
+
+            if tzinfo is not None:
+                entry_start_dt = entry_start_dt.astimezone(tzinfo)
+
+            resolution_map = {"15m": 15, "30m": 30, "60m": 60}
+            minutes = resolution_map.get(resolution_value, 15)
+            entry_end_dt = entry_start_dt + timedelta(minutes=minutes)
+
+            if entry_end_dt <= start_time or entry_start_dt >= horizon_end:
+                continue
+
+            processed_entries.append(
+                (entry_start_dt, entry_end_dt, price_value / 1000.0)
+            )
+
+        if not processed_entries:
+            logger.error(
+                "[PRICE-IF] No relevant STROMLIGNING price entries found within horizon."
+            )
+            return []
+
+        processed_entries.sort(key=lambda item: item[0])
+
+        hourly_prices = []
+        current_slot_start = start_time
+        coverage_warning = False
+
+        while current_slot_start < horizon_end:
+            current_slot_end = current_slot_start + timedelta(hours=1)
+            weighted_sum = 0.0
+            covered_seconds = 0.0
+
+            for entry_start, entry_end, price_per_wh in processed_entries:
+                overlap_start = max(entry_start, current_slot_start)
+                overlap_end = min(entry_end, current_slot_end)
+                if overlap_start >= overlap_end:
+                    continue
+                duration = (overlap_end - overlap_start).total_seconds()
+                weighted_sum += price_per_wh * duration
+                covered_seconds += duration
+
+            if covered_seconds == 0:
+                coverage_warning = True
+                if hourly_prices:
+                    hourly_prices.append(hourly_prices[-1])
+                else:
+                    hourly_prices.append(processed_entries[0][2])
+            else:
+                hourly_prices.append(round(weighted_sum / covered_seconds, 9))
+
+            current_slot_start = current_slot_end
+
+        if coverage_warning:
+            logger.warning(
+                "[PRICE-IF] Incomplete STROMLIGNING price coverage detected; "
+                "missing intervals reused the prior value."
+            )
+
+        self.current_prices_direct = hourly_prices.copy()
+        logger.debug("[PRICE-IF] Prices from STROMLIGNING fetched successfully.")
+        return hourly_prices
+
     def __retrieve_prices_from_smartenergy_at(self, tgt_duration, start_time=None):
         logger.debug("[PRICE-IF] Prices fetching from SMARTENERGY_AT started")
         if self.src != "smartenergy_at":
             logger.error(
                 "[PRICE-IF] Price source '%s' currently not supported.",
+                "[PRICE-IF] Price source '%s' currently not supported.",
                 self.src,
             )
+            return []
             return []
         if start_time is None:
             start_time = datetime.now(self.time_zone).replace(
@@ -618,11 +946,14 @@ class PriceInterface:
                 "[PRICE-IF] Request timed out while fetching prices from SMARTENERGY_AT."
             )
             return []
+            return []
         except requests.exceptions.RequestException as e:
             logger.error(
                 "[PRICE-IF] Request failed while fetching prices from SMARTENERGY_AT: %s",
+                "[PRICE-IF] Request failed while fetching prices from SMARTENERGY_AT: %s",
                 e,
             )
+            return []
             return []
 
         # Summarize to hourly averages
@@ -636,6 +967,7 @@ class PriceInterface:
             values = hourly.get(hour, [])
             avg = sum(values) / len(values) if values else 0
             hourly_prices.append(round(avg, 9))
+            hourly_prices.append(round(avg, 9))
 
         # Optionally extend to tgt_duration if needed
         extended_prices = hourly_prices
@@ -645,7 +977,9 @@ class PriceInterface:
 
         # Catch case where all prices are zero (or data is empty)
         if not any(extended_prices):
-            logger.error("[PRICE-IF] SMARTENERGY_AT API returned only zero prices or empty data.")
+            logger.error(
+                "[PRICE-IF] SMARTENERGY_AT API returned only zero prices or empty data."
+            )
             return []
 
         logger.debug("[PRICE-IF] Prices from SMARTENERGY_AT fetched successfully.")
@@ -672,7 +1006,10 @@ class PriceInterface:
                 + " but no 'fixed_24h_array' is provided."
             )
             return []
+            return []
         if len(self.fixed_24h_array) != 24:
+            logger.error("[PRICE-IF] fixed_24h_array must contain exactly 24 entries.")
+            return []
             logger.error("[PRICE-IF] fixed_24h_array must contain exactly 24 entries.")
             return []
         # Convert each entry in fixed_24h_array from ct/kWh to €/Wh (divide by 100000)

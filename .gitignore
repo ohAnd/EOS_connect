@@ -4,8 +4,7 @@
 __pycache__/
 src/config.bak.yaml
 src/config.yaml
-src/json/optimize_request.json
-src/json/optimize_response.json
+src/json/*.json
 src/interfaces/__pycache__
 src/interfaces/config/battery_config.json
 src/interfaces/config/timeofuse_config.json
