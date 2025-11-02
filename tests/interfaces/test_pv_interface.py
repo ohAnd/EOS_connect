@@ -450,3 +450,332 @@ def test_horizon_config_handling(source):
             or entry["horizon"] == ""
             or entry["horizon"] is None
         )
+
+
+import datetime as real_datetime
+
+
+class FixedDatetime(real_datetime.datetime):
+    """
+    A subclass of `real_datetime.datetime` that overrides the `now()` class method
+    to return a fixed datetime value. Useful for testing scenarios where a
+    predictable datetime is required.
+
+    Attributes:
+        None
+
+    Methods:
+        now(cls, tz=None): Returns a fixed datetime (2025-11-02 08:30:00) with optional timezone.
+    """
+
+    @classmethod
+    def now(cls, tz=None):
+        # Return a fixed datetime, e.g., midnight UTC
+        return cls(2025, 11, 2, 8, 30, 0, tzinfo=tz)
+
+
+def test_solcast_data_adaption(monkeypatch):
+    """
+    Test that Solcast API data is correctly transformed into a 48-hour forecast in Wh per hour.
+    Uses a mock response based on test.json (data embedded directly).
+    Also checks that the transformation from kWh/30min to Wh/hour is correct.
+    """
+    # Minimal mock Solcast response (first 48 periods, simplified for brevity)
+    solcast_data = {
+        "forecasts": [
+            {
+                "pv_estimate": 0.0734,
+                "period_end": "2025-11-02T08:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.1706,
+                "period_end": "2025-11-02T09:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.4624,
+                "period_end": "2025-11-02T09:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.4254,
+                "period_end": "2025-11-02T10:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.4511,
+                "period_end": "2025-11-02T10:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.4142,
+                "period_end": "2025-11-02T11:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.3381,
+                "period_end": "2025-11-02T11:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.3353,
+                "period_end": "2025-11-02T12:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.3267,
+                "period_end": "2025-11-02T12:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.3267,
+                "period_end": "2025-11-02T13:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.2797,
+                "period_end": "2025-11-02T13:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.2072,
+                "period_end": "2025-11-02T14:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.1313,
+                "period_end": "2025-11-02T14:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.0638,
+                "period_end": "2025-11-02T15:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.0303,
+                "period_end": "2025-11-02T15:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.0096,
+                "period_end": "2025-11-02T16:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T16:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T17:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T17:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T18:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T18:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T19:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T19:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T20:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T20:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T21:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T21:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T22:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T22:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T23:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-02T23:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-03T00:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-03T00:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-03T01:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-03T01:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-03T02:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-03T02:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-03T03:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-03T03:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-03T04:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-03T04:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-03T05:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0,
+                "period_end": "2025-11-03T05:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.0051,
+                "period_end": "2025-11-03T06:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.0417,
+                "period_end": "2025-11-03T07:00:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.0802,
+                "period_end": "2025-11-03T07:30:00.0000000Z",
+                "period": "PT30M",
+            },
+            {
+                "pv_estimate": 0.2342,
+                "period_end": "2025-11-03T08:00:00.0000000Z",
+                "period": "PT30M",
+            },
+        ]
+    }
+    # Pad to 48 entries if needed
+    while len(solcast_data["forecasts"]) < 48:
+        solcast_data["forecasts"].append(
+            {"pv_estimate": 0, "period_end": "", "period": "PT30M"}
+        )
+
+    config_entry = {
+        "name": "solcast_test",
+        "lat": 50,
+        "lon": 8,
+        "resource_id": "dummy_resource",
+    }
+    config_source = {"source": "solcast", "api_key": "dummy_key"}
+
+    pv = PvInterface(config_source, [config_entry], {}, timezone="UTC")
+
+    # Monkeypatch the _retry_request to return our mock data
+    def mock_retry_request(request_func, error_handler, **kwargs):
+        return solcast_data
+
+    pv._retry_request = mock_retry_request
+
+    # Monkeypatch requests.get to avoid real HTTP calls
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: None)
+
+    # Monkeypatch datetime in pv_interface to fixed time (08:30)
+    monkeypatch.setattr("src.interfaces.pv_interface.datetime", FixedDatetime)
+
+    # Call the Solcast API handler
+    forecast = pv._PvInterface__get_pv_forecast_solcast_api(
+        config_entry, tgt_duration=48
+    )
+
+    print("forecast: " + str(forecast))
+
+    # The forecast should be a list of 48 floats (Wh per hour)
+    assert isinstance(forecast, list)
+    assert len(forecast) == 48
+    assert all(isinstance(x, float) or isinstance(x, int) for x in forecast)
+    # Check that the sum is positive (since there is some production in the mock)
+    assert sum(forecast) > 0
+
+    # Since padding is from midnight, first 8 hours (0-7) should be zero
+    for i in range(8):
+        assert forecast[i] == 0, f"Expected zero padding at hour {i}, got {forecast[i]}"
+
+    # Check the transformation for the first few nonzero hours (starting at hour 8)
+    for hour in range(8, min(8 + 6, 24)):
+        solcast_idx = (hour - 8) * 2
+        expected_wh = (
+            solcast_data["forecasts"][solcast_idx]["pv_estimate"]
+            + solcast_data["forecasts"][solcast_idx + 1]["pv_estimate"]
+        ) * 1000
+        assert abs(forecast[hour] - expected_wh) < 1e-6, (
+            f"Solcast data transformation error at hour {hour}: "
+            f"expected {expected_wh} Wh, got {forecast[hour]} Wh. "
+            f"Input values: {solcast_data['forecasts'][solcast_idx]['pv_estimate']} kWh + "
+            f"{solcast_data['forecasts'][solcast_idx + 1]['pv_estimate']} kWh"
+        )

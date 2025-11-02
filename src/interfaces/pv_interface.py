@@ -211,7 +211,7 @@ class PvInterface:
                     )
             else:  # to get a working temperature forecast we set dummy values here
                 config_entry["power"] = 1000
-            # powerInverter, inverterEfficiency - only evcc, forecast_solar not required
+            # powerInverter - only evcc, forecast_solar not required
             if self.config_source.get("source") not in (
                 "evcc",
                 "forecast_solar",
@@ -220,8 +220,6 @@ class PvInterface:
                 missing_common = []
                 if config_entry.get("powerInverter") is None:
                     missing_common.append("powerInverter")
-                if config_entry.get("inverterEfficiency") is None:
-                    missing_common.append("inverterEfficiency")
 
                 if missing_common:
                     raise ValueError(
@@ -230,7 +228,28 @@ class PvInterface:
                     )
             else:  # to get a working temperature forecast we set dummy values here
                 config_entry["powerInverter"] = 1000
-                config_entry["inverterEfficiency"] = 100
+
+            # powerInverter, inverterEfficiency - only evcc, forecast_solar not required
+            # solcast optional
+            if self.config_source.get("source") not in (
+                "evcc",
+                "forecast_solar",
+                "solcast",
+            ):
+                missing_common = []
+                if config_entry.get("inverterEfficiency") is None:
+                    missing_common.append("inverterEfficiency")
+                if missing_common:
+                    raise ValueError(
+                        "[PV-IF] Missing required parameters"
+                        + f" for '{entry_name}': {', '.join(missing_common)}"
+                    )
+            else:  # to get a working temperature forecast we set dummy values here
+                if self.config_source.get("source") == "solcast":
+                    if config_entry.get("inverterEfficiency") is None:
+                        config_entry["inverterEfficiency"] = 1
+                else:
+                    config_entry["inverterEfficiency"] = 1
 
             # horizon parameter check for specific sources
             if self.config_source.get("source") in [
@@ -1223,11 +1242,8 @@ class PvInterface:
                     # system capacity you configured
                     pv_estimate_kw = forecast_item.get("pv_estimate", 0)
 
-                    # Convert kW to Wh for 30-minute period
-                    # kW * 0.5 hours = kWh, then * 1000 to get Wh
-                    pv_estimate_wh = (
-                        pv_estimate_kw * 500
-                    )  # kW * 0.5h * 1000W/kW = Wh for 30min
+                    # Convert kWh to Wh for 30-minute period
+                    pv_estimate_wh = pv_estimate_kw * 1000
 
                     # Aggregate 30-minute values into hourly values
                     if hour_key in hourly_power:
