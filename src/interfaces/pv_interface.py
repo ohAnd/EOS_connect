@@ -211,7 +211,7 @@ class PvInterface:
                     )
             else:  # to get a working temperature forecast we set dummy values here
                 config_entry["power"] = 1000
-            # powerInverter - only evcc, forecast_solar not required
+            # powerInverter - only evcc, forecast_solar, solcast not required
             if self.config_source.get("source") not in (
                 "evcc",
                 "forecast_solar",
@@ -229,7 +229,7 @@ class PvInterface:
             else:  # to get a working temperature forecast we set dummy values here
                 config_entry["powerInverter"] = 1000
 
-            # powerInverter, inverterEfficiency - only evcc, forecast_solar not required
+            # inverterEfficiency - only evcc, forecast_solar not required
             # solcast optional
             if self.config_source.get("source") not in (
                 "evcc",
@@ -1272,9 +1272,11 @@ class PvInterface:
             self.pv_forcast_request_error["error"] = None
 
             logger.debug(
-                "[PV-IF] Solcast PV forecast for resource '%s' received %d forecast points,"
+                "[PV-IF] Solcast PV forecast for resource '%s' (inverterEfficiency: %s) "
+                + "received %d forecast points,"
                 + " first 12h (Wh): %s",
                 resource_id,
+                inverter_efficiency,
                 len(forecasts),
                 pv_forecast[:12],  # Log first 12 hours to avoid spam
             )

@@ -194,18 +194,18 @@ This section contains two subsections:
 
 Each entry in `pv_forecast` must follow these rules, depending on the selected `pv_forecast_source`:
 
-| Parameter            | Required for Source(s)                         | Type/Format    | Default/Notes                                                                                         |
-| -------------------- | ---------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------- |
-| `name`               | all                                            | string         | User-defined identifier. Must be unique if multiple installations.                                    |
-| `lat`                | all except `evcc`                              | float          | Latitude of PV installation. Required for temperature forecasts.                                      |
-| `lon`                | all except `evcc`                              | float          | Longitude of PV installation. Required for temperature forecasts.                                     |
-| `azimuth`            | all except `solcast`, `evcc`                   | int/float      | Required. For `solcast`/`evcc`, defaults to `0` if missing.                                           |
-| `tilt`               | all except `solcast`, `evcc`                   | int/float      | Required. For `solcast`/`evcc`, defaults to `0` if missing.                                           |
-| `power`              | all except `evcc`, `solcast`                   | int/float      | Required. For `evcc`/`solcast`, set to `0` (dummy value for temperature forecast).                    |
-| `powerInverter`      | all except `evcc`, `forecast_solar`, `solcast` | int/float      | Required. For `evcc`, `forecast_solar`, `solcast`, set to `0` (dummy value for temperature forecast). |
-| `inverterEfficiency` | all except `evcc`, `forecast_solar`, `solcast` | float          | Required. For `evcc`, `forecast_solar`, `solcast`, set to `0` (dummy value for temperature forecast). |
-| `horizon`            | `openmeteo_local`, `forecast_solar`            | list or string | Mandatory. If missing, defaults to `[0]*36` for `openmeteo_local`, `[0]*24` for `forecast_solar`.     |
-| `resource_id`        | `solcast`                                      | string         | Required for Solcast. Must be set in each entry when using Solcast as the source.                     |
+| Parameter            | Required for Source(s)              | Type/Format    | Default/Notes                                                                                     |
+| -------------------- | ----------------------------------- | -------------- | ------------------------------------------------------------------------------------------------- |
+| `name`               | all                                 | string         | User-defined identifier. Must be unique if multiple installations.                                |
+| `lat`                | all                                 | float          | Latitude of PV installation. ('evcc','solcast' only required for temperature forecasts.)          |
+| `lon`                | all                                 | float          | Longitude of PV installation. ('evcc','solcast' only required for temperature forecasts.)         |
+| `azimuth`            | all except `solcast`, `evcc`        | int/float      | Required. For `evcc`/`solcast`, not needed (in HA addon config set to 180)                        |
+| `tilt`               | all except `solcast`, `evcc`        | int/float      | Required. For `evcc`/`solcast`, not needed (in HA addon config set to 25)                         |
+| `power`              | all except `evcc`, `solcast`        | int/float      | Required. For `evcc`/`solcast`, not needed (in HA addon config set to 1000)                       |
+| `powerInverter`      | all except `evcc`, `forecast_solar` | int/float      | Required. For `evcc`, `forecast_solar`, `solcast`, not needed (in HA addon config set to 1000)    |
+| `inverterEfficiency` | all except `evcc`, `forecast_solar` | float          | Required. For `evcc`, `forecast_solar`, set to `1`, not needed (in HA addon config set to 1)      |
+| `horizon`            | `openmeteo_local`, `forecast_solar` | list or string | Mandatory. If missing, defaults to `[0]*36` for `openmeteo_local`, `[0]*24` for `forecast_solar`. |
+| `resource_id`        | `solcast`                           | string         | Required for Solcast. Must be set in each entry when using Solcast as the source.                 |
 
 #### Parameter Details
 
