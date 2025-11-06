@@ -1242,8 +1242,9 @@ class PvInterface:
                     # system capacity you configured
                     pv_estimate_kw = forecast_item.get("pv_estimate", 0)
 
-                    # Convert kWh to Wh for 30-minute period
-                    pv_estimate_wh = pv_estimate_kw * 1000
+                    # Convert kW (average power over 30 minutes) to energy (Wh) for 30-minute period
+                    # Energy (Wh) = Power (kW) * Time (h)
+                    pv_estimate_wh = pv_estimate_kw * 0.5 * 1000  # kW * h * 1000 = Wh
 
                     # Aggregate 30-minute values into hourly values
                     if hour_key in hourly_power:
