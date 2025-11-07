@@ -325,7 +325,9 @@ battery_interface = BatteryInterface(
     on_bat_max_changed=None,
 )
 
-price_interface = PriceInterface(config_manager.config["price"], time_zone)
+price_interface = PriceInterface(
+    config_manager.config["price"], time_frame_base, time_zone
+)
 
 pv_interface = PvInterface(
     config_manager.config["pv_forecast_source"],

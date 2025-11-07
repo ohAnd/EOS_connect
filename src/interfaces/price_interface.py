@@ -14,16 +14,18 @@ Features:
     - Generates feed-in prices based on configuration.
     - Handles negative price switching and feed-in tariff logic.
     - Provides default fallback prices if external data is unavailable.
+    - Background thread for periodic price updates with retry and fallback logic.
+    - Supports both hourly and 15-minute intervals.
 
 Usage:
     config = {
         "source": "tibber",
         "token": "your_access_token",
-        "feed_in_tariff_price": 5.0,
+        "feed_in_price": 5.0,
         "negative_price_switch": True,
         "fixed_24h_array": [10.0] * 24
     }
-    price_interface = PriceInterface(config, timezone="Europe/Berlin")
+    price_interface = PriceInterface(config, time_frame_base=3600, timezone="Europe/Berlin")
     price_interface.update_prices(tgt_duration=24, start_time=datetime.now())
     current_prices = price_interface.get_current_prices()
     current_feedin_prices = price_interface.get_current_feedin_prices()
@@ -55,22 +57,22 @@ class PriceInterface:
         src (str): Source of the price data
                    (e.g., 'tibber', 'stromligning', 'smartenergy_at', 'fixed_24h', 'default').
         access_token (str): Access token for authenticating with the price source.
-        fixed_24h_array (list): Optional fixed 24-hour price array.
-        feed_in_tariff_price (float): Feed-in tariff price in cents per kWh.
+        fixed_24h_array (list): Optional fixed 24-hour price array (ct/kWh).
+        feed_in_tariff_price (float): Feed-in tariff price in ct/kWh.
         negative_price_switch (bool): If True, sets feed-in prices to 0 for negative prices.
         time_zone (str): Timezone for date and time operations.
-        current_prices (list): Current prices including taxes.
-        current_prices_direct (list): Current prices without tax.
-        current_feedin (list): Current feed-in prices.
-        default_prices (list): Default price list if external data is unavailable.
+        current_prices (list): Current prices including taxes (€/Wh).
+        current_prices_direct (list): Current prices without tax (€/Wh).
+        current_feedin (list): Current feed-in prices (€/Wh).
+        default_prices (list): Default price list if external data is unavailable (€/Wh).
 
     Methods:
         update_prices(tgt_duration, start_time):
             Updates current_prices and current_feedin for the given duration and start time.
         get_current_prices():
-            Returns the current prices.
+            Returns the current prices (€/Wh).
         get_current_feedin_prices():
-            Returns the current feed-in prices.
+            Returns the current feed-in prices (€/Wh).
         __create_feedin_prices():
             Generates feed-in prices based on current_prices_direct and configuration.
         __retrieve_prices(tgt_duration, start_time=None):
@@ -90,6 +92,7 @@ class PriceInterface:
     def __init__(
         self,
         config,
+        time_frame_base,
         timezone="UTC",
     ):
         self.src = config["source"]
@@ -107,6 +110,7 @@ class PriceInterface:
             self.fixed_24h_array = False
         self.feed_in_tariff_price = config.get("feed_in_price", 0.0)
         self.negative_price_switch = config.get("negative_price_switch", False)
+        self.time_frame_base = time_frame_base
         self.time_zone = timezone
         self.current_prices = []
         self.current_prices_direct = []  # without tax
@@ -293,7 +297,8 @@ class PriceInterface:
         and start time provided.
 
         Args:
-            tgt_duration (int): The target duration for which prices need to be retrieved.
+            tgt_duration (int): The target duration (hours or 15-min slots) for which prices
+            need to be retrieved.
             start_time (datetime): The starting time for retrieving prices.
 
         Updates:
@@ -320,11 +325,8 @@ class PriceInterface:
         """
         Returns the current prices.
 
-        This function returns the current prices fetched from the price source.
-        If the source is not supported, it returns an empty list.
-
         Returns:
-            list: A list of current prices.
+            list: A list of current prices (€/Wh) for the configured time frame.
         """
         # logger.debug("[PRICE-IF] Returning current prices: %s", self.current_prices)
         return self.current_prices
@@ -333,11 +335,8 @@ class PriceInterface:
         """
         Returns the current feed-in prices.
 
-        This function returns the current feed-in prices fetched from the price source.
-        If the source is not supported, it returns an empty list.
-
         Returns:
-            list: A list of current feed-in prices.
+            list: A list of current feed-in prices (€/Wh) for the configured time frame.
         """
         # logger.debug(
         #     "[PRICE-IF] Returning current feed-in prices: %s", self.current_feedin
@@ -357,13 +356,11 @@ class PriceInterface:
         """
         Creates feed-in prices based on the current prices.
 
-        This function generates feed-in prices based on the current prices and the
-        configured feed-in tariff price. If the negative price switch is enabled,
-        feed-in prices are set to 0 for negative prices. Otherwise, the feed-in tariff
-        price is used for all prices.
+        If negative_price_switch is enabled, feed-in prices are set to 0 for negative prices.
+        Otherwise, the feed-in tariff price is used for all prices.
 
         Returns:
-            list: A list of feed-in prices.
+            list: A list of feed-in prices (€/Wh).
         """
         if self.negative_price_switch:
             self.current_feedin = [
@@ -389,17 +386,16 @@ class PriceInterface:
         """
         Retrieve prices based on the target duration and optional start time.
 
-        This function fetches prices from different sources based on the configuration.
-        It supports fetching prices from 'tibber' and 'default' sources.
+        Fetches prices from the configured source. Supported sources: 'tibber', 'smartenergy_at',
+        'stromligning', 'fixed_24h', 'default'.
 
         Args:
-            tgt_duration (int): The target duration for which prices are to be fetched.
+            tgt_duration (int): The target duration (hours or 15-min slots) for which prices
+            are to be fetched.
             start_time (datetime, optional): The start time from which prices are to be fetched.
-            Defaults to None.
 
         Returns:
-            list: A list of prices for the specified duration and start time. Returns an empty list
-            if the price source is not supported.
+            list: A list of prices (€/Wh) for the specified duration and start time.
         """
         prices = []
         if self.src == "tibber":
@@ -494,20 +490,14 @@ class PriceInterface:
 
     def __retrieve_prices_from_akkudoktor(self, tgt_duration, start_time=None):
         """
-        Fetches and processes electricity prices for today and tomorrow.
-
-        This function retrieves electricity prices for today and tomorrow from an API,
-        processes the prices, and returns a list of prices for the specified duration starting
-        from the specified start time. If tomorrow's prices are not available, today's prices are
-        repeated for tomorrow.
+        Fetches and processes electricity prices for today and tomorrow from Akkudoktor API.
 
         Args:
-            tgt_duration (int): The target duration in hours for which the prices are needed.
-            start_time (datetime, optional): The start time for fetching prices. Defaults to None.
+            tgt_duration (int): The target duration in hours or 15-min slots.
+            start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
-            list: A list of electricity prices for the specified duration starting
-                from the specified start time.
+            list: A list of electricity prices (€/Wh) for the specified duration.
         """
         if self.src != "default":
             logger.error(
@@ -567,25 +557,25 @@ class PriceInterface:
             remaining_hours = tgt_duration - len(extended_prices)
             extended_prices.extend(prices[:remaining_hours])
         logger.debug("[PRICE-IF] Prices from AKKUDOKTOR fetched successfully.")
+        # for 15 min output only extend the array
+        if self.time_frame_base == 900:
+            extended_prices_15min = []
+            for price in extended_prices:
+                extended_prices_15min.extend([price] * 4)
+            extended_prices = extended_prices_15min
         self.current_prices_direct = extended_prices.copy()
         return extended_prices
 
     def __retrieve_prices_from_tibber(self, tgt_duration, start_time=None):
         """
-        Fetches and processes electricity prices for today and tomorrow.
-
-        This function retrieves electricity prices for today and tomorrow from a web service,
-        processes the prices, and returns a list of prices for the specified duration starting
-        from the specified start time. If tomorrow's prices are not available, today's prices are
-        repeated for tomorrow.
+        Fetches and processes electricity prices for today and tomorrow from Tibber API.
 
         Args:
-            tgt_duration (int): The target duration in hours for which the prices are needed.
-            start_time (datetime, optional): The start time for fetching prices. Defaults to None.
+            tgt_duration (int): The target duration in hours or 15-min slots.
+            start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
-            list: A list of electricity prices for the specified duration starting
-                from the specified start time.
+            list: A list of electricity prices (€/Wh) for the specified duration.
         """
         logger.debug("[PRICE-IF] Prices fetching from TIBBER started")
         if self.src != "tibber":
@@ -620,6 +610,14 @@ class PriceInterface:
             }
         }
         """
+        # patching query if time_frame_base is set to 900 (15 minutes)
+        # -> priceInfo(resolution: QUARTER_HOURLY)
+        if self.time_frame_base == 900:
+            query = query.replace(
+                "priceInfo",
+                "priceInfo(resolution: QUARTER_HOURLY)",
+            )
+
         try:
             response = requests.post(
                 TIBBER_API, headers=headers, json={"query": query}, timeout=10
@@ -677,9 +675,6 @@ class PriceInterface:
         for price in today_prices_json:
             prices.append(round(price["total"] / 1000, 9))
             prices_direct.append(round(price["energy"] / 1000, 9))
-            # logger.debug(
-            #     "[Main] day 1 - price for %s -> %s", price["startsAt"], price["total"]
-            # )
         if tomorrow_prices_json:
             for price in tomorrow_prices_json:
                 prices.append(round(price["total"] / 1000, 9))
@@ -688,9 +683,12 @@ class PriceInterface:
                 #     "[Main] day 2 - price for %s -> %s", price["startsAt"], price["total"]
                 # )
         else:
-            prices.extend(prices[:24])  # Repeat today's prices for tomorrow
+            extend_amount = 24
+            if self.time_frame_base == 900:
+                extend_amount = 96
+            prices.extend(prices[:extend_amount])  # Repeat today's prices for tomorrow
             prices_direct.extend(
-                prices_direct[:24]
+                prices_direct[:extend_amount]
             )  # Repeat today's prices for tomorrow
 
         if start_time is None:
@@ -698,6 +696,8 @@ class PriceInterface:
                 minute=0, second=0, microsecond=0
             )
         current_hour = start_time.hour
+        if self.time_frame_base == 900:
+            tgt_duration = 192  # 48 hours in 15 min intervals
         extended_prices = prices[current_hour : current_hour + tgt_duration]
         extended_prices_direct = prices_direct[
             current_hour : current_hour + tgt_duration
@@ -712,6 +712,16 @@ class PriceInterface:
         return extended_prices
 
     def __retrieve_prices_from_stromligning(self, tgt_duration, start_time=None):
+        """
+        Fetches and processes electricity prices from Stromligning.dk API.
+
+        Args:
+            tgt_duration (int): The target duration in hours or 15-min slots.
+            start_time (datetime, optional): The start time for fetching prices.
+
+        Returns:
+            list: A list of electricity prices (€/Wh) for the specified duration.
+        """
         logger.debug("[PRICE-IF] Prices fetching from STROMLIGNING started")
         if self.src != "stromligning":
             logger.error(
@@ -735,6 +745,8 @@ class PriceInterface:
             "%Y-%m-%dT%H:%M"
         )
         request_url = f"{request_url}&forecast=true&to={to_param}"
+
+        logger.debug("[PRICE-IF] Requesting prices from STROMLIGNING: %s", request_url)
 
         try:
             response = requests.get(request_url, headers=headers, timeout=10)
@@ -810,46 +822,126 @@ class PriceInterface:
 
         processed_entries.sort(key=lambda item: item[0])
 
-        hourly_prices = []
-        current_slot_start = start_time
-        coverage_warning = False
+        logger.debug(
+            "[PRICE-IF] Processing STROMLIGNING prices from %s to %s",
+            start_time.strftime("%Y-%m-%d %H:%M"),
+            horizon_end.strftime("%Y-%m-%d %H:%M"),
+        )
+        logger.debug(
+            "[PRICE-IF] Total STROMLIGNING entries to process: %d",
+            len(processed_entries),
+        )
 
-        while current_slot_start < horizon_end:
-            current_slot_end = current_slot_start + timedelta(hours=1)
-            weighted_sum = 0.0
-            covered_seconds = 0.0
-
-            for entry_start, entry_end, price_per_wh in processed_entries:
-                overlap_start = max(entry_start, current_slot_start)
-                overlap_end = min(entry_end, current_slot_end)
-                if overlap_start >= overlap_end:
-                    continue
-                duration = (overlap_end - overlap_start).total_seconds()
-                weighted_sum += price_per_wh * duration
-                covered_seconds += duration
-
-            if covered_seconds == 0:
-                coverage_warning = True
-                if hourly_prices:
-                    hourly_prices.append(hourly_prices[-1])
+        # Output 15min or hourly values depending on self.time_frame_base
+        if self.time_frame_base == 900:
+            # 15min intervals, 192 values for 2 days
+            interval = timedelta(minutes=15)
+            num_slots = int((horizon_end - start_time).total_seconds() // 900)
+            # Build a dict of all entries by their start time
+            entry_map = {}
+            for entry_start_dt, entry_end_dt, price_per_wh in processed_entries:
+                duration = (entry_end_dt - entry_start_dt).total_seconds()
+                if duration == 900:  # 15min
+                    entry_map[entry_start_dt] = price_per_wh
+                elif duration == 3600:  # 1h
+                    # Fill 4x 15min slots for this hour
+                    for i in range(4):
+                        slot_time = entry_start_dt + timedelta(minutes=15 * i)
+                        entry_map[slot_time] = price_per_wh
                 else:
-                    hourly_prices.append(processed_entries[0][2])
-            else:
-                hourly_prices.append(round(weighted_sum / covered_seconds, 9))
+                    # If other durations, fill as many 15min slots as fit
+                    n_slots = int(duration // 900)
+                    for i in range(n_slots):
+                        slot_time = entry_start_dt + timedelta(minutes=15 * i)
+                        entry_map[slot_time] = price_per_wh
 
-            current_slot_start = current_slot_end
+            prices = []
+            current_slot_start = start_time
+            coverage_warning = False
 
-        if coverage_warning:
-            logger.warning(
-                "[PRICE-IF] Incomplete STROMLIGNING price coverage detected; "
-                "missing intervals reused the prior value."
-            )
+            for _ in range(num_slots):
+                price = entry_map.get(current_slot_start)
+                if price is None:
+                    coverage_warning = True
+                    if prices:
+                        prices.append(prices[-1])
+                    else:
+                        # fallback: use first available value
+                        if entry_map:
+                            prices.append(next(iter(entry_map.values())))
+                        else:
+                            prices.append(0.0)
+                else:
+                    prices.append(round(price, 9))
+                current_slot_start += interval
 
-        self.current_prices_direct = hourly_prices.copy()
-        logger.debug("[PRICE-IF] Prices from STROMLIGNING fetched successfully.")
-        return hourly_prices
+            if coverage_warning:
+                logger.warning(
+                    "[PRICE-IF] Incomplete STROMLIGNING price coverage detected; "
+                    "missing intervals reused the prior value."
+                )
+
+            self.current_prices_direct = prices.copy()
+            logger.debug("[PRICE-IF] Prices from STROMLIGNING fetched successfully.")
+            return prices
+
+        else:
+            # hourly intervals, 48 values for 2 days
+            interval = timedelta(hours=1)
+            num_slots = int((horizon_end - start_time).total_seconds() // 3600)
+            # For each hour, average all 15min slots or use the hourly value
+            prices = []
+            current_slot_start = start_time
+            coverage_warning = False
+
+            for _ in range(num_slots):
+                current_slot_end = current_slot_start + interval
+                # Collect all 15min slots in this hour
+                slot_prices = []
+                for entry_start_dt, entry_end_dt, price_per_wh in processed_entries:
+                    duration = (entry_end_dt - entry_start_dt).total_seconds()
+                    # If 1h and matches the hour, use directly
+                    if duration == 3600 and entry_start_dt == current_slot_start:
+                        slot_prices = [price_per_wh]
+                        break
+                    # If 15min and within this hour, collect
+                    if (
+                        duration == 900
+                        and current_slot_start <= entry_start_dt < current_slot_end
+                    ):
+                        slot_prices.append(price_per_wh)
+                if slot_prices:
+                    avg_price = round(sum(slot_prices) / len(slot_prices), 9)
+                    prices.append(avg_price)
+                else:
+                    coverage_warning = True
+                    if prices:
+                        prices.append(prices[-1])
+                    else:
+                        prices.append(0.0)
+                current_slot_start = current_slot_end
+
+            if coverage_warning:
+                logger.warning(
+                    "[PRICE-IF] Incomplete STROMLIGNING price coverage detected; "
+                    "missing intervals reused the prior value."
+                )
+
+            self.current_prices_direct = prices.copy()
+            logger.debug("[PRICE-IF] Prices from STROMLIGNING fetched successfully.")
+            return prices
 
     def __retrieve_prices_from_smartenergy_at(self, tgt_duration, start_time=None):
+        """
+        Fetches and processes electricity prices from SmartEnergy AT API.
+
+        Args:
+            tgt_duration (int): The target duration in hours or 15-min slots.
+            start_time (datetime, optional): The start time for fetching prices.
+
+        Returns:
+            list: A list of electricity prices (€/Wh) for the specified duration.
+        """
         logger.debug("[PRICE-IF] Prices fetching from SMARTENERGY_AT started")
         if self.src != "smartenergy_at":
             logger.error(
@@ -881,23 +973,36 @@ class PriceInterface:
             )
             return []
 
-        # Summarize to hourly averages
-        hourly = defaultdict(list)
-        for entry in data["data"]:
-            hour = datetime.fromisoformat(entry["date"]).hour
-            hourly[hour].append(entry["value"] / 100000)  # Convert to euro/wh
-        # Compute the average for each hour (0-23)
-        hourly_prices = []
-        for hour in range(24):
-            values = hourly.get(hour, [])
-            avg = sum(values) / len(values) if values else 0
-            hourly_prices.append(round(avg, 9))
+        if self.time_frame_base == 3600:
+            # Summarize to hourly averages
+            hourly = defaultdict(list)
+            for entry in data["data"]:
+                hour = datetime.fromisoformat(entry["date"]).hour
+                hourly[hour].append(entry["value"] / 100000)  # Convert to euro/wh
+            # Compute the average for each hour (0-23)
+            hourly_prices = []
+            for hour in range(24):
+                values = hourly.get(hour, [])
+                avg = sum(values) / len(values) if values else 0
+                hourly_prices.append(round(avg, 9))
 
-        # Optionally extend to tgt_duration if needed
-        extended_prices = hourly_prices
-        if len(extended_prices) < tgt_duration:
-            remaining_hours = tgt_duration - len(extended_prices)
-            extended_prices.extend(hourly_prices[:remaining_hours])
+            # Optionally extend to tgt_duration if needed
+            extended_prices = hourly_prices
+            if len(extended_prices) < tgt_duration:
+                remaining_hours = tgt_duration - len(extended_prices)
+                extended_prices.extend(hourly_prices[:remaining_hours])
+
+        elif self.time_frame_base == 900:
+            # Use 15min values directly
+            prices_15min = []
+            for entry in data["data"]:
+                prices_15min.append(round(entry["value"] / 100000, 9))  # euro/wh
+
+            # Extend to tgt_duration if needed
+            extended_prices = prices_15min
+            if len(extended_prices) < tgt_duration:
+                remaining_slots = tgt_duration - len(extended_prices)
+                extended_prices.extend(prices_15min[:remaining_slots])
 
         # Catch case where all prices are zero (or data is empty)
         if not any(extended_prices):
@@ -914,15 +1019,12 @@ class PriceInterface:
         """
         Returns a fixed 24-hour array of prices.
 
-        This function returns a fixed 24-hour array of prices based on the configured
-        feed-in tariff price. It is used when the `fixed_24h_array` configuration is set to True.
-
         Args:
-            tgt_duration (int): The target duration for which prices are needed.
-            start_time (datetime, optional): The start time for fetching prices. Defaults to None.
+            tgt_duration (int): The target duration in hours or 15-min slots.
+            start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
-            list: A list of fixed prices for the specified duration.
+            list: A list of fixed prices (€/Wh) for the specified duration.
         """
         if not self.fixed_24h_array:
             logger.error(
@@ -939,5 +1041,11 @@ class PriceInterface:
         if len(extended_prices) < tgt_duration:
             remaining_hours = tgt_duration - len(extended_prices)
             extended_prices.extend(extended_prices[:remaining_hours])
+        # for 15 min output only extend the array
+        if self.time_frame_base == 900:
+            extended_prices_15min = []
+            for price in extended_prices:
+                extended_prices_15min.extend([price] * 4)
+            extended_prices = extended_prices_15min
         self.current_prices_direct = extended_prices.copy()
         return extended_prices
