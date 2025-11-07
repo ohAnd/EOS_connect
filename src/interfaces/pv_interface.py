@@ -53,12 +53,15 @@ class PvInterface:
         self,
         config_source,
         config,
+        time_frame_base,
         config_special,
         timezone="UTC",
     ):
         self.config = config
         self.time_zone = timezone
         self.config_source = config_source
+        # Set time_frame_base, defaulting to 3600 if None or not provided
+        self.time_frame_base = time_frame_base if time_frame_base is not None else 3600
         self.config_special = config_special
         logger.debug(
             "[PV-IF] Initializing with 1st source: %s",
@@ -74,7 +77,10 @@ class PvInterface:
             "config_entry": None,
             "source": None,
         }
-        self.temp_forecast_array = [15] * 48
+        if self.time_frame_base == 900:
+            self.temp_forecast_array = [15] * 48 * 4
+        else:
+            self.temp_forecast_array = [15] * 48
 
         self._update_thread = None
         self._stop_event = threading.Event()
@@ -297,7 +303,7 @@ class PvInterface:
         """
         while not self._stop_event.is_set():
             # Fetch the PV forecast data
-            pv_forcast_array = self.get_summarized_pv_forecast(48)
+            pv_forcast_array = self.get_summarized_pv_forecast()
             if not self.pv_forcast_request_error["error"]:
                 logger.debug("[PV-IF] PV forecast updated successfully")
                 self.pv_forcast_array = pv_forcast_array
@@ -319,9 +325,7 @@ class PvInterface:
             # special temp forecast if pv config is not given in detail
             if self.config and self.config[0]:
                 temp_result = self.__get_pv_forecast_akkudoktor_api(
-                    tgt_value="temperature",
-                    pv_config_entry=self.config[0],
-                    tgt_duration=48,
+                    tgt_value="temperature", pv_config_entry=self.config[0]
                 )
                 if not temp_result:  # If empty array or None due to API error
                     logger.warning(
@@ -376,6 +380,8 @@ class PvInterface:
         horizon_string = ""
         if pv_config_entry.get("horizon", "") != "":
             horizon_string = "&horizont=" + str(pv_config_entry["horizon"])
+        # if self.time_frame_base == 900:
+        #     horizon_string += "&timeframe=minutely_15"
         return (
             EOS_API_GET_PV_FORECAST
             + "?lat="
@@ -402,32 +408,165 @@ class PvInterface:
         Creates a default PV forecast with fixed values based on max power.
         """
         # Create a 24-hour default forecast
-        forecast_24h = [
-            pv_power * 0.0,  # 0% at 00:00
-            pv_power * 0.0,  # 0% at 01:00
-            pv_power * 0.0,  # 0% at 02:00
-            pv_power * 0.0,  # 0% at 03:00
-            pv_power * 0.0,  # 0% at 04:00
-            pv_power * 0.0,  # 0% at 05:00
-            pv_power * 0.1,  # 30% at 06:00
-            pv_power * 0.2,  # 50% at 07:00
-            pv_power * 0.3,  # 60% at 08:00
-            pv_power * 0.4,  # 70% at 09:00
-            pv_power * 0.5,  # 90% at 10:00
-            pv_power * 0.6,  # 80% at 11:00
-            pv_power * 0.7,  # 70% at 12:00
-            pv_power * 0.6,  # 60% at 13:00
-            pv_power * 0.5,  # 50% at 14:00
-            pv_power * 0.4,  # 40% at 15:00
-            pv_power * 0.3,  # 30% at 16:00
-            pv_power * 0.2,  # 20% at 17:00
-            pv_power * 0.1,  # 10% at 18:00
-            pv_power * 0.0,  # 0% at 19:00
-            pv_power * 0.0,  # 0% at 20:00
-            pv_power * 0.0,  # 0% at 21:00
-            pv_power * 0.0,  # 0% at 22:00
-            pv_power * 0.0,  # 0% at 23:00,
-        ]
+        # Create a default 24-hour PV forecast.
+        # If time_frame_base is 3600 (hourly), use 24 values.
+        # If time_frame_base is 900 (15-min), use 96 values (4 per hour).
+        if self.time_frame_base == 3600:
+            forecast_24h = [
+                pv_power * 0.0,  # 0% at 00:00
+                pv_power * 0.0,  # 0% at 01:00
+                pv_power * 0.0,  # 0% at 02:00
+                pv_power * 0.0,  # 0% at 03:00
+                pv_power * 0.0,  # 0% at 04:00
+                pv_power * 0.0,  # 0% at 05:00
+                pv_power * 0.1,  # 10% at 06:00
+                pv_power * 0.2,  # 20% at 07:00
+                pv_power * 0.3,  # 30% at 08:00
+                pv_power * 0.4,  # 40% at 09:00
+                pv_power * 0.5,  # 50% at 10:00
+                pv_power * 0.6,  # 60% at 11:00
+                pv_power * 0.7,  # 70% at 12:00
+                pv_power * 0.6,  # 60% at 13:00
+                pv_power * 0.5,  # 50% at 14:00
+                pv_power * 0.4,  # 40% at 15:00
+                pv_power * 0.3,  # 30% at 16:00
+                pv_power * 0.2,  # 20% at 17:00
+                pv_power * 0.1,  # 10% at 18:00
+                pv_power * 0.0,  # 0% at 19:00
+                pv_power * 0.0,  # 0% at 20:00
+                pv_power * 0.0,  # 0% at 21:00
+                pv_power * 0.0,  # 0% at 22:00
+                pv_power * 0.0,  # 0% at 23:00
+            ]
+        elif self.time_frame_base == 900:
+            # For 15-min intervals, interpolate each hour value to 4 values
+            hourly_values = [
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,  # 00:00
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,  # 01:00
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,  # 02:00
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,  # 03:00
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,  # 04:00
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,  # 05:00
+                pv_power * 0.025,
+                pv_power * 0.05,
+                pv_power * 0.075,
+                pv_power * 0.1,  # 06:00
+                pv_power * 0.125,
+                pv_power * 0.15,
+                pv_power * 0.175,
+                pv_power * 0.2,  # 07:00
+                pv_power * 0.225,
+                pv_power * 0.25,
+                pv_power * 0.275,
+                pv_power * 0.3,  # 08:00
+                pv_power * 0.325,
+                pv_power * 0.35,
+                pv_power * 0.375,
+                pv_power * 0.4,  # 09:00
+                pv_power * 0.425,
+                pv_power * 0.45,
+                pv_power * 0.475,
+                pv_power * 0.5,  # 10:00
+                pv_power * 0.525,
+                pv_power * 0.55,
+                pv_power * 0.575,
+                pv_power * 0.6,  # 11:00
+                pv_power * 0.625,
+                pv_power * 0.65,
+                pv_power * 0.675,
+                pv_power * 0.7,  # 12:00
+                pv_power * 0.675,
+                pv_power * 0.65,
+                pv_power * 0.625,
+                pv_power * 0.6,  # 13:00
+                pv_power * 0.575,
+                pv_power * 0.55,
+                pv_power * 0.525,
+                pv_power * 0.5,  # 14:00
+                pv_power * 0.475,
+                pv_power * 0.45,
+                pv_power * 0.425,
+                pv_power * 0.4,  # 15:00
+                pv_power * 0.375,
+                pv_power * 0.35,
+                pv_power * 0.325,
+                pv_power * 0.3,  # 16:00
+                pv_power * 0.275,
+                pv_power * 0.25,
+                pv_power * 0.225,
+                pv_power * 0.2,  # 17:00
+                pv_power * 0.175,
+                pv_power * 0.15,
+                pv_power * 0.125,
+                pv_power * 0.1,  # 18:00
+                pv_power * 0.075,
+                pv_power * 0.05,
+                pv_power * 0.025,
+                pv_power * 0.0,  # 19:00
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,  # 20:00
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,  # 21:00
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,  # 22:00
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,  # 23:00
+            ]
+            forecast_24h = hourly_values
+        else:
+            # Fallback to hourly if unknown time_frame_base
+            forecast_24h = [
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.1,
+                pv_power * 0.2,
+                pv_power * 0.3,
+                pv_power * 0.4,
+                pv_power * 0.5,
+                pv_power * 0.6,
+                pv_power * 0.7,
+                pv_power * 0.6,
+                pv_power * 0.5,
+                pv_power * 0.4,
+                pv_power * 0.3,
+                pv_power * 0.2,
+                pv_power * 0.1,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+                pv_power * 0.0,
+            ]
         # Repeat for the next day (48 hours total)
         # logger.debug("[PV-IF] Using default PV forecast with %s W max power", pv_power)
         return forecast_24h * 2
@@ -439,10 +578,12 @@ class PvInterface:
         """
         # Create a 24-hour default temperature forecast
         forecast_24h = [15.0] * 24  # 15 degrees Celsius for each hour
+        if self.time_frame_base == 900:
+            forecast_24h = [15.0] * 96  # 15 degrees Celsius for each 15-min interval
         logger.debug("[PV-IF] Using default temperature forecast with 15 degrees")
         return forecast_24h * 2  # Repeat for the next day (48 hours total)
 
-    def get_pv_forecast(self, config_entry, tgt_duration=24):
+    def __get_pv_forecast(self, config_entry):
         """
         Retrieves the photovoltaic (PV) power forecast based on the configured
         data source.
@@ -465,20 +606,18 @@ class PvInterface:
               source is configured.
         """
         if self.config_source.get("source") == "akkudoktor":
-            return self.__get_pv_forecast_akkudoktor_api(
-                "power", config_entry, tgt_duration
-            )
+            return self.__get_pv_forecast_akkudoktor_api("power", config_entry)
         elif self.config_source.get("source") == "openmeteo":
             # return self.__get_pv_forecast_openmeteo_api(config_entry, tgt_duration)
             return self.__get_pv_forecast_openmeteo_lib(config_entry)
         elif self.config_source.get("source") == "openmeteo_local":
-            return self.__get_pv_forecast_openmeteo_api(config_entry, tgt_duration)
+            return self.__get_pv_forecast_openmeteo_api(config_entry)
         elif self.config_source.get("source") == "forecast_solar":
             return self.__get_pv_forecast_forecast_solar_api(config_entry)
         elif self.config_source.get("source") == "evcc":
-            return self.__get_pv_forecast_evcc_api(config_entry, tgt_duration)
+            return self.__get_pv_forecast_evcc_api(config_entry)
         elif self.config_source.get("source") == "solcast":
-            return self.__get_pv_forecast_solcast_api(config_entry, tgt_duration)
+            return self.__get_pv_forecast_solcast_api(config_entry)
         elif self.config_source.get("source") == "default":
             logger.warning("[PV-IF] Using default PV forecast source")
             return self.__get_default_pv_forcast(config_entry["power"])
@@ -486,30 +625,32 @@ class PvInterface:
             logger.error("[PV-IF] No valid source configured for PV forecast")
             return self.__get_default_pv_forcast(config_entry["power"])
 
-    def get_summarized_pv_forecast(self, tgt_duration=24):
+    def get_summarized_pv_forecast(self):
         """
         requesting pv forecast freach config entry and summarize the values
         """
         forecast_values = []
         if self.config_special and self.config_source.get("source") == "evcc":
             logger.debug("[PV-IF] fetching forecast for evcc config")
-            forecast = self.get_pv_forecast("evcc_config", tgt_duration)
+            forecast = self.__get_pv_forecast("evcc_config")
             forecast_values = forecast
         else:
             for config_entry in self.config:
                 logger.debug("[PV-IF] fetching forecast for '%s'", config_entry["name"])
-                forecast = self.get_pv_forecast(config_entry, tgt_duration)
+                forecast = self.__get_pv_forecast(config_entry)
                 # print("values for " + config_entry+ " -> ")
                 # print(forecast)
                 if not forecast_values:
                     forecast_values = forecast
                 else:
                     forecast_values = [x + y for x, y in zip(forecast_values, forecast)]
+        # round all values to 1 decimal place
+        forecast_values = [round(value, 1) for value in forecast_values]
         logger.debug("[PV-IF] Summarized PV forecast values: %s", forecast_values)
         return forecast_values
 
     def __get_pv_forecast_akkudoktor_api(
-        self, tgt_value="power", pv_config_entry=None, tgt_duration=24
+        self, tgt_value="power", pv_config_entry=None, tgt_duration=48
     ):
         """
         Fetches the PV forecast data from the EOS API and processes it to extract
@@ -611,6 +752,14 @@ class PvInterface:
                 "[PV-IF] %s fetched successfully %s", request_type, pv_config_name
             )
 
+            if self.time_frame_base == 900 and tgt_value == "power":
+                return self._convert_hourly_to_15min(forecast_values)
+            # all value have to be repeated 4 times for 15min base for temperature
+            if self.time_frame_base == 900 and tgt_value == "temperature":
+                extended_values = []
+                for val in forecast_values:
+                    extended_values.extend([val] * 4)
+                return extended_values
             return forecast_values
 
         except (ValueError, TypeError, AttributeError, KeyError) as e:
@@ -773,6 +922,9 @@ class PvInterface:
             pv_forecast,
         )
 
+        if self.time_frame_base == 900:
+            return self._convert_hourly_to_15min(pv_forecast)
+
         return pv_forecast
 
     def __get_pv_forecast_openmeteo_lib(self, pv_config_entry):
@@ -857,6 +1009,8 @@ class PvInterface:
                 len(pv_forecast),
                 pv_forecast,
             )
+            if self.time_frame_base == 900:
+                return self._convert_hourly_to_15min(pv_forecast)
             return pv_forecast
 
         except (ValueError, TypeError, AttributeError) as e:
@@ -960,6 +1114,8 @@ class PvInterface:
             self.pv_forcast_request_error["error"] = None
 
             pv_forecast = forecast_wh
+            if self.time_frame_base == 900:
+                return self._convert_hourly_to_15min(pv_forecast)
             return pv_forecast
 
         except (ValueError, TypeError, AttributeError) as e:
@@ -1037,8 +1193,7 @@ class PvInterface:
             forecast_hours = [midnight_today + timedelta(hours=i) for i in range(hours)]
             pv_forecast = [0.0] * hours  # Initialize with zeros
 
-            # with thanks for the hint from @forouher with PR #108
-            # --- AGGREGATE 15-min intervals to hourly Wh ---
+            # --- AGGREGATE 15-min intervals to hourly Wh if needed ---
             forecast_items = []
             for item in solar_forecast:
                 ts_str = item.get("ts", "")
@@ -1049,15 +1204,25 @@ class PvInterface:
                     val_wh = item.get("val", 0) * 0.25
                     forecast_items.append((ts, val_wh))
 
-            # Group by hour and sum Wh values
-            hourly_values = defaultdict(float)
-            for ts, val_wh in forecast_items:
-                hour_ts = ts.replace(minute=0, second=0, microsecond=0)
-                hourly_values[hour_ts] += val_wh
+            if self.time_frame_base == 3600:
+                # Group by hour and sum Wh values
+                hourly_values = defaultdict(float)
+                for ts, val_wh in forecast_items:
+                    hour_ts = ts.replace(minute=0, second=0, microsecond=0)
+                    hourly_values[hour_ts] += val_wh
 
-            # Fill forecast array for 48 hours from midnight
-            for i, hour in enumerate(forecast_hours):
-                pv_forecast[i] = hourly_values.get(hour, 0.0)
+                # Fill forecast array for 48 hours from midnight
+                for i, hour in enumerate(forecast_hours):
+                    pv_forecast[i] = hourly_values.get(hour, 0.0)
+            elif self.time_frame_base == 900:
+                # Fill forecast array for 192 15-min intervals from midnight
+                forecast_15min = [0.0] * 192
+                # Build a lookup for fast access
+                forecast_lookup = {ts: val for ts, val in forecast_items}
+                for i in range(192):
+                    interval_time = midnight_today + timedelta(minutes=15 * i)
+                    forecast_15min[i] = forecast_lookup.get(interval_time, 0.0)
+                pv_forecast = forecast_15min
 
             # Apply scaling factor
             try:
@@ -1072,7 +1237,7 @@ class PvInterface:
                 )
                 scale_factor = 1.0
 
-            pv_forecast = [val * scale_factor for val in pv_forecast]
+            pv_forecast = [round(val * scale_factor, 1) for val in pv_forecast]
 
             # Clear any previous errors on success
             self.pv_forcast_request_error["error"] = None
@@ -1282,6 +1447,9 @@ class PvInterface:
                 pv_forecast[:12],  # Log first 12 hours to avoid spam
             )
 
+            if self.time_frame_base == 900:
+                return self._convert_hourly_to_15min(pv_forecast)
+
             return pv_forecast
 
         except (ValueError, TypeError, AttributeError, KeyError) as e:
@@ -1297,12 +1465,12 @@ class PvInterface:
         Test method to print the current PV and temperature forecasts.
         """
         self.config_source["source"] = "akkudoktor"
-        pv_forcast_array1 = self.get_summarized_pv_forecast(48)
+        pv_forcast_array1 = self.get_summarized_pv_forecast()
         # print("[PV-IF] PV forecast (Akkudoktor):", pv_forcast_array1)
         self.config_source["source"] = "openmeteo"
-        pv_forcast_array2 = self.get_summarized_pv_forecast(48)
+        pv_forcast_array2 = self.get_summarized_pv_forecast()
         # self.config_source["source"] = "forecast_solar"
-        # pv_forcast_array3 = self.get_summarized_pv_forecast(48)
+        # pv_forcast_array3 = self.get_summarized_pv_forecast()
 
         # print out to csv file - first column is the hour, second column is the value
         # Set start to today at midnight in the configured timezone
@@ -1490,3 +1658,18 @@ class PvInterface:
             }
         )
         return []
+
+    def _convert_hourly_to_15min(self, hourly_values):
+        """
+        Converts a list of hourly Wh values to 15-min interval Wh values by dividing
+        each value by 4.
+
+        Args:
+            hourly_values (list): List of Wh values at hourly intervals.
+
+        Returns:
+            list: List of Wh values at 15-min intervals.
+        """
+        if not isinstance(hourly_values, list):
+            raise TypeError("Input must be a list of hourly values.")
+        return [round(value / 4.0, 1) for value in hourly_values for _ in range(4)]

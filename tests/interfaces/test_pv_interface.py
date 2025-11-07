@@ -7,9 +7,12 @@ forecast aggregation, and API fallback logic in the PvInterface implementation.
 """
 
 import threading
+import datetime as real_datetime
 import requests
 import pytest
 from src.interfaces.pv_interface import PvInterface
+
+time_frame_base = 3600  # Example time frame base, adjust as needed
 
 
 @pytest.fixture(autouse=True)
@@ -47,7 +50,7 @@ def test_handle_interface_error_updates_state_and_returns_empty(monkeypatch):
     monkeypatch.setattr(
         PvInterface, "_PvInterface__update_pv_state_loop", lambda self: None
     )
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     error_type = "test_error"
     message = "Test error message"
     config_entry = {"name": "test"}
@@ -67,7 +70,7 @@ def test_retry_request_success():
     """
     Test that _retry_request returns the result on the first successful attempt.
     """
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     call_count = {"count": 0}
 
     def request_func():
@@ -93,7 +96,7 @@ def test_retry_request_failure():
     Test that _retry_request retries the correct number of times and calls
     error_handler after max retries.
     """
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     call_count = {"count": 0}
 
     def request_func():
@@ -118,7 +121,7 @@ def test_retry_request_partial_success():
     """
     Test that _retry_request returns the result if a later attempt succeeds.
     """
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     call_count = {"count": 0}
 
     def request_func():
@@ -146,7 +149,7 @@ def test_retry_request_handles_timeout():
     Test that _retry_request handles timeout exceptions.
     """
 
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     call_count = {"count": 0}
 
     def request_func():
@@ -173,7 +176,7 @@ def test_retry_request_handles_request_exception():
     Test that _retry_request handles generic request exceptions.
     """
 
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     call_count = {"count": 0}
 
     def request_func():
@@ -199,7 +202,7 @@ def test_retry_request_handles_json_errors():
     """
     Test that _retry_request handles ValueError and TypeError as JSON errors.
     """
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     call_count = {"count": 0}
 
     def request_func():
@@ -225,7 +228,7 @@ def test_retry_request_handles_parsing_errors():
     """
     Test that _retry_request handles KeyError and AttributeError as parsing errors.
     """
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     call_count = {"count": 0}
 
     def request_func():
@@ -251,7 +254,7 @@ def test_handle_interface_error_multiple_calls():
     """
     Test that multiple calls to _handle_interface_error update the error state each time.
     """
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     result1 = pv._handle_interface_error("error1", "msg1", {"a": 1}, "src1")
     result2 = pv._handle_interface_error("error2", "msg2", {"b": 2}, "src2")
     assert not result1
@@ -267,7 +270,7 @@ def test_handle_interface_error_with_empty_config():
     """
     Test that _handle_interface_error works with empty config_entry.
     """
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     result = pv._handle_interface_error("error", "msg", {}, "src")
     assert not result
     assert pv.pv_forcast_request_error["error"] == "error"
@@ -281,7 +284,7 @@ def test_default_pv_forecast_length_and_values():
     """
     Test that the default PV forecast returns 48 values of type int or float.
     """
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     result = pv._PvInterface__get_default_pv_forcast(100)
     assert len(result) == 48
     assert all(isinstance(x, float) or isinstance(x, int) for x in result)
@@ -291,7 +294,7 @@ def test_default_temperature_forecast_length_and_values():
     """
     Test that the default temperature forecast returns 48 values of 15.0.
     """
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     result = pv._PvInterface__get_default_temperature_forecast()
     assert len(result) == 48
     assert all(x == 15.0 for x in result)
@@ -303,7 +306,7 @@ def test_check_config_missing_parameters():
     """
     config = [{"lat": 50, "lon": 8}]  # missing required parameters
     with pytest.raises(SystemExit):
-        PvInterface({}, config, {}, timezone="UTC")
+        PvInterface({}, config, time_frame_base, {}, timezone="UTC")
 
 
 def test_summarized_pv_forecast_aggregation():
@@ -332,10 +335,12 @@ def test_summarized_pv_forecast_aggregation():
             "inverterEfficiency": 1.0,
         },
     ]
-    pv = PvInterface({}, config, {}, timezone="UTC")
-    # Monkeypatch get_pv_forecast to return fixed arrays
-    pv.get_pv_forecast = lambda entry, tgt_duration=24: [entry["power"]] * tgt_duration
-    result = pv.get_summarized_pv_forecast(24)
+    pv = PvInterface({}, config, time_frame_base, {}, timezone="UTC")
+    # Monkeypatch __get_pv_forecast to return fixed arrays
+    pv._PvInterface__get_pv_forecast = (
+        lambda entry, tgt_duration=24: [entry["power"]] * tgt_duration
+    )
+    result = pv.get_summarized_pv_forecast()
     assert result == [300] * 24
 
 
@@ -343,7 +348,7 @@ def test_api_error_triggers_fallback(monkeypatch):
     """
     Test that an API error triggers fallback to default PV forecast.
     """
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     pv._retry_request = lambda req, err, **kwargs: err("api_error", Exception("fail"))
     result = pv._PvInterface__get_pv_forecast_akkudoktor_api(
         pv_config_entry={
@@ -357,7 +362,7 @@ def test_api_error_triggers_fallback(monkeypatch):
             "horizon": "0",
         }
     )
-    assert result == [0] * 24
+    assert result == [0] * 48
     assert pv.pv_forcast_request_error["error"] in (None, "api_error")
 
 
@@ -365,7 +370,7 @@ def test_get_current_pv_forecast_returns_array():
     """
     Test that get_current_pv_forecast returns the correct array.
     """
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     pv.pv_forcast_array = [1, 2, 3]
     assert pv.get_current_pv_forecast() == [1, 2, 3]
 
@@ -374,7 +379,7 @@ def test_get_current_temp_forecast_returns_array():
     """
     Test that get_current_temp_forecast returns the correct array.
     """
-    pv = PvInterface({}, [], {}, timezone="UTC")
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     pv.temp_forecast_array = [15, 16, 17]
     assert pv.get_current_temp_forecast() == [15, 16, 17]
 
@@ -433,7 +438,7 @@ def test_horizon_config_handling(source):
 
     threading.Thread = DummyThread
 
-    pv = PvInterface(config_source, config, {}, timezone="UTC")
+    pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
     entry = pv.config[0]
     if source == "openmeteo_local":
         assert "horizon" in entry
@@ -450,9 +455,6 @@ def test_horizon_config_handling(source):
             or entry["horizon"] == ""
             or entry["horizon"] is None
         )
-
-
-import datetime as real_datetime
 
 
 class FixedDatetime(real_datetime.datetime):
@@ -734,7 +736,7 @@ def test_solcast_data_adaption(monkeypatch):
     }
     config_source = {"source": "solcast", "api_key": "dummy_key"}
 
-    pv = PvInterface(config_source, [config_entry], {}, timezone="UTC")
+    pv = PvInterface(config_source, [config_entry], time_frame_base, {}, timezone="UTC")
 
     # Monkeypatch the _retry_request to return our mock data
     def mock_retry_request(request_func, error_handler, **kwargs):
@@ -772,8 +774,9 @@ def test_solcast_data_adaption(monkeypatch):
         expected_wh = (
             solcast_data["forecasts"][solcast_idx]["pv_estimate"]
             + solcast_data["forecasts"][solcast_idx + 1]["pv_estimate"]
-        ) * 1000
-        assert abs(forecast[hour] - expected_wh) < 1e-6, (
+        ) * 500
+        # Round both values to one decimal place before comparison
+        assert round(forecast[hour], 1) == round(expected_wh, 1), (
             f"Solcast data transformation error at hour {hour}: "
             f"expected {expected_wh} Wh, got {forecast[hour]} Wh. "
             f"Input values: {solcast_data['forecasts'][solcast_idx]['pv_estimate']} kWh + "

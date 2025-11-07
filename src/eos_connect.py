@@ -330,6 +330,7 @@ price_interface = PriceInterface(config_manager.config["price"], time_zone)
 pv_interface = PvInterface(
     config_manager.config["pv_forecast_source"],
     config_manager.config["pv_forecast"],
+    time_frame_base,
     config_manager.config.get("evcc", {}),
     config_manager.config.get("time_zone", "UTC"),
 )
