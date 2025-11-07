@@ -1,5 +1,9 @@
+"""
+Unit tests for the LoadInterface class in load_interface.py
+"""
+
 from unittest.mock import patch, MagicMock
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytest
 from requests.exceptions import RequestException
 from src.interfaces.load_interface import LoadInterface
@@ -39,7 +43,7 @@ def test_request_with_retries_logs_and_retries(config_fixture):
     logs warnings up to the configured warning threshold, then logs an error, and ultimately
     returns None after exhausting the maximum retries.
     """
-    li = LoadInterface(config_fixture)
+    li = LoadInterface(config_fixture, 3600)
 
     with patch(
         "src.interfaces.load_interface.requests.get",
@@ -85,7 +89,7 @@ def test_fetch_historical_energy_data_from_openhab_success(config_fixture):
     Args:
             config_fixture: pytest fixture providing configuration for LoadInterface.
     """
-    li = LoadInterface(config_fixture)
+    li = LoadInterface(config_fixture, 3600)
     mock_response = MagicMock()
     mock_response.json.return_value = {
         "data": [
@@ -124,7 +128,7 @@ def test_fetch_historical_energy_data_from_openhab_failure(config_fixture):
     method returns an empty list, confirming that request errors are caught and
     result in an empty result rather than propagating an exception.
     """
-    li = LoadInterface(config_fixture)
+    li = LoadInterface(config_fixture, 3600)
     with patch(
         "src.interfaces.load_interface.requests.get",
         side_effect=RequestException("fail"),
@@ -143,7 +147,7 @@ def test_fetch_historical_energy_data_from_homeassistant_success(config_fixture)
     """
     Test that __fetch_historical_energy_data_from_homeassistant returns parsed data on success.
     """
-    li = LoadInterface(config_fixture)
+    li = LoadInterface(config_fixture, 3600)
     mock_response = MagicMock()
     mock_response.json.return_value = [
         [
@@ -171,7 +175,7 @@ def test_fetch_historical_energy_data_from_homeassistant_failure(config_fixture)
     """
     Test that __fetch_historical_energy_data_from_homeassistant returns empty list on failure.
     """
-    li = LoadInterface(config_fixture)
+    li = LoadInterface(config_fixture, 3600)
     with patch(
         "src.interfaces.load_interface.requests.get",
         side_effect=RequestException("fail"),
@@ -190,7 +194,7 @@ def test_timezone_fallback_to_none(config_fixture):
     """
     Test that LoadInterface falls back to None timezone if an invalid tz_name is given.
     """
-    li = LoadInterface(config_fixture, tz_name="Invalid/Timezone")
+    li = LoadInterface(config_fixture, 3600, tz_name="Invalid/Timezone")
     assert getattr(li, "time_zone", None) is None
 
 
@@ -198,7 +202,7 @@ def test_empty_sensor_returns_empty_list(config_fixture):
     """
     Test that fetch methods return empty list if sensor/entity_id is empty.
     """
-    li = LoadInterface(config_fixture)
+    li = LoadInterface(config_fixture, 3600)
     start = datetime(2023, 7, 1, 0, 0)
     end = datetime(2023, 7, 1, 1, 0)
     assert (
@@ -217,7 +221,7 @@ def test_get_load_profile_returns_expected_structure(config_fixture):
     """
     Test that get_load_profile returns a list of floats (energy values).
     """
-    li = LoadInterface(config_fixture)
+    li = LoadInterface(config_fixture, 3600)
     with patch.object(
         li,
         "_LoadInterface__fetch_historical_energy_data_from_openhab",
@@ -236,7 +240,7 @@ def test_get_load_profile_handles_empty_data(config_fixture):
     """
     Test that get_load_profile returns an empty list if no data is available.
     """
-    li = LoadInterface(config_fixture)
+    li = LoadInterface(config_fixture, 3600)
     with patch.object(
         li, "_LoadInterface__fetch_historical_energy_data_from_openhab", return_value=[]
     ), patch("src.interfaces.load_interface.time.sleep"):
@@ -250,7 +254,7 @@ def test_get_load_profile_invalid_dates(config_fixture):
     """
     Test that get_load_profile returns a default profile for valid but empty input.
     """
-    li = LoadInterface(config_fixture)
+    li = LoadInterface(config_fixture, 3600)
     with patch("src.interfaces.load_interface.time.sleep"), patch.object(
         li, "_LoadInterface__fetch_historical_energy_data_from_openhab", return_value=[]
     ):
@@ -265,8 +269,12 @@ def test_get_load_profile_invalid_dates(config_fixture):
 
 
 def test_get_load_profile_with_none_sensor(config_fixture):
+    """
+    Test that LoadInterface.get_load_profile returns an empty list when no load sensor
+    is configured.
+    """
     config_fixture["load_sensor"] = ""
-    li = LoadInterface(config_fixture)
+    li = LoadInterface(config_fixture, 3600)
     with patch("src.interfaces.load_interface.time.sleep"):
 
         result = li.get_load_profile(0, datetime(2023, 7, 1, 0, 0))
@@ -277,7 +285,7 @@ def test_get_load_profile_handles_partial_data(config_fixture):
     """
     Test that get_load_profile can handle partial/malformed data from fetch.
     """
-    li = LoadInterface(config_fixture)
+    li = LoadInterface(config_fixture, 3600)
     with patch.object(
         li,
         "_LoadInterface__fetch_historical_energy_data_from_openhab",
@@ -289,3 +297,164 @@ def test_get_load_profile_handles_partial_data(config_fixture):
         result = li.get_load_profile(24, datetime(2023, 7, 1, 0, 0))
         assert isinstance(result, list)
         # Should not raise, but may skip or fill missing fields
+
+
+def test_default_profile_time_frame_base_3600():
+    """
+    Test that LoadInterface with src='default' and time_frame_base=3600 returns 48 hourly values.
+    """
+    config = {
+        "source": "default",
+        "url": "",
+        "load_sensor": "",
+        "max_retries": 1,
+        "retry_backoff": 0,
+        "warning_threshold": 1,
+    }
+    li = LoadInterface(config, 3600)
+    profile = li.get_load_profile(48)
+    assert isinstance(profile, list)
+    assert len(profile) == 48
+    # All values should be floats or ints
+    assert all(isinstance(v, (float, int)) for v in profile)
+    # Should match the default profile
+    assert profile == li._get_default_profile()
+
+
+def test_default_profile_time_frame_base_900():
+    """
+    Test that LoadInterface with src='default' and time_frame_base=900 returns 192
+    quarter-hourly values.
+    Each value should be one quarter of the corresponding hourly value.
+    """
+    config = {
+        "source": "default",
+        "url": "",
+        "load_sensor": "",
+        "max_retries": 1,
+        "retry_backoff": 0,
+        "warning_threshold": 1,
+    }
+    li = LoadInterface(config, 900)
+    profile = li.get_load_profile(192)
+    print("Profile:", profile)
+    assert isinstance(profile, list)
+    assert len(profile) == 192
+    # All values should be floats or ints
+    assert all(isinstance(v, (float, int)) for v in profile)
+    # Each group of 4 values should be equal and one quarter of the hourly value
+    li2 = LoadInterface(config, 3600)
+    hourly_profile = li2.get_load_profile(48)
+    print("Hourly Profile:", hourly_profile)
+    for i in range(48):
+        expected = hourly_profile[i] / 4
+        for j in range(4):
+            assert profile[i * 4 + j] == expected
+
+
+def test_load_profile_for_day_15min_intervals_default():
+    """
+    Test that get_load_profile_for_day with time_frame_base=900 and source='default'
+    returns 96 values for one day, each value is one quarter of the hourly default profile.
+    """
+    config = {
+        "source": "default",
+        "url": "",
+        "load_sensor": "",
+        "max_retries": 1,
+        "retry_backoff": 0,
+        "warning_threshold": 1,
+    }
+    li = LoadInterface(config, 900)
+    # One day: 24 hours * 4 = 96 intervals
+    start = datetime(2023, 7, 1, 0, 0)
+    end = start + timedelta(days=1)
+    profile = li.get_load_profile_for_day(start, end)
+    assert isinstance(profile, list)
+    assert len(profile) == 96
+    # Each group of 4 values should be equal and one quarter of the hourly value
+    li_hourly = LoadInterface(config, 3600)
+    hourly_profile = li_hourly.get_load_profile_for_day(start, end)
+    for i in range(24):
+        expected = hourly_profile[i] / 4
+        for j in range(4):
+            assert profile[i * 4 + j] == expected
+
+
+def test_load_profile_for_day_15min_intervals_openhab(monkeypatch):
+    """
+    Test that get_load_profile_for_day with time_frame_base=900 and source='openhab'
+    returns 96 values for one day, and each value is calculated from mocked sensor data.
+    """
+    config = {
+        "source": "openhab",
+        "url": "http://dummy",
+        "load_sensor": "sensor.test",
+        "max_retries": 1,
+        "retry_backoff": 0,
+        "warning_threshold": 1,
+    }
+    li = LoadInterface(config, 900)
+
+    # Mock the fetch method to return a constant value for each interval
+    def mock_fetch(item, start, end):
+        # Return two data points 15 minutes apart, both with state "100"
+        return [
+            {"state": "100", "last_updated": start.isoformat()},
+            {
+                "state": "100",
+                "last_updated": (start + timedelta(minutes=15)).isoformat(),
+            },
+        ]
+
+    monkeypatch.setattr(
+        li, "_LoadInterface__fetch_historical_energy_data_from_openhab", mock_fetch
+    )
+    start = datetime(2023, 7, 1, 0, 0)
+    end = start + timedelta(days=1)
+    profile = li.get_load_profile_for_day(start, end)
+    assert isinstance(profile, list)
+    assert len(profile) == 96
+    # All values should be 100 (since mocked)
+    assert all(v == 100 for v in profile)
+
+
+def test_load_profile_for_day_15min_intervals_homeassistant(monkeypatch):
+    """
+    Test that get_load_profile_for_day with time_frame_base=900 and source='homeassistant'
+    returns 96 values for one day, and each value is calculated from mocked sensor data.
+    """
+    config = {
+        "source": "homeassistant",
+        "url": "http://dummy",
+        "load_sensor": "sensor.test",
+        "access_token": "dummy",
+        "max_retries": 1,
+        "retry_backoff": 0,
+        "warning_threshold": 1,
+    }
+    li = LoadInterface(config, 900)
+
+    # Mock the fetch method to return a constant value for each interval
+    def mock_fetch(entity_id, start, end):
+        # Return two data points 15 minutes apart, both with state "200"
+        return [
+            {"state": "200", "last_updated": start.isoformat()},
+            {
+                "state": "200",
+                "last_updated": (start + timedelta(minutes=15)).isoformat(),
+            },
+        ]
+
+    monkeypatch.setattr(
+        li,
+        "_LoadInterface__fetch_historical_energy_data_from_homeassistant",
+        mock_fetch,
+    )
+    start = datetime(2023, 7, 1, 0, 0)
+    end = start + timedelta(days=1)
+    profile = li.get_load_profile_for_day(start, end)
+    assert isinstance(profile, list)
+    assert len(profile) == 96
+    # All values should be 200 (since mocked)
+    assert all(v == 200 for v in profile)

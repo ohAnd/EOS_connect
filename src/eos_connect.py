@@ -317,6 +317,7 @@ evcc_interface = EvccInterface(
 # intialize the load interface
 load_interface = LoadInterface(
     config_manager.config.get("load", {}),
+    time_frame_base,
     time_zone,
 )
 

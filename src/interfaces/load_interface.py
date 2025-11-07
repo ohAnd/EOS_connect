@@ -28,6 +28,7 @@ class LoadInterface:
     def __init__(
         self,
         config,
+        time_frame_base,
         tz_name=None,  # Changed default to None
     ):
         self.src = config.get("source", "")
@@ -44,8 +45,12 @@ class LoadInterface:
         self.warning_threshold = config.get(
             "warning_threshold", max(1, self.max_retries - 1)
         )
-
+        self.time_frame_base = time_frame_base
         self.time_zone = None
+
+        logger.debug("[LOAD-IF] Initializing LoadInterface with source: %s", self.src)
+        logger.debug("[LOAD-IF] Using URL: %s", self.url)
+        logger.debug("[LOAD-IF] Using access token: %s", self.access_token)
 
         # Handle timezone properly
         if tz_name == "UTC" or tz_name is None:
@@ -355,9 +360,9 @@ class LoadInterface:
             total_energy += current_state * duration
             total_duration += duration
         # add last data point to total energy calculation if duration is less than 1 hour
-        if total_duration < 3600:
+        if total_duration < self.time_frame_base:
             duration = (
-                (current_time + timedelta(seconds=3600)).replace(
+                (current_time + timedelta(seconds=self.time_frame_base)).replace(
                     minute=0, second=0, microsecond=0
                 )
                 - current_time
@@ -470,7 +475,8 @@ class LoadInterface:
 
     def get_load_profile_for_day(self, start_time, end_time):
         """
-        Retrieves the load profile for a specific day by fetching energy data from Home Assistant.
+        Retrieves the load profile for a specific day by fetching energy data from Home Assistant
+        or using the default profile.
 
         Args:
             start_time (datetime): The start time for the load profile.
@@ -479,23 +485,35 @@ class LoadInterface:
         Returns:
             list: A list of energy consumption values for the specified day.
         """
+        if self.src == "default":
+            # Calculate number of intervals
+            num_intervals = int(
+                (end_time - start_time).total_seconds() // self.time_frame_base
+            )
+            default_profile = self._get_default_profile()
+            # For 3600s, 48 values for 2 days, 24 for 1 day; for 900s, 192 for 2 days, 96 for 1 day
+            # Return the first num_intervals values
+            return default_profile[:num_intervals]
+
         logger.debug(
             "[LOAD-IF] Creating day load profile from %s to %s", start_time, end_time
         )
 
         load_profile = []
-        current_hour = start_time
+        current_time_slot = start_time
 
-        while current_hour < end_time:
-            next_hour = current_hour + timedelta(hours=1)
-            # logger.debug("[LOAD-IF] Fetching data for %s to %s", current_hour, next_hour)
+        while current_time_slot < end_time:
+            next_slot = current_time_slot + timedelta(seconds=self.time_frame_base)
+            # logger.debug(
+            #     "[LOAD-IF] Fetching data for %s to %s", current_time_slot, next_slot
+            # )
             if self.src == "openhab":
                 energy_data = self.__fetch_historical_energy_data_from_openhab(
-                    self.load_sensor, current_hour, next_hour
+                    self.load_sensor, current_time_slot, next_slot
                 )
             elif self.src == "homeassistant":
                 energy_data = self.__fetch_historical_energy_data_from_homeassistant(
-                    self.load_sensor, current_hour, next_hour
+                    self.load_sensor, current_time_slot, next_slot
                 )
             else:
                 logger.error(
@@ -508,7 +526,7 @@ class LoadInterface:
             # check if car load sensor is configured
             if self.car_charge_load_sensor != "":
                 car_load_data = self.__get_additional_load_list_from_to(
-                    self.car_charge_load_sensor, current_hour, next_hour
+                    self.car_charge_load_sensor, current_time_slot, next_slot
                 )
                 car_load_energy = abs(
                     self.__process_energy_data(
@@ -521,7 +539,7 @@ class LoadInterface:
             # check if additional load 1 sensor is configured
             if self.additional_load_1_sensor != "":
                 add_load_data_1 = self.__get_additional_load_list_from_to(
-                    self.additional_load_1_sensor, current_hour, next_hour
+                    self.additional_load_1_sensor, current_time_slot, next_slot
                 )
                 add_load_data_1_energy = abs(
                     self.__process_energy_data(
@@ -542,7 +560,7 @@ class LoadInterface:
             else:
                 debug_url = None
                 if self.src == "homeassistant":
-                    current_time = datetime.fromisoformat(current_hour.isoformat())
+                    current_time = datetime.fromisoformat(current_time_slot.isoformat())
                     debug_url = (
                         "(check: "
                         + self.url
@@ -557,7 +575,7 @@ class LoadInterface:
                 logger.warning(
                     "[LOAD-IF] DATA ERROR load smaller than car load "
                     + "- Energy for %s: %5.1f Wh (sum add energy %5.1f Wh - car load: %5.1f Wh) %s",
-                    current_hour,
+                    current_time_slot,
                     round(energy, 1),
                     round(sum_controlable_energy_load, 1),
                     round(car_load_energy, 1),
@@ -567,7 +585,7 @@ class LoadInterface:
                 logger.debug(
                     "[LOAD-IF] load = 0 ... Energy for %s: %5.1f Wh"
                     + " (sum add energy %5.1f Wh - car load: %5.1f Wh)",
-                    current_hour,
+                    current_time_slot,
                     round(energy, 1),
                     round(sum_controlable_energy_load, 1),
                     round(car_load_energy, 1),
@@ -576,12 +594,12 @@ class LoadInterface:
             load_profile.append(energy)
             logger.debug(
                 "[LOAD-IF] Energy for %s: %5.1f Wh (sum add energy %5.1f Wh - car load: %5.1f Wh)",
-                current_hour,
+                current_time_slot,
                 round(energy, 1),
                 round(sum_controlable_energy_load, 1),
                 round(car_load_energy, 1),
             )
-            current_hour += timedelta(hours=1)
+            current_time_slot += timedelta(seconds=self.time_frame_base)
         if not load_profile:
             logger.error(
                 "[LOAD-IF] No load profile data available for the specified day - % s to % s",
@@ -652,19 +670,21 @@ class LoadInterface:
         load_profile = []
         for i, value in enumerate(load_profile_one_week_before):
             if load_profile_two_week_before and len(load_profile_two_week_before) >= 24:
-                load_profile.append((value + load_profile_two_week_before[i]) / 2)
+                load_profile.append(
+                    round((value + load_profile_two_week_before[i]) / 2, 3)
+                )
             else:
-                load_profile.append(value)
+                load_profile.append(round(value, 3))
         for i, value in enumerate(load_profile_tomorrow_one_week_before):
             if (
                 load_profile_tomorrow_two_week_before
                 and len(load_profile_tomorrow_two_week_before) >= 24
             ):
                 load_profile.append(
-                    (value + load_profile_tomorrow_two_week_before[i]) / 2
+                    round((value + load_profile_tomorrow_two_week_before[i]) / 2, 3)
                 )
             else:
-                load_profile.append(value)
+                load_profile.append(round(value, 3))
 
         # Check if load profile contains useful values (not all zeros)
         if not load_profile or all(value == 0 for value in load_profile):
@@ -747,7 +767,7 @@ class LoadInterface:
         Returns:
             list: A list of 48 default energy consumption values.
         """
-        return [
+        default_profile = [
             200.0,  # 0:00 - 1:00 -- day 1
             200.0,  # 1:00 - 2:00
             200.0,  # 2:00 - 3:00
@@ -797,3 +817,7 @@ class LoadInterface:
             300.0,  # 22:00 - 23:00
             200.0,  # 23:00 - 0:00
         ]
+        if self.time_frame_base == 900:
+            # convert to 15 min time frame
+            default_profile = [value / 4 for value in default_profile for _ in range(4)]
+        return default_profile
