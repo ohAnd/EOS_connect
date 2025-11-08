@@ -17,6 +17,67 @@ class ScheduleManager {
     }
 
     /**
+     * Converts 15-min interval data to hourly averages based on the base timestamp.
+     * @param {Array<number>} dataArray - Array of 15-min interval values.
+     * @param {string|Date} baseTimestamp - Timestamp of the first value (ISO string or Date).
+     * @returns {Array<number>} Array of hourly averages.
+     */
+    convertQuarterlyToHourly(dataArray, baseTimestamp) {
+        var baseTime = new Date(baseTimestamp);
+        var baseMinute = baseTime.getMinutes();
+        // How many quarters left in the current hour (including the current one)
+        var quartersLeft = Math.ceil((60 - baseMinute) / 15);
+
+        var hourlyData = [];
+        var i = 0;
+        // First hour: average over the remaining quarters in the current hour
+        if (quartersLeft > 0 && dataArray.length >= quartersLeft) {
+            var avg = dataArray.slice(0, quartersLeft).reduce((a, b) => a + b, 0) / quartersLeft;
+            hourlyData.push(avg);
+            i = quartersLeft;
+        }
+        // Process remaining full hours
+        for (; i < dataArray.length; i += 4) {
+            var chunk = dataArray.slice(i, i + 4);
+            if (chunk.length > 0) {
+                var avg = chunk.reduce((a, b) => a + b, 0) / chunk.length;
+                hourlyData.push(avg);
+            }
+        }
+        return hourlyData;
+    }
+
+    /**
+     * Converts 15-min interval data to hourly sums based on the base timestamp.
+     * @param {Array<number>} dataArray - Array of 15-min interval values.
+     * @param {string|Date} baseTimestamp - Timestamp of the first value (ISO string or Date).
+     * @returns {Array<number>} Array of hourly sums.
+     */
+    convertQuarterlyToHourlySum(dataArray, baseTimestamp) {
+        var baseTime = new Date(baseTimestamp);
+        var baseMinute = baseTime.getMinutes();
+        var quartersLeft = Math.ceil((60 - baseMinute) / 15);
+
+        var hourlyData = [];
+        var i = 0;
+        // First hour: sum over the remaining quarters in the current hour
+        if (quartersLeft > 0 && dataArray.length >= quartersLeft) {
+            var sum = dataArray.slice(0, quartersLeft).reduce((a, b) => a + b, 0);
+            hourlyData.push(sum);
+            i = quartersLeft;
+        }
+        // Process remaining full hours
+        for (; i < dataArray.length; i += 4) {
+            var chunk = dataArray.slice(i, i + 4);
+            if (chunk.length > 0) {
+                var sum = chunk.reduce((a, b) => a + b, 0);
+                hourlyData.push(sum);
+            }
+        }
+        return hourlyData;
+    }
+
+    /**
      * Show schedule for next 24 hours
      */
     showSchedule(data_request, data_response, data_controls) {
@@ -30,6 +91,7 @@ class ScheduleManager {
         var manual_override_active_until = data_controls["current_states"]["override_end_time"];
         var max_charge_power_w = data_request["pv_akku"] && data_request["pv_akku"].hasOwnProperty("max_ladeleistung_w") ? data_request["pv_akku"]["max_ladeleistung_w"] : data_request["pv_akku"] ? data_request["pv_akku"]["max_charge_power_w"] : 0;
 
+        const time_frame_base = data_controls["used_time_frame_base"];
         const evopt_in_charge = data_controls["used_optimization_source"] === "evopt";
 
         ac_charge = ac_charge.map((value, index) => value * max_charge_power_w);
@@ -37,6 +99,26 @@ class ScheduleManager {
         var socData = data_response["result"]["akku_soc_pro_stunde"];
         var expenseData = data_response["result"]["Kosten_Euro_pro_Stunde"];
         var incomeData = data_response["result"]["Einnahmen_Euro_pro_Stunde"];
+
+        if (time_frame_base === 900) {
+            priceData = this.convertQuarterlyToHourly(
+                data_response["result"]["Electricity_price"],
+                data_response["timestamp"]
+            );
+            socData = this.convertQuarterlyToHourly(
+                data_response["result"]["akku_soc_pro_stunde"],
+                data_response["timestamp"]
+            );
+            expenseData = this.convertQuarterlyToHourlySum(
+                data_response["result"]["Kosten_Euro_pro_Stunde"],
+                data_response["timestamp"]
+            );
+            incomeData = this.convertQuarterlyToHourlySum(
+                data_response["result"]["Einnahmen_Euro_pro_Stunde"],
+                data_response["timestamp"]
+            );
+        }
+
         document.getElementById('schedule_currency_symbol').innerText = localization.currency_symbol;
         document.getElementById('price_minor_unit_label').innerText = `${localization.currency_minor_unit}/kWh`;
         document.querySelector('#discharge_scheduler .table-header .table-cell[title]').setAttribute(
