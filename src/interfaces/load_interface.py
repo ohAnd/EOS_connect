@@ -359,16 +359,39 @@ class LoadInterface:
             duration = (next_time - current_time).total_seconds()
             total_energy += current_state * duration
             total_duration += duration
+        # After the for-loop, check if the last sample is before the end of the interval
+        if len(data["data"]) > 0 and total_duration > 0:
+            # Get the timestamp of the last sample
+            last_sample_time = datetime.fromisoformat(data["data"][-1]["last_updated"])
+            # The interval end is the latest timestamp in the interval (should be provided externally)
+            # If not available, assume the interval is 1 hour after the first sample
+            interval_end = None
+            if "interval_end" in data:
+                interval_end = data["interval_end"]
+            else:
+                # fallback: interval is 1 hour after the first sample
+                interval_end = datetime.fromisoformat(
+                    data["data"][0]["last_updated"]
+                ) + timedelta(seconds=self.time_frame_base)
+            # If the last sample is before the interval end, extend its value
+            if last_sample_time < interval_end:
+                extension_duration = (interval_end - last_sample_time).total_seconds()
+                try:
+                    last_state = float(data["data"][-1]["state"])
+                    total_energy += last_state * extension_duration
+                    total_duration += extension_duration
+                except (ValueError, KeyError):
+                    pass
         # add last data point to total energy calculation if duration is less than 1 hour
-        if total_duration < self.time_frame_base:
-            duration = (
-                (current_time + timedelta(seconds=self.time_frame_base)).replace(
-                    minute=0, second=0, microsecond=0
-                )
-                - current_time
-            ).total_seconds()
-            total_energy += last_state * duration
-            total_duration += duration
+        # if total_duration < self.time_frame_base:
+        #     duration = (
+        #         (current_time + timedelta(seconds=self.time_frame_base)).replace(
+        #             minute=0, second=0, microsecond=0
+        #         )
+        #         - current_time
+        #     ).total_seconds()
+        #     total_energy += last_state * duration
+        #     total_duration += duration
         if total_duration > 0:
             return round(total_energy / total_duration, 4)
         return 0
@@ -423,55 +446,6 @@ class LoadInterface:
                 continue
         # print(f'HA Car load data: {car_load_data}')
         return additional_load_data
-
-    def __get_car_load_list_from_to(self, start_time, end_time):
-        """
-        Retrieves and processes car load data within a specified time range.
-        This method fetches historical energy data for car charging from Home Assistant,
-        determines the maximum car load, and adjusts the unit of measurement if necessary.
-        The processed data is then returned with all values converted to the appropriate unit.
-        Args:
-            start_time (datetime): The start time of the data retrieval period.
-            end_time (datetime): The end time of the data retrieval period.
-        Returns:
-            list[dict]: A list of dictionaries containing the processed car load data.
-                        Each dictionary includes a "state" key with the adjusted load value.
-        Raises:
-            ValueError: If a data entry's "state" value cannot be converted to a float.
-            KeyError: If a data entry does not contain the "state" key.
-        Notes:
-            - If the maximum car load is between 0 and 23 (assumed to be in kW), it is
-              converted to W.
-            - All load values are multiplied by the determined unit factor before being returned.
-        """
-
-        if self.src == "openhab":
-            car_load_data = self.__fetch_historical_energy_data_from_openhab(
-                self.car_charge_load_sensor, start_time, end_time
-            )
-        elif self.src == "homeassistant":
-            car_load_data = self.__fetch_historical_energy_data_from_homeassistant(
-                self.car_charge_load_sensor, start_time, end_time
-            )
-        else:
-            logger.error(
-                "[LOAD-IF] Car Load source '%s' currently not supported. Using default.",
-                self.src,
-            )
-            return []
-
-        # multiply every value with car_load_unit_factor before returning
-        for data_entry in car_load_data:
-            try:
-                data_entry["state"] = float(
-                    data_entry["state"]
-                )  # * car_load_unit_factor
-            except ValueError:
-                continue
-            except KeyError:
-                continue
-        # print(f'HA Car load data: {car_load_data}')
-        return car_load_data
 
     def get_load_profile_for_day(self, start_time, end_time):
         """
@@ -550,13 +524,23 @@ class LoadInterface:
                 add_load_data_1_energy, 0
             )  # prevent negative values
 
-            sum_controlable_energy_load = car_load_energy + add_load_data_1_energy
             energy = abs(
                 self.__process_energy_data({"data": energy_data}, self.load_sensor)
             )
 
-            if sum_controlable_energy_load <= energy:
-                energy = energy - sum_controlable_energy_load
+            # Convert average power (W) to energy (Wh) for the interval
+            interval_hours = self.time_frame_base / 3600.0
+            energy_wh = energy * interval_hours
+            car_load_energy_wh = car_load_energy * interval_hours
+            add_load_data_1_energy_wh = add_load_data_1_energy * interval_hours
+
+            # sum_controlable_energy_load = car_load_energy + add_load_data_1_energy
+            sum_controlable_energy_load_wh = (
+                car_load_energy_wh + add_load_data_1_energy_wh
+            )
+
+            if sum_controlable_energy_load_wh <= energy_wh:
+                energy_wh = energy_wh - sum_controlable_energy_load_wh
             else:
                 debug_url = None
                 if self.src == "homeassistant":
@@ -576,27 +560,40 @@ class LoadInterface:
                     "[LOAD-IF] DATA ERROR load smaller than car load "
                     + "- Energy for %s: %5.1f Wh (sum add energy %5.1f Wh - car load: %5.1f Wh) %s",
                     current_time_slot,
-                    round(energy, 1),
-                    round(sum_controlable_energy_load, 1),
+                    round(energy_wh, 1),
+                    round(sum_controlable_energy_load_wh, 1),
                     round(car_load_energy, 1),
                     debug_url,
                 )
-            if energy == 0:
+            if energy_wh == 0:
+                current_time = datetime.fromisoformat(current_time_slot.isoformat())
+                debug_url = (
+                    "(check: "
+                    + self.url
+                    + "/history?entity_id="
+                    + quote(self.load_sensor)
+                    + "&start_date="
+                    + quote((current_time - timedelta(minutes=15)).isoformat())
+                    + "&end_date="
+                    + quote((current_time + timedelta(minutes=15)).isoformat())
+                    + " )"
+                )
                 logger.debug(
                     "[LOAD-IF] load = 0 ... Energy for %s: %5.1f Wh"
-                    + " (sum add energy %5.1f Wh - car load: %5.1f Wh)",
+                    + " (sum add energy %5.1f Wh - car load: %5.1f Wh - debug: %s)",
                     current_time_slot,
-                    round(energy, 1),
-                    round(sum_controlable_energy_load, 1),
+                    round(energy_wh, 1),
+                    round(sum_controlable_energy_load_wh, 1),
                     round(car_load_energy, 1),
+                    debug_url,
                 )
 
-            load_profile.append(energy)
+            load_profile.append(energy_wh)
             logger.debug(
                 "[LOAD-IF] Energy for %s: %5.1f Wh (sum add energy %5.1f Wh - car load: %5.1f Wh)",
                 current_time_slot,
-                round(energy, 1),
-                round(sum_controlable_energy_load, 1),
+                round(energy_wh, 1),
+                round(sum_controlable_energy_load_wh, 1),
                 round(car_load_energy, 1),
             )
             current_time_slot += timedelta(seconds=self.time_frame_base)

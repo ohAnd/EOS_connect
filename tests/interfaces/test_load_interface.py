@@ -2,6 +2,7 @@
 Unit tests for the LoadInterface class in load_interface.py
 """
 
+import profile
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
 import pytest
@@ -396,15 +397,14 @@ def test_load_profile_for_day_15min_intervals_openhab(monkeypatch):
     }
     li = LoadInterface(config, 900)
 
-    # Mock the fetch method to return a constant value for each interval
     def mock_fetch(item, start, end):
-        # Return two data points 15 minutes apart, both with state "100"
+        # Return 96 data points, all with state "100"
         return [
-            {"state": "100", "last_updated": start.isoformat()},
             {
                 "state": "100",
-                "last_updated": (start + timedelta(minutes=15)).isoformat(),
-            },
+                "last_updated": (start + timedelta(minutes=15 * i)).isoformat(),
+            }
+            for i in range(96)
         ]
 
     monkeypatch.setattr(
@@ -415,8 +415,8 @@ def test_load_profile_for_day_15min_intervals_openhab(monkeypatch):
     profile = li.get_load_profile_for_day(start, end)
     assert isinstance(profile, list)
     assert len(profile) == 96
-    # All values should be 100 (since mocked)
-    assert all(v == 100 for v in profile)
+    # All values should be 25.0 (since mocked and divided by 4)
+    assert all(v == 25.0 for v in profile)
 
 
 def test_load_profile_for_day_15min_intervals_homeassistant(monkeypatch):
@@ -437,13 +437,13 @@ def test_load_profile_for_day_15min_intervals_homeassistant(monkeypatch):
 
     # Mock the fetch method to return a constant value for each interval
     def mock_fetch(entity_id, start, end):
-        # Return two data points 15 minutes apart, both with state "200"
+        # Return 96 data points, all with state "200"
         return [
-            {"state": "200", "last_updated": start.isoformat()},
             {
                 "state": "200",
-                "last_updated": (start + timedelta(minutes=15)).isoformat(),
-            },
+                "last_updated": (start + timedelta(minutes=15 * i)).isoformat(),
+            }
+            for i in range(96)
         ]
 
     monkeypatch.setattr(
@@ -457,4 +457,4 @@ def test_load_profile_for_day_15min_intervals_homeassistant(monkeypatch):
     assert isinstance(profile, list)
     assert len(profile) == 96
     # All values should be 200 (since mocked)
-    assert all(v == 200 for v in profile)
+    assert all(v == 50.0 for v in profile)
