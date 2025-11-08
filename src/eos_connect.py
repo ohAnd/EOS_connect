@@ -87,8 +87,20 @@ LOGLEVEL = config_manager.config["log_level"].upper()
 logger.setLevel(LOGLEVEL)
 
 # global time frame base
-# time_frame_base = config_manager.config.get("timeframe_base", 3600)
-time_frame_base = 3600  # prep for future config entry
+time_frame_base = config_manager.config.get("eos", {}).get("time_frame", 3600)
+eos_source = config_manager.config.get("eos", {}).get("source", "eos_server")
+if time_frame_base not in [900, 3600]:
+    logger.warning(
+        "[Config] Invalid time_frame %s in config - defaulting to 3600 seconds",
+        time_frame_base,
+    )
+    time_frame_base = 3600
+if time_frame_base == 900 and eos_source != "evopt":
+    logger.warning(
+        "[Config] 15-min time_frame is only supported with EVopt source - "
+        "defaulting to 3600 seconds",
+    )
+    time_frame_base = 3600
 
 # Now upgrade to timezone-aware formatter after config is loaded
 timezone_formatter = TimezoneFormatter(
@@ -441,15 +453,21 @@ def create_optimize_request():
                 time_frame_base - (seconds_since_midnight % time_frame_base)
             ) / time_frame_base
 
-            current_hour = now.hour
+            if time_frame_base == 3600:
+                current_slot = now.hour
+            elif time_frame_base == 900:
+                current_slot = now.hour * 4 + now.minute // 15
+            else:
+                current_slot = seconds_since_midnight // time_frame_base
+
             for ts in (pv_prognose_wh, gesamtlast):
-                if ts and len(ts) > current_hour:
-                    ts[current_hour] *= scale_factor
+                if ts and len(ts) > current_slot:
+                    ts[current_slot] *= scale_factor
                     logger.debug(
-                        "[EOS_Request] Adjusted forecast for hour %d to %.2f Wh "
-                        + "due to partial hour",
-                        current_hour + 1,
-                        ts[current_hour],
+                        "[EOS_Request] Adjusted forecast for slot %d to %.2f Wh "
+                        + "due to partial slot",
+                        current_slot + 1,
+                        ts[current_slot],
                     )
 
         # if dst_change_detected != 0:
@@ -1468,9 +1486,10 @@ def get_controls():
         "used_optimization_source": config_manager.config.get("eos", {}).get(
             "source", "eos_server"
         ),
+        "used_time_frame_base": time_frame_base,
         "eos_connect_version": __version__,
         "timestamp": datetime.now(time_zone).isoformat(),
-        "api_version": "0.0.2",
+        "api_version": "0.0.3",
     }
     return Response(
         json.dumps(response_data, indent=4), content_type="application/json"

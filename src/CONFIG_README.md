@@ -19,6 +19,8 @@
       - [Parameters](#parameters)
     - [Other Configuration Settings](#other-configuration-settings)
   - [Notes](#notes-1)
+    - [config.yaml](#configyaml)
+    - [`refresh_time` and `time_frame`](#refresh_time-and-time_frame)
   - [Config examples](#config-examples)
     - [Full Config Example (will be generated at first startup)](#full-config-example-will-be-generated-at-first-startup)
     - [Minimal possible Config Example](#minimal-possible-config-example)
@@ -77,7 +79,6 @@ A default config file will be created with the first start, if there is no `conf
   Overall consumption of additional load 1 in Wh for the given hours. Set to 0 if not needed. (If not needed, set to `additional_load_1_consumption: ""`)
 
 ---
-
 ### EOS Server Configuration
 
 - **`eos.source`**:  
@@ -87,10 +88,30 @@ A default config file will be created with the first start, if there is no `conf
   EOS or EVopt server address (e.g., `192.168.1.94`). (Mandatory)
 
 - **`eos.port`**:  
-  port for EOS server (8503) or EVopt server (7050) - default: `8503` (Mandatory)
+  Port for EOS server (8503) or EVopt server (7050) - default: `8503` (Mandatory)
 
 - **`timeout`**:  
   Timeout for EOS optimization requests, in seconds. Default: `180`. (Mandatory)
+
+- **`time_frame`**:  
+  Granularity of the optimization and forecast time steps, in seconds.  
+  - `3600` for hourly (legacy mode)  
+  - `900` for 15-minute (quarterly) optimization  
+  This controls the resolution of the forecast and optimization arrays sent to EOS.  
+  For example, with `time_frame: 900`, all forecasts and optimization results will be calculated in 15-minute intervals.  
+  **Note:**  
+  - `refresh_time` (see "Other Configuration Settings") controls how often EOS Connect sends a request to EOS.  
+  - `time_frame` sets the time step granularity inside each optimization request.
+
+  Example:
+  ```yaml
+  eos:
+    source: eos_server
+    server: 192.168.1.94
+    port: 8503
+    timeout: 180
+    time_frame: 900   # Use 900 for 15-min steps, 3600 for hourly steps
+  ```
 
 ---
 
@@ -362,7 +383,8 @@ The `mqtt` section allows you to configure the MQTT broker and Home Assistant MQ
 ### Other Configuration Settings
 
 - **`refresh_time`**:  
-  Default refresh time for the application, in minutes.
+  Default refresh time for the application, in minutes.  
+  This sets how often EOS Connect sends an optimization request to the EOS server.
 
 - **`time_zone`**:  
   Default time zone for the application.
@@ -377,8 +399,17 @@ The `mqtt` section allows you to configure the MQTT broker and Home Assistant MQ
 
 ## Notes
 
+### config.yaml
 - Ensure that the `config.yaml` file is located in the same directory as the application.
 - If the configuration file does not exist, the application will create one with default values and prompt you to restart the server after configuring the settings.
+
+### `refresh_time` and `time_frame`
+
+- `refresh_time` sets how often EOS Connect sends a new optimization request to the EOS server (e.g., every 3 minutes).
+- `time_frame` sets the granularity of the optimization and forecast arrays inside each request (e.g., 900 for 15-minute steps, 3600 for hourly steps).
+- For more precise optimization and control, set `time_frame: 900`. For legacy hourly operation, use `3600`.
+- The combination of `refresh_time` and `time_frame` allows you to control both how frequently the system updates and how detailed the optimization is.
+
 
 ## Config examples
 
@@ -401,6 +432,7 @@ eos:
   server: 192.168.1.94  # EOS server address
   port: 8503 # port for EOS server - default: 8503
   timeout: 180 # timeout for EOS optimize request in seconds - default: 180
+  time_frame: 900 # granularity of optimization steps in seconds (900=15min, 3600=hourly)
 # Electricity price configuration
 price:
   source: default  # data source for electricity price tibber, smartenergy_at, stromligning, fixed_24h, default (default uses akkudoktor)
@@ -483,6 +515,7 @@ eos:
   server: 192.168.1.94  # EOS server address
   port: 8503 # port for EOS server - default: 8503
   timeout: 180 # timeout for EOS optimize request in seconds - default: 180
+  time_frame: 3600 # granularity of optimization steps in seconds (900=15min, 3600=hourly)
 # Electricity price configuration
 price:
   source: default  # data source for electricity price tibber, smartenergy_at, stromligning, fixed_24h, default (default uses akkudoktor)

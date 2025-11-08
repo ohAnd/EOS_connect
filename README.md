@@ -55,6 +55,7 @@ EOS Connect helps you get the most out of your solar and storage systems—wheth
     - [How to Use](#how-to-use)
       - [Examples](#examples)
   - [Configuration](#configuration)
+      - [New: Optimization Time Frame](#new-optimization-time-frame)
   - [Useful Information](#useful-information)
     - [Getting historical values](#getting-historical-values)
       - [Home Assistant Persistance](#home-assistant-persistance)
@@ -172,8 +173,8 @@ Get up and running with EOS Connect in just a few steps!
 ### 3. Configure
 
 - On first start, a default `config.yaml` will be created in the add-on’s config folder.
-- Edit this file via the Home Assistant add-on UI to set your EOS server address and other options.
-- See the [CONFIG_README](src/CONFIG_README.md) for full configuration details.
+- Edit this file via the Home Assistant add-on UI to set your EOS server address, `time_frame`, and other options.
+- See the [CONFIG_README](src/CONFIG_README.md) for full configuration details, including the new `time_frame` setting for 15-minute or hourly cycles.
 
 ### 4. Explore
 
@@ -304,6 +305,10 @@ EOS Connect supports multiple sources for solar (PV) production forecasts. You c
 
 #### Energy Price Forecast
 Energy price forecasts are retrieved from the chosen source (e.g. tibber, Akkudoktor, Smartenergy, ...). **Note**: Prices for tomorrow are available earliest at 1 PM. Until then, today's prices are used to feed the model.
+
+> **Note:**  
+> All data collection, forecasting, and optimization cycles are now driven by the `time_frame` setting in your configuration.  
+> For more precise and responsive optimization, set `time_frame: 900` for a 15-minute cycle.
 
 ---
 
@@ -934,6 +939,23 @@ You can set the system mode by publishing either the **mode name** (string) or t
 With the first start of **EOS connect** a default `config.yaml` will be generated in the `\src` folder. For full documentation for the different entries go to [CONFIG_README](src/CONFIG_README.md)
 
 *Note: With the default config and a valid EOS server IP/DNS name entry ('eos -> server') - **EOS connect** should be running out of the box with some static defaults as a start point for a step-by-step commissioning.*
+
+#### New: Optimization Time Frame
+
+EOS Connect now supports both hourly (legacy) and 15-minute (quarterly) optimization cycles for all forecasts and control flows.  
+Set the new `time_frame` entry in your `config.yaml` to control the interval:
+
+```yaml
+time_frame: 900   # 15-minute cycle (recommended for more precise optimization)
+# or
+time_frame: 3600  # hourly cycle (legacy mode, default if not set)
+```
+
+- All forecasts, optimization requests, and control cycles will use this interval.
+- For higher precision and more frequent updates, use `900` (15 minutes).
+- For legacy hourly operation, use `3600`.
+
+See [CONFIG_README](src/CONFIG_README.md) for full details.
 
 ## Useful Information
 
