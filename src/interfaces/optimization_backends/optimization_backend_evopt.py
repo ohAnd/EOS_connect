@@ -17,6 +17,7 @@ import logging
 import time
 import json
 import os
+from math import floor
 from datetime import datetime
 import requests
 
@@ -155,32 +156,47 @@ class EVOptBackend:
         feed_series = ems.get("einspeiseverguetung_euro_pro_wh", []) or []
         load_series = ems.get("gesamtlast", []) or []
 
-        current_hour = datetime.now(self.time_zone).hour
-        pv_series = (
-            pv_series[current_hour:] if len(pv_series) > current_hour else pv_series
-        )
-        price_series = (
-            price_series[current_hour:]
-            if len(price_series) > current_hour
-            else price_series
-        )
-        feed_series = (
-            feed_series[current_hour:]
-            if len(feed_series) > current_hour
-            else feed_series
-        )
-        load_series = (
-            load_series[current_hour:]
-            if len(load_series) > current_hour
-            else load_series
-        )
+        now = datetime.now(self.time_zone)
+        if self.time_frame_base == 900:
+            # 15-min intervals
+            current_slot = now.hour * 4 + floor(now.minute / 15)
 
-        lengths = [
-            len(s)
-            for s in (pv_series, price_series, feed_series, load_series)
-            if len(s) > 0
-        ]
-        n = min(lengths) if lengths else 1
+            def wrap(arr):
+                arr = arr or []
+                return (arr[current_slot:] + arr[:current_slot])[:192]
+
+            pv_series = wrap(pv_series)
+            price_series = wrap(price_series)
+            feed_series = wrap(feed_series)
+            load_series = wrap(load_series)
+            n = 192
+        else:
+            # hourly intervals
+            current_hour = now.hour
+            pv_series = (
+                pv_series[current_hour:] if len(pv_series) > current_hour else pv_series
+            )
+            price_series = (
+                price_series[current_hour:]
+                if len(price_series) > current_hour
+                else price_series
+            )
+            feed_series = (
+                feed_series[current_hour:]
+                if len(feed_series) > current_hour
+                else feed_series
+            )
+            load_series = (
+                load_series[current_hour:]
+                if len(load_series) > current_hour
+                else load_series
+            )
+            lengths = [
+                len(s)
+                for s in (pv_series, price_series, feed_series, load_series)
+                if len(s) > 0
+            ]
+            n = min(lengths) if lengths else 1
 
         def normalize(arr):
             return [float(x) for x in arr[:n]] if arr else [0.0] * n
@@ -295,6 +311,8 @@ class EVOptBackend:
         n_total = 48  # Total hours from midnight today to midnight tomorrow
         n_future = n_total - current_hour  # Hours from now to end of tomorrow
         n = n_future  # Override n to focus on future horizon
+        if self.time_frame_base == 900:
+            n = n_future * 4  # 15-min intervals
 
         # # determine horizon length n
         # n = 0
