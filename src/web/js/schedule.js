@@ -117,6 +117,16 @@ class ScheduleManager {
                 data_response["result"]["Einnahmen_Euro_pro_Stunde"],
                 data_response["timestamp"]
             );
+            // Transform ac_charge to hourly sums
+            ac_charge = this.convertQuarterlyToHourly(
+                ac_charge,
+                data_response["timestamp"]
+            );
+            // Transform discharge_allowed to hourly values (avg then round)
+            discharge_allowed = this.convertQuarterlyToHourly(
+                discharge_allowed,
+                data_response["timestamp"]
+            ).map(val => Math.round(val));
         }
 
         document.getElementById('schedule_currency_symbol').innerText = localization.currency_symbol;
