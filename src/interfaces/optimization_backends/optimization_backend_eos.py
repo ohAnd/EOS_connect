@@ -31,7 +31,7 @@ class EOSBackend:
         self.eos_version = ">=2025-04-09"  # default
         try:
             self.eos_version = self._retrieve_eos_version()
-            if self.eos_version == "0.1.0+dev":
+            if self.eos_version in ["0.1.0+dev", "0.2.0+dev"]:
                 # check config for needed values
                 config_optimization = self.__get_config_path("optimization")
                 config_optimization_upodate_needed = False
@@ -47,13 +47,13 @@ class EOSBackend:
                 if config_optimization_upodate_needed:
                     self.__set_config_path("optimization", config_optimization)
                     logger.warning(
-                        "[EOS] Detected EOS version 0.1.0+dev - config updated with "
+                        "[EOS] Detected EOS version 0.1.0+dev or above - config updated with "
                         + ": %s",
                         config_optimization,
                     )
                 else:
                     logger.info(
-                        "[EOS] Detected EOS version 0.1.0+dev - config optimization values OK"
+                        "[EOS] Detected EOS version 0.1.0+dev or above - config optimization values OK"
                     )
 
                 config_devices = self.__get_config_path("devices/electric_vehicles")

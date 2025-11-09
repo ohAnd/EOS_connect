@@ -517,7 +517,7 @@ def create_optimize_request():
         }
         if (
             eos_interface.get_eos_version() == ">=2025-04-09"
-            or eos_interface.get_eos_version() == "0.1.0+dev"
+            or eos_interface.get_eos_version() in ["0.1.0+dev", "0.2.0+dev"]
         ):
             akku_object = {"device_id": "battery1", **akku_object}
         return akku_object
@@ -528,7 +528,7 @@ def create_optimize_request():
         }
         if (
             eos_interface.get_eos_version() == ">=2025-04-09"
-            or eos_interface.get_eos_version() == "0.1.0+dev"
+            or eos_interface.get_eos_version() in ["0.1.0+dev", "0.2.0+dev"]
         ):
             wechselrichter_object = {
                 "device_id": "inverter1",
@@ -549,7 +549,7 @@ def create_optimize_request():
         }
         if (
             eos_interface.get_eos_version() == ">=2025-04-09"
-            or eos_interface.get_eos_version() == "0.1.0+dev"
+            or eos_interface.get_eos_version() in ["0.1.0+dev", "0.2.0+dev"]
         ):
             eauto_object = {"device_id": "ev1", **eauto_object}
         return eauto_object
@@ -569,7 +569,7 @@ def create_optimize_request():
         }
         if (
             eos_interface.get_eos_version() == ">=2025-04-09"
-            or eos_interface.get_eos_version() == "0.1.0+dev"
+            or eos_interface.get_eos_version() in ["0.1.0+dev", "0.2.0+dev"]
         ):
             dishwasher_object = {"device_id": "additional_load_1", **dishwasher_object}
         # if eos_interface.get_eos_version() == "0.1.0+dev":
