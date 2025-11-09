@@ -214,7 +214,7 @@ async function init() {
         // Update all displays
         showStatistics(data_request, data_response, data_controls);
         showSchedule(data_request, data_response, data_controls);
-        setBatteryChargingData(data_response);
+        setBatteryChargingData(data_response, data_controls);
         chartManager.updateLegendVisibility();
 
     } catch (error) {

@@ -22,7 +22,7 @@ class ScheduleManager {
      * @param {string|Date} baseTimestamp - Timestamp of the first value (ISO string or Date).
      * @returns {Array<number>} Array of hourly averages.
      */
-    convertQuarterlyToHourly(dataArray, baseTimestamp) {
+    convertQuarterlyToHourly(dataArray, baseTimestamp, full = false) {
         var baseTime = new Date(baseTimestamp);
         var baseMinute = baseTime.getMinutes();
         // How many quarters left in the current hour (including the current one)
@@ -30,18 +30,29 @@ class ScheduleManager {
 
         var hourlyData = [];
         var i = 0;
-        // First hour: average over the remaining quarters in the current hour
-        if (quartersLeft > 0 && dataArray.length >= quartersLeft) {
-            var avg = dataArray.slice(0, quartersLeft).reduce((a, b) => a + b, 0) / quartersLeft;
-            hourlyData.push(avg);
-            i = quartersLeft;
-        }
-        // Process remaining full hours
-        for (; i < dataArray.length; i += 4) {
-            var chunk = dataArray.slice(i, i + 4);
-            if (chunk.length > 0) {
-                var avg = chunk.reduce((a, b) => a + b, 0) / chunk.length;
+        if (full) {
+            // Always start grouping from midnight, every 4 slots = 1 hour
+            for (; i < dataArray.length; i += 4) {
+                var chunk = dataArray.slice(i, i + 4);
+                if (chunk.length > 0) {
+                    var avg = chunk.reduce((a, b) => a + b, 0) / chunk.length;
+                    hourlyData.push(avg);
+                }
+            }
+        } else {
+            // First hour: average over the remaining quarters in the current hour
+            if (quartersLeft > 0 && dataArray.length >= quartersLeft) {
+                var avg = dataArray.slice(0, quartersLeft).reduce((a, b) => a + b, 0) / quartersLeft;
                 hourlyData.push(avg);
+                i = quartersLeft;
+            }
+            // Process remaining full hours
+            for (; i < dataArray.length; i += 4) {
+                var chunk = dataArray.slice(i, i + 4);
+                if (chunk.length > 0) {
+                    var avg = chunk.reduce((a, b) => a + b, 0) / chunk.length;
+                    hourlyData.push(avg);
+                }
             }
         }
         return hourlyData;
@@ -120,7 +131,8 @@ class ScheduleManager {
             // Transform ac_charge to hourly sums
             ac_charge = this.convertQuarterlyToHourly(
                 ac_charge,
-                data_response["timestamp"]
+                data_response["timestamp"],
+                true
             );
             // Transform discharge_allowed to hourly values (avg then round)
             discharge_allowed = this.convertQuarterlyToHourly(

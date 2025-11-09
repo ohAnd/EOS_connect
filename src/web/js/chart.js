@@ -97,7 +97,14 @@ class ChartManager {
         const acChargeData = [];
 
         data_response["result"]["Netzbezug_Wh_pro_Stunde"].forEach((value, index) => {
-            const originalAcChargeValue = data_response["ac_charge"].slice(currentHour).concat(data_response["ac_charge"].slice(24, 48))[index] * max_charge_power_w;
+            var originalAcChargeValue = data_response["ac_charge"].slice(currentHour).concat(data_response["ac_charge"].slice(24, 48))[index] * max_charge_power_w;
+            if (time_frame_base === 900) {
+                const current_quarterly_slot = serverTime.getHours() * 4 + Math.floor(serverTime.getMinutes() / 15);
+                // originalAcChargeValue = ac_charge.slice(current_quarterly_slot).findIndex((value) => value > 0);
+                originalAcChargeValue = data_response["ac_charge"].slice(current_quarterly_slot).concat(data_response["ac_charge"].slice(24, 48))[index] * max_charge_power_w / 4;
+            }
+
+
             let gridValue = (value - originalAcChargeValue) / 1000;
             let adjustedAcChargeValue = originalAcChargeValue / 1000;
 
