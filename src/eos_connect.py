@@ -86,19 +86,26 @@ time_zone = pytz.timezone(config_manager.config["time_zone"])
 LOGLEVEL = config_manager.config["log_level"].upper()
 logger.setLevel(LOGLEVEL)
 
-# global time frame base
+# Set global time frame base with validation and fallback
 time_frame_base = config_manager.config.get("eos", {}).get("time_frame", 3600)
 eos_source = config_manager.config.get("eos", {}).get("source", "eos_server")
-if time_frame_base not in [900, 3600]:
+
+try:
+    time_frame_base = int(time_frame_base)
+except (TypeError, ValueError):
     logger.warning(
-        "[Config] Invalid time_frame %s in config - defaulting to 3600 seconds",
-        time_frame_base,
+        "[Config] Invalid time_frame type (%r); defaulting to 3600", time_frame_base
     )
     time_frame_base = 3600
-if time_frame_base == 900 and eos_source != "evopt":
+
+if time_frame_base not in (900, 3600):
     logger.warning(
-        "[Config] 15-min time_frame is only supported with EVopt source - "
-        "defaulting to 3600 seconds",
+        "[Config] Invalid time_frame (%s); defaulting to 3600", time_frame_base
+    )
+    time_frame_base = 3600
+elif time_frame_base == 900 and eos_source != "evopt":
+    logger.warning(
+        "[Config] 15-min time_frame only supported with EVopt source; defaulting to 3600"
     )
     time_frame_base = 3600
 
