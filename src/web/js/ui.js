@@ -149,7 +149,7 @@ document.addEventListener('DOMContentLoaded', function () {
 /**
  * Show main dropdown menu near the menu icon
  */
-function showMainMenu(version) {
+function showMainMenu(version, backend, granularity) {
     // Remove existing dropdown if present
     const existingDropdown = document.getElementById('main-dropdown-menu');
     if (existingDropdown) {
@@ -219,7 +219,7 @@ function showMainMenu(version) {
             </div>
         </div>
 
-        <div onclick="showInfoMenu('${version}'); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
+        <div onclick="showInfoMenu('${version}', '${backend}', '${granularity}'); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
             <i class="fa-solid fa-info-circle" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
@@ -491,7 +491,9 @@ function showLogsMenu() {
 /**
  * Show info menu using modern full-screen overlay
  */
-function showInfoMenu(version) {
+function showInfoMenu(version, backend, granularity) {
+    backend = backend == "evopt" ? "EVOpt @ EVCC" : "EOS@akkudoktor";
+    granularity = granularity == "900" ? "15 min intervals" : "60 min intervals";
     const header = `
         <div style="display: flex; align-items: center; gap: 10px;">
             <i class="fas fa-info-circle" style="color: #17a2b8;"></i>
@@ -501,6 +503,20 @@ function showInfoMenu(version) {
 
     const content = `
         <div style="height: calc(100% - 20px); overflow-y: auto; margin-top: 10px; text-align: center;">
+            <!-- main config Section -->
+            <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 30px; margin-bottom: 25px; border-left: 4px solid #7017b8ff;">
+                <div style="font-size: 1.2em; color: #cb6bd8ff; margin-bottom: 15px; font-weight: bold;">
+                    <i class="fas fa-brain" style="margin-right: 10px;"></i>Backend & Core Information
+                </div>
+                <div style="font-size: 0.9em; color: #888; margin-bottom: 15px;">Currently selected backend:</div>
+                <div style="font-size: 1.4em; color: #fff; font-weight: bold; background-color: rgba(255,255,255,0.1); padding: 12px 20px; border-radius: 6px; display: inline-block;">
+                    ${backend}
+                </div>
+                <div style="font-size: 0.9em; color: #888; margin-top: 15px; margin-bottom: 15px;">Currently selected optimization granularity:</div>
+                <div style="font-size: 1.4em; color: #fff; font-weight: bold; background-color: rgba(255,255,255,0.1); padding: 12px 20px; border-radius: 6px; display: inline-block;">
+                    ${granularity}
+                </div>
+            </div>
             <!-- Version Section -->
             <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 30px; margin-bottom: 25px; border-left: 4px solid #17a2b8;">
                 <div style="font-size: 1.2em; color: #17a2b8; margin-bottom: 15px; font-weight: bold;">
