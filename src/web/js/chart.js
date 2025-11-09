@@ -45,8 +45,10 @@ class ChartManager {
                     base.setMinutes(Math.floor(base.getMinutes() / 15) * 15, 0, 0);
                     labelTime = new Date(base.getTime() + i * 15 * 60 * 1000);
                 } else {
-                    // For hourly intervals, add i*1h to serverTime
-                    labelTime = new Date(serverTime.getTime() + i * 60 * 60 * 1000);
+                    // For hourly intervals, add i*1h to the full hour (HH:00) from serverTime
+                    let baseHour = new Date(serverTime);
+                    baseHour.setMinutes(0, 0, 0);
+                    labelTime = new Date(baseHour.getTime() + i * 60 * 60 * 1000);
                 }
                 if (evopt_in_charge && i === 0) {
                     // Show current time as HH:MM for the first entry
@@ -60,46 +62,6 @@ class ChartManager {
                 }
             }
         );
-
-        // this.chartInstance.data.labels = Array.from(
-        //     { length: data_response["result"]["Last_Wh_pro_Stunde"].length },
-        //     (_, i) => {
-        //         var labelTime = null;
-        //         if (time_frame_base === 900) {
-        //             // For 15-minute intervals, show every 15 minutes
-        //             // For 15-minute intervals, show only :15, :30, :45, :00 starting from current minute
-        //             const startMinute = serverTime.getMinutes();
-        //             const minuteSteps = [15, 30, 45, 0];
-        //             const stepIndex = i % 4;
-        //             let minute = minuteSteps[stepIndex];
-        //             let hour = serverTime.getHours() + Math.floor((startMinute + i * 15) / 60);
-        //             if (minute === 0) {
-        //                 hour += 1; // Move to next hour for :00
-        //             }
-        //             labelTime = new Date(serverTime.getFullYear(), serverTime.getMonth(), serverTime.getDate(), hour, minute, 0);
-        //         } else {
-        //             // For hourly intervals, show every hour
-        //             labelTime = new Date(serverTime.getTime() + (i * 60 * 60 * 1000));
-        //         }
-        //         if (evopt_in_charge && i === 0) {
-        //             // Show current time as HH:MM for the first entry
-        //             const hour = labelTime.getHours();
-        //             const minute = labelTime.getMinutes();
-        //             return `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-        //         } else {
-        //             if (time_frame_base === 900) {
-        //                 // Show HH:15, HH:30, HH:45 for 15-minute intervals
-        //                 const hour = labelTime.getHours();
-        //                 const minute = labelTime.getMinutes();
-        //                 return `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-        //             } else {
-        //                 // Show HH:00 for all other entries
-        //                 const hour = labelTime.getHours();
-        //                 return `${hour.toString().padStart(2, '0')}:00`;
-        //             }
-        //         }
-        //     }
-        // );
 
         // Calculate consumption (excluding home appliances)
         this.chartInstance.data.datasets[0].data = data_response["result"]["Last_Wh_pro_Stunde"].map((value, index) => {
@@ -169,7 +131,11 @@ class ChartManager {
         this.chartInstance.data.datasets[8].data = data_response["result"]["Electricity_price"].map(value => value * 1000);
         this.chartInstance.data.datasets[8].label = `Electricity Price (${localization.currency_symbol}/kWh)`;
         this.chartInstance.options.scales.y1.title.text = `Price (${localization.currency_symbol}/kWh)`;
-        this.chartInstance.data.datasets[9].data = data_response["discharge_allowed"].slice(currentHour).concat(data_response["discharge_allowed"].slice(24, 48));
+        if (time_frame_base === 900) {
+            this.chartInstance.data.datasets[9].data = data_response["discharge_allowed"].slice(currentHour * 4).concat(data_response["discharge_allowed"].slice(96, 192));
+        } else {
+            this.chartInstance.data.datasets[9].data = data_response["discharge_allowed"].slice(currentHour).concat(data_response["discharge_allowed"].slice(24, 48));
+        }
 
         this.chartInstance.update('none'); // Update without animation
     }
