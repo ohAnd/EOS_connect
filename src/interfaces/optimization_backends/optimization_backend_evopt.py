@@ -42,7 +42,7 @@ class EVOptBackend:
         Accepts EOS-format request, transforms to EVopt format, sends request,
         transforms response back to EOS-format, and returns (response_json, avg_runtime).
         """
-        evcc_request, errors = self._transform_request_from_eos_to_evopt(eos_request)
+        evopt_request, errors = self._transform_request_from_eos_to_evopt(eos_request)
         if errors:
             logger.error("[EVopt] Request transformation errors: %s", errors)
         # Optionally, write transformed payload to json file for debugging
@@ -56,7 +56,7 @@ class EVOptBackend:
         debug_path = os.path.abspath(debug_path)
         try:
             with open(debug_path, "w", encoding="utf-8") as fh:
-                json.dump(evcc_request, fh, indent=2, ensure_ascii=False)
+                json.dump(evopt_request, fh, indent=2, ensure_ascii=False)
         except OSError as e:
             logger.warning("[EVopt] Could not write debug file: %s", e)
 
@@ -71,7 +71,7 @@ class EVOptBackend:
         try:
             start_time = time.time()
             response = requests.post(
-                request_url, headers=headers, json=evcc_request, timeout=timeout
+                request_url, headers=headers, json=evopt_request, timeout=timeout
             )
             end_time = time.time()
             elapsed_time = end_time - start_time
@@ -93,7 +93,7 @@ class EVOptBackend:
                 self.last_optimization_runtime_number + 1
             ) % 5
             avg_runtime = sum(self.last_optimization_runtimes) / 5
-            evcc_response = response.json()
+            evopt_response = response.json()
 
             # Optionally, write transformed payload to json file for debugging
             debug_path = os.path.join(
@@ -106,12 +106,12 @@ class EVOptBackend:
             debug_path = os.path.abspath(debug_path)
             try:
                 with open(debug_path, "w", encoding="utf-8") as fh:
-                    json.dump(evcc_response, fh, indent=2, ensure_ascii=False)
+                    json.dump(evopt_response, fh, indent=2, ensure_ascii=False)
             except OSError as e:
                 logger.warning("[EVopt] Could not write debug file: %s", e)
 
-            eos_response = self._transform_response_from_evcc(
-                evcc_response, evcc_request
+            eos_response = self._transform_response_from_evopt_to_eos(
+                evopt_response, evopt_request
             )
             return eos_response, avg_runtime
         except requests.exceptions.Timeout:
@@ -138,7 +138,7 @@ class EVOptBackend:
                 )
             logger.debug(
                 "[EVopt] ERROR - payload for the request was:\n%s",
-                evcc_request,
+                evopt_request,
             )
             return {"error": str(e)}, None
 
@@ -276,7 +276,7 @@ class EVOptBackend:
 
         return evopt, errors
 
-    def _transform_response_from_evcc(self, evcc_resp, evopt=None):
+    def _transform_response_from_evopt_to_eos(self, evcc_resp, evopt=None):
         """
         Translate EVoptimizer response -> EOS-style optimize response.
 
@@ -313,22 +313,6 @@ class EVOptBackend:
         n = n_future  # Override n to focus on future horizon
         if self.time_frame_base == 900:
             n = n_future * 4  # 15-min intervals
-
-        # # determine horizon length n
-        # n = 0
-        # if isinstance(resp.get("grid_import"), list):
-        #     n = len(resp.get("grid_import"))
-        # elif isinstance(resp.get("grid_export"), list):
-        #     n = len(resp.get("grid_export"))
-        # else:
-        #     # try batteries[*].charging_power
-        #     b_list = resp.get("batteries") or []
-        #     if isinstance(b_list, list) and len(b_list) > 0:
-        #         b0 = b_list[0]
-        #         if isinstance(b0.get("charging_power"), list):
-        #             n = len(b0.get("charging_power"))
-        # if n == 0:
-        #     n = 24
 
         # primary battery arrays (first battery)
         batteries_resp = resp.get("batteries") or []
@@ -606,6 +590,8 @@ class EVOptBackend:
 
         # Pad past hours with zeros for control arrays
         pad_past = [0.0] * current_hour
+        if self.time_frame_base == 900:
+            pad_past = [0.0] * (current_hour * 4)
 
         eos_resp = {
             "ac_charge": pad_past + [float(x) for x in ac_charge],
@@ -632,14 +618,14 @@ class EVOptBackend:
 
         return eos_resp
 
-    def _validate_evcc_request(self, evopt):
+    def _validate_evopt_request(self, evopt):
         """
         Validate EVopt-format optimization request.
         Returns: (bool, list[str]) - valid, errors
         """
         errors = []
         if not isinstance(evopt, dict):
-            errors.append("EVCC request must be a dictionary.")
+            errors.append("evopt request must be a dictionary.")
         # Example: check required keys
         required_keys = ["strategy", "grid", "batteries", "time_series"]
         for key in required_keys:
