@@ -9,10 +9,11 @@
     - [Electricity Price Configuration](#electricity-price-configuration)
     - [Battery Configuration](#battery-configuration)
     - [PV Forecast Configuration](#pv-forecast-configuration)
-    - [PV Forecast Configuration](#pv-forecast-configuration-1)
-      - [Parameter Details](#parameter-details)
-      - [Example Config Entry](#example-config-entry)
-      - [Notes](#notes)
+      - [PV Forecast Source](#pv-forecast-source)
+      - [PV Forecast installations](#pv-forecast-installations)
+        - [Parameter Details](#parameter-details)
+        - [Example Config Entry](#example-config-entry)
+        - [Notes](#notes)
     - [Inverter Configuration](#inverter-configuration)
     - [EVCC Configuration](#evcc-configuration)
     - [MQTT Configuration](#mqtt-configuration)
@@ -211,7 +212,22 @@ A default config file will be created with the first start, if there is no `conf
 
 This section contains two subsections:
 
-### PV Forecast Configuration
+#### PV Forecast Source
+
+The `pv_forecast_source` section defines which provider is used for solar generation forecasts.  
+Supported sources are: `akkudoktor`, `openmeteo`, `openmeteo_local`, `forecast_solar`, `evcc`, `solcast`, and `default`.  
+- **source**: Select the provider for PV forecasts.  
+  - Example: `source: akkudoktor`
+- **api_key**: Only required for Solcast. Enter your Solcast API key here if using `solcast` as the source.
+
+Example:
+```yaml
+pv_forecast_source:
+  source: akkudoktor
+  api_key: "" # Only needed for Solcast
+```
+
+#### PV Forecast installations
 
 Each entry in `pv_forecast` must follow these rules, depending on the selected `pv_forecast_source`:
 
@@ -228,7 +244,7 @@ Each entry in `pv_forecast` must follow these rules, depending on the selected `
 | `horizon`            | `openmeteo_local`, `forecast_solar` | list or string | Mandatory. If missing, defaults to `[0]*36` for `openmeteo_local`, `[0]*24` for `forecast_solar`. |
 | `resource_id`        | `solcast`                           | string         | Required for Solcast. Must be set in each entry when using Solcast as the source.                 |
 
-#### Parameter Details
+##### Parameter Details
 
 - **name**:  
   User-defined identifier for the PV installation. Must be unique if you use multiple installations.
@@ -268,7 +284,7 @@ Each entry in `pv_forecast` must follow these rules, depending on the selected `
   - Must be set in each entry when using Solcast as the source.  
   - Used to identify the rooftop site in your Solcast account.
 
-#### Example Config Entry
+##### Example Config Entry
 
 ```yaml
 pv_forecast:
@@ -284,7 +300,7 @@ pv_forecast:
     # resource_id: "your_solcast_resource_id"  # Only for Solcast
 ```
 
-#### Notes
+##### Notes
 
 - For `evcc` and `solcast`, dummy values are set for `power`, `powerInverter`, and `inverterEfficiency` to enable temperature forecasts.
 - For `openmeteo_local` and `forecast_solar`, ensure `horizon` is provided or defaults will be used.
@@ -293,7 +309,7 @@ pv_forecast:
 Refer to this table and details when editing your `config.yaml` and for troubleshooting configuration errors.
 - **`api_key`** (in `pv_forecast_source`): Required. Your Solcast API key obtained from your Solcast account.
 - **`resource_id`** (in each `pv_forecast` entry): Required. The resource ID from your Solcast rooftop site configuration.
-- **Location parameters for temperature forecasts**: While `azimuth`, `tilt`, and `horizon` are configured in your Solcast dashboard and ignored by EOS Connect, **`lat` and `lon` are still required** for fetching temperature forecasts that EOS needs for accurate optimization calculations.
+- **Location parameters for temperature forecasts**: For all PV forecast sources, EOS Connect requires temperature data for optimization. The temperature forecast is always retrieved from Akkudoktor, and therefore, the `lat` and `lon` parameters are mandatory for every PV installation entry, regardless of the selected forecast source.
 - **`power`, `powerInverter`, `inverterEfficiency`**: Still required for system scaling and efficiency calculations.
 
 **Setting up Solcast:**
