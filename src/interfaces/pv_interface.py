@@ -680,7 +680,7 @@ class PvInterface:
                 "akkudoktor",
             )
 
-        day_values = self._retry_request(request_func, error_handler)
+        day_values = self._retry_request(request_func, error_handler, 5, 3)
 
         # Data processing
         try:
