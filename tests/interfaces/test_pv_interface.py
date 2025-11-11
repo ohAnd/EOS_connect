@@ -349,7 +349,9 @@ def test_api_error_triggers_fallback(monkeypatch):
     Test that an API error triggers fallback to default PV forecast.
     """
     pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
-    pv._retry_request = lambda req, err, **kwargs: err("api_error", Exception("fail"))
+    pv._retry_request = lambda req, err, *args, **kwargs: err(
+        "api_error", Exception("fail")
+    )
     result = pv._PvInterface__get_pv_forecast_akkudoktor_api(
         pv_config_entry={
             "lat": 50,
