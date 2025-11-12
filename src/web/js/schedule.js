@@ -129,11 +129,12 @@ class ScheduleManager {
                 data_response["timestamp"]
             );
             // Transform ac_charge to hourly sums
-            ac_charge = this.convertQuarterlyToHourly(
+            ac_charge = this.convertQuarterlyToHourlySum(
                 ac_charge,
                 data_response["timestamp"],
                 true
             );
+
             // Transform discharge_allowed to hourly values (avg then round)
             discharge_allowed = this.convertQuarterlyToHourly(
                 discharge_allowed,

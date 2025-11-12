@@ -111,10 +111,10 @@ class BatteryManager {
                         foundFirst = true;
                     }
                     let current_slot_amount = value * max_charge_power_w;
-                    let current_hour_price = price_data[index] * current_slot_amount / 4; // Convert to minor unit per kWh
+                    let current_hour_price = price_data[index] * current_slot_amount; // Convert to minor unit per kWh
                     total_price += current_hour_price;
                     total_price_count += 1;
-                    next_charge_amount += value * max_charge_power_w / 4;
+                    next_charge_amount += value * max_charge_power_w;
                 } else if (foundFirst) {
                     break;
                 }
