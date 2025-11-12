@@ -86,9 +86,15 @@ class PvInterface:
         self._stop_event = threading.Event()
         # Adjust update interval based on provider
         if self.config_source.get("source") == "solcast":
-            self.update_interval = (
-                2.5 * 60 * 60
-            )  # 2.5 hours (9.6 calls/day - under the 10 limit)
+            if len(self.config) == 2:
+                # for each update 2 calls will be needed
+                self.update_interval = (
+                    6 * 60 * 60
+                )  # all 6 hours 2 calls (8 calls/day - under the 10 limit)
+            if len(self.config) == 1:
+                self.update_interval = (
+                    2.5 * 60 * 60
+                )  # 2.5 hours (9.6 calls/day - under the 10 limit)
             logger.info("[PV-IF] Using extended update interval for Solcast: 2.5 hours")
         else:
             self.update_interval = 15 * 60  # Standard 15 minutes
