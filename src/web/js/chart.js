@@ -28,6 +28,8 @@ class ChartManager {
 
         // Use server timestamp consistently for data processing
         const serverTime = new Date(data_response["timestamp"]);
+        const currentMinutes = serverTime.getMinutes();
+        const currentSlot = serverTime.getHours() * 4 + Math.floor(currentMinutes / 15);
         const currentHour = serverTime.getHours();
 
         const time_frame_base = data_controls["used_time_frame_base"];
@@ -76,8 +78,6 @@ class ChartManager {
         let pvData;
         if (time_frame_base === 900) {
             // 15-minute intervals, 192 slots
-            const currentMinutes = serverTime.getMinutes();
-            const currentSlot = serverTime.getHours() * 4 + Math.floor(currentMinutes / 15);
             pvData = data_request["ems"]["pv_prognose_wh"]
                 .slice(currentSlot)
                 .concat(data_request["ems"]["pv_prognose_wh"].slice(0, currentSlot))
@@ -138,7 +138,7 @@ class ChartManager {
         this.chartInstance.data.datasets[8].label = `Electricity Price (${localization.currency_symbol}/kWh)`;
         this.chartInstance.options.scales.y1.title.text = `Price (${localization.currency_symbol}/kWh)`;
         if (time_frame_base === 900) {
-            this.chartInstance.data.datasets[9].data = data_response["discharge_allowed"].slice(currentHour * 4).concat(data_response["discharge_allowed"].slice(96, 192));
+            this.chartInstance.data.datasets[9].data = data_response["discharge_allowed"].slice(currentSlot).concat(data_response["discharge_allowed"].slice(96, 192));
         } else {
             this.chartInstance.data.datasets[9].data = data_response["discharge_allowed"].slice(currentHour).concat(data_response["discharge_allowed"].slice(24, 48));
         }
