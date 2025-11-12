@@ -666,7 +666,11 @@ class LoadInterface:
         # combine to a list with 48 values
         load_profile = []
         for i, value in enumerate(load_profile_one_week_before):
-            if load_profile_two_week_before and len(load_profile_two_week_before) >= 24:
+            if (
+                load_profile_two_week_before
+                and len(load_profile_two_week_before) >= 24
+                and not all(v == 0 for v in load_profile_two_week_before)
+            ):
                 load_profile.append(
                     round((value + load_profile_two_week_before[i]) / 2, 3)
                 )
@@ -676,6 +680,7 @@ class LoadInterface:
             if (
                 load_profile_tomorrow_two_week_before
                 and len(load_profile_tomorrow_two_week_before) >= 24
+                and not all(v == 0 for v in load_profile_tomorrow_two_week_before)
             ):
                 load_profile.append(
                     round((value + load_profile_tomorrow_two_week_before[i]) / 2, 3)

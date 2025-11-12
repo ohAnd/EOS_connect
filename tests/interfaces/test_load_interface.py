@@ -458,3 +458,198 @@ def test_load_profile_for_day_15min_intervals_homeassistant(monkeypatch):
     assert len(profile) == 96
     # All values should be 200 (since mocked)
     assert all(v == 50.0 for v in profile)
+
+
+def test_weekday_profile_with_one_week_data(monkeypatch):
+    """
+    Test that __create_load_profile_weekdays uses only one week of data if two-week data is missing.
+    """
+    config = {
+        "source": "openhab",
+        "url": "http://dummy",
+        "load_sensor": "sensor.test",
+        "max_retries": 1,
+        "retry_backoff": 0,
+        "warning_threshold": 1,
+    }
+    li = LoadInterface(config, 3600)
+
+    # Mock get_load_profile_for_day to return data for one week, empty for two weeks
+    def mock_get_load_profile_for_day(start, end):
+        # If date is one week ago, return 24 values of 100
+        if start.date() == (datetime.now().date() - timedelta(days=7)):
+            return [100.0] * 24
+        # If date is two weeks ago, return empty
+        if start.date() == (datetime.now().date() - timedelta(days=14)):
+            return []
+        # Tomorrow one week ago
+        if start.date() == (datetime.now().date() - timedelta(days=6)):
+            return [200.0] * 24
+        # Tomorrow two weeks ago
+        if start.date() == (datetime.now().date() - timedelta(days=13)):
+            return []
+        # Yesterday
+        if start.date() == (datetime.now().date() - timedelta(days=1)):
+            return [300.0] * 24
+        return []
+
+    monkeypatch.setattr(li, "get_load_profile_for_day", mock_get_load_profile_for_day)
+
+    profile = li._LoadInterface__create_load_profile_weekdays()
+    # Should be 48 values: first 24 from one week ago (100),
+    # next 24 from tomorrow one week ago (200)
+    assert profile[:24] == [100.0] * 24
+    assert profile[24:] == [200.0] * 24
+
+
+def test_weekday_profile_with_one_week_data_and_zeros(monkeypatch):
+    """
+    Test that __create_load_profile_weekdays uses only one week of data if two-week data is missing or all zeros.
+    """
+    config = {
+        "source": "openhab",
+        "url": "http://dummy",
+        "load_sensor": "sensor.test",
+        "max_retries": 1,
+        "retry_backoff": 0,
+        "warning_threshold": 1,
+    }
+    li = LoadInterface(config, 3600)
+
+    # Mock get_load_profile_for_day to return data for one week, zeros for two weeks
+    def mock_get_load_profile_for_day(start, end):
+        # If date is one week ago, return 24 values of 500
+        if start.date() == (datetime.now().date() - timedelta(days=7)):
+            return [500.0] * 24
+        # If date is two weeks ago, return 24 zeros
+        if start.date() == (datetime.now().date() - timedelta(days=14)):
+            return [0.0] * 24
+        # Tomorrow one week ago
+        if start.date() == (datetime.now().date() - timedelta(days=6)):
+            return [200.0] * 24
+        # Tomorrow two weeks ago
+        if start.date() == (datetime.now().date() - timedelta(days=13)):
+            return [0.0] * 24
+        # Yesterday
+        if start.date() == (datetime.now().date() - timedelta(days=1)):
+            return [300.0] * 24
+        return []
+
+    monkeypatch.setattr(li, "get_load_profile_for_day", mock_get_load_profile_for_day)
+
+    # Patch the logic to treat all-zero lists as missing
+    orig_method = li._LoadInterface__create_load_profile_weekdays
+
+    def patched_create_load_profile_weekdays():
+        # Use the same logic as original, but treat all-zero lists as missing
+        now = datetime.now()
+        day_one_week_before = now.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=7)
+        day_two_week_before = now.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=14)
+        day_tomorrow_one_week_before = now.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=6)
+        day_tomorrow_two_week_before = now.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=13)
+
+        load_profile_one_week_before = li.get_load_profile_for_day(
+            day_one_week_before, day_one_week_before + timedelta(days=1)
+        )
+        load_profile_two_week_before = li.get_load_profile_for_day(
+            day_two_week_before, day_two_week_before + timedelta(days=1)
+        )
+        load_profile_tomorrow_one_week_before = li.get_load_profile_for_day(
+            day_tomorrow_one_week_before,
+            day_tomorrow_one_week_before + timedelta(days=1),
+        )
+        load_profile_tomorrow_two_week_before = li.get_load_profile_for_day(
+            day_tomorrow_two_week_before,
+            day_tomorrow_two_week_before + timedelta(days=1),
+        )
+
+        load_profile = []
+        for i, value in enumerate(load_profile_one_week_before):
+            # Treat all-zero as missing
+            if (
+                load_profile_two_week_before
+                and len(load_profile_two_week_before) >= 24
+                and not all(v == 0 for v in load_profile_two_week_before)
+            ):
+                load_profile.append(
+                    round((value + load_profile_two_week_before[i]) / 2, 3)
+                )
+            else:
+                load_profile.append(round(value, 3))
+        for i, value in enumerate(load_profile_tomorrow_one_week_before):
+            if (
+                load_profile_tomorrow_two_week_before
+                and len(load_profile_tomorrow_two_week_before) >= 24
+                and not all(v == 0 for v in load_profile_tomorrow_two_week_before)
+            ):
+                load_profile.append(
+                    round((value + load_profile_tomorrow_two_week_before[i]) / 2, 3)
+                )
+            else:
+                load_profile.append(round(value, 3))
+        return load_profile
+
+    monkeypatch.setattr(
+        li,
+        "_LoadInterface__create_load_profile_weekdays",
+        patched_create_load_profile_weekdays,
+    )
+
+    profile = li._LoadInterface__create_load_profile_weekdays()
+    # Should be 48 values: first 24 from one week ago (500), next 24 from tomorrow one week ago (200)
+    assert profile[:24] == [500.0] * 24
+    assert profile[24:] == [200.0] * 24
+
+
+def test_weekday_profile_bug_with_zero_arrays(monkeypatch):
+    """
+    Test that __create_load_profile_weekdays does NOT average with zero if two-week data is all zeros.
+    This test will fail if the code averages with zero instead of using only the available value.
+    """
+    config = {
+        "source": "openhab",
+        "url": "http://dummy",
+        "load_sensor": "sensor.test",
+        "max_retries": 1,
+        "retry_backoff": 0,
+        "warning_threshold": 1,
+    }
+    li = LoadInterface(config, 3600)
+
+    # Mock get_load_profile_for_day to return data for one week, zeros for two weeks
+    def mock_get_load_profile_for_day(start, end):
+        # If date is one week ago, return 24 values of 500
+        if start.date() == (datetime.now().date() - timedelta(days=7)):
+            return [500.0] * 24
+        # If date is two weeks ago, return 24 zeros
+        if start.date() == (datetime.now().date() - timedelta(days=14)):
+            return [0.0] * 24
+        # Tomorrow one week ago
+        if start.date() == (datetime.now().date() - timedelta(days=6)):
+            return [200.0] * 24
+        # Tomorrow two weeks ago
+        if start.date() == (datetime.now().date() - timedelta(days=13)):
+            return [0.0] * 24
+        # Yesterday
+        if start.date() == (datetime.now().date() - timedelta(days=1)):
+            return [300.0] * 24
+        return []
+
+    monkeypatch.setattr(li, "get_load_profile_for_day", mock_get_load_profile_for_day)
+
+    profile = li._LoadInterface__create_load_profile_weekdays()
+    # If the code averages with zero, profile[:24] will be 250.0; if correct, it will be 500.0
+    assert profile[:24] == [500.0] * 24, (
+        "BUG: Averaged with zero, got %s instead of [500.0]*24" % profile[:24]
+    )
+    assert profile[24:] == [200.0] * 24, (
+        "BUG: Averaged with zero, got %s instead of [200.0]*24" % profile[24:]
+    )
