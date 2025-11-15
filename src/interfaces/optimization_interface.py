@@ -286,8 +286,19 @@ class OptimizationInterface:
         """
         Calculate the next run time prioritizing quarter-hour alignment with improved gap filling.
         """
+        # Fallback if avg_runtime is None
+        if avg_runtime is None:
+            logger.warning(
+                "[OPTIMIZATION] avg_runtime is None, using default value 60s"
+            )
+            avg_runtime = 60  # or another reasonable default
+
         # Calculate minimum time between runs
-        min_gap_seconds = max((update_interval + avg_runtime) * 0.7, 30)
+        try:
+            min_gap_seconds = max((update_interval + avg_runtime) * 0.7, 30)
+        except Exception as e:
+            logger.error(f"[OPTIMIZATION] Failed to calculate min_gap_seconds: {e}")
+            min_gap_seconds = 30
 
         # Find next quarter-hour from current time
         next_quarter = current_time.replace(second=0, microsecond=0)
