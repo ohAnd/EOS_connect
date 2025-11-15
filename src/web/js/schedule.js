@@ -139,7 +139,7 @@ class ScheduleManager {
             discharge_allowed = this.convertQuarterlyToHourly(
                 discharge_allowed,
                 data_response["timestamp"]
-            ).map(val => Math.round(val));
+            ).map(val => val > 0 ? 1 : 0);
         }
 
         document.getElementById('schedule_currency_symbol').innerText = localization.currency_symbol;
