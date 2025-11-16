@@ -142,7 +142,8 @@ class OptimizationInterface:
         current_step = now.hour * steps_per_hour + now.minute // (
             self.time_frame_base // 60
         )
-        # Calculate the datetime for the current step: today midnight + step number * time_frame_base (in seconds)
+        # Calculate the datetime for the current step: today midnight
+        #  + step number * time_frame_base (in seconds)
         today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
         current_step_time = today_midnight + timedelta(
             seconds=current_step * self.time_frame_base
@@ -297,7 +298,7 @@ class OptimizationInterface:
         try:
             min_gap_seconds = max((update_interval + avg_runtime) * 0.7, 30)
         except Exception as e:
-            logger.error(f"[OPTIMIZATION] Failed to calculate min_gap_seconds: {e}")
+            logger.error("[OPTIMIZATION] Failed to calculate min_gap_seconds: %s", e)
             min_gap_seconds = 30
 
         # Find next quarter-hour from current time
@@ -377,3 +378,17 @@ class OptimizationInterface:
         if hasattr(self.backend, "get_eos_version"):
             return self.backend.get_eos_version()
         return None
+
+    def is_eos_version_at_least(self, version_str):
+        """
+        Checks if the EOS version from the backend is at least the specified version.
+
+        Args:
+            version_str (str): The version string to compare against.
+        Returns:
+            bool: True if the EOS version is at least the specified version, False otherwise.
+        """
+        if hasattr(self.backend, "is_eos_version_at_least"):
+            result = self.backend.is_eos_version_at_least(version_str)
+            return result
+        return False

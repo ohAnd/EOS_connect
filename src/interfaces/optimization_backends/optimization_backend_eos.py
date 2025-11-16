@@ -12,6 +12,7 @@ from datetime import datetime
 import requests
 import pandas as pd
 import numpy as np
+from packaging import version
 
 logger = logging.getLogger("__main__")
 
@@ -28,10 +29,11 @@ class EOSBackend:
         self.time_zone = time_zone
         self.last_optimization_runtimes = [0] * 5
         self.last_optimization_runtime_number = 0
-        self.eos_version = ">=2025-04-09"  # default
+        self.eos_version = "0.0.2"  # default
         try:
             self.eos_version = self._retrieve_eos_version()
-            if self.eos_version in ["0.1.0+dev", "0.2.0+dev"]:
+            # if self.eos_version in ["0.1.0+dev", "0.2.0+dev"]:
+            if self.is_eos_version_at_least("0.1.0"):
                 # check config for needed values
                 config_optimization = self.__get_config_path("optimization")
                 config_optimization_upodate_needed = False
@@ -47,13 +49,13 @@ class EOSBackend:
                 if config_optimization_upodate_needed:
                     self.__set_config_path("optimization", config_optimization)
                     logger.warning(
-                        "[EOS] Detected EOS version 0.1.0+dev or above - config updated with "
+                        "[EOS] Detected EOS version >= 0.1.0 - config updated with "
                         + ": %s",
                         config_optimization,
                     )
                 else:
                     logger.info(
-                        "[EOS] Detected EOS version 0.1.0+dev or above - config optimization values OK"
+                        "[EOS] Detected EOS version >= 0.1.0 - config optimization values OK"
                     )
 
                 config_devices = self.__get_config_path("devices/electric_vehicles")
@@ -65,7 +67,7 @@ class EOSBackend:
                     )
                     self.__set_config_path("devices/electric_vehicles", config_devices)
                     logger.warning(
-                        "[EOS] Detected EOS version 0.1.0+dev - config updated with charge "
+                        "[EOS] Detected EOS version >= 0.1.0 - config updated with charge "
                         + "rates for electric vehicles"
                     )
                 elif "charge_rates" not in config_devices[0]:
@@ -74,12 +76,12 @@ class EOSBackend:
                     )
                     self.__set_config_path("devices/electric_vehicles", config_devices)
                     logger.warning(
-                        "[EOS] Detected EOS version 0.1.0+dev - config updated with charge "
+                        "[EOS] Detected EOS version >= 0.1.0 - config updated with charge "
                         + "rates for electric vehicles"
                     )
                 else:
                     logger.info(
-                        "[EOS] Detected EOS version 0.1.0+dev - config charge rates for "
+                        "[EOS] Detected EOS version >= 0.1.0 - config charge rates for "
                         + "electric vehicles OK"
                     )
             logger.info("[EOS] Configuration validation successful")
@@ -267,7 +269,7 @@ class EOSBackend:
             eos_version = response.json().get("status")
             eos_version_real = response.json().get("version", "unknown")
             if eos_version == "alive" and eos_version_real == "unknown":
-                eos_version = ">=2025-04-09"
+                eos_version = "0.0.2"
             else:
                 eos_version = eos_version_real
                 # raise ValueError(
@@ -277,7 +279,7 @@ class EOSBackend:
             return eos_version
         except requests.exceptions.HTTPError as e:
             if hasattr(e, "response") and e.response and e.response.status_code == 404:
-                eos_version = "<2025-04-09"
+                eos_version = "0.0.1"
                 logger.info("[EOS] Getting EOS version: %s", eos_version)
                 return eos_version
             else:
@@ -329,6 +331,21 @@ class EOSBackend:
         Returns: str
         """
         return self.eos_version
+
+    def is_eos_version_at_least(self, version_string):
+        """
+        Check if the EOS version is at least the given version.
+        Args:
+            version_string (str): Version string to compare against.
+        Returns: bool
+        """
+        try:
+            return version.parse(self.eos_version) >= version.parse(version_string)
+        except ImportError:
+            logger.warning(
+                "[EOS] 'packaging' module not found. Cannot compare EOS versions."
+            )
+            return False
 
     def create_dataframe(self, profile):
         """

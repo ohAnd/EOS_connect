@@ -515,10 +515,7 @@ def create_optimize_request():
             "min_soc_percentage": battery_interface.get_min_soc(),
             "max_soc_percentage": battery_interface.get_max_soc(),
         }
-        if (
-            eos_interface.get_eos_version() == ">=2025-04-09"
-            or eos_interface.get_eos_version() in ["0.1.0+dev", "0.2.0+dev"]
-        ):
+        if eos_interface.is_eos_version_at_least("0.0.2"):
             akku_object = {"device_id": "battery1", **akku_object}
         return akku_object
 
@@ -526,10 +523,7 @@ def create_optimize_request():
         wechselrichter_object = {
             "max_power_wh": config_manager.config["inverter"]["max_pv_charge_rate"],
         }
-        if (
-            eos_interface.get_eos_version() == ">=2025-04-09"
-            or eos_interface.get_eos_version() in ["0.1.0+dev", "0.2.0+dev"]
-        ):
+        if eos_interface.is_eos_version_at_least("0.0.2"):
             wechselrichter_object = {
                 "device_id": "inverter1",
                 **wechselrichter_object,
@@ -547,10 +541,7 @@ def create_optimize_request():
             "min_soc_percentage": 5,
             "max_soc_percentage": 100,
         }
-        if (
-            eos_interface.get_eos_version() == ">=2025-04-09"
-            or eos_interface.get_eos_version() in ["0.1.0+dev", "0.2.0+dev"]
-        ):
+        if eos_interface.is_eos_version_at_least("0.0.2"):
             eauto_object = {"device_id": "ev1", **eauto_object}
         return eauto_object
 
@@ -567,10 +558,7 @@ def create_optimize_request():
             "consumption_wh": consumption_wh,
             "duration_h": duration_h,
         }
-        if (
-            eos_interface.get_eos_version() == ">=2025-04-09"
-            or eos_interface.get_eos_version() in ["0.1.0+dev", "0.2.0+dev"]
-        ):
+        if eos_interface.is_eos_version_at_least("0.0.2"):
             dishwasher_object = {"device_id": "additional_load_1", **dishwasher_object}
         # if eos_interface.get_eos_version() == "0.1.0+dev":
         #     time_windows = [{"duration": "2", "start_time": "10:00"}]
