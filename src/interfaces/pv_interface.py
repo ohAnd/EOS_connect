@@ -77,10 +77,7 @@ class PvInterface:
             "config_entry": None,
             "source": None,
         }
-        if self.time_frame_base == 900:
-            self.temp_forecast_array = [15] * 48 * 4
-        else:
-            self.temp_forecast_array = [15] * 48
+        self.temp_forecast_array = self.__get_default_temperature_forecast()
 
         self._update_thread = None
         self._stop_event = threading.Event()
@@ -328,26 +325,26 @@ class PvInterface:
                     "[PV-IF] Using previous PV forecast due to error: %s",
                     self.pv_forcast_request_error["message"],
                 )
-            # special temp forecast if pv config is not given in detail
-            if self.config and self.config[0]:
-                temp_result = self.__get_pv_forecast_akkudoktor_api(
-                    tgt_value="temperature", pv_config_entry=self.config[0]
-                )
-                if not temp_result:  # If empty array or None due to API error
-                    logger.warning(
-                        "[PV-IF] Temperature forecast API failed - using default"
-                        + " temperature forecast"
-                    )
-                    self.temp_forecast_array = self.__get_default_temperature_forecast()
-                else:
-                    self.temp_forecast_array = temp_result
-                    # logger.debug(
-                    #     "[PV-IF] Temperature forecast updated with %d values",
-                    #     len(temp_result),
-                    # )
-            else:
-                self.temp_forecast_array = self.__get_default_temperature_forecast()
-            logger.info("[PV-IF] PV and Temperature updated")
+            # # special temp forecast if pv config is not given in detail
+            # if self.config and self.config[0]:
+            #     temp_result = self.__get_pv_forecast_akkudoktor_api(
+            #         tgt_value="temperature", pv_config_entry=self.config[0]
+            #     )
+            #     if not temp_result:  # If empty array or None due to API error
+            #         logger.warning(
+            #             "[PV-IF] Temperature forecast API failed - using default"
+            #             + " temperature forecast"
+            #         )
+            #         self.temp_forecast_array = self.__get_default_temperature_forecast()
+            #     else:
+            #         self.temp_forecast_array = temp_result
+            #         # logger.debug(
+            #         #     "[PV-IF] Temperature forecast updated with %d values",
+            #         #     len(temp_result),
+            #         # )
+            # else:
+            #     self.temp_forecast_array = self.__get_default_temperature_forecast()
+            # logger.info("[PV-IF] PV and Temperature updated")
             # Break the sleep interval into smaller chunks to allow immediate shutdown
             sleep_interval = self.update_interval
             while sleep_interval > 0:
