@@ -1820,7 +1820,9 @@ if __name__ == "__main__":
     try:
         # Create web server with port checking
         HOST = "0.0.0.0"
-        desired_port = config_manager.config["eos_connect_web_port"]
+        # In HA addon mode, port is always 8081 (mapped via ports: config)
+        # In local/Docker mode, use the configured port
+        desired_port = config_manager.config.get("eos_connect_web_port", 8081)
 
         logger.info("[Main] Initializing EOS Connect web server...")
         http_server, actual_port = PortInterface.create_web_server_with_port_check(
