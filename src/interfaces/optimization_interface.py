@@ -87,65 +87,129 @@ class OptimizationInterface:
         Examines the optimized response data for control parameters.
         Returns tuple: (ac_charge, dc_charge, discharge_allowed, response_error)
         """
-        current_hour = datetime.now(self.time_zone).hour
+        # current_hour = datetime.now(self.time_zone).hour
+        # ac_charge_demand_relative = None
+        # dc_charge_demand_relative = None
+        # discharge_allowed = None
+        # response_error = False
+
+        # if "ac_charge" in optimized_response_in:
+        #     ac_charge_demand_relative = optimized_response_in["ac_charge"]
+        #     self.last_control_data[0]["ac_charge_demand"] = ac_charge_demand_relative[
+        #         current_hour
+        #     ]
+        #     self.last_control_data[1]["ac_charge_demand"] = ac_charge_demand_relative[
+        #         current_hour + 1 if current_hour < 23 else 0
+        #     ]
+        #     ac_charge_demand_relative = ac_charge_demand_relative[current_hour]
+        #     logger.debug(
+        #         "[OPT] AC charge demand for current hour %s:00 -> %s %%",
+        #         current_hour,
+        #         ac_charge_demand_relative * 100,
+        #     )
+        # if "dc_charge" in optimized_response_in:
+        #     dc_charge_demand_relative = optimized_response_in["dc_charge"]
+        #     self.last_control_data[0]["dc_charge_demand"] = dc_charge_demand_relative[
+        #         current_hour
+        #     ]
+        #     self.last_control_data[1]["dc_charge_demand"] = dc_charge_demand_relative[
+        #         current_hour + 1 if current_hour < 23 else 0
+        #     ]
+        #     dc_charge_demand_relative = dc_charge_demand_relative[current_hour]
+        #     logger.debug(
+        #         "[OPT] DC charge demand for current hour %s:00 -> %s %%",
+        #         current_hour,
+        #         dc_charge_demand_relative * 100,
+        #     )
+        # if "discharge_allowed" in optimized_response_in:
+        #     discharge_allowed = optimized_response_in["discharge_allowed"]
+        #     self.last_control_data[0]["discharge_allowed"] = discharge_allowed[
+        #         current_hour
+        #     ]
+        #     self.last_control_data[1]["discharge_allowed"] = discharge_allowed[
+        #         current_hour + 1 if current_hour < 23 else 0
+        #     ]
+        #     discharge_allowed = bool(discharge_allowed[current_hour])
+        #     logger.debug(
+        #         "[OPT] Discharge allowed for current hour %s:00 %s",
+        #         current_hour,
+        #         discharge_allowed,
+        #     )
+
+        now = datetime.now(self.time_zone)
+        # Calculate the current step index based on time_frame_base (in seconds)
+        steps_per_hour = 3600 // self.time_frame_base
+        current_step = now.hour * steps_per_hour + now.minute // (
+            self.time_frame_base // 60
+        )
+        # Calculate the datetime for the current step: today midnight
+        #  + step number * time_frame_base (in seconds)
+        today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        current_step_time = today_midnight + timedelta(
+            seconds=current_step * self.time_frame_base
+        )
+
+        next_step = (
+            current_step + 1
+            if current_step
+            < len(optimized_response_in.get("discharge_allowed", [])) - 1
+            else 0
+        )
+
         ac_charge_demand_relative = None
         dc_charge_demand_relative = None
         discharge_allowed = None
         response_error = False
 
         if "ac_charge" in optimized_response_in:
-            ac_charge_demand_relative = optimized_response_in["ac_charge"]
-            self.last_control_data[0]["ac_charge_demand"] = ac_charge_demand_relative[
-                current_hour
-            ]
-            self.last_control_data[1]["ac_charge_demand"] = ac_charge_demand_relative[
-                current_hour + 1 if current_hour < 23 else 0
-            ]
-            ac_charge_demand_relative = ac_charge_demand_relative[current_hour]
+            ac_charge = optimized_response_in["ac_charge"]
+            self.last_control_data[0]["ac_charge_demand"] = ac_charge[current_step]
+            self.last_control_data[1]["ac_charge_demand"] = ac_charge[next_step]
+            ac_charge_demand_relative = ac_charge[current_step]
             logger.debug(
-                "[OPT] AC charge demand for current hour %s:00 -> %s %%",
-                current_hour,
+                "[OPT] AC charge demand for current step %s (%s) -> %s %%",
+                current_step,
+                current_step_time.strftime("%Y-%m-%d %H:%M"),
                 ac_charge_demand_relative * 100,
             )
         if "dc_charge" in optimized_response_in:
-            dc_charge_demand_relative = optimized_response_in["dc_charge"]
-            self.last_control_data[0]["dc_charge_demand"] = dc_charge_demand_relative[
-                current_hour
-            ]
-            self.last_control_data[1]["dc_charge_demand"] = dc_charge_demand_relative[
-                current_hour + 1 if current_hour < 23 else 0
-            ]
-            dc_charge_demand_relative = dc_charge_demand_relative[current_hour]
+            dc_charge = optimized_response_in["dc_charge"]
+            self.last_control_data[0]["dc_charge_demand"] = dc_charge[current_step]
+            self.last_control_data[1]["dc_charge_demand"] = dc_charge[next_step]
+            dc_charge_demand_relative = dc_charge[current_step]
             logger.debug(
-                "[OPT] DC charge demand for current hour %s:00 -> %s %%",
-                current_hour,
+                "[OPT] DC charge demand for current step %s (%s) -> %s %%",
+                current_step,
+                current_step_time.strftime("%Y-%m-%d %H:%M"),
                 dc_charge_demand_relative * 100,
             )
         if "discharge_allowed" in optimized_response_in:
-            discharge_allowed = optimized_response_in["discharge_allowed"]
-            self.last_control_data[0]["discharge_allowed"] = discharge_allowed[
-                current_hour
+            discharge_allowed_arr = optimized_response_in["discharge_allowed"]
+            self.last_control_data[0]["discharge_allowed"] = discharge_allowed_arr[
+                current_step
             ]
-            self.last_control_data[1]["discharge_allowed"] = discharge_allowed[
-                current_hour + 1 if current_hour < 23 else 0
+            self.last_control_data[1]["discharge_allowed"] = discharge_allowed_arr[
+                next_step
             ]
-            discharge_allowed = bool(discharge_allowed[current_hour])
+            discharge_allowed = bool(discharge_allowed_arr[current_step])
             logger.debug(
-                "[OPT] Discharge allowed for current hour %s:00 %s",
-                current_hour,
+                "[OPT] Discharge allowed for current step %s (%s): %s",
+                current_step,
+                current_step_time.strftime("%Y-%m-%d %H:%M"),
                 discharge_allowed,
             )
 
+        current_hour = datetime.now(self.time_zone).hour
         if (
             "start_solution" in optimized_response_in
             and len(optimized_response_in["start_solution"]) > 1
         ):
             self.set_last_start_solution(optimized_response_in["start_solution"])
-            logger.debug(
-                "[OPT] Start solution for current hour %s:00 %s",
-                current_hour,
-                self.get_last_start_solution(),
-            )
+            # logger.debug(
+            #     "[OPT] Start solution for current hour %s:00 %s",
+            #     current_hour,
+            #     self.get_last_start_solution(),
+            # )
         else:
             logger.error("[OPT] No control data in optimized response")
             response_error = True
@@ -223,8 +287,19 @@ class OptimizationInterface:
         """
         Calculate the next run time prioritizing quarter-hour alignment with improved gap filling.
         """
+        # Fallback if avg_runtime is None
+        if avg_runtime is None:
+            logger.warning(
+                "[OPTIMIZATION] avg_runtime is None, using default value 60s"
+            )
+            avg_runtime = 60  # or another reasonable default
+
         # Calculate minimum time between runs
-        min_gap_seconds = max((update_interval + avg_runtime) * 0.7, 30)
+        try:
+            min_gap_seconds = max((update_interval + avg_runtime) * 0.7, 30)
+        except Exception as e:
+            logger.error("[OPTIMIZATION] Failed to calculate min_gap_seconds: %s", e)
+            min_gap_seconds = 30
 
         # Find next quarter-hour from current time
         next_quarter = current_time.replace(second=0, microsecond=0)
@@ -303,3 +378,17 @@ class OptimizationInterface:
         if hasattr(self.backend, "get_eos_version"):
             return self.backend.get_eos_version()
         return None
+
+    def is_eos_version_at_least(self, version_str):
+        """
+        Checks if the EOS version from the backend is at least the specified version.
+
+        Args:
+            version_str (str): The version string to compare against.
+        Returns:
+            bool: True if the EOS version is at least the specified version, False otherwise.
+        """
+        if hasattr(self.backend, "is_eos_version_at_least"):
+            result = self.backend.is_eos_version_at_least(version_str)
+            return result
+        return False

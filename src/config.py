@@ -59,6 +59,7 @@ class ConfigManager:
                         "server": "192.168.100.100",  # EOS or EVopt server address
                         "port": 8503,  # port for EOS server (8503) or EVopt server (7050) - default: 8503
                         "timeout": 180,  # Default timeout for EOS optimize request
+                        "time_frame": 3600,  # Time frame for EOS optimize request in seconds
                     }
                 ),
                 "price": CommentedMap(
@@ -203,6 +204,10 @@ class ConfigManager:
         config["eos"].yaml_add_eol_comment(
             "port for EOS server (8503) or EVopt server (7050) - default: 8503",
             "port",
+        )
+        config["eos"].yaml_add_eol_comment(
+            "time frame for EOS optimize request in seconds - default: 3600",
+            "time_frame",
         )
         config["eos"].yaml_add_eol_comment(
             "timeout for EOS optimize request in seconds - default: 180", "timeout"

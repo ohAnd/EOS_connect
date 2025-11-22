@@ -17,6 +17,7 @@ import logging
 import time
 import json
 import os
+from math import floor
 from datetime import datetime
 import requests
 
@@ -41,7 +42,7 @@ class EVOptBackend:
         Accepts EOS-format request, transforms to EVopt format, sends request,
         transforms response back to EOS-format, and returns (response_json, avg_runtime).
         """
-        evcc_request, errors = self._transform_request_from_eos_to_evopt(eos_request)
+        evopt_request, errors = self._transform_request_from_eos_to_evopt(eos_request)
         if errors:
             logger.error("[EVopt] Request transformation errors: %s", errors)
         # Optionally, write transformed payload to json file for debugging
@@ -55,7 +56,7 @@ class EVOptBackend:
         debug_path = os.path.abspath(debug_path)
         try:
             with open(debug_path, "w", encoding="utf-8") as fh:
-                json.dump(evcc_request, fh, indent=2, ensure_ascii=False)
+                json.dump(evopt_request, fh, indent=2, ensure_ascii=False)
         except OSError as e:
             logger.warning("[EVopt] Could not write debug file: %s", e)
 
@@ -70,7 +71,7 @@ class EVOptBackend:
         try:
             start_time = time.time()
             response = requests.post(
-                request_url, headers=headers, json=evcc_request, timeout=timeout
+                request_url, headers=headers, json=evopt_request, timeout=timeout
             )
             end_time = time.time()
             elapsed_time = end_time - start_time
@@ -92,7 +93,7 @@ class EVOptBackend:
                 self.last_optimization_runtime_number + 1
             ) % 5
             avg_runtime = sum(self.last_optimization_runtimes) / 5
-            evcc_response = response.json()
+            evopt_response = response.json()
 
             # Optionally, write transformed payload to json file for debugging
             debug_path = os.path.join(
@@ -105,12 +106,12 @@ class EVOptBackend:
             debug_path = os.path.abspath(debug_path)
             try:
                 with open(debug_path, "w", encoding="utf-8") as fh:
-                    json.dump(evcc_response, fh, indent=2, ensure_ascii=False)
+                    json.dump(evopt_response, fh, indent=2, ensure_ascii=False)
             except OSError as e:
                 logger.warning("[EVopt] Could not write debug file: %s", e)
 
-            eos_response = self._transform_response_from_evcc(
-                evcc_response, evcc_request
+            eos_response = self._transform_response_from_evopt_to_eos(
+                evopt_response, evopt_request
             )
             return eos_response, avg_runtime
         except requests.exceptions.Timeout:
@@ -137,7 +138,7 @@ class EVOptBackend:
                 )
             logger.debug(
                 "[EVopt] ERROR - payload for the request was:\n%s",
-                evcc_request,
+                evopt_request,
             )
             return {"error": str(e)}, None
 
@@ -155,32 +156,47 @@ class EVOptBackend:
         feed_series = ems.get("einspeiseverguetung_euro_pro_wh", []) or []
         load_series = ems.get("gesamtlast", []) or []
 
-        current_hour = datetime.now(self.time_zone).hour
-        pv_series = (
-            pv_series[current_hour:] if len(pv_series) > current_hour else pv_series
-        )
-        price_series = (
-            price_series[current_hour:]
-            if len(price_series) > current_hour
-            else price_series
-        )
-        feed_series = (
-            feed_series[current_hour:]
-            if len(feed_series) > current_hour
-            else feed_series
-        )
-        load_series = (
-            load_series[current_hour:]
-            if len(load_series) > current_hour
-            else load_series
-        )
+        now = datetime.now(self.time_zone)
+        if self.time_frame_base == 900:
+            # 15-min intervals
+            current_slot = now.hour * 4 + floor(now.minute / 15)
 
-        lengths = [
-            len(s)
-            for s in (pv_series, price_series, feed_series, load_series)
-            if len(s) > 0
-        ]
-        n = min(lengths) if lengths else 1
+            def wrap(arr):
+                arr = arr or []
+                return (arr[current_slot:] + arr[:current_slot])[:192]
+
+            pv_series = wrap(pv_series)
+            price_series = wrap(price_series)
+            feed_series = wrap(feed_series)
+            load_series = wrap(load_series)
+            n = 192
+        else:
+            # hourly intervals
+            current_hour = now.hour
+            pv_series = (
+                pv_series[current_hour:] if len(pv_series) > current_hour else pv_series
+            )
+            price_series = (
+                price_series[current_hour:]
+                if len(price_series) > current_hour
+                else price_series
+            )
+            feed_series = (
+                feed_series[current_hour:]
+                if len(feed_series) > current_hour
+                else feed_series
+            )
+            load_series = (
+                load_series[current_hour:]
+                if len(load_series) > current_hour
+                else load_series
+            )
+            lengths = [
+                len(s)
+                for s in (pv_series, price_series, feed_series, load_series)
+                if len(s) > 0
+            ]
+            n = min(lengths) if lengths else 1
 
         def normalize(arr):
             return [float(x) for x in arr[:n]] if arr else [0.0] * n
@@ -260,25 +276,70 @@ class EVOptBackend:
 
         return evopt, errors
 
-    def _transform_response_from_evcc(self, evcc_resp, evopt=None):
+    def _transform_response_from_evopt_to_eos(self, evcc_resp, evopt=None):
         """
         Translate EVoptimizer response -> EOS-style optimize response.
 
-        Produces a fuller EOS-shaped response using the sample `src/json/optimize_response.json`
-        as guidance. The mapping is conservative and uses available EVCC fields:
+        ARRAY LENGTH SPECIFICATION FOR EOS RESPONSE:
+        ============================================
 
-        - ac_charge, dc_charge, discharge_allowed, start_solution
-        - result.* arrays: Last_Wh_pro_Stunde, EAuto_SoC_pro_Stunde,
-            Einnahmen_Euro_pro_Stunde, Kosten_Euro_pro_Stunde, Netzbezug_Wh_pro_Stunde,
-            Netzeinspeisung_Wh_pro_Stunde, Verluste_Pro_Stunde, akku_soc_pro_stunde,
-            Electricity_price
-        - numeric summaries: Gesamt_Verluste, Gesamtbilanz_Euro, Gesamteinnahmen_Euro,
-            Gesamtkosten_Euro
-        - eauto_obj, washingstart, timestamp
+        CONTROL ARRAYS (Full 2-day timeline from midnight today):
+        ----------------------------------------------------------
+        These arrays MUST cover the complete period from midnight today (00:00)
+        to midnight day after tomorrow (48:00):
 
-        evcc_resp: dict (raw EVCC JSON) or {"response": {...}}.
-        evopt: optional EVCC request dict (used to read p_N, p_E, eta_c, eta_d,
-            battery s_max/c_max).
+        - ac_charge:           192 values (15-min) OR 48 values (hourly)
+        - dc_charge:           192 values (15-min) OR 48 values (hourly)
+        - discharge_allowed:   192 values (15-min) OR 48 values (hourly)
+        - start_solution:      192 values (15-min) OR 48 values (hourly)
+        - eauto.charge_array:  192 values (15-min) OR 48 values (hourly) [if present]
+        - eauto.discharge_array: 192 values (15-min) OR 48 values (hourly) [if present]
+
+        Implementation: Past slots (midnight -> now) are zero-padded,
+                    Future slots (now -> midnight tomorrow) from EVopt response
+
+        RESULT ARRAYS (Variable timeline from current time):
+        -----------------------------------------------------
+        These arrays cover ONLY the future period from NOW until midnight tomorrow:
+
+        - result.Last_Wh_pro_Stunde:              Variable (depends on current time)
+        - result.Netzbezug_Wh_pro_Stunde:         Variable (depends on current time)
+        - result.Netzeinspeisung_Wh_pro_Stunde:   Variable (depends on current time)
+        - result.Kosten_Euro_pro_Stunde:          Variable (depends on current time)
+        - result.Einnahmen_Euro_pro_Stunde:       Variable (depends on current time)
+        - result.Verluste_Pro_Stunde:             Variable (depends on current time)
+        - result.akku_soc_pro_stunde:             Variable (depends on current time)
+        - result.Electricity_price:               Variable (depends on current time)
+        - result.Home_appliance_wh_per_hour:      Variable (depends on current time)
+        - result.EAuto_SoC_pro_Stunde:            Variable (depends on current time)
+
+        Implementation: No padding, arrays start from current time
+
+        EXAMPLES:
+        ---------
+        For 15-minute intervals (time_frame_base=900):
+        - Current time: 07:30 (slot 30 of 96 for day 1)
+        - Control arrays: 30 zeros (00:00-07:15) + 162 values from EVopt = 192 total
+        - Result arrays: 162 values (07:30 today -> 00:00 day after tomorrow)
+
+        For hourly intervals (time_frame_base=3600):
+        - Current time: 07:xx (hour 7)
+        - Control arrays: 7 zeros (00:00-06:00) + 41 values from EVopt = 48 total
+        - Result arrays: 41 values (07:00 today -> 00:00 day after tomorrow)
+
+        EVOPT RESPONSE EXPECTATION:
+        ---------------------------
+        EVopt server returns 192 (15-min) or 48 (hourly) values representing
+        48 hours starting from the current time slot. These are used to:
+        1. Fill future slots in control arrays (after padding past with zeros)
+        2. Provide all data for result arrays (no padding needed)
+
+        Args:
+            evcc_resp: EVopt server response dict
+            evopt: Original EVopt request dict (for extracting pricing, load, etc.)
+
+        Returns:
+            dict: EOS-format response with properly sized arrays
         """
         # defensive guard
         if not isinstance(evcc_resp, dict):
@@ -290,209 +351,358 @@ class EVOptBackend:
         # EVCC might wrap actual payload under "response"
         resp = evcc_resp.get("response", evcc_resp)
 
-        # Set total hours and slice for future
-        current_hour = datetime.now(self.time_zone).hour
-        n_total = 48  # Total hours from midnight today to midnight tomorrow
-        n_future = n_total - current_hour  # Hours from now to end of tomorrow
-        n = n_future  # Override n to focus on future horizon
+        # Calculate time-based parameters
+        time_params = self._calculate_time_parameters()
 
-        # # determine horizon length n
-        # n = 0
-        # if isinstance(resp.get("grid_import"), list):
-        #     n = len(resp.get("grid_import"))
-        # elif isinstance(resp.get("grid_export"), list):
-        #     n = len(resp.get("grid_export"))
-        # else:
-        #     # try batteries[*].charging_power
-        #     b_list = resp.get("batteries") or []
-        #     if isinstance(b_list, list) and len(b_list) > 0:
-        #         b0 = b_list[0]
-        #         if isinstance(b0.get("charging_power"), list):
-        #             n = len(b0.get("charging_power"))
-        # if n == 0:
-        #     n = 24
+        # Extract battery parameters from request
+        battery_params = self._extract_battery_parameters(evopt)
 
-        # primary battery arrays (first battery)
+        # Extract response data arrays
+        response_arrays = self._extract_response_arrays(
+            resp, time_params["n_control"], time_params["n_result"]
+        )
+
+        # Extract pricing data
+        pricing_data = self._extract_pricing_data(evopt, time_params["n_result"])
+
+        # Process control arrays (ac_charge, dc_charge, discharge_allowed)
+        control_arrays = self._process_control_arrays(
+            response_arrays["full"],
+            battery_params,
+            time_params["n_result"],  # CHANGED: was n_control
+        )
+
+        # Process result arrays (costs, revenues, losses, SOC)
+        result_data = self._process_result_arrays(
+            response_arrays["result"],
+            pricing_data,
+            battery_params,
+            evopt,
+            time_params["n_result"],
+        )
+
+        # Build EOS response
+        return self._build_eos_response(
+            control_arrays,
+            result_data,
+            time_params,
+            resp,
+            evcc_resp,
+        )
+
+    def _calculate_time_parameters(self):
+        """
+        Calculate time-based parameters for array sizing and padding.
+
+        Returns:
+            dict with keys:
+            - n_control: Total slots for control arrays (192 for 15-min, 48 for hourly)
+            - n_result: Slots for result arrays (from now to midnight tomorrow)
+            - current_slot: Current time slot index
+            - pad_past: Padding array for past slots
+        """
+        now = datetime.now(self.time_zone)
+        current_hour = now.hour
+
+        if self.time_frame_base == 900:
+            # 15-minute intervals
+            n_control = 192  # 48 hours * 4
+            current_slot = now.hour * 4 + floor(now.minute / 15)
+            pad_past = [0.0] * current_slot
+
+            # From NOW to midnight tomorrow
+            slots_today = (24 - now.hour) * 4 - floor(now.minute / 15)
+            n_result = slots_today + 96  # +96 for tomorrow
+        else:
+            # Hourly intervals
+            n_control = 48  # 48 hours
+            current_slot = current_hour
+            pad_past = [0.0] * current_hour
+
+            # From NOW to midnight tomorrow
+            hours_today = 24 - current_hour
+            n_result = hours_today + 24  # +24 for tomorrow
+
+        return {
+            "n_control": n_control,
+            "n_result": n_result,
+            "current_slot": current_slot,
+            "current_hour": current_hour,
+            "pad_past": pad_past,
+        }
+
+    def _extract_battery_parameters(self, evopt):
+        """
+        Extract battery parameters from EVopt request.
+
+        Returns:
+            dict with keys: s_max, eta_c, eta_d, c_max, d_max
+        """
+        params = {
+            "s_max": None,
+            "eta_c": 0.95,
+            "eta_d": 0.95,
+            "c_max": None,
+            "d_max": None,
+        }
+
+        if not isinstance(evopt, dict):
+            return params
+
+        breq = evopt.get("batteries")
+        if not isinstance(breq, list) or len(breq) == 0:
+            return params
+
+        b0r = breq[0]
+
+        # Extract s_max
+        try:
+            params["s_max"] = float(b0r.get("s_max", 0.0))
+            if params["s_max"] == 0:
+                params["s_max"] = None
+        except (ValueError, TypeError):
+            params["s_max"] = None
+
+        # Extract eta_c and eta_d
+        try:
+            params["eta_c"] = float(evopt.get("eta_c", b0r.get("eta_c", 0.95) or 0.95))
+        except (ValueError, TypeError):
+            params["eta_c"] = 0.95
+
+        try:
+            params["eta_d"] = float(evopt.get("eta_d", b0r.get("eta_d", 0.95) or 0.95))
+        except (ValueError, TypeError):
+            params["eta_d"] = 0.95
+
+        # Extract c_max and d_max
+        try:
+            params["c_max"] = float(b0r.get("c_max", 0.0)) or None
+        except (ValueError, TypeError):
+            params["c_max"] = None
+
+        try:
+            params["d_max"] = float(b0r.get("d_max", 0.0)) or None
+        except (ValueError, TypeError):
+            params["d_max"] = None
+
+        return params
+
+    def _extract_response_arrays(self, resp, n_control, n_result):
+        """
+        Extract data arrays from EVopt response.
+
+        Returns:
+            dict with keys:
+            - full: Full arrays for control processing (n_control length)
+            - result: Truncated arrays for result processing (n_result length)
+        """
         batteries_resp = resp.get("batteries") or []
         first_batt = batteries_resp[0] if batteries_resp else {}
-        charging_power = list(first_batt.get("charging_power") or [0.0] * n)[:n]
-        discharging_power = list(first_batt.get("discharging_power") or [0.0] * n)[:n]
-        soc_wh = list(first_batt.get("state_of_charge") or [])[:n]
 
-        # grid arrays
-        grid_import = list(resp.get("grid_import") or [0.0] * n)[:n]
-        grid_export = list(resp.get("grid_export") or [0.0] * n)[:n]
+        # Extract full arrays (for control processing)
+        charging_power_full = list(
+            first_batt.get("charging_power") or [0.0] * n_control
+        )[:n_control]
+        discharging_power_full = list(
+            first_batt.get("discharging_power") or [0.0] * n_control
+        )[:n_control]
+        grid_import_full = list(resp.get("grid_import") or [0.0] * n_control)[
+            :n_control
+        ]
+        grid_export_full = list(resp.get("grid_export") or [0.0] * n_control)[
+            :n_control
+        ]
+        soc_wh_full = list(first_batt.get("state_of_charge") or [])[:n_control]
 
-        # harvest pricing from evopt when available (per-Wh units)
+        return {
+            "full": {
+                "charging_power": charging_power_full,
+                "discharging_power": discharging_power_full,
+                "grid_import": grid_import_full,
+                "grid_export": grid_export_full,
+                "soc_wh": soc_wh_full,
+            },
+            "result": {
+                "charging_power": charging_power_full[:n_result],
+                "discharging_power": discharging_power_full[:n_result],
+                "grid_import": grid_import_full[:n_result],
+                "grid_export": grid_export_full[:n_result],
+                "soc_wh": soc_wh_full[:n_result],
+            },
+        }
+
+    def _extract_pricing_data(self, evopt, n):
+        """
+        Extract and normalize pricing data from EVopt request.
+
+        Returns:
+            dict with keys: p_n, p_e, electricity_price (all arrays of length n)
+        """
         p_n = None
         p_e = None
         electricity_price = [None] * n
-        if isinstance(evopt, dict):
-            ts = evopt.get("time_series", {}) or {}
-            p_n = ts.get("p_N")
-            p_e = ts.get("p_E")
-            # if p_N/p_E are lists, normalize length
-            if isinstance(p_n, list):
-                p_n = (
-                    [float(x) for x in p_n[:n]]
-                    + [float(p_n[-1])] * max(0, n - len(p_n))
-                    if p_n
-                    else None
-                )
-            if isinstance(p_e, list):
-                p_e = (
-                    [float(x) for x in p_e[:n]]
-                    + [float(p_e[-1])] * max(0, n - len(p_e))
-                    if p_e
-                    else None
-                )
-            if isinstance(p_n, list):
-                electricity_price = [float(x) for x in p_n[:n]]
-            elif isinstance(p_n, (int, float)):
-                electricity_price = [float(p_n)] * n
 
-        # fallback price arrays if missing
-        if not any(isinstance(x, (int, float)) for x in electricity_price):
+        if not isinstance(evopt, dict):
+            return {
+                "p_n": [0.0] * n,
+                "p_e": [0.0] * n,
+                "electricity_price": [0.0] * n,
+            }
+
+        ts = evopt.get("time_series", {}) or {}
+        p_n = ts.get("p_N")
+        p_e = ts.get("p_E")
+
+        # Normalize p_N
+        if isinstance(p_n, list):
+            if len(p_n) >= n:
+                p_n = [float(x) for x in p_n[:n]]
+            elif p_n:
+                p_n = [float(x) for x in p_n] + [float(p_n[-1])] * (n - len(p_n))
+            else:
+                p_n = [0.0] * n
+            electricity_price = p_n.copy()
+        elif isinstance(p_n, (int, float)):
+            p_n = [float(p_n)] * n
+            electricity_price = p_n.copy()
+        else:
+            p_n = [0.0] * n
             electricity_price = [0.0] * n
-        if p_n is None:
-            p_n = electricity_price
-        if p_e is None:
+
+        # Normalize p_E
+        if isinstance(p_e, list):
+            if len(p_e) >= n:
+                p_e = [float(x) for x in p_e[:n]]
+            elif p_e:
+                p_e = [float(x) for x in p_e] + [float(p_e[-1])] * (n - len(p_e))
+            else:
+                p_e = [0.0] * n
+        elif isinstance(p_e, (int, float)):
+            p_e = [float(p_e)] * n
+        else:
             p_e = [0.0] * n
 
-        # battery parameters from request if present (s_max in Wh, eta_c, eta_d)
-        s_max_req = None
-        eta_c = None
-        eta_d = None
-        if isinstance(evopt, dict):
-            breq = evopt.get("batteries")
-            if isinstance(breq, list) and len(breq) > 0:
-                b0r = breq[0]
-                try:
-                    s_max_req = float(b0r.get("s_max", 0.0))
-                except (ValueError, TypeError):
-                    s_max_req = None
-                try:
-                    eta_c = float(evopt.get("eta_c", b0r.get("eta_c", 0.95) or 0.95))
-                except (ValueError, TypeError):
-                    eta_c = 0.95
-                try:
-                    eta_d = float(evopt.get("eta_d", b0r.get("eta_d", 0.95) or 0.95))
-                except (ValueError, TypeError):
-                    eta_d = 0.95
-        # Set defaults
-        eta_c = eta_c if eta_c is not None else 0.95
-        eta_d = eta_d if eta_d is not None else 0.95
-        s_max_val = s_max_req if s_max_req not in (None, 0) else None
+        return {
+            "p_n": p_n,
+            "p_e": p_e,
+            "electricity_price": electricity_price,
+        }
 
-        # compute ac_charge fraction: charging_power normalized to c_max from request
-        # or observed max
-        c_max = None
-        d_max = None
-        if isinstance(evopt, dict):
-            breq = evopt.get("batteries")
-            if isinstance(breq, list) and len(breq) > 0:
-                try:
-                    c_max = float(breq[0].get("c_max", 0.0))
-                except (ValueError, TypeError):
-                    c_max = None
-                try:
-                    d_max = float(breq[0].get("d_max", 0.0))
-                except (ValueError, TypeError):
-                    d_max = None
-        # fallback observed maxima
-        try:
-            if not c_max:
-                observed_max_ch = (
+    def _process_control_arrays(self, full_arrays, battery_params, n_result):
+        """
+        Process control arrays (ac_charge, dc_charge, discharge_allowed).
+
+        NOTE: Processes n_result values which will be combined with pad_past
+        to create the full n_control-length arrays.
+
+        Returns:
+            dict with keys: ac_charge, dc_charge, discharge_allowed
+        """
+        charging_power = full_arrays["charging_power"]
+        discharging_power = full_arrays["discharging_power"]
+        grid_import = full_arrays["grid_import"]
+
+        # Determine c_max and d_max (fallback to observed max)
+        c_max = battery_params["c_max"]
+        d_max = battery_params["d_max"]
+
+        if not c_max:
+            try:
+                observed_max = (
                     max([float(x) for x in charging_power]) if charging_power else 0.0
                 )
-                c_max = observed_max_ch if observed_max_ch > 0 else 1.0
-            if not d_max:
-                observed_max_dch = (
+                c_max = observed_max if observed_max > 0 else 1.0
+            except (ValueError, TypeError):
+                c_max = 1.0
+
+        if not d_max:
+            try:
+                observed_max = (
                     max([float(x) for x in discharging_power])
                     if discharging_power
                     else 0.0
                 )
-                d_max = observed_max_dch if observed_max_dch > 0 else 1.0
-        except (ValueError, TypeError):
-            c_max = c_max or 1.0
-            d_max = d_max or 1.0
-
-        ac_charge = []
-        for i, v in enumerate(charging_power):
-            # Use grid import if charging_power exceeds grid_import
-            charge_from_grid = min(float(v), float(grid_import[i]))
-            try:
-                frac = charge_from_grid / float(c_max) if float(c_max) > 0 else 0.0
+                d_max = observed_max if observed_max > 0 else 1.0
             except (ValueError, TypeError):
-                frac = 0.0
-            if frac != frac:
-                frac = 0.0
-            ac_charge.append(max(0.0, min(1.0, frac)))
+                d_max = 1.0
 
-        # Adjust ac_charge: set to 0 if no grid import (PV-only charging)
-        for i in range(n):
-            if grid_import[i] <= 0:
-                ac_charge[i] = 0.0
+        # Process arrays - only n_result values (will be padded later)
+        ac_charge = []
+        dc_charge = []
+        for i in range(n_result):  # CHANGED: was n_control
+            if i < len(charging_power):
+                cp = float(charging_power[i])
+                gi = float(grid_import[i]) if i < len(grid_import) else 0.0
 
-        # dc_charge: mark 1.0 if charging_power > 0 (conservative)
-        dc_charge = [1.0 if float(v) > 0.0 else 0.0 for v in charging_power]
+                # ac_charge: fraction of charging from grid
+                charge_from_grid = min(cp, gi)
+                try:
+                    frac = charge_from_grid / float(c_max) if float(c_max) > 0 else 0.0
+                except (ValueError, TypeError):
+                    frac = 0.0
 
-        # discharge_allowed: 1 if discharging_power > tiny epsilon
-        discharge_allowed = [1 if float(v) > 1e-9 else 0 for v in discharging_power]
+                if frac != frac:  # NaN check
+                    frac = 0.0
+                if gi <= 0:  # No grid import = PV-only charging
+                    frac = 0.0
 
-        # start_solution: prefer resp['start_solution'] if present, else try
-        # eauto_obj.charge_array -> ints, otherwise zeros
-        start_solution = None
-        if isinstance(resp.get("start_solution"), list):
-            # coerce to numbers
-            start_solution = [
-                float(x) if isinstance(x, (int, float)) else 0
-                for x in resp.get("start_solution")[:n]
-            ]
-        else:
-            eauto_obj = resp.get("eauto_obj") or evcc_resp.get("eauto_obj")
-            if isinstance(eauto_obj, dict) and isinstance(
-                eauto_obj.get("charge_array"), list
-            ):
-                # map boolean/float charge_array to integers (placeholder)
-                start_solution = [
-                    int(1 if float(x) > 0 else 0)
-                    for x in eauto_obj.get("charge_array")[:n]
-                ]
-        if start_solution is None:
-            start_solution = [0] * n
+                ac_charge.append(max(0.0, min(1.0, frac)))
 
-        # washingstart if present
-        washingstart = resp.get("washingstart")
+                # dc_charge: 1 if charging, 0 otherwise
+                dc_charge.append(1.0 if cp > 0.0 else 0.0)
+            else:
+                ac_charge.append(0.0)
+                dc_charge.append(0.0)
 
-        # compute per-hour costs and revenues in Euro (using €/Wh units from p_N/p_E)
+        # discharge_allowed
+        discharge_allowed = []
+        for i in range(n_result):  # CHANGED: was n_control
+            if i < len(discharging_power):
+                discharge_allowed.append(1 if float(discharging_power[i]) > 1e-9 else 0)
+            else:
+                discharge_allowed.append(0)
+
+        return {
+            "ac_charge": ac_charge,
+            "dc_charge": dc_charge,
+            "discharge_allowed": discharge_allowed,
+            "c_max": c_max,
+            "d_max": d_max,
+        }
+
+    def _process_result_arrays(
+        self, result_arrays, pricing_data, battery_params, evopt, n
+    ):
+        """
+        Process result arrays (costs, revenues, losses, SOC, etc.).
+
+        Returns:
+            dict with all result data
+        """
+        charging_power = result_arrays["charging_power"]
+        discharging_power = result_arrays["discharging_power"]
+        grid_import = result_arrays["grid_import"]
+        grid_export = result_arrays["grid_export"]
+        soc_wh = result_arrays["soc_wh"]
+
+        p_n = pricing_data["p_n"]
+        p_e = pricing_data["p_e"]
+        eta_c = battery_params["eta_c"]
+        eta_d = battery_params["eta_d"]
+
+        # Calculate costs and revenues
         kosten_per_hour = []
         einnahmen_per_hour = []
         for i in range(n):
             gi = float(grid_import[i]) if i < len(grid_import) else 0.0
             ge = float(grid_export[i]) if i < len(grid_export) else 0.0
-            pr = (
-                float(p_n[i])
-                if isinstance(p_n, list) and i < len(p_n)
-                else float(p_n[i]) if isinstance(p_n, list) and len(p_n) > 0 else 0.0
-            )
-            pe = (
-                float(p_e[i])
-                if isinstance(p_e, list) and i < len(p_e)
-                else (float(p_e[i]) if isinstance(p_e, list) and len(p_e) > 0 else 0.0)
-            )
-            # if p_N/p_E are scalars (should be lists), handle above; fallback zero if missing
-            if isinstance(p_n, (int, float)):
-                pr = float(p_n)
-            if isinstance(p_e, (int, float)):
-                pe = float(p_e)
+            pr = float(p_n[i]) if i < len(p_n) else 0.0
+            pe = float(p_e[i]) if i < len(p_e) else 0.0
 
-            kosten = gi * pr
-            einnahmen = ge * pe
-            kosten_per_hour.append(kosten)
-            einnahmen_per_hour.append(einnahmen)
+            kosten_per_hour.append(gi * pr)
+            einnahmen_per_hour.append(ge * pe)
 
-        # estimate per-hour battery losses: charging_loss + discharging_loss
+        # Calculate battery losses
         verluste_per_hour = []
         for i in range(n):
             ch = float(charging_power[i]) if i < len(charging_power) else 0.0
@@ -500,113 +710,120 @@ class EVOptBackend:
             loss = ch * (1.0 - eta_c) + dch * (1.0 - eta_d)
             verluste_per_hour.append(loss)
 
-        # Akku SoC percent per hour (if soc_wh available): convert to percent using s_max_req
-        # or inferred max
-        akku_soc_pct = []
-        if soc_wh:
-            # determine s_max reference: use s_max_req if provided, otherwise attempt to
-            # infer from soc_wh max
-            ref = s_max_val
-            if not ref:
-                try:
-                    ref = max([float(x) for x in soc_wh]) if soc_wh else None
-                except (ValueError, TypeError):
-                    ref = None
-            for v in soc_wh:
-                try:
-                    if ref and ref > 0:
-                        pct = float(v) / float(ref) * 100.0
-                    else:
-                        pct = float(v)
-                except (ValueError, TypeError):
-                    pct = 0.0
-                akku_soc_pct.append(pct)
-        else:
-            akku_soc_pct = []
+        # Calculate SOC percentage
+        akku_soc_pct = self._calculate_soc_percentage(soc_wh, battery_params["s_max"])
 
-        # totals
-        gesamt_kosten = sum(kosten_per_hour) if kosten_per_hour else 0.0
-        gesamt_einnahmen = sum(einnahmen_per_hour) if einnahmen_per_hour else 0.0
-        gesamt_verluste = sum(verluste_per_hour) if verluste_per_hour else 0.0
-        gesamt_bilanz = gesamt_einnahmen - gesamt_kosten
+        # Get household load from request
+        last_wh = self._extract_household_load(evopt, grid_import, n)
 
-        # build result dict like optimize_response.json
-        result = {}
-        # Prefer household load ('gt') from the EVCC request if available,
-        # otherwise fall back to EVCC response grid_import (parity with previous behavior).
-        last_wh = None
-        if isinstance(evopt, dict):
-            ts = evopt.get("time_series", {}) or {}
-            gt = ts.get("gt")
-            if isinstance(gt, list) and len(gt) > 0:
-                # normalize/trim/pad gt to length n (similar to other normalizations)
-                if len(gt) >= n:
-                    last_wh = [float(x) for x in gt[:n]]
-                else:
-                    last_val = float(gt[-1])
-                    last_wh = [float(x) for x in gt] + [last_val] * (n - len(gt))
-        # fallback to grid_import if gt not present or invalid
-        if last_wh is None:
-            last_wh = [float(x) for x in grid_import[:n]]
-
-        result["Last_Wh_pro_Stunde"] = last_wh
-
-        if akku_soc_pct:
-            # EAuto_SoC_pro_Stunde - fallback to eauto object SOC or same as akku
-            # percent if appropriate
-            result["EAuto_SoC_pro_Stunde"] = (
-                [
-                    float(x)
-                    for x in (
-                        evcc_resp.get("eauto_obj", {}).get("soc_wh")
-                        or (
-                            []
-                            if not isinstance(evcc_resp.get("eauto_obj", {}), dict)
-                            else []
-                        )
-                    )[:n]
-                ]
-                if evcc_resp.get("eauto_obj")
-                else []
-            )
-        # Einnahmen & Kosten per hour
-        result["Einnahmen_Euro_pro_Stunde"] = [float(x) for x in einnahmen_per_hour]
-        result["Kosten_Euro_pro_Stunde"] = [float(x) for x in kosten_per_hour]
-        result["Gesamt_Verluste"] = float(gesamt_verluste)
-        result["Gesamtbilanz_Euro"] = float(gesamt_bilanz)
-        result["Gesamteinnahmen_Euro"] = float(gesamt_einnahmen)
-        result["Gesamtkosten_Euro"] = float(gesamt_kosten)
-        # Home appliance placeholder (zeros)
-        result["Home_appliance_wh_per_hour"] = [0.0] * n
-        result["Netzbezug_Wh_pro_Stunde"] = [float(x) for x in grid_import[:n]]
-        result["Netzeinspeisung_Wh_pro_Stunde"] = [float(x) for x in grid_export[:n]]
-        result["Verluste_Pro_Stunde"] = [float(x) for x in verluste_per_hour]
-        if akku_soc_pct:
-            result["akku_soc_pro_stunde"] = [float(x) for x in akku_soc_pct[:n]]
-        # Electricity price array
-        result["Electricity_price"] = [float(x) for x in electricity_price[:n]]
-
-        # Pad past hours with zeros for control arrays
-        pad_past = [0.0] * current_hour
-
-        eos_resp = {
-            "ac_charge": pad_past + [float(x) for x in ac_charge],
-            "dc_charge": pad_past + [float(x) for x in dc_charge],
-            "discharge_allowed": pad_past + [int(x) for x in discharge_allowed],
-            "eautocharge_hours_float": None,
-            "result": result,  # result arrays remain unpadded (start from current time)
+        return {
+            "Last_Wh_pro_Stunde": last_wh,
+            "Einnahmen_Euro_pro_Stunde": [float(x) for x in einnahmen_per_hour],
+            "Kosten_Euro_pro_Stunde": [float(x) for x in kosten_per_hour],
+            "Gesamt_Verluste": float(sum(verluste_per_hour)),
+            "Gesamtbilanz_Euro": float(sum(einnahmen_per_hour) - sum(kosten_per_hour)),
+            "Gesamteinnahmen_Euro": float(sum(einnahmen_per_hour)),
+            "Gesamtkosten_Euro": float(sum(kosten_per_hour)),
+            "Home_appliance_wh_per_hour": [0.0] * n,
+            "Netzbezug_Wh_pro_Stunde": [float(x) for x in grid_import[:n]],
+            "Netzeinspeisung_Wh_pro_Stunde": [float(x) for x in grid_export[:n]],
+            "Verluste_Pro_Stunde": [float(x) for x in verluste_per_hour],
+            "akku_soc_pro_stunde": akku_soc_pct if akku_soc_pct else [],
+            "Electricity_price": pricing_data["electricity_price"],
+            "EAuto_SoC_pro_Stunde": [],  # Placeholder
         }
 
-        # attach eauto_obj if present in resp
+    def _calculate_soc_percentage(self, soc_wh, s_max):
+        """
+        Convert SOC from Wh to percentage.
+
+        Returns:
+            list of percentages or empty list
+        """
+        if not soc_wh:
+            return []
+
+        # Determine reference capacity
+        ref = s_max
+        if not ref:
+            try:
+                ref = max([float(x) for x in soc_wh]) if soc_wh else None
+            except (ValueError, TypeError):
+                ref = None
+
+        if not ref or ref <= 0:
+            return []
+
+        akku_soc_pct = []
+        for v in soc_wh:
+            try:
+                pct = float(v) / float(ref) * 100.0
+            except (ValueError, TypeError):
+                pct = 0.0
+            akku_soc_pct.append(pct)
+
+        return akku_soc_pct
+
+    def _extract_household_load(self, evopt, grid_import_fallback, n):
+        """
+        Extract household load from EVopt request, fallback to grid_import.
+
+        Returns:
+            list of load values (Wh)
+        """
+        if not isinstance(evopt, dict):
+            return [float(x) for x in grid_import_fallback[:n]]
+
+        ts = evopt.get("time_series", {}) or {}
+        gt = ts.get("gt")
+
+        if not isinstance(gt, list) or len(gt) == 0:
+            return [float(x) for x in grid_import_fallback[:n]]
+
+        # Normalize/trim/pad gt to length n
+        if len(gt) >= n:
+            return [float(x) for x in gt[:n]]
+        else:
+            last_val = float(gt[-1])
+            return [float(x) for x in gt] + [last_val] * (n - len(gt))
+
+    def _build_eos_response(
+        self, control_arrays, result_data, time_params, resp, evcc_resp
+    ):
+        """
+        Build final EOS response structure.
+
+        Returns:
+            dict with complete EOS response
+        """
+        eos_resp = {
+            "ac_charge": time_params["pad_past"]
+            + [float(x) for x in control_arrays["ac_charge"]],
+            "dc_charge": time_params["pad_past"]
+            + [float(x) for x in control_arrays["dc_charge"]],
+            "discharge_allowed": time_params["pad_past"]
+            + [int(x) for x in control_arrays["discharge_allowed"]],
+            "eautocharge_hours_float": None,
+            "result": result_data,
+        }
+
+        # Handle start_solution (if present in response)
+        start_solution = self._extract_start_solution(
+            resp, evcc_resp, time_params["n_result"]  # CHANGED: was n_control
+        )
+        if start_solution:
+            eos_resp["start_solution"] = time_params["pad_past"] + start_solution
+
+        # Handle washingstart (if present)
+        washingstart = resp.get("washingstart")
+        if washingstart is not None:
+            eos_resp["washingstart"] = time_params["pad_past"] + washingstart
+
+        # Attach eauto_obj if present
         if "eauto_obj" in resp:
             eos_resp["eauto_obj"] = resp.get("eauto_obj")
 
-        # map start_solution and washingstart if present
-        eos_resp["start_solution"] = pad_past + start_solution
-        if washingstart is not None:
-            eos_resp["washingstart"] = pad_past + washingstart
-
-        # timestamp
+        # Add timestamp
         try:
             eos_resp["timestamp"] = datetime.now(self.time_zone).isoformat()
         except (ValueError, TypeError):
@@ -614,17 +831,28 @@ class EVOptBackend:
 
         return eos_resp
 
-    def _validate_evcc_request(self, evopt):
+    def _extract_start_solution(
+        self, resp, evcc_resp, n_result
+    ):  # CHANGED: was n_control
         """
-        Validate EVopt-format optimization request.
-        Returns: (bool, list[str]) - valid, errors
+        Extract start_solution from response.
+
+        Returns:
+            list of n_result values (will be padded later)
         """
-        errors = []
-        if not isinstance(evopt, dict):
-            errors.append("EVCC request must be a dictionary.")
-        # Example: check required keys
-        required_keys = ["strategy", "grid", "batteries", "time_series"]
-        for key in required_keys:
-            if key not in evopt:
-                errors.append(f"Missing required key: {key}")
-        return len(errors) == 0, errors
+        if isinstance(resp.get("start_solution"), list):
+            return [
+                float(x) if isinstance(x, (int, float)) else 0
+                for x in resp.get("start_solution")[:n_result]  # CHANGED
+            ]
+
+        eauto_obj = resp.get("eauto_obj") or evcc_resp.get("eauto_obj")
+        if isinstance(eauto_obj, dict) and isinstance(
+            eauto_obj.get("charge_array"), list
+        ):
+            return [
+                int(1 if float(x) > 0 else 0)
+                for x in eauto_obj.get("charge_array")[:n_result]  # CHANGED
+            ]
+
+        return [0] * n_result  # CHANGED

@@ -9,16 +9,19 @@
     - [Electricity Price Configuration](#electricity-price-configuration)
     - [Battery Configuration](#battery-configuration)
     - [PV Forecast Configuration](#pv-forecast-configuration)
-    - [PV Forecast Configuration](#pv-forecast-configuration-1)
-      - [Parameter Details](#parameter-details)
-      - [Example Config Entry](#example-config-entry)
-      - [Notes](#notes)
+      - [PV Forecast Source](#pv-forecast-source)
+      - [PV Forecast installations](#pv-forecast-installations)
+        - [Parameter Details](#parameter-details)
+        - [Example Config Entry](#example-config-entry)
+        - [Notes](#notes)
     - [Inverter Configuration](#inverter-configuration)
     - [EVCC Configuration](#evcc-configuration)
     - [MQTT Configuration](#mqtt-configuration)
       - [Parameters](#parameters)
     - [Other Configuration Settings](#other-configuration-settings)
   - [Notes](#notes-1)
+    - [config.yaml](#configyaml)
+    - [`refresh_time` and `time_frame`](#refresh_time-and-time_frame)
   - [Config examples](#config-examples)
     - [Full Config Example (will be generated at first startup)](#full-config-example-will-be-generated-at-first-startup)
     - [Minimal possible Config Example](#minimal-possible-config-example)
@@ -77,7 +80,6 @@ A default config file will be created with the first start, if there is no `conf
   Overall consumption of additional load 1 in Wh for the given hours. Set to 0 if not needed. (If not needed, set to `additional_load_1_consumption: ""`)
 
 ---
-
 ### EOS Server Configuration
 
 - **`eos.source`**:  
@@ -87,10 +89,30 @@ A default config file will be created with the first start, if there is no `conf
   EOS or EVopt server address (e.g., `192.168.1.94`). (Mandatory)
 
 - **`eos.port`**:  
-  port for EOS server (8503) or EVopt server (7050) - default: `8503` (Mandatory)
+  Port for EOS server (8503) or EVopt server (7050) - default: `8503` (Mandatory)
 
 - **`timeout`**:  
   Timeout for EOS optimization requests, in seconds. Default: `180`. (Mandatory)
+
+- **`time_frame`**:  
+  Granularity of the optimization and forecast time steps, in seconds.  
+  - `3600` for hourly (legacy mode)  
+  - `900` for 15-minute (quarterly) optimization  
+  This controls the resolution of the forecast and optimization arrays sent to EOS.  
+  For example, with `time_frame: 900`, all forecasts and optimization results will be calculated in 15-minute intervals.  
+  **Note:**  
+  - `refresh_time` (see "Other Configuration Settings") controls how often EOS Connect sends a request to EOS.  
+  - `time_frame` sets the time step granularity inside each optimization request.
+
+  Example:
+  ```yaml
+  eos:
+    source: eos_server
+    server: 192.168.1.94
+    port: 8503
+    timeout: 180
+    time_frame: 900   # Use 900 for 15-min steps, 3600 for hourly steps
+  ```
 
 ---
 
@@ -190,24 +212,39 @@ A default config file will be created with the first start, if there is no `conf
 
 This section contains two subsections:
 
-### PV Forecast Configuration
+#### PV Forecast Source
+
+The `pv_forecast_source` section defines which provider is used for solar generation forecasts.  
+Supported sources are: `akkudoktor`, `openmeteo`, `openmeteo_local`, `forecast_solar`, `evcc`, `solcast`, and `default`.  
+- **source**: Select the provider for PV forecasts.  
+  - Example: `source: akkudoktor`
+- **api_key**: Only required for Solcast. Enter your Solcast API key here if using `solcast` as the source.
+
+Example:
+```yaml
+pv_forecast_source:
+  source: akkudoktor
+  api_key: "" # Only needed for Solcast
+```
+
+#### PV Forecast installations
 
 Each entry in `pv_forecast` must follow these rules, depending on the selected `pv_forecast_source`:
 
-| Parameter            | Required for Source(s)                         | Type/Format    | Default/Notes                                                                                         |
-| -------------------- | ---------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------- |
-| `name`               | all                                            | string         | User-defined identifier. Must be unique if multiple installations.                                    |
-| `lat`                | all except `evcc`                              | float          | Latitude of PV installation. Required for temperature forecasts.                                      |
-| `lon`                | all except `evcc`                              | float          | Longitude of PV installation. Required for temperature forecasts.                                     |
-| `azimuth`            | all except `solcast`, `evcc`                   | int/float      | Required. For `solcast`/`evcc`, defaults to `0` if missing.                                           |
-| `tilt`               | all except `solcast`, `evcc`                   | int/float      | Required. For `solcast`/`evcc`, defaults to `0` if missing.                                           |
-| `power`              | all except `evcc`, `solcast`                   | int/float      | Required. For `evcc`/`solcast`, set to `0` (dummy value for temperature forecast).                    |
-| `powerInverter`      | all except `evcc`, `forecast_solar`, `solcast` | int/float      | Required. For `evcc`, `forecast_solar`, `solcast`, set to `0` (dummy value for temperature forecast). |
-| `inverterEfficiency` | all except `evcc`, `forecast_solar`, `solcast` | float          | Required. For `evcc`, `forecast_solar`, `solcast`, set to `0` (dummy value for temperature forecast). |
-| `horizon`            | `openmeteo_local`, `forecast_solar`            | list or string | Mandatory. If missing, defaults to `[0]*36` for `openmeteo_local`, `[0]*24` for `forecast_solar`.     |
-| `resource_id`        | `solcast`                                      | string         | Required for Solcast. Must be set in each entry when using Solcast as the source.                     |
+| Parameter            | Required for Source(s)              | Type/Format    | Default/Notes                                                                                     |
+| -------------------- | ----------------------------------- | -------------- | ------------------------------------------------------------------------------------------------- |
+| `name`               | all                                 | string         | User-defined identifier. Must be unique if multiple installations.                                |
+| `lat`                | all                                 | float          | Latitude of PV installation. ('evcc','solcast' only required for temperature forecasts.)          |
+| `lon`                | all                                 | float          | Longitude of PV installation. ('evcc','solcast' only required for temperature forecasts.)         |
+| `azimuth`            | all except `solcast`, `evcc`        | int/float      | Required. For `evcc`/`solcast`, not needed (in HA addon config set to 180)                        |
+| `tilt`               | all except `solcast`, `evcc`        | int/float      | Required. For `evcc`/`solcast`, not needed (in HA addon config set to 25)                         |
+| `power`              | all except `evcc`, `solcast`        | int/float      | Required. For `evcc`/`solcast`, not needed (in HA addon config set to 1000)                       |
+| `powerInverter`      | all except `evcc`, `forecast_solar` | int/float      | Required. For `evcc`, `forecast_solar`, `solcast`, not needed (in HA addon config set to 1000)    |
+| `inverterEfficiency` | all except `evcc`, `forecast_solar` | float          | Required. For `evcc`, `forecast_solar`, set to `1`, not needed (in HA addon config set to 1)      |
+| `horizon`            | `openmeteo_local`, `forecast_solar` | list or string | Mandatory. If missing, defaults to `[0]*36` for `openmeteo_local`, `[0]*24` for `forecast_solar`. |
+| `resource_id`        | `solcast`                           | string         | Required for Solcast. Must be set in each entry when using Solcast as the source.                 |
 
-#### Parameter Details
+##### Parameter Details
 
 - **name**:  
   User-defined identifier for the PV installation. Must be unique if you use multiple installations.
@@ -247,7 +284,7 @@ Each entry in `pv_forecast` must follow these rules, depending on the selected `
   - Must be set in each entry when using Solcast as the source.  
   - Used to identify the rooftop site in your Solcast account.
 
-#### Example Config Entry
+##### Example Config Entry
 
 ```yaml
 pv_forecast:
@@ -263,7 +300,7 @@ pv_forecast:
     # resource_id: "your_solcast_resource_id"  # Only for Solcast
 ```
 
-#### Notes
+##### Notes
 
 - For `evcc` and `solcast`, dummy values are set for `power`, `powerInverter`, and `inverterEfficiency` to enable temperature forecasts.
 - For `openmeteo_local` and `forecast_solar`, ensure `horizon` is provided or defaults will be used.
@@ -272,7 +309,7 @@ pv_forecast:
 Refer to this table and details when editing your `config.yaml` and for troubleshooting configuration errors.
 - **`api_key`** (in `pv_forecast_source`): Required. Your Solcast API key obtained from your Solcast account.
 - **`resource_id`** (in each `pv_forecast` entry): Required. The resource ID from your Solcast rooftop site configuration.
-- **Location parameters for temperature forecasts**: While `azimuth`, `tilt`, and `horizon` are configured in your Solcast dashboard and ignored by EOS Connect, **`lat` and `lon` are still required** for fetching temperature forecasts that EOS needs for accurate optimization calculations.
+- **Location parameters for temperature forecasts**: For all PV forecast sources, EOS Connect requires temperature data for optimization. The temperature forecast is always retrieved from Akkudoktor, and therefore, the `lat` and `lon` parameters are mandatory for every PV installation entry, regardless of the selected forecast source.
 - **`power`, `powerInverter`, `inverterEfficiency`**: Still required for system scaling and efficiency calculations.
 
 **Setting up Solcast:**
@@ -362,7 +399,8 @@ The `mqtt` section allows you to configure the MQTT broker and Home Assistant MQ
 ### Other Configuration Settings
 
 - **`refresh_time`**:  
-  Default refresh time for the application, in minutes.
+  Default refresh time for the application, in minutes.  
+  This sets how often EOS Connect sends an optimization request to the EOS server.
 
 - **`time_zone`**:  
   Default time zone for the application.
@@ -377,8 +415,17 @@ The `mqtt` section allows you to configure the MQTT broker and Home Assistant MQ
 
 ## Notes
 
+### config.yaml
 - Ensure that the `config.yaml` file is located in the same directory as the application.
 - If the configuration file does not exist, the application will create one with default values and prompt you to restart the server after configuring the settings.
+
+### `refresh_time` and `time_frame`
+
+- `refresh_time` sets how often EOS Connect sends a new optimization request to the EOS server (e.g., every 3 minutes).
+- `time_frame` sets the granularity of the optimization and forecast arrays inside each request (e.g., 900 for 15-minute steps, 3600 for hourly steps).
+- For more precise optimization and control, set `time_frame: 900`. For legacy hourly operation, use `3600`.
+- The combination of `refresh_time` and `time_frame` allows you to control both how frequently the system updates and how detailed the optimization is.
+
 
 ## Config examples
 
@@ -401,6 +448,7 @@ eos:
   server: 192.168.1.94  # EOS server address
   port: 8503 # port for EOS server - default: 8503
   timeout: 180 # timeout for EOS optimize request in seconds - default: 180
+  time_frame: 900 # granularity of optimization steps in seconds (900=15min, 3600=hourly)
 # Electricity price configuration
 price:
   source: default  # data source for electricity price tibber, smartenergy_at, stromligning, fixed_24h, default (default uses akkudoktor)
@@ -483,6 +531,7 @@ eos:
   server: 192.168.1.94  # EOS server address
   port: 8503 # port for EOS server - default: 8503
   timeout: 180 # timeout for EOS optimize request in seconds - default: 180
+  time_frame: 3600 # granularity of optimization steps in seconds (900=15min, 3600=hourly)
 # Electricity price configuration
 price:
   source: default  # data source for electricity price tibber, smartenergy_at, stromligning, fixed_24h, default (default uses akkudoktor)

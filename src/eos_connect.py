@@ -86,9 +86,28 @@ time_zone = pytz.timezone(config_manager.config["time_zone"])
 LOGLEVEL = config_manager.config["log_level"].upper()
 logger.setLevel(LOGLEVEL)
 
-# global time frame base
-# time_frame_base = config_manager.config.get("timeframe_base", 3600)
-time_frame_base = 3600  # prep for future config entry
+# Set global time frame base with validation and fallback
+time_frame_base = config_manager.config.get("eos", {}).get("time_frame", 3600)
+eos_source = config_manager.config.get("eos", {}).get("source", "eos_server")
+
+try:
+    time_frame_base = int(time_frame_base)
+except (TypeError, ValueError):
+    logger.warning(
+        "[Config] Invalid time_frame type (%r); defaulting to 3600", time_frame_base
+    )
+    time_frame_base = 3600
+
+if time_frame_base not in (900, 3600):
+    logger.warning(
+        "[Config] Invalid time_frame (%s); defaulting to 3600", time_frame_base
+    )
+    time_frame_base = 3600
+elif time_frame_base == 900 and eos_source != "evopt":
+    logger.warning(
+        "[Config] 15-min time_frame only supported with EVopt source; defaulting to 3600"
+    )
+    time_frame_base = 3600
 
 # Now upgrade to timezone-aware formatter after config is loaded
 timezone_formatter = TimezoneFormatter(
@@ -317,6 +336,7 @@ evcc_interface = EvccInterface(
 # intialize the load interface
 load_interface = LoadInterface(
     config_manager.config.get("load", {}),
+    time_frame_base,
     time_zone,
 )
 
@@ -325,11 +345,14 @@ battery_interface = BatteryInterface(
     on_bat_max_changed=None,
 )
 
-price_interface = PriceInterface(config_manager.config["price"], time_zone)
+price_interface = PriceInterface(
+    config_manager.config["price"], time_frame_base, time_zone
+)
 
 pv_interface = PvInterface(
     config_manager.config["pv_forecast_source"],
     config_manager.config["pv_forecast"],
+    time_frame_base,
     config_manager.config.get("evcc", {}),
     config_manager.config.get("time_zone", "UTC"),
 )
@@ -437,15 +460,21 @@ def create_optimize_request():
                 time_frame_base - (seconds_since_midnight % time_frame_base)
             ) / time_frame_base
 
-            current_hour = now.hour
+            if time_frame_base == 3600:
+                current_slot = now.hour
+            elif time_frame_base == 900:
+                current_slot = now.hour * 4 + now.minute // 15
+            else:
+                current_slot = seconds_since_midnight // time_frame_base
+
             for ts in (pv_prognose_wh, gesamtlast):
-                if ts and len(ts) > current_hour:
-                    ts[current_hour] *= scale_factor
+                if ts and len(ts) > current_slot:
+                    ts[current_slot] *= scale_factor
                     logger.debug(
-                        "[EOS_Request] Adjusted forecast for hour %d to %.2f Wh "
-                        + "due to partial hour",
-                        current_hour + 1,
-                        ts[current_hour],
+                        "[EOS_Request] Adjusted forecast for slot %d to %.2f Wh "
+                        + "due to partial slot",
+                        current_slot + 1,
+                        ts[current_slot],
                     )
 
         # if dst_change_detected != 0:
@@ -486,10 +515,7 @@ def create_optimize_request():
             "min_soc_percentage": battery_interface.get_min_soc(),
             "max_soc_percentage": battery_interface.get_max_soc(),
         }
-        if (
-            eos_interface.get_eos_version() == ">=2025-04-09"
-            or eos_interface.get_eos_version() == "0.1.0+dev"
-        ):
+        if eos_interface.is_eos_version_at_least("0.0.2"):
             akku_object = {"device_id": "battery1", **akku_object}
         return akku_object
 
@@ -497,10 +523,7 @@ def create_optimize_request():
         wechselrichter_object = {
             "max_power_wh": config_manager.config["inverter"]["max_pv_charge_rate"],
         }
-        if (
-            eos_interface.get_eos_version() == ">=2025-04-09"
-            or eos_interface.get_eos_version() == "0.1.0+dev"
-        ):
+        if eos_interface.is_eos_version_at_least("0.0.2"):
             wechselrichter_object = {
                 "device_id": "inverter1",
                 **wechselrichter_object,
@@ -518,10 +541,7 @@ def create_optimize_request():
             "min_soc_percentage": 5,
             "max_soc_percentage": 100,
         }
-        if (
-            eos_interface.get_eos_version() == ">=2025-04-09"
-            or eos_interface.get_eos_version() == "0.1.0+dev"
-        ):
+        if eos_interface.is_eos_version_at_least("0.0.2"):
             eauto_object = {"device_id": "ev1", **eauto_object}
         return eauto_object
 
@@ -538,10 +558,7 @@ def create_optimize_request():
             "consumption_wh": consumption_wh,
             "duration_h": duration_h,
         }
-        if (
-            eos_interface.get_eos_version() == ">=2025-04-09"
-            or eos_interface.get_eos_version() == "0.1.0+dev"
-        ):
+        if eos_interface.is_eos_version_at_least("0.0.2"):
             dishwasher_object = {"device_id": "additional_load_1", **dishwasher_object}
         # if eos_interface.get_eos_version() == "0.1.0+dev":
         #     time_windows = [{"duration": "2", "start_time": "10:00"}]
@@ -1464,9 +1481,10 @@ def get_controls():
         "used_optimization_source": config_manager.config.get("eos", {}).get(
             "source", "eos_server"
         ),
+        "used_time_frame_base": time_frame_base,
         "eos_connect_version": __version__,
         "timestamp": datetime.now(time_zone).isoformat(),
-        "api_version": "0.0.2",
+        "api_version": "0.0.3",
     }
     return Response(
         json.dumps(response_data, indent=4), content_type="application/json"
@@ -1790,7 +1808,9 @@ if __name__ == "__main__":
     try:
         # Create web server with port checking
         HOST = "0.0.0.0"
-        desired_port = config_manager.config["eos_connect_web_port"]
+        # In HA addon mode, port is always 8081 (mapped via ports: config)
+        # In local/Docker mode, use the configured port
+        desired_port = config_manager.config.get("eos_connect_web_port", 8081)
 
         logger.info("[Main] Initializing EOS Connect web server...")
         http_server, actual_port = PortInterface.create_web_server_with_port_check(

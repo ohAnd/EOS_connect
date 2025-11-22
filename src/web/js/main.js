@@ -119,7 +119,7 @@ async function showCurrentData() {
 
         // Add single event listener
         newMenuElement.addEventListener('click', function () {
-            showMainMenu(data_controls["eos_connect_version"]);
+            showMainMenu(data_controls["eos_connect_version"], data_controls["used_optimization_source"], data_controls["used_time_frame_base"]);
         });
 
         console.log('[Main] Updated menu element and preserved notification dot');
@@ -212,9 +212,9 @@ async function init() {
         }
 
         // Update all displays
-        showStatistics(data_request, data_response);
+        showStatistics(data_request, data_response, data_controls);
         showSchedule(data_request, data_response, data_controls);
-        setBatteryChargingData(data_response);
+        setBatteryChargingData(data_response, data_controls);
         chartManager.updateLegendVisibility();
 
     } catch (error) {
