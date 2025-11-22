@@ -868,7 +868,6 @@ class FroniusWRV2:
     def fetch_inverter_data(self):
         """Get inverter data for monitoring (temperatures, fan control, etc.)."""
         try:
-            # Get inverter component data (try different endpoint paths for different firmware)
             response = self._make_authenticated_request(
                 "GET", "/components/inverter/readable"
             )
@@ -890,15 +889,38 @@ class FroniusWRV2:
                 return None
 
             data = response.json()
-            channels = (
-                data.get("Body", {}).get("Data", {}).get("0", {}).get("channels", {})
-            )
+            body_data = data.get("Body", {}).get("Data", {})
 
-            # Store inverter monitoring data compatible with V1 format
+            # Find first device that has channel data (device id is dynamic)
+            channels = {}
+            for device_id, device_data in body_data.items():
+                if isinstance(device_data, dict) and "channels" in device_data:
+                    channels = device_data.get("channels", {}) or {}
+                    logger.debug(
+                        f"[InverterV2] Found inverter data for device: {device_id}"
+                    )
+                    break
+
+            # If no channels found, still return a zeroed dict (do not return None on malformed 200)
+            if not channels:
+                logger.warning(
+                    "[InverterV2] No channel data found in inverter response"
+                )
+                self.inverter_current_data = {
+                    "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": 0.0,
+                    "MODULE_TEMPERATURE_MEAN_01_F32": 0.0,
+                    "MODULE_TEMPERATURE_MEAN_03_F32": 0.0,
+                    "MODULE_TEMPERATURE_MEAN_04_F32": 0.0,
+                    "FANCONTROL_PERCENT_01_F32": 0.0,
+                    "FANCONTROL_PERCENT_02_F32": 0.0,
+                }
+                return self.inverter_current_data
+
+            # Build normalized inverter_current_data with consistent keys
+            ambient_raw = channels.get("DEVICE_TEMPERATURE_AMBIENTMEAN_01_F32", 0)
             self.inverter_current_data = {
-                "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": round(
-                    channels.get("DEVICE_TEMPERATURE_AMBIENTMEAN_01_F32", 0), 2
-                ),
+                # Canonical keys used by V2/tests
+                "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": round(ambient_raw, 2),
                 "MODULE_TEMPERATURE_MEAN_01_F32": round(
                     channels.get("MODULE_TEMPERATURE_MEAN_01_F32", 0), 2
                 ),
@@ -915,13 +937,18 @@ class FroniusWRV2:
                     channels.get("FANCONTROL_PERCENT_02_F32", 0), 2
                 ),
             }
+            # Provide backward-compatible alias if some code expects the variant without the extra 'E'
+            if "DEVICE_TEMPERATURE_AMBIENTMEAN_F32" not in self.inverter_current_data:
+                # Only add if external callers ever used this (defensive)
+                self.inverter_current_data["DEVICE_TEMPERATURE_AMBIENTMEAN_F32"] = (
+                    self.inverter_current_data["DEVICE_TEMPERATURE_AMBIENTEMEAN_F32"]
+                )
 
             logger.debug(f"[InverterV2] Inverter data: {self.inverter_current_data}")
             return self.inverter_current_data
 
         except (requests.RequestException, ValueError, KeyError) as e:
             logger.debug(f"[InverterV2] Inverter monitoring unavailable: {e}")
-            # Initialize with zeros if fetch fails
             self.inverter_current_data = {
                 "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": 0.0,
                 "MODULE_TEMPERATURE_MEAN_01_F32": 0.0,
