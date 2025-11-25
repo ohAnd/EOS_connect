@@ -806,7 +806,7 @@ class OptimizationScheduler:
                     seconds,
                 )
 
-            except (requests.exceptions.RequestException, ValueError, KeyError) as e:
+            except (requests.exceptions.RequestException, ValueError, KeyError, TypeError) as e:
                 logger.error("[OPTIMIZATION] Error while updating state: %s", e)
                 actual_sleep_interval = self.update_interval  # Fallback on error
 
