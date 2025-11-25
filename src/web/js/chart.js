@@ -172,7 +172,7 @@ class ChartManager {
                 scales: {
                     y: { beginAtZero: true, title: { display: true, text: 'Energy (kWh)', color: 'lightgray' }, grid: { color: 'rgb(54, 54, 54)' }, ticks: { color: 'lightgray' } },
                     y1: { beginAtZero: true, position: 'right', title: { display: true, text: `Price (${localization.currency_symbol}/kWh)`, color: 'lightgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'lightgray', callback: value => value.toFixed(2) } },
-                    y2: { beginAtZero: true, position: 'right', title: { display: true, text: 'Battery SOC (%)', color: 'darkgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'darkgray', callback: value => value.toFixed(0) } },
+                    y2: { beginAtZero: true, position: 'right', title: { display: true, text: 'Battery SOC (%)', color: 'darkgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'darkgray', callback: value => value.toFixed(0) }, suggestedMax: 100  },
                     y3: { beginAtZero: true, position: 'right', display: false, title: { display: true, text: 'AC Charge', color: 'darkgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'darkgray', callback: value => value.toFixed(2) } },
                     x: { grid: { color: 'rgb(54, 54, 54)' }, ticks: { color: 'lightgray', font: { size: 10 } } }
                 },
