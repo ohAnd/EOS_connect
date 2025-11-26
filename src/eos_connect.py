@@ -16,17 +16,20 @@ from version import __version__
 from config import ConfigManager
 from log_handler import MemoryLogHandler
 from constants import CURRENCY_SYMBOL_MAP, CURRENCY_MINOR_UNIT_MAP
-from interfaces.base_control import BaseControl
-from interfaces.load_interface import LoadInterface
-from interfaces.battery_interface import BatteryInterface
-from interfaces.inverter_fronius import FroniusWR
-from interfaces.inverter_fronius_v2 import FroniusWRV2
-from interfaces.evcc_interface import EvccInterface
-from interfaces.optimization_interface import OptimizationInterface
-from interfaces.price_interface import PriceInterface
-from interfaces.mqtt_interface import MqttInterface
-from interfaces.pv_interface import PvInterface
-from interfaces.port_interface import PortInterface
+from src.interfaces.base_control import BaseControl
+from src.interfaces.load_interface import LoadInterface
+from src.interfaces.battery_interface import BatteryInterface
+from src.interfaces.inverter_fronius import FroniusWR
+from src.interfaces.inverter_fronius_v2 import FroniusWRV2
+from src.interfaces.evcc_interface import EvccInterface
+from src.interfaces.optimization_interface import OptimizationInterface
+from src.interfaces.price_interface import PriceInterface
+from src.interfaces.mqtt_interface import MqttInterface
+from src.interfaces.pv_interface import PvInterface
+from src.interfaces.port_interface import PortInterface
+
+from src.interfaces.inverter_factory import create_inverter
+
 
 # Check Python version early
 if sys.version_info < (3, 11):
@@ -141,8 +144,13 @@ base_control = BaseControl(config_manager.config, time_zone, time_frame_base)
 inverter_interface = None
 
 # Handle backward compatibility for old interface names
-inverter_type = config_manager.config["inverter"]["type"]
-if inverter_type == "fronius_gen24_v2":
+# inverter_type = config_manager.config["inverter"]["type"]
+
+# Factory aufrufen über config dic
+inverter_interface = create_inverter(config_manager.config["inverter"])
+inverter_interface.initialize()
+
+""" if inverter_type == "fronius_gen24_v2":
     logger.warning(
         "[Config] Interface name 'fronius_gen24_v2' is deprecated. "
         "Please update your config.yaml to use 'fronius_gen24' instead. "
@@ -190,7 +198,7 @@ else:
         "[Inverter] Inverter type %s - no external connection."
         + " Changing to show only mode.",
         config_manager.config["inverter"]["type"],
-    )
+    ) """
 
 
 # callback function for evcc interface

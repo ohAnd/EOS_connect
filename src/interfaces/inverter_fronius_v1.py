@@ -1,35 +1,14 @@
-"""
-fork from https://github.com/muexxl/batcontrol/blob/main/src/batcontrol/inverter/fronius.py
-
-This module provides a class `FroniusWR` for handling Fronius GEN24 Inverters.
-It includes methods for interacting with the inverter's API, managing battery
-configurations, and controlling various inverter settings.
-
-The Fronius Web-API is a bit quirky, which is reflected in the code.
-
-The Web-Login form does send a first request without authentication, which
-returns a nonce. This nonce is then used to create a digest for the login
-request.
-
-Parts of the information can be called without authentication, but some
-settings require authentication. We tackle a 401 as a signal to login again
-and retry the request.
-
-Yes, the Webfronted does send the password on each authenticated request hashed
-with MD5, nounce etc.
-
-"""
-
 import time
 import os
 import logging
 import json
 import hashlib
+import re
 import requests
 
-# from .baseclass import InverterBaseclass
 
-# logger = logging.getLogger('__main__')
+from src.interfaces.base_inverter import BaseInverter
+
 logger = logging.getLogger("__main__").getChild("Fronius")
 logger.setLevel(logging.INFO)
 logger.info("[Inverter] loading module ")
@@ -60,28 +39,32 @@ TIMEOFUSE_CONFIG_FILENAME = base_path + "/config/timeofuse_config.json"
 BATTERY_CONFIG_FILENAME = base_path + "/config/battery_config.json"
 
 
-# class FroniusWR(InverterBaseclass):
-class FroniusWR:
-    """Class for Handling Fronius GEN24 Inverters"""
+class FroniusInverterV1(BaseInverter):
 
-    def __init__(self, config: dict) -> None:
-        # super().__init__(config)
+    def __init__(self, config):
+        """Initialize the Fronius V2 interface with updated authentication."""
+        # Basisklasse aufrufen
+
+        super().__init__(config)
+
+        # --- Konfigurationswerte ---
+        self.address = config["address"]
+        self.capacity = -1
+        self.max_soc = 100
+        self.min_soc = 5
+
+        # --- Auth-Status ---
         self.subsequent_login = False
         self.ncvalue_num = 1
         self.cnonce = "NaN"
         self.login_attempts = 0
-        self.address = config["address"]
-        self.capacity = -1
-        self.max_grid_charge_rate = config["max_grid_charge_rate"]
-        self.max_pv_charge_rate = config["max_pv_charge_rate"]
         self.nonce = 0
-        self.user = config["user"]
-        self.password = config["password"]
-        self.inverter_sw_revision = {"major": 0, "minor": 0, "patch": 0, "build": 0}
-        self.api_praefix = ""  # default empty string
-        self.__get_current_inverter_sw_version()
-        self.__set_api_praefix()
 
+        # --- SW-Version wird erst in initialize() geladen ---
+        self.inverter_sw_revision = {"major": 0, "minor": 0, "patch": 0, "build": 0}
+        self.api_praefix = ""
+
+        # --- interne Inverter-Daten (bleibt im __init__) ---
         self.inverter_current_data = {
             "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": 0,
             "MODULE_TEMPERATURE_MEAN_01_F32": 0,
@@ -91,84 +74,89 @@ class FroniusWR:
             "FANCONTROL_PERCENT_02_F32": 0,
         }
 
-        self.previous_battery_config = self.get_battery_config()
+        # Platzhalter, wird in initialize() befüllt
+        self.previous_battery_config = {}
         self.previous_backup_power_config = None
-        # default values
-        self.max_soc = 100
-        self.min_soc = 5
-        # Energy Management (EM)
-        #  0 - On  (Automatic , Default)
-        #  1 - Off (Adjustable)
-        self.em_mode = self.previous_battery_config["HYB_EM_MODE"]
-        # Power in W  on in em_mode = 0
-        #   negative = Feed-In (to grid)
-        #   positive = Get from grid
-        self.em_power = self.previous_battery_config["HYB_EM_POWER"]
+        self.backup_power_mode = 0
 
-        self.set_solar_api_active(True)
+        # Energy Management Default-Initialisierung (wird später überschrieben)
+        self.em_mode = 0
+        self.em_power = 0
 
+    def initialize(self):
+        """Heavy initialization that performs API calls and loads full configuration."""
+
+        # 1) Firmware-Version laden + API Prefix setzen
+        self.__get_current_inverter_sw_version()
+        self.__set_api_praefix()
+
+        # 2) Batterie-Konfig laden
+        self.previous_battery_config = self.get_battery_config()
         if not self.previous_battery_config:
             raise RuntimeError(
-                f"[Inverter] failed to load Battery config from Inverter at {self.address}"
+                f"[Inverter] Failed to load Battery config from Inverter at {self.address}"
             )
+
+        # 3) EM Mode + Power übernehmen
+        self.em_mode = self.previous_battery_config["HYB_EM_MODE"]
+        self.em_power = self.previous_battery_config["HYB_EM_POWER"]
+
+        # 4) Solar API aktivieren
+        self.set_solar_api_active(True)
+
+        # 5) PowerUnit Config versuchen
         try:
             self.previous_backup_power_config = self.get_powerunit_config()
         except RuntimeError:
-            logger.error(
-                "[Inverter] failed to load Power Unit config from Inverter (latest)."
-            )
+            logger.error("[Inverter] failed to load latest PowerUnit config.")
 
+        # Fallback auf ältere API 1.2
         if not self.previous_backup_power_config:
             try:
                 self.previous_backup_power_config = self.get_powerunit_config("1.2")
-                logger.info("[Inverter] loaded Power Unit config from Inverter (1.2).")
+                logger.info("[Inverter] Loaded PowerUnit config from 1.2 API.")
             except RuntimeError:
-                logger.error(
-                    "[Inverter] failed to load Power Unit config from Inverter (1.2)."
-                )
+                logger.error("[Inverter] Failed to load PowerUnit config (1.2).")
+                self.previous_backup_power_config = None
 
+        # 6) Backup Power Mode bestimmen
         if self.previous_backup_power_config:
             self.backup_power_mode = self.previous_backup_power_config["backuppower"][
                 "DEVICE_MODE_BACKUPMODE_TYPE_U16"
             ]
         else:
-            logger.error("[Inverter] Setting backup power mode to 0 as a fallback.")
+            logger.error("[Inverter] Setting backup power mode to 0 as fallback.")
             self.backup_power_mode = 0
-            self.previous_backup_power_config = None
 
+        # 7) Min/Max SOC konfigurieren
         if self.backup_power_mode == 0:
-            # in percent
             self.min_soc = self.previous_battery_config["BAT_M0_SOC_MIN"]
         else:
-            # in percent
             self.min_soc = max(
                 self.previous_battery_config["BAT_M0_SOC_MIN"],
                 self.previous_battery_config["HYB_BACKUP_RESERVED"],
             )
         self.max_soc = self.previous_battery_config["BAT_M0_SOC_MAX"]
-        self.get_time_of_use()  # save timesofuse
-        self.set_allow_grid_charging(True)
 
-    def initialize(self):
-        self.__get_current_inverter_sw_version()
-        self.__set_api_praefix()
-
-        self.previous_battery_config = self.get_battery_config()
-        self.set_solar_api_active(True)
-
-        try:
-            self.previous_backup_power_config = self.get_powerunit_config()
-        except RuntimeError:
-            ...
-
-        # SOC settings
-        if self.previous_backup_power_config:
-            self.backup_power_mode = ...
-            self.min_soc = ...
-            self.max_soc = ...
-
+        # 8) Time-of-Use laden
         self.get_time_of_use()
+
+        # 9) Grid Charging aktivieren
         self.set_allow_grid_charging(True)
+
+        logger.info("[Inverter] Initialization completed.")
+
+    def connect_inverter(self):
+        return super().connect_inverter()
+
+    def disconnect_inverter(self):
+        return super().disconnect_inverter()
+
+    def get_battery_info(self):
+        return super().get_battery_info()
+
+    def set_battery_mode(self, mode):
+        return super().set_battery_mode(mode)
 
     def get_SOC(self):
         """
@@ -180,7 +168,7 @@ class FroniusWR:
 
         Returns:
             float: The State of Charge (SOC) as a percentage. Defaults to 99.0 if
-               the request fails or the response is invalid.
+            the request fails or the response is invalid.
         """
         path = "/solar_api/v1/GetPowerFlowRealtimeData.fcgi"
         response = self.send_request(path)

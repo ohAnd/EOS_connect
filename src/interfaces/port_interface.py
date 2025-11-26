@@ -175,9 +175,7 @@ class PortInterface:
 
         # Different error explanation based on environment
         if is_hassio:
-            error_explanation = (
-                f"\n   📋 Home Assistant Add-on: Port {port} is already in use{process_msg}"
-            )
+            error_explanation = f"\n   📋 Home Assistant Add-on: Port {port} is already in use{process_msg}"
 
             solutions = (
                 f"\n   🔧 How to fix this in Home Assistant:\n"
