@@ -641,7 +641,7 @@ def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_a
     mqtt_interface.update_publish_topics(
         {
             "control/eos_ac_charge_demand": {
-                "value": base_control.get_current_ac_charge_demand()
+                "value": base_control.get_needed_ac_charge_power()
             },
             "control/eos_dc_charge_demand": {
                 "value": base_control.get_current_dc_charge_demand()
