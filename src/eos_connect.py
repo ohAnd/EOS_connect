@@ -493,9 +493,7 @@ def create_optimize_request():
             "pv_prognose_wh": pv_prognose_wh,
             "strompreis_euro_pro_wh": strompreis_euro_pro_wh,
             "einspeiseverguetung_euro_pro_wh": einspeiseverguetung_euro_pro_wh,
-            "preis_euro_pro_wh_akku": config_manager.config["battery"][
-                "price_euro_per_wh_accu"
-            ],
+            "preis_euro_pro_wh_akku": battery_interface.get_price_euro_per_wh(),
             "gesamtlast": gesamtlast,
         }
 

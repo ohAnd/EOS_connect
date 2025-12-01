@@ -77,6 +77,9 @@ class BatteryInterface:
         self.on_bat_max_changed = on_bat_max_changed
         self.min_soc_set = config.get("min_soc_percentage", 0)
         self.max_soc_set = config.get("max_soc_percentage", 100)
+        self.price_euro_per_wh = float(config.get("price_euro_per_wh_accu", 0.0))
+        self.price_source = config.get("price_euro_per_wh_source", "config")
+        self.price_sensor = config.get("price_euro_per_wh_sensor", "")
 
         self.soc_fail_count = 0
 
@@ -192,6 +195,109 @@ class BatteryInterface:
             )
         return self.current_soc
 
+    def __fetch_price_data_from_openhab(self):
+        """
+        Fetch the current battery energy price from an OpenHAB item.
+
+        Returns:
+            float: Battery energy cost in €/Wh provided by the configured item.
+        """
+        if not self.price_sensor:
+            raise ValueError("price_euro_per_wh_sensor must be configured for OpenHAB.")
+
+        logger.debug("[BATTERY-IF] getting price from openhab ...")
+        openhab_url = self.url + "/rest/items/" + self.price_sensor
+        try:
+            response = requests.get(openhab_url, timeout=6)
+            response.raise_for_status()
+            data = response.json()
+            raw_state = str(data["state"]).strip()
+            # Take only the first part before any space (handles "0.0001", "0.0001 €/Wh", etc.)
+            cleaned_value = raw_state.split()[0]
+            price = float(cleaned_value)
+            logger.debug("[BATTERY-IF] Fetched price from OpenHAB: %s €/Wh", price)
+            return price
+        except requests.exceptions.Timeout:
+            raise requests.exceptions.Timeout(
+                "Request timed out while fetching price from OpenHAB"
+            )
+        except requests.exceptions.RequestException as e:
+            raise requests.exceptions.RequestException(
+                f"Error fetching price from OpenHAB: {e}"
+            )
+
+    def __fetch_price_data_from_homeassistant(self):
+        """
+        Fetch the current battery energy price from a Home Assistant sensor.
+
+        Returns:
+            float: Battery energy cost in €/Wh provided by the configured sensor.
+        """
+        if not self.price_sensor:
+            raise ValueError(
+                "price_euro_per_wh_sensor must be configured for Home Assistant."
+            )
+
+        logger.debug("[BATTERY-IF] getting price from homeassistant ...")
+        homeassistant_url = f"{self.url}/api/states/{self.price_sensor}"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+        response = requests.get(homeassistant_url, headers=headers, timeout=6)
+        response.raise_for_status()
+        entity_data = response.json()
+        price = float(entity_data["state"])
+        logger.debug("[BATTERY-IF] Fetched price from Home Assistant: %s €/Wh", price)
+        return price
+
+    def __update_price_euro_per_wh(self):
+        """
+        Update the battery price from the configured source if needed.
+        """
+        if self.price_source == "config":
+            return self.price_euro_per_wh
+
+        source_name = self.price_source.upper()
+        try:
+            if self.price_source == "homeassistant":
+                latest_price = self.__fetch_price_data_from_homeassistant()
+            elif self.price_source == "openhab":
+                latest_price = self.__fetch_price_data_from_openhab()
+            else:
+                logger.warning(
+                    "[BATTERY-IF] Unknown price source '%s'. Keeping last value %s.",
+                    self.price_source,
+                    self.price_euro_per_wh,
+                )
+                return self.price_euro_per_wh
+        except requests.exceptions.Timeout:
+            logger.warning(
+                "[BATTERY-IF] %s - Request timed out while fetching "
+                + "price_euro_per_wh_accu. Keeping last value %s.",
+                source_name,
+                self.price_euro_per_wh,
+            )
+            return self.price_euro_per_wh
+        except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
+            logger.warning(
+                "[BATTERY-IF] %s - Error fetching price sensor data: %s. "
+                + "Keeping last value %s.",
+                source_name,
+                exc,
+                self.price_euro_per_wh,
+            )
+            return self.price_euro_per_wh
+
+        self.price_euro_per_wh = latest_price
+        logger.debug(
+            "[BATTERY-IF] Updated price_euro_per_wh_accu from %s sensor %s: %s",
+            self.price_source,
+            self.price_sensor,
+            self.price_euro_per_wh,
+        )
+        return self.price_euro_per_wh
+
     def _handle_soc_error(self, source, error, last_soc):
         self.soc_fail_count += 1
         if self.soc_fail_count < 5:
@@ -235,6 +341,12 @@ class BatteryInterface:
         Returns the minimum state of charge (SOC) percentage of the battery.
         """
         return self.min_soc_set
+
+    def get_price_euro_per_wh(self):
+        """
+        Returns the current battery price in €/Wh.
+        """
+        return self.price_euro_per_wh
 
     def set_min_soc(self, min_soc):
         """
@@ -402,6 +514,7 @@ class BatteryInterface:
                     ),
                 )
                 self.__get_max_charge_power_dyn()
+                self.__update_price_euro_per_wh()
 
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:
                 logger.error("[BATTERY-IF] Error while updating state: %s", e)
