@@ -328,6 +328,10 @@ class BaseControl:
             # No time left in the current time frame - use last value
             needed_ac_charge_power = self.last_ac_charge_power
 
+        needed_ac_charge_power = min(
+            needed_ac_charge_power, round(self.current_bat_charge_max)
+        )
+
         self.last_ac_charge_power = needed_ac_charge_power
 
         return needed_ac_charge_power
