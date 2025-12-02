@@ -7,6 +7,7 @@ and control methods of the BatteryInterface.
 
 from unittest.mock import patch, MagicMock
 import pytest
+import requests
 from src.interfaces.battery_interface import BatteryInterface
 
 # Accessing protected members is fine in white-box tests.
@@ -28,6 +29,9 @@ def default_config():
         "max_soc_percentage": 90,
         "charging_curve_enabled": True,
         "discharge_efficiency": 1.0,
+        "price_euro_per_wh_accu": 0.0,
+        "price_euro_per_wh_source": "config",
+        "price_euro_per_wh_sensor": "",
     }
 
 
@@ -104,6 +108,125 @@ def test_homeassistant_fetch_success(default_config):
         mock_get.return_value = mock_resp
         soc = bi._BatteryInterface__fetch_soc_data_from_homeassistant()
         assert soc == 55.0
+
+
+def test_homeassistant_price_sensor_success(default_config):
+    """
+    Ensure the Home Assistant price sensor value is fetched and stored.
+    """
+    test_config = default_config.copy()
+    test_config.update(
+        {
+            "url": "http://fake",
+            "access_token": "token",
+            "price_euro_per_wh_source": "homeassistant",
+            "price_euro_per_wh_sensor": "sensor.accu_price",
+        }
+    )
+    with patch("src.interfaces.battery_interface.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"state": "0.002"}
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+        bi = BatteryInterface(test_config)
+        # Ensure manual update works and the getter reflects the sensor value
+        bi._BatteryInterface__update_price_euro_per_wh()
+        assert bi.get_price_euro_per_wh() == pytest.approx(0.002)
+        bi.shutdown()
+
+
+def test_homeassistant_price_sensor_failure_keeps_last_value(default_config):
+    """
+    Ensure failing sensor updates keep the last configured price.
+    """
+    test_config = default_config.copy()
+    test_config.update(
+        {
+            "url": "http://fake",
+            "access_token": "token",
+            "price_euro_per_wh_source": "homeassistant",
+            "price_euro_per_wh_sensor": "sensor.accu_price",
+            "price_euro_per_wh_accu": 0.001,
+        }
+    )
+    with patch(
+        "src.interfaces.battery_interface.requests.get",
+        side_effect=requests.exceptions.RequestException("boom"),
+    ):
+        bi = BatteryInterface(test_config)
+        bi._BatteryInterface__update_price_euro_per_wh()
+        assert bi.get_price_euro_per_wh() == pytest.approx(0.001)
+        bi.shutdown()
+
+
+def test_openhab_price_sensor_success(default_config):
+    """
+    Ensure the OpenHAB price item value is fetched and stored.
+    """
+    test_config = default_config.copy()
+    test_config.update(
+        {
+            "url": "http://fake",
+            "price_euro_per_wh_source": "openhab",
+            "price_euro_per_wh_sensor": "BatteryPrice",
+        }
+    )
+    with patch("src.interfaces.battery_interface.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"state": "0.00015"}
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+        bi = BatteryInterface(test_config)
+        # Ensure manual update works and the getter reflects the item value
+        bi._BatteryInterface__update_price_euro_per_wh()
+        assert bi.get_price_euro_per_wh() == pytest.approx(0.00015)
+        bi.shutdown()
+
+
+def test_openhab_price_sensor_with_unit_success(default_config):
+    """
+    Ensure OpenHAB price item with unit (e.g., "0.00015 €/Wh") is parsed correctly.
+    """
+    test_config = default_config.copy()
+    test_config.update(
+        {
+            "url": "http://fake",
+            "price_euro_per_wh_source": "openhab",
+            "price_euro_per_wh_sensor": "BatteryPrice",
+        }
+    )
+    with patch("src.interfaces.battery_interface.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"state": "0.00015 €/Wh"}
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+        bi = BatteryInterface(test_config)
+        bi._BatteryInterface__update_price_euro_per_wh()
+        assert bi.get_price_euro_per_wh() == pytest.approx(0.00015)
+        bi.shutdown()
+
+
+def test_openhab_price_sensor_failure_keeps_last_value(default_config):
+    """
+    Ensure failing OpenHAB item updates keep the last configured price.
+    """
+    test_config = default_config.copy()
+    test_config.update(
+        {
+            "url": "http://fake",
+            "price_euro_per_wh_source": "openhab",
+            "price_euro_per_wh_sensor": "BatteryPrice",
+            "price_euro_per_wh_accu": 0.0001,
+        }
+    )
+    with patch(
+        "src.interfaces.battery_interface.requests.get",
+        side_effect=requests.exceptions.RequestException("boom"),
+    ):
+        bi = BatteryInterface(test_config)
+        bi._BatteryInterface__update_price_euro_per_wh()
+        assert bi.get_price_euro_per_wh() == pytest.approx(0.0001)
+        bi.shutdown()
 
 
 def test_soc_error_handling(default_config):
