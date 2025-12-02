@@ -64,6 +64,8 @@ class TestACChargeDemandConversion:
 
         base_control = BaseControl(config_base, berlin_timezone, time_frame_base=3600)
         base_control.set_current_ac_charge_demand(0.5)
+        # Set battery charge max to allow full power (simulates real-world battery interface)
+        base_control.set_current_bat_charge_max(5000)
 
         # Energy is stored correctly
         energy = base_control.get_current_ac_charge_demand()
@@ -93,6 +95,8 @@ class TestACChargeDemandConversion:
 
         base_control = BaseControl(config_base, berlin_timezone, time_frame_base=900)
         base_control.set_current_ac_charge_demand(0.5)
+        # Set battery charge max to allow full power
+        base_control.set_current_bat_charge_max(10000)
 
         # Energy is stored correctly
         energy = base_control.get_current_ac_charge_demand()
@@ -125,6 +129,8 @@ class TestACChargeDemandConversion:
 
         base_control = BaseControl(config_base, berlin_timezone, time_frame_base=900)
         base_control.set_current_ac_charge_demand(0.5)
+        # Set battery charge max to allow full power
+        base_control.set_current_bat_charge_max(10000)
 
         # What MQTT was WRONGLY showing before fix
         wrong_mqtt_value = base_control.get_current_ac_charge_demand()
@@ -149,6 +155,8 @@ class TestACChargeDemandConversion:
         """
         base_control = BaseControl(config_base, berlin_timezone, time_frame_base=900)
         base_control.set_current_ac_charge_demand(0.5)  # 2500 Wh target
+        # Set battery charge max high enough to not cap the power
+        base_control.set_current_bat_charge_max(200000)
 
         # At start of slot (10:00:00)
         mock_datetime.now.return_value = berlin_timezone.localize(
@@ -228,6 +236,8 @@ class TestMQTTInverterParity:
 
         base_control = BaseControl(config_base, berlin_timezone, time_frame_base=900)
         base_control.set_current_ac_charge_demand(0.5)
+        # Set battery charge max to allow full power
+        base_control.set_current_bat_charge_max(10000)
 
         # Both should use this method
         power_value = base_control.get_needed_ac_charge_power()
