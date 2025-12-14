@@ -25,7 +25,7 @@ from src.interfaces.optimization_backends.optimization_backend_eos import EOSBac
 def fixture_base_url():
     """
     Provides the base URL for the EOS server.
-    
+
     Returns:
         str: Base URL for testing.
     """
@@ -36,7 +36,7 @@ def fixture_base_url():
 def fixture_time_frame_base():
     """
     Provides the time frame base value.
-    
+
     Returns:
         int: Time frame base in seconds.
     """
@@ -47,7 +47,7 @@ def fixture_time_frame_base():
 def fixture_berlin_timezone():
     """
     Provides a timezone object for Europe/Berlin.
-    
+
     Returns:
         pytz.timezone: Timezone object.
     """
@@ -57,14 +57,14 @@ def fixture_berlin_timezone():
 class TestRetrieveEOSVersion:
     """Test suite for the _retrieve_eos_version method of EOSBackend."""
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.put')
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.put")
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_success_with_version(
         self, mock_get, mock_put, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test successful version retrieval when server returns a specific version.
-        
+
         Args:
             mock_get: Mocked requests.get function.
             mock_put: Mocked requests.put function.
@@ -76,7 +76,7 @@ class TestRetrieveEOSVersion:
         mock_version_response = Mock()
         mock_version_response.json.return_value = {
             "status": "alive",
-            "version": "0.1.0+dev"
+            "version": "0.1.0+dev",
         }
         mock_version_response.raise_for_status = Mock()
 
@@ -87,16 +87,14 @@ class TestRetrieveEOSVersion:
             "genetic": {
                 "individuals": 300,
                 "generations": 400,
-            }
+            },
         }
         mock_config_opt_response.raise_for_status = Mock()
 
         # Setup mock response for config devices
         mock_config_dev_response = Mock()
         mock_config_dev_response.json.return_value = [
-            {
-                "charge_rates": [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
-            }
+            {"charge_rates": [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]}
         ]
         mock_config_dev_response.raise_for_status = Mock()
 
@@ -124,14 +122,14 @@ class TestRetrieveEOSVersion:
         # Verify health endpoint was called
         assert any("/v1/health" in str(call) for call in mock_get.call_args_list)
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_success_alive_unknown(
         self, mock_get, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test version retrieval when server returns "alive" status with "unknown" version.
         Should default to "0.0.2".
-        
+
         Args:
             mock_get: Mocked requests.get function.
             base_url: Base URL fixture.
@@ -140,10 +138,7 @@ class TestRetrieveEOSVersion:
         """
         # Setup mock response
         mock_response = Mock()
-        mock_response.json.return_value = {
-            "status": "alive",
-            "version": "unknown"
-        }
+        mock_response.json.return_value = {"status": "alive", "version": "unknown"}
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
 
@@ -153,14 +148,14 @@ class TestRetrieveEOSVersion:
         # Assert
         assert backend.eos_version == "0.0.2"
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_http_404(
         self, mock_get, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test version retrieval when server returns HTTP 404 (older EOS version).
         Should return "0.0.1".
-        
+
         Args:
             mock_get: Mocked requests.get function.
             base_url: Base URL fixture.
@@ -180,14 +175,14 @@ class TestRetrieveEOSVersion:
         # Assert
         assert backend.eos_version == "0.0.1"
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_http_error_non_404(
         self, mock_get, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test version retrieval when server returns a non-404 HTTP error.
         Should return the default version "0.0.2".
-        
+
         Args:
             mock_get: Mocked requests.get function.
             base_url: Base URL fixture.
@@ -208,14 +203,14 @@ class TestRetrieveEOSVersion:
         # Assert
         assert backend.eos_version == "0.0.2"
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_connect_timeout(
         self, mock_get, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test version retrieval when connection times out.
         Should return the default version "0.0.2".
-        
+
         Args:
             mock_get: Mocked requests.get function.
             base_url: Base URL fixture.
@@ -231,14 +226,14 @@ class TestRetrieveEOSVersion:
         # Assert
         assert backend.eos_version == "0.0.2"
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_connection_error(
         self, mock_get, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test version retrieval when a connection error occurs.
         Should return the default version "0.0.2".
-        
+
         Args:
             mock_get: Mocked requests.get function.
             base_url: Base URL fixture.
@@ -254,14 +249,14 @@ class TestRetrieveEOSVersion:
         # Assert
         assert backend.eos_version == "0.0.2"
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_request_exception(
         self, mock_get, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test version retrieval when a general request exception occurs.
         Should return the default version "0.0.2".
-        
+
         Args:
             mock_get: Mocked requests.get function.
             base_url: Base URL fixture.
@@ -277,14 +272,14 @@ class TestRetrieveEOSVersion:
         # Assert
         assert backend.eos_version == "0.0.2"
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_json_decode_error(
         self, mock_get, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test version retrieval when response cannot be decoded as JSON.
         Should return the default version "0.0.2".
-        
+
         Args:
             mock_get: Mocked requests.get function.
             base_url: Base URL fixture.
@@ -303,14 +298,14 @@ class TestRetrieveEOSVersion:
         # Assert
         assert backend.eos_version == "0.0.2"
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_http_error_no_response(
         self, mock_get, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test version retrieval when HTTPError has no response attribute.
         Should return the default version "0.0.2".
-        
+
         Args:
             mock_get: Mocked requests.get function.
             base_url: Base URL fixture.
@@ -327,14 +322,14 @@ class TestRetrieveEOSVersion:
         # Assert
         assert backend.eos_version == "0.0.2"
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.put')
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.put")
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_dev_version_config_needs_update(
         self, mock_get, mock_put, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test that when version is "0.2.0+dev", the configuration is validated and updated if needed.
-        
+
         Args:
             mock_get: Mocked requests.get function.
             mock_put: Mocked requests.put function.
@@ -346,7 +341,7 @@ class TestRetrieveEOSVersion:
         mock_version_response = Mock()
         mock_version_response.json.return_value = {
             "status": "alive",
-            "version": "0.2.0+dev"
+            "version": "0.2.0+dev",
         }
         mock_version_response.raise_for_status = Mock()
 
@@ -387,14 +382,14 @@ class TestRetrieveEOSVersion:
         # Assert that config update was called (both optimization and devices)
         assert mock_put.call_count == 2
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.put')
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.put")
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_dev_version_config_none(
         self, mock_get, mock_put, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test that when config_devices is None, it's properly initialized.
-        
+
         Args:
             mock_get: Mocked requests.get function.
             mock_put: Mocked requests.put function.
@@ -406,7 +401,7 @@ class TestRetrieveEOSVersion:
         mock_version_response = Mock()
         mock_version_response.json.return_value = {
             "status": "alive",
-            "version": "0.1.0+dev"
+            "version": "0.1.0+dev",
         }
         mock_version_response.raise_for_status = Mock()
 
@@ -417,7 +412,7 @@ class TestRetrieveEOSVersion:
             "genetic": {
                 "individuals": 300,
                 "generations": 400,
-            }
+            },
         }
         mock_config_opt_response.raise_for_status = Mock()
 
@@ -451,14 +446,14 @@ class TestRetrieveEOSVersion:
         # Assert that config update was called for devices (not for optimization since it was OK)
         assert mock_put.call_count == 1
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.put')
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.put")
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_non_dev_version(
         self, mock_get, mock_put, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test that version 1.0.0 triggers config validation (since 1.0.0 >= 0.1.0).
-        
+
         Args:
             mock_get: Mocked requests.get function.
             base_url: Base URL fixture.
@@ -469,7 +464,7 @@ class TestRetrieveEOSVersion:
         mock_version_response = Mock()
         mock_version_response.json.return_value = {
             "status": "alive",
-            "version": "1.0.0"
+            "version": "1.0.0",
         }
         mock_version_response.raise_for_status = Mock()
 
@@ -480,16 +475,14 @@ class TestRetrieveEOSVersion:
             "genetic": {
                 "individuals": 300,
                 "generations": 400,
-            }
+            },
         }
         mock_config_opt_response.raise_for_status = Mock()
 
         # Setup mock response for config devices - already correct
         mock_config_dev_response = Mock()
         mock_config_dev_response.json.return_value = [
-            {
-                "charge_rates": [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
-            }
+            {"charge_rates": [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]}
         ]
         mock_config_dev_response.raise_for_status = Mock()
 
@@ -530,19 +523,25 @@ class TestRetrieveEOSVersion:
             ("0.2.0", True),
             ("1.0.0", True),
             ("2025.1.0", True),
-        ]
+        ],
     )
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.put')
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.put")
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_with_multiple_versions(
-        self, mock_get, mock_put, base_url, time_frame_base, berlin_timezone,
-        version, should_validate_config
+        self,
+        mock_get,
+        mock_put,
+        base_url,
+        time_frame_base,
+        berlin_timezone,
+        version,
+        should_validate_config,
     ):
         """
         Test version retrieval with multiple version formats.
         Dev versions (0.1.0+dev, 0.2.0+dev) should trigger config validation,
         while non-dev versions should not.
-        
+
         Args:
             mock_get: Mocked requests.get function.
             mock_put: Mocked requests.put function.
@@ -556,7 +555,7 @@ class TestRetrieveEOSVersion:
         mock_version_response = Mock()
         mock_version_response.json.return_value = {
             "status": "alive",
-            "version": version
+            "version": version,
         }
         mock_version_response.raise_for_status = Mock()
 
@@ -568,16 +567,14 @@ class TestRetrieveEOSVersion:
                 "genetic": {
                     "individuals": 300,
                     "generations": 400,
-                }
+                },
             }
             mock_config_opt_response.raise_for_status = Mock()
 
             # Setup mock response for config devices - already correct
             mock_config_dev_response = Mock()
             mock_config_dev_response.json.return_value = [
-                {
-                    "charge_rates": [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
-                }
+                {"charge_rates": [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]}
             ]
             mock_config_dev_response.raise_for_status = Mock()
 
@@ -617,13 +614,13 @@ class TestRetrieveEOSVersion:
             assert mock_get.call_count == 1
             mock_get.assert_called_with(base_url + "/v1/health", timeout=10)
 
-    @patch('src.interfaces.optimization_backends.optimization_backend_eos.requests.get')
+    @patch("src.interfaces.optimization_backends.optimization_backend_eos.requests.get")
     def test_retrieve_eos_version_old_version_no_config(
         self, mock_get, base_url, time_frame_base, berlin_timezone
     ):
         """
         Test that old versions (< 0.1.0) don't trigger config validation.
-        
+
         Args:
             mock_get: Mocked requests.get function.
             base_url: Base URL fixture.
@@ -634,7 +631,7 @@ class TestRetrieveEOSVersion:
         mock_response = Mock()
         mock_response.json.return_value = {
             "status": "alive",
-            "version": "0.0.1"  # Old version, below 0.1.0
+            "version": "0.0.1",  # Old version, below 0.1.0
         }
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
@@ -649,28 +646,33 @@ class TestRetrieveEOSVersion:
         assert mock_get.call_count == 1
         mock_get.assert_called_with(base_url + "/v1/health", timeout=10)
 
+
 @pytest.mark.parametrize(
     "current_version, compare_to, expected",
     [
         # 0.1.0+dev cases
-        ("0.0.1", "0.1.0", False),       # lower public segment -> False
-        ("0.0.2", "0.1.0", False),       # lower public segment -> False
-        ("0.0.3", "0.1.0", False),       #
-
+        ("0.0.1", "0.1.0", False),  # lower public segment -> False
+        ("0.0.2", "0.1.0", False),  # lower public segment -> False
+        ("0.0.3", "0.1.0", False),  #
         # 0.1.0+dev cases
-        ("0.1.0+dev", "0.0.9", True),   # higher public segment -> True
-        ("0.1.0+dev", "0.1.0", True),   # local version sorts AFTER public release per PEP 440
-
+        ("0.1.0+dev", "0.0.9", True),  # higher public segment -> True
+        (
+            "0.1.0+dev",
+            "0.1.0",
+            True,
+        ),  # local version sorts AFTER public release per PEP 440
         # 0.1.0 cases
-        ("0.1.0", "0.1.0", True),       # equal
-        ("0.1.0", "0.2.0", False),      # lower minor -> False
-
+        ("0.1.0", "0.1.0", True),  # equal
+        ("0.1.0", "0.2.0", False),  # lower minor -> False
         # 0.2.0+dev cases
-        ("0.2.0+dev", "0.1.0", True),   # higher minor -> True
-        ("0.2.0+dev", "0.2.0", True),   # local version sorts AFTER public release per PEP 440
-
+        ("0.2.0+dev", "0.1.0", True),  # higher minor -> True
+        (
+            "0.2.0+dev",
+            "0.2.0",
+            True,
+        ),  # local version sorts AFTER public release per PEP 440
         # Optional extra to illustrate pre-release behavior:
-        ("0.1.0.dev0", "0.1.0", False), # dev pre-release sorts BEFORE final
+        ("0.1.0.dev0", "0.1.0", False),  # dev pre-release sorts BEFORE final
     ],
 )
 def test_is_eos_version_at_least(current_version, compare_to, expected):

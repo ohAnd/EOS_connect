@@ -1,23 +1,32 @@
-from src.interfaces.base_inverter import BaseInverter
 
-import time
-import os
+"""Victron inverter interface module.
+
+Provides the VictronInverter class which implements the BaseInverter
+interface for Victron devices (Modbus/TCP client integration).
+"""
+
 import logging
-import json
-import hashlib
-import re
-import requests
 
-logger = logging.getLogger("__main__").getChild("FroniusV2")
+from ..inverter_base import BaseInverter  # pylint: disable=relative-beyond-top-level
+
+
+logger = logging.getLogger("__main__").getChild("VictronModbus")
 logger.setLevel(logging.INFO)
-logger.info("[InverterV2] Loading Fronius GEN24 V2 with updated authentication")
+logger.info("[Inverter] Loading Victron Inverter")
+
+try:
+    import pymodbus
+    from pymodbus.client import ModbusTcpClient
+
+    logger.info("[Inverter] pymodbus imported successfully")
+except ImportError as e:
+    logger.warning("[Inverter] pymodbus import failed: %s", e)
 
 
-class FroniusInverterV2(BaseInverter):
+class VictronInverter(BaseInverter):
 
     def __init__(self, config):
-        """Initialize the Fronius V2 interface with updated authentication."""
-        # Ruft den Konstruktor der Basisklasse auf
+        """Initialize the Victron inverter interface."""
         super().__init__(config)
 
     def initialize(self):
@@ -48,7 +57,4 @@ class FroniusInverterV2(BaseInverter):
         raise NotImplementedError
 
     def disconnect_inverter(self):
-        raise NotImplementedError
-
-    def authenticate(self):
         raise NotImplementedError

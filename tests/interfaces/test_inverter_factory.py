@@ -1,7 +1,7 @@
 import pytest
 import pprint
-from src.interfaces.base_inverter import BaseInverter
-from src.interfaces.inverter_factory import (
+from src.interfaces.inverters import (
+    BaseInverter,
     INVERTER_TYPES,
     LEGACY_INVERTER_TYPES,
     create_inverter,

@@ -11,3 +11,4 @@ packaging>=23.2
 # pvlib>=0.13.0
 open-meteo-solar-forecast>=0.1.22
 psutil>=7.0.0
+pymodbus>=3.11.4

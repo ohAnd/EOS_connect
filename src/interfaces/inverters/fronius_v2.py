@@ -1,24 +1,4 @@
-"""
-fork from https://github.com/muexxl/batcontrol/blob/main/src/batcontrol/inverter/fronius.py
-
-This module provides a class `FroniusWR` for handling Fronius GEN24 Inverters.
-It includes methods for interacting with the inverter's API, managing battery
-configurations, and controlling various inverter settings.
-
-The Fronius Web-API is a bit quirky, which is reflected in the code.
-
-The Web-Login form does send a first request without authentication, which
-returns a nonce. This nonce is then used to create a digest for the login
-request.
-
-Parts of the information can be called without authentication, but some
-settings require authentication. We tackle a 401 as a signal to login again
-and retry the request.
-
-Yes, the Webfronted does send the password on each authenticated request hashed
-with MD5, nounce etc.
-
-"""
+"""Fronius GEN24 V2 inverter interface implementation."""
 
 import time
 import os
@@ -27,19 +7,26 @@ import json
 import hashlib
 import requests
 
-# from .baseclass import InverterBaseclass
 
-# logger = logging.getLogger('__main__')
-logger = logging.getLogger("__main__").getChild("Fronius")
+from ..inverter_base import BaseInverter  # pylint: disable=relative-beyond-top-level
+
+logger = logging.getLogger("__main__").getChild("FroniusV2")
 logger.setLevel(logging.INFO)
-logger.info("[Inverter] loading module ")
+logger.info("[Inverter] Loading Fronius GEN24 V2 interface")
 
 
-def hash_utf8(x):
-    """Hash a string or bytes object."""
+def hash_utf8_md5(x):
+    """Hash a string or bytes object with MD5 (legacy support)."""
     if isinstance(x, str):
         x = x.encode("utf-8")
     return hashlib.md5(x).hexdigest()
+
+
+def hash_utf8_sha256(x):
+    """Hash a string or bytes object with SHA256 (new firmware)."""
+    if isinstance(x, str):
+        x = x.encode("utf-8")
+    return hashlib.sha256(x).hexdigest()
 
 
 def strip_dict(original):
@@ -54,34 +41,40 @@ def strip_dict(original):
     return stripped_copy
 
 
-base_path = os.path.dirname(os.path.abspath(__file__))
+# Config files are stored in interfaces/config, one level up from inverters/
+base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-TIMEOFUSE_CONFIG_FILENAME = base_path + "/config/timeofuse_config.json"
-BATTERY_CONFIG_FILENAME = base_path + "/config/battery_config.json"
+TIMEOFUSE_CONFIG_FILENAME = os.path.join(base_path, "config", "timeofuse_config.json")
+BATTERY_CONFIG_FILENAME = os.path.join(base_path, "config", "battery_config.json")
 
 
-# class FroniusWR(InverterBaseclass):
-class FroniusWR:
-    """Class for Handling Fronius GEN24 Inverters"""
+class FroniusV2(BaseInverter):
 
-    def __init__(self, config: dict) -> None:
-        # super().__init__(config)
+    def __init__(self, config):
+        """Initialize the Fronius V2 interface."""
+        super().__init__(config)
+
+        # --- Configuration values ---
+        self.address = config["address"]
+        self.user = config.get("user", "customer").lower()  # Always lowercase
+        self.password = config.get("password", "your_password")
+        self.capacity = -1
+        self.max_soc = 100
+        self.min_soc = 5
+
+        # --- Auth status ---
         self.subsequent_login = False
         self.ncvalue_num = 1
         self.cnonce = "NaN"
         self.login_attempts = 0
-        self.address = config["address"]
-        self.capacity = -1
-        self.max_grid_charge_rate = config["max_grid_charge_rate"]
-        self.max_pv_charge_rate = config["max_pv_charge_rate"]
         self.nonce = 0
-        self.user = config["user"]
-        self.password = config["password"]
-        self.inverter_sw_revision = {"major": 0, "minor": 0, "patch": 0, "build": 0}
-        self.api_praefix = ""  # default empty string
-        self.__get_current_inverter_sw_version()
-        self.__set_api_praefix()
+        self.algorithm = "SHA256"  # Will be determined by firmware version
 
+        # --- SW version loaded in initialize() ---
+        self.inverter_sw_revision = {"major": 0, "minor": 0, "patch": 0, "build": 0}
+        self.api_praefix = ""
+
+        # --- Internal inverter data (stays in __init__) ---
         self.inverter_current_data = {
             "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": 0,
             "MODULE_TEMPERATURE_MEAN_01_F32": 0,
@@ -91,84 +84,89 @@ class FroniusWR:
             "FANCONTROL_PERCENT_02_F32": 0,
         }
 
-        self.previous_battery_config = self.get_battery_config()
+        # Placeholder, filled in initialize()
+        self.previous_battery_config = {}
         self.previous_backup_power_config = None
-        # default values
-        self.max_soc = 100
-        self.min_soc = 5
-        # Energy Management (EM)
-        #  0 - On  (Automatic , Default)
-        #  1 - Off (Adjustable)
-        self.em_mode = self.previous_battery_config["HYB_EM_MODE"]
-        # Power in W  on in em_mode = 0
-        #   negative = Feed-In (to grid)
-        #   positive = Get from grid
-        self.em_power = self.previous_battery_config["HYB_EM_POWER"]
+        self.backup_power_mode = 0
 
-        self.set_solar_api_active(True)
+        # Energy Management default initialization (overwritten later)
+        self.em_mode = 0
+        self.em_power = 0
 
+    def initialize(self):
+        """Heavy initialization that performs API calls and loads full configuration."""
+
+        # 1) Load firmware version + set API prefix
+        self.__get_current_inverter_sw_version()
+        self.__set_api_praefix()
+
+        # 2) Load battery config
+        self.previous_battery_config = self.get_battery_config()
         if not self.previous_battery_config:
             raise RuntimeError(
-                f"[Inverter] failed to load Battery config from Inverter at {self.address}"
+                f"[Inverter] Failed to load Battery config from Inverter at {self.address}"
             )
+
+        # 3) Take over EM mode + power
+        self.em_mode = self.previous_battery_config["HYB_EM_MODE"]
+        self.em_power = self.previous_battery_config["HYB_EM_POWER"]
+
+        # 4) Activate Solar API
+        self.set_solar_api_active(True)
+
+        # 5) Try PowerUnit config
         try:
             self.previous_backup_power_config = self.get_powerunit_config()
         except RuntimeError:
-            logger.error(
-                "[Inverter] failed to load Power Unit config from Inverter (latest)."
-            )
+            logger.error("[Inverter] failed to load latest PowerUnit config.")
 
+        # Fallback to older API 1.2
         if not self.previous_backup_power_config:
             try:
                 self.previous_backup_power_config = self.get_powerunit_config("1.2")
-                logger.info("[Inverter] loaded Power Unit config from Inverter (1.2).")
+                logger.info("[Inverter] Loaded PowerUnit config from 1.2 API.")
             except RuntimeError:
-                logger.error(
-                    "[Inverter] failed to load Power Unit config from Inverter (1.2)."
-                )
+                logger.error("[Inverter] Failed to load PowerUnit config (1.2).")
+                self.previous_backup_power_config = None
 
+        # 6) Determine backup power mode
         if self.previous_backup_power_config:
             self.backup_power_mode = self.previous_backup_power_config["backuppower"][
                 "DEVICE_MODE_BACKUPMODE_TYPE_U16"
             ]
         else:
-            logger.error("[Inverter] Setting backup power mode to 0 as a fallback.")
+            logger.error("[Inverter] Setting backup power mode to 0 as fallback.")
             self.backup_power_mode = 0
-            self.previous_backup_power_config = None
 
+        # 7) Configure min/max SOC
         if self.backup_power_mode == 0:
-            # in percent
             self.min_soc = self.previous_battery_config["BAT_M0_SOC_MIN"]
         else:
-            # in percent
             self.min_soc = max(
                 self.previous_battery_config["BAT_M0_SOC_MIN"],
                 self.previous_battery_config["HYB_BACKUP_RESERVED"],
             )
         self.max_soc = self.previous_battery_config["BAT_M0_SOC_MAX"]
-        self.get_time_of_use()  # save timesofuse
-        self.set_allow_grid_charging(True)
 
-    def initialize(self):
-        self.__get_current_inverter_sw_version()
-        self.__set_api_praefix()
-
-        self.previous_battery_config = self.get_battery_config()
-        self.set_solar_api_active(True)
-
-        try:
-            self.previous_backup_power_config = self.get_powerunit_config()
-        except RuntimeError:
-            ...
-
-        # SOC settings
-        if self.previous_backup_power_config:
-            self.backup_power_mode = ...
-            self.min_soc = ...
-            self.max_soc = ...
-
+        # 8) Load time-of-use
         self.get_time_of_use()
+
+        # 9) Activate grid charging
         self.set_allow_grid_charging(True)
+
+        logger.info("[Inverter] Initialization completed.")
+
+    def connect_inverter(self):
+        return super().connect_inverter()
+
+    def disconnect_inverter(self):
+        return super().disconnect_inverter()
+
+    def get_battery_info(self):
+        return super().get_battery_info()
+
+    def set_battery_mode(self, mode):
+        return super().set_battery_mode(mode)
 
     def get_SOC(self):
         """
@@ -180,7 +178,7 @@ class FroniusWR:
 
         Returns:
             float: The State of Charge (SOC) as a percentage. Defaults to 99.0 if
-               the request fails or the response is invalid.
+            the request fails or the response is invalid.
         """
         path = "/solar_api/v1/GetPowerFlowRealtimeData.fcgi"
         response = self.send_request(path)
@@ -377,43 +375,90 @@ class FroniusWR:
         return result
 
     def fetch_inverter_data(self):
-        """Get inverter data from inverter."""
-        response = self.send_request(
-            self.api_praefix + "/components/inverter/readable", auth=True
-        )
-        if not response:
+        """Get inverter data for monitoring (temperatures, fan control, etc.)."""
+        try:
+            response = self.send_request(
+                self.api_praefix + "/components/inverter/readable", auth=True
+            )
+
+            if not response:
+                logger.debug("[Inverter] Inverter monitoring endpoint not available")
+                return None
+
+            if response.status_code == 404:
+                logger.debug(
+                    "[Inverter] Inverter monitoring not supported by this firmware"
+                )
+                return None
+
+            if response.status_code != 200:
+                logger.debug(
+                    f"[Inverter] Inverter monitoring returned {response.status_code}"
+                )
+                return None
+
+            data = json.loads(response.text)
+            body_data = data.get("Body", {}).get("Data", {})
+
+            # Find first device that has channel data (device id is dynamic)
+            channels = {}
+            for device_id, device_data in body_data.items():
+                if isinstance(device_data, dict) and "channels" in device_data:
+                    channels = device_data.get("channels", {}) or {}
+                    logger.debug(
+                        f"[Inverter] Found inverter data for device: {device_id}"
+                    )
+                    break
+
+            # If no channels found, still return a zeroed dict (do not return None on malformed 200)
+            if not channels:
+                logger.warning("[Inverter] No channel data found in inverter response")
+                self.inverter_current_data = {
+                    "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": 0.0,
+                    "MODULE_TEMPERATURE_MEAN_01_F32": 0.0,
+                    "MODULE_TEMPERATURE_MEAN_03_F32": 0.0,
+                    "MODULE_TEMPERATURE_MEAN_04_F32": 0.0,
+                    "FANCONTROL_PERCENT_01_F32": 0.0,
+                    "FANCONTROL_PERCENT_02_F32": 0.0,
+                }
+                return self.inverter_current_data
+
+            # Build normalized inverter_current_data with consistent keys
+            ambient_raw = channels.get("DEVICE_TEMPERATURE_AMBIENTMEAN_01_F32", 0)
+            self.inverter_current_data = {
+                # Canonical keys used by V2/tests
+                "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": round(ambient_raw, 2),
+                "MODULE_TEMPERATURE_MEAN_01_F32": round(
+                    channels.get("MODULE_TEMPERATURE_MEAN_01_F32", 0), 2
+                ),
+                "MODULE_TEMPERATURE_MEAN_03_F32": round(
+                    channels.get("MODULE_TEMPERATURE_MEAN_03_F32", 0), 2
+                ),
+                "MODULE_TEMPERATURE_MEAN_04_F32": round(
+                    channels.get("MODULE_TEMPERATURE_MEAN_04_F32", 0), 2
+                ),
+                "FANCONTROL_PERCENT_01_F32": round(
+                    channels.get("FANCONTROL_PERCENT_01_F32", 0), 2
+                ),
+                "FANCONTROL_PERCENT_02_F32": round(
+                    channels.get("FANCONTROL_PERCENT_02_F32", 0), 2
+                ),
+            }
+
+            logger.debug("[Inverter] Inverter data: %s", self.inverter_current_data)
+            return self.inverter_current_data
+
+        except (KeyError, ValueError, AttributeError) as e:
+            logger.warning(f"[Inverter] Error parsing inverter data: {e}")
             return None
-
-        result = json.loads(response.text)["Body"]["Data"]["0"]["channels"]
-
-        self.inverter_current_data = {
-            "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": round(
-                result.get("DEVICE_TEMPERATURE_AMBIENTMEAN_01_F32", 0), 2
-            ),
-            "MODULE_TEMPERATURE_MEAN_01_F32": round(
-                result.get("MODULE_TEMPERATURE_MEAN_01_F32", 0), 2
-            ),
-            "MODULE_TEMPERATURE_MEAN_03_F32": round(
-                result.get("MODULE_TEMPERATURE_MEAN_03_F32", 0), 2
-            ),
-            "MODULE_TEMPERATURE_MEAN_04_F32": round(
-                result.get("MODULE_TEMPERATURE_MEAN_04_F32", 0), 2
-            ),
-            "FANCONTROL_PERCENT_01_F32": round(
-                result.get("FANCONTROL_PERCENT_01_F32", 0), 2
-            ),
-            "FANCONTROL_PERCENT_02_F32": round(
-                result.get("FANCONTROL_PERCENT_02_F32", 0), 2
-            ),
-        }
-
-        logger.debug("[Inverter] Inverter data: %s", self.inverter_current_data)
-
-        return self.inverter_current_data
 
     def get_inverter_current_data(self):
         """Get the current inverter data."""
         return self.inverter_current_data
+
+    def supports_extended_monitoring(self) -> bool:
+        """Fronius V2 supports extended monitoring (temperature, fan control)."""
+        return True
 
     def set_mode_avoid_discharge(self):
         """Set the inverter to avoid discharging the battery."""
@@ -728,26 +773,36 @@ class FroniusWR:
         return auth_dict
 
     def get_auth_header(self, method, path) -> str:
-        """Create the Authorization header for the request."""
+        """Create the Authorization header with SHA256/MD5 support based on firmware."""
         nonce = self.nonce
         realm = "Webinterface area"
         ncvalue = f"{self.ncvalue_num:08d}"
         cnonce = self.cnonce
         user = self.user
         password = self.password
+
         if len(self.user) < 4:
             raise RuntimeError("User needed for Authorization")
         if len(self.password) < 4:
             raise RuntimeError("Password needed for Authorization")
 
+        # Choose hash function based on algorithm
+        if self.algorithm == "SHA256":
+            hash_func = hash_utf8_sha256
+            algorithm_header = "SHA256"
+        else:
+            hash_func = hash_utf8_md5
+            algorithm_header = "MD5"
+
         a1 = f"{user}:{realm}:{password}"
         a2 = f"{method}:{path}"
-        ha1 = hash_utf8(a1)
-        ha2 = hash_utf8(a2)
+        ha1 = hash_func(a1)
+        ha2 = hash_func(a2)
         noncebit = f"{nonce}:{ncvalue}:{cnonce}:auth:{ha2}"
-        respdig = hash_utf8(f"{ha1}:{noncebit}")
+        respdig = hash_func(f"{ha1}:{noncebit}")
+
         auth_header = f'Digest username="{user}", realm="{realm}", nonce="{nonce}", uri="{path}", '
-        auth_header += f'algorithm="MD5", qop=auth, nc={ncvalue}, cnonce="{cnonce}", '
+        auth_header += f'algorithm="{algorithm_header}", qop=auth, nc={ncvalue}, cnonce="{cnonce}", '
         auth_header += f'response="{respdig}"'
         return auth_header
 
@@ -788,8 +843,8 @@ class FroniusWR:
     #             self.__get_mqtt_topic() + 'em_mode', mode)
 
     def shutdown(self):
-        """Change back batcontrol changes."""
-        logger.info("[Inverter] Reverting batcontrol created config changes")
+        """Change back EOS_connect changes."""
+        logger.info("[Inverter] Reverting EOS_connect created config changes")
         self.restore_battery_config()
         self.restore_time_of_use_config()
         self.logout()
@@ -816,18 +871,35 @@ class FroniusWR:
         return True
 
     def __set_api_praefix(self):
-        """Set the API prefix based on the inverter version."""
-        if (
+        """Set API prefix and authentication algorithm based on firmware version."""
+        version_tuple = (
             self.inverter_sw_revision["major"],
             self.inverter_sw_revision["minor"],
             self.inverter_sw_revision["patch"],
             self.inverter_sw_revision["build"],
-        ) < (1, 36, 5, 1):
+        )
+
+        if version_tuple < (1, 36, 5, 1):
+            # Old firmware: no /api prefix, MD5 only
             self.api_praefix = ""
-            logger.info("[Inverter] Using API prefix: '%s'", self.api_praefix)
-        else:
+            self.algorithm = "MD5"
+            logger.info(
+                "[Inverter] Old firmware (<1.36.5-1): Using '' base with MD5 auth"
+            )
+        elif version_tuple < (1, 38, 6, 1):
+            # Middle firmware: /api prefix, MD5 only
             self.api_praefix = "/api"
-            logger.info("[Inverter] Using API prefix: '%s'", self.api_praefix)
+            self.algorithm = "MD5"
+            logger.info(
+                "[Inverter] Middle firmware (1.36.5-1 to 1.38.5-x): Using '/api' base with MD5 auth"
+            )
+        else:
+            # New firmware: /api prefix, SHA256
+            self.api_praefix = "/api"
+            self.algorithm = "SHA256"
+            logger.info(
+                "[Inverter] New firmware (>=1.38.6-1): Using '/api' base with SHA256 auth"
+            )
         return True
 
     # def activate_mqtt(self, api_mqtt_api):

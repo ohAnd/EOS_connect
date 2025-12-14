@@ -1,17 +1,23 @@
+"""Fronius Legacy inverter interface implementation.
+
+This module provides the FroniusLegacy class for interfacing with Fronius
+inverters using their legacy API. It handles authentication, battery configuration,
+time-of-use settings, and various inverter control operations.
+"""
+
 import time
 import os
 import logging
 import json
 import hashlib
-import re
 import requests
 
 
-from src.interfaces.base_inverter import BaseInverter
+from ..inverter_base import BaseInverter  # pylint: disable=relative-beyond-top-level
 
-logger = logging.getLogger("__main__").getChild("Fronius")
+logger = logging.getLogger("__main__").getChild("FroniusLegacy")
 logger.setLevel(logging.INFO)
-logger.info("[Inverter] loading module ")
+logger.info("[Inverter] Loading Fronius Legacy interface")
 
 
 def hash_utf8(x):
@@ -33,38 +39,43 @@ def strip_dict(original):
     return stripped_copy
 
 
-base_path = os.path.dirname(os.path.abspath(__file__))
+# Config files are stored in interfaces/config, one level up from inverters/
+base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-TIMEOFUSE_CONFIG_FILENAME = base_path + "/config/timeofuse_config.json"
-BATTERY_CONFIG_FILENAME = base_path + "/config/battery_config.json"
+TIMEOFUSE_CONFIG_FILENAME = os.path.join(base_path, "config", "timeofuse_config.json")
+BATTERY_CONFIG_FILENAME = os.path.join(base_path, "config", "battery_config.json")
 
 
-class FroniusInverterV1(BaseInverter):
+class FroniusLegacy(BaseInverter):
+    """Fronius Legacy inverter interface.
+
+    Provides methods for authentication, battery configuration, time-of-use
+    settings, energy management, and communication with Fronius legacy API
+    endpoints.
+    """
 
     def __init__(self, config):
-        """Initialize the Fronius V2 interface with updated authentication."""
-        # Basisklasse aufrufen
-
+        """Initialize the Fronius Legacy interface."""
         super().__init__(config)
 
-        # --- Konfigurationswerte ---
+        # --- Configuration values ---
         self.address = config["address"]
         self.capacity = -1
         self.max_soc = 100
         self.min_soc = 5
 
-        # --- Auth-Status ---
+        # --- Auth status ---
         self.subsequent_login = False
         self.ncvalue_num = 1
         self.cnonce = "NaN"
         self.login_attempts = 0
         self.nonce = 0
 
-        # --- SW-Version wird erst in initialize() geladen ---
+        # --- SW version loaded in initialize() ---
         self.inverter_sw_revision = {"major": 0, "minor": 0, "patch": 0, "build": 0}
         self.api_praefix = ""
 
-        # --- interne Inverter-Daten (bleibt im __init__) ---
+        # --- Internal inverter data (stays in __init__) ---
         self.inverter_current_data = {
             "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32": 0,
             "MODULE_TEMPERATURE_MEAN_01_F32": 0,
@@ -74,43 +85,43 @@ class FroniusInverterV1(BaseInverter):
             "FANCONTROL_PERCENT_02_F32": 0,
         }
 
-        # Platzhalter, wird in initialize() befüllt
+        # Placeholder, filled in initialize()
         self.previous_battery_config = {}
         self.previous_backup_power_config = None
         self.backup_power_mode = 0
 
-        # Energy Management Default-Initialisierung (wird später überschrieben)
+        # Energy Management default initialization (overwritten later)
         self.em_mode = 0
         self.em_power = 0
 
     def initialize(self):
         """Heavy initialization that performs API calls and loads full configuration."""
 
-        # 1) Firmware-Version laden + API Prefix setzen
+        # 1) Load firmware version + set API prefix
         self.__get_current_inverter_sw_version()
         self.__set_api_praefix()
 
-        # 2) Batterie-Konfig laden
+        # 2) Load battery config
         self.previous_battery_config = self.get_battery_config()
         if not self.previous_battery_config:
             raise RuntimeError(
                 f"[Inverter] Failed to load Battery config from Inverter at {self.address}"
             )
 
-        # 3) EM Mode + Power übernehmen
+        # 3) Take over EM mode + power
         self.em_mode = self.previous_battery_config["HYB_EM_MODE"]
         self.em_power = self.previous_battery_config["HYB_EM_POWER"]
 
-        # 4) Solar API aktivieren
+        # 4) Activate Solar API
         self.set_solar_api_active(True)
 
-        # 5) PowerUnit Config versuchen
+        # 5) Try PowerUnit config
         try:
             self.previous_backup_power_config = self.get_powerunit_config()
         except RuntimeError:
             logger.error("[Inverter] failed to load latest PowerUnit config.")
 
-        # Fallback auf ältere API 1.2
+        # Fallback to older API 1.2
         if not self.previous_backup_power_config:
             try:
                 self.previous_backup_power_config = self.get_powerunit_config("1.2")
@@ -119,7 +130,7 @@ class FroniusInverterV1(BaseInverter):
                 logger.error("[Inverter] Failed to load PowerUnit config (1.2).")
                 self.previous_backup_power_config = None
 
-        # 6) Backup Power Mode bestimmen
+        # 6) Determine backup power mode
         if self.previous_backup_power_config:
             self.backup_power_mode = self.previous_backup_power_config["backuppower"][
                 "DEVICE_MODE_BACKUPMODE_TYPE_U16"
@@ -128,7 +139,7 @@ class FroniusInverterV1(BaseInverter):
             logger.error("[Inverter] Setting backup power mode to 0 as fallback.")
             self.backup_power_mode = 0
 
-        # 7) Min/Max SOC konfigurieren
+        # 7) Configure min/max SOC
         if self.backup_power_mode == 0:
             self.min_soc = self.previous_battery_config["BAT_M0_SOC_MIN"]
         else:
@@ -138,10 +149,10 @@ class FroniusInverterV1(BaseInverter):
             )
         self.max_soc = self.previous_battery_config["BAT_M0_SOC_MAX"]
 
-        # 8) Time-of-Use laden
+        # 8) Load time-of-use
         self.get_time_of_use()
 
-        # 9) Grid Charging aktivieren
+        # 9) Activate grid charging
         self.set_allow_grid_charging(True)
 
         logger.info("[Inverter] Initialization completed.")
@@ -257,7 +268,7 @@ class FroniusInverterV1(BaseInverter):
         response_dict = json.loads(response.text)
         expected_write_successes = settings_to_restore
         for expected_write_success in expected_write_successes:
-            if not expected_write_success in response_dict["writeSuccess"]:
+            if expected_write_success not in response_dict["writeSuccess"]:
                 raise RuntimeError(f"failed to set {expected_write_success}")
         # Remove after successful restore
         try:
@@ -280,7 +291,7 @@ class FroniusInverterV1(BaseInverter):
         response_dict = json.loads(response.text)
         expected_write_successes = ["HYB_EVU_CHARGEFROMGRID"]
         for expected_write_success in expected_write_successes:
-            if not expected_write_success in response_dict["writeSuccess"]:
+            if expected_write_success not in response_dict["writeSuccess"]:
                 raise RuntimeError(f"failed to set {expected_write_success}")
         return response
 
@@ -295,7 +306,7 @@ class FroniusInverterV1(BaseInverter):
         response_dict = json.loads(response.text)
         expected_write_successes = ["SolarAPIv1Enabled"]
         for expected_write_success in expected_write_successes:
-            if not expected_write_success in response_dict["writeSuccess"]:
+            if expected_write_success not in response_dict["writeSuccess"]:
                 raise RuntimeError(f"failed to set {expected_write_success}")
         return response
 
@@ -341,7 +352,7 @@ class FroniusInverterV1(BaseInverter):
             return response
         response_dict = json.loads(response.text)
         for expected_write_success in parameters.keys():
-            if not expected_write_success in response_dict["writeSuccess"]:
+            if expected_write_success not in response_dict["writeSuccess"]:
                 raise RuntimeError(f"failed to set {expected_write_success}")
         return response
 
@@ -402,6 +413,10 @@ class FroniusInverterV1(BaseInverter):
     def get_inverter_current_data(self):
         """Get the current inverter data."""
         return self.inverter_current_data
+
+    def supports_extended_monitoring(self) -> bool:
+        """Fronius Legacy supports extended monitoring (temperature, fan control)."""
+        return True
 
     def set_mode_avoid_discharge(self):
         """Set the inverter to avoid discharging the battery."""
@@ -483,7 +498,7 @@ class FroniusInverterV1(BaseInverter):
 
         try:
             time_of_use_config = json.loads(time_of_use_config_json)
-        except:  # pylint: disable=bare-except
+        except json.JSONDecodeError:
             logger.error(
                 "[Inverter] could not parse timeofuse config from %s",
                 TIMEOFUSE_CONFIG_FILENAME,
@@ -529,7 +544,7 @@ class FroniusInverterV1(BaseInverter):
         response_dict = json.loads(response.text)
         expected_write_successes = ["timeofuse"]
         for expected_write_success in expected_write_successes:
-            if not expected_write_success in response_dict["writeSuccess"]:
+            if expected_write_success not in response_dict["writeSuccess"]:
                 raise RuntimeError(f"failed to set {expected_write_success}")
         return response
 
@@ -776,8 +791,8 @@ class FroniusInverterV1(BaseInverter):
     #             self.__get_mqtt_topic() + 'em_mode', mode)
 
     def shutdown(self):
-        """Change back batcontrol changes."""
-        logger.info("[Inverter] Reverting batcontrol created config changes")
+        """Change back EOS_connect changes."""
+        logger.info("[Inverter] Reverting EOS_connect created config changes")
         self.restore_battery_config()
         self.restore_time_of_use_config()
         self.logout()
