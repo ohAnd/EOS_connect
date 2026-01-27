@@ -1100,7 +1100,9 @@ class OptimizationScheduler:
         self.__start_update_service_data_loop()
 
     def __run_data_loop(self):
-        if inverter_interface.supports_extended_monitoring():
+
+        if inverter_interface.supports_extended_monitoring:
+            # TODO: Add support for standard inverter data
             inverter_interface.fetch_inverter_data()
             mqtt_interface.update_publish_topics(
                 {
@@ -1574,7 +1576,7 @@ def get_controls():
         "inverter": {
             "inverter_special_data": (
                 inverter_interface.get_inverter_current_data()
-                if inverter_interface.supports_extended_monitoring()
+                if inverter_interface.supports_extended_monitoring
                 else None
             )
         },

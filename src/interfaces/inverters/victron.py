@@ -30,6 +30,9 @@ except ImportError as e:
 
 
 class VictronInverter(BaseInverter):
+    """Victron inverter interface implementation."""
+
+    supports_extended_monitoring_default = False
 
     def __init__(self, config):
         """Initialize the Victron inverter interface."""

@@ -1,4 +1,3 @@
-
 """Base inverter interface definitions.
 
 This module provides the Abstract Base Class for inverter implementations
@@ -15,6 +14,8 @@ logger.setLevel(logging.INFO)
 class BaseInverter(ABC):
     """Abstract base class for different inverter types."""
 
+    supports_extended_monitoring_default = False  # capability default
+
     def __init__(self, config: dict):
         # Store complete config (for tests & future extensions)
         self.config = config
@@ -25,6 +26,14 @@ class BaseInverter(ABC):
         self.password = config.get("password", "")
         self.max_grid_charge_rate = config.get("max_grid_charge_rate")
         self.max_pv_charge_rate = config.get("max_pv_charge_rate")
+
+        # Allow config override, otherwise use class capability default
+        self.supports_extended_monitoring = bool(
+            config.get(
+                "supports_extended_monitoring",
+                self.supports_extended_monitoring_default,
+            )
+        )
 
         self.is_authenticated = False
         self.inverter_type = self.__class__.__name__
@@ -128,17 +137,6 @@ class BaseInverter(ABC):
             self.inverter_type,
             max_pv_charge_rate,
         )
-
-    def supports_extended_monitoring(self) -> bool:
-        """
-        Indicates whether this inverter supports extended monitoring data
-        (temperature sensors, fan control, etc.).
-
-        Returns:
-            False by default. Subclasses providing extended monitoring
-            should override this method to return True.
-        """
-        return False
 
     def disconnect(self):
         """Session closes itself."""

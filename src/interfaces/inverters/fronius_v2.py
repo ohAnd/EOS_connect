@@ -49,6 +49,9 @@ BATTERY_CONFIG_FILENAME = os.path.join(base_path, "config", "battery_config.json
 
 
 class FroniusV2(BaseInverter):
+    """Fronius GEN24 V2 inverter interface implementation."""
+
+    supports_extended_monitoring_default = True
 
     def __init__(self, config):
         """Initialize the Fronius V2 interface."""
@@ -456,9 +459,10 @@ class FroniusV2(BaseInverter):
         """Get the current inverter data."""
         return self.inverter_current_data
 
-    def supports_extended_monitoring(self) -> bool:
-        """Fronius V2 supports extended monitoring (temperature, fan control)."""
-        return True
+    # TODO: delete later if working
+    # def supports_extended_monitoring(self) -> bool:
+    #    """Fronius V2 supports extended monitoring (temperature, fan control)."""
+    #    return True
 
     def set_mode_avoid_discharge(self):
         """Set the inverter to avoid discharging the battery."""
