@@ -1198,6 +1198,9 @@ def change_control_state():
         and config_manager.config["inverter"]["type"] != "default"
     ):
         inverter_fronius_en = True
+        inverter_en = True
+        # TODO: Hier sollte ein spezieller Inverter verwendet werden
+        # NOTE: Welcher Inverter dann verwendet wird, wird in der config_manager.config["inverter"]["type"] abgefragt
 
     current_overall_state = base_control.get_current_overall_state_number()
     current_overall_state_text = base_control.get_current_overall_state()
@@ -1266,9 +1269,13 @@ def change_control_state():
     if base_control.was_overall_state_changed_recently(consume=True):
         logger.debug("[Main] Overall state changed recently")
         # MODE_CHARGE_FROM_GRID
+        # TODO: An inverter query should be avoided here; this is handled by the base class and the inverter factory.
+        # TODO: inverter_fronius_en replace with inverter_en
         if current_overall_state == 0:
+
             if inverter_fronius_en:
                 inverter_interface.set_mode_force_charge(tgt_ac_charge_power)
+
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("force_charge")
             logger.info(
@@ -1289,6 +1296,8 @@ def change_control_state():
         # MODE_DISCHARGE_ALLOWED
         elif current_overall_state == 2:
             if inverter_fronius_en:
+                # TODO: tgt_dc_charge_power as discharge power?
+                # TODO: parameter passing in function?
                 inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_allow_discharge()
             elif inverter_evcc_en:

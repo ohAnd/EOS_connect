@@ -419,13 +419,13 @@ class ConfigManager:
             "inverter", before="Inverter configuration"
         )
         config["inverter"].yaml_add_eol_comment(
-            "Type of inverter - fronius_gen24, fronius_gen24_legacy, evcc, default"
+            "Type of inverter - fronius_gen24, fronius_gen24_legacy, victron, evcc, default"
             + " (default will disable inverter control -"
             + " only displaying the target state) - preset: default",
             "type",
         )
         config["inverter"].yaml_add_eol_comment(
-            "Address of the inverter (fronius_gen24/fronius_gen24_legacy only)",
+            "Address of the inverter (fronius_gen24/fronius_gen24_legacy, victron only)",
             "address",
         )
         config["inverter"].yaml_add_eol_comment(
