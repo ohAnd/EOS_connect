@@ -1,8 +1,14 @@
 """
 Unit tests for FroniusV2 inverter implementation.
 
-Tests initialization, authentication, battery control, and API interactions
-for the Fronius GEN24 V2 inverter interface with updated authentication.
+Tests Fronius V2-specific functionality:
+- SHA256 authentication attributes
+- hash_utf8_md5/hash_utf8_sha256 and strip_dict utility functions
+- User lowercase conversion
+- Inverter data structure
+- Configuration paths
+
+Common interface compliance tests are inherited from BaseInverterTestSuite.
 """
 
 # pylint: disable=import-error,redefined-outer-name,import-outside-toplevel,duplicate-code,too-few-public-methods
@@ -10,47 +16,58 @@ for the Fronius GEN24 V2 inverter interface with updated authentication.
 from unittest.mock import patch
 import pytest
 from src.interfaces.inverters.fronius_v2 import FroniusV2
-from src.interfaces.inverter_base import BaseInverter
+from .base_inverter_tests import BaseInverterTestSuite
 
 
-@pytest.fixture
-def fronius_v2_config():
-    """Provide a default configuration for FroniusV2."""
-    return {
-        "address": "192.168.1.102",
-        "user": "customer",
-        "password": "test_password",
-        "max_pv_charge_rate": 15000,
-        "max_grid_charge_rate": 10000,
-        "type": "fronius_gen24",
-    }
+# =========================================================================
+# Test Configuration
+# =========================================================================
 
 
-@pytest.fixture
-def fronius_v2_instance(fronius_v2_config):
-    """Create a FroniusV2 instance with basic mocking."""
-    with patch("src.interfaces.inverters.fronius_v2.requests.Session"):
-        instance = FroniusV2(fronius_v2_config)
-        return instance
+class TestFroniusV2Base(BaseInverterTestSuite):
+    """
+    Base test suite for FroniusV2.
+    Inherits common interface compliance tests from BaseInverterTestSuite.
+    """
+
+    inverter_class = FroniusV2  # type: ignore[assignment]
+    minimal_config = {"address": "192.168.1.102", "type": "fronius_gen24"}  # type: ignore[assignment]
+    expected_extended_monitoring = True  # type: ignore[assignment]
+
+    @classmethod
+    def setup_mocks(cls, monkeypatch):
+        """Set up mocks for FroniusV2 (requests.Session)."""
+        monkeypatch.setattr(
+            "src.interfaces.inverters.fronius_v2.requests.Session", lambda: None
+        )
 
 
-class TestFroniusV2Initialization:
-    """Tests for FroniusV2 initialization."""
+# =========================================================================
+# Fronius V2-Specific Tests
+# =========================================================================
 
-    def test_initialization_sets_basic_attributes(self, fronius_v2_instance):
-        """Test that initialization sets basic attributes correctly."""
-        assert fronius_v2_instance.address == "192.168.1.102"
-        assert fronius_v2_instance.user == "customer"
-        assert fronius_v2_instance.password == "test_password"
-        assert fronius_v2_instance.max_soc == 100
-        assert fronius_v2_instance.min_soc == 5
 
-    def test_initialization_sets_auth_defaults(self, fronius_v2_instance):
+class TestFroniusV2Authentication:
+    """Tests for Fronius V2 SHA256 authentication attributes."""
+
+    @pytest.fixture
+    def fronius_instance(self):
+        """Create FroniusV2 instance for testing."""
+        config = {
+            "address": "192.168.1.102",
+            "user": "customer",
+            "password": "test_password",
+            "type": "fronius_gen24",
+        }
+        with patch("src.interfaces.inverters.fronius_v2.requests.Session"):
+            return FroniusV2(config)
+
+    def test_auth_attributes_initialized(self, fronius_instance):
         """Test that authentication-related attributes are initialized."""
-        assert fronius_v2_instance.subsequent_login is False
-        assert fronius_v2_instance.ncvalue_num == 1
-        assert fronius_v2_instance.algorithm == "SHA256"
-        assert fronius_v2_instance.login_attempts == 0
+        assert fronius_instance.subsequent_login is False
+        assert fronius_instance.ncvalue_num == 1
+        assert fronius_instance.algorithm == "SHA256"
+        assert fronius_instance.login_attempts == 0
 
     def test_user_is_converted_to_lowercase(self):
         """Test that user field is always converted to lowercase."""
@@ -64,108 +81,42 @@ class TestFroniusV2Initialization:
             instance = FroniusV2(config)
             assert instance.user == "customer"
 
-    def test_initialization_sets_inverter_data_structure(self, fronius_v2_instance):
-        """Test that inverter data structure is initialized."""
-        assert (
-            "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32"
-            in fronius_v2_instance.inverter_current_data
-        )
-        assert (
-            "MODULE_TEMPERATURE_MEAN_01_F32"
-            in fronius_v2_instance.inverter_current_data
-        )
-        assert "FANCONTROL_PERCENT_01_F32" in fronius_v2_instance.inverter_current_data
-
-    def test_inherits_from_base_inverter(self, fronius_v2_instance):
-        """Test that FroniusV2 inherits from BaseInverter."""
-        assert isinstance(fronius_v2_instance, BaseInverter)
-
-
-class TestFroniusV2Capabilities:
-    """Tests for FroniusV2 capability detection."""
-
-    def test_supports_extended_monitoring(self, fronius_v2_instance):
-        """Test that FroniusV2 supports extended monitoring."""
-        assert fronius_v2_instance.supports_extended_monitoring() is True
-
-    def test_has_api_set_max_pv_charge_rate_method(self, fronius_v2_instance):
-        """Test that API method for PV charge rate exists and is callable."""
-        assert hasattr(fronius_v2_instance, "api_set_max_pv_charge_rate")
-        assert callable(fronius_v2_instance.api_set_max_pv_charge_rate)
-
-
-class TestFroniusV2ConnectionMethods:
-    """Tests for connection-related methods."""
-
-    @pytest.mark.skip(reason="connect_inverter calls abstract base method")
-    def test_connect_inverter_returns_boolean(self, fronius_v2_instance):
-        """Test that connect_inverter returns a boolean value."""
-        with patch.object(fronius_v2_instance, "authenticate", return_value=True):
-            result = fronius_v2_instance.connect_inverter()
-            assert isinstance(result, bool)
-
-    @pytest.mark.skip(reason="disconnect_inverter calls abstract base method")
-    def test_disconnect_inverter_returns_boolean(self, fronius_v2_instance):
-        """Test that disconnect_inverter returns a boolean value."""
-        result = fronius_v2_instance.disconnect_inverter()
-        assert isinstance(result, bool)
-
-
-class TestFroniusV2BatteryControl:
-    """Tests for battery control methods."""
-
-    def test_set_mode_avoid_discharge_has_method(self, fronius_v2_instance):
-        """Test that set_mode_avoid_discharge method exists."""
-        assert hasattr(fronius_v2_instance, "set_mode_avoid_discharge")
-        assert callable(fronius_v2_instance.set_mode_avoid_discharge)
-
-    def test_set_mode_allow_discharge_has_method(self, fronius_v2_instance):
-        """Test that set_mode_allow_discharge method exists."""
-        assert hasattr(fronius_v2_instance, "set_mode_allow_discharge")
-        assert callable(fronius_v2_instance.set_mode_allow_discharge)
-
-    def test_set_mode_force_charge_has_method(self, fronius_v2_instance):
-        """Test that set_mode_force_charge method exists."""
-        assert hasattr(fronius_v2_instance, "set_mode_force_charge")
-        assert callable(fronius_v2_instance.set_mode_force_charge)
-
-    def test_get_battery_info_has_method(self, fronius_v2_instance):
-        """Test that get_battery_info method exists."""
-        assert hasattr(fronius_v2_instance, "get_battery_info")
-        assert callable(fronius_v2_instance.get_battery_info)
-
-    def test_set_allow_grid_charging_has_method(self, fronius_v2_instance):
-        """Test that set_allow_grid_charging method exists."""
-        assert hasattr(fronius_v2_instance, "set_allow_grid_charging")
-        assert callable(fronius_v2_instance.set_allow_grid_charging)
-
 
 class TestFroniusV2InverterData:
-    """Tests for inverter data fetching."""
+    """Tests for Fronius V2 inverter data structure."""
 
-    def test_fetch_inverter_data_has_method(self, fronius_v2_instance):
-        """Test that fetch_inverter_data method exists."""
-        assert hasattr(fronius_v2_instance, "fetch_inverter_data")
-        assert callable(fronius_v2_instance.fetch_inverter_data)
+    @pytest.fixture
+    def fronius_instance(self):
+        """Create FroniusV2 instance for testing."""
+        config = {"address": "192.168.1.102", "type": "fronius_gen24"}
+        with patch("src.interfaces.inverters.fronius_v2.requests.Session"):
+            return FroniusV2(config)
 
-    def test_get_inverter_current_data_returns_dict(self, fronius_v2_instance):
+    def test_inverter_data_structure_initialized(self, fronius_instance):
+        """Test that Fronius-specific inverter data structure is initialized."""
+        assert (
+            "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32"
+            in fronius_instance.inverter_current_data
+        )
+        assert (
+            "MODULE_TEMPERATURE_MEAN_01_F32" in fronius_instance.inverter_current_data
+        )
+        assert "FANCONTROL_PERCENT_01_F32" in fronius_instance.inverter_current_data
+
+    def test_get_inverter_current_data_returns_dict(self, fronius_instance):
         """Test that get_inverter_current_data returns the internal data dict."""
-        result = fronius_v2_instance.get_inverter_current_data()
+        result = fronius_instance.get_inverter_current_data()
         assert isinstance(result, dict)
         assert "DEVICE_TEMPERATURE_AMBIENTEMEAN_F32" in result
 
-
-class TestFroniusV2PVChargeRateControl:  # pylint: disable=too-few-public-methods
-    """Tests for PV charge rate control specific to FroniusV2."""
-
-    def test_api_set_max_pv_charge_rate_has_method(self, fronius_v2_instance):
-        """Test that api_set_max_pv_charge_rate method exists."""
-        assert hasattr(fronius_v2_instance, "api_set_max_pv_charge_rate")
-        assert callable(fronius_v2_instance.api_set_max_pv_charge_rate)
+    def test_has_api_set_max_grid_charge_rate_method(self, fronius_instance):
+        """Fronius V2 provides hardware-specific grid charge rate control."""
+        assert hasattr(fronius_instance, "api_set_max_grid_charge_rate")
+        assert callable(fronius_instance.api_set_max_grid_charge_rate)
 
 
 class TestFroniusV2HashingFunctions:
-    """Tests for hashing utility functions used by FroniusV2."""
+    """Tests for Fronius V2 hashing utility functions (MD5 and SHA256)."""
 
     def test_hash_utf8_md5_with_string(self):
         """Test hash_utf8_md5 function with string input."""
@@ -201,7 +152,7 @@ class TestFroniusV2HashingFunctions:
 
 
 class TestFroniusV2UtilityFunctions:
-    """Tests for utility functions used by FroniusV2."""
+    """Tests for Fronius V2 utility functions (strip_dict)."""
 
     def test_strip_dict_removes_underscore_keys(self):
         """Test strip_dict removes keys starting with underscore."""
@@ -223,7 +174,7 @@ class TestFroniusV2UtilityFunctions:
 
 
 class TestFroniusV2Configuration:
-    """Tests for configuration handling."""
+    """Tests for Fronius V2 configuration handling."""
 
     def test_config_paths_are_set(self):
         """Test that configuration file paths are set."""
@@ -257,8 +208,15 @@ class TestFroniusV2Configuration:
 
 
 class TestFroniusV2Algorithms:
-    """Tests for algorithm selection based on firmware."""
+    """Tests for Fronius V2 algorithm selection."""
 
-    def test_algorithm_defaults_to_sha256(self, fronius_v2_instance):
+    @pytest.fixture
+    def fronius_instance(self):
+        """Create FroniusV2 instance for testing."""
+        config = {"address": "192.168.1.102", "type": "fronius_gen24"}
+        with patch("src.interfaces.inverters.fronius_v2.requests.Session"):
+            return FroniusV2(config)
+
+    def test_algorithm_defaults_to_sha256(self, fronius_instance):
         """Test that algorithm defaults to SHA256."""
-        assert fronius_v2_instance.algorithm == "SHA256"
+        assert fronius_instance.algorithm == "SHA256"

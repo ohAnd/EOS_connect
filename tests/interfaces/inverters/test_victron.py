@@ -1,17 +1,50 @@
 """
 Unit tests for VictronInverter implementation.
 
-Tests initialization and interface compliance for the Victron inverter stub.
-Note: VictronInverter is currently a stub implementation with NotImplementedError
-for most methods, pending full implementation.
+Tests for the Victron Modbus/TCP inverter interface.
+Most methods are now implemented; only set_battery_mode() and get_battery_info()
+remain as stubs pending implementation.
 """
 
 # pylint: disable=import-error,redefined-outer-name,import-outside-toplevel,too-few-public-methods
 
 import pytest
+import src.interfaces.inverters.victron as victron_mod
 
-# from ..src.interfaces.inverters import create_inverter, VictronInverter, BaseInverter
-from ..inverters import create_inverter, VictronInverter, BaseInverter
+from src.interfaces.inverters import create_inverter, VictronInverter, BaseInverter
+
+
+class DummyResponse:
+    """Minimal pymodbus-like response stub."""
+
+    def __init__(self, registers, error: bool = False):
+        self.registers = registers
+        self._error = error
+
+    def isError(self):
+        return self._error
+
+
+class DummyModbusTcpClient:
+    """Fake ModbusTcpClient for testing without network."""
+
+    def __init__(self, host, port=502):
+        self.host = host
+        self.port = port
+        self.connected = False
+
+    def connect(self):
+        self.connected = True
+        return True
+
+    def close(self):
+        self.connected = False
+
+    def read_holding_registers(
+        self, _address, _count, _device_id=None, _unit=None
+    ):  # pylint: disable=unused-argument
+        """Return a dummy response."""
+        return DummyResponse([500], error=False)
 
 
 @pytest.fixture
@@ -26,8 +59,11 @@ def victron_config():
 
 
 @pytest.fixture
-def victron_instance(victron_config):
-    """Create a VictronInverter instance."""
+def victron_instance(monkeypatch, victron_config):
+    """Create a VictronInverter instance with mocked Modbus client."""
+    monkeypatch.setattr(
+        victron_mod, "ModbusTcpClient", DummyModbusTcpClient, raising=True
+    )
     return VictronInverter(victron_config)
 
 
@@ -57,7 +93,7 @@ class TestVictronInverterCapabilities:
         self, victron_instance
     ):
         """Test that extended monitoring is not supported by default."""
-        assert victron_instance.supports_extended_monitoring() is False
+        assert victron_instance.supports_extended_monitoring is False
 
     def test_has_api_set_max_pv_charge_rate_from_base(self, victron_instance):
         """Test that API method exists from base class."""
@@ -66,43 +102,14 @@ class TestVictronInverterCapabilities:
 
 class TestVictronInverterStubImplementation:
     """
-    Tests for stub implementation methods that should raise NotImplementedError.
+    Tests for stub implementation methods that still raise NotImplementedError.
 
-    IMPORTANT:
-    - fetch_inverter_data is no longer treated as a stub here (see separate test class below).
+    Only set_battery_mode() and get_battery_info() remain unimplemented.
     """
-
-    def test_initialize_raises_not_implemented(self, victron_instance):
-        with pytest.raises(NotImplementedError):
-            victron_instance.initialize()
-
-    def test_connect_inverter_raises_not_implemented(self, victron_instance):
-        with pytest.raises(NotImplementedError):
-            victron_instance.connect_inverter()
-
-    def test_disconnect_inverter_raises_not_implemented(self, victron_instance):
-        with pytest.raises(NotImplementedError):
-            victron_instance.disconnect_inverter()
 
     def test_set_battery_mode_raises_not_implemented(self, victron_instance):
         with pytest.raises(NotImplementedError):
             victron_instance.set_battery_mode("normal")
-
-    def test_set_mode_avoid_discharge_raises_not_implemented(self, victron_instance):
-        with pytest.raises(NotImplementedError):
-            victron_instance.set_mode_avoid_discharge()
-
-    def test_set_mode_allow_discharge_raises_not_implemented(self, victron_instance):
-        with pytest.raises(NotImplementedError):
-            victron_instance.set_mode_allow_discharge()
-
-    def test_set_mode_force_charge_raises_not_implemented(self, victron_instance):
-        with pytest.raises(NotImplementedError):
-            victron_instance.set_mode_force_charge(3000)
-
-    def test_set_allow_grid_charging_raises_not_implemented(self, victron_instance):
-        with pytest.raises(NotImplementedError):
-            victron_instance.set_allow_grid_charging(True)
 
     def test_get_battery_info_raises_not_implemented(self, victron_instance):
         with pytest.raises(NotImplementedError):
@@ -111,16 +118,6 @@ class TestVictronInverterStubImplementation:
 
 class TestVictronFetchInverterData:
     """Tests for fetch_inverter_data() with the new register handling."""
-
-    class DummyResponse:
-        """Minimal pymodbus-like response stub."""
-
-        def __init__(self, registers, error: bool = False):
-            self.registers = registers
-            self._error = error
-
-        def isError(self):
-            return self._error
 
     def test_fetch_inverter_data_calls_read_registers_success(
         self, monkeypatch, victron_instance
@@ -138,7 +135,7 @@ class TestVictronFetchInverterData:
             #   read_registers(Reg.X, unit=100)
             #   read_registers(address, count=?, unit=100)
             calls.append((args, kwargs))
-            return self.DummyResponse([500], error=False)
+            return DummyResponse([500], error=False)
 
         # monkeypatch read_register wird durch fake_read_registers ersetzt
         monkeypatch.setattr(
@@ -157,8 +154,8 @@ class TestVictronFetchInverterData:
     ):
         """If Modbus response isError(), fetch_inverter_data should not raise."""
 
-        def fake_read_registers(*args, **kwargs):
-            return self.DummyResponse([], error=True)
+        def fake_read_registers(*_args, **_kwargs):  # pylint: disable=unused-argument
+            return DummyResponse([], error=True)
 
         monkeypatch.setattr(
             victron_instance, "read_registers", fake_read_registers, raising=True
@@ -184,22 +181,27 @@ class TestVictronInverterModbusImport:  # pylint: disable=too-few-public-methods
 
     def test_imports_victron_module(self):
         """Test that the victron module can be imported."""
-        from src.interfaces.inverters import victron  # noqa: F401
-
-        assert victron is not None
+        # Verify module is importable (already imported at module level)
+        assert victron_mod is not None
 
 
 class TestVictronInverterConfigurationHandling:
     """Tests for configuration handling."""
 
-    def test_initialization_with_minimal_config(self):
+    def test_initialization_with_minimal_config(self, monkeypatch):
         """Test initialization with minimal configuration."""
+        monkeypatch.setattr(
+            victron_mod, "ModbusTcpClient", DummyModbusTcpClient, raising=True
+        )
         minimal_config = {"address": "192.168.1.1", "type": "victron"}
         instance = VictronInverter(minimal_config)
         assert instance.address == "192.168.1.1"
 
-    def test_initialization_with_full_config(self, victron_config):
+    def test_initialization_with_full_config(self, monkeypatch, victron_config):
         """Test initialization with full configuration."""
+        monkeypatch.setattr(
+            victron_mod, "ModbusTcpClient", DummyModbusTcpClient, raising=True
+        )
         instance = VictronInverter(victron_config)
         assert instance.address == "192.168.1.200"
         assert instance.max_pv_charge_rate == 15000
@@ -209,7 +211,10 @@ class TestVictronInverterConfigurationHandling:
 class TestVictronInverterFactory:
     """Tests for inverter factory creation (create_inverter)."""
 
-    def test_create_inverter_returns_victron(self, victron_config):
+    def test_create_inverter_returns_victron(self, monkeypatch, victron_config):
+        monkeypatch.setattr(
+            victron_mod, "ModbusTcpClient", DummyModbusTcpClient, raising=True
+        )
         inv = create_inverter(victron_config)
         assert isinstance(inv, VictronInverter)
 

@@ -17,6 +17,8 @@ class NullInverter(BaseInverter):
     All control methods are no-ops, returning success without actual hardware interaction.
     """
 
+    supports_extended_monitoring_default = False
+
     def __init__(self, config):
         """Initialize with minimal config."""
         super().__init__(config)
@@ -76,6 +78,5 @@ class NullInverter(BaseInverter):
         logger.debug("[NullInverter] fetch_inverter_data() called (no-op)")
         return {}
 
-    def supports_extended_monitoring(self) -> bool:
-        """Null inverter has no monitoring capabilities."""
-        return False
+    # Capability flag is set via supports_extended_monitoring_default class attribute
+    # and handled by BaseInverter.__init__

@@ -54,6 +54,8 @@ class FroniusLegacy(BaseInverter):
     endpoints.
     """
 
+    supports_extended_monitoring_default = True
+
     def __init__(self, config):
         """Initialize the Fronius Legacy interface."""
         super().__init__(config)
@@ -414,9 +416,8 @@ class FroniusLegacy(BaseInverter):
         """Get the current inverter data."""
         return self.inverter_current_data
 
-    def supports_extended_monitoring(self) -> bool:
-        """Fronius Legacy supports extended monitoring (temperature, fan control)."""
-        return True
+    # Capability flag is set via supports_extended_monitoring_default class attribute
+    # and handled by BaseInverter.__init__
 
     def set_mode_avoid_discharge(self):
         """Set the inverter to avoid discharging the battery."""

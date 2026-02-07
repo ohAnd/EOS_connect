@@ -1,12 +1,12 @@
 """
 Unit tests for VictronInverter.
 
-Version passend zu deinem aktuellen victron.py:
-- __init__ ruft initialize() automatisch auf
-- initialize() erstellt ModbusTcpClient und ruft connect_inverter()
-- daher: ModbusTcpClient wird gemockt, keine echten Netzwerkcalls
-- initialize/connect/disconnect werden NICHT als NotImplemented getestet
-- NotImplemented-Tests bleiben nur für wirklich stub-methoden
+Tests Victron-specific functionality:
+- Modbus operations and register handling
+- Force charge calculations
+- Register encoding/decoding
+
+Common interface compliance tests are inherited from BaseInverterTestSuite.
 """
 
 # pylint: disable=import-error,redefined-outer-name,import-outside-toplevel,too-few-public-methods
@@ -18,10 +18,15 @@ import struct
 import pytest
 import math
 
-
 import src.interfaces.inverters.victron as victron_mod
-from src.interfaces.inverters import create_inverter, VictronInverter, BaseInverter
+from src.interfaces.inverters import VictronInverter
 from src.interfaces.inverters.ccgx_registers import RegisterDef, Reg, REGISTERS
+from .base_inverter_tests import BaseInverterTestSuite
+
+
+# =========================================================================
+# Mock Objects
+# =========================================================================
 
 
 class DummyResponse:
@@ -83,8 +88,35 @@ class DummyModbusTcpClient:
         return True
 
 
+# =========================================================================
+# Base Test Suite Extension
+# =========================================================================
+
+
+class TestVictronInverterBase(BaseInverterTestSuite):
+    """Tests common BaseInverter interface compliance for VictronInverter."""
+
+    inverter_class = VictronInverter  # type: ignore[assignment]
+    minimal_config = {"address": "192.168.1.50", "type": "victron"}  # type: ignore[assignment]
+    expected_extended_monitoring = False  # type: ignore[assignment]
+
+    @classmethod
+    def setup_mocks(cls, monkeypatch):
+        """Set up ModbusTcpClient mock before instantiation."""
+        monkeypatch.setattr(
+            victron_mod, "ModbusTcpClient", DummyModbusTcpClient, raising=True
+        )
+        victron_mod.logger.setLevel(logging.INFO)
+
+
+# =========================================================================
+# Victron-Specific Tests
+# =========================================================================
+
+
 @pytest.fixture
 def victron_config():
+    """Victron configuration with all options."""
     return {
         "address": "192.168.1.50",
         "max_pv_charge_rate": 15000,
@@ -95,55 +127,36 @@ def victron_config():
 
 @pytest.fixture
 def victron_instance(monkeypatch, victron_config):
-    # Patch ModbusTcpClient used inside victron.py BEFORE instantiation
-    # ersetze ModbusTcpClient durch DummyModbusTcpClient
+    """Create VictronInverter instance with mocked Modbus client."""
     monkeypatch.setattr(
         victron_mod, "ModbusTcpClient", DummyModbusTcpClient, raising=True
     )
     victron_mod.logger.setLevel(logging.INFO)
-
     return VictronInverter(victron_config)
 
 
-class TestVictronInverterInitialization:
-    def test_initialization_succeeds(self, victron_instance, victron_config):
-        assert isinstance(victron_instance, VictronInverter)
-        assert victron_instance.address == victron_config["address"]
-
-    def test_inherits_from_base_inverter(self, victron_instance):
-        assert isinstance(victron_instance, BaseInverter)
-
-    def test_has_base_inverter_attributes(self, victron_instance):
-        assert hasattr(victron_instance, "address")
-        assert hasattr(victron_instance, "max_pv_charge_rate")
-        assert hasattr(victron_instance, "max_grid_charge_rate")
+class TestVictronModbusInitialization:
+    """Test Victron-specific initialization (Modbus client setup)."""
 
     def test_client_is_created_and_connected(self, victron_instance):
+        """Verify Modbus client is created and connected during init."""
         assert isinstance(victron_instance.client, DummyModbusTcpClient)
         assert victron_instance.client.connected is True
         assert victron_instance.unit_id == 100
         assert victron_instance.port == 502
 
 
-class TestVictronInverterCapabilities:
-    def test_supports_extended_monitoring_returns_false_by_default(
-        self, victron_instance
-    ):
-        assert victron_instance.supports_extended_monitoring() is False
+class TestVictronFetchInverterData:
+    """Test fetch_inverter_data with Modbus operations."""
 
-    def test_has_api_set_max_pv_charge_rate_from_base(self, victron_instance):
-        assert hasattr(victron_instance, "api_set_max_pv_charge_rate")
-
-
-class TestVictronInverterFetchData:
-    def test_fetch_inverter_data_reads_soc(self, monkeypatch, victron_instance):
+    def test_fetch_inverter_data_reads_registers(self, monkeypatch, victron_instance):
+        """Verify fetch_inverter_data calls read_registers."""
         calls = []
 
-        def fake_read_registers(*args, **kwargs):
-            calls.append((args, kwargs))
+        def fake_read_registers(*_args, **_kwargs):  # pylint: disable=unused-argument
+            calls.append((_args, _kwargs))
             return DummyResponse([500], error=False)
 
-        # monkeypatch ersetzt read_registers durch fake_read_registers
         monkeypatch.setattr(
             victron_instance, "read_registers", fake_read_registers, raising=True
         )
@@ -157,7 +170,9 @@ class TestVictronInverterFetchData:
     def test_fetch_inverter_data_logs_error_on_modbus_error(
         self, monkeypatch, victron_instance, caplog
     ):
-        def fake_read_registers(*args, **kwargs):
+        """Verify error logging when Modbus response indicates an error."""
+
+        def fake_read_registers(*_args, **_kwargs):  # pylint: disable=unused-argument
             return DummyResponse([], error=True)
 
         monkeypatch.setattr(
@@ -165,16 +180,18 @@ class TestVictronInverterFetchData:
         )
 
         caplog.set_level(logging.ERROR)
-
         _ = victron_instance.fetch_inverter_data()
 
         assert any(
             rec.levelno >= logging.ERROR for rec in caplog.records
-        ), "Expected an ERROR log entry when Modbus response isError()==True"
+        ), "Expected ERROR log when Modbus isError()==True"
 
 
 class TestVictronWriteRegister:
-    def test_write_register_writes_correct_register(self, victron_instance):
+    """Test write_register with specific registers."""
+
+    def test_write_register_writes_correct_address_and_value(self, victron_instance):
+        """Verify write_register writes to correct Modbus address."""
         # Act: ESS max discharge current (fractional) = 49%
         victron_instance.write_register(
             unit=100,
@@ -182,7 +199,7 @@ class TestVictronWriteRegister:
             value=49,
         )
 
-        # Assert: Dummy hat den Schreibzugriff protokolliert
+        # Assert: Dummy client recorded the write
         assert victron_instance.client.last_write == {
             "address": 2702,
             "values": [49],
@@ -190,80 +207,48 @@ class TestVictronWriteRegister:
         }
 
 
-class TestVictronInverterOptionalMethods:
-    def test_api_set_max_pv_charge_rate_uses_base_implementation(
-        self, victron_instance
-    ):
-        victron_instance.api_set_max_pv_charge_rate(5000)
+class TestVictronStubMethods:
+    """Test methods that are still stubs (raise NotImplementedError)."""
 
+    def test_set_battery_mode_raises_not_implemented(self, victron_instance):
+        """set_battery_mode is not yet implemented for Victron."""
+        with pytest.raises(NotImplementedError):
+            victron_instance.set_battery_mode("normal")
 
-class TestVictronInverterModbusImport:
-    def test_imports_victron_module(self):
-        from src.interfaces.inverters import victron  # noqa: F401
-
-        assert victron is not None
-
-
-class TestVictronInverterConfigurationHandling:
-    def test_initialization_with_minimal_config(self, monkeypatch):
-        monkeypatch.setattr(
-            victron_mod, "ModbusTcpClient", DummyModbusTcpClient, raising=True
-        )
-        minimal_config = {"address": "192.168.1.1", "type": "victron"}
-        instance = VictronInverter(minimal_config)
-        assert instance.address == "192.168.1.1"
-
-    def test_initialization_with_full_config(self, victron_instance, victron_config):
-        assert victron_instance.address == "192.168.1.50"
-        assert victron_instance.max_pv_charge_rate == 15000
-        assert victron_instance.max_grid_charge_rate == 10000
-
-
-class TestVictronInverterFactory:
-    def test_create_inverter_returns_victron(self, monkeypatch, victron_config):
-        monkeypatch.setattr(
-            victron_mod, "ModbusTcpClient", DummyModbusTcpClient, raising=True
-        )
-        inv = create_inverter(victron_config)
-        assert isinstance(inv, VictronInverter)
-
-
-class TestVictronInverterFutureImplementation:
-    def test_has_required_abstract_methods_defined(self, victron_instance):
-        required_methods = [
-            "initialize",
-            "connect_inverter",
-            "disconnect_inverter",
-            "set_battery_mode",
-            "set_mode_avoid_discharge",
-            "set_mode_allow_discharge",
-            "set_mode_force_charge",
-            "set_allow_grid_charging",
-            "get_battery_info",
-            "fetch_inverter_data",
-        ]
-
-        for method in required_methods:
-            assert hasattr(victron_instance, method)
-            assert callable(getattr(victron_instance, method))
+    def test_get_battery_info_raises_not_implemented(self, victron_instance):
+        """get_battery_info is not yet implemented for Victron."""
+        with pytest.raises(NotImplementedError):
+            victron_instance.get_battery_info()
 
 
 class TestVictronEncodeWords:
+    """Test _encode_words static method for various data types."""
+
     def test_uint16_no_scale(self):
         reg = RegisterDef(address=1, count=1, type="uint16", scale=1.0)
-        assert VictronInverter._encode_words(reg, 42) == [42]
+        assert VictronInverter._encode_words(reg, 50) == [
+            50
+        ]  # pylint: disable=protected-access
 
     def test_int16_negative(self):
         reg = RegisterDef(address=1, count=1, type="int16", scale=1.0)
-        assert VictronInverter._encode_words(reg, -1) == [0xFFFF]
+        assert VictronInverter._encode_words(reg, -1) == [
+            0xFFFF
+        ]  # pylint: disable=protected-access
 
     def test_uint32_big_endian(self):
         reg = RegisterDef(address=1, count=2, type="uint32", scale=1.0)
-        assert VictronInverter._encode_words(reg, 0x11223344) == [0x1122, 0x3344]
+        assert VictronInverter._encode_words(reg, 0x11223344) == [
+            0x1122,
+            0x3344,
+        ]  # pylint: disable=protected-access
 
     def test_int32_negative_one(self):
         reg = RegisterDef(address=1, count=2, type="int32", scale=1.0)
-        assert VictronInverter._encode_words(reg, -1) == [0xFFFF, 0xFFFF]
+        assert VictronInverter._encode_words(reg, -1) == [
+            0xFFFF,
+            0xFFFF,
+        ]  # pylint: disable=protected-access
 
     def test_float32_encoding(self):
         reg = RegisterDef(address=1, count=2, type="float32", scale=1.0)
@@ -272,11 +257,14 @@ class TestVictronEncodeWords:
         b = struct.pack(">f", float(value))
         expected = [int.from_bytes(b[0:2], "big"), int.from_bytes(b[2:4], "big")]
 
-        assert VictronInverter._encode_words(reg, value) == expected
+        assert (
+            VictronInverter._encode_words(reg, value) == expected
+        )  # pylint: disable=protected-access
 
     def test_string_padded_to_word_count(self):
         reg = RegisterDef(address=1, count=4, type="string[7]", scale=1.0)
         # 4 words => 8 bytes: "ABC" -> 41 42 43 00 00 00 00 00
+        # pylint: disable=protected-access
         assert VictronInverter._encode_words(reg, "ABC") == [
             0x4142,
             0x4300,
@@ -287,7 +275,9 @@ class TestVictronEncodeWords:
     def test_inverse_scale_applied(self):
         reg = RegisterDef(address=1, count=1, type="uint16", scale=10.0)
         # decode multiplies by 10 => write must divide by 10
-        assert VictronInverter._encode_words(reg, 50) == [5]
+        assert VictronInverter._encode_words(reg, 50) == [
+            5
+        ]  # pylint: disable=protected-access
 
     @pytest.mark.parametrize(
         "type_name,value,expected",
@@ -298,21 +288,22 @@ class TestVictronEncodeWords:
     )
     def test_64bit_types(self, type_name, value, expected):
         reg = RegisterDef(address=1, count=4, type=type_name, scale=1.0)
-        assert VictronInverter._encode_words(reg, value) == expected
+        assert (
+            VictronInverter._encode_words(reg, value) == expected
+        )  # pylint: disable=protected-access
 
 
-class TestVictronForceChargeWatts:
-    def test_set_mode_force_charge_sets_2701_and_2705(
+class TestVictronForceCharge:
+    """Test set_mode_force_charge with power-to-current calculation."""
+
+    def test_set_mode_force_charge_sets_percentage_and_current(
         self, monkeypatch, victron_instance
     ):
-        # --- Arrange ---
-        # 1) Alle Writes mitschneiden
+        """Verify force charge writes both max charge percentage and current."""
+        # Track all register writes
         writes = []
-
-        # 2) Original Write Register speichern
         orig_write_register = victron_instance.client.write_register
 
-        # 3) Write Register mit dem neuen Wrapper ersetzen
         def spy_write_register(address, value, device_id=None, unit=None):
             slave = unit if unit is not None else device_id
             writes.append(
@@ -324,7 +315,7 @@ class TestVictronForceChargeWatts:
             victron_instance.client, "write_register", spy_write_register, raising=True
         )
 
-        # 2) Battery voltage decode für address=840 fix auf 52.0 V
+        # Mock battery voltage read to return fixed 52.0V
         orig_decode = RegisterDef.decode
 
         def fake_decode(self, words):
@@ -334,16 +325,17 @@ class TestVictronForceChargeWatts:
 
         monkeypatch.setattr(RegisterDef, "decode", fake_decode, raising=True)
 
-        # 3) read_registers so patchen, dass Voltage-Read "erfolgreich" ist
+        # Mock read_registers to return successful response
         class DummyResp:
             def __init__(self):
-                self.registers = [0]  # egal, weil decode gepatcht
+                self.registers = [0]  # value doesn't matter, decode is patched
 
             def isError(self):
                 return False
 
-        def fake_read_registers(address, count=1, unit=None):
-            # optional: sicherstellen, dass wirklich Voltage gelesen wird
+        def fake_read_registers(
+            address, count=1, unit=None
+        ):  # pylint: disable=unused-argument
             assert int(address) == REGISTERS[Reg.SYSTEM_DC_BATTERY_VOLTAGE].address
             return DummyResp()
 
@@ -351,14 +343,13 @@ class TestVictronForceChargeWatts:
             victron_instance, "read_registers", fake_read_registers, raising=True
         )
 
-        # --- Act ---
-        victron_instance.set_mode_force_charge(3000)  # 3000 W
+        # Act: Request 3000W force charge
+        victron_instance.set_mode_force_charge(3000)
 
-        # --- Assert ---
-        # Erwarteter Strom: ceil(3000/52.0) = 58 A
+        # Assert: Expected current = ceil(3000 / 52.0) = 58A
         expected_a = int(math.ceil(3000 / 52.0))
 
-        # Wir erwarten mindestens 2 Writes:
+        # Verify both registers were written:
         # - 2701 (max charge percentage) = 100
         # - 2705 (max charge current) = expected_a
         assert {"address": 2701, "values": [100], "unit": 100} in writes

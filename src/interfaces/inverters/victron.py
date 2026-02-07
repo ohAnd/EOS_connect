@@ -5,9 +5,7 @@ interface for Victron devices (Modbus/TCP client integration).
 """
 
 import logging
-from dataclasses import dataclass
-from enum import Enum
-from typing import Callable, Optional, Union, Sequence, Any
+from typing import Union, Any
 import struct
 import math
 
@@ -21,7 +19,6 @@ logger.setLevel(logging.INFO)
 logger.info("[Inverter] Loading Victron Inverter")
 
 try:
-    import pymodbus
     from pymodbus.client import ModbusTcpClient
 
     logger.info("[Inverter] pymodbus imported successfully")
@@ -177,7 +174,9 @@ class VictronInverter(BaseInverter):
         batt_v = self._read_battery_voltage_v()
 
         # 3) Convert W -> A
-        charge_current_a = _power_w_to_target_charge_current_a(charge_power_w, batt_v)
+        charge_current_a = self._power_w_to_target_charge_current_a(
+            charge_power_w, batt_v
+        )
 
         logger.info(
             "[VictronModbus] Force charge: target %.0f W @ %.2f V -> %d A (set 2705)",
@@ -355,7 +354,7 @@ class VictronInverter(BaseInverter):
             )
 
         address = r.address  # <- schon korrekt für CCGX Modbus TCP
-        words = _encode_words(r, value)
+        words = self._encode_words(r, value)
 
         # 1 Word => FC06, mehrere => FC10
         if len(words) == 1:
@@ -364,6 +363,7 @@ class VictronInverter(BaseInverter):
             )
         return self.write_holding_registers(unit=unit, address=address, values=words)
 
+    @staticmethod
     def _encode_words(reg: RegisterDef, value: Any) -> list[int]:
         """
         Encode a python value into Modbus register words according to reg.type and reg.scale.
@@ -424,56 +424,53 @@ class VictronInverter(BaseInverter):
         # fallback
         return [int(v) & 0xFFFF]
 
-
-def api_set_max_grid_charge_rate(self, max_grid_charge_rate: int):
-    """Set the maximum power in W that can be used to load the battery from the grid."""
-    if max_grid_charge_rate < 0:
-        logger.warning(
-            "[Inverter] API: Invalid max_grid_charge_rate %sW", max_grid_charge_rate
+    def api_set_max_grid_charge_rate(self, max_grid_charge_rate: int):
+        """Set the maximum power in W that can be used to load the battery from the grid."""
+        if max_grid_charge_rate < 0:
+            logger.warning(
+                "[Inverter] API: Invalid max_grid_charge_rate %sW", max_grid_charge_rate
+            )
+            return
+        logger.info(
+            "[Inverter] API: Setting max_grid_charge_rate: %.1fW", max_grid_charge_rate
         )
-        return
-    logger.info(
-        "[Inverter] API: Setting max_grid_charge_rate: %.1fW", max_grid_charge_rate
-    )
-    self.max_grid_charge_rate = max_grid_charge_rate
+        self.max_grid_charge_rate = max_grid_charge_rate
 
-
-def api_set_max_pv_charge_rate(self, max_pv_charge_rate: int):
-    """Set the maximum power in W that can be used to load the battery from the PV."""
-    if max_pv_charge_rate < 0:
-        logger.warning(
-            "[Inverter] API: Invalid max_pv_charge_rate %s", max_pv_charge_rate
+    def api_set_max_pv_charge_rate(self, max_pv_charge_rate: int):
+        """Set the maximum power in W that can be used to load the battery from the PV."""
+        if max_pv_charge_rate < 0:
+            logger.warning(
+                "[Inverter] API: Invalid max_pv_charge_rate %s", max_pv_charge_rate
+            )
+            return
+        logger.info(
+            "[Inverter] API: Setting max_pv_charge_rate: %.1fW", max_pv_charge_rate
         )
-        return
-    logger.info("[Inverter] API: Setting max_pv_charge_rate: %.1fW", max_pv_charge_rate)
-    self.max_pv_charge_rate = max_pv_charge_rate
+        self.max_pv_charge_rate = max_pv_charge_rate
 
+    def _read_battery_voltage_v(self) -> float:
+        """Read current system battery voltage in V."""
+        v_reg = Reg.SYSTEM_DC_BATTERY_VOLTAGE
+        vdef = REGISTERS[v_reg]
+        v_resp = self.read_registers(vdef.address, count=vdef.count, unit=self.unit_id)
 
-def _read_battery_voltage_v(self) -> float:
-    """Read current system battery voltage in V."""
-    v_reg = Reg.SYSTEM_DC_BATTERY_VOLTAGE
-    vdef = REGISTERS[v_reg]
-    v_resp = self.read_registers(vdef.address, count=vdef.count, unit=self.unit_id)
+        if v_resp.isError() or not getattr(v_resp, "registers", None):
+            raise RuntimeError("Failed to read battery voltage for W->A conversion")
 
-    if v_resp.isError() or not getattr(v_resp, "registers", None):
-        raise RuntimeError("Failed to read battery voltage for W->A conversion")
+        batt_v = float(vdef.decode(v_resp.registers))
+        if batt_v <= 1.0:
+            raise RuntimeError(f"Battery voltage looks invalid: {batt_v} V")
 
-    batt_v = float(vdef.decode(v_resp.registers))
-    if batt_v <= 1.0:
-        raise RuntimeError(f"Battery voltage looks invalid: {batt_v} V")
+        return batt_v
 
-    return batt_v
+    def _power_w_to_target_charge_current_a(self, power_w: float, batt_v: float) -> int:
+        """Convert power in W to target current in A using battery voltage."""
+        if power_w is None:
+            raise TypeError("power_w must be a number")
 
+        power_w = float(power_w)
+        if power_w <= 0:
+            return 0
 
-def _power_w_to_target_charge_current_a(self, power_w: float) -> int:
-    """Convert power in W to target current in A using current battery voltage."""
-    if power_w is None:
-        raise TypeError("power_w must be a number")
-
-    power_w = float(power_w)
-    if power_w <= 0:
-        return 0
-
-    batt_v = self._read_battery_voltage_v()
-    target_a = int(math.ceil(power_w / batt_v))
-    return max(0, min(target_a, 32767))
+        target_a = int(math.ceil(power_w / batt_v))
+        return max(0, min(target_a, 32767))

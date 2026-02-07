@@ -1,46 +1,72 @@
-"""Unit tests for NullInverter."""
+"""
+Unit tests for NullInverter.
+
+Tests NullInverter-specific functionality:
+- Factory creation for default and EVCC modes
+- No-op behavior (all methods return True/empty dicts)
+- Control state pattern integration
+- Display-only vs EVCC mode differences
+
+Common interface compliance tests are inherited from BaseInverterTestSuite.
+"""
 
 # pylint: disable=import-error,redefined-outer-name,too-few-public-methods
 
 import pytest
 from src.interfaces.inverters import create_inverter, NullInverter, BaseInverter
+from .base_inverter_tests import BaseInverterTestSuite
 
 
-@pytest.fixture
-def null_config_default():
-    """Config for default (display-only) mode."""
-    return {
-        "type": "default",
-        "address": "192.168.1.100",
-        "max_grid_charge_rate": 5000,
-        "max_pv_charge_rate": 5000,
-    }
+# =========================================================================
+# Test Configuration
+# =========================================================================
 
 
-@pytest.fixture
-def null_config_evcc():
-    """Config for EVCC mode."""
-    return {
-        "type": "evcc",
-        "max_grid_charge_rate": 5000,
-        "max_pv_charge_rate": 5000,
-    }
+class TestNullInverterBase(BaseInverterTestSuite):
+    """
+    Base test suite for NullInverter.
+    Inherits common interface compliance tests from BaseInverterTestSuite.
+    """
+
+    inverter_class = NullInverter  # type: ignore[assignment]
+    minimal_config = {"type": "default", "address": "null"}  # type: ignore[assignment]
+    expected_extended_monitoring = False  # type: ignore[assignment]
+
+    @classmethod
+    def setup_mocks(cls, monkeypatch):
+        """No mocks needed for NullInverter."""
+
+
+# =========================================================================
+# NullInverter-Specific Tests
+# =========================================================================
 
 
 class TestNullInverterCreation:
     """Test NullInverter instantiation through factory."""
 
-    def test_factory_creates_null_inverter_for_default(self, null_config_default):
+    def test_factory_creates_null_inverter_for_default(self):
         """Factory should create NullInverter for type 'default'."""
-        inverter = create_inverter(null_config_default)
+        config = {
+            "type": "default",
+            "address": "192.168.1.100",
+            "max_grid_charge_rate": 5000,
+            "max_pv_charge_rate": 5000,
+        }
+        inverter = create_inverter(config)
 
         assert isinstance(inverter, NullInverter)
         assert isinstance(inverter, BaseInverter)
         assert inverter.config["type"] == "default"
 
-    def test_factory_creates_null_inverter_for_evcc(self, null_config_evcc):
+    def test_factory_creates_null_inverter_for_evcc(self):
         """Factory should create NullInverter for type 'evcc'."""
-        inverter = create_inverter(null_config_evcc)
+        config = {
+            "type": "evcc",
+            "max_grid_charge_rate": 5000,
+            "max_pv_charge_rate": 5000,
+        }
+        inverter = create_inverter(config)
 
         assert isinstance(inverter, NullInverter)
         assert isinstance(inverter, BaseInverter)
@@ -48,20 +74,12 @@ class TestNullInverterCreation:
 
 
 class TestNullInverterInitialization:
-    """Test NullInverter initialization and configuration."""
+    """Test NullInverter initialization and authentication flag."""
 
-    def test_initialization_with_default_config(self, null_config_default):
-        """NullInverter should initialize properly with default config."""
-        inverter = NullInverter(null_config_default)
-
-        assert inverter.address == "192.168.1.100"
-        assert inverter.max_grid_charge_rate == 5000
-        assert inverter.max_pv_charge_rate == 5000
-        assert inverter.inverter_type == "NullInverter"
-
-    def test_initialize_sets_authenticated(self, null_config_default):
+    def test_initialize_sets_authenticated(self):
         """initialize() should set is_authenticated to True."""
-        inverter = NullInverter(null_config_default)
+        config = {"type": "default", "address": "192.168.1.100"}
+        inverter = NullInverter(config)
 
         assert inverter.is_authenticated is False  # Before initialize
         inverter.initialize()
@@ -72,9 +90,15 @@ class TestNullInverterNoOpBehavior:
     """Test that all control methods are no-ops returning success."""
 
     @pytest.fixture
-    def null_inverter(self, null_config_default):
+    def null_inverter(self):
         """Create initialized null inverter."""
-        inverter = NullInverter(null_config_default)
+        config = {
+            "type": "default",
+            "address": "192.168.1.100",
+            "max_grid_charge_rate": 5000,
+            "max_pv_charge_rate": 5000,
+        }
+        inverter = NullInverter(config)
         inverter.initialize()
         return inverter
 
@@ -124,57 +148,38 @@ class TestNullInverterNoOpBehavior:
         assert len(data) == 0
 
 
-class TestNullInverterCapabilities:
-    """Test capability detection methods."""
-
-    def test_supports_extended_monitoring_returns_false(self, null_config_default):
-        """supports_extended_monitoring() should return False."""
-        inverter = NullInverter(null_config_default)
-        assert inverter.supports_extended_monitoring() is False
-
-
 class TestNullInverterIntegration:
-    """Test NullInverter works correctly in isinstance checks."""
+    """Test NullInverter integration with control state patterns."""
 
-    def test_isinstance_base_inverter(self, null_config_default):
-        """NullInverter should pass isinstance check for BaseInverter."""
-        inverter = create_inverter(null_config_default)
-
-        # This is the critical check used in eos_connect.py
-        assert isinstance(inverter, BaseInverter)
-
-    def test_works_in_change_control_state_pattern(self, null_config_evcc):
+    def test_evcc_mode_enables_evcc_control(self):
         """Test the pattern used in change_control_state() function."""
-        inverter = create_inverter(null_config_evcc)
+        config = {"type": "evcc", "max_grid_charge_rate": 5000}
+        inverter = create_inverter(config)
 
         # Simulate the check from eos_connect.py line 1079-1083
         inverter_fronius_en = False
         inverter_evcc_en = False
 
-        if null_config_evcc["type"] == "evcc":
+        if config["type"] == "evcc":
             inverter_evcc_en = True
-        elif (
-            isinstance(inverter, BaseInverter) and null_config_evcc["type"] != "default"
-        ):
+        elif isinstance(inverter, BaseInverter) and config["type"] != "default":
             inverter_fronius_en = True
 
         # For NullInverter with evcc type, inverter_evcc_en should be True
         assert inverter_evcc_en is True
         assert inverter_fronius_en is False
 
-    def test_default_type_neither_fronius_nor_evcc(self, null_config_default):
+    def test_default_type_neither_fronius_nor_evcc(self):
         """Test that default type doesn't enable either control path."""
-        inverter = create_inverter(null_config_default)
+        config = {"type": "default", "address": "192.168.1.100"}
+        inverter = create_inverter(config)
 
         inverter_fronius_en = False
         inverter_evcc_en = False
 
-        if null_config_default["type"] == "evcc":
+        if config["type"] == "evcc":
             inverter_evcc_en = True
-        elif (
-            isinstance(inverter, BaseInverter)
-            and null_config_default["type"] != "default"
-        ):
+        elif isinstance(inverter, BaseInverter) and config["type"] != "default":
             inverter_fronius_en = True
 
         # For default type, neither should be enabled (display-only mode)
@@ -205,13 +210,3 @@ class TestNullInverterIntegration:
         # Real hardware inverter should enable fronius_en
         assert inverter_fronius_en is True
         assert inverter_evcc_en is False
-
-    def test_supports_extended_monitoring_check(self, null_config_default):
-        """Test the pattern used in __run_data_loop() function."""
-        inverter = create_inverter(null_config_default)
-
-        # Simulate check from eos_connect.py line 990
-        should_fetch_data = inverter.supports_extended_monitoring()
-
-        # NullInverter should not fetch extended monitoring data
-        assert should_fetch_data is False

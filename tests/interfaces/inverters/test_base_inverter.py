@@ -14,6 +14,8 @@ from src.interfaces.inverters import BaseInverter
 class MockInverter(BaseInverter):
     """Mock implementation of BaseInverter used for unit tests."""
 
+    # pylint: disable=attribute-defined-outside-init,useless-super-delegation
+
     def initialize(self):
         """Initialize the mock inverter."""
         self.inverter_connected = True
