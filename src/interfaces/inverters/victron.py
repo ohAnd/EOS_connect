@@ -8,6 +8,7 @@ import logging
 from typing import Union, Any
 import struct
 import math
+import time
 
 from ..inverter_base import BaseInverter  # pylint: disable=relative-beyond-top-level
 
@@ -51,6 +52,30 @@ class VictronInverter(BaseInverter):
         """Set the inverter to avoid discharging the battery."""
         logger.info("[VictronModbus] Setting hold mode, avoid discharge")
 
+        reg = Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPERCENTAGE
+        target_value = 49
+        rdef = REGISTERS[reg]
+
+        logger.info(
+            "[VictronModbus] Setting hold mode (avoid discharge): %s @ %d (%s)",
+            reg.name,
+            rdef.address,
+            rdef.description,
+        )
+
+        self.write_register_verified(reg, target_value, retries=8, delay_s=0.2)
+
+        logger.info(
+            "[VictronModbus] Hold mode active (discharge disabled, %s=%s)",
+            reg.name,
+            target_value,
+        )
+
+    def set_mode_avoid_discharge_just_write(self):
+        """Set the inverter to avoid discharging the battery."""
+        logger.info("[VictronModbus] Setting hold mode, avoid discharge")
+        logger.info("[VictronModbus] Setting hold mode, avoid discharge")
+
         # Hold mode = disable discharge (0W), allow PV charging only
         # ESS max discharge current (fractional)
         # Modbus Adress 2702
@@ -62,14 +87,14 @@ class VictronInverter(BaseInverter):
         # ESS Mode 3 - Max charge current for ESS control-loop. The control-loop will use this value to limit the multi power setpoint.
         # Currently a value < 50% will disable charge completely. >=50% allows.
         # self.write_holding_registers(self.unit_id, 2702, 99)
-        self.write_register(
-            unit=100,
-            reg=Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPERCENTAGE,
-            value=49,
-        )
+        # self.write_register(
+        #     unit=100,
+        #     reg=Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPERCENTAGE,
+        #     value=49,
+        # )
 
     def set_mode_allow_discharge(self):
-        """Set the inverter to allo discharging the battery."""
+        """Set the inverter to allow discharging the battery."""
         logger.info("[VictronModbus] Setting discharge mode, allow discharge")
 
         # Hold mode = disable discharge (0W), allow PV charging only
@@ -84,11 +109,31 @@ class VictronInverter(BaseInverter):
         # Currently a value < 50% will disable charge completely. >=50% allows.
         # self.write_holding_registers(self.unit_id, 2702, 99)
 
-        self.write_register(
-            unit=100,
-            reg=Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPERCENTAGE,
-            value=100,
+        reg = Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPERCENTAGE
+        target_value = 100
+        rdef = REGISTERS[reg]
+
+        logger.info(
+            "[VictronModbus] Setting discharge mode: write %s=%d @ %d (%s)",
+            reg.name,
+            target_value,
+            rdef.address,
+            rdef.description,
         )
+
+        self.write_register_verified(reg, target_value, retries=8, delay_s=0.2)
+
+        logger.info(
+            "[VictronModbus] Discharge mode active (discharge enabled, %s=%s)",
+            reg.name,
+            target_value,
+        )
+
+    #    """  self.write_register(
+    #         unit=100,
+    #         reg=Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPERCENTAGE,
+    #         value=100,
+    #     ) """
 
     def set_allow_grid_charging(self, value: bool):
         """
@@ -105,11 +150,11 @@ class VictronInverter(BaseInverter):
 
         logger.info("[VictronModbus] Set allow grid charging")
 
-        self.write_register(
-            unit=self.unit_id,
-            reg=Reg.SETTINGS_SETTINGS_CGWACS_MAXCHARGEPERCENTAGE,
-            value=percent,
-        )
+        # self.write_register(
+        #     unit=self.unit_id,
+        #     reg=Reg.SETTINGS_SETTINGS_CGWACS_MAXCHARGEPERCENTAGE,
+        #     value=percent,
+        # )
 
     def set_battery_mode(self, mode):
         raise NotImplementedError
@@ -159,11 +204,11 @@ class VictronInverter(BaseInverter):
         if charge_power_w <= 0:
             # Disable grid charging + remove DVCC limit (Victron: -1 disables the limit)
             self.set_allow_grid_charging(False)
-            self.write_register(
-                unit=self.unit_id,
-                reg=Reg.SETTINGS_SETTINGS_SYSTEMSETUP_MAXCHARGECURRENT,
-                value=-1,  # disables the limit
-            )
+            # self.write_register(
+            #     unit=self.unit_id,
+            #     reg=Reg.SETTINGS_SETTINGS_SYSTEMSETUP_MAXCHARGECURRENT,
+            #     value=-1,  # disables the limit
+            # )
             logger.info("[VictronModbus] Force grid charge disabled (P<=0).")
             return
 
@@ -186,11 +231,11 @@ class VictronInverter(BaseInverter):
         )
 
         # 4) Apply DVCC max charge current (A DC)
-        self.write_register(
-            unit=self.unit_id,
-            reg=Reg.SETTINGS_SETTINGS_SYSTEMSETUP_MAXCHARGECURRENT,
-            value=charge_current_a,
-        )
+        # self.write_register(
+        #     unit=self.unit_id,
+        #     reg=Reg.SETTINGS_SETTINGS_SYSTEMSETUP_MAXCHARGECURRENT,
+        #     value=charge_current_a,
+        # )
 
     def connect_inverter(self):
         """Connect to Victron Modbus device."""
@@ -312,14 +357,14 @@ class VictronInverter(BaseInverter):
 
         if isinstance(values, (int, float)):
             return self.client.write_register(
-                address=reg_address, value=int(values), unit=slave
+                address=reg_address, value=int(values), device_id=slave
             )
 
         if isinstance(values, (list, tuple)):
             return self.client.write_registers(
                 address=reg_address,
                 values=[int(v) for v in values],
-                unit=slave,
+                device_id=slave,
             )
 
         raise TypeError("❌ 'values' must be int, float, list or tuple")
@@ -335,6 +380,41 @@ class VictronInverter(BaseInverter):
             unit=unit,
             address=r.address,
             values=value,
+        )
+
+    def _read_reg_value(self, reg: Reg) -> int:
+        rdef = REGISTERS[reg]
+        resp = self.read_registers(rdef.address, rdef.count, unit=self.unit_id)
+        if resp.isError():
+            raise RuntimeError(f"Read error for {reg.name} @ {rdef.address}")
+        return int(rdef.decode(resp.registers))
+
+    def write_register_verified(
+        self, reg: Reg, value: int, retries: int = 8, delay_s: float = 0.2
+    ) -> None:
+        # 1) write
+        res = self.write_register(unit=self.unit_id, reg=reg, value=value)
+
+        # optional: falls pymodbus response unterstützt
+        if hasattr(res, "isError") and res.isError():
+            raise RuntimeError(f"Write failed for {reg.name}")
+
+        # 2) readback with retry
+        last = None
+        for i in range(retries):
+            time.sleep(delay_s)
+            last = self._read_reg_value(reg)
+            if last == value:
+                logger.info(
+                    "[VictronModbus] Verified write %s=%s after %d attempt(s)",
+                    reg.name,
+                    value,
+                    i + 1,
+                )
+                return
+
+        raise RuntimeError(
+            f"Write verification failed for {reg.name}: expected {value}, got {last}"
         )
 
     def _normalize_register_address(self, address: int) -> int:
