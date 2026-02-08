@@ -16,7 +16,7 @@ import time
 import threading
 import requests
 from packaging import version as pkg_version
-from interfaces.port_interface import PortInterface
+from .port_interface import PortInterface
 
 logger = logging.getLogger("__main__")
 
