@@ -55,6 +55,7 @@
                     <a href="#mqtt-published" class="toc-link toc-sub">→ Published Topics</a>
                     <a href="#mqtt-subscribed" class="toc-link toc-sub">→ Subscribed Topics</a>
                     <a href="#mqtt-mode-control" class="toc-link toc-sub">→ Mode Control</a>
+                    <a href="#mqtt-update-topics" class="toc-link toc-sub">→ Update Topics</a>
                     <a href="#mqtt-examples" class="toc-link toc-sub">→ Examples</a>
                     <a href="#integrations" class="toc-link">Integrations</a>
                     <a href="#automation" class="toc-link">Automation</a>
@@ -167,6 +168,11 @@
                         <td><code>/logs/stats</code></td>
                         <td>GET</td>
                         <td>Get buffer usage statistics for log storage</td>
+                    </tr>
+                    <tr>
+                        <td><code>/api/update/status</code></td>
+                        <td>GET</td>
+                        <td>Get update notification status (Docker installations only)</td>
                     </tr>
                 </tbody>
             </table>
@@ -757,6 +763,119 @@ curl "http://localhost:8081/logs?since=2024-06-01T11:00:00Z"</code></pre>
                     <li><strong>Thread-safe:</strong> Safe for concurrent access from multiple clients</li>
                 </ul>
             </div>
+
+            <h3>Update Status API (Docker Only)</h3>
+            <p>Docker image installations can check for available updates via the update status API. <strong>This endpoint is only active for Docker installations</strong> - Home Assistant Add-on users receive updates through the HA Supervisor.</p>
+
+            <h4>Get Update Status</h4>
+            <pre><code>curl http://localhost:8081/api/update/status</code></pre>
+
+            <p><strong>Response Example (Update Available):</strong></p>
+            <pre><code>{
+  "update_status": {
+    "enabled": true,
+    "is_ha_addon": false,
+    "current_version": "0.2.30",
+    "is_develop_branch": false,
+    "update_available": true,
+    "latest_version": "0.2.31",
+    "last_check_time": 1704729600.0,
+    "last_check_success": true,
+    "last_error": null,
+    "next_check_in_seconds": 39847
+  },
+  "timestamp": "2024-01-08T14:30:00+00:00",
+  "api_version": "0.0.1"
+}</code></pre>
+
+            <p><strong>Response Example (HA Add-on):</strong></p>
+            <pre><code>{
+  "update_status": {
+    "enabled": false,
+    "is_ha_addon": true,
+    "current_version": "0.2.30",
+    "is_develop_branch": false,
+    "update_available": false,
+    "latest_version": null,
+    "last_check_time": null,
+    "last_check_success": false,
+    "last_error": null,
+    "next_check_in_seconds": 0
+  },
+  "timestamp": "2024-01-08T14:30:00+00:00",
+  "api_version": "0.0.1"
+}</code></pre>
+
+            <h5>Response Fields</h5>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Type</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>enabled</code></td>
+                        <td>Boolean</td>
+                        <td>Whether update checking is active (<code>true</code> for Docker, <code>false</code> for HA)</td>
+                    </tr>
+                    <tr>
+                        <td><code>is_ha_addon</code></td>
+                        <td>Boolean</td>
+                        <td>Whether running as Home Assistant Add-on</td>
+                    </tr>
+                    <tr>
+                        <td><code>current_version</code></td>
+                        <td>String</td>
+                        <td>Currently installed EOS Connect version</td>
+                    </tr>
+                    <tr>
+                        <td><code>is_develop_branch</code></td>
+                        <td>Boolean</td>
+                        <td>Whether on develop branch (vs stable)</td>
+                    </tr>
+                    <tr>
+                        <td><code>update_available</code></td>
+                        <td>Boolean</td>
+                        <td>Whether a newer version is available(<code>false</code> always for HA)</td>
+                    </tr>
+                    <tr>
+                        <td><code>latest_version</code></td>
+                        <td>String</td>
+                        <td>Latest available version (null if not checked or no update)</td>
+                    </tr>
+                    <tr>
+                        <td><code>last_check_time</code></td>
+                        <td>Float</td>
+                        <td>Unix timestamp of last update check (null if never checked)</td>
+                    </tr>
+                    <tr>
+                        <td><code>last_check_success</code></td>
+                        <td>Boolean</td>
+                        <td>Whether last check succeeded</td>
+                    </tr>
+                    <tr>
+                        <td><code>last_error</code></td>
+                        <td>String</td>
+                        <td>Error message from last check (null if successful)</td>
+                    </tr>
+                    <tr>
+                        <td><code>next_check_in_seconds</code></td>
+                        <td>Integer</td>
+                        <td>Seconds until next automatic check (0 for HA or immediate check)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-clock"></i> Check Interval:</strong> Update checks run automatically every 12 hours (43200 seconds) for Docker installations. First check occurs 30 seconds after startup.
+            </div>
+
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-exclamation-triangle"></i> Branch Detection:</strong> The system automatically detects stable (<code>0.2.30</code>) vs develop (<code>0.2.31.236-develop</code>) versions and only shows matching updates.
+            </div>
         </div>
 
         <!-- Sensor Auto-Detection Section -->
@@ -1045,6 +1164,72 @@ mosquitto_pub -t "myhome/eos_connect/control/overall_state/set" -m "0"</code></p
 
             <h4>Monitor Battery SOC</h4>
             <pre><code>mosquitto_sub -t "myhome/eos_connect/battery/soc"</code></pre>
+
+            <h3 id="mqtt-update-topics">Update Notification Topics (Docker Only)</h3>
+            <p>For Docker image installations, EOS Connect publishes update status to MQTT. These topics are <strong>not published for Home Assistant Add-on installations</strong> since updates are managed by the Supervisor.</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Topic Suffix</th>
+                        <th>Type</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td colspan="3" style="background-color: rgba(74, 158, 255, 0.1); font-weight: bold;"><i class="fas fa-bell"></i> Update Status</td>
+                    </tr>
+                    <tr>
+                        <td><code>system/update_available</code></td>
+                        <td>Binary (ON/OFF)</td>
+                        <td>Whether an update is available</td>
+                    </tr>
+                    <tr>
+                        <td><code>system/current_version</code></td>
+                        <td>String</td>
+                        <td>Current EOS Connect version</td>
+                    </tr>
+                    <tr>
+                        <td><code>system/latest_version</code></td>
+                        <td>String</td>
+                        <td>Latest available version (empty if none)</td>
+                    </tr>
+                    <tr>
+                        <td><code>system/update_check_enabled</code></td>
+                        <td>Binary (ON/OFF)</td>
+                        <td>Whether update checking is enabled (ON for Docker, OFF for HA)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h4>MQTT Update Automation Example</h4>
+            <p>Create a Home Assistant automation to notify when updates are available:</p>
+            <pre><code>automation:
+  - alias: "EOS Connect Update Notification"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.eos_connect_update_available
+        to: 'on'
+    action:
+      - service: notify.mobile_app
+        data:
+          title: "EOS Connect Update Available"
+          message: >
+            New version {{ states('sensor.eos_connect_latest_version') }} 
+            is available (current: {{ states('sensor.eos_connect_current_version') }})
+          data:
+            url: https://github.com/Ohand/EOS_connect/pkgs/container/eos_connect</code></pre>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-home"></i> Home Assistant Auto-Discovery:</strong> When MQTT auto-discovery is enabled, these topics appear as sensors in Home Assistant automatically:
+                <ul>
+                    <li><code>binary_sensor.eos_connect_update_available</code></li>
+                    <li><code>sensor.eos_connect_current_version</code></li>
+                    <li><code>sensor.eos_connect_latest_version</code></li>
+                    <li><code>binary_sensor.eos_connect_update_check_enabled</code></li>
+                </ul>
+            </div>
 
             <h3>Home Assistant MQTT Auto Discovery</h3>
             <p>When enabled (<code>ha_mqtt_auto_discovery: true</code>), EOS Connect automatically creates Home Assistant entities for all sensors and controls.</p>

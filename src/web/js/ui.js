@@ -236,7 +236,7 @@ function showMainMenu(version, backend, granularity) {
             </div>
         </div>
 
-        <div onclick="showInfoMenu('${version}', '${backend}', '${granularity}'); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
+        <div id="info-menu-item" onclick="showInfoMenu('${version}', '${backend}', '${granularity}'); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
             <i class="fa-solid fa-info-circle" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
@@ -315,11 +315,31 @@ const MenuNotifications = {
 
     /**
      * Determine target color based on priority rules
+     * Priority: red > orange > blue > white > gray > null
+     * Note: null can only clear colors with equal or lower priority
      */
     getTargetColor(requestedColor) {
-        // For now, just return the requested color
-        // Later can add priority logic for multiple sources
-        return requestedColor;
+        // Priority map (higher number = higher priority)
+        const priorities = {
+            'red': 5,
+            'orange': 4,
+            'blue': 3,
+            'white': 2,
+            'gray': 1,
+            null: 0,
+            undefined: 0
+        };
+        
+        const currentPriority = priorities[this.displayedColor] || 0;
+        const requestedPriority = priorities[requestedColor] || 0;
+        
+        // Only change if requested priority is higher or equal
+        if (requestedPriority >= currentPriority) {
+            return requestedColor;
+        }
+        
+        // Keep current color if it has higher priority
+        return this.displayedColor;
     },
 
     /**
@@ -343,6 +363,7 @@ const MenuNotifications = {
             const colors = {
                 'red': 'rgb(220, 53, 69)',
                 'orange': 'rgb(255, 193, 7)',
+                'blue': 'rgb(74, 158, 255)',
                 'white': 'rgb(255, 255, 255)',
                 'gray': 'rgb(136, 136, 136)'
             };
@@ -389,6 +410,12 @@ const MenuNotifications = {
             this.addDropdownNotification(alarmsItem, status);
         }
 
+        // Add blue dot to Info menu item if update available
+        const infoItem = dropdown.querySelector('#info-menu-item');
+        if (infoItem && this.displayedColor === 'blue') {
+            this.addDropdownNotification(infoItem, 'update');
+        }
+
         // Ensure Logs menu item has no notification dot
         const logsItem = dropdown.querySelector('div[onclick*="showLogsMenu"]');
         if (logsItem) {
@@ -413,21 +440,27 @@ const MenuNotifications = {
 
         // Add new notification dot if needed
         if (status) {
-            const dotColor = status === 'error' ? '#dc3545' : '#ffc107';
-            const dot = document.createElement('div');
-            dot.className = 'dropdown-notification-dot';
-            dot.style.cssText = `
-                width: 8px;
-                height: 8px;
-                background-color: ${dotColor};
-                border-radius: 50%;
-                margin-left: auto;
-                margin-right: 8px;
-                flex-shrink: 0;
-                border: 1px solid rgba(255,255,255,0.2);
-            `;
+            let dotColor;
+            if (status === 'error') dotColor = '#dc3545';
+            else if (status === 'warning') dotColor = '#ffc107';
+            else if (status === 'update') dotColor = '#4a9eff';
+            
+            if (dotColor) {
+                const dot = document.createElement('div');
+                dot.className = 'dropdown-notification-dot';
+                dot.style.cssText = `
+                    width: 8px;
+                    height: 8px;
+                    background-color: ${dotColor};
+                    border-radius: 50%;
+                    margin-left: auto;
+                    margin-right: 8px;
+                    flex-shrink: 0;
+                    border: 1px solid rgba(255,255,255,0.2);
+                `;
 
-            menuItem.appendChild(dot);
+                menuItem.appendChild(dot);
+            }
         }
     },
 
@@ -450,6 +483,41 @@ const MenuNotifications = {
                 }
             }
         }, 50);
+    },
+
+    /**
+     * Show blue dot for update available
+     * Won't override higher priority colors (red, orange)
+     */
+    showUpdateDot() {
+        this.showDot('blue');
+    },
+
+    /**
+     * Hide blue dot for updates
+     * Forcefully removes blue dot if it's showing
+     */
+    hideUpdateDot() {
+        if (this.displayedColor === 'blue') {
+            // Directly set to null, bypassing priority check
+            this.displayedColor = null;
+            this.renderDot();
+            console.log('[MenuNotifications] Blue dot forcefully removed');
+        }
+    },
+    
+    /**
+     * Clear logging-related dots (red/orange only)
+     * Won't touch blue (update) dots
+     */
+    clearLoggingDot() {
+        if (this.displayedColor === 'red' || this.displayedColor === 'orange') {
+            this.displayedColor = null;
+            this.renderDot();
+            console.log('[MenuNotifications] Logging dot cleared (was: red/orange)');
+        } else {
+            console.log('[MenuNotifications] Not clearing dot - not a logging color (current: ' + this.displayedColor + ')');
+        }
     }
 };
 
@@ -523,6 +591,143 @@ function showLogsMenu() {
 function showInfoMenu(version, backend, granularity) {
     backend = backend == "evopt" ? "EVOpt @ EVCC" : "EOS@akkudoktor";
     granularity = granularity == "900" ? "15 min intervals" : "60 min intervals";
+    
+    // Build combined version/update status section
+    let versionSection = '';
+    if (typeof updateBannerManager !== 'undefined') {
+        const updateStatus = updateBannerManager.getStatus();
+        const isUpdateCheckEnabled = updateStatus && updateStatus.enabled;
+        const hasUpdate = isUpdateCheckEnabled && updateStatus.update_available;
+        const isDismissed = hasUpdate && updateBannerManager.isDismissed();
+        
+        // Color and icon logic
+        const borderColor = hasUpdate ? '#4a9eff' : '#17a2b8';
+        const iconColor = hasUpdate ? '#4a9eff' : '#17a2b8';
+        const statusIcon = hasUpdate ? 'fa-arrow-circle-up' : 'fa-code-branch';
+        const titleText = hasUpdate ? 'Version & Update Status' : 'Version Information';
+        
+        versionSection = `
+            <!-- Combined Version & Update Section -->
+            <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 30px; margin-bottom: 25px; border-left: 4px solid ${borderColor};">
+                <div style="font-size: 1.2em; color: ${iconColor}; margin-bottom: 20px; font-weight: bold;">
+                    <i class="fas ${statusIcon}" style="margin-right: 10px;"></i>${titleText}
+                </div>
+                
+                ${!isUpdateCheckEnabled ? `
+                    <!-- Update Check Disabled (HA Add-on) -->
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
+                        <div style="font-size: 0.85em; color: #888; margin-bottom: 5px;">Current Version</div>
+                        <div style="font-size: 1.4em; color: #fff; font-weight: bold; background-color: rgba(255,255,255,0.1); padding: 12px 20px; border-radius: 6px;">
+                            ${version}
+                        </div>
+                        
+                        <div style="background-color: rgba(108, 117, 125, 0.15); border: 1px solid rgba(108, 117, 125, 0.4); border-radius: 6px; padding: 10px 16px; display: inline-flex; align-items: center; gap: 8px; margin-top: 10px;">
+                            <i class="fas fa-info-circle" style="color: #6c757d;"></i>
+                            <span style="color: #6c757d; font-weight: 600;">Update Check: Disabled (Home Assistant Add-on)</span>
+                        </div>
+                    </div>
+                ` : hasUpdate ? `
+                    <!-- Update Available Layout -->
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
+                        <!-- Version Comparison -->
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                            <!-- Labels -->
+                            <div style="display: flex; gap: 20px; justify-content: center;">
+                                <div style="text-align: center; width: 180px;">
+                                    <div style="font-size: 0.8em; color: #888;">Current</div>
+                                </div>
+                                <div style="width: 40px;"></div>
+                                <div style="text-align: center; width: 180px;">
+                                    <div style="font-size: 0.8em; color: #888;">Latest</div>
+                                </div>
+                            </div>
+                            
+                            <!-- Version Boxes with Arrow -->
+                            <div style="display: flex; align-items: center; gap: 20px; justify-content: center;">
+                                <div style="font-size: 1.2em; color: #fff; font-weight: bold; background-color: rgba(255,255,255,0.1); padding: 10px 16px; border-radius: 6px; text-align: center; width: 180px;">
+                                    ${version}
+                                </div>
+                                
+                                <div style="font-size: 1.5em; color: #4a9eff; width: 40px; text-align: center;">
+                                    <i class="fas fa-arrow-right"></i>
+                                </div>
+                                
+                                <div style="font-size: 1.2em; color: #4a9eff; font-weight: bold; background-color: rgba(74, 158, 255, 0.2); padding: 10px 16px; border-radius: 6px; border: 1px solid #4a9eff; text-align: center; width: 180px;">
+                                    ${updateStatus.latest_version}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Status Badge -->
+                        <div style="background-color: rgba(74, 158, 255, 0.15); border: 1px solid rgba(74, 158, 255, 0.4); border-radius: 6px; padding: 10px 16px; display: inline-flex; align-items: center; gap: 8px; margin-top: 10px;">
+                            <i class="fas fa-arrow-circle-up" style="color: #4a9eff;"></i>
+                            <span style="color: #4a9eff; font-weight: 600;">${isDismissed ? 'Update Available (Dismissed)' : 'Update Available'}</span>
+                        </div>
+                        
+                        ${isDismissed ? `
+                            <div style="background-color: rgba(255, 193, 7, 0.1); border: 1px solid rgba(255, 193, 7, 0.3); border-radius: 6px; padding: 10px 16px; display: inline-flex; align-items: center; gap: 8px;">
+                                <i class="fas fa-info-circle" style="color: #ffc107;"></i>
+                                <span style="color: #ffc107; font-size: 0.9em;">Notification dismissed</span>
+                            </div>
+                        ` : ''}
+                        
+                        <!-- Actions -->
+                        <div style="display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin-top: 15px;">
+                            <a href="https://github.com/Ohand/EOS_connect/pkgs/container/eos_connect" target="_blank"
+                               style="padding: 10px 20px; background-color: #4a9eff; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9em; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; transition: all 0.2s ease;"
+                               onmouseover="this.style.backgroundColor='#357abd'; this.style.transform='translateY(-2px)'"
+                               onmouseout="this.style.backgroundColor='#4a9eff'; this.style.transform='translateY(0)'">
+                                <i class="fas fa-external-link-alt"></i> View on GHCR
+                            </a>
+                            
+                            ${!isDismissed ? `
+                                <button id="dismiss-update-btn"
+                                   style="padding: 10px 20px; background-color: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px; cursor: pointer; font-size: 0.9em; display: inline-flex; align-items: center; gap: 6px; transition: all 0.2s ease;"
+                                   onmouseover="this.style.backgroundColor='rgba(255,255,255,0.2)'"
+                                   onmouseout="this.style.backgroundColor='rgba(255,255,255,0.1)'">
+                                    <i class="fas fa-times-circle"></i> Dismiss
+                                </button>
+                            ` : `
+                                <button id="undismiss-update-btn"
+                                   style="padding: 10px 20px; background-color: rgba(74, 158, 255, 0.2); color: #4a9eff; border: 1px solid rgba(74, 158, 255, 0.4); border-radius: 6px; cursor: pointer; font-size: 0.9em; display: inline-flex; align-items: center; gap: 6px; transition: all 0.2s ease;"
+                                   onmouseover="this.style.backgroundColor='rgba(74, 158, 255, 0.3)'"
+                                   onmouseout="this.style.backgroundColor='rgba(74, 158, 255, 0.2)'">
+                                    <i class="fas fa-bell"></i> Show Notification
+                                </button>
+                            `}
+                        </div>
+                    </div>
+                ` : `
+                    <!-- Up to Date Layout -->
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
+                        <div style="font-size: 0.85em; color: #888; margin-bottom: 5px;">Current Version</div>
+                        <div style="font-size: 1.4em; color: #fff; font-weight: bold; background-color: rgba(255,255,255,0.1); padding: 12px 20px; border-radius: 6px;">
+                            ${version}
+                        </div>
+                        
+                        <div style="background-color: rgba(40, 167, 69, 0.15); border: 1px solid rgba(40, 167, 69, 0.4); border-radius: 6px; padding: 10px 16px; display: inline-flex; align-items: center; gap: 8px; margin-top: 10px;">
+                            <i class="fas fa-check-circle" style="color: #28a745;"></i>
+                            <span style="color: #28a745; font-weight: 600;">Up to Date</span>
+                        </div>
+                    </div>
+                `}
+            </div>
+        `;
+    } else {
+        // Fallback if update checker not available
+        versionSection = `
+            <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 30px; margin-bottom: 25px; border-left: 4px solid #17a2b8;">
+                <div style="font-size: 1.2em; color: #17a2b8; margin-bottom: 15px; font-weight: bold;">
+                    <i class="fas fa-code-branch" style="margin-right: 10px;"></i>Version Information
+                </div>
+                <div style="font-size: 0.9em; color: #888; margin-bottom: 15px;">Currently installed version:</div>
+                <div style="font-size: 1.4em; color: #fff; font-weight: bold; background-color: rgba(255,255,255,0.1); padding: 12px 20px; border-radius: 6px; display: inline-block;">
+                    ${version}
+                </div>
+            </div>
+        `;
+    }
+    
     const header = `
         <div style="display: flex; align-items: center; gap: 10px;">
             <i class="fas fa-info-circle" style="color: #17a2b8;"></i>
@@ -532,7 +737,7 @@ function showInfoMenu(version, backend, granularity) {
 
     const content = `
         <div style="height: calc(100% - 20px); overflow-y: auto; margin-top: 10px; text-align: center;">
-            <!-- main config Section -->
+            <!-- Backend & Core Section -->
             <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 30px; margin-bottom: 25px; border-left: 4px solid #7017b8ff;">
                 <div style="font-size: 1.2em; color: #cb6bd8ff; margin-bottom: 15px; font-weight: bold;">
                     <i class="fas fa-brain" style="margin-right: 10px;"></i>Backend & Core Information
@@ -546,17 +751,8 @@ function showInfoMenu(version, backend, granularity) {
                     ${granularity}
                 </div>
             </div>
-            <!-- Version Section -->
-            <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 30px; margin-bottom: 25px; border-left: 4px solid #17a2b8;">
-                <div style="font-size: 1.2em; color: #17a2b8; margin-bottom: 15px; font-weight: bold;">
-                    <i class="fas fa-code-branch" style="margin-right: 10px;"></i>Version Information
-                </div>
-                <div style="font-size: 0.9em; color: #888; margin-bottom: 15px;">Currently installed version:</div>
-                <div style="font-size: 1.4em; color: #fff; font-weight: bold; background-color: rgba(255,255,255,0.1); padding: 12px 20px; border-radius: 6px; display: inline-block;">
-                    ${version}
-                </div>
-            </div>
             
+            ${versionSection}
             <!-- Links Section -->
             <div style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 30px; border-left: 4px solid #28a745;">
                 <div style="font-size: 1.2em; color: #28a745; margin-bottom: 20px; font-weight: bold;">
@@ -605,6 +801,41 @@ function showInfoMenu(version, backend, granularity) {
     `;
 
     showFullScreenOverlay(header, content);
+    
+    // Set up dismiss/undismiss button event listeners if update section exists
+    setTimeout(() => {
+        const dismissBtn = document.getElementById('dismiss-update-btn');
+        const undismissBtn = document.getElementById('undismiss-update-btn');
+        
+        if (dismissBtn && typeof updateBannerManager !== 'undefined') {
+            dismissBtn.addEventListener('click', () => {
+                console.log('[INFO-PAGE] Dismiss update button clicked');
+                updateBannerManager.dismissBanner();
+                closeFullScreenOverlay();
+                // Reopen Info page to show updated state (without menu flash)
+                setTimeout(() => {
+                    if (typeof data_controls !== 'undefined') {
+                        showInfoMenu(
+                            data_controls["eos_connect_version"],
+                            data_controls["used_optimization_source"],
+                            data_controls["used_time_frame_base"]
+                        );
+                    }
+                }, 200);
+            });
+        }
+        
+        if (undismissBtn && typeof updateBannerManager !== 'undefined') {
+            undismissBtn.addEventListener('click', () => {
+                console.log('[INFO-PAGE] Undismiss update button clicked');
+                // Remove dismissal from localStorage
+                localStorage.removeItem(updateBannerManager.dismissedVersionKey);
+                // Re-check for updates to show banner again
+                updateBannerManager.checkForUpdates();
+                closeFullScreenOverlay();
+            });
+        }
+    }, 50); // Small delay to ensure DOM is ready
 }
 
 /**

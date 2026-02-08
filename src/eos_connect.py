@@ -27,6 +27,7 @@ from interfaces.price_interface import PriceInterface
 from interfaces.mqtt_interface import MqttInterface
 from interfaces.pv_interface import PvInterface
 from interfaces.port_interface import PortInterface
+from interfaces.update_checker import UpdateChecker
 
 # Check Python version early
 if sys.version_info < (3, 11):
@@ -375,6 +376,43 @@ time.sleep(init_time)
 # Perform initial battery price calculation if enabled (blocking, synchronous)
 # This ensures the first optimization run has the correct battery price
 battery_interface.perform_initial_price_calculation()
+
+
+# Callback for update status changes (publishes to MQTT)
+def on_update_status_change(status):
+    """Called when update status changes (update becomes available or unavailable)."""
+    try:
+        mqtt_interface.update_publish_topics(
+            {
+                "system/update_available": {
+                    "value": str(status["update_available"]).lower()
+                },
+                "system/current_version": {"value": status["current_version"]},
+                "system/latest_version": {"value": status.get("latest_version") or ""},
+                "system/update_check_enabled": {
+                    "value": str(status["enabled"]).lower()
+                },
+            }
+        )
+        logger.info("[UPDATE-CHECK] Published status change to MQTT")
+    except (KeyError, TypeError, ValueError) as e:
+        logger.error("[UPDATE-CHECK] Error publishing to MQTT: %s", e)
+
+
+# Initialize update checker (checks for Docker image updates)
+# Automatically disabled for Home Assistant Add-on users
+update_checker = UpdateChecker(
+    current_version=__version__,
+    check_interval=43200,
+    on_status_change=on_update_status_change,
+)
+
+# Publish initial update status to MQTT
+try:
+    initial_status = update_checker.get_update_status()
+    on_update_status_change(initial_status)
+except (KeyError, TypeError, ValueError) as e:
+    logger.error("[UPDATE-CHECK] Error publishing initial status to MQTT: %s", e)
 
 # pv_interface.test_output()
 # sys.exit(0)  # exit if the interfaces are not initialized correctly
@@ -1859,6 +1897,52 @@ def get_log_stats():
         )
 
 
+@app.route("/api/update/status", methods=["GET"])
+def get_update_status():
+    """
+    Get update checker status.
+
+    Returns information about available updates for Docker image users.
+    For Home Assistant Add-on users, this will indicate that update checking
+    is handled by Home Assistant.
+
+    Returns:
+        JSON response with update status including:
+        - enabled: Whether update checking is active
+        - is_ha_addon: Whether running as HA Add-on
+        - current_version: Current EOS Connect version
+        - is_develop_branch: Whether on develop or stable branch
+        - update_available: Whether an update is available
+        - latest_version: Latest available version (if any)
+        - last_check_time: Unix timestamp of last check
+        - last_check_success: Whether last check succeeded
+        - last_error: Error message from last check (if any)
+        - next_check_in_seconds: Seconds until next automatic check
+    """
+    try:
+        status = update_checker.get_update_status()
+
+        response_data = {
+            "update_status": status,
+            "timestamp": datetime.now(time_zone).isoformat(),
+            "api_version": "0.0.1",
+        }
+
+        return Response(
+            json.dumps(response_data, indent=2), content_type="application/json"
+        )
+
+    except (ValueError, TypeError, KeyError, AttributeError) as e:
+        logger.error("[Web] Error retrieving update status: %s", e)
+        return Response(
+            json.dumps(
+                {"error": "Failed to retrieve update status", "message": str(e)}
+            ),
+            status=500,
+            content_type="application/json",
+        )
+
+
 if __name__ == "__main__":
     http_server = None
     try:
@@ -1918,6 +2002,7 @@ if __name__ == "__main__":
         mqtt_interface.shutdown()
         evcc_interface.shutdown()
         battery_interface.shutdown()
+        update_checker.shutdown()
         logger.info("[Main] Server stopped gracefully")
     finally:
         logging.shutdown()  # This will call close() on all handlers
