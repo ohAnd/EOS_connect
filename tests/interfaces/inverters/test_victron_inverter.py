@@ -20,7 +20,7 @@ import math
 
 import src.interfaces.inverters.victron as victron_mod
 from src.interfaces.inverters import VictronInverter
-from src.interfaces.inverters.ccgx_registers import RegisterDef, Reg, REGISTERS
+from src.interfaces.inverters.ccgx_registers_all import RegisterDef, Reg, REGISTERS
 from .base_inverter_tests import BaseInverterTestSuite
 
 
@@ -354,3 +354,92 @@ class TestVictronForceCharge:
         # - 2705 (max charge current) = expected_a
         assert {"address": 2701, "values": [100], "unit": 100} in writes
         assert {"address": 2705, "values": [expected_a], "unit": 100} in writes
+
+
+class TestVictronAvoidDischargeExternalControl:
+    """Test set_mode_avoid_discharge() with External Control + VE.Bus keepalive."""
+
+    def test_set_mode_avoid_discharge_sets_hub4mode_and_starts_keepalive(
+        self, monkeypatch, victron_instance
+    ):
+        calls_write_verified = []
+        calls_write_holding = []
+        calls_keepalive = []
+
+        # --- spies ---
+        def fake_write_register_verified(reg, value, retries=0, delay_s=0.0):
+            calls_write_verified.append(
+                {"reg": reg, "value": value, "retries": retries, "delay_s": delay_s}
+            )
+            return True
+
+        def fake_write_holding_registers(unit, address, values):
+            calls_write_holding.append(
+                {"unit": int(unit), "address": int(address), "values": int(values)}
+            )
+            return True
+
+        def fake_start_vebus_keepalive(targets, interval_s=0.5, unit=227):
+            calls_keepalive.append(
+                {
+                    "targets": dict(targets),
+                    "interval_s": float(interval_s),
+                    "unit": int(unit),
+                }
+            )
+            return True
+
+        monkeypatch.setattr(
+            victron_instance,
+            "write_register_verified",
+            fake_write_register_verified,
+            raising=True,
+        )
+        monkeypatch.setattr(
+            victron_instance,
+            "write_holding_registers",
+            fake_write_holding_registers,
+            raising=True,
+        )
+        monkeypatch.setattr(
+            victron_instance,
+            "start_vebus_keepalive",
+            fake_start_vebus_keepalive,
+            raising=True,
+        )
+
+        # --- act ---
+        victron_instance.set_mode_avoid_discharge()
+
+        # --- assert: Hub4Mode set to external control (3) ---
+        assert calls_write_verified, "Expected write_register_verified to be called"
+        assert calls_write_verified[0]["reg"] == Reg.SETTINGS_Settings_Cgwacs_Hub4Mode
+        assert calls_write_verified[0]["value"] == 3
+
+        # --- assert: initial writes for the 3 VE.Bus phase setpoints ---
+        expected_regs = [
+            Reg.VEBUS_Hub4_L1_AcPowerSetpoint_37,
+            Reg.VEBUS_Hub4_L2_AcPowerSetpoint_40,
+            Reg.VEBUS_Hub4_L3_AcPowerSetpoint_41,
+        ]
+        expected_addrs = sorted([REGISTERS[r].address for r in expected_regs])
+
+        assert len(calls_write_holding) == 3, "Expected exactly 3 initial VE.Bus writes"
+        got_addrs = sorted([c["address"] for c in calls_write_holding])
+        assert got_addrs == expected_addrs
+
+        for c in calls_write_holding:
+            assert c["unit"] == 227
+            assert c["values"] == 0
+
+        # --- assert: keepalive started once with correct params ---
+        assert (
+            len(calls_keepalive) == 1
+        ), "Expected start_vebus_keepalive to be called once"
+        ka = calls_keepalive[0]
+        assert ka["unit"] == 227
+        assert ka["interval_s"] == 0.5
+
+        assert ka["targets"][Reg.VEBUS_Hub4_L1_AcPowerSetpoint_37] == 0
+        assert ka["targets"][Reg.VEBUS_Hub4_L2_AcPowerSetpoint_40] == 0
+        assert ka["targets"][Reg.VEBUS_Hub4_L3_AcPowerSetpoint_41] == 0

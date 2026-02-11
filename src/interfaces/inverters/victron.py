@@ -9,10 +9,11 @@ from typing import Union, Any
 import struct
 import math
 import time
+import threading
 
 from ..inverter_base import BaseInverter  # pylint: disable=relative-beyond-top-level
 
-from ..inverters.ccgx_registers import Reg, REGISTERS, RegisterDef
+from ..inverters.ccgx_registers_all import Reg, REGISTERS, RegisterDef
 
 
 logger = logging.getLogger("__main__").getChild("VictronModbus")
@@ -40,6 +41,98 @@ class VictronInverter(BaseInverter):
 
         self.initialize()
 
+        self._vebus_keepalive_thread: threading.Thread | None = None
+        self._vebus_keepalive_stop = threading.Event()
+        self._vebus_keepalive_lock = threading.Lock()
+
+        # welche Regs zyklisch geschrieben werden + ihre aktuellen Zielwerte (W)
+        self._vebus_targets: dict[Reg, int] = {}
+        self._vebus_interval_s: float = 1.0  # 500ms
+
+    def start_vebus_keepalive(
+        self,
+        targets: dict[Reg, int],
+        interval_s: float = 0.5,
+        unit: int = 227,
+    ):
+        """
+        Startet einen Thread, der die angegebenen VE.Bus Setpoints zyklisch schreibt.
+        targets: z.B. {Reg.VEBUS_Hub4_L1_AcPowerSetpoint_37: 0, ...}
+        """
+        self._vebus_interval_s = float(interval_s)
+
+        with self._vebus_keepalive_lock:
+            self._vebus_targets = {k: int(v) for k, v in targets.items()}
+
+        if self._vebus_keepalive_thread and self._vebus_keepalive_thread.is_alive():
+            logger.info(
+                "[VictronModbus] VE.Bus keepalive already running - targets updated"
+            )
+            return
+
+        self._vebus_keepalive_stop.clear()
+
+        def _loop():
+            while not self._vebus_keepalive_stop.is_set():
+                with self._vebus_keepalive_lock:
+                    snapshot = dict(self._vebus_targets)
+
+                for reg, watts in snapshot.items():
+                    try:
+                        rdef = REGISTERS[reg]
+                        # Wichtig: kein verify, nur write (Keepalive)
+                        self.write_holding_registers(
+                            unit=unit,
+                            address=rdef.address,
+                            values=int(watts),
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "[VictronModbus] VE.Bus keepalive write failed for %s: %s",
+                            getattr(reg, "name", str(reg)),
+                            e,
+                        )
+
+                time.sleep(self._vebus_interval_s)
+
+        self._vebus_keepalive_thread = threading.Thread(target=_loop, daemon=True)
+        self._vebus_keepalive_thread.start()
+
+        logger.info(
+            "[VictronModbus] VE.Bus keepalive started (%d regs, %.2fs interval)",
+            len(targets),
+            self._vebus_interval_s,
+        )
+
+    def update_vebus_keepalive_targets(self, targets: dict[Reg, int]):
+        """Aktualisiert die Zielwerte, Thread läuft weiter."""
+        with self._vebus_keepalive_lock:
+            for reg, watts in targets.items():
+                self._vebus_targets[reg] = int(watts)
+
+    def stop_vebus_keepalive(self, unit: int = 227, write_zero: bool = True):
+        """Stoppt Keepalive-Thread und schreibt optional 0W auf alle Targets (Fail-safe)."""
+        self._vebus_keepalive_stop.set()
+        if self._vebus_keepalive_thread:
+            self._vebus_keepalive_thread.join(timeout=2.0)
+
+        if write_zero:
+            with self._vebus_keepalive_lock:
+                regs = list(self._vebus_targets.keys())
+
+            for reg in regs:
+                try:
+                    rdef = REGISTERS[reg]
+                    self.write_holding_registers(
+                        unit=unit, address=rdef.address, values=0
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[VictronModbus] Failed to write 0W for %s: %s", reg.name, e
+                    )
+
+        logger.info("[VictronModbus] VE.Bus keepalive stopped")
+
     def initialize(self):
         self.address = self.config["address"]
         self.port = 502
@@ -52,18 +145,41 @@ class VictronInverter(BaseInverter):
         """Set the inverter to avoid discharging the battery."""
         logger.info("[VictronModbus] Setting hold mode, avoid discharge")
 
-        reg = Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPERCENTAGE
-        target_value = 49
+        # Also wir stellen auf ESS Externe Regelung ES Mode auf 3und setzen dann ID 37,41 und 42 auf 0W -> es werden 0 W aus oder in richtung Grid geschoben kein Laden kein Entladen
+
+        # ESS Mode external controll
+        reg = Reg.SETTINGS_Settings_Cgwacs_Hub4Mode
+        target_value = 3
         rdef = REGISTERS[reg]
 
         logger.info(
-            "[VictronModbus] Setting hold mode (avoid discharge): %s @ %d (%s)",
+            "[VictronModbus] Setting ESS Mode to External Control: write %s=%d @ %d (%s)",
             reg.name,
+            target_value,
             rdef.address,
             rdef.description,
         )
 
         self.write_register_verified(reg, target_value, retries=8, delay_s=0.2)
+
+        # 2) VE.Bus Setpoints zyklisch halten (unit 227)
+        targets = {
+            Reg.VEBUS_Hub4_L1_AcPowerSetpoint_37: 0,
+            Reg.VEBUS_Hub4_L2_AcPowerSetpoint_40: 0,
+            Reg.VEBUS_Hub4_L3_AcPowerSetpoint_41: 0,
+        }
+
+        # optional: einmalig initial schreiben (kurz)
+        for r, v in targets.items():
+            rdef = REGISTERS[r]
+            self.write_holding_registers(unit=227, address=rdef.address, values=v)
+
+        # dann Keepalive starten
+        self.start_vebus_keepalive(targets, interval_s=0.5, unit=227)
+
+        logger.info(
+            "[VictronModbus] Hold mode active (setpoints kept at 0W on L1/L2/L3)"
+        )
 
         logger.info(
             "[VictronModbus] Hold mode active (discharge disabled, %s=%s)",
@@ -71,50 +187,20 @@ class VictronInverter(BaseInverter):
             target_value,
         )
 
-    def set_mode_avoid_discharge_just_write(self):
-        """Set the inverter to avoid discharging the battery."""
-        logger.info("[VictronModbus] Setting hold mode, avoid discharge")
-        logger.info("[VictronModbus] Setting hold mode, avoid discharge")
-
-        # Hold mode = disable discharge (0W), allow PV charging only
-        # ESS max discharge current (fractional)
-        # Modbus Adress 2702
-        # ESS Mode 2 - Max discharge current for ESS control-loop. The control-loop will use this value to limit the multi power setpoint.
-        # Currently a value < 50% will disable discharge completely. >=50% allows. Consider using 2704 instead.
-
-        # ESS max charge current (fractional)
-        # Modbus Adress 2703
-        # ESS Mode 3 - Max charge current for ESS control-loop. The control-loop will use this value to limit the multi power setpoint.
-        # Currently a value < 50% will disable charge completely. >=50% allows.
-        # self.write_holding_registers(self.unit_id, 2702, 99)
-        # self.write_register(
-        #     unit=100,
-        #     reg=Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPERCENTAGE,
-        #     value=49,
-        # )
-
     def set_mode_allow_discharge(self):
         """Set the inverter to allow discharging the battery."""
         logger.info("[VictronModbus] Setting discharge mode, allow discharge")
 
-        # Hold mode = disable discharge (0W), allow PV charging only
-        # ESS max discharge current (fractional)
-        # Modbus Adress 2702
-        # ESS Mode 2 - Max discharge current for ESS control-loop. The control-loop will use this value to limit the multi power setpoint.
-        # Currently a value < 50% will disable discharge completely. >=50% allows. Consider using 2704 instead.
+        # VE.Bus Keepalive stoppen
+        self.stop_vebus_keepalive()
 
-        # ESS max charge current (fractional)
-        # Modbus Adress 2703
-        # ESS Mode 3 - Max charge current for ESS control-loop. The control-loop will use this value to limit the multi power setpoint.
-        # Currently a value < 50% will disable charge completely. >=50% allows.
-        # self.write_holding_registers(self.unit_id, 2702, 99)
-
-        reg = Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPERCENTAGE
-        target_value = 100
+        # ESS Mode reset external control to ESS with Phase Compensation
+        reg = Reg.SETTINGS_Settings_Cgwacs_Hub4Mode
+        target_value = 1
         rdef = REGISTERS[reg]
 
         logger.info(
-            "[VictronModbus] Setting discharge mode: write %s=%d @ %d (%s)",
+            "[VictronModbus] Setting ESS Mode to 1=ESS with Phase Compensation: write %s=%d @ %d (%s)",
             reg.name,
             target_value,
             rdef.address,
@@ -129,32 +215,8 @@ class VictronInverter(BaseInverter):
             target_value,
         )
 
-    #    """  self.write_register(
-    #         unit=100,
-    #         reg=Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPERCENTAGE,
-    #         value=100,
-    #     ) """
-
     def set_allow_grid_charging(self, value: bool):
-        """
-        Enable or disable grid charging via MultiPlus (ESS).
-        value:
-        - bool:
-            True  -> enable grid charging (default 100%)
-            False -> disable grid charging
-        """
-        if isinstance(value, bool):
-            percent = 100 if value else 0
-        else:
-            raise TypeError("value must be bool")
-
-        logger.info("[VictronModbus] Set allow grid charging")
-
-        # self.write_register(
-        #     unit=self.unit_id,
-        #     reg=Reg.SETTINGS_SETTINGS_CGWACS_MAXCHARGEPERCENTAGE,
-        #     value=percent,
-        # )
+        logger.info("[VictronModbus] Allow Gridcharging")
 
     def set_battery_mode(self, mode):
         raise NotImplementedError
@@ -186,56 +248,39 @@ class VictronInverter(BaseInverter):
     def set_mode_force_charge(self, charge_power_w):
         """
         Force charging from grid with approx. charge power in W.
-        Einfache Variante bei Victron Anlagen: SOC Limit hochsetzen auf den gewünschten Wert... Victron lädt selbständig
-
-        Strategy:
-                    1) Enable grid charging (ESS)
-                    2) Read current battery voltage
-                    3) Convert desired power (W) to DC current (A)
-                    4) Apply DVCC max charge current
+        2902 = 1 oder 2   # ESS an
+        2900 = 9          # Keep batteries charged (typisch)
+        2705 = sinnvoller Wert (z. B. 30–60 A)  # Lade-Limit
         """
         # TODO: Unit test fuer set_mode_force_charge erstellen
-
         if charge_power_w is None:
             raise TypeError("charge_power_w must be a number")
 
-        charge_power_w = float(charge_power_w)
-
         if charge_power_w <= 0:
             # Disable grid charging + remove DVCC limit (Victron: -1 disables the limit)
-            self.set_allow_grid_charging(False)
-            # self.write_register(
-            #     unit=self.unit_id,
-            #     reg=Reg.SETTINGS_SETTINGS_SYSTEMSETUP_MAXCHARGECURRENT,
-            #     value=-1,  # disables the limit
-            # )
             logger.info("[VictronModbus] Force grid charge disabled (P<=0).")
             return
 
-        # 1) Allow grid charging via MAXCHARGEPERCENTAGE
-        self.set_allow_grid_charging(True)
-
-        # 2) Read battery voltage
-        batt_v = self._read_battery_voltage_v()
-
-        # 3) Convert W -> A
-        charge_current_a = self._power_w_to_target_charge_current_a(
-            charge_power_w, batt_v
-        )
+        # ESS Mode external controll
+        reg = Reg.SETTINGS_Settings_Cgwacs_Hub4Mode
+        target_value = 3
+        rdef = REGISTERS[reg]
 
         logger.info(
-            "[VictronModbus] Force charge: target %.0f W @ %.2f V -> %d A (set 2705)",
-            charge_power_w,
-            batt_v,
-            charge_current_a,
+            "[VictronModbus] Setting ESS Mode to External Control: write %s=%d @ %d (%s)",
+            reg.name,
+            target_value,
+            rdef.address,
+            rdef.description,
         )
 
-        # 4) Apply DVCC max charge current (A DC)
-        # self.write_register(
-        #     unit=self.unit_id,
-        #     reg=Reg.SETTINGS_SETTINGS_SYSTEMSETUP_MAXCHARGECURRENT,
-        #     value=charge_current_a,
-        # )
+        self.write_register_verified(reg, target_value, retries=8, delay_s=0.2)
+
+        logger.info(
+            "[VictronModbus] charging from grid active (charge from grid enabled, %s=%s)",
+            reg.name,
+            target_value,
+        )
 
     def connect_inverter(self):
         """Connect to Victron Modbus device."""
