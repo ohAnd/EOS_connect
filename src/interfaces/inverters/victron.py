@@ -86,6 +86,7 @@ class VictronInverter(BaseInverter):
                             address=rdef.address,
                             values=int(watts),
                         )
+
                     except Exception as e:
                         logger.warning(
                             "[VictronModbus] VE.Bus keepalive write failed for %s: %s",
@@ -172,10 +173,16 @@ class VictronInverter(BaseInverter):
         # optional: einmalig initial schreiben (kurz)
         for r, v in targets.items():
             rdef = REGISTERS[r]
+            logger.info(
+                "[VictronModbus] VE.Bus ID %d (%s) -> %dW",
+                rdef.address,
+                r.name,
+                v,
+            )
             self.write_holding_registers(unit=227, address=rdef.address, values=v)
 
         # dann Keepalive starten
-        self.start_vebus_keepalive(targets, interval_s=0.5, unit=227)
+        self.start_vebus_keepalive(targets, interval_s=1.0, unit=227)
 
         logger.info(
             "[VictronModbus] Hold mode active (setpoints kept at 0W on L1/L2/L3)"
