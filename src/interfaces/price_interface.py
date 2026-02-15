@@ -767,7 +767,8 @@ class PriceInterface:
             )
             if forecast_prices:
                 logger.info(
-                    "[PRICE-IF] Using energyforecast.de smart price prediction to fill remaining %d hours",
+                    "[PRICE-IF] Using energyforecast.de smart price prediction"
+                    + " to fill remaining %d hours",
                     (
                         remaining_hours
                         if self.time_frame_base == 3600
@@ -779,7 +780,8 @@ class PriceInterface:
             else:
                 # Fall back to simple price repetition
                 logger.debug(
-                    "[PRICE-IF] Smart price prediction unavailable, using simple repetition for remaining %d hours",
+                    "[PRICE-IF] Smart price prediction unavailable, using simple repetition"
+                    + " for remaining %d hours",
                     (
                         remaining_hours
                         if self.time_frame_base == 3600
@@ -1327,14 +1329,11 @@ class PriceInterface:
         # Convert offset from EUR/Wh to ct/kWh for logging
         offset_ct_kwh = offset * 100000
 
-        # Log sample comparison for learning quality
-        logger.info(
-            "[PRICE-IF] Learning from %d samples - First 3 comparisons:",
-            overlap_size,
-        )
+        # Log sample comparison for learning quality (each as standalone entry for web UI compatibility)
         for i in range(min(3, overlap_size)):
             logger.info(
-                "  Sample %d: EPEX %.2f ct/kWh → Primary %.2f ct/kWh",
+                "[PRICE-IF] Learning from %d samples - Sample %d: EPEX %.2f ct/kWh → Primary %.2f ct/kWh",
+                overlap_size,
                 i,
                 epex_samples[i] * 100000,
                 primary_samples[i] * 100000,
@@ -1400,7 +1399,8 @@ class PriceInterface:
         adapted_prices = []
         for epex_price in future_epex:
             adapted_price = factor * epex_price + offset
-            # Handle negative prices: if result is negative, keep it (user pays negative = gets paid)
+            # Handle negative prices: if result is negative,
+            # keep it (user pays negative = gets paid)
             adapted_prices.append(round(adapted_price, 9))
 
         logger.info(
