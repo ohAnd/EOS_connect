@@ -844,7 +844,13 @@
             </table>
 
             <div class="alert alert-warning">
-                <strong><i class="fas fa-info-circle"></i> API Usage:</strong> Since energyforecast.de is only used when your primary source lacks tomorrow's prices, API calls are minimal—typically 1-2 per day. The free tier is sufficient for most users.
+                <strong><i class="fas fa-info-circle"></i> API Usage:</strong> Smart Price Prediction uses energyforecast.de's API with intelligent throttling:
+                <ul style="margin-top: 10px; margin-bottom: 0;">
+                    <li><strong>Smart caching:</strong> API calls limited to maximum once per hour, with auto-call at midnight</li>
+                    <li><strong>Typical usage:</strong> ~13 API calls/day when predictions needed (e.g., Tibber 00:00-13:00)</li>
+                    <li><strong>Rate limit:</strong> Free tier = 50 calls/day (plenty of margin for safety)</li>
+                    <li><strong>Note:</strong> Cached predictions used within each hour to avoid hitting rate limits</li>
+                </ul>
             </div>
         </div>
 

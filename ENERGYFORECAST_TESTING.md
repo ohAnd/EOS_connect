@@ -209,14 +209,19 @@ No energyforecast messages - using real prices directly.
 
 ### Issue: API rate limits exceeded
 
-**Free tier limits:**
-- Usually sufficient (1-2 calls per day)
-- Only called when tomorrow's prices missing
+**Free tier limits: 50 requests/day**
 
-**If exceeded:**
-- Verify calling frequency in logs
+**Smart caching optimization:**
+- API calls throttled to maximum once per hour
+- Always calls on first check after midnight (when tomorrow becomes today)
+- Subsequent calls within 1 hour use cached result
+- **Result: ~13 API calls/day** (well under 50-request limit)
+- Example: For Tibber, ~1 call/hour from 00:00-13:00 = ~13 calls total
+
+**If rate limit exceeded (unlikely with optimization):**
+- Check frequency in logs for unexpected calls
 - Consider upgrading to paid tier
-- Check for configuration errors causing repeated calls
+- Report if still exceeding limit (possible edge case)
 
 ### Issue: "Currency DKK detected" message
 

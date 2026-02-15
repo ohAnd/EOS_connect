@@ -146,6 +146,12 @@ class PriceInterface:
         self._stop_event = threading.Event()
         self.update_interval = 900  # 15 minutes in seconds
 
+        # Smart caching for energyforecast.de API calls to stay within rate limits
+        # Throttles calls to once per hour (max ~13/day) to avoid excessive API usage
+        self._last_energyforecast_call_time = None  # Timestamp of last API call
+        self._last_energyforecast_call_date = None  # Date of last API call
+        self._energyforecast_cache = []  # Cached prediction from last call
+
         self.__check_config()  # Validate configuration parameters
         logger.info(
             "[PRICE-IF] Initialized with"
@@ -1129,6 +1135,57 @@ class PriceInterface:
         self.current_prices_direct = extended_prices.copy()
         return extended_prices
 
+    def _should_call_energyforecast(self):
+        """
+        Determine if we should call energyforecast.de API based on throttling.
+
+        Throttles API calls to avoid rate limiting:
+        - Always call on first prediction request
+        - Always call after midnight (when predictions for new day needed)
+        - Otherwise, only call if 1+ hour has passed since last successful call
+        - Use cached prediction within the 1-hour window
+
+        Returns:
+            bool: True if we should call the API, False if we should use cache.
+        """
+        now = datetime.now(self.time_zone)
+        today = now.date()
+
+        # First call ever - always proceed
+        if self._last_energyforecast_call_time is None:
+            logger.debug(
+                "[PRICE-IF] First energyforecast call - proceeding (no prior call)"
+            )
+            return True
+
+        # New calendar day detected - always call (handles midnight crossing)
+        if self._last_energyforecast_call_date != today:
+            logger.debug(
+                "[PRICE-IF] New day detected - calling energyforecast "
+                "(last: %s, today: %s)",
+                self._last_energyforecast_call_date,
+                today,
+            )
+            return True
+
+        # Check if 1 hour has passed since last call
+        time_since_last_call = now - self._last_energyforecast_call_time
+        if time_since_last_call.total_seconds() >= 3600:  # 1 hour = 3600 seconds
+            logger.debug(
+                "[PRICE-IF] 1+ hour passed since last call (%.0f seconds ago) "
+                "- calling energyforecast",
+                time_since_last_call.total_seconds(),
+            )
+            return True
+
+        # Within 1 hour of last call - use cached result
+        logger.debug(
+            "[PRICE-IF] Using cached energyforecast result "
+            "(called %.0f seconds ago, threshold: 3600s)",
+            time_since_last_call.total_seconds(),
+        )
+        return False
+
     def _fetch_adaptive_energyforecast_fallback(
         self, known_prices_with_ts=None, known_prices=None, num_missing_hours=None
     ):
@@ -1145,6 +1202,11 @@ class PriceInterface:
         - Fixed grid fees and charges
         - Negative EPEX spot prices correctly
         - Timestamp-based alignment when available
+
+        Uses intelligent API throttling to manage rate limits:
+        - Only calls API if 1+ hour has passed since last call or on new calendar day
+        - Caches predictions for reuse within the 1-hour window
+        - Minimizes API usage while maintaining current predictions
 
         Args:
             known_prices_with_ts (list): List of dicts with 'price' and 'timestamp' keys (EUR/Wh).
@@ -1197,6 +1259,17 @@ class PriceInterface:
             ),
         )
 
+        # Apply smart caching - only call API if 1+ hour passed or new day
+        if not self._should_call_energyforecast():
+            if self._energyforecast_cache:
+                logger.debug(
+                    "[PRICE-IF] Using cached energyforecast prediction " "(%d prices)",
+                    len(self._energyforecast_cache),
+                )
+                return self._energyforecast_cache
+            logger.debug("[PRICE-IF] Throttled energyforecast call, no cache available")
+            return []
+
         # Fetch full 48h of EPEX spot prices from energyforecast (NO markup applied)
         resolution = "QUARTER_HOURLY" if self.time_frame_base == 900 else "HOURLY"
 
@@ -1207,6 +1280,11 @@ class PriceInterface:
             "fixed_cost_cent": 0,  # Get raw EPEX prices for learning
             "vat": 0,  # No markup - we'll learn the relationship
         }
+
+        # Update call tracking before attempting API call
+        now = datetime.now(self.time_zone)
+        self._last_energyforecast_call_time = now
+        self._last_energyforecast_call_date = now.date()
 
         try:
             response = requests.get(ENERGYFORECAST_API, params=params, timeout=10)
@@ -1409,6 +1487,9 @@ class PriceInterface:
             min(adapted_prices) * 100000 if adapted_prices else 0,
             max(adapted_prices) * 100000 if adapted_prices else 0,
         )
+
+        # Cache the result for use within the next hour
+        self._energyforecast_cache = adapted_prices
 
         return adapted_prices
 
