@@ -152,6 +152,15 @@ class PriceInterface:
         self._last_energyforecast_call_date = None  # Date of last API call
         self._energyforecast_cache = []  # Cached prediction from last call
 
+        # Forecast metadata tracking for UI visualization
+        self.forecast_start_index = (
+            None  # Index where forecast/repetition begins (None = all real)
+        )
+        self.forecast_type = (
+            None  # "smart_forecast", "simple_repetition", or None (all real)
+        )
+        self.forecast_source = None  # e.g., "energyforecast.de" for smart forecasts
+
         self.__check_config()  # Validate configuration parameters
         logger.info(
             "[PRICE-IF] Initialized with"
@@ -374,6 +383,42 @@ class PriceInterface:
             str: ISO 4217 currency code (e.g. 'EUR', 'DKK').
         """
         return self.price_currency
+
+    def get_forecast_metadata(self):
+        """
+        Return metadata about current price forecast/repetition.
+
+        Returns:
+            dict: Contains forecast_start_index, forecast_type, and forecast_source.
+                  - forecast_start_index: Index where prediction/repetition starts (None if all real)
+                  - forecast_type: "smart_forecast", "simple_repetition", or None
+                  - forecast_source: Source of prediction (e.g., "energyforecast.de") or None
+        """
+        return {
+            "forecast_start_index": self.forecast_start_index,
+            "forecast_type": self.forecast_type,
+            "forecast_source": self.forecast_source,
+        }
+
+    def _set_forecast_metadata(self, start_index, forecast_type, source=None):
+        """
+        Update forecast metadata for UI visualization.
+
+        Args:
+            start_index (int or None): Index where forecast/repetition begins
+            forecast_type (str or None): "smart_forecast", "simple_repetition", or None
+            source (str or None): Source name (e.g., "energyforecast.de")
+        """
+        self.forecast_start_index = start_index
+        self.forecast_type = forecast_type
+        self.forecast_source = source
+        if forecast_type:
+            logger.debug(
+                "[PRICE-IF] Forecast metadata updated: type=%s, start_index=%s, source=%s",
+                forecast_type,
+                start_index,
+                source,
+            )
 
     def __create_feedin_prices(self):
         """
@@ -718,6 +763,12 @@ class PriceInterface:
                 # logger.debug(
                 #     "[Main] day 2 - price for %s -> %s", price["startsAt"], price["total"]
                 # )
+            # All prices are real data from Tibber
+            self._set_forecast_metadata(
+                start_index=None,
+                forecast_type="all_real",
+                source=None,
+            )
         else:
             extend_amount = 24
             if self.time_frame_base == 900:
@@ -735,12 +786,24 @@ class PriceInterface:
                     "using energyforecast.de smart price prediction for next %d hours",
                     extend_amount,
                 )
+                forecast_start_idx = len(prices)
                 prices.extend(forecast_prices)
                 prices_direct.extend(forecast_prices)
+                self._set_forecast_metadata(
+                    start_index=forecast_start_idx,
+                    forecast_type="smart_forecast",
+                    source="energyforecast.de",
+                )
             else:
                 # Use simple price repetition when prediction unavailable
+                forecast_start_idx = len(prices)
                 prices.extend(prices[:extend_amount])
                 prices_direct.extend(prices_direct[:extend_amount])
+                self._set_forecast_metadata(
+                    start_index=forecast_start_idx,
+                    forecast_type="simple_repetition",
+                    source=None,
+                )
 
         if start_time is None:
             start_time = datetime.now(self.time_zone).replace(
@@ -1092,10 +1155,29 @@ class PriceInterface:
                         "using energyforecast.de smart price prediction for %d missing hours",
                         remaining_hours,
                     )
+                    forecast_start_idx = len(extended_prices)
                     extended_prices.extend(forecast_prices)
+                    self._set_forecast_metadata(
+                        start_index=forecast_start_idx,
+                        forecast_type="smart_forecast",
+                        source="energyforecast.de",
+                    )
                 else:
                     # Use simple price repetition
+                    forecast_start_idx = len(extended_prices)
                     extended_prices.extend(hourly_prices[:remaining_hours])
+                    self._set_forecast_metadata(
+                        start_index=forecast_start_idx,
+                        forecast_type="simple_repetition",
+                        source=None,
+                    )
+            else:
+                # All prices are complete real data from SmartEnergy AT
+                self._set_forecast_metadata(
+                    start_index=None,
+                    forecast_type="all_real",
+                    source=None,
+                )
 
         elif self.time_frame_base == 900:
             # Use 15min values directly
@@ -1119,10 +1201,29 @@ class PriceInterface:
                         "using energyforecast.de smart price prediction for %d missing slots",
                         remaining_slots,
                     )
+                    forecast_start_idx = len(extended_prices)
                     extended_prices.extend(forecast_prices)
+                    self._set_forecast_metadata(
+                        start_index=forecast_start_idx,
+                        forecast_type="smart_forecast",
+                        source="energyforecast.de",
+                    )
                 else:
                     # Use simple price repetition
+                    forecast_start_idx = len(extended_prices)
                     extended_prices.extend(prices_15min[:remaining_slots])
+                    self._set_forecast_metadata(
+                        start_index=forecast_start_idx,
+                        forecast_type="simple_repetition",
+                        source=None,
+                    )
+            else:
+                # All prices are complete real data from SmartEnergy AT
+                self._set_forecast_metadata(
+                    start_index=None,
+                    forecast_type="all_real",
+                    source=None,
+                )
 
         # Catch case where all prices are zero (or data is empty)
         if not any(extended_prices):

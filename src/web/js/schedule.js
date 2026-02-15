@@ -91,7 +91,7 @@ class ScheduleManager {
     /**
      * Show schedule for next 24 hours
      */
-    showSchedule(data_request, data_response, data_controls) {
+    showSchedule(data_request, data_response, data_controls, priceInfo = null) {
         //console.log("------- showSchedule -------");
         var serverTime = new Date(data_response["timestamp"]);
         var currentHour = serverTime.getHours();
@@ -140,6 +140,18 @@ class ScheduleManager {
                 discharge_allowed,
                 data_response["timestamp"]
             ).map(val => val > 0 ? 1 : 0);
+        }
+
+        // Log price info for debugging
+        if (priceInfo && priceInfo.forecast_start_index !== null) {
+        }
+
+        // Adjust forecast_start_index if data is converted from quarterly to hourly
+        let adjustedForecastStartIndex = priceInfo ? priceInfo.forecast_start_index : null;
+        if (time_frame_base === 900 && adjustedForecastStartIndex !== null) {
+            // Convert from quarterly (15-min) index to hourly index
+            // 4 quarterly slots = 1 hour, so divide by 4
+            adjustedForecastStartIndex = Math.floor(adjustedForecastStartIndex / 4);
         }
 
         document.getElementById('schedule_currency_symbol').innerText = localization.currency_symbol;
@@ -251,6 +263,12 @@ class ScheduleManager {
             cell3.className = 'table-cell';
             cell3.innerHTML = (priceData[index] * 100000).toFixed(1);
             cell3.style.textAlign = "center";
+            
+            // Apply gray color to forecasted prices
+            if (adjustedForecastStartIndex !== null && index >= adjustedForecastStartIndex) {
+                cell3.style.color = 'rgba(131, 131, 131, 1)';  // Darker gray for forecasted prices
+            }
+            
             row.appendChild(cell3);
 
             var cell4 = document.createElement('div');
@@ -271,8 +289,8 @@ class ScheduleManager {
 }
 
 // Legacy compatibility function
-function showSchedule(data_request, data_response, data_controls) {
+function showSchedule(data_request, data_response, data_controls, priceInfo = null) {
     if (scheduleManager) {
-        scheduleManager.showSchedule(data_request, data_response, data_controls);
+        scheduleManager.showSchedule(data_request, data_response, data_controls, priceInfo);
     }
 }

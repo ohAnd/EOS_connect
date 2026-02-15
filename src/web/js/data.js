@@ -118,22 +118,51 @@ class DataManager {
     }
 
     /**
+     * Fetch price metadata (forecast state and transition point)
+     */
+    async fetchPriceInfo() {
+        try {
+            const response = await fetch('/json/price_info.json');
+            if (!response.ok) {
+                return {
+                    forecast_start_index: null,
+                    forecast_type: "all_real",
+                    forecast_source: null,
+                    timestamp: new Date().toISOString(),
+                    api_version: "0.0.1"
+                };
+            }
+            return await response.json();
+        } catch (error) {
+            return {
+                forecast_start_index: null,
+                forecast_type: "all_real",
+                forecast_source: null,
+                timestamp: new Date().toISOString(),
+                api_version: "0.0.1"
+            };
+        }
+    }
+
+    /**
      * Fetch all data needed for initialization
      * Returns both request and response data
      */
     async fetchAllData(isTestMode = false, testScenario = null) {
         // testScenario != 'LIVE' ? console.log("[DataManager] Fetching all data in TEST mode") : null;
         try {
-            const [requestData, responseData, controlsData] = await Promise.all([
+            const [requestData, responseData, controlsData, priceInfo] = await Promise.all([
                 this.fetchOptimizationRequest(isTestMode),
                 this.fetchOptimizationResponse(isTestMode),
-                this.fetchCurrentControls(testScenario)
+                this.fetchCurrentControls(testScenario),
+                this.fetchPriceInfo()
             ]);
 
             return {
                 request: requestData,
                 response: responseData,
-                controls: controlsData
+                controls: controlsData,
+                priceInfo: priceInfo
             };
         } catch (error) {
             console.error("[DataManager] Error fetching all data:", error);

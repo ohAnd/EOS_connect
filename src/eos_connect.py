@@ -1585,6 +1585,28 @@ def get_controls():
     )
 
 
+@app.route("/json/price_info.json", methods=["GET"])
+def get_price_info():
+    """
+    Returns price forecast metadata for UI visualization.
+
+    Provides information about whether prices are real data, simple repetition,
+    or smart forecasted, to help distinguish in charts and tables.
+    """
+    forecast_metadata = price_interface.get_forecast_metadata()
+
+    response_data = {
+        "forecast_start_index": forecast_metadata.get("forecast_start_index"),
+        "forecast_type": forecast_metadata.get("forecast_type"),
+        "forecast_source": forecast_metadata.get("forecast_source"),
+        "timestamp": datetime.now(time_zone).isoformat(),
+        "api_version": "0.0.1",
+    }
+    return Response(
+        json.dumps(response_data, indent=4), content_type="application/json"
+    )
+
+
 @app.route("/json/test/<filename>")
 def serve_test_json_files(filename):
     """
