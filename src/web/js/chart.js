@@ -147,7 +147,23 @@ class ChartManager {
         
         // Apply segment styling if forecast data is available
         if (priceInfo && priceInfo.forecast_start_index !== null && priceInfo.forecast_type !== "all_real") {
-            const forecastIdx = priceInfo.forecast_start_index;
+            // Calculate current hour offset based on time frame
+            const now = new Date();
+            const currentHour = now.getHours();
+            const timeFrameBase = data_controls && data_controls["used_time_frame_base"] ? data_controls["used_time_frame_base"] : 3600;
+            
+            // Convert absolute forecast_start_index (from midnight) to relative index in priceData
+            // priceData starts from current hour, so subtract the hour offset
+            let arrayOffset = 0;
+            if (timeFrameBase === 900) {
+                // 15-min intervals: multiply hour by 4
+                arrayOffset = currentHour * 4;
+            } else {
+                // Hourly: use hour directly
+                arrayOffset = currentHour;
+            }
+            
+            const forecastIdx = Math.max(0, priceInfo.forecast_start_index - arrayOffset);
             
             // Split price data into real and forecast portions
             const realPriceData = priceData.slice(0, forecastIdx);
@@ -171,7 +187,7 @@ class ChartManager {
             this.chartInstance.data.datasets[9].borderColor = 'rgba(255, 69, 0, 0.8)';
             this.chartInstance.data.datasets[9].borderDash = [];
             
-            // Set dataset 10 (forecast prices) - dotted red
+            // Set dataset 10 (forecast prices) - gray
             if (!this.chartInstance.data.datasets[10]) {
                 console.warn('[ChartManager] Dataset 10 does not exist for forecast visualization');
             } else {

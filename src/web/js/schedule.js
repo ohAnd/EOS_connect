@@ -146,12 +146,22 @@ class ScheduleManager {
         if (priceInfo && priceInfo.forecast_start_index !== null) {
         }
 
-        // Adjust forecast_start_index if data is converted from quarterly to hourly
+        // Adjust forecast_start_index for display
         let adjustedForecastStartIndex = priceInfo ? priceInfo.forecast_start_index : null;
-        if (time_frame_base === 900 && adjustedForecastStartIndex !== null) {
-            // Convert from quarterly (15-min) index to hourly index
-            // 4 quarterly slots = 1 hour, so divide by 4
-            adjustedForecastStartIndex = Math.floor(adjustedForecastStartIndex / 4);
+        
+        if (adjustedForecastStartIndex !== null) {
+            const now = new Date();
+            const currentHour = now.getHours();
+            
+            if (time_frame_base === 900) {
+                // Convert from quarterly (15-min) index to hourly index
+                // 4 quarterly slots = 1 hour, so divide by 4
+                adjustedForecastStartIndex = Math.floor(adjustedForecastStartIndex / 4);
+            }
+            
+            // Adjust for current hour offset
+            // forecast_start_index is absolute (from midnight), schedule table shows relative hours (from now)
+            adjustedForecastStartIndex = Math.max(0, adjustedForecastStartIndex - currentHour);
         }
 
         document.getElementById('schedule_currency_symbol').innerText = localization.currency_symbol;

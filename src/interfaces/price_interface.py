@@ -737,11 +737,19 @@ class PriceInterface:
 
         today_prices_json = json.loads(today_prices)
         tomorrow_prices_json = json.loads(tomorrow_prices)
+
+        if start_time is None:
+            start_time = datetime.now(self.time_zone).replace(
+                minute=0, second=0, microsecond=0
+            )
+
         prices = []
         prices_direct = []
         prices_with_timestamps = []  # Keep timestamp info for smart price prediction
+        today_cutoff_idx = 0  # Track where today's real data ends
 
-        for price in today_prices_json:
+        # Load today's prices and find where real data ends (end of calendar day)
+        for i, price in enumerate(today_prices_json):
             prices.append(round(price["total"] / 1000, 9))
             prices_direct.append(round(price["energy"] / 1000, 9))
             prices_with_timestamps.append(
@@ -750,6 +758,14 @@ class PriceInterface:
                     "timestamp": price["startsAt"],
                 }
             )
+
+        # Calculate where "today" ends - today's data always goes to 23:59
+        # In 15-min intervals: 96 items (24 * 4)
+        # In hourly intervals: 24 items
+        if self.time_frame_base == 900:
+            today_cutoff_idx = 96  # Full day in 15-min intervals
+        else:
+            today_cutoff_idx = 24  # Full day in hourly intervals
         if tomorrow_prices_json:
             for price in tomorrow_prices_json:
                 prices.append(round(price["total"] / 1000, 9))
@@ -786,7 +802,7 @@ class PriceInterface:
                     "using energyforecast.de smart price prediction for next %d hours",
                     extend_amount,
                 )
-                forecast_start_idx = len(prices)
+                forecast_start_idx = today_cutoff_idx
                 prices.extend(forecast_prices)
                 prices_direct.extend(forecast_prices)
                 self._set_forecast_metadata(
@@ -796,7 +812,7 @@ class PriceInterface:
                 )
             else:
                 # Use simple price repetition when prediction unavailable
-                forecast_start_idx = len(prices)
+                forecast_start_idx = today_cutoff_idx
                 prices.extend(prices[:extend_amount])
                 prices_direct.extend(prices_direct[:extend_amount])
                 self._set_forecast_metadata(
@@ -810,12 +826,24 @@ class PriceInterface:
                 minute=0, second=0, microsecond=0
             )
         current_hour = start_time.hour
+
+        # Convert tgt_duration to actual array slots based on time frame
         if self.time_frame_base == 900:
-            tgt_duration = 192  # 48 hours in 15 min intervals
-        extended_prices = prices[current_hour : current_hour + tgt_duration]
+            # 15-min intervals: convert hours to 15-min slots
+            actual_slots = tgt_duration * 4
+            array_offset = current_hour * 4
+        else:
+            # Hourly intervals: use as-is
+            actual_slots = tgt_duration
+            array_offset = current_hour
+
+        extended_prices = prices[array_offset : array_offset + actual_slots]
         extended_prices_direct = prices_direct[
-            current_hour : current_hour + tgt_duration
+            array_offset : array_offset + actual_slots
         ]
+
+        # Note: forecast_start_index remains canonical (relative to full 48-hour array)
+        # UI will handle time offset when filtering for display
 
         # Fill any remaining gap with smart price prediction or simple repetition
         if len(extended_prices) < tgt_duration:
