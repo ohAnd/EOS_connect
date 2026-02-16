@@ -213,7 +213,7 @@ th {
     color: white;
     justify-content: center;
     align-items: center;
-    z-index: 1100;
+    z-index: 2000;
     border-radius: 10px;
     box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
     overflow: auto;
@@ -522,5 +522,114 @@ input[type="number"] {
         justify-content: center;
         padding: 10px 12px;
         font-size: 0.85em;
+    }
+}
+
+/* ===================================
+   Version Comparison Responsive Styles
+   =================================== */
+
+/* Desktop and landscape: horizontal layout */
+.version-comparison-container {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 20px;
+    justify-content: center;
+}
+
+.version-box {
+    font-size: 1.2em;
+    color: #fff;
+    font-weight: bold;
+    background-color: rgba(255,255,255,0.1);
+    padding: 10px 16px;
+    border-radius: 6px;
+    text-align: center;
+    width: 180px;
+    flex-shrink: 0;
+}
+
+.version-box-latest {
+    color: #4a9eff;
+    background-color: rgba(74, 158, 255, 0.2);
+    border: 1px solid #4a9eff;
+}
+
+.version-arrow {
+    font-size: 1.5em;
+    color: #4a9eff;
+    width: 40px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.version-arrow-horizontal {
+    display: inline-block;
+}
+
+.version-arrow-vertical {
+    display: none;
+}
+
+.version-labels-container {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+}
+
+.version-label {
+    text-align: center;
+    width: 180px;
+    font-size: 0.8em;
+    color: #888;
+}
+
+.version-label-spacer {
+    width: 40px;
+}
+
+/* Mobile portrait: vertical layout */
+@media (max-width: 768px) and (orientation: portrait) {
+    .version-comparison-container {
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .version-box {
+        width: 100%;
+        max-width: 250px;
+        font-size: 1.1em;
+        padding: 8px 14px;
+    }
+
+    .version-arrow {
+        width: auto;
+        font-size: 1.3em;
+        transform: rotate(90deg);
+        margin: -5px 0;
+    }
+
+    .version-arrow-horizontal {
+        display: none;
+    }
+
+    .version-arrow-vertical {
+        display: inline-block;
+    }
+
+    .version-labels-container {
+        flex-direction: column;
+        gap: 12px;
+        width: 100%;
+    }
+
+    .version-label {
+        width: 100%;
+        max-width: 250px;
+    }
+
+    .version-label-spacer {
+        display: none;
     }
 }

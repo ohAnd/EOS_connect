@@ -381,7 +381,7 @@ const MenuNotifications = {
                     background-color: ${dotColor};
                     border-radius: 50%;
                     /* border: 1px solid darkgray; optional border */
-                    z-index: 999;
+                    z-index: 10;
                     pointer-events: none;
                 `;
                 menuElement.appendChild(dot);
@@ -630,29 +630,26 @@ function showInfoMenu(version, backend, granularity) {
                     <!-- Update Available Layout -->
                     <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
                         <!-- Version Comparison -->
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
                             <!-- Labels -->
-                            <div style="display: flex; gap: 20px; justify-content: center;">
-                                <div style="text-align: center; width: 180px;">
-                                    <div style="font-size: 0.8em; color: #888;">Current</div>
-                                </div>
-                                <div style="width: 40px;"></div>
-                                <div style="text-align: center; width: 180px;">
-                                    <div style="font-size: 0.8em; color: #888;">Latest</div>
-                                </div>
+                            <div class="version-labels-container">
+                                <div class="version-label">Current</div>
+                                <div class="version-label-spacer"></div>
+                                <div class="version-label">Latest</div>
                             </div>
                             
                             <!-- Version Boxes with Arrow -->
-                            <div style="display: flex; align-items: center; gap: 20px; justify-content: center;">
-                                <div style="font-size: 1.2em; color: #fff; font-weight: bold; background-color: rgba(255,255,255,0.1); padding: 10px 16px; border-radius: 6px; text-align: center; width: 180px;">
+                            <div class="version-comparison-container">
+                                <div class="version-box">
                                     ${version}
                                 </div>
                                 
-                                <div style="font-size: 1.5em; color: #4a9eff; width: 40px; text-align: center;">
-                                    <i class="fas fa-arrow-right"></i>
+                                <div class="version-arrow">
+                                    <i class="fas fa-arrow-right version-arrow-horizontal"></i>
+                                    <i class="fas fa-arrow-down version-arrow-vertical"></i>
                                 </div>
                                 
-                                <div style="font-size: 1.2em; color: #4a9eff; font-weight: bold; background-color: rgba(74, 158, 255, 0.2); padding: 10px 16px; border-radius: 6px; border: 1px solid #4a9eff; text-align: center; width: 180px;">
+                                <div class="version-box version-box-latest">
                                     ${updateStatus.latest_version}
                                 </div>
                             </div>
