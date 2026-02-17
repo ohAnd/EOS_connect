@@ -103,7 +103,7 @@ class UpdateBannerManager {
      */
     async checkForUpdates() {
         try {
-            const response = await fetch('/api/update/status');
+            const response = await fetch('/api/update/status?nocache=' + Date.now());
             if (!response.ok) {
                 console.warn('[UPDATE-BANNER] Failed to fetch update status:', response.status);
                 return;

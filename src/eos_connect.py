@@ -1602,9 +1602,13 @@ def get_price_info():
         "timestamp": datetime.now(time_zone).isoformat(),
         "api_version": "0.0.1",
     }
-    return Response(
+    response = Response(
         json.dumps(response_data, indent=4), content_type="application/json"
     )
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.route("/json/test/<filename>")
@@ -1950,9 +1954,13 @@ def get_update_status():
             "api_version": "0.0.1",
         }
 
-        return Response(
+        response = Response(
             json.dumps(response_data, indent=2), content_type="application/json"
         )
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
     except (ValueError, TypeError, KeyError, AttributeError) as e:
         logger.error("[Web] Error retrieving update status: %s", e)
