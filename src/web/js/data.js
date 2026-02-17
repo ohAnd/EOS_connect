@@ -122,7 +122,7 @@ class DataManager {
      */
     async fetchPriceInfo() {
         try {
-            const response = await fetch('/json/price_info.json?nocache=' + Date.now());
+            const response = await fetch('json/price_info.json?nocache=' + Date.now());
             if (!response.ok) {
                 return {
                     forecast_start_index: null,
