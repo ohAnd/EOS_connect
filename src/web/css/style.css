@@ -101,6 +101,15 @@ body {
     .battery-overview-card td, .battery-overview-card th {
         padding: 4px 2px !important;
     }
+
+    /* Toast notifications - centered on mobile */
+    #toast-container {
+        top: 20px !important;
+        right: auto !important;
+        left: 5% !important;
+        transform: translateX(0%);
+        max-width: calc(100% - 40px);
+    }
 }
 
 /* Very small screens (e.g. iPhone SE) */

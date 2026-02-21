@@ -218,7 +218,6 @@ class ControlsManager {
                 </div>
 
                 <!-- Grid Charge Power Section (Only for Mode 0) -->
-                ${currentModeNum === 0 ? `
                 <div id="grid-power-section" style="background-color: rgba(0,0,0,0.3); border-radius: 8px; padding: 25px; border-left: 4px solid ${EOS_CONNECT_ICONS[0].color}; margin-bottom: 15px; ">
                     <div style="font-size: 1.1em; color: ${EOS_CONNECT_ICONS[0].color}; margin-bottom: 15px; font-weight: bold;">
                         <i class="fas fa-bolt" style="margin-right: 10px;"></i>Grid Charge Power (kW)<br> <span style="font-size: 0.75em; color: #888; font-weight: normal;">Mode '${EOS_CONNECT_ICONS[0].title}' Only</span>
@@ -276,7 +275,6 @@ class ControlsManager {
                         Range: 0.5 - ${maxChargePower.toFixed(1)} kW
                     </div>
                 </div>
-                ` : ''}
 
                 <div style="margin-top: auto;">
                 </div>
