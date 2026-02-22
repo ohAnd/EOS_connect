@@ -147,17 +147,17 @@ class ChartManager {
         
         // Apply segment styling if forecast data is available
         if (priceInfo && priceInfo.forecast_start_index !== null && priceInfo.forecast_type !== "all_real") {
-            // Calculate current hour offset based on time frame
-            const now = new Date();
-            const currentHour = now.getHours();
+            // Calculate current slot offset based on time frame
+            // forecast_start_index is absolute from midnight, so we need to subtract current position
             const timeFrameBase = data_controls && data_controls["used_time_frame_base"] ? data_controls["used_time_frame_base"] : 3600;
             
             // Convert absolute forecast_start_index (from midnight) to relative index in priceData
-            // priceData starts from current hour, so subtract the hour offset
+            // priceData starts from midnight, so subtract the current slot offset
             let arrayOffset = 0;
             if (timeFrameBase === 900) {
-                // 15-min intervals: multiply hour by 4
-                arrayOffset = currentHour * 4;
+                // 15-min intervals: use currentSlot which includes both hours AND minutes
+                // currentSlot already calculated at top: currentHour * 4 + Math.floor(currentMinutes / 15)
+                arrayOffset = currentSlot;
             } else {
                 // Hourly: use hour directly
                 arrayOffset = currentHour;
