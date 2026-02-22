@@ -171,6 +171,9 @@ Array.from(document.getElementsByClassName("valueChange")).forEach(function (ele
 async function init() {
     try {
         // Initialize managers if not already done
+        if (!dataManager) {
+            dataManager = new DataManager();
+        }
         if (!controlsManager) {
             controlsManager = new ControlsManager();
         }
@@ -199,7 +202,7 @@ async function init() {
 
         // Fetch all data using the dataManager
         const allData = await dataManager.fetchAllData(isTestMode, currentTestScenario);
-        const { request: data_request, response: data_response, controls: data_controls } = allData;
+        const { request: data_request, response: data_response, controls: data_controls, priceInfo: data_priceInfo } = allData;
 
         // Extract max_charge_power_w from request data
         max_charge_power_w = data_request["pv_akku"] && data_request["pv_akku"].hasOwnProperty("max_ladeleistung_w")
@@ -227,16 +230,16 @@ async function init() {
 
         // Update or create chart using chartManager
         if (chartManager.chartInstance) {
-            chartManager.updateChart(data_request, data_response, data_controls);
+            chartManager.updateChart(data_request, data_response, data_controls, data_priceInfo);
             document.getElementById('overlay').style.display = 'none';
         } else {
-            chartManager.createChart(data_request, data_response, data_controls);
+            chartManager.createChart(data_request, data_response, data_controls, data_priceInfo);
             document.getElementById('overlay').style.display = 'none';
         }
 
         // Update all displays
         showStatistics(data_request, data_response, data_controls);
-        showSchedule(data_request, data_response, data_controls);
+        showSchedule(data_request, data_response, data_controls, data_priceInfo);
         setBatteryChargingData(data_response, data_controls);
         chartManager.updateLegendVisibility();
 

@@ -267,6 +267,78 @@ class LoadInterface:
                 for sublist in historical_data
                 for entry in sublist
             ]
+
+            # if device_class is energy, convert to power
+            if (
+                filtered_data
+                and "attributes" in filtered_data[0]
+                and "device_class" in filtered_data[0]["attributes"]
+            ):
+                device_class = filtered_data[0]["attributes"]["device_class"]
+                if device_class == "power":
+                    pass
+                elif device_class == "energy":
+
+                    # convert energy (Wh) to power (W) over the time frame
+                    # 1. find the first entry with valid data
+                    # 2. find the last entry with valid data
+                    # 3. take the delta & compute W from Wh.
+                    # 4. overwrite the orginal data structure.
+                    start_idx = 0
+                    end_idx = len(filtered_data) - 1
+                    while start_idx < end_idx:
+                        try:
+                            float(filtered_data[start_idx]["state"])
+                            break
+                        except ValueError:
+                            start_idx += 1
+                    while start_idx < end_idx:
+                        try:
+                            float(filtered_data[end_idx]["state"])
+                            break
+                        except ValueError:
+                            end_idx -= 1
+                    first_state = float(filtered_data[start_idx]["state"])
+                    last_state = float(filtered_data[end_idx]["state"])
+                    first_time = datetime.fromisoformat(
+                        filtered_data[start_idx]["last_updated"]
+                    )
+                    last_time = datetime.fromisoformat(
+                        filtered_data[end_idx]["last_updated"]
+                    )
+                    duration_hours = (last_time - first_time).total_seconds() / 3600.0
+
+                    filtered_data_new = []
+                    if duration_hours > 0:
+                        power_w = (last_state - first_state) / duration_hours
+                        power_w = max(
+                            0, power_w
+                        )  # Prevent negative from counter resets
+                        filtered_data[start_idx]["state"] = power_w
+                        filtered_data[end_idx]["state"] = power_w
+                        filtered_data_new.append(filtered_data[start_idx])
+                        filtered_data_new.append(filtered_data[end_idx])
+                        logger.debug(
+                            "[LOAD-IF] HOMEASSISTANT - Converted energy to power for '%s': "
+                            "%.1f Wh over %.2f hours = %.1f W",
+                            entity_id,
+                            last_state - first_state,
+                            duration_hours,
+                            power_w,
+                        )
+                    else:
+                        filtered_data[start_idx]["state"] = 0.0
+                        filtered_data[end_idx]["state"] = 0.0
+                        filtered_data_new.append(filtered_data[start_idx])
+                        filtered_data_new.append(filtered_data[end_idx])
+                        logger.debug(
+                            "[LOAD-IF] HOMEASSISTANT - Duration is zero for energy to"
+                            + " power conversion for '%s', assuming 0W",
+                            entity_id,
+                        )
+
+                    filtered_data = filtered_data_new
+
             # check if the data are delivered with unit kW and convert to W
             if (
                 filtered_data

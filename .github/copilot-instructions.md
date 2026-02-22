@@ -69,20 +69,17 @@
 When making ANY code changes:
 
 1. **Identify Documentation Impact**: Determine which doc sections are affected
-
    - New features → Update what-is, user-guide, and advanced pages
    - Configuration changes → Update user-guide/configuration.html
    - API changes → Update advanced/index.html (REST API & MQTT sections)
    - Bug fixes → Update troubleshooting in user-guide if user-facing
 
 2. **Update All Affected Pages**: Changes must be synchronized across:
-
    - `/docs` GitHub Pages (primary documentation)
    - `README.md` (if quick start or core features affected)
    - `src/CONFIG_README.md` (if configuration parameters changed) - NOTE: This file is being deprecated, integrate changes into README.md instead
 
 3. **Maintain Accuracy**: Documentation must match actual code behavior
-
    - Verify API endpoint responses match code
    - Confirm MQTT topic names and payloads match implementation
    - Validate configuration parameter names, types, and valid values
@@ -100,6 +97,15 @@ When making ANY code changes:
   2. Update src/CONFIG_README.md (essential info, with links)
   3. Update GitHub Pages documentation (complete details)
 - Present a summary of changes for user to review before committing
+
+### Testing Phase Documentation
+
+- **ENERGYFORECAST_TESTING.md**: Temporary file for develop branch testing
+  - Contains Smart Price Prediction testing guide
+  - **MUST BE DELETED** when merging to main
+  - Full documentation already exists in `/docs/user-guide/configuration.html#energyforecast`
+  - Purpose: Provide accessible docs while feature is on develop (GitHub Pages shows main only)
+  - **Reminder**: Check for and remove any similar `*_TESTING.md` files before merging features to main
 
 ### Testing
 

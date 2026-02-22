@@ -1,5 +1,6 @@
 /.mypy_cache
 /.vscode
+/venv
 /.venv
 __pycache__/
 src/config.bak.yaml

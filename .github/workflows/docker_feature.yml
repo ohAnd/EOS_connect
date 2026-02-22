@@ -1,7 +1,11 @@
-name: feature - build image and push
-# This workflow builds and pushes a Docker image to GitHub Container Registry.
-# It is triggered on pushes to branches other than "main" and "develop", and can also be triggered manually.
-# The image is tagged with the branch name of the push event.
+name: Feature - build and test image
+# This workflow builds and optionally pushes a Docker image to GitHub Container Registry.
+# It is triggered on pushes to feature branches, pull requests to develop, and can be triggered manually.
+# 
+# Build Modes:
+# - Automatic (push/PR): Builds image but does NOT push to GHCR (fast validation)
+# - Manual trigger: Option to build AND push to GHCR for remote testing
+# 
 # The workflow uses the GITHUB_TOKEN secret for authentication with GitHub Container Registry.
 
 on:
@@ -11,7 +15,18 @@ on:
       - "develop"
   pull_request:
     branches: ["develop"]
-  workflow_dispatch: # allows manual triggering of the workflow
+  workflow_dispatch: # allows manual triggering with option to push
+    inputs:
+      push_to_registry:
+        description: 'Push image to GHCR (for remote testing)'
+        required: false
+        type: boolean
+        default: false
+
+# Explicit permissions for GHCR access
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   pytest:
@@ -47,6 +62,16 @@ jobs:
       - name: Sanitize ref name for Docker tag
         run: echo "clean_ref=$(echo '${{ github.ref_name }}' | sed 's/\//_/g')" >> $GITHUB_ENV
 
+      - name: Determine push mode
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.push_to_registry }}" == "true" ]]; then
+            echo "PUSH_ENABLED=true" >> $GITHUB_ENV
+            echo "🚀 Push to GHCR: ENABLED"
+          else
+            echo "PUSH_ENABLED=false" >> $GITHUB_ENV
+            echo "🔨 Build only mode (no push to GHCR)"
+          fi
+
       # 1. Setup QEMU for ARM64 emulation
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -57,20 +82,52 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 3. Log in to GitHub Container Registry
+      # 3. Log in to GitHub Container Registry (only if pushing)
       - name: Log in to GitHub Container Registry
+        if: env.PUSH_ENABLED == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 4. Build & Push Multi-Arch Image
+      # 4. Build (and optionally push) Multi-Arch Image
       - name: Build and push multi-platform Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/${{ env.owner }}/eos_connect:feature_dev_${{ env.clean_ref }}
-          push: true
+            ghcr.io/${{ env.owner }}/eos_connect:feature-${{ env.clean_ref }}
+          push: ${{ env.PUSH_ENABLED }}
+          
+      - name: Build summary
+        run: |
+          echo "### Docker Build Summary :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag:** \`feature-${{ env.clean_ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
+          echo "- **Pushed to GHCR:** ${{ env.PUSH_ENABLED }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ env.PUSH_ENABLED }}" == "true" ]]; then
+            echo "### ✅ Image Available in Registry" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Pull and test with:" >> $GITHUB_STEP_SUMMARY
+            echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ghcr.io/${{ env.owner }}/eos_connect:feature-${{ env.clean_ref }}" >> $GITHUB_STEP_SUMMARY
+            echo "docker run -d -p 8503:8503 ghcr.io/${{ env.owner }}/eos_connect:feature-${{ env.clean_ref }}" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ℹ️ Build-Only Mode" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Image built successfully but **not pushed** to registry." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**To push for remote testing:**" >> $GITHUB_STEP_SUMMARY
+            echo "1. Go to [Actions](${{ github.server_url }}/${{ github.repository }}/actions/workflows/docker_feature.yml)" >> $GITHUB_STEP_SUMMARY
+            echo "2. Click \"Run workflow\"" >> $GITHUB_STEP_SUMMARY
+            echo "3. Select your branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "4. Check ✅ \"Push image to GHCR\"" >> $GITHUB_STEP_SUMMARY
+            echo "5. Click \"Run workflow\"" >> $GITHUB_STEP_SUMMARY
+          fi

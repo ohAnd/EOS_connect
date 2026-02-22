@@ -19,7 +19,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.2.30</span>
+                <span class="version-badge">v0.2.31</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -49,6 +49,7 @@
                     <a href="#data-collection" class="toc-link">Data Collection</a>
                     <a href="#configuration" class="toc-link">Configuration</a>
                     <a href="#common-tasks" class="toc-link">Common Tasks</a>
+                    <a href="#update-notifications" class="toc-link">Update Notifications</a>
                     <a href="#battery-pricing" class="toc-link">Battery Pricing</a>
                     <a href="#battery-overview" class="toc-link">Battery Overview</a>
                     <a href="#troubleshooting" class="toc-link">Troubleshooting</a>
@@ -382,8 +383,131 @@ recorder:
                 <li>View "Next Optimization" countdown</li>
                 <li>Charts show planned battery SOC curve</li>
             </ol>
-        </div>
 
+            <h3>Preventive Mode Overrides</h3>
+            <p>One of the most powerful features of EOS Connect is the ability to set <strong>preventive overrides</strong> for upcoming situations. You can <strong>set any mode override regardless of the current active mode</strong>.</p>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-lightbulb"></i> Example Use Case:</strong> You notice that the optimization is planning "avoid discharge" modes for the next few hours, but you need a different behavior. You can immediately set a preventive override now—even if the system is currently in "discharge allowed" mode—and it will apply when the new period begins.
+            </div>
+            <p><strong>Key Benefits:</strong></p>
+            <ul>
+                <li>Set overrides proactively before conditions change</li>
+                <li>No restrictions based on current system mode</li>
+                <li>Choose any mode (ChargeFromGrid, AvoidDischarge, DischargeAllowed)</li>
+                <li>Useful for preparing for known future scenarios (e.g., when you know poor weather is coming)</li>
+            </ul>
+        </div>
+        
+        <!-- Update Notifications -->
+        <div class="content-section" id="update-notifications">
+            <h2><i class="fas fa-bell"></i> Update Notifications (Docker Only)</h2>
+            <p>EOS Connect automatically notifies Docker image users when new versions are available. <strong>This feature is only active for Docker installations</strong> - Home Assistant Add-on users receive updates through the HA Supervisor.</p>
+
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-info-circle"></i> Installation Type Matters:</strong> The update notification system automatically detects your installation type. If you're running the Home Assistant Add-on, update checking is disabled since HA manages updates for you.
+            </div>
+
+            <h4>How to Check for Updates</h4>
+            <p>Updates are checked automatically every 12 hours in the background. You'll see notifications in the web interface when updates are available:</p>
+
+            <ol>
+                <li><strong>Blue Dot:</strong> A blue notification dot appears on the hamburger menu icon when an update is available</li>
+                <li><strong>Update Banner:</strong> A slide-down banner appears at the top of the page showing the new version</li>
+                <li><strong>Info Page:</strong> Click the menu icon → Info to see detailed version information</li>
+            </ol>
+
+            <h4>Understanding Update States</h4>
+            <table>
+                <thead>
+                    <tr>
+                        <th>State</th>
+                        <th>What You See</th>
+                        <th>Meaning</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Up to Date</td>
+                        <td>Green "Up to Date" badge, no blue dot</td>
+                        <td>You're running the latest version for your branch</td>
+                    </tr>
+                    <tr>
+                        <td>Update Available</td>
+                        <td>Blue dot, update banner, "Update Available" badge</td>
+                        <td>A newer version is available for download</td>
+                    </tr>
+                    <tr>
+                        <td>Update Dismissed</td>
+                        <td>Yellow "Dismissed" badge, no blue dot or banner</td>
+                        <td>You dismissed this specific version's notification</td>
+                    </tr>
+                    <tr>
+                        <td>HA Add-on</td>
+                        <td>Version displayed, no update checking</td>
+                        <td>Updates managed by Home Assistant Supervisor</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h4>Dismissing Update Notifications</h4>
+            <p>If you don't want to update right away, you can dismiss the notification:</p>
+            <ol>
+                <li>Click the menu icon (☰) in the top-left corner</li>
+                <li>Click "Info" to open the information page</li>
+                <li>In the Version &amp; Update Status section, click "Dismiss"</li>
+                <li>The blue dot and banner will disappear for this version</li>
+            </ol>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-lightbulb"></i> Note:</strong> Dismissing a notification is version-specific. If a newer version is released later, you'll see a new notification.
+            </div>
+
+            <h4>Showing Dismissed Notifications Again</h4>
+            <p>Changed your mind? You can re-enable notifications for a dismissed version:</p>
+            <ol>
+                <li>Open the Info page (Menu → Info)</li>
+                <li>If an update was dismissed, you'll see a "Show Notification" button</li>
+                <li>Click it to bring back the blue dot and update banner</li>
+            </ol>
+
+            <h4>Updating Your Docker Installation</h4>
+            <p>When an update is available:</p>
+            <ol>
+                <li><strong>View Details:</strong> Click "View on GHCR" to see the release on GitHub Container Registry</li>
+                <li><strong>Pull New Image:</strong>
+                    <pre><code>docker pull ghcr.io/ohand/eos_connect:latest</code></pre>
+                    <p>Or for develop branch:</p>
+                    <pre><code>docker pull ghcr.io/ohand/eos_connect:&lt;version&gt;-develop</code></pre>
+                </li>
+                <li><strong>Restart Container:</strong>
+                    <pre><code>docker-compose down
+docker-compose up -d</code></pre>
+                </li>
+                <li><strong>Verify Update:</strong> Check the Info page to confirm the new version</li>
+            </ol>
+
+            <h4>Branch Detection</h4>
+            <p>EOS Connect automatically detects which branch you're using:</p>
+            <ul>
+                <li><strong>Stable Branch:</strong> Versions like <code>0.2.30</code> - Only shows stable updates</li>
+                <li><strong>Develop Branch:</strong> Versions like <code>0.2.31.236-develop</code> - Only shows develop updates</li>
+            </ul>
+
+            <div class="alert alert-success">
+                <strong><i class="fas fa-check-circle"></i> Smart Filtering:</strong> The system ensures you only see updates that match your branch, preventing confusion about version compatibility.
+            </div>
+
+            <h4>MQTT Integration (Advanced)</h4>
+            <p>Update status is published to MQTT topics for automation:</p>
+            <ul>
+                <li><code>eos_connect/system/update_available</code> - <code>true</code>/<code>false</code></li>
+                <li><code>eos_connect/system/current_version</code> - Your current version string</li>
+                <li><code>eos_connect/system/latest_version</code> - Latest available version</li>
+                <li><code>eos_connect/system/update_check_enabled</code> - <code>true</code> for Docker, <code>false</code> for HA</li>
+            </ul>
+
+            <p>See the <a href="../advanced/index.html#mqtt-update-topics">Advanced section</a> for automation examples.</p>
+        </div>
         <!-- Battery Pricing -->
         <div class="content-section" id="battery-pricing">
             <h2><i class="fas fa-coins"></i> Battery Energy Pricing</h2>

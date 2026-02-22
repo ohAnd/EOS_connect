@@ -20,7 +20,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.2.30</span>
+                <span class="version-badge">v0.2.31</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -46,6 +46,7 @@
                     <a href="#load" class="toc-link">Load</a>
                     <a href="#eos" class="toc-link">EOS Server</a>
                     <a href="#price" class="toc-link">Electricity Prices</a>
+                    <a href="#energyforecast" class="toc-link toc-sub">→ Smart Price Prediction</a>
                     <a href="#battery" class="toc-link">Battery</a>
                     <a href="#pv" class="toc-link">PV Forecasts</a>
                     <a href="#inverter" class="toc-link">Inverter</a>
@@ -191,7 +192,7 @@
                 </tr>
                 <tr>
                     <th>Unit</th>
-                    <td>Watts (W)</td>
+                    <td>Watts (W) or energy (Wh) for Home Assistant energy entities</td>
                 </tr>
                 <tr>
                     <th>Examples</th>
@@ -202,7 +203,7 @@
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Represents overall net household load (total house consumption). Positive (consumption) or negative (feed-in) values are converted to absolute positive internally.</td>
+                    <td>Represents overall net household load (total house consumption). Positive (consumption) or negative (feed-in) values are converted to absolute positive internally. Home Assistant <strong>energy</strong> entities (device_class: <code>energy</code>) are supported and converted to average power per time frame. Feature contributed by <a href="https://github.com/forouher" target="_blank">Dariush Forouher</a>.</td>
                 </tr>
             </table>
 
@@ -649,6 +650,208 @@
                     <td>Use <code>true</code> if your feed-in tariff pays €0 during negative market prices</td>
                 </tr>
             </table>
+
+            <h3 id="energyforecast"><i class="fas fa-brain"></i> Smart Price Prediction (Energyforecast.de)</h3>
+            <div class="alert alert-success">
+                <strong><i class="fas fa-lightbulb"></i> New Feature:</strong> Energyforecast.de integration provides <strong>smart price prediction</strong> when your primary price source lacks tomorrow's prices. The system automatically learns your grid fees and taxes pattern to provide accurate predictions.
+            </div>
+
+            <h4>How It Works</h4>
+            <p>Instead of simple price repetition or fixed markups, EOS Connect:</p>
+            <ol>
+                <li><strong>Learns</strong> the relationship between your primary source (e.g., Tibber) and EPEX spot prices</li>
+                <li><strong>Calculates</strong> both multiplicative factor (for VAT) and offset (for grid fees)</li>
+                <li><strong>Applies</strong> this learned pattern to future EPEX forecasts</li>
+            </ol>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Example:</strong> Your Tibber prices: 20-35 ct/kWh, EPEX spot: 8-15 ct/kWh → System learns: <code>customer_price = 2.1 × epex_spot + 9.5 ct/kWh</code>. Tomorrow's EPEX forecast (12 ct/kWh) → Adapted price: <code>2.1 × 12 + 9.5 = 34.7 ct/kWh</code>
+            </div>
+
+            <h4>When It Activates</h4>
+            <ul>
+                <li><strong>Primary Source First:</strong> Uses your configured source (Tibber, SmartEnergy, etc.)</li>
+                <li><strong>Smart Detection:</strong> Only triggers when tomorrow's prices aren't available</li>
+                <li><strong>Seamless:</strong> Real prices when available, intelligent predictions when needed</li>
+            </ul>
+
+            <h4>Configuration Parameters</h4>
+
+            <h3>price.energyforecast_enabled</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.energyforecast_enabled</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Enable smart price prediction with energyforecast.de</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>true</code> - Enable smart price prediction<br>
+                        <code>false</code> - Disable (use simple price repetition)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>false</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Only used when primary source lacks tomorrow's prices</td>
+                </tr>
+            </table>
+
+            <h3>price.energyforecast_token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.energyforecast_token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>API token from energyforecast.de</td>
+                </tr>
+                <tr>
+                    <th>How to Get</th>
+                    <td>Register at <a href="https://www.energyforecast.de/api_keys" target="_blank">energyforecast.de/api_keys</a></td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>demo_token</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        <strong>Demo token:</strong> Limited rate limits, for testing only<br>
+                        <strong>Free tier:</strong> 48-hour forecasts (sufficient for most users)<br>
+                        <strong>Paid tier:</strong> 96-hour forecasts + higher limits<br><br>
+                        EOS Connect automatically validates and warns if using demo_token in production.
+                    </td>
+                </tr>
+            </table>
+
+            <h3>price.energyforecast_market_zone</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.energyforecast_market_zone</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>European EPEX spot market zone</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>DE-LU</code> - Germany/Luxembourg<br>
+                        <code>AT</code> - Austria<br>
+                        <code>FR</code> - France<br>
+                        <code>NL</code> - Netherlands<br>
+                        <code>BE</code> - Belgium<br>
+                        <code>PL</code> - Poland<br>
+                        <code>DK1</code> - Denmark West<br>
+                        <code>DK2</code> - Denmark East
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>DE-LU</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Must match your location for accurate EPEX spot prices. Invalid zones automatically default to DE-LU with a warning.</td>
+                </tr>
+            </table>
+
+            <h4>Example Configuration</h4>
+            <pre><code>price:
+  source: tibber
+  token: "YOUR_TIBBER_TOKEN"
+  feed_in_price: 0.08
+  negative_price_switch: true
+  
+  # Smart price prediction with energyforecast.de
+  energyforecast_enabled: true
+  energyforecast_token: "YOUR_ENERGYFORECAST_TOKEN"
+  energyforecast_market_zone: "DE-LU"</code></pre>
+
+            <h4>Benefits</h4>
+            <ul>
+                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>Early optimization:</strong> Start at 11am instead of waiting for 1pm Tibber update</li>
+                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>Smart learning:</strong> Automatically adapts to YOUR grid fees and taxes</li>
+                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>Handles negatives:</strong> Correctly applies grid fees even when EPEX is negative</li>
+                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>No manual calibration:</strong> No need for <code>fixed_price_adder_ct</code></li>
+                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>31.4% more accurate:</strong> Than simple price repetition (validated with real data)</li>
+            </ul>
+
+            <h4>Technical Details</h4>
+            <p><strong>Adaptive Learning Algorithm:</strong></p>
+            <ul>
+                <li>Uses linear regression: <code>customer_price = factor × epex_spot + offset</code></li>
+                <li>Factor (typically 1.5-3.0): Captures VAT and percentage markups</li>
+                <li>Offset (typically 5-15 ct/kWh): Captures fixed grid fees and taxes</li>
+                <li>Timestamp-based alignment ensures accuracy regardless of fetch timing</li>
+                <li>Requires minimum 6 hours of overlapping data for learning</li>
+            </ul>
+
+            <p><strong>Safety Checks:</strong></p>
+            <ul>
+                <li>Factor must be between 0.5 and 5.0</li>
+                <li>Offset must be within ±50 ct/kWh</li>
+                <li>Falls back to simple repetition if validation fails</li>
+            </ul>
+
+            <p><strong>Supported Price Sources:</strong></p>
+            <ul>
+                <li><i class="fas fa-bolt" style="color: #4a9eff;"></i> Tibber (EUR - with smart price prediction)</li>
+                <li><i class="fas fa-plug" style="color: #4a9eff;"></i> SmartEnergy AT (EUR - with smart price prediction)</li>
+                <li><i class="fas fa-ban" style="color: #999;"></i> Stromligning (DKK - currency not yet supported)</li>
+                <li><i class="fas fa-ban" style="color: #999;"></i> Akkudoktor (no effect - uses optimization prices)</li>
+            </ul>
+
+            <h4>Limitations</h4>
+            <ul>
+                <li><i class="fas fa-euro-sign" style="color: #ff9800;"></i> <strong>EUR prices only:</strong> Currently supports EUR-based price sources (Tibber, SmartEnergy AT)</li>
+                <li><i class="fas fa-globe" style="color: #ff9800;"></i> <strong>Currency conversion:</strong> Support for DKK (Stromligning) and other currencies will be added when requested by users</li>
+                <li><i class="fas fa-clock" style="color: #ff9800;"></i> <strong>Minimum overlap:</strong> Requires at least 6 hours of overlapping price data to learn the pattern</li>
+            </ul>
+
+            <h4>Troubleshooting</h4>
+            <table>
+                <tr>
+                    <th style="width: 250px;">Issue</th>
+                    <th>Solution</th>
+                </tr>
+                <tr>
+                    <td>Prediction not activating</td>
+                    <td>Verify <code>energyforecast_enabled: true</code> and check logs for learning messages. Test before 1pm with Tibber.</td>
+                </tr>
+                <tr>
+                    <td>"Insufficient overlap"</td>
+                    <td>Need at least 6 hours of valid price data from primary source. Check primary source is returning data correctly.</td>
+                </tr>
+                <tr>
+                    <td>"Factor outside valid range"</td>
+                    <td>Suggests data quality issues. Check logs for actual learned values. Typical factors: 1.5-3.0.</td>
+                </tr>
+                <tr>
+                    <td>"Access denied" error</td>
+                    <td>Verify API token at <a href="https://www.energyforecast.de/api_keys" target="_blank">energyforecast.de/api_keys</a>. Try with <code>demo_token</code> to test connectivity.</td>
+                </tr>
+            </table>
+
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-info-circle"></i> API Usage:</strong> Smart Price Prediction uses energyforecast.de's API with intelligent throttling:
+                <ul style="margin-top: 10px; margin-bottom: 0;">
+                    <li><strong>Smart caching:</strong> API calls limited to maximum once per hour, with auto-call at midnight</li>
+                    <li><strong>Typical usage:</strong> ~13 API calls/day when predictions needed (e.g., Tibber 00:00-13:00)</li>
+                    <li><strong>Rate limit:</strong> Free tier = 50 calls/day (plenty of margin for safety)</li>
+                    <li><strong>Note:</strong> Cached predictions used within each hour to avoid hitting rate limits</li>
+                </ul>
+            </div>
         </div>
 
         <!-- Continue with Battery, PV, Inverter, EVCC, MQTT, Other sections... -->
@@ -2071,16 +2274,16 @@
 
             <h3 id="example-full">Full Configuration Example</h3>
             <p>This complete example will be automatically generated at first startup. Copy and customize for your setup:</p>
-            <pre><code class="yaml"># Load configuration
+                        <pre><code class="yaml"># Load configuration
 load:
-  source: default  # Data source for load power - openhab, homeassistant, default (using a static load profile)
-  url: http://homeassistant:8123 # URL for openhab or homeassistant (e.g. http://openhab:8080 or http://homeassistant:8123)
-  access_token: abc123 # access token for homeassistant (optional)
-  load_sensor: Load_Power # item / entity for load power data in watts
-  car_charge_load_sensor: Wallbox_Power # item / entity for wallbox power data in watts. (If not needed, set to "")
-  additional_load_1_sensor: "additional_load_1_sensor" # item / entity for additional load power. (If not needed set to "")
-  additional_load_1_runtime: 2 # runtime for additional load 1 in minutes - default: 0 (If not needed set to "")
-  additional_load_1_consumption: 1500 # consumption for additional load 1 in Wh - default: 0 (If not needed set to "")
+    source: default  # Data source for load power - openhab, homeassistant, default (using a static load profile)
+    url: http://homeassistant:8123 # URL for openhab or homeassistant (e.g. http://openhab:8080 or http://homeassistant:8123)
+    access_token: abc123 # access token for homeassistant (optional)
+    load_sensor: Load_Power # item / entity for load power data in watts (or HA energy entity in Wh)
+    car_charge_load_sensor: Wallbox_Power # item / entity for wallbox power data in watts. (If not needed, set to "")
+    additional_load_1_sensor: "additional_load_1_sensor" # item / entity for additional load power. (If not needed set to "")
+    additional_load_1_runtime: 2 # runtime for additional load 1 in minutes - default: 0 (If not needed set to "")
+    additional_load_1_consumption: 1500 # consumption for additional load 1 in Wh - default: 0 (If not needed set to "")
 
 # EOS server configuration
 eos:
@@ -2172,11 +2375,11 @@ request_timeout: 10 # Request timeout for Home Assistant and OpenHAB API calls i
             <div class="alert alert-info">
                 <strong><i class="fas fa-info-circle"></i> Note:</strong> Within HA addon, unused parameters will be automatically added after saving. For standalone installations, use empty strings <code>""</code> for unused parameters.
             </div>
-            <pre><code class="yaml"># Load configuration
+                        <pre><code class="yaml"># Load configuration
 load:
-  source: default  # Data source for load power - openhab, homeassistant, default (using a static load profile)
-  load_sensor: Load_Power # item / entity for load power data in watts
-  car_charge_load_sensor: "" # item / entity for wallbox power data in watts. (If not needed, set to "")
+    source: default  # Data source for load power - openhab, homeassistant, default (using a static load profile)
+    load_sensor: Load_Power # item / entity for load power data in watts (or HA energy entity in Wh)
+    car_charge_load_sensor: "" # item / entity for wallbox power data in watts. (If not needed, set to "")
 
 # EOS server configuration
 eos:

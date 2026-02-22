@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 This module provides the `PriceInterface` class for retrieving and processing electricity price
 data from various sources.
@@ -7,6 +8,7 @@ Supported sources:
     - Tibber API
     - SmartEnergy AT API
     - Stromligning.dk API
+    - Energyforecast.de API
     - Fixed 24-hour price array
 
 Features:
@@ -46,6 +48,13 @@ AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
 TIBBER_API = "https://api.tibber.com/v1-beta/gql"
 SMARTENERGY_API = "https://apis.smartenergy.at/market/v1/price"
 STROMLIGNING_API_BASE = "https://stromligning.dk/api/prices?lean=true"
+ENERGYFORECAST_API = "https://www.energyforecast.de/api/v1/predictions/next_48_hours"
+
+# Energyforecast smart price prediction constants
+ENERGYFORECAST_MIN_OVERLAP_HOURS = 6  # Minimum overlapping hours needed for learning
+ENERGYFORECAST_MAX_FACTOR = 5.0  # Maximum allowed multiplicative factor
+ENERGYFORECAST_MIN_FACTOR = 0.5  # Minimum allowed multiplicative factor
+ENERGYFORECAST_MAX_OFFSET_CT = 50.0  # Maximum allowed offset in ct/kWh
 
 
 class PriceInterface:
@@ -61,18 +70,18 @@ class PriceInterface:
         feed_in_tariff_price (float): Feed-in tariff price in ct/kWh.
         negative_price_switch (bool): If True, sets feed-in prices to 0 for negative prices.
         time_zone (str): Timezone for date and time operations.
-        current_prices (list): Current prices including taxes (€/Wh).
-        current_prices_direct (list): Current prices without tax (€/Wh).
-        current_feedin (list): Current feed-in prices (€/Wh).
-        default_prices (list): Default price list if external data is unavailable (€/Wh).
+        current_prices (list): Current prices including taxes (EUR/Wh).
+        current_prices_direct (list): Current prices without tax (EUR/Wh).
+        current_feedin (list): Current feed-in prices (EUR/Wh).
+        default_prices (list): Default price list if external data is unavailable (EUR/Wh).
 
     Methods:
         update_prices(tgt_duration, start_time):
             Updates current_prices and current_feedin for the given duration and start time.
         get_current_prices():
-            Returns the current prices (€/Wh).
+            Returns the current prices (EUR/Wh).
         get_current_feedin_prices():
-            Returns the current feed-in prices (€/Wh).
+            Returns the current feed-in prices (EUR/Wh).
         __create_feedin_prices():
             Generates feed-in prices based on current_prices_direct and configuration.
         __retrieve_prices(tgt_duration, start_time=None):
@@ -110,6 +119,14 @@ class PriceInterface:
             self.fixed_24h_array = False
         self.feed_in_tariff_price = config.get("feed_in_price", 0.0)
         self.negative_price_switch = config.get("negative_price_switch", False)
+
+        # Energyforecast.de smart price prediction configuration
+        self.energyforecast_enabled = config.get("energyforecast_enabled", False)
+        self.energyforecast_token = config.get("energyforecast_token", "demo_token")
+        self.energyforecast_market_zone = config.get(
+            "energyforecast_market_zone", "DE-LU"
+        )
+
         self.time_frame_base = time_frame_base
         self.time_zone = timezone
         self.current_prices = []
@@ -128,6 +145,21 @@ class PriceInterface:
         self._update_thread = None
         self._stop_event = threading.Event()
         self.update_interval = 900  # 15 minutes in seconds
+
+        # Smart caching for energyforecast.de API calls to stay within rate limits
+        # Throttles calls to once per hour (max ~13/day) to avoid excessive API usage
+        self._last_energyforecast_call_time = None  # Timestamp of last API call
+        self._last_energyforecast_call_date = None  # Date of last API call
+        self._energyforecast_cache = []  # Cached prediction from last call
+
+        # Forecast metadata tracking for UI visualization
+        self.forecast_start_index = (
+            None  # Index where forecast/repetition begins (None = all real)
+        )
+        self.forecast_type = (
+            None  # "smart_forecast", "simple_repetition", or None (all real)
+        )
+        self.forecast_source = None  # e.g., "energyforecast.de" for smart forecasts
 
         self.__check_config()  # Validate configuration parameters
         logger.info(
@@ -326,7 +358,7 @@ class PriceInterface:
         Returns the current prices.
 
         Returns:
-            list: A list of current prices (€/Wh) for the configured time frame.
+            list: A list of current prices (EUR/Wh) for the configured time frame.
         """
         # logger.debug("[PRICE-IF] Returning current prices: %s", self.current_prices)
         return self.current_prices
@@ -336,7 +368,7 @@ class PriceInterface:
         Returns the current feed-in prices.
 
         Returns:
-            list: A list of current feed-in prices (€/Wh) for the configured time frame.
+            list: A list of current feed-in prices (EUR/Wh) for the configured time frame.
         """
         # logger.debug(
         #     "[PRICE-IF] Returning current feed-in prices: %s", self.current_feedin
@@ -352,6 +384,42 @@ class PriceInterface:
         """
         return self.price_currency
 
+    def get_forecast_metadata(self):
+        """
+        Return metadata about current price forecast/repetition.
+
+        Returns:
+            dict: Contains forecast_start_index, forecast_type, and forecast_source.
+                  - forecast_start_index: Index where prediction/repetition starts (None if all real)
+                  - forecast_type: "smart_forecast", "simple_repetition", or None
+                  - forecast_source: Source of prediction (e.g., "energyforecast.de") or None
+        """
+        return {
+            "forecast_start_index": self.forecast_start_index,
+            "forecast_type": self.forecast_type,
+            "forecast_source": self.forecast_source,
+        }
+
+    def _set_forecast_metadata(self, start_index, forecast_type, source=None):
+        """
+        Update forecast metadata for UI visualization.
+
+        Args:
+            start_index (int or None): Index where forecast/repetition begins
+            forecast_type (str or None): "smart_forecast", "simple_repetition", or None
+            source (str or None): Source name (e.g., "energyforecast.de")
+        """
+        self.forecast_start_index = start_index
+        self.forecast_type = forecast_type
+        self.forecast_source = source
+        if forecast_type:
+            logger.debug(
+                "[PRICE-IF] Forecast metadata updated: type=%s, start_index=%s, source=%s",
+                forecast_type,
+                start_index,
+                source,
+            )
+
     def __create_feedin_prices(self):
         """
         Creates feed-in prices based on the current prices.
@@ -360,7 +428,7 @@ class PriceInterface:
         Otherwise, the feed-in tariff price is used for all prices.
 
         Returns:
-            list: A list of feed-in prices (€/Wh).
+            list: A list of feed-in prices (EUR/Wh).
         """
         if self.negative_price_switch:
             self.current_feedin = [
@@ -395,7 +463,7 @@ class PriceInterface:
             start_time (datetime, optional): The start time from which prices are to be fetched.
 
         Returns:
-            list: A list of prices (€/Wh) for the specified duration and start time.
+            list: A list of prices (EUR/Wh) for the specified duration and start time.
         """
         prices = []
         if self.src == "tibber":
@@ -669,44 +737,157 @@ class PriceInterface:
 
         today_prices_json = json.loads(today_prices)
         tomorrow_prices_json = json.loads(tomorrow_prices)
+
+        if start_time is None:
+            start_time = datetime.now(self.time_zone).replace(
+                minute=0, second=0, microsecond=0
+            )
+
         prices = []
         prices_direct = []
+        prices_with_timestamps = []  # Keep timestamp info for smart price prediction
+        today_cutoff_idx = 0  # Track where today's real data ends
 
-        for price in today_prices_json:
+        # Load today's prices and find where real data ends (end of calendar day)
+        for i, price in enumerate(today_prices_json):
             prices.append(round(price["total"] / 1000, 9))
             prices_direct.append(round(price["energy"] / 1000, 9))
+            prices_with_timestamps.append(
+                {
+                    "price": round(price["total"] / 1000, 9),
+                    "timestamp": price["startsAt"],
+                }
+            )
+
+        # Calculate where "today" ends - today's data always goes to 23:59
+        # In 15-min intervals: 96 items (24 * 4)
+        # In hourly intervals: 24 items
+        if self.time_frame_base == 900:
+            today_cutoff_idx = 96  # Full day in 15-min intervals
+        else:
+            today_cutoff_idx = 24  # Full day in hourly intervals
         if tomorrow_prices_json:
             for price in tomorrow_prices_json:
                 prices.append(round(price["total"] / 1000, 9))
                 prices_direct.append(round(price["energy"] / 1000, 9))
+                prices_with_timestamps.append(
+                    {
+                        "price": round(price["total"] / 1000, 9),
+                        "timestamp": price["startsAt"],
+                    }
+                )
                 # logger.debug(
                 #     "[Main] day 2 - price for %s -> %s", price["startsAt"], price["total"]
                 # )
+            # All prices are real data from Tibber
+            self._set_forecast_metadata(
+                start_index=None,
+                forecast_type="all_real",
+                source=None,
+            )
         else:
             extend_amount = 24
             if self.time_frame_base == 900:
                 extend_amount = 96
-            prices.extend(prices[:extend_amount])  # Repeat today's prices for tomorrow
-            prices_direct.extend(
-                prices_direct[:extend_amount]
-            )  # Repeat today's prices for tomorrow
+
+            # Try smart price prediction with energyforecast.de if enabled
+            # Pass known prices WITH timestamps for proper alignment
+            forecast_prices = self._fetch_adaptive_energyforecast_fallback(
+                known_prices_with_ts=prices_with_timestamps,
+                num_missing_hours=extend_amount,
+            )
+            if forecast_prices:
+                logger.info(
+                    "[PRICE-IF] Tomorrow prices not available from Tibber, "
+                    "using energyforecast.de smart price prediction for next %d hours",
+                    extend_amount,
+                )
+                forecast_start_idx = today_cutoff_idx
+                prices.extend(forecast_prices)
+                prices_direct.extend(forecast_prices)
+                self._set_forecast_metadata(
+                    start_index=forecast_start_idx,
+                    forecast_type="smart_forecast",
+                    source="energyforecast.de",
+                )
+            else:
+                # Use simple price repetition when prediction unavailable
+                forecast_start_idx = today_cutoff_idx
+                prices.extend(prices[:extend_amount])
+                prices_direct.extend(prices_direct[:extend_amount])
+                self._set_forecast_metadata(
+                    start_index=forecast_start_idx,
+                    forecast_type="simple_repetition",
+                    source=None,
+                )
 
         if start_time is None:
             start_time = datetime.now(self.time_zone).replace(
                 minute=0, second=0, microsecond=0
             )
         current_hour = start_time.hour
+
+        # Convert tgt_duration to actual array slots based on time frame
         if self.time_frame_base == 900:
-            tgt_duration = 192  # 48 hours in 15 min intervals
-        extended_prices = prices[current_hour : current_hour + tgt_duration]
+            # 15-min intervals: convert hours to 15-min slots
+            actual_slots = tgt_duration * 4
+            array_offset = current_hour * 4
+        else:
+            # Hourly intervals: use as-is
+            actual_slots = tgt_duration
+            array_offset = current_hour
+
+        extended_prices = prices[array_offset : array_offset + actual_slots]
         extended_prices_direct = prices_direct[
-            current_hour : current_hour + tgt_duration
+            array_offset : array_offset + actual_slots
         ]
 
+        # Note: forecast_start_index remains canonical (relative to full 48-hour array)
+        # UI will handle time offset when filtering for display
+
+        # Fill any remaining gap with smart price prediction or simple repetition
         if len(extended_prices) < tgt_duration:
             remaining_hours = tgt_duration - len(extended_prices)
-            extended_prices.extend(prices[:remaining_hours])
-            extended_prices_direct.extend(prices_direct[:remaining_hours])
+            logger.debug(
+                "[PRICE-IF] Need %d more hours to reach 48h target, trying smart price prediction",
+                (
+                    remaining_hours
+                    if self.time_frame_base == 3600
+                    else remaining_hours // 4
+                ),
+            )
+
+            # Try smart price prediction with energyforecast.de if enabled
+            forecast_prices = self._fetch_adaptive_energyforecast_fallback(
+                known_prices_with_ts=prices_with_timestamps,
+                num_missing_hours=remaining_hours,
+            )
+            if forecast_prices:
+                logger.info(
+                    "[PRICE-IF] Using energyforecast.de smart price prediction"
+                    + " to fill remaining %d hours",
+                    (
+                        remaining_hours
+                        if self.time_frame_base == 3600
+                        else remaining_hours // 4
+                    ),
+                )
+                extended_prices.extend(forecast_prices)
+                extended_prices_direct.extend(forecast_prices)
+            else:
+                # Fall back to simple price repetition
+                logger.debug(
+                    "[PRICE-IF] Smart price prediction unavailable, using simple repetition"
+                    + " for remaining %d hours",
+                    (
+                        remaining_hours
+                        if self.time_frame_base == 3600
+                        else remaining_hours // 4
+                    ),
+                )
+                extended_prices.extend(prices[:remaining_hours])
+                extended_prices_direct.extend(prices_direct[:remaining_hours])
+
         self.current_prices_direct = extended_prices_direct.copy()
         logger.debug("[PRICE-IF] Prices from TIBBER fetched successfully.")
         return extended_prices
@@ -986,11 +1167,45 @@ class PriceInterface:
                 avg = sum(values) / len(values) if values else 0
                 hourly_prices.append(round(avg, 9))
 
-            # Optionally extend to tgt_duration if needed
+            # Extend to tgt_duration if needed
             extended_prices = hourly_prices
             if len(extended_prices) < tgt_duration:
                 remaining_hours = tgt_duration - len(extended_prices)
-                extended_prices.extend(hourly_prices[:remaining_hours])
+
+                # Try smart price prediction with energyforecast.de if enabled
+                forecast_prices = self._fetch_adaptive_energyforecast_fallback(
+                    known_prices=extended_prices,
+                    num_missing_hours=remaining_hours,
+                )
+                if forecast_prices:
+                    logger.info(
+                        "[PRICE-IF] SmartEnergy AT incomplete, "
+                        "using energyforecast.de smart price prediction for %d missing hours",
+                        remaining_hours,
+                    )
+                    forecast_start_idx = len(extended_prices)
+                    extended_prices.extend(forecast_prices)
+                    self._set_forecast_metadata(
+                        start_index=forecast_start_idx,
+                        forecast_type="smart_forecast",
+                        source="energyforecast.de",
+                    )
+                else:
+                    # Use simple price repetition
+                    forecast_start_idx = len(extended_prices)
+                    extended_prices.extend(hourly_prices[:remaining_hours])
+                    self._set_forecast_metadata(
+                        start_index=forecast_start_idx,
+                        forecast_type="simple_repetition",
+                        source=None,
+                    )
+            else:
+                # All prices are complete real data from SmartEnergy AT
+                self._set_forecast_metadata(
+                    start_index=None,
+                    forecast_type="all_real",
+                    source=None,
+                )
 
         elif self.time_frame_base == 900:
             # Use 15min values directly
@@ -1002,7 +1217,41 @@ class PriceInterface:
             extended_prices = prices_15min
             if len(extended_prices) < tgt_duration:
                 remaining_slots = tgt_duration - len(extended_prices)
-                extended_prices.extend(prices_15min[:remaining_slots])
+
+                # Try smart price prediction with energyforecast.de if enabled
+                forecast_prices = self._fetch_adaptive_energyforecast_fallback(
+                    known_prices=extended_prices,
+                    num_missing_hours=remaining_slots,
+                )
+                if forecast_prices:
+                    logger.info(
+                        "[PRICE-IF] SmartEnergy AT incomplete, "
+                        "using energyforecast.de smart price prediction for %d missing slots",
+                        remaining_slots,
+                    )
+                    forecast_start_idx = len(extended_prices)
+                    extended_prices.extend(forecast_prices)
+                    self._set_forecast_metadata(
+                        start_index=forecast_start_idx,
+                        forecast_type="smart_forecast",
+                        source="energyforecast.de",
+                    )
+                else:
+                    # Use simple price repetition
+                    forecast_start_idx = len(extended_prices)
+                    extended_prices.extend(prices_15min[:remaining_slots])
+                    self._set_forecast_metadata(
+                        start_index=forecast_start_idx,
+                        forecast_type="simple_repetition",
+                        source=None,
+                    )
+            else:
+                # All prices are complete real data from SmartEnergy AT
+                self._set_forecast_metadata(
+                    start_index=None,
+                    forecast_type="all_real",
+                    source=None,
+                )
 
         # Catch case where all prices are zero (or data is empty)
         if not any(extended_prices):
@@ -1015,6 +1264,401 @@ class PriceInterface:
         self.current_prices_direct = extended_prices.copy()
         return extended_prices
 
+    def _should_call_energyforecast(self):
+        """
+        Determine if we should call energyforecast.de API based on throttling.
+
+        Throttles API calls to avoid rate limiting:
+        - Always call on first prediction request
+        - Always call after midnight (when predictions for new day needed)
+        - Otherwise, only call if 1+ hour has passed since last successful call
+        - Use cached prediction within the 1-hour window
+
+        Returns:
+            bool: True if we should call the API, False if we should use cache.
+        """
+        now = datetime.now(self.time_zone)
+        today = now.date()
+
+        # First call ever - always proceed
+        if self._last_energyforecast_call_time is None:
+            logger.debug(
+                "[PRICE-IF] First energyforecast call - proceeding (no prior call)"
+            )
+            return True
+
+        # New calendar day detected - always call (handles midnight crossing)
+        if self._last_energyforecast_call_date != today:
+            logger.debug(
+                "[PRICE-IF] New day detected - calling energyforecast "
+                "(last: %s, today: %s)",
+                self._last_energyforecast_call_date,
+                today,
+            )
+            return True
+
+        # Check if 1 hour has passed since last call
+        time_since_last_call = now - self._last_energyforecast_call_time
+        if time_since_last_call.total_seconds() >= 3600:  # 1 hour = 3600 seconds
+            logger.debug(
+                "[PRICE-IF] 1+ hour passed since last call (%.0f seconds ago) "
+                "- calling energyforecast",
+                time_since_last_call.total_seconds(),
+            )
+            return True
+
+        # Within 1 hour of last call - use cached result
+        logger.debug(
+            "[PRICE-IF] Using cached energyforecast result "
+            "(called %.0f seconds ago, threshold: 3600s)",
+            time_since_last_call.total_seconds(),
+        )
+        return False
+
+    def _fetch_adaptive_energyforecast_fallback(
+        self, known_prices_with_ts=None, known_prices=None, num_missing_hours=None
+    ):
+        """
+        Fetch smart price predictions from energyforecast.de using learned pattern.
+
+        This method learns the relationship between primary source prices (e.g., Tibber)
+        and energyforecast.de EPEX spot prices, then applies that learned pattern to
+        predict future hours. Uses linear regression to find:
+            primary_price = factor * epex_spot + offset
+
+        This handles:
+        - Variable taxes (percentage-based on EPEX)
+        - Fixed grid fees and charges
+        - Negative EPEX spot prices correctly
+        - Timestamp-based alignment when available
+
+        Uses intelligent API throttling to manage rate limits:
+        - Only calls API if 1+ hour has passed since last call or on new calendar day
+        - Caches predictions for reuse within the 1-hour window
+        - Minimizes API usage while maintaining current predictions
+
+        Args:
+            known_prices_with_ts (list): List of dicts with 'price' and 'timestamp' keys (EUR/Wh).
+            known_prices (list): Simple price list (EUR/Wh) for backward compatibility.
+            num_missing_hours (int): Number of future hours/slots to predict.
+
+        Returns:
+            list: Adapted forecast prices in EUR/Wh, or empty list if learning failed.
+        """
+        if not self.energyforecast_enabled:
+            logger.debug(
+                "[PRICE-IF] Energyforecast.de smart price prediction disabled in config"
+            )
+            return []
+
+        # Check currency compatibility - energyforecast.de only supports EUR
+        if self.price_currency != "EUR":
+            logger.info(
+                "[PRICE-IF] Smart price prediction currently only supports EUR prices. "
+                "Currency %s detected - using simple price repetition instead.",
+                self.price_currency,
+            )
+            return []
+
+        # Handle both timestamp and simple price list formats
+        if known_prices_with_ts is not None:
+            num_known_slots = len(known_prices_with_ts)
+            use_timestamps = True
+        elif known_prices is not None:
+            num_known_slots = len(known_prices)
+            use_timestamps = False
+        else:
+            logger.warning(
+                "[PRICE-IF] No known prices provided for smart price prediction"
+            )
+            return []
+
+        num_known_hours = (
+            num_known_slots if self.time_frame_base == 3600 else num_known_slots // 4
+        )
+
+        logger.info(
+            "[PRICE-IF] Fetching energyforecast.de smart price prediction "
+            "(have %d hours, need %d more)",
+            num_known_hours,
+            (
+                num_missing_hours
+                if self.time_frame_base == 3600
+                else num_missing_hours // 4
+            ),
+        )
+
+        # Apply smart caching - only call API if 1+ hour passed or new day
+        if not self._should_call_energyforecast():
+            if self._energyforecast_cache:
+                logger.debug(
+                    "[PRICE-IF] Using cached energyforecast prediction " "(%d prices)",
+                    len(self._energyforecast_cache),
+                )
+                return self._energyforecast_cache
+            logger.debug("[PRICE-IF] Throttled energyforecast call, no cache available")
+            return []
+
+        # Fetch full 48h of EPEX spot prices from energyforecast (NO markup applied)
+        resolution = "QUARTER_HOURLY" if self.time_frame_base == 900 else "HOURLY"
+
+        params = {
+            "token": self.energyforecast_token,
+            "market_zone": self.energyforecast_market_zone,
+            "resolution": resolution,
+            "fixed_cost_cent": 0,  # Get raw EPEX prices for learning
+            "vat": 0,  # No markup - we'll learn the relationship
+        }
+
+        # Update call tracking before attempting API call
+        now = datetime.now(self.time_zone)
+        self._last_energyforecast_call_time = now
+        self._last_energyforecast_call_date = now.date()
+
+        try:
+            response = requests.get(ENERGYFORECAST_API, params=params, timeout=10)
+            response.raise_for_status()
+        except requests.exceptions.Timeout:
+            logger.warning(
+                "[PRICE-IF] Energyforecast.de request timed out, using simple price repetition"
+            )
+            return []
+        except requests.exceptions.RequestException as e:
+            logger.warning(
+                "[PRICE-IF] Energyforecast.de request failed (%s): %s",
+                type(e).__name__,
+                str(e),
+            )
+            return []
+
+        try:
+            data = response.json()
+        except ValueError as e:
+            logger.warning(
+                "[PRICE-IF] Failed to parse energyforecast.de response: %s", e
+            )
+            return []
+
+        if not isinstance(data, list) or len(data) == 0:
+            logger.warning(
+                "[PRICE-IF] Energyforecast.de returned invalid or empty data"
+            )
+            return []
+
+        # Convert energyforecast data to EUR/Wh with timestamps for alignment
+        energyforecast_data = []
+        for entry in data:
+            try:
+                price_eur_per_kwh = float(entry["price"])
+                price_eur_per_wh = price_eur_per_kwh / 1000
+                timestamp_str = entry.get("start", "")
+                energyforecast_data.append(
+                    {
+                        "price": round(price_eur_per_wh, 9),
+                        "timestamp": timestamp_str,
+                    }
+                )
+            except (KeyError, ValueError, TypeError) as e:
+                logger.debug("[PRICE-IF] Error parsing energyforecast.de entry: %s", e)
+                continue
+
+        # Align by timestamps if available, otherwise use simple index matching
+        if use_timestamps:
+            # Create timestamp -> price mappings
+            known_map = {
+                entry["timestamp"]: entry["price"] for entry in known_prices_with_ts
+            }
+            epex_map = {
+                entry["timestamp"]: entry["price"] for entry in energyforecast_data
+            }
+
+            # Find overlapping timestamps
+            common_timestamps = sorted(set(known_map.keys()) & set(epex_map.keys()))
+
+            if len(common_timestamps) == 0:
+                logger.warning(
+                    "[PRICE-IF] No overlapping timestamps between source and energyforecast"
+                )
+                return []
+
+            # Extract aligned samples
+            primary_samples = [known_map[ts] for ts in common_timestamps]
+            epex_samples = [epex_map[ts] for ts in common_timestamps]
+
+            overlap_size = len(common_timestamps)
+
+            logger.info(
+                "[PRICE-IF] Timestamp alignment: %d overlapping slots found",
+                overlap_size,
+            )
+
+        else:
+            # Simple index-based matching (backward compatibility for sources without timestamps)
+            energyforecast_prices = [entry["price"] for entry in energyforecast_data]
+
+            if len(energyforecast_prices) < num_known_slots + num_missing_hours:
+                logger.warning(
+                    "[PRICE-IF] Energyforecast.de returned insufficient data "
+                    "(got %d, need %d)",
+                    len(energyforecast_prices),
+                    num_known_slots + num_missing_hours,
+                )
+                return []
+
+            overlap_size = min(num_known_slots, len(energyforecast_prices))
+            primary_samples = known_prices[:overlap_size]
+            epex_samples = energyforecast_prices[:overlap_size]
+
+        # Check minimum overlap requirement
+        min_overlap_slots = (
+            ENERGYFORECAST_MIN_OVERLAP_HOURS
+            if self.time_frame_base == 3600
+            else ENERGYFORECAST_MIN_OVERLAP_HOURS * 4
+        )
+
+        if overlap_size < min_overlap_slots:
+            logger.warning(
+                "[PRICE-IF] Insufficient overlap for learning "
+                "(have %d slots, need %d minimum)",
+                overlap_size,
+                min_overlap_slots,
+            )
+            return []
+
+        # Learn relationship using linear regression: primary = factor * epex + offset
+        # Using simple least squares: y = a*x + b
+        try:
+            factor, offset = self._linear_regression(epex_samples, primary_samples)
+        except Exception as e:
+            logger.warning("[PRICE-IF] Linear regression failed: %s", e)
+            return []
+
+        # Convert offset from EUR/Wh to ct/kWh for logging
+        offset_ct_kwh = offset * 100000
+
+        # Log sample comparison for learning quality (each as standalone entry for web UI compatibility)
+        for i in range(min(3, overlap_size)):
+            logger.info(
+                "[PRICE-IF] Learning from %d samples - Sample %d: EPEX %.2f ct/kWh → Primary %.2f ct/kWh",
+                overlap_size,
+                i,
+                epex_samples[i] * 100000,
+                primary_samples[i] * 100000,
+            )
+
+        # Validate learned parameters
+        if not (ENERGYFORECAST_MIN_FACTOR <= factor <= ENERGYFORECAST_MAX_FACTOR):
+            logger.warning(
+                "[PRICE-IF] Learned factor %.3f outside valid range [%.1f, %.1f], "
+                "using price repetition",
+                factor,
+                ENERGYFORECAST_MIN_FACTOR,
+                ENERGYFORECAST_MAX_FACTOR,
+            )
+            return []
+
+        if abs(offset_ct_kwh) > ENERGYFORECAST_MAX_OFFSET_CT:
+            logger.warning(
+                "[PRICE-IF] Learned offset %.1f ct/kWh exceeds maximum ±%.1f ct/kWh, "
+                "using price repetition",
+                offset_ct_kwh,
+                ENERGYFORECAST_MAX_OFFSET_CT,
+            )
+            return []
+
+        logger.info(
+            "[PRICE-IF] Learned adaptation from %d overlapping hours: "
+            "factor=%.3f, offset=%.1f ct/kWh",
+            overlap_size if self.time_frame_base == 3600 else overlap_size // 4,
+            factor,
+            offset_ct_kwh,
+        )
+
+        # Extract future prices from energyforecast (timestamps after known data)
+        if use_timestamps:
+            # Get last timestamp from known prices
+            last_known_ts = known_prices_with_ts[-1]["timestamp"]
+
+            # Filter energyforecast for future timestamps
+            future_epex = [
+                entry["price"]
+                for entry in energyforecast_data
+                if entry["timestamp"] > last_known_ts
+            ][:num_missing_hours]
+
+        else:
+            # Simple index-based extraction
+            energyforecast_prices = [entry["price"] for entry in energyforecast_data]
+            future_epex = energyforecast_prices[
+                num_known_slots : num_known_slots + num_missing_hours
+            ]
+
+        if len(future_epex) < num_missing_hours:
+            logger.warning(
+                "[PRICE-IF] Insufficient future prices from energyforecast "
+                "(got %d, need %d)",
+                len(future_epex),
+                num_missing_hours,
+            )
+            return []
+
+        # Apply learned pattern to future hours
+        adapted_prices = []
+        for epex_price in future_epex:
+            adapted_price = factor * epex_price + offset
+            # Handle negative prices: if result is negative,
+            # keep it (user pays negative = gets paid)
+            adapted_prices.append(round(adapted_price, 9))
+
+        logger.info(
+            "[PRICE-IF] Generated %d adapted forecast prices (range: %.2f to %.2f ct/kWh)",
+            len(adapted_prices),
+            min(adapted_prices) * 100000 if adapted_prices else 0,
+            max(adapted_prices) * 100000 if adapted_prices else 0,
+        )
+
+        # Cache the result for use within the next hour
+        self._energyforecast_cache = adapted_prices
+
+        return adapted_prices
+
+    @staticmethod
+    def _linear_regression(x_values, y_values):
+        """
+        Perform simple linear regression: y = a*x + b
+
+        Args:
+            x_values (list): Independent variable values (EPEX prices).
+            y_values (list): Dependent variable values (primary source prices).
+
+        Returns:
+            tuple: (slope/factor, intercept/offset)
+
+        Raises:
+            ValueError: If regression cannot be computed.
+        """
+        n = len(x_values)
+        if n < 2:
+            raise ValueError("Need at least 2 data points for regression")
+
+        # Calculate means
+        mean_x = sum(x_values) / n
+        mean_y = sum(y_values) / n
+
+        # Calculate slope (a) and intercept (b)
+        numerator = sum(
+            (x_values[i] - mean_x) * (y_values[i] - mean_y) for i in range(n)
+        )
+        denominator = sum((x_values[i] - mean_x) ** 2 for i in range(n))
+
+        if abs(denominator) < 1e-10:
+            raise ValueError("Cannot compute regression - x values have no variance")
+
+        slope = numerator / denominator
+        intercept = mean_y - slope * mean_x
+
+        return slope, intercept
+
     def __retrieve_prices_from_fixed24h_array(self, tgt_duration, start_time=None):
         """
         Returns a fixed 24-hour array of prices.
@@ -1024,7 +1668,7 @@ class PriceInterface:
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
-            list: A list of fixed prices (€/Wh) for the specified duration.
+            list: A list of fixed prices (EUR/Wh) for the specified duration.
         """
         if not self.fixed_24h_array:
             logger.error(
@@ -1035,7 +1679,7 @@ class PriceInterface:
         if len(self.fixed_24h_array) != 24:
             logger.error("[PRICE-IF] fixed_24h_array must contain exactly 24 entries.")
             return []
-        # Convert each entry in fixed_24h_array from ct/kWh to €/Wh (divide by 100000)
+        # Convert each entry in fixed_24h_array from ct/kWh to EUR/Wh (divide by 100000)
         extended_prices = [round(price / 100000, 9) for price in self.fixed_24h_array]
         # Extend to tgt_duration if needed
         if len(extended_prices) < tgt_duration:

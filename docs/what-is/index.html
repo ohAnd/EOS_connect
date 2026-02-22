@@ -20,7 +20,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.2.30</span>
+                <span class="version-badge">v0.2.31</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -51,6 +51,7 @@
                     <a href="#forecasting" class="toc-link">Solar Forecasting</a>
                     <a href="#cost" class="toc-link">Cost Optimization</a>
                     <a href="#integrations" class="toc-link">Integrations</a>
+                    <a href="#updates" class="toc-link">Update Notifications</a>
                     <a href="#benefits" class="toc-link">Benefits</a>                    <a href="#web-dashboard" class="toc-link">Web Dashboard</a>                    <a href="#next-steps" class="toc-link">Next Steps</a>
                 </nav>
             </aside>
@@ -287,6 +288,46 @@
 
             <div class="alert alert-info">
                 <strong><i class="fas fa-lightbulb"></i> Smart Decision:</strong> If you charged your battery from the grid at €0.30/kWh, the optimizer knows not to discharge it when prices are only €0.25/kWh.
+            </div>
+        </div>
+
+        <!-- Update Notifications -->
+        <div class="content-section" id="updates">
+            <h2><i class="fas fa-bell"></i> Update Notifications</h2>
+            <p><strong>Docker Image Users:</strong> EOS Connect automatically checks for available updates from GitHub Container Registry (GHCR).</p>
+            
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Docker Only:</strong> Update notifications are <strong>only available for Docker image installations</strong>. If you're using the Home Assistant Add-on, updates are managed by Home Assistant itself through the Supervisor.
+            </div>
+
+            <h4>Update System Features</h4>
+            <ul>
+                <li><strong>Automatic Detection:</strong> Checks for updates every 12 hours in the background</li>
+                <li><strong>Branch Awareness:</strong> Detects whether you're on stable or develop branch and only shows matching updates</li>
+                <li><strong>Smart Notifications:</strong>
+                    <ul>
+                        <li>Blue dot notification on web interface menu</li>
+                        <li>Slide-down banner showing version information</li>
+                        <li>Dismissible per version (remembers your choice)</li>
+                    </ul>
+                </li>
+                <li><strong>Zero Configuration:</strong> Works automatically without any setup</li>
+                <li><strong>MQTT Integration:</strong> Publishes update status for Home Assistant automations</li>
+                <li><strong>REST API:</strong> Check update status programmatically</li>
+            </ul>
+
+            <h4>How It Works</h4>
+            <ol>
+                <li>On startup, EOS Connect detects if running as Docker image or HA Add-on</li>
+                <li>For Docker users, it queries GHCR every 12 hours for new releases</li>
+                <li>Compares latest available version with your current version</li>
+                <li>Shows notification banner and blue dot when update is available</li>
+                <li>You can dismiss the notification per version (it won't show again for that version)</li>
+                <li>Access detailed information via the Info page in the web interface</li>
+            </ol>
+
+            <div class="alert alert-success">
+                <strong><i class="fas fa-check-circle"></i> Example:</strong> Running v0.2.30 on stable branch? The system only checks for newer stable versions (0.2.31, 0.2.32, etc.), not develop versions.
             </div>
         </div>
 

@@ -65,7 +65,7 @@ class ConfigManager:
                 "price": CommentedMap(
                     {
                         "source": "default",
-                        "token": "tibberBearerToken",  # token for electricity price (e.g. Tibber bearer token or Stromligning supplier/product/group)
+                        "token": "tibberBearerToken",  # token for electricity price
                         "fixed_price_adder_ct": 0.0,  # Describes the fixed cost addition in ct per kWh.
                         "relative_price_multiplier": 0.00,  # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
                         # 24 hours array with fixed end customer prices in ct/kWh over the day
@@ -74,6 +74,10 @@ class ConfigManager:
                         + "34.28,34.28,34.28,34.28,28,23",
                         "feed_in_price": 0.0,  # feed in price for the grid
                         "negative_price_switch": False,  # switch for negative price
+                        # Smart price prediction with energyforecast.de (when primary source lacks tomorrow prices)
+                        "energyforecast_enabled": False,  # enable smart price prediction
+                        "energyforecast_token": "demo_token",  # API token from energyforecast.de
+                        "energyforecast_market_zone": "DE-LU",  # Market zone: DE-LU, AT, FR, NL, BE, PL, DK1, DK2
                     }
                 ),
                 "battery": CommentedMap(
@@ -501,6 +505,7 @@ class ConfigManager:
             with open(self.config_file, "r", encoding="utf-8") as f:
                 self.config.update(self.yaml.load(f))
             self.check_eos_timeout_and_refreshtime()
+            self.check_energyforecast_config()
         else:
             self.write_config()
             print("Config file not found. Created a new one with default values.")
@@ -550,3 +555,44 @@ class ConfigManager:
                 request_timeout,
             )
             self.config["request_timeout"] = 120
+
+    def check_energyforecast_config(self):
+        """
+        Validate energyforecast.de configuration when enabled.
+
+        If energyforecast_enabled is True:
+        - Requires valid token (not empty or "demo_token")
+        - Requires valid market_zone from supported list
+        """
+        price_config = self.config.get("price", {})
+
+        if not price_config.get("energyforecast_enabled", False):
+            # Not enabled, no validation needed
+            return
+
+        token = price_config.get("energyforecast_token", "")
+        market_zone = price_config.get("energyforecast_market_zone", "")
+
+        # Supported market zones per energyforecast.de API
+        valid_zones = ["DE-LU", "AT", "FR", "NL", "BE", "PL", "DK1", "DK2"]
+
+        # Validate token
+        if not token or token == "demo_token":
+            logger.warning(
+                "[Config] energyforecast_enabled is True, but token is '%s'. "
+                "Fallback will use demo token (limited functionality). "
+                "Get a free API key from https://www.energyforecast.de/api_keys",
+                token if token else "(empty)",
+            )
+
+        # Validate market zone
+        if market_zone not in valid_zones:
+            logger.error(
+                "[Config] Invalid energyforecast_market_zone '%s'. "
+                "Must be one of: %s. Please correct in config.yaml",
+                market_zone,
+                ", ".join(valid_zones),
+            )
+            # Set to default to prevent crash
+            self.config["price"]["energyforecast_market_zone"] = "DE-LU"
+            logger.warning("[Config] Defaulting to market zone: DE-LU")
