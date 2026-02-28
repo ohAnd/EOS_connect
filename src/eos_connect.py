@@ -723,10 +723,7 @@ def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_a
 
     # Publish MQTT after all states are set to reflect the final combined state
     ac_power_for_mqtt = base_control.get_needed_ac_charge_power()
-    logger.info(
-        "[CHARGE_DEMAND] MQTT publish: control/eos_ac_charge_demand = %.2f W",
-        ac_power_for_mqtt,
-    )
+    # Only log MQTT publish on change (logging happens in get_needed_ac_charge_power)
     mqtt_interface.update_publish_topics(
         {
             "control/eos_ac_charge_demand": {"value": ac_power_for_mqtt},
@@ -1539,15 +1536,8 @@ def get_controls():
     current_inverter_mode = base_control.get_current_overall_state()
     current_inverter_mode_num = base_control.get_current_overall_state_number()
 
-    # Debug logging for dashboard data
+    # Get current actual power (logging handled in get_needed_ac_charge_power with change tracking)
     actual_power = base_control.get_needed_ac_charge_power()
-    logger.info(
-        "[CHARGE_DEMAND] API /current_controls response: current_ac_charge_demand=%.2f Wh (stored value), "
-        "actual_power=%.2f W (from get_needed_ac_charge_power()), dashboard_display=%.2f kW",
-        current_ac_charge_demand,
-        actual_power,
-        current_ac_charge_demand / 1000,
-    )
 
     currency = price_interface.get_price_currency()
     currency_symbol = CURRENCY_SYMBOL_MAP.get(currency, currency)
