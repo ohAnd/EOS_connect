@@ -218,6 +218,16 @@ class BaseControl:
         self.current_ac_charge_demand_no_override = current_charge_demand
         if not self.override_active:
             self.current_ac_charge_demand = current_charge_demand
+            logger.info(
+                "[CHARGE_DEMAND] Relative→Absolute conversion: relative=%.3f × max_power=%s W "
+                "→ %.2f Wh (slot=%s:%s, time_frame=%ds)",
+                value_relative,
+                self.optimization_max_charge_power_w,
+                self.current_ac_charge_demand,
+                current_hour,
+                minute_str,
+                self.time_frame_base,
+            )
             logger.debug(
                 "[BASE-CTRL] set AC charge demand for current slot %s:%s -> %.2f Wh"
                 + " (slot=%ds, max=%s W)",
@@ -370,19 +380,55 @@ class BaseControl:
                 / (seconds_to_end_of_current_time_frame / 3600),
                 0,
             )
-            # logger.debug(
-            #     "[BASE-CTRL] needed AC charge power to reach target %s W in current time frame",
-            #     needed_ac_charge_power,
-            # )
+            logger.info(
+                "[CHARGE_DEMAND] Energy→Power conversion: %.2f Wh / %.2fs (%.4fh) = %.2f W",
+                self.current_ac_charge_demand,
+                seconds_to_end_of_current_time_frame,
+                seconds_to_end_of_current_time_frame / 3600,
+                needed_ac_charge_power,
+            )
         else:
             # No time left in the current time frame - use last value
             needed_ac_charge_power = self.last_ac_charge_power
+            logger.info(
+                "[CHARGE_DEMAND] No time left in frame, using last value: %.2f W",
+                needed_ac_charge_power,
+            )
 
         needed_ac_charge_power = min(
             needed_ac_charge_power, round(self.current_bat_charge_max)
         )
 
+        if (
+            needed_ac_charge_power
+            != round(
+                self.current_ac_charge_demand
+                / (seconds_to_end_of_current_time_frame / 3600),
+                0,
+            )
+            if seconds_to_end_of_current_time_frame > 0
+            else False
+        ):
+            logger.info(
+                "[CHARGE_DEMAND] Power capped by battery max: calculated=%.2f W, capped=%.2f W, bat_max=%.2f W",
+                (
+                    round(
+                        self.current_ac_charge_demand
+                        / (seconds_to_end_of_current_time_frame / 3600),
+                        0,
+                    )
+                    if seconds_to_end_of_current_time_frame > 0
+                    else needed_ac_charge_power
+                ),
+                needed_ac_charge_power,
+                self.current_bat_charge_max,
+            )
+
         self.last_ac_charge_power = needed_ac_charge_power
+        logger.info(
+            "[CHARGE_DEMAND] Final AC charge power returned: %.2f W",
+            needed_ac_charge_power,
+        )
 
         return needed_ac_charge_power
 

@@ -559,6 +559,20 @@ def create_optimize_request():
             else config_manager.config["battery"]["max_charge_power_w"]
         )
 
+        # Debug logging for charge demand tracking
+        is_dynamic = config_manager.config["battery"].get(
+            "charging_curve_enabled", True
+        )
+        logger.info(
+            "[CHARGE_DEMAND] Optimizer request preparation: max_charge_power=%s W "
+            "(source=%s, dynamic_max=%s, config_fixed=%s, charging_curve_enabled=%s)",
+            max_charge_power,
+            "dynamic" if is_dynamic else "fixed",
+            current_dynamic_max,
+            config_manager.config["battery"]["max_charge_power_w"],
+            is_dynamic,
+        )
+
         # Store this value in base_control so it can use the same value when
         # converting relative charge demands back to absolute values
         # This prevents sawtooth patterns caused by mismatched max_charge_power values
@@ -708,11 +722,14 @@ def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_a
     base_control.set_current_evcc_charging_mode(evcc_interface.get_charging_mode())
 
     # Publish MQTT after all states are set to reflect the final combined state
+    ac_power_for_mqtt = base_control.get_needed_ac_charge_power()
+    logger.info(
+        "[CHARGE_DEMAND] MQTT publish: control/eos_ac_charge_demand = %.2f W",
+        ac_power_for_mqtt,
+    )
     mqtt_interface.update_publish_topics(
         {
-            "control/eos_ac_charge_demand": {
-                "value": base_control.get_needed_ac_charge_power()
-            },
+            "control/eos_ac_charge_demand": {"value": ac_power_for_mqtt},
             "control/eos_dc_charge_demand": {
                 "value": base_control.get_current_dc_charge_demand()
             },
@@ -1521,6 +1538,16 @@ def get_controls():
     base_control.set_current_battery_soc(current_battery_soc)
     current_inverter_mode = base_control.get_current_overall_state()
     current_inverter_mode_num = base_control.get_current_overall_state_number()
+
+    # Debug logging for dashboard data
+    actual_power = base_control.get_needed_ac_charge_power()
+    logger.info(
+        "[CHARGE_DEMAND] API /current_controls response: current_ac_charge_demand=%.2f Wh (stored value), "
+        "actual_power=%.2f W (from get_needed_ac_charge_power()), dashboard_display=%.2f kW",
+        current_ac_charge_demand,
+        actual_power,
+        current_ac_charge_demand / 1000,
+    )
 
     currency = price_interface.get_price_currency()
     currency_symbol = CURRENCY_SYMBOL_MAP.get(currency, currency)

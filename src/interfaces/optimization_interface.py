@@ -166,6 +166,16 @@ class OptimizationInterface:
             self.last_control_data[0]["ac_charge_demand"] = ac_charge[current_step]
             self.last_control_data[1]["ac_charge_demand"] = ac_charge[next_step]
             ac_charge_demand_relative = ac_charge[current_step]
+            logger.info(
+                "[CHARGE_DEMAND] Optimizer response extraction: ac_charge[step=%d] = %.3f (%.1f%%) "
+                "(time=%s, next_step=%d with value=%.3f)",
+                current_step,
+                ac_charge_demand_relative,
+                ac_charge_demand_relative * 100,
+                current_step_time.strftime("%Y-%m-%d %H:%M"),
+                next_step,
+                ac_charge[next_step],
+            )
             logger.debug(
                 "[OPTIMIZATION] AC charge demand for current step %s (%s) -> %s %%",
                 current_step,

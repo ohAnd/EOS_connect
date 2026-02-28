@@ -610,6 +610,7 @@ class ControlsManager {
     updateNormalControls(states) {
         document.getElementById('control_ac_charge_desc').innerText = "AC Charge";
         document.getElementById('control_ac_charge_desc').style.color = "";
+        console.log('[CHARGE_DEMAND] Dashboard AC Charge: currentDemand=' + states.current_ac_charge_demand + ' Wh, displayed=' + (states.current_ac_charge_demand / 1000).toFixed(1) + ' kW');
         document.getElementById('control_ac_charge').innerText = (states.current_ac_charge_demand / 1000).toFixed(1) + " kW";
         document.getElementById('control_ac_charge').style.color = "";
 
