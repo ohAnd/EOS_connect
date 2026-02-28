@@ -510,3 +510,36 @@ def test_power_split_with_pv_and_grid():
     # - Grid surplus: 2000W → to battery (1500W remaining capacity)
     assert pv_to_bat == 1500.0, "PV surplus should charge battery"
     assert grid_to_bat == 1500.0, "Grid should cover remaining battery charge"
+
+
+def test_total_costs_include_pv_cost(battery_config, mock_load_interface):
+    """Verify that PV energy is charged at the configured fixed cost when
+    computing historical battery price.
+    """
+    # add explicit feed-in price to config (€/kWh)
+    cfg = battery_config.copy()
+    cfg["feed_in_price"] = 0.147  # 14.7 ct/kWh
+
+    handler = BatteryPriceHandler(config=cfg, load_interface=mock_load_interface)
+
+    # monkeypatch split function to return controlled values
+    def fake_split(event, hist):
+        return {
+            "pv_to_battery_wh": 1000.0,
+            "grid_to_battery_wh": 2000.0,
+            "total_battery_wh": 3000.0,
+            "grid_cost_euro": 0.5,
+        }
+
+    handler._split_energy_sources = fake_split
+
+    now = datetime.now(pytz.UTC)
+    events = [
+        {"start_time": now, "end_time": now + timedelta(hours=1), "power_points": []}
+    ]
+    results = handler._calculate_total_costs(events, {}, lookback_hours=2)
+
+    # expected cost: grid 0.5€ + pv 1000 * (0.147€/kWh -> 0.000147€/Wh) = 0.147€, all scaled
+    # by efficiency
+    expected = (0.5 + 1000.0 * (cfg["feed_in_price"] / 1000.0)) / handler.charge_efficiency
+    assert results["total_cost"] == pytest.approx(expected)
