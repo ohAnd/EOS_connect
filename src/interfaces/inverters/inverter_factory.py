@@ -10,6 +10,7 @@ from .fronius_v2 import FroniusV2
 from .victron import VictronInverter
 from .null_inverter import NullInverter
 from .evcc_inverter import EvccInverter
+from .inverter_ha import InverterHA
 
 
 logger = logging.getLogger("__main__").getChild("Factory")
@@ -19,6 +20,7 @@ logger = logging.getLogger("__main__").getChild("Factory")
 INVERTER_TYPES: dict[str, Type[BaseInverter]] = {
     "victron": VictronInverter,
     "fronius_gen24": FroniusV2,
+    "homeassistant": InverterHA,
     "evcc": EvccInverter,  # EVCC handles control externally
     "default": NullInverter,  # Display-only mode
 }
