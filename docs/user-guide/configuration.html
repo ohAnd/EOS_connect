@@ -1084,7 +1084,7 @@
                     <th>Notes</th>
                     <td>
                         <strong>SOC-based reduction:</strong> At SOC ≤50%, full power. Above 50%, exponentially reduced to ~5% at 95% SOC.<br><br>
-                        <strong>Temperature protection:</strong> If <code>sensor_battery_temperature</code> configured:<br>
+                        <strong>Temperature protection:</strong> If <code>sensor_battery_temperature</code> configured, uses a generic temperature derating curve <strong>derived from BYD HVM battery thermal specifications</strong>. This generic approach works with any battery chemistry or manufacturer:<br>
                         <table style="margin-top: 10px; font-size: 0.9em;">
                             <tr style="background: rgba(255,255,255,0.05);">
                                 <th style="width: 150px;">Temperature Range</th>
@@ -1092,43 +1092,48 @@
                                 <th>Protection Reason</th>
                             </tr>
                             <tr>
-                                <td>Below 0°C</td>
-                                <td>5-7.5%</td>
-                                <td>Prevents lithium plating in LiFePO4 batteries</td>
+                                <td>Below -10°C</td>
+                                <td>0% (Locked)</td>
+                                <td>Cell damage protection - no charging allowed</td>
                             </tr>
                             <tr>
-                                <td>0-5°C</td>
-                                <td>5-15%</td>
-                                <td>Gradual warm-up phase</td>
+                                <td>-10°C to 0°C</td>
+                                <td>7.5% → 50%</td>
+                                <td>Lithium-plating protection in extreme cold</td>
                             </tr>
                             <tr>
-                                <td>5-15°C</td>
-                                <td>15-100%</td>
-                                <td>Transition to optimal operating range</td>
+                                <td>0°C to 5°C</td>
+                                <td>50%</td>
+                                <td>Moderate cold derating (flat)</td>
                             </tr>
                             <tr>
-                                <td>15-45°C</td>
+                                <td>5°C to 12°C</td>
+                                <td>50% → 77%</td>
+                                <td>Light derating - battery warming gradually</td>
+                            </tr>
+                            <tr>
+                                <td>12°C to 40°C</td>
                                 <td>100%</td>
                                 <td>Optimal range (only SOC-based reduction applies)</td>
                             </tr>
                             <tr>
-                                <td>45-50°C</td>
-                                <td>100-45%</td>
-                                <td>Heat warning - gradual reduction</td>
+                                <td>40°C to 50°C</td>
+                                <td>100% → 50%</td>
+                                <td>Thermal derating - heat protection begins</td>
                             </tr>
                             <tr>
-                                <td>50-60°C</td>
-                                <td>45-7.5%</td>
-                                <td>Severe heat protection</td>
+                                <td>50°C to 60°C</td>
+                                <td>50% → 0%</td>
+                                <td>Severe derating - critical heat protection</td>
                             </tr>
                             <tr>
                                 <td>Above 60°C</td>
-                                <td>5-7.5%</td>
-                                <td>Critical temperature protection</td>
+                                <td>0% (Locked)</td>
+                                <td>Overheat protection - no charging allowed</td>
                             </tr>
                         </table>
                         <br><strong>Combined Effect:</strong> The final charging power is the product of both SOC and temperature multipliers.<br>
-                        <em>Example: At -2°C with 51% SOC, charging power would be ~0.65 kW instead of 10 kW maximum.</em>
+                        <em>Example: At 10.5°C with 30% SOC, a 3 kWh battery would charge at ~71% power applying the generic curve derived from BYD specifications.</em>
                     </td>
                 </tr>
             </table>
