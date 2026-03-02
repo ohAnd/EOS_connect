@@ -52,6 +52,12 @@ class BaseControl:
         self.current_ac_charge_demand_no_override = 0
         self.current_dc_charge_demand = 0
         self.last_dc_charge_demand = 0
+        self.last_logged_dc_charge_demand_override = (
+            -999
+        )  # Track last logged DC override value to avoid duplicate logs
+        self.last_logged_dc_charge_demand_override_time = (
+            0  # Track time for heartbeat logging
+        )
         self.current_dc_charge_demand_no_override = 0
         self.current_bat_charge_max = 0
         self.last_bat_charge_max = 0
@@ -283,13 +289,40 @@ class BaseControl:
                 self.optimization_max_charge_power_w,
             )
         else:
-            logger.debug(
-                "[BASE-CTRL] OVERRIDE DC charge demand for current hour %s:00 -> %s Wh -"
-                + " based on max charge power %s W",
-                current_hour,
-                self.current_dc_charge_demand,
-                self.config["battery"]["max_charge_power_w"],
-            )
+            # Only log override on change or every 60 seconds (heartbeat)
+            current_time_unix = time.time()
+            if (
+                self.current_dc_charge_demand
+                != self.last_logged_dc_charge_demand_override
+                or current_time_unix - self.last_logged_dc_charge_demand_override_time
+                > 60
+            ):
+                # Log details on change
+                if (
+                    self.current_dc_charge_demand
+                    != self.last_logged_dc_charge_demand_override
+                ):
+                    logger.debug(
+                        "[BASE-CTRL] OVERRIDE DC charge demand for current hour %s:00 -> %s Wh -"
+                        + " based on max charge power %s W",
+                        current_hour,
+                        self.current_dc_charge_demand,
+                        self.config["battery"]["max_charge_power_w"],
+                    )
+                # Log as heartbeat every 60 seconds
+                elif (
+                    current_time_unix - self.last_logged_dc_charge_demand_override_time
+                    > 60
+                ):
+                    logger.debug(
+                        "[BASE-CTRL] OVERRIDE DC charge demand (active): current hour %s:00 -> %s Wh (heartbeat)",
+                        current_hour,
+                        self.current_dc_charge_demand,
+                    )
+                self.last_logged_dc_charge_demand_override = (
+                    self.current_dc_charge_demand
+                )
+                self.last_logged_dc_charge_demand_override_time = current_time_unix
         self.__set_current_overall_state()
 
     def set_current_bat_charge_max(self, value_max):
