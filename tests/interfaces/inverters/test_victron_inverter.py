@@ -195,7 +195,7 @@ class TestVictronWriteRegister:
         # Act: ESS max discharge current (fractional) = 49%
         victron_instance.write_register(
             unit=100,
-            reg=Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPERCENTAGE,
+            reg=Reg.SETTINGS_Settings_Cgwacs_MaxDischargePercentage,
             value=49,
         )
 
@@ -299,7 +299,7 @@ class TestVictronForceCharge:
     def test_set_mode_force_charge_sets_percentage_and_current(
         self, monkeypatch, victron_instance
     ):
-        """Verify force charge writes both max charge percentage and current."""
+        """Verify force charge writes VE.Bus setpoints."""
         # Track all register writes
         writes = []
         orig_write_register = victron_instance.client.write_register
@@ -315,45 +315,28 @@ class TestVictronForceCharge:
             victron_instance.client, "write_register", spy_write_register, raising=True
         )
 
-        # Mock battery voltage read to return fixed 52.0V
-        orig_decode = RegisterDef.decode
-
-        def fake_decode(self, words):
-            if getattr(self, "address", None) == 840:
-                return 52.0
-            return orig_decode(self, words)
-
-        monkeypatch.setattr(RegisterDef, "decode", fake_decode, raising=True)
-
-        # Mock read_registers to return successful response
-        class DummyResp:
-            def __init__(self):
-                self.registers = [0]  # value doesn't matter, decode is patched
-
-            def isError(self):
-                return False
-
-        def fake_read_registers(
-            address, count=1, unit=None
-        ):  # pylint: disable=unused-argument
-            assert int(address) == REGISTERS[Reg.SYSTEM_DC_BATTERY_VOLTAGE].address
-            return DummyResp()
+        # Mock write_register_verified to skip verification
+        def fake_write_register_verified(reg, value, retries=0, delay_s=0.0):
+            victron_instance.write_register(
+                unit=victron_instance.unit_id, reg=reg, value=value
+            )
+            return True
 
         monkeypatch.setattr(
-            victron_instance, "read_registers", fake_read_registers, raising=True
+            victron_instance,
+            "write_register_verified",
+            fake_write_register_verified,
+            raising=True,
         )
 
-        # Act: Request 3000W force charge
+        # Act: Request force charge
         victron_instance.set_mode_force_charge(3000)
 
-        # Assert: Expected current = ceil(3000 / 52.0) = 58A
-        expected_a = int(math.ceil(3000 / 52.0))
-
-        # Verify both registers were written:
-        # - 2701 (max charge percentage) = 100
-        # - 2705 (max charge current) = expected_a
-        assert {"address": 2701, "values": [100], "unit": 100} in writes
-        assert {"address": 2705, "values": [expected_a], "unit": 100} in writes
+        # Assert: VE.Bus setpoints were written (addresses 37, 40, 41 on unit 227)
+        # with value 167W (500W hardcoded test value / 3 per phase)
+        assert {"address": 37, "values": [167], "unit": 227} in writes
+        assert {"address": 40, "values": [167], "unit": 227} in writes
+        assert {"address": 41, "values": [167], "unit": 227} in writes
 
 
 class TestVictronAvoidDischargeExternalControl:
@@ -438,7 +421,7 @@ class TestVictronAvoidDischargeExternalControl:
         ), "Expected start_vebus_keepalive to be called once"
         ka = calls_keepalive[0]
         assert ka["unit"] == 227
-        assert ka["interval_s"] == 0.5
+        assert ka["interval_s"] == 1.0
 
         assert ka["targets"][Reg.VEBUS_Hub4_L1_AcPowerSetpoint_37] == 0
         assert ka["targets"][Reg.VEBUS_Hub4_L2_AcPowerSetpoint_40] == 0

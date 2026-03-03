@@ -287,7 +287,7 @@ class VictronInverter(BaseInverter):
         logger.info("[VictronModbus] Reading Victron Inverter Values")
 
         reg = (
-            Reg.SYSTEM_DC_BATTERY_SOC
+            Reg.SYSTEM_Dc_Battery_Soc
         )  # Beispiel: Name aus dem optimierten File (service+path-basiert)
         rdef = REGISTERS[reg]
 
@@ -656,7 +656,7 @@ class VictronInverter(BaseInverter):
 
     def _read_battery_voltage_v(self) -> float:
         """Read current system battery voltage in V."""
-        v_reg = Reg.SYSTEM_DC_BATTERY_VOLTAGE
+        v_reg = Reg.SYSTEM_Dc_Battery_Voltage
         vdef = REGISTERS[v_reg]
         v_resp = self.read_registers(vdef.address, count=vdef.count, unit=self.unit_id)
 
