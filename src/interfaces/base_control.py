@@ -427,14 +427,25 @@ class BaseControl:
 
         self.last_ac_charge_power = needed_ac_charge_power
 
-        # Only log on change or every 30 seconds if value is constant
+        # Only log on meaningful change (>2% or >50W) or every 30 seconds (heartbeat)
         current_time_unix = time.time()
-        if (
-            needed_ac_charge_power != self.last_logged_ac_charge_power
-            or current_time_unix - self.last_logged_ac_charge_power_time > 30
-        ):
-            # Log details on change
-            if needed_ac_charge_power != self.last_logged_ac_charge_power:
+        # Threshold-based change detection to avoid logging small variations
+        min_threshold = 50  # Minimum 50W change
+        percent_threshold = 0.02  # 2% change
+        max_threshold = max(
+            min_threshold, abs(self.last_logged_ac_charge_power * percent_threshold)
+        )
+        is_meaningful_change = (
+            abs(needed_ac_charge_power - self.last_logged_ac_charge_power)
+            >= max_threshold
+        )
+        is_heartbeat_due = (
+            current_time_unix - self.last_logged_ac_charge_power_time > 30
+        )
+
+        if is_meaningful_change or is_heartbeat_due:
+            # Log details on meaningful change
+            if is_meaningful_change:
                 if seconds_to_end_of_current_time_frame > 0:
                     logger.debug(
                         "[CHARGE_DEMAND] Energy→Power conversion: %.2f Wh / %.2fs (%.4fh) = %.2f W",
@@ -473,13 +484,13 @@ class BaseControl:
                         needed_ac_charge_power,
                         self.current_bat_charge_max,
                     )
-            # Log final value on change or as heartbeat every 30 sec
-            if current_time_unix - self.last_logged_ac_charge_power_time > 30:
+            # Log final value on meaningful change or as heartbeat every 30 sec
+            if is_heartbeat_due and not is_meaningful_change:
                 logger.debug(
                     "[CHARGE_DEMAND] Current AC charge power: %.2f W (heartbeat)",
                     needed_ac_charge_power,
                 )
-            elif needed_ac_charge_power != self.last_logged_ac_charge_power:
+            elif is_meaningful_change:
                 logger.debug(
                     "[CHARGE_DEMAND] Final AC charge power: %.2f W",
                     needed_ac_charge_power,
