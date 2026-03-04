@@ -1546,6 +1546,7 @@ def get_controls():
     response_data = {
         "current_states": {
             "current_ac_charge_demand": current_ac_charge_demand,
+            "current_ac_charge_power": actual_power,  # Power in W, not energy
             "current_dc_charge_demand": current_dc_charge_demand,
             "current_discharge_allowed": current_discharge_allowed,
             "inverter_mode": current_inverter_mode,
