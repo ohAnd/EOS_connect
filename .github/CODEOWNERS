@@ -1,0 +1,9 @@
+# GitHub CODEOWNERS file
+# This file specifies code ownership and automatically requests reviews from owners when PRs modify their files
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Victron inverter implementation - maintained by contributor
+src/interfaces/inverters/victron.py @Awienert
+src\interfaces\inverters\victron_old.py @Awienert
+src/interfaces/inverters/ccgx_registers_all.py @Awienert
+src/interfaces/inverters/ccgx_registers.py @Awienert
