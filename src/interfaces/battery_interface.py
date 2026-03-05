@@ -46,25 +46,19 @@ from .battery_price_handler import BatteryPriceHandler
 logger = logging.getLogger("__main__")
 logger.info("[BATTERY-IF] loading module ")
 
-# Temperature Compensation Sensitivity Constant
-# Controls how aggressively battery charging is reduced in extreme temperatures.
-# This protects the battery from damage during cold/hot conditions.
+# Temperature Compensation
+# ========================
+# Battery temperature derating uses a generic curve derived from official BYD HVM
+# datasheet specifications. This approach is equipment-agnostic and works with any
+# battery capacity or inverter combination while maintaining manufacturer-validated
+# safety principles for LiFePO4 batteries.
 #
-# ADJUSTING THIS VALUE:
-# - 0.0 = Maximum protection (most conservative, minimal charging in extreme temps)
-# - 0.5 = Conservative (default, good balance for LiFePO4 like BYD)
-# - 1.0 = Lenient (allows more charging in extreme temps, less protection)
+# The __calculate_temp_multiplier method implements thermal protection with these zones:
+# - Cold protection (-10°C): Prevents lithium-plating damage
+# - Optimal range (12-40°C): 100% charging capacity
+# - Thermal protection (40-60°C): Reduces power to protect battery
 #
-# EXAMPLES at -1°C with 52.5% SOC (base calculation = ~20 kW):
-# - Sensitivity 0.0: ~0.4 kW (2% power, maximum protection)
-# - Sensitivity 0.5: ~2.0 kW (10% power, recommended for LiFePO4)
-# - Sensitivity 1.0: ~4.0 kW (20% power, lenient)
-#
-# RECOMMENDATION:
-# For LiFePO4 batteries (BYD, CATL): keep at 0.5 or lower
-# For NMC batteries: 0.3-0.5 depending on manufacturer specs
-# Only increase if your battery manufacturer explicitly allows higher charge rates in cold
-TEMP_COMPENSATION_SENSITIVITY = 0.5
+# Generic implementation - suitable for any LiFePO4 battery system.
 
 
 class BatteryInterface:
@@ -481,76 +475,63 @@ class BatteryInterface:
 
     def __calculate_temp_multiplier(self, temp):
         """
-        Calculate temperature compensation multiplier for charge power.
+        Calculate temperature compensation multiplier using a generic thermal derating curve
+        derived from BYD HVM battery specifications.
 
-        Uses conservative base values with adjustable sensitivity via
-        TEMP_COMPENSATION_SENSITIVITY constant.
+        This C-rate multiplier is equipment-agnostic and works with any battery capacity
+        or inverter combination. While derived from BYD HVM specifications, it's implemented
+        as a generic solution suitable for LiFePO4 batteries from any manufacturer.
 
-        Base multipliers (before sensitivity adjustment):
-        - Below 0°C: 0.05 (5%) - moderate cold protection
-        - 0-5°C: Linear ramp 0.05 to 0.10 (5-10%)
-        - 5-15°C: Linear ramp 0.10 to 1.0 (10-100%)
-        - 15-45°C: 1.0 (100%) - optimal range
-        - 45-50°C: Linear ramp 1.0 to 0.3 (100-30%)
-        - 50-60°C: Linear ramp 0.3 to 0.05 (30-5%)
-        - Above 60°C: 0.05 (5%) - critical heat protection
+        Derating zones (derived from BYD HVM specifications):
+        - Below -10°C: 0% (Charging locked - cell damage protection)
+        - -10 to 0°C: Linear ramp 7.5% → 50% (Lithium-plating danger)
+        - 0 to 5°C: 50% (Moderate derating)
+        - 5 to 12°C: Linear ramp 50% → 77% (Light derating - battery warming)
+        - 12 to 40°C: 100% (Optimal range)
+        - 40 to 50°C: Linear ramp 100% → 50% (Thermal derating)
+        - 50 to 60°C: Linear ramp 50% → 0% (Severe derating)
+        - Above 60°C: 0% (Shutdown - overheat protection)
 
         Args:
             temp (float): Battery temperature in °C
 
         Returns:
-            float: Multiplier between 0.05 and 1.0
+            float: C-rate multiplier between 0.0 and 1.0
         """
         if temp is None:
-            return 1.0  # No temperature sensor - no compensation
+            return 1.0  # No temperature sensor - assume optimal conditions
 
-        # Calculate conservative base multiplier
-        if temp < 0:
-            base_multiplier = 0.05  # Moderate cold protection below freezing
+        if temp < -10:
+            # Charging locked below -10°C - prevents cell damage
+            return 0.0
+        elif temp < 0:
+            # Strong derating: linear ramp from 7.5% to 50%
+            # Protects against lithium-plating in extreme cold
+            return 0.075 + ((temp + 10) / 10) * (0.50 - 0.075)
         elif temp < 5:
-            # Linear ramp from 0.05 to 0.10
-            base_multiplier = 0.05 + (temp / 5) * 0.05
-        elif temp < 15:
-            # Linear ramp from 0.10 to 1.0
-            base_multiplier = 0.10 + ((temp - 5) / 10) * 0.90
-        elif temp <= 45:
-            # Optimal operating range
-            base_multiplier = 1.0
+            # Moderate derating: flat 50%
+            return 0.50
+        elif temp < 12:
+            # Light derating: linear ramp from 50% to 77%
+            # Battery gradually accepts more power as it warms from 5-12°C
+            progress = (temp - 5) / 7
+            return 0.50 + progress * (0.77 - 0.50)
+        elif temp <= 40:
+            # Optimal operating range: 100% capacity
+            return 1.0
         elif temp < 50:
-            # Heat warning zone - ramp down from 1.0 to 0.3
-            base_multiplier = 1.0 - ((temp - 45) / 5) * 0.7
+            # Thermal derating: linear ramp from 100% to 50%
+            # Battery protection during heat conditions (40-50°C)
+            progress = (temp - 40) / 10
+            return 1.0 - progress * (1.0 - 0.50)
         elif temp < 60:
-            # Severe heat protection - ramp down from 0.3 to 0.05
-            base_multiplier = 0.3 - ((temp - 50) / 10) * 0.25
+            # Severe derating: linear ramp from 50% to 0%
+            # Critical heat protection (50-60°C)
+            progress = (temp - 50) / 10
+            return 0.50 * (1 - progress)
         else:
-            # Critical temperature
-            base_multiplier = 0.05
-
-        # Apply sensitivity adjustment
-        # Formula: scales the base multiplier by (1 + sensitivity)
-        # sensitivity=0.0 → multiplier = base (most conservative, e.g., 5% at -2°C)
-        # sensitivity=0.5 → multiplier = base × 1.5 (e.g., 7.5% at -2°C)
-        # sensitivity=1.0 → multiplier = base × 2.0 (e.g., 10% at -2°C)
-        # sensitivity=2.0 → multiplier = base × 3.0 (e.g., 15% at -2°C)
-        multiplier = base_multiplier * (1.0 + TEMP_COMPENSATION_SENSITIVITY)
-
-        # Ensure multiplier stays within valid range
-        multiplier = max(0.05, min(1.0, multiplier))
-
-        # Log only significant changes (reduce spam)
-        if (
-            self.last_logged_temp_multiplier is None
-            or abs(multiplier - self.last_logged_temp_multiplier) >= 0.1
-        ):
-            if multiplier < 1.0:
-                logger.info(
-                    "[BATTERY-IF] Temperature compensation active: %.0f°C → %.0f%% power",
-                    temp,
-                    multiplier * 100,
-                )
-            self.last_logged_temp_multiplier = multiplier
-
-        return multiplier
+            # Shutdown above 60°C - overheat protection
+            return 0.0
 
     def __get_max_charge_power_dyn(self, soc=None, temp=None, min_charge_power=500):
         """
@@ -601,7 +582,8 @@ class BatteryInterface:
             return
 
         # SOC-based C-rate calculation
-        max_c_rate = 1.0
+        # Max C-rate is based on configured max charge power relative to battery capacity
+        max_c_rate = self.max_charge_power_fix / battery_capacity_wh
         min_c_rate = 0.05
 
         if soc <= 50:

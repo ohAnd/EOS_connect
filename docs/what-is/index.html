@@ -154,7 +154,7 @@
             </div>
 
             <h4><i class="fas fa-thermometer-half"></i> Temperature-Based Protection Details</h4>
-            <p>When a battery temperature sensor is configured, EOS Connect applies intelligent power reduction to protect your battery:</p>
+            <p>When a battery temperature sensor is configured, EOS Connect applies a generic temperature derating curve <strong>derived from BYD HVM battery thermal specifications</strong>. This manufacturer-validated approach ensures safe charging across all temperature ranges for any battery system:</p>
             <table>
                 <thead>
                     <tr>
@@ -165,35 +165,50 @@
                 </thead>
                 <tbody>
                     <tr>
-                        <td>&lt; 0°C</td>
-                        <td>5-7.5%</td>
-                        <td>Prevents lithium plating in LiFePO4 batteries</td>
+                        <td>&lt; -10°C</td>
+                        <td>0% (Locked)</td>
+                        <td>Cell damage protection - no charging allowed</td>
                     </tr>
                     <tr>
-                        <td>0-15°C</td>
-                        <td>Gradual increase</td>
-                        <td>Safe warm-up phase</td>
+                        <td>-10°C to 0°C</td>
+                        <td>7.5% → 50%</td>
+                        <td>Lithium-plating protection in extreme cold</td>
                     </tr>
                     <tr>
-                        <td>15-45°C</td>
+                        <td>0°C to 5°C</td>
+                        <td>50%</td>
+                        <td>Moderate cold derating</td>
+                    </tr>
+                    <tr>
+                        <td>5°C to 12°C</td>
+                        <td>50% → 77%</td>
+                        <td>Light derating - battery warming gradually</td>
+                    </tr>
+                    <tr>
+                        <td>12°C to 40°C</td>
                         <td>100% (SOC-based only)</td>
-                        <td>Optimal operating range</td>
+                        <td>Optimal operating range - full charging capacity</td>
                     </tr>
                     <tr>
-                        <td>45-60°C</td>
-                        <td>Gradual reduction</td>
-                        <td>Heat protection</td>
+                        <td>40°C to 50°C</td>
+                        <td>100% → 50%</td>
+                        <td>Thermal derating - heat protection begins</td>
+                    </tr>
+                    <tr>
+                        <td>50°C to 60°C</td>
+                        <td>50% → 0%</td>
+                        <td>Severe derating - critical heat protection</td>
                     </tr>
                     <tr>
                         <td>&gt; 60°C</td>
-                        <td>5-7.5%</td>
-                        <td>Critical temperature protection</td>
+                        <td>0% (Locked)</td>
+                        <td>Overheat protection - no charging allowed</td>
                     </tr>
                 </tbody>
             </table>
 
             <div class="alert alert-success">
-                <strong><i class="fas fa-check-circle"></i> Example:</strong> At -2°C with 51% SOC, a 10 kW battery would charge at only ~0.65 kW instead of the configured maximum, protecting against cold damage.
+                <strong><i class="fas fa-check-circle"></i> Example:</strong> At 10.5°C with 30% SOC, a 3 kWh battery charges at ~71% power (2,136 W) according to BYD HVM specifications. Temperature derating and SOC curves work together to optimize both safety and charging speed.
             </div>
         </div>
 

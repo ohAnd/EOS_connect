@@ -590,7 +590,8 @@ class ControlsManager {
 
         if (inverterModeNum === 0) {
             document.getElementById('control_dc_charge_desc').innerText = "AC Charge Power";
-            document.getElementById('control_dc_charge').innerText = (states.current_ac_charge_demand / 1000).toFixed(1) + " kW";
+            const acPowerKw = (states.current_ac_charge_power / 1000).toFixed(2);
+            document.getElementById('control_dc_charge').innerText = acPowerKw + " kW";
         } else if (inverterModeNum === 2) {
             document.getElementById('control_dc_charge_desc').innerText = "DC Charge Power";
             document.getElementById('control_dc_charge').innerText = (states.current_dc_charge_demand / 1000).toFixed(1) + " kW";
@@ -608,10 +609,12 @@ class ControlsManager {
      * Update controls in normal mode
      */
     updateNormalControls(states) {
-        document.getElementById('control_ac_charge_desc').innerText = "AC Charge";
+        document.getElementById('control_ac_charge_desc').innerText = "AC Charge Power";
         document.getElementById('control_ac_charge_desc').style.color = "";
-        console.log('[CHARGE_DEMAND] Dashboard AC Charge: currentDemand=' + states.current_ac_charge_demand + ' Wh, displayed=' + (states.current_ac_charge_demand / 1000).toFixed(1) + ' kW');
-        document.getElementById('control_ac_charge').innerText = (states.current_ac_charge_demand / 1000).toFixed(1) + " kW";
+        const acPowerKw = (states.current_ac_charge_power / 1000).toFixed(2);
+        const acEnergyKwh = (states.current_ac_charge_demand / 1000).toFixed(3);
+        console.log('[CHARGE_DEMAND] Dashboard AC Charge: power=' + states.current_ac_charge_power + ' W, energy=' + states.current_ac_charge_demand + ' Wh');
+        document.getElementById('control_ac_charge').innerHTML = acPowerKw + " kW <span style='font-size: 0.75em;'>("+ acEnergyKwh + " kWh)</span>";
         document.getElementById('control_ac_charge').style.color = "";
 
         document.getElementById('control_dc_charge_desc').innerText = "DC Charge";

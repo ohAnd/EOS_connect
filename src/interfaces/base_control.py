@@ -45,9 +45,19 @@ class BaseControl:
         self.current_ac_charge_demand = 0
         self.last_ac_charge_demand = 0
         self.last_ac_charge_power = 0
+        self.last_logged_ac_charge_power = (
+            -999
+        )  # Track last logged value to avoid duplicate logs
+        self.last_logged_ac_charge_power_time = 0  # Track time for heartbeat logging
         self.current_ac_charge_demand_no_override = 0
         self.current_dc_charge_demand = 0
         self.last_dc_charge_demand = 0
+        self.last_logged_dc_charge_demand_override = (
+            -999
+        )  # Track last logged DC override value to avoid duplicate logs
+        self.last_logged_dc_charge_demand_override_time = (
+            0  # Track time for heartbeat logging
+        )
         self.current_dc_charge_demand_no_override = 0
         self.current_bat_charge_max = 0
         self.last_bat_charge_max = 0
@@ -279,13 +289,40 @@ class BaseControl:
                 self.optimization_max_charge_power_w,
             )
         else:
-            logger.debug(
-                "[BASE-CTRL] OVERRIDE DC charge demand for current hour %s:00 -> %s Wh -"
-                + " based on max charge power %s W",
-                current_hour,
-                self.current_dc_charge_demand,
-                self.config["battery"]["max_charge_power_w"],
-            )
+            # Only log override on change or every 60 seconds (heartbeat)
+            current_time_unix = time.time()
+            if (
+                self.current_dc_charge_demand
+                != self.last_logged_dc_charge_demand_override
+                or current_time_unix - self.last_logged_dc_charge_demand_override_time
+                > 60
+            ):
+                # Log details on change
+                if (
+                    self.current_dc_charge_demand
+                    != self.last_logged_dc_charge_demand_override
+                ):
+                    logger.debug(
+                        "[BASE-CTRL] OVERRIDE DC charge demand for current hour %s:00 -> %s Wh -"
+                        + " based on max charge power %s W",
+                        current_hour,
+                        self.current_dc_charge_demand,
+                        self.config["battery"]["max_charge_power_w"],
+                    )
+                # Log as heartbeat every 60 seconds
+                elif (
+                    current_time_unix - self.last_logged_dc_charge_demand_override_time
+                    > 60
+                ):
+                    logger.debug(
+                        "[BASE-CTRL] OVERRIDE DC charge demand (active): current hour %s:00 -> %s Wh (heartbeat)",
+                        current_hour,
+                        self.current_dc_charge_demand,
+                    )
+                self.last_logged_dc_charge_demand_override = (
+                    self.current_dc_charge_demand
+                )
+                self.last_logged_dc_charge_demand_override_time = current_time_unix
         self.__set_current_overall_state()
 
     def set_current_bat_charge_max(self, value_max):
@@ -380,55 +417,87 @@ class BaseControl:
                 / (seconds_to_end_of_current_time_frame / 3600),
                 0,
             )
-            logger.info(
-                "[CHARGE_DEMAND] Energy→Power conversion: %.2f Wh / %.2fs (%.4fh) = %.2f W",
-                self.current_ac_charge_demand,
-                seconds_to_end_of_current_time_frame,
-                seconds_to_end_of_current_time_frame / 3600,
-                needed_ac_charge_power,
-            )
         else:
             # No time left in the current time frame - use last value
             needed_ac_charge_power = self.last_ac_charge_power
-            logger.info(
-                "[CHARGE_DEMAND] No time left in frame, using last value: %.2f W",
-                needed_ac_charge_power,
-            )
 
         needed_ac_charge_power = min(
             needed_ac_charge_power, round(self.current_bat_charge_max)
         )
 
-        if (
-            needed_ac_charge_power
-            != round(
-                self.current_ac_charge_demand
-                / (seconds_to_end_of_current_time_frame / 3600),
-                0,
-            )
-            if seconds_to_end_of_current_time_frame > 0
-            else False
-        ):
-            logger.info(
-                "[CHARGE_DEMAND] Power capped by battery max: calculated=%.2f W, capped=%.2f W, bat_max=%.2f W",
-                (
-                    round(
+        self.last_ac_charge_power = needed_ac_charge_power
+
+        # Only log on meaningful change (>2% or >50W) or every 30 seconds (heartbeat)
+        current_time_unix = time.time()
+        # Threshold-based change detection to avoid logging small variations
+        min_threshold = 50  # Minimum 50W change
+        percent_threshold = 0.02  # 2% change
+        max_threshold = max(
+            min_threshold, abs(self.last_logged_ac_charge_power * percent_threshold)
+        )
+        is_meaningful_change = (
+            abs(needed_ac_charge_power - self.last_logged_ac_charge_power)
+            >= max_threshold
+        )
+        is_heartbeat_due = (
+            current_time_unix - self.last_logged_ac_charge_power_time > 30
+        )
+
+        if is_meaningful_change or is_heartbeat_due:
+            # Log details on meaningful change
+            if is_meaningful_change:
+                if seconds_to_end_of_current_time_frame > 0:
+                    logger.debug(
+                        "[CHARGE_DEMAND] Energy→Power conversion: %.2f Wh / %.2fs (%.4fh) = %.2f W",
+                        self.current_ac_charge_demand,
+                        seconds_to_end_of_current_time_frame,
+                        seconds_to_end_of_current_time_frame / 3600,
+                        needed_ac_charge_power,
+                    )
+                else:
+                    logger.debug(
+                        "[CHARGE_DEMAND] No time left in frame, using last value: %.2f W",
+                        needed_ac_charge_power,
+                    )
+
+                if (
+                    needed_ac_charge_power
+                    != round(
                         self.current_ac_charge_demand
                         / (seconds_to_end_of_current_time_frame / 3600),
                         0,
                     )
                     if seconds_to_end_of_current_time_frame > 0
-                    else needed_ac_charge_power
-                ),
-                needed_ac_charge_power,
-                self.current_bat_charge_max,
-            )
+                    else False
+                ):
+                    logger.debug(
+                        "[CHARGE_DEMAND] Power capped by battery max: calculated=%.2f W, capped=%.2f W, bat_max=%.2f W",
+                        (
+                            round(
+                                self.current_ac_charge_demand
+                                / (seconds_to_end_of_current_time_frame / 3600),
+                                0,
+                            )
+                            if seconds_to_end_of_current_time_frame > 0
+                            else needed_ac_charge_power
+                        ),
+                        needed_ac_charge_power,
+                        self.current_bat_charge_max,
+                    )
+            # Log final value on meaningful change or as heartbeat every 30 sec
+            if is_heartbeat_due and not is_meaningful_change:
+                logger.debug(
+                    "[CHARGE_DEMAND] Current AC charge power: %.2f W (heartbeat)",
+                    needed_ac_charge_power,
+                )
+            elif is_meaningful_change:
+                logger.debug(
+                    "[CHARGE_DEMAND] Final AC charge power: %.2f W",
+                    needed_ac_charge_power,
+                )
 
-        self.last_ac_charge_power = needed_ac_charge_power
-        logger.info(
-            "[CHARGE_DEMAND] Final AC charge power returned: %.2f W",
-            needed_ac_charge_power,
-        )
+            self.last_logged_ac_charge_power = needed_ac_charge_power
+            self.last_logged_ac_charge_power_time = current_time_unix
 
         return needed_ac_charge_power
 
