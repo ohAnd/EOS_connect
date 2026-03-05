@@ -715,6 +715,12 @@ def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_a
     base_control.set_current_dc_charge_demand(dc_charge_demand_rel)
     base_control.set_current_discharge_allowed(bool(discharge_allowed))
 
+    # Set the dynamic override discharge allowed active flag from latest optimization data
+    dyn_override_active = eos_interface.get_last_control_data()[0].get(
+        "dyn_override_active", False
+    )
+    base_control.set_dyn_override_discharge_allowed_active(dyn_override_active)
+
     # set the current battery state of charge
     base_control.set_current_battery_soc(battery_interface.get_current_soc())
     # getting the current charging state from evcc
@@ -789,6 +795,7 @@ class OptimizationScheduler:
         self._update_thread_optimization_loop = None
         self._stop_event = threading.Event()
         self._last_avg_runtime = 120  # Initialize with a default value
+        self._last_dyn_override_array = []  # Initialize override array for chart
         self.__start_update_service_optimization_loop()
         self._update_thread_control_loop = None
         self._stop_event_control_loop = threading.Event()
@@ -808,6 +815,12 @@ class OptimizationScheduler:
         Returns the current state of the optimization scheduler.
         """
         return self.current_state
+
+    def get_last_dyn_override_array(self):
+        """
+        Returns the last dynamic override array for all time slots.
+        """
+        return self._last_dyn_override_array
 
     def __set_state_request(self):
         """
@@ -976,11 +989,17 @@ class OptimizationScheduler:
         ) as file:
             json.dump(optimized_response, file, indent=4)
         # +++++++++
-        ac_charge_demand, dc_charge_demand, discharge_allowed, error = (
-            eos_interface.examine_response_to_control_data(optimized_response)
-        )
+        (
+            ac_charge_demand,
+            dc_charge_demand,
+            discharge_allowed,
+            error,
+            dyn_override_array,
+        ) = eos_interface.examine_response_to_control_data(optimized_response)
         if error is not True:
             setting_control_data(ac_charge_demand, dc_charge_demand, discharge_allowed)
+            # Store the override array for API response
+            self._last_dyn_override_array = dyn_override_array
             # get recent evcc states
             base_control.set_current_evcc_charging_state(
                 evcc_interface.get_charging_state()
@@ -1553,6 +1572,15 @@ def get_controls():
             "inverter_mode_num": current_inverter_mode_num,
             "override_active": base_control.get_override_active_and_endtime()[0],
             "override_end_time": base_control.get_override_active_and_endtime()[1],
+            "dyn_override_discharge_allowed_enabled": config_manager.config.get(
+                "eos", {}
+            ).get("dyn_override_discharge_allowed_pv_greater_load", False),
+            "dyn_override_discharge_allowed_active": eos_interface.get_last_control_data()[
+                0
+            ].get(
+                "dyn_override_active", False
+            ),
+            "dyn_override_discharge_allowed_array": optimization_scheduler.get_last_dyn_override_array(),
         },
         "evcc": {
             "charging_state": base_control.get_current_evcc_charging_state(),

@@ -60,6 +60,7 @@ class ConfigManager:
                         "port": 8503,  # port for EOS server (8503) or EVopt server (7050) - default: 8503
                         "timeout": 180,  # Default timeout for EOS optimize request
                         "time_frame": 3600,  # Time frame for EOS optimize request in seconds
+                        "dyn_override_discharge_allowed_pv_greater_load": False,  # Dynamic override for discharge when PV > Load
                     }
                 ),
                 "price": CommentedMap(
@@ -228,6 +229,12 @@ class ConfigManager:
         )
         config["eos"].yaml_add_eol_comment(
             "timeout for EOS optimize request in seconds - default: 180", "timeout"
+        )
+        config["eos"].yaml_add_eol_comment(
+            "Dynamic discharge override when PV forecast is greater than load - default: false"
+            + " - when enabled, discharge is allowed even if optimizer says avoid discharge,"
+            + " if pv_forecast > load in current time slot",
+            "dyn_override_discharge_allowed_pv_greater_load",
         )
         # price configuration
         config.yaml_set_comment_before_after_key(

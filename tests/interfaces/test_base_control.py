@@ -426,5 +426,44 @@ class TestEffectiveDischargeAllowed:
         assert base_control.get_effective_discharge_allowed() == True
 
 
+class TestDynamicOverridePVGreaterLoad:
+    """Test suite for dynamic discharge override based on PV > Load - Issue #XXX"""
+
+    @patch("src.interfaces.base_control.datetime")
+    def test_dyn_override_initialization(
+        self, mock_datetime, config_base, berlin_timezone
+    ):
+        """Test that dynamic override starts as False"""
+        mock_datetime.now.return_value = datetime(
+            2024, 10, 4, 10, 0, 0, tzinfo=berlin_timezone
+        )
+        mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+
+        base_control = BaseControl(config_base, berlin_timezone, 3600)
+
+        # Should start as False
+        assert base_control.get_dyn_override_discharge_allowed_active() == False
+
+    @patch("src.interfaces.base_control.datetime")
+    def test_dyn_override_setter_and_getter(
+        self, mock_datetime, config_base, berlin_timezone
+    ):
+        """Test setting and getting dynamic override state"""
+        mock_datetime.now.return_value = datetime(
+            2024, 10, 4, 10, 0, 0, tzinfo=berlin_timezone
+        )
+        mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+
+        base_control = BaseControl(config_base, berlin_timezone, 3600)
+
+        # Set to True
+        base_control.set_dyn_override_discharge_allowed_active(True)
+        assert base_control.get_dyn_override_discharge_allowed_active() == True
+
+        # Set to False
+        base_control.set_dyn_override_discharge_allowed_active(False)
+        assert base_control.get_dyn_override_discharge_allowed_active() == False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

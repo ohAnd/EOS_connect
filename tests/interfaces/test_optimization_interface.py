@@ -193,11 +193,14 @@ def test_control_data_tracking(
             eos_server_config, time_frame_base, berlin_timezone
         )
         response, _ = interface.optimize(sample_eos_request)
-        ac, dc, discharge, error = interface.examine_response_to_control_data(response)
+        ac, dc, discharge, error, override_array = (
+            interface.examine_response_to_control_data(response)
+        )
         assert isinstance(ac, float)
         assert isinstance(dc, float)
         assert isinstance(discharge, bool)
         assert isinstance(error, bool) or isinstance(error, int)
+        assert isinstance(override_array, list)
 
 
 def test_get_eos_version(eos_server_config, time_frame_base, berlin_timezone):

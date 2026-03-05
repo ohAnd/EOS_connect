@@ -550,21 +550,29 @@ class ControlsManager {
         const overrideEndTime = states.override_end_time;
         const inverterModeText = states.inverter_mode;
         const inverterModeNum = states.inverter_mode_num;
+        const dynOverrideActive = states.dyn_override_discharge_allowed_active;
 
         // Update overall state
         const cleanModeText = inverterModeText.replace("MODE ", "");
-        document.getElementById('control_overall').innerHTML = overrideActive ?
-            `<i class="fa-solid fa-triangle-exclamation"></i> ${cleanModeText}` : cleanModeText;
+        if (overrideActive) {
+            document.getElementById('control_overall').innerHTML = `<i style="color:orange;" class="fa-solid fa-triangle-exclamation"></i> ${cleanModeText}`;
+        } else if (dynOverrideActive) {
+            document.getElementById('control_overall').innerHTML = `<i style="color:#32CD32;" class="fa-solid fa-triangle-exclamation"></i> ${cleanModeText}`;
+        } else {
+            document.getElementById('control_overall').innerHTML = cleanModeText;
+        }
 
         // Update controls based on override state
         if (overrideActive) {
             this.updateOverrideControls(states, overrideEndTime, inverterModeNum);
+        } else if (dynOverrideActive) {
+            this.updateDynamicOverrideControls(states, inverterModeNum);
         } else {
             this.updateNormalControls(states);
         }
 
         // Update mode icon and click handler
-        this.updateModeIcon(inverterModeNum, overrideActive, controlsData.battery.max_charge_power_dyn);
+        this.updateModeIcon(inverterModeNum, overrideActive, controlsData.battery.max_charge_power_dyn, dynOverrideActive);
 
         // Show experimental banner if optimization source is ??? (t.b.d.) - was introduced in early phase of evopt
         if (controlsData.used_optimization_source === "tbd") {
@@ -606,6 +614,32 @@ class ControlsManager {
     }
 
     /**
+     * Update controls when dynamic override is active
+     */
+    updateDynamicOverrideControls(states, inverterModeNum) {
+        document.getElementById('control_ac_charge_desc').innerText = "Dynamic Override Active";
+        document.getElementById('control_ac_charge_desc').style.color = "#32CD32";
+        document.getElementById('control_ac_charge').innerText = "PV > Load";
+        document.getElementById('control_ac_charge').style.color = "#32CD32";
+
+        if (inverterModeNum === 0) {
+            document.getElementById('control_dc_charge_desc').innerText = "AC Charge Power";
+            const acPowerKw = (states.current_ac_charge_power / 1000).toFixed(2);
+            document.getElementById('control_dc_charge').innerText = acPowerKw + " kW";
+        } else if (inverterModeNum === 2) {
+            document.getElementById('control_dc_charge_desc').innerText = "DC Charge Power";
+            document.getElementById('control_dc_charge').innerText = (states.current_dc_charge_demand / 1000).toFixed(1) + " kW";
+        } else {
+            document.getElementById('control_dc_charge_desc').innerText = "";
+            document.getElementById('control_dc_charge').innerText = "";
+        }
+
+        document.getElementById('control_discharge_allowed_desc').innerText = "";
+        document.getElementById('control_discharge_allowed').innerText = "";
+        document.getElementById('current_controls_box').style.border = "1px solid #32CD32";
+    }
+
+    /**
      * Update controls in normal mode
      */
     updateNormalControls(states) {
@@ -630,7 +664,7 @@ class ControlsManager {
     /**
      * Update the mode icon and setup click handler
      */
-    updateModeIcon(inverterModeNum, overrideActive, maxChargePowerDyn) {
+    updateModeIcon(inverterModeNum, overrideActive, maxChargePowerDyn, dynOverrideActive = false) {
         const iconElement = document.getElementById('current_header_right');
         if (!iconElement) return;
 
@@ -645,6 +679,8 @@ class ControlsManager {
 
         if (overrideActive) {
             iconElement.innerHTML = '<i style="color:orange;" class="fa-solid fa-triangle-exclamation"></i> ' + iconElement.innerHTML;
+        } else if (dynOverrideActive) {
+            iconElement.innerHTML = '<i style="color:#32CD32;" class="fa-solid fa-triangle-exclamation"></i> ' + iconElement.innerHTML;
         }
 
         // Setup click handler for override controls
