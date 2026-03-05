@@ -42,7 +42,7 @@ class BatteryManager {
         const soc = battery.soc || 0;
         const usableKWh = (battery.usable_capacity / 1000).toFixed(1);
         const maxChargeKW = (battery.max_charge_power_dyn / 1000).toFixed(2);
-        const wac = stored.stored_energy_price !== undefined ? (stored.stored_energy_price * 10000).toFixed(2) : "--";
+        const wac = stored.stored_energy_price !== undefined ? (stored.stored_energy_price * 100000).toFixed(2) : "--";
         const pvRatio = isEnabled && stored.ratio !== undefined ? stored.ratio.toFixed(1) : "--";
         const lastUpdate = stored.last_update ? new Date(stored.last_update).toLocaleString() : "Never";
 
