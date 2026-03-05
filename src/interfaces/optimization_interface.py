@@ -253,9 +253,21 @@ class OptimizationInterface:
                             load_forecast = gesamtlast[slot_idx]
 
                             # Override applies if: PV > Load AND optimizer said no discharge
+                            # BUT NOT if AC charging is requested (grid charging takes precedence)
+                            ac_charge_at_slot = (
+                                optimized_response_in.get(
+                                    "ac_charge", [None] * len(discharge_allowed_arr)
+                                )[slot_idx]
+                                if slot_idx
+                                < len(optimized_response_in.get("ac_charge", []))
+                                else 0
+                            )
                             if (
                                 pv_forecast > load_forecast
                                 and not discharge_allowed_arr[slot_idx]
+                                and (
+                                    ac_charge_at_slot is None or ac_charge_at_slot <= 0
+                                )
                             ):
                                 dyn_override_allowed_array[slot_idx] = True
 
@@ -283,6 +295,8 @@ class OptimizationInterface:
                     )
 
             # Update the stored discharge_allowed value with the override result for current slot
+            # NOTE: Even if override is applied here, AC charging takes final precedence in
+            # BaseControl.__set_current_overall_state() which checks ac_charge_demand FIRST
             if dyn_override_allowed_array and current_step < len(
                 dyn_override_allowed_array
             ):
