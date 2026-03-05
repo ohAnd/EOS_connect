@@ -64,6 +64,8 @@ class BaseControl:
         self.current_discharge_allowed = -1
         self.current_evcc_charging_state = False
         self.current_evcc_charging_mode = False
+        # Dynamic override state for PV > Load discharge override
+        self.dyn_override_discharge_allowed_active = False
         # 1 hour = 3600 seconds / 900 for 15 minutes
         self.time_frame_base = time_frame_base
         # startup with None to force a writing to the inverter
@@ -203,6 +205,24 @@ class BaseControl:
         Returns the override duration.
         """
         return self.override_duration
+
+    def set_dyn_override_discharge_allowed_active(self, value):
+        """
+        Sets whether the dynamic PV > Load discharge override is currently active.
+
+        Args:
+            value (bool): True if dynamic override is active, False otherwise
+        """
+        self.dyn_override_discharge_allowed_active = value
+
+    def get_dyn_override_discharge_allowed_active(self):
+        """
+        Returns whether the dynamic PV > Load discharge override is currently active.
+
+        Returns:
+            bool: True if dynamic override is active, False otherwise
+        """
+        return self.dyn_override_discharge_allowed_active
 
     def set_current_ac_charge_demand(self, value_relative):
         """

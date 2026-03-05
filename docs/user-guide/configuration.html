@@ -45,6 +45,7 @@
                 <nav class="toc-nav">
                     <a href="#load" class="toc-link">Load</a>
                     <a href="#eos" class="toc-link">EOS Server</a>
+                    <a href="#dyn-override" class="toc-link toc-sub">→ Dynamic PV Override</a>
                     <a href="#price" class="toc-link">Electricity Prices</a>
                     <a href="#energyforecast" class="toc-link toc-sub">→ Smart Price Prediction</a>
                     <a href="#battery" class="toc-link">Battery</a>
@@ -76,6 +77,9 @@
                 </div>
                 <div class="feature-item">
                     <a href="#eos"><i class="fas fa-server"></i> EOS Server</a>
+                </div>
+                <div class="feature-item">
+                    <a href="#dyn-override"><i class="fas fa-zap"></i> Dynamic PV Override</a>
                 </div>
                 <div class="feature-item">
                     <a href="#price"><i class="fas fa-dollar-sign"></i> Electricity Prices</a>
@@ -445,6 +449,99 @@
                     <td>Increase if optimization takes longer or server is slow</td>
                 </tr>
             </table>
+
+            <h3 id="dyn-override">eos.dyn_override_discharge_allowed_pv_greater_load</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>eos.dyn_override_discharge_allowed_pv_greater_load</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Dynamically allow battery discharge when solar PV forecast exceeds household load</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td><code>true</code>, <code>false</code></td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>false</code> (disabled)</td>
+                </tr>
+                <tr>
+                    <th>When to Enable</th>
+                    <td>Enable when you want to prevent grid input during cloud shadows. This feature overrides the optimizer's discharge decision when solar generation exceeds current load.</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td style="padding: 1rem;">
+                        <ul style="margin: 0; padding-left: 20px;">
+                            <li><strong>Manual override precedence:</strong> Manual override takes precedence over dynamic override</li>
+                            <li><strong>PV forecast dependency:</strong> Requires accurate PV forecast data</li>
+                            <li><strong>Per time slot:</strong> Checked for each optimization interval</li>
+                            <li><strong>Visual feedback:</strong> Green indicators on dashboard when active</li>
+                        </ul>
+                    </td>
+                </tr>
+            </table>
+
+            <div style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid rgba(255,255,255,0.1);">
+                <h2><i class="fas fa-zap"></i> Dynamic PV Override Explained</h2>
+                <p>The <strong>Dynamic PV Override</strong> automatically allows battery discharge when solar production exceeds household load, preventing unwanted grid input.</p>
+
+                <h3>How It Works</h3>
+                <p>The system compares each time slot:</p>
+                <ul>
+                    <li><strong>PV Forecast</strong> vs <strong>Household Load</strong></li>
+                </ul>
+                <p>If PV > Load and optimizer said "avoid discharge", the system automatically allows discharge instead.</p>
+
+                <h3>Common Scenarios</h3>
+                <table style="width: 100%; margin: 1rem 0;">
+                    <tr style="background: rgba(0,0,0,0.2);">
+                        <th style="padding: 0.75rem;">Scenario</th>
+                        <th style="padding: 0.75rem;">Without Override</th>
+                        <th style="padding: 0.75rem;">With Override</th>
+                    </tr>
+                    <tr>
+                        <td style="padding: 0.75rem;">Morning cloud shadow with high solar forecast</td>
+                        <td style="padding: 0.75rem;">Battery holds, PV excess → grid</td>
+                        <td style="padding: 0.75rem;">Battery discharges, supplies household directly</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 0.75rem;">High solar day + low current load</td>
+                        <td style="padding: 0.75rem;">Grid import despite available PV</td>
+                        <td style="padding: 0.75rem;">Battery covers load, self-consumption maximized</td>
+                    </tr>
+                </table>
+
+                <h3>Priority Hierarchy</h3>
+                <ol style="margin: 1rem 0;">
+                    <li><strong style="color: #FFA500;">Manual Override</strong> (Highest - takes full control)</li>
+                    <li><strong style="color: #32CD32;">Dynamic Override</strong> (automatic PV>Load detection)</li>
+                    <li><strong>EV Charging</strong> (EVCC modes)</li>
+                    <li><strong>Optimizer Decision</strong> (default)</li>
+                </ol>
+
+                <h3>Configuration Example</h3>
+                <pre style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px; overflow-x: auto; margin: 1rem 0;"><code style="color: #89d969;">eos:
+  source: eos_server
+  server: 192.168.1.50
+  port: 8503
+  time_frame: 3600
+  dyn_override_discharge_allowed_pv_greater_load: true  # Enable</code></pre>
+
+                <h3>Dashboard Indicators</h3>
+                <div style="background: rgba(50, 205, 50, 0.1); border-left: 4px solid #32CD32; padding: 1rem; border-radius: 4px; margin: 1rem 0;">
+                    <p><i class="fas fa-triangle-exclamation" style="color: #32CD32;"></i> <strong>Green Triangle:</strong> Mode indicator shows green triangle when active</p>
+                    <p><i class="fas fa-tag" style="color: #32CD32;"></i> <strong>Green Label:</strong> \"Dynamic Override Active\" + \"PV > Load\" in control panel</p>
+                    <p><i class="fas fa-chart-line" style="color: #32CD32;"></i> <strong>Green Overlay:</strong> Chart shows green shading for future slots where override applies</p>
+                </div>
+
+                <h3>Monitoring & Logs</h3>
+                <p>Check logs for activation events:</p>
+                <pre style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px; overflow-x: auto; margin: 1rem 0; color: #ff9999; font-size: 0.9em;">[OPTIMIZATION] Dynamic PV>Load override ACTIVATED for step 3 (14:00): PV=2500 Wh > Load=1800 Wh - discharge allowed overridden to TRUE</pre>
+            </div>
         </div>
 
         <!-- Price Configuration -->

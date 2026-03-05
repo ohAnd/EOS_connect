@@ -26,6 +26,7 @@ EOS Connect fetches real-time and forecast data, processes it via your chosen op
 - **Dynamic Web Dashboard:** Live monitoring, manual control, and visualization of your energy system.
 - **Cost Optimization:** Aligns energy usage with dynamic electricity prices (Tibber, smartenergy.at, Stromligning.dk) with hourly or quarterly distribution.
 - **Smart Price Prediction:** Energyforecast.de integration automatically learns your grid fees and taxes to provide accurate price predictions when your primary source lacks tomorrow's prices. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#energyforecast)
+- **Dynamic PV Override:** Automatically allows discharge when solar production exceeds load, preventing unwanted grid input during cloud shadows. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#dyn-override)
 - **Flexible Configuration:** Easy to set up and extend for a wide range of energy systems and user needs.
 
 ---
