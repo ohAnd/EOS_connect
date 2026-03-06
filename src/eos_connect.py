@@ -2037,7 +2037,7 @@ if __name__ == "__main__":
         # restore the old config
         if (
             config_manager.config["inverter"]["type"]
-            in ["fronius_gen24", "fronius_gen24_v2"]
+            in ["fronius_gen24", "fronius_gen24_v2", "victron"]
             and inverter_interface is not None
         ):
             inverter_interface.shutdown()

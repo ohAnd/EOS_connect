@@ -178,11 +178,18 @@ class VictronInverter(BaseInverter):
 
     def set_mode_avoid_discharge(self):
         """Set the inverter to avoid discharging the battery."""
+        """avoid_discharge
+            Batterie: NICHT entladen
+            Batterie: darf laden (PV)
+            Netz: übernimmt Differenz"""
+
         logger.info("[VictronModbus] Setting hold mode, avoid discharge")
 
         # ESS Externe Regelung ES Mode auf 3 und setzen dann ID 37,41 und 42 auf 0W -> es werden 0 W aus oder in richtung Grid geschoben kein Laden kein Entladen
 
         # TODO: Read old state of battery life modus
+        # Save current ESS state
+        self.save_ess_state(unit=100)
         # ESS Mode external controll
         reg = Reg.SETTINGS_Settings_Cgwacs_Hub4Mode
         target_value = 3
@@ -230,48 +237,59 @@ class VictronInverter(BaseInverter):
         )
 
     def set_mode_allow_discharge(self):
-        """Set the inverter to allow discharging the battery."""
+        """Set the inverter back to normal ESS operation (allow discharge)."""
         logger.info("[VictronModbus] Setting discharge mode, allow discharge")
 
-        # VE.Bus Keepalive stoppen
-        self.stop_vebus_keepalive()
-
-        # ESS Mode reset external control to ESS with Phase Compensation
+        # Aktuellen Hub4Mode lesen
         reg = Reg.SETTINGS_Settings_Cgwacs_Hub4Mode
-        target_value = 1
         rdef = REGISTERS[reg]
+        resp = self.read_registers(reg, unit=100)
 
-        logger.info(
-            "[VictronModbus] Setting ESS Mode to 1=ESS with Phase Compensation: write %s=%d @ %d (%s)",
-            reg.name,
-            target_value,
-            rdef.address,
-            rdef.description,
+        if resp is None or resp.isError():
+            raise RuntimeError(
+                f"Failed to read {reg.name} @ {rdef.address} before restoring ESS mode"
+            )
+
+        current_mode = int(rdef.decode(resp.registers))
+
+        keepalive_running = (
+            self._vebus_keepalive_thread is not None
+            and self._vebus_keepalive_thread.is_alive()
         )
 
-        self.write_register_verified(reg, target_value, retries=8, delay_s=0.2)
-
-        # TODO: Write old state of battery life modus
-        # Batterey Life Modus Optimized without batterylife
-        reg = Reg.SETTINGS_Settings_CGwacs_BatteryLife_State
-        target_value = 10
-        rdef = REGISTERS[reg]
-
         logger.info(
-            "[VictronModbus] Setting Batterey Life Modus to Optimized without batterylife: write %s=%d @ %d (%s)",
-            reg.name,
-            target_value,
-            rdef.address,
-            rdef.description,
+            "[VictronModbus] Current Hub4Mode=%d, keepalive_running=%s",
+            current_mode,
+            keepalive_running,
         )
 
-        self.write_register_verified(reg, target_value, retries=8, delay_s=0.2)
+        # Wenn weder External Control aktiv ist noch Keepalive läuft, nichts tun
+        if current_mode != 3 and not keepalive_running:
+            logger.info(
+                "[VictronModbus] ESS already in normal mode, nothing to restore"
+            )
+            return
 
-        logger.info(
-            "[VictronModbus] Discharge mode active (discharge enabled, %s=%s)",
-            reg.name,
-            target_value,
-        )
+        # VE.Bus Keepalive stoppen + 0W schreiben
+        self.stop_vebus_keepalive(write_zero=True)
+
+        # Gespeicherten ESS Zustand wiederherstellen
+        self.restore_ess_state(unit=100, retries=8, delay_s=0.2)
+
+        logger.info("[VictronModbus] Discharge mode active (normal ESS restored)")
+
+    def set_mode_allow_discharge_old(self):
+        """Set the inverter back to normal ESS operation (allow discharge)."""
+        logger.info("[VictronModbus] Setting discharge mode, allow discharge")
+
+        # 1) VE.Bus Keepalive stoppen + 0W schreiben
+        self.stop_vebus_keepalive(write_zero=True)
+
+        # 2) Vorher gespeicherten ESS Zustand wiederherstellen (Hub4Mode + BatteryLife)
+        #    Fallbacks sind in restore_ess_state() drin, falls nie gespeichert wurde
+        self.restore_ess_state(unit=100, retries=8, delay_s=0.2)
+
+        logger.info("[VictronModbus] Discharge mode active (normal ESS restored)")
 
     def set_allow_grid_charging(self, value: bool):
         logger.info("[VictronModbus] Allow Gridcharging")
@@ -319,6 +337,9 @@ class VictronInverter(BaseInverter):
             # self.stop_vebus_keepalive(unit=227, write_zero=True)
             return
 
+        # Save current ESS state
+        self.save_ess_state(unit=100)
+
         # 1) ESS External Control
         reg = Reg.SETTINGS_Settings_Cgwacs_Hub4Mode
         hub4mode = 3
@@ -335,7 +356,7 @@ class VictronInverter(BaseInverter):
         self.write_register_verified(reg, hub4mode, retries=8, delay_s=0.2)
 
         # 2) Power -> per phase setpoint (positiv = import/charge)
-        charge_power_w = 500.0  # for testing
+        # charge_power_w = 500.0  # for testing
         per_phase_w = int(math.ceil(charge_power_w / 3.0))
         setpoint_w = +per_phase_w  # import from grid
 
@@ -363,6 +384,97 @@ class VictronInverter(BaseInverter):
             setpoint_w,
         )
 
+    def save_ess_state(self, unit: int = 100, overwrite: bool = False) -> None:
+        """
+        Save current ESS state (Hub4Mode + BatteryLife) only once by default.
+        Will NOT save if currently already in External Control (Hub4Mode=3),
+        unless overwrite=True.
+        """
+        if not overwrite and getattr(self, "_saved_ess_state", None):
+            logger.info("[VictronModbus] ESS state already saved -> skip")
+            return
+
+        # read current Hub4Mode first
+        hub_reg = Reg.SETTINGS_Settings_Cgwacs_Hub4Mode
+        hub_def = REGISTERS[hub_reg]
+        hub_resp = self.read_registers(hub_reg, unit=unit)
+
+        if hub_resp is None or hub_resp.isError():
+            logger.warning(
+                "[VictronModbus] Could not read Hub4Mode -> not saving ESS state"
+            )
+            return
+
+        hub4mode = int(round(float(hub_def.decode(hub_resp.registers))))
+
+        # if already External Control, don't save (unless overwrite explicitly)
+        if hub4mode == 3 and not overwrite:
+            logger.info(
+                "[VictronModbus] Hub4Mode=3 (External Control) -> skip saving ESS state"
+            )
+            return
+
+        state: dict[Reg, int] = {hub_reg: hub4mode}
+
+        # read BatteryLife state
+        bl_reg = Reg.SETTINGS_Settings_CGwacs_BatteryLife_State
+        bl_def = REGISTERS[bl_reg]
+        bl_resp = self.read_registers(bl_reg, unit=unit)
+
+        if bl_resp is not None and not bl_resp.isError():
+            state[bl_reg] = int(round(float(bl_def.decode(bl_resp.registers))))
+        else:
+            logger.warning(
+                "[VictronModbus] Could not read BatteryLife state -> saving Hub4Mode only"
+            )
+
+        self._saved_ess_state = state
+        logger.info(
+            "[VictronModbus] Saved ESS baseline: %s",
+            {k.name: v for k, v in state.items()},
+        )
+
+    def restore_ess_state(
+        self, unit: int = 100, retries: int = 8, delay_s: float = 0.2
+    ) -> None:
+        """Restore previously saved ESS-related settings."""
+        state = getattr(self, "_saved_ess_state", None)
+
+        if not state:
+            logger.warning("[VictronModbus] No saved ESS state found -> using defaults")
+            state = {
+                Reg.SETTINGS_Settings_Cgwacs_Hub4Mode: 1,  # normal ESS
+                Reg.SETTINGS_Settings_CGwacs_BatteryLife_State: 10,  # without Batterylife
+            }
+
+        # stop keepalive first so it can't fight the restore
+        try:
+            self.stop_vebus_keepalive(write_zero=True)
+        except Exception:
+            pass
+
+        # restore in order: Hub4Mode first, then BatteryLife
+        for reg in (
+            Reg.SETTINGS_Settings_Cgwacs_Hub4Mode,
+            Reg.SETTINGS_Settings_CGwacs_BatteryLife_State,
+        ):
+            if reg not in state:
+                continue
+
+            val = int(state[reg])
+            rdef = REGISTERS[reg]
+
+            logger.info(
+                "[VictronModbus] Restoring %s=%d @ %d (%s)",
+                reg.name,
+                val,
+                rdef.address,
+                rdef.description,
+            )
+            self.write_register_verified(reg, val, retries=retries, delay_s=delay_s)
+
+        logger.info("[VictronModbus] ESS state restored")
+
     def connect_inverter(self):
         """Connect to Victron Modbus device."""
         if self.client.connect():
@@ -378,6 +490,7 @@ class VictronInverter(BaseInverter):
             return False
 
     def disconnect_inverter(self):
+        # close modbus socket connection
         self.client.close()
         logger.info("[VictronModbus] Verbindung geschlossen")
 
@@ -451,12 +564,13 @@ class VictronInverter(BaseInverter):
     def write_holding_registers(self, unit, address, values):
         """Write one or multiple holding registers."""
         slave = int(unit) if unit else 1
+        """
         logger.info(
             "[VictronModbus] Writing unit %s address %s values %s",
             unit,
             address,
             values,
-        )
+        )"""
 
         # Einzelwert schreiben (Function Code 0x06)
         if isinstance(values, (int, float)):
@@ -680,3 +794,16 @@ class VictronInverter(BaseInverter):
 
         target_a = int(math.ceil(power_w / batt_v))
         return max(0, min(target_a, 32767))
+
+    def disconnect(self):
+        """Session closes itself."""
+        self.disconnect_inverter()
+        logger.info(f"[{self.inverter_type}] Session closed")
+
+    def shutdown(self):
+        # Vorher gespeicherten ESS Zustand wiederherstellen (Hub4Mode + BatteryLife)
+        # Fallbacks sind in restore_ess_state() drin, falls nie gespeichert wurde
+        logger.info("[VictronModbus] Restoring ESS state before shutdown...")
+        self.restore_ess_state(unit=100, retries=8, delay_s=0.2)
+        # Close modbus session
+        self.disconnect()
