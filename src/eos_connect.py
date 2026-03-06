@@ -1300,8 +1300,10 @@ def change_control_state():
         config_manager.config["inverter"]["max_pv_charge_rate"],
     )
 
+    # Update current battery max to actual capability (after SOC/temp derating)
+    # This allows get_needed_ac_charge_power() to properly cap calculated demand
     base_control.set_current_bat_charge_max(
-        max(tgt_ac_charge_power, tgt_dc_charge_power)
+        round(battery_interface.get_max_charge_power())
     )
 
     # Check if the overall state of the inverter was changed recently and consume the event
