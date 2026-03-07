@@ -7,7 +7,7 @@ discharge permissions, and overall system state.
 import logging
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger("__main__")
 logger.info("[BASE-CTRL] loading module ")
@@ -81,6 +81,16 @@ class BaseControl:
         # Track the max_charge_power_w value used in the last optimization request
         # to ensure consistent conversion of relative charge values
         self.optimization_max_charge_power_w = config["battery"]["max_charge_power_w"]
+
+        # Slot commitment tracking for stable power delivery
+        # (Energy Commitment Strategy to reduce update frequency)
+        self.current_slot_commitment_wh = 0  # Energy for current slot
+        self.current_slot_target_power_w = 0  # Calculated power for this slot
+        self.current_slot_end_time = None  # When this slot ends
+        self.slot_commitment_time = None  # When commitment was made
+        self.last_ac_charge_demand_tracked = 0  # Track energy changes
+        self.last_battery_max_tracked = 0  # Track battery capability changes
+
         self._state_change_timestamps = []
         self.update_interval = 15  # seconds
         self._update_thread = None
@@ -399,127 +409,172 @@ class BaseControl:
         # logger.debug("[BASE-CTRL] set current EVCC charging mode to %s", value)
         self.__set_current_overall_state()
 
+    def should_recalculate_slot_power(self):
+        """
+        Determine if we need to recalculate power for current slot (Energy Commitment Strategy).
+
+        Returns:
+            tuple: (should_recalculate: bool, reasons: list of strings)
+
+        Recalculate power when:
+        1. New slot started (time boundary crossed)
+        2. Energy demand changed (new optimizer response)
+        3. Battery capability decreased significantly (SOC/temp derate)
+        4. Periodic safety refresh (every 5 minutes) to catch gradual changes
+        """
+        reasons = []
+        current_time = datetime.now(self.time_zone)
+
+        # Calculate current slot boundary
+        seconds_elapsed = (
+            current_time.hour * 3600 + current_time.minute * 60 + current_time.second
+        ) % self.time_frame_base
+
+        # Reason 1: New slot started
+        if (
+            self.current_slot_end_time is None
+            or current_time >= self.current_slot_end_time
+        ):
+            reasons.append("new_slot")
+
+        # Reason 2: Energy demand changed (new optimizer response)
+        if self.current_ac_charge_demand != self.last_ac_charge_demand_tracked:
+            reasons.append("new_optimizer_data")
+
+        # Reason 3: Battery capability decreased significantly (5% threshold)
+        # Only trigger on DECREASE, not increase (conservative approach)
+        current_battery_max = round(self.current_bat_charge_max)
+        battery_derate_threshold = self.current_slot_target_power_w * 0.95
+        if (
+            current_battery_max > 0
+            and current_battery_max < battery_derate_threshold
+            and self.current_slot_target_power_w > 0
+        ):
+            reasons.append("battery_derate")
+
+        # Reason 4: Periodic safety refresh (every 5 minutes)
+        # Catches gradual SOC increase and temperature changes from charging
+        if self.slot_commitment_time is not None:
+            elapsed_seconds = (current_time - self.slot_commitment_time).total_seconds()
+            if elapsed_seconds >= 300:  # 5 minutes = 300 seconds
+                reasons.append("periodic_safety_refresh")
+
+        return len(reasons) > 0, reasons
+
+    def update_slot_power_if_needed(self):
+        """
+        Update slot power commitment only when needed (Energy Commitment Strategy).
+
+        Returns:
+            tuple: (updated: bool, target_power: float)
+        """
+        should_update, reasons = self.should_recalculate_slot_power()
+
+        if should_update:
+            current_time = datetime.now(self.time_zone)
+
+            # Calculate slot end time for full slot duration
+            seconds_elapsed = (
+                current_time.hour * 3600
+                + current_time.minute * 60
+                + current_time.second
+            ) % self.time_frame_base
+            seconds_to_end = self.time_frame_base - seconds_elapsed
+
+            # If no time left, slot ends at next boundary
+            if seconds_to_end <= 0:
+                seconds_to_end = self.time_frame_base
+                # Calculate next slot end time
+                slot_end_seconds = (
+                    current_time.hour * 3600
+                    + current_time.minute * 60
+                    + current_time.second
+                    + self.time_frame_base
+                ) % (24 * 3600)
+            else:
+                slot_end_seconds = (
+                    current_time.hour * 3600
+                    + current_time.minute * 60
+                    + current_time.second
+                    + seconds_to_end
+                ) % (24 * 3600)
+
+            # Calculate target power to deliver committed energy in full slot time
+            current_ac_demand_wh = self.current_ac_charge_demand
+
+            if seconds_to_end > 0 and current_ac_demand_wh > 0:
+                calculated_power = round(
+                    current_ac_demand_wh / (seconds_to_end / 3600), 0
+                )
+            else:
+                calculated_power = 0
+
+            # Cap by current battery capability
+            battery_max = round(self.current_bat_charge_max)
+            target_power = (
+                min(calculated_power, battery_max)
+                if battery_max > 0
+                else calculated_power
+            )
+
+            # Store new commitment
+            self.current_slot_target_power_w = target_power
+            self.current_slot_commitment_wh = current_ac_demand_wh
+            self.slot_commitment_time = current_time
+            # Store slot end time (critical for next comparison!)
+            self.current_slot_end_time = current_time + timedelta(
+                seconds=seconds_to_end
+            )
+            # Update tracking for next comparison
+            self.last_ac_charge_demand_tracked = current_ac_demand_wh
+            self.last_battery_max_tracked = battery_max
+
+            # Log reason for update
+            logger.info(
+                "[CHARGE_DEMAND] Updating slot power (reasons: %s): "
+                "demand=%.0f Wh, slot=%ds, calculated=%.0f W, capped=%.0f W",
+                ",".join(reasons),
+                current_ac_demand_wh,
+                seconds_to_end,
+                calculated_power,
+                target_power,
+            )
+
+            return True, target_power
+
+        # No update needed, return existing commitment
+        return False, self.current_slot_target_power_w
+
     def get_needed_ac_charge_power(self):
         """
-        Calculates the required AC charge power to deliver the target energy
-        within the remaining time frame.
+        Returns AC charge power commitment for current slot (Energy Commitment Strategy).
 
-        During normal EOS operation: Converts energy (Wh) stored in current_ac_charge_demand
-        to power (W) based on remaining time in the current time frame.
+        During normal EOS operation: Returns stable power calculated once per optimizer cycle
+        and kept stable throughout the slot. Power is only recalculated when:
+        - New optimizer response arrives
+        - Battery capability decreases (SOC/temperature derating)
+        - Slot boundary crossed (new time frame)
 
-        During override: Returns current_ac_charge_demand directly as it's already
-        set as power (W), not energy (Wh).
+        This strategy reduces update frequency from ~3,600/hour to ~4-10/hour while maintaining
+        accurate energy delivery and stable inverter control.
 
-        This fixes issue #173 where override values were incorrectly converted.
+        During override: Returns current_ac_charge_demand directly as it's already in W.
         """
         # During override, current_ac_charge_demand is already in W, return it directly
         if self.override_active:
             return self.current_ac_charge_demand
 
-        # Normal EOS operation: convert energy (Wh) to power (W)
-        current_time = datetime.now(self.time_zone)
-        # Calculate the seconds elapsed in the current time frame with time_frame_base
-        seconds_elapsed = (
-            current_time.hour * 3600 + current_time.minute * 60 + current_time.second
-        ) % self.time_frame_base
+        # Normal EOS operation: return committed power for current slot
+        updated, power = self.update_slot_power_if_needed()
 
-        # Calculate the remaining seconds in the current time frame
-        seconds_to_end_of_current_time_frame = self.time_frame_base - seconds_elapsed
-
-        # Calculate the required AC charge power to deliver the target energy within
-        # the remaining time frame.
-        # tgt_ac_charge_demand is the total energy (in Wh) needed in the current time frame.
-        # seconds_to_end_of_current_time_frame is the remaining seconds in the time frame.
-        # The needed power (in W) is calculated as energy divided by time (in hours).
-        if seconds_to_end_of_current_time_frame > 0:
-            needed_ac_charge_power = round(
-                self.current_ac_charge_demand
-                / (seconds_to_end_of_current_time_frame / 3600),
-                0,
+        if updated:
+            logger.info(
+                "[CHARGE_DEMAND] Slot power updated to %.0f W (new commitment)",
+                power,
             )
-        else:
-            # No time left in the current time frame - use last value
-            needed_ac_charge_power = self.last_ac_charge_power
 
-        needed_ac_charge_power = min(
-            needed_ac_charge_power, round(self.current_bat_charge_max)
-        )
-
-        self.last_ac_charge_power = needed_ac_charge_power
-
-        # Only log on meaningful change (>2% or >50W) or every 30 seconds (heartbeat)
-        current_time_unix = time.time()
-        # Threshold-based change detection to avoid logging small variations
-        min_threshold = 50  # Minimum 50W change
-        percent_threshold = 0.02  # 2% change
-        max_threshold = max(
-            min_threshold, abs(self.last_logged_ac_charge_power * percent_threshold)
-        )
-        is_meaningful_change = (
-            abs(needed_ac_charge_power - self.last_logged_ac_charge_power)
-            >= max_threshold
-        )
-        is_heartbeat_due = (
-            current_time_unix - self.last_logged_ac_charge_power_time > 30
-        )
-
-        if is_meaningful_change or is_heartbeat_due:
-            # Log details on meaningful change
-            if is_meaningful_change:
-                if seconds_to_end_of_current_time_frame > 0:
-                    logger.debug(
-                        "[CHARGE_DEMAND] Energy→Power conversion: %.2f Wh / %.2fs (%.4fh) = %.2f W",
-                        self.current_ac_charge_demand,
-                        seconds_to_end_of_current_time_frame,
-                        seconds_to_end_of_current_time_frame / 3600,
-                        needed_ac_charge_power,
-                    )
-                else:
-                    logger.debug(
-                        "[CHARGE_DEMAND] No time left in frame, using last value: %.2f W",
-                        needed_ac_charge_power,
-                    )
-
-                if (
-                    needed_ac_charge_power
-                    != round(
-                        self.current_ac_charge_demand
-                        / (seconds_to_end_of_current_time_frame / 3600),
-                        0,
-                    )
-                    if seconds_to_end_of_current_time_frame > 0
-                    else False
-                ):
-                    logger.debug(
-                        "[CHARGE_DEMAND] Power capped by battery max: calculated=%.2f W, capped=%.2f W, bat_max=%.2f W",
-                        (
-                            round(
-                                self.current_ac_charge_demand
-                                / (seconds_to_end_of_current_time_frame / 3600),
-                                0,
-                            )
-                            if seconds_to_end_of_current_time_frame > 0
-                            else needed_ac_charge_power
-                        ),
-                        needed_ac_charge_power,
-                        self.current_bat_charge_max,
-                    )
-            # Log final value on meaningful change or as heartbeat every 30 sec
-            if is_heartbeat_due and not is_meaningful_change:
-                logger.debug(
-                    "[CHARGE_DEMAND] Current AC charge power: %.2f W (heartbeat)",
-                    needed_ac_charge_power,
-                )
-            elif is_meaningful_change:
-                logger.debug(
-                    "[CHARGE_DEMAND] Final AC charge power: %.2f W",
-                    needed_ac_charge_power,
-                )
-
-            self.last_logged_ac_charge_power = needed_ac_charge_power
-            self.last_logged_ac_charge_power_time = current_time_unix
-
-        return needed_ac_charge_power
+        # Return current slot commitment (stable throughout slot)
+        return self.current_slot_target_power_w
 
     def __set_current_overall_state(self):
         """
