@@ -1591,6 +1591,7 @@
                         <code>forecast_solar</code> - Forecast.Solar<br>
                         <code>evcc</code> - EVCC integration<br>
                         <code>solcast</code> - Solcast<br>
+                        <code>victron</code> - Victron VRM API<br>
                         <code>default</code> - Uses akkudoktor
                     </td>
                 </tr>
@@ -1608,15 +1609,18 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>API key for Solcast</td>
+                    <td>API key for authentication (used by Solcast and Victron VRM)</td>
                 </tr>
                 <tr>
                     <th>Required</th>
-                    <td>Yes, when source is <code>solcast</code></td>
+                    <td>Yes, when source is <code>solcast</code> or <code>victron</code></td>
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Obtain from <a href="https://solcast.com/" target="_blank">solcast.com</a>. Leave empty for other sources: <code>api_key:</code></td>
+                    <td>
+                        <strong>Solcast:</strong> Obtain from <a href="https://solcast.com/" target="_blank">solcast.com</a>. Free accounts limited to 10 calls/day.<br>
+                        <strong>Victron:</strong> Generate in VRM portal (Preferences → API tokens). Requires "Dynamic ESS" configured in VRM portal.
+                    </td>
                 </tr>
             </table>
 
@@ -1624,10 +1628,41 @@
                 <strong><i class="fas fa-exclamation-triangle"></i> Solcast Rate Limits:</strong> Free accounts are limited to 10 API calls per day. EOS Connect automatically extends update intervals to 2.5 hours when using Solcast (9.6 calls/day).
             </div>
 
-            <h4>PV Installation Parameters</h4>
-            <p>Configure one or more PV installations in the <code>pv_forecast</code> array:</p>
+            <h3>pv_forecast[].resource_id</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>resource_id</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Installation identifier for Solcast (rooftop site) or Victron VRM (installation ID)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes (when source is <code>solcast</code> or <code>victron</code>)</td>
+                </tr>
+                <tr>
+                    <th>Example (Solcast)</th>
+                    <td><code>abcd-efgh-1234-5678</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Victron)</th>
+                    <td><code>123456</code> (your VRM installation ID)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        <strong>Solcast:</strong> Obtained from Solcast dashboard after configuring rooftop site<br>
+                        <strong>Victron VRM:</strong> Found in VRM account settings. Requires "Dynamic ESS" configured in VRM portal.<br>
+                        <strong>Important:</strong> For Victron, this ID should be in the <strong>first PV forecast entry</strong> in the array.
+                    </td>
+                </tr>
+            </table>
 
-            <h3>pv_forecast[].name</h3>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Victron VRM:</strong> Provides direct solar yield forecasts from your Victron system. Requires "Dynamic ESS" configuration in VRM portal and valid <code>api_key</code> in <code>pv_forecast_source</code>. Automatically updates every 15 minutes.
+            </div>
             <table>
                 <tr>
                     <th>Parameter</th>
@@ -1992,30 +2027,6 @@
                     </ul>
                 </li>
             </ol>
-
-            <h3>pv_forecast[].resource_id</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>resource_id</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Solcast rooftop site identifier</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes (when source is <code>solcast</code>)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>abcd-efgh-1234-5678</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Obtained from Solcast dashboard after configuring rooftop site</td>
-                </tr>
-            </table>
         </div>
 
         <div class="content-section" id="inverter">

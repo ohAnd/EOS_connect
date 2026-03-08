@@ -784,3 +784,409 @@ def test_solcast_data_adaption(monkeypatch):
             f"Input values: {solcast_data['forecasts'][solcast_idx]['pv_estimate']} kWh + "
             f"{solcast_data['forecasts'][solcast_idx + 1]['pv_estimate']} kWh"
         )
+
+
+# ============================================================================
+# Victron VRM API Integration Tests
+# ============================================================================
+
+
+def test_victron_config_validation_missing_vrm_id():
+    """
+    Test that Victron provider requires resource_id in first pv_forecast entry.
+    Should raise ValueError during initialization.
+    """
+    config_source = {"source": "victron", "api_key": "test_token"}
+    config = [
+        {
+            "name": "test",
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 5000,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.95,
+        }
+    ]
+    with pytest.raises(SystemExit):
+        PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+
+
+def test_victron_config_validation_missing_api_key():
+    """
+    Test that Victron provider requires api_key in pv_forecast_source.
+    Should raise ValueError during initialization.
+    """
+    config_source = {"source": "victron"}
+    config = [
+        {
+            "name": "test",
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 5000,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.95,
+            "resource_id": "12345678",
+        }
+    ]
+    with pytest.raises(SystemExit):
+        PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+
+
+def test_victron_successful_forecast_retrieval(monkeypatch):
+    """
+    Test successful Victron VRM API forecast retrieval.
+    Verifies the method returns a valid forecast array.
+    """
+    config_source = {"source": "victron", "api_key": "test"}
+    config = [
+        {
+            "name": "test",
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 5000,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.95,
+            "resource_id": "12345678",
+        }
+    ]
+
+    pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+
+    # Mock Victron API response with sufficient forecast data
+    mock_response = {
+        "result": {
+            "records": {
+                "solar_yield_forecast": [
+                    [1730505600000, 50.0],
+                    [1730509200000, 100.0],
+                    [1730512800000, 150.0],
+                ]
+                + [[1730505600000 + (3600000 * i), 100.0] for i in range(3, 48)]
+            }
+        }
+    }
+
+    def mock_get(*args, **kwargs):
+        class MockResponse:
+            def json(self):
+                return mock_response
+
+            def raise_for_status(self):
+                pass
+
+        return MockResponse()
+
+    monkeypatch.setattr("requests.get", mock_get)
+
+    forecast = pv._PvInterface__get_pv_forecast_victron_api(config[0], hours=48)
+
+    # Assert we got a valid list
+    assert isinstance(forecast, list)
+    assert len(forecast) == 48
+    assert all(isinstance(x, (int, float)) for x in forecast)
+    # Error state should be clear on success
+    assert pv.pv_forcast_request_error["error"] is None
+
+
+def test_victron_15min_time_frame_conversion(monkeypatch):
+    """
+    Test that Victron forecast is correctly converted to 15-min intervals.
+    48 hourly values should become 192 15-min values (each hourly value / 4).
+    """
+    config_source = {"source": "victron", "api_key": "test"}
+    config = [
+        {
+            "name": "test",
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 5000,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.95,
+            "resource_id": "12345678",
+        }
+    ]
+
+    time_frame_900 = 900
+    pv = PvInterface(config_source, config, time_frame_900, {}, timezone="UTC")
+
+    mock_response = {
+        "result": {
+            "records": {
+                "solar_yield_forecast": [
+                    [1730505600000 + (3600000 * i), 400.0] for i in range(48)
+                ]
+            }
+        }
+    }
+
+    def mock_get(*args, **kwargs):
+        class MockResponse:
+            def json(self):
+                return mock_response
+
+            def raise_for_status(self):
+                pass
+
+        return MockResponse()
+
+    monkeypatch.setattr("requests.get", mock_get)
+
+    forecast = pv._PvInterface__get_pv_forecast_victron_api(config[0], hours=48)
+
+    # Should have 192 values (48 * 4)
+    assert len(forecast) == 192
+    # Each value should be numeric and reasonable (400 / 4 = 100 with rounding)
+    assert all(isinstance(x, (int, float)) for x in forecast)
+    # Most values should be around 100 (400 / 4)
+    non_zero_values = [x for x in forecast if x > 0]
+    if non_zero_values:
+        avg_value = sum(non_zero_values) / len(non_zero_values)
+        assert 90 <= avg_value <= 110  # Should average around 100
+
+
+def test_victron_api_timeout_error_handling(monkeypatch):
+    """
+    Test that Victron provider handles API timeout errors gracefully.
+    Should return empty list and set error state.
+    """
+    config_source = {"source": "victron", "api_key": "test"}
+    config = [
+        {
+            "name": "test",
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 5000,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.95,
+            "resource_id": "12345678",
+        }
+    ]
+
+    pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+
+    def mock_timeout(*args, **kwargs):
+        raise requests.exceptions.Timeout("Connection timeout")
+
+    monkeypatch.setattr("requests.get", mock_timeout)
+
+    forecast = pv._PvInterface__get_pv_forecast_victron_api(config[0], hours=48)
+
+    # Should return empty list on error
+    assert forecast == []
+    # Error state should be set to "no_valid_data" (after retries exhausted)
+    # or contain "timeout" in the message
+    assert pv.pv_forcast_request_error["error"] in ("timeout", "no_valid_data")
+    assert (
+        "Victron VRM API error" in pv.pv_forcast_request_error["message"]
+        or "No valid solar forecast data" in pv.pv_forcast_request_error["message"]
+    )
+
+
+def test_victron_api_request_error_handling(monkeypatch):
+    """
+    Test that Victron provider handles generic request errors gracefully.
+    """
+    config_source = {"source": "victron", "api_key": "test"}
+    config = [
+        {
+            "name": "test",
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 5000,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.95,
+            "resource_id": "12345678",
+        }
+    ]
+
+    pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+
+    def mock_request_error(*args, **kwargs):
+        raise requests.exceptions.RequestException("Connection failed")
+
+    monkeypatch.setattr("requests.get", mock_request_error)
+
+    forecast = pv._PvInterface__get_pv_forecast_victron_api(config[0], hours=48)
+
+    assert forecast == []
+    # Error state should indicate failure
+    assert pv.pv_forcast_request_error["error"] in ("request_failed", "no_valid_data")
+    # Message should reference either the API error or the data validation failure
+    assert (
+        "victron" in pv.pv_forcast_request_error["message"].lower()
+        or "forecast" in pv.pv_forcast_request_error["message"].lower()
+    )
+
+
+def test_victron_invalid_response_structure(monkeypatch):
+    """
+    Test that Victron provider handles malformed API responses.
+    Missing 'result' or 'records' keys should trigger error handling.
+    """
+    config_source = {"source": "victron", "api_key": "test"}
+    config = [
+        {
+            "name": "test",
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 5000,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.95,
+            "resource_id": "12345678",
+        }
+    ]
+
+    pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+
+    # Missing nested structure - API will return empty forecast list
+    mock_response = {"status": "error"}
+
+    def mock_get(*args, **kwargs):
+        class MockResponse:
+            def json(self):
+                return mock_response
+
+            def raise_for_status(self):
+                pass
+
+        return MockResponse()
+
+    monkeypatch.setattr("requests.get", mock_get)
+
+    forecast = pv._PvInterface__get_pv_forecast_victron_api(config[0], hours=48)
+
+    # Empty solar forecast triggers error
+    assert forecast == []
+    assert pv.pv_forcast_request_error["error"] == "no_valid_data"
+
+
+def test_victron_malformed_forecast_points(monkeypatch):
+    """
+    Test that Victron provider handles malformed forecast points in response.
+    Invalid points should be skipped gracefully.
+    """
+    config_source = {"source": "victron", "api_key": "test"}
+    config = [
+        {
+            "name": "test",
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 5000,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.95,
+            "resource_id": "12345678",
+        }
+    ]
+
+    pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+
+    # Build forecast points with mix of valid and invalid entries
+    forecast_points = [
+        [1730505600000, 100.0],  # Valid
+        [1730509200000],  # Invalid: missing value
+        [1730512800000, 200.0],  # Valid
+        None,  # Invalid: not a list
+        1730516400000,  # Invalid: not a list/tuple
+        [1730519200000, 300.0],  # Valid
+    ]
+    # Add remaining valid points
+    for i in range(6, 48):
+        forecast_points.append([1730505600000 + (3600000 * i), 50.0])
+
+    mock_response = {"result": {"records": {"solar_yield_forecast": forecast_points}}}
+
+    def mock_get(*args, **kwargs):
+        class MockResponse:
+            def json(self):
+                return mock_response
+
+            def raise_for_status(self):
+                pass
+
+        return MockResponse()
+
+    monkeypatch.setattr("requests.get", mock_get)
+
+    forecast = pv._PvInterface__get_pv_forecast_victron_api(config[0], hours=48)
+
+    # Should process valid points and skip invalid ones
+    assert isinstance(forecast, list)
+    assert len(forecast) == 48
+    # All values should be numeric (floats or ints)
+    assert all(isinstance(x, (int, float)) for x in forecast)
+
+
+def test_victron_dispatch_routing(monkeypatch):
+    """
+    Test that __get_pv_forecast correctly routes to Victron provider.
+    """
+
+    class FixedDatetimeVictron(real_datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2025, 11, 2, 8, 0, 0, tzinfo=tz)
+
+    monkeypatch.setattr("src.interfaces.pv_interface.datetime", FixedDatetimeVictron)
+
+    config_source = {"source": "victron", "api_key": "test"}
+    config = [
+        {
+            "name": "test",
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 5000,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.95,
+            "resource_id": "12345678",
+        }
+    ]
+
+    pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+
+    mock_response = {
+        "result": {
+            "records": {
+                "solar_yield_forecast": [
+                    [1730534400000 + (3600000 * i), 200.0] for i in range(48)
+                ]
+            }
+        }
+    }
+
+    def mock_get(*args, **kwargs):
+        class MockResponse:
+            def json(self):
+                return mock_response
+
+            def raise_for_status(self):
+                pass
+
+        return MockResponse()
+
+    monkeypatch.setattr("requests.get", mock_get)
+
+    # Call the dispatch method
+    forecast = pv._PvInterface__get_pv_forecast(config[0])
+
+    # Should return valid Victron forecast via dispatch
+    assert isinstance(forecast, list)
+    assert len(forecast) == 48
+    assert all(isinstance(x, (int, float)) for x in forecast)
