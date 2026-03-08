@@ -126,6 +126,10 @@ battery:
 # PV forecast configuration
 pv_forecast_source:
   source: akkudoktor
+  # Available sources: akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, victron
+  # For Solcast or Victron VRM, add api_key below:
+  api_key: ""
+  # api_key: your-api-token
 
 pv_forecast:
   - name: myPV
@@ -133,6 +137,10 @@ pv_forecast:
     lon: 13.4050
     azimuth: 180
     tilt: 25
+    # For Solcast or Victron VRM source, add the installation identifier as resource_id:
+    # Solcast: rooftop site ID (e.g., abcd-efgh-1234-5678)
+    # Victron: VRM installation ID (e.g., 123456)
+    # resource_id: your-resource-id-here
 
 # Note: Temperature forecast (outside temperature) is only retrieved and sent to the optimizer when `eos.source: eos_server` is set. For `evopt`, temperature is not required and not used in optimization.
 

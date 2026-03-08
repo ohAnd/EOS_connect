@@ -112,8 +112,8 @@ class ConfigManager:
                 "pv_forecast_source": CommentedMap(
                     {
                         # openmeteo, openmeteo_local, forecast_solar, akkudoktor
-                        "source": "akkudoktor",  # akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default
-                        "api_key": "",  # API key for solcast (required when source is solcast)
+                        "source": "akkudoktor",  # akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, victron, default
+                        "api_key": "",  # API key for Solcast and Victron (required when source is 'solcast' or 'victron')
                     }
                 ),
                 "pv_forecast": [
@@ -361,13 +361,14 @@ class ConfigManager:
         )
         config["pv_forecast_source"].yaml_add_eol_comment(
             "data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local,"
-            + " forecast_solar, evcc, solcast, default (default uses akkudoktor)",
+            + " forecast_solar, evcc, solcast, victron, default (default uses akkudoktor)",
             "source",
         )
         config["pv_forecast_source"].yaml_add_eol_comment(
-            "API key for Solcast (required only when source is 'solcast')",
+            "API key for Solcast and Victron (required only when source is 'solcast' or 'victron')",
             "api_key",
         )
+
         # pv forecast configuration
         config.yaml_set_comment_before_after_key(
             "pv_forecast",

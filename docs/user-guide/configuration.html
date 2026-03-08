@@ -1591,6 +1591,7 @@
                         <code>forecast_solar</code> - Forecast.Solar<br>
                         <code>evcc</code> - EVCC integration<br>
                         <code>solcast</code> - Solcast<br>
+                        <code>victron</code> - Victron VRM API<br>
                         <code>default</code> - Uses akkudoktor
                     </td>
                 </tr>
@@ -1608,15 +1609,18 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>API key for Solcast</td>
+                    <td>API key for authentication (used by Solcast and Victron VRM)</td>
                 </tr>
                 <tr>
                     <th>Required</th>
-                    <td>Yes, when source is <code>solcast</code></td>
+                    <td>Yes, when source is <code>solcast</code> or <code>victron</code></td>
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Obtain from <a href="https://solcast.com/" target="_blank">solcast.com</a>. Leave empty for other sources: <code>api_key:</code></td>
+                    <td>
+                        <strong>Solcast:</strong> Obtain from <a href="https://solcast.com/" target="_blank">solcast.com</a>. Free accounts limited to 10 calls/day.<br>
+                        <strong>Victron:</strong> Generate in VRM portal (Preferences → API tokens). Requires "Dynamic ESS" configured in VRM portal.
+                    </td>
                 </tr>
             </table>
 
@@ -1624,10 +1628,41 @@
                 <strong><i class="fas fa-exclamation-triangle"></i> Solcast Rate Limits:</strong> Free accounts are limited to 10 API calls per day. EOS Connect automatically extends update intervals to 2.5 hours when using Solcast (9.6 calls/day).
             </div>
 
-            <h4>PV Installation Parameters</h4>
-            <p>Configure one or more PV installations in the <code>pv_forecast</code> array:</p>
+            <h3>pv_forecast[].resource_id</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>resource_id</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Installation identifier for Solcast (rooftop site) or Victron VRM (installation ID)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes (when source is <code>solcast</code> or <code>victron</code>)</td>
+                </tr>
+                <tr>
+                    <th>Example (Solcast)</th>
+                    <td><code>abcd-efgh-1234-5678</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Victron)</th>
+                    <td><code>123456</code> (your VRM installation ID)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        <strong>Solcast:</strong> Obtained from Solcast dashboard after configuring rooftop site<br>
+                        <strong>Victron VRM:</strong> Found in VRM account settings. Requires "Dynamic ESS" configured in VRM portal.<br>
+                        <strong>Important:</strong> For Victron, this ID should be in the <strong>first PV forecast entry</strong> in the array.
+                    </td>
+                </tr>
+            </table>
 
-            <h3>pv_forecast[].name</h3>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Victron VRM:</strong> Provides direct solar yield forecasts from your Victron system. Requires "Dynamic ESS" configuration in VRM portal and valid <code>api_key</code> in <code>pv_forecast_source</code>. Automatically updates every 15 minutes.
+            </div>
             <table>
                 <tr>
                     <th>Parameter</th>
@@ -1699,7 +1734,18 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>Azimuth angle (0=North, 90=East, 180=South, 270=West)</td>
+                    <td>Azimuth angle in degrees using the solar/PV industry standard convention</td>
+                </tr>
+                <tr>
+                    <th>Convention</th>
+                    <td>
+                        <ul style="margin: 0.5rem 0; padding-left: 20px;">
+                            <li><strong>0°</strong> = South (optimal for Northern Hemisphere)</li>
+                            <li><strong>90°</strong> = West</li>
+                            <li><strong>180°</strong> = North</li>
+                            <li><strong>-90°</strong> = East (use negative values for east-facing)</li>
+                        </ul>
+                    </td>
                 </tr>
                 <tr>
                     <th>Unit</th>
@@ -1710,12 +1756,21 @@
                     <td>Yes (all sources except <code>solcast</code>, <code>evcc</code>)</td>
                 </tr>
                 <tr>
-                    <th>Example</th>
-                    <td><code>180</code> (South-facing)</td>
+                    <th>Examples</th>
+                    <td>
+                        <code>0</code> (South-facing)<br>
+                        <code>-45</code> (Southeast)<br>
+                        <code>90</code> (West-facing)<br>
+                        <code>-90</code> (East-facing)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Important</th>
+                    <td><strong>Same convention for all providers:</strong> All supported PV forecast providers (akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc) use this same standard. No conversion needed when switching between providers.</td>
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>For <code>evcc</code>/<code>solcast</code>, configured in their platforms, set to <code>180</code> in HA addon</td>
+                    <td>For <code>evcc</code>/<code>solcast</code>, also configured in their native platforms, set to <code>0</code> in HA addon (South-facing)</td>
                 </tr>
             </table>
 
@@ -1839,49 +1894,139 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>Shading situation for PV installation</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>Comma-separated values or list describing horizon elevation</td>
+                    <td>Describes the shading/obstruction situation around your PV installation from all directions. Based on <a href="https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast" target="_blank">Akkudoktor Horizon Parameter</a>.</td>
                 </tr>
                 <tr>
                     <th>Required</th>
-                    <td>Yes (for <code>openmeteo_local</code>, <code>forecast_solar</code>)</td>
+                    <td>Yes (for <code>openmeteo_local</code>, <code>forecast_solar</code>), Optional for others</td>
                 </tr>
                 <tr>
                     <th>Default</th>
-                    <td><code>[0]*36</code> for openmeteo_local, <code>[0]*24</code> for forecast_solar</td>
+                    <td><code>[0]*36</code> (no shading) for openmeteo_local, <code>[0]*24</code> (no shading) for forecast_solar</td>
                 </tr>
                 <tr>
-                    <th>Example</th>
-                    <td><code>0,0,0,0,0,0,0,0,50,70,0,0,0,0,0,0,0,0</code></td>
+                    <th>Format</th>
+                    <td>Comma-separated string of angles in degrees</td>
                 </tr>
             </table>
 
-            <h3>pv_forecast[].resource_id</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>resource_id</code></td>
+            <h4><i class="fas fa-mountain"></i> Understanding the Horizon Parameter</h4>
+            <p>The horizon parameter describes obstruction heights around your PV installation in different directions. <strong>Each value represents the elevation angle (height) of an obstacle that blocks sunlight from that direction.</strong></p>
+
+            <div style="background: rgba(255, 152, 0, 0.1); border-left: 4px solid #ff9800; padding: 1rem; border-radius: 4px; margin: 1rem 0;">
+                <p><strong><i class="fas fa-lightbulb"></i> Key Concept:</strong> If an obstacle (building, tree, mountain) has an elevation angle of <strong>30°</strong> in the south direction, then:</p>
+                <ul style="margin: 0.5rem 0; padding-left: 20px;">
+                    <li>Your PV panel has <strong>NO free sight to the sun</strong> when sun is below 30° elevation</li>
+                    <li>Sunlight is blocked until the sun is higher than 30° above the horizon</li>
+                    <li>Only when the sun rises above 30° can it reach your panel from that direction</li>
+                </ul>
+            </div>
+
+            <table style="width: 100%; margin: 1rem 0;">
+                <tr style="background: rgba(0,0,0,0.2);">
+                    <th style="padding: 0.75rem; text-align: left;">Concept</th>
+                    <th style="padding: 0.75rem; text-align: left;">Explanation</th>
                 </tr>
                 <tr>
-                    <th>Description</th>
-                    <td>Solcast rooftop site identifier</td>
+                    <td style="padding: 0.75rem;"><strong>Azimuth direction</strong></td>
+                    <td style="padding: 0.75rem;">
+                        <ul style="margin: 0; padding-left: 20px;">
+                            <li><strong>-180° to -90°</strong> = North to East side</li>
+                            <li><strong>-90° to 0°</strong> = East to South side</li>
+                            <li><strong>0° to 90°</strong> = South to West side</li>
+                            <li><strong>90° to 180°</strong> = West to North side</li>
+                        </ul>
+                    </td>
                 </tr>
                 <tr>
-                    <th>Required</th>
-                    <td>Yes (when source is <code>solcast</code>)</td>
+                    <td style="padding: 0.75rem;"><strong>Elevation angle (the obstruction height)</strong></td>
+                    <td style="padding: 0.75rem;">
+                        The angle from horizon UP to the top of the obstacle blocking the sun.<br>
+                        <ul style="margin: 0.5rem 0; padding-left: 20px;">
+                            <li><strong>0°</strong> = Clear horizon (no obstruction)</li>
+                            <li><strong>15°</strong> = Obstacle blocks until sun is 15° above horizon</li>
+                            <li><strong>30°</strong> = Obstacle blocks until sun is 30° above horizon</li>
+                            <li><strong>90°</strong> = Straight overhead (complete blockage)</li>
+                        </ul>
+                    </td>
                 </tr>
                 <tr>
-                    <th>Example</th>
-                    <td><code>abcd-efgh-1234-5678</code></td>
+                    <td style="padding: 0.75rem;"><strong>Transparency</strong></td>
+                    <td style="padding: 0.75rem;">Optional: use "t" notation to add transparency (0.0 = opaque/fully blocked, 1.0 = fully transparent/no blocking). <br>Example: <code>30t0.5</code> means obstacle blocks 50% of light until 30° elevation</td>
                 </tr>
                 <tr>
-                    <th>Notes</th>
-                    <td>Obtained from Solcast dashboard after configuring rooftop site</td>
+                    <td style="padding: 0.75rem;"><strong>Number of values</strong></td>
+                    <td style="padding: 0.75rem;">
+                        Determines azimuth coverage per value: 360° ÷ number of values<br>
+                        E.g., 18 values = 20° per segment, 36 values = 10° per segment
+                    </td>
                 </tr>
             </table>
+
+            <h4>Practical Examples</h4>
+
+            <div style="background: rgba(74, 158, 255, 0.1); border-left: 4px solid #4a9eff; padding: 1rem; border-radius: 4px; margin: 1rem 0;">
+                <p><strong><i class="fas fa-home"></i> Example 1: Simple 4-segment shading (every 90° azimuth)</strong></p>
+                <pre style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: 4px; font-size: 0.9em;"><code>horizon: 10,20,10,15</code></pre>
+                <p style="margin-top: 0.5rem; font-size: 0.95em;">
+                    <strong>Interpretation:</strong> Your PV has NO free sight to the sun until certain elevations:<br>
+                    • <strong>North direction (−180° to −90°):</strong> Sun blocked until 10° above horizon<br>
+                    • <strong>East direction (−90° to 0°):</strong> Sun blocked until 20° above horizon<br>
+                    • <strong>South direction (0° to 90°):</strong> Sun blocked until 10° above horizon<br>
+                    • <strong>West direction (90° to 180°):</strong> Sun blocked until 15° above horizon
+                </p>
+            </div>
+
+            <div style="background: rgba(74, 158, 255, 0.1); border-left: 4px solid #4a9eff; padding: 1rem; border-radius: 4px; margin: 1rem 0;">
+                <p><strong><i class="fas fa-tree"></i> Example 2: With transparency (partial blockage)</strong></p>
+                <pre style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: 4px; font-size: 0.9em;"><code>horizon: 10t0.3,15t0.8</code></pre>
+                <p style="margin-top: 0.5rem; font-size: 0.95em;">
+                    <strong>Interpretation:</strong> Obstacle blocks PARTIALLY (light vegetation/semi-transparent):<br>
+                    • <strong>North to South (−180° to 0°):</strong> Can see through 30% of the obstacle (blocks 70%). No sight until sun is 10° up.<br>
+                    • <strong>South to North (0° to 180°):</strong> Can see through 80% of the obstacle (blocks only 20%). No sight until sun is 15° up.
+                </p>
+            </div>
+
+            <div style="background: rgba(74, 158, 255, 0.1); border-left: 4px solid #4a9eff; padding: 1rem; border-radius: 4px; margin: 1rem 0;">
+                <p><strong><i class="fas fa-chart-line"></i> Example 3: Fine-grained 18-segment shading (every 20° azimuth)</strong></p>
+                <pre style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: 4px; font-size: 0.9em; word-break: break-word;"><code>horizon: 10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10</code></pre>
+                <p style="margin-top: 0.5rem; font-size: 0.95em;">
+                    <strong>Interpretation:</strong> Uniform obstruction in all directions:<br>
+                    • 18 values cover full 360°, each value represents 20° of azimuth<br>
+                    • <strong>Every direction:</strong> PV has NO free sight to sun until it is 10° above horizon (e.g., surrounded by terrain, hills)
+                </p>
+            </div>
+
+            <div style="background: rgba(74, 158, 255, 0.1); border-left: 4px solid #4a9eff; padding: 1rem; border-radius: 4px; margin: 1rem 0;">
+                <p><strong><i class="fas fa-building"></i> Example 4: Realistic scenario (building/tree shading on south)</strong></p>
+                <pre style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: 4px; font-size: 0.9em; word-break: break-word;"><code>horizon: 0,0,0,0,0,0,0,0,50t0.4,70,0,0,0,0,0,0,0,0</code></pre>
+                <p style="margin-top: 0.5rem; font-size: 0.95em;">
+                    <strong>Interpretation:</strong> Clear northern/eastern sky, but southern obstruction (building fronts south):<br>
+                    • 18 segments (20° each)<br>
+                    • <strong>Segments 1-8, 11-18 (North, East, West):</strong> Clear horizon (0°) = free sight to sun at any elevation<br>
+                    • <strong>Segment 9 (South direction):</strong> 50° elevation obstacle WITH 40% transparency = blocks 60% of sunlight, NO sight until sun is 50° up<br>
+                    • <strong>Segment 10 (South-adjacent):</strong> 70° elevation obstacle = blocks sun until it is 70° above horizon (significant shading during early/late day)
+                </p>
+            </div>
+
+            <h4>How to Determine Your Horizon Values</h4>
+            <ol style="margin: 1rem 0; padding-left: 20px;">
+                <li><strong>Visual assessment:</strong> Stand at your PV installation and identify obstacles (trees, buildings, mountains) in each direction</li>
+                <li><strong>Measure obstacle HEIGHT:</strong> Use a smartphone app (e.g., clinometer/inclinometer) to measure the <strong>elevation angle</strong> of the top of each obstacle:
+                    <ul style="margin: 0.5rem 0; padding-left: 20px;">
+                        <li>Point the app at the top of the obstacle (roof edge, tree crown, mountain peak)</li>
+                        <li>The angle shown is the obstruction height – this is what you enter as the horizon value</li>
+                        <li>Example: Building top appears at 35° elevation angle → enter <code>35</code> for that direction</li>
+                    </ul>
+                </li>
+                <li><strong>Assign to segments:</strong> Divide 360° by your number of values (e.g., 18 values = 20° per segment) and assign measured obstacle heights to each segment</li>
+                <li><strong>Test and refine:</strong> Start with measured values, then compare actual generation with forecast to fine-tune:
+                    <ul style="margin: 0.5rem 0; padding-left: 20px;">
+                        <li>If forecast is higher than reality → obstacles are higher than measured (increase values)</li>
+                        <li>If forecast is lower than reality → obstacles are lower than measured (decrease values)</li>
+                    </ul>
+                </li>
+            </ol>
         </div>
 
         <div class="content-section" id="inverter">
