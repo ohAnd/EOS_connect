@@ -160,7 +160,7 @@ class PvInterface:
                     )
 
                 if config_entry.get("azimuth") is None:
-                    config_entry["azimuth"] = 180
+                    config_entry["azimuth"] = 0  # 0° = South (industry standard)
                     logger.debug(
                         "[PV-IF] Solcast config - setting default azimuth for '%s'",
                         entry_name,
@@ -188,7 +188,7 @@ class PvInterface:
             # azimuth, tilt - only solcast and evcc not required but have defaults
             if self.config_source.get("source") in ("solcast", "evcc"):
                 if config_entry.get("azimuth") is None:
-                    config_entry["azimuth"] = 180
+                    config_entry["azimuth"] = 0  # 0° = South (industry standard)
                     logger.debug(
                         "[PV-IF] Solcast config - setting default azimuth for '%s'",
                         entry_name,
@@ -817,7 +817,9 @@ class PvInterface:
         latitude = pv_config_entry["lat"]
         longitude = pv_config_entry["lon"]
         tilt = pv_config_entry.get("tilt", 30)  # degrees
-        azimuth = pv_config_entry.get("azimuth", 180)  # degrees (180=south)
+        azimuth = pv_config_entry.get(
+            "azimuth", 0
+        )  # degrees (0=South - industry standard)
         installed_power_watt = pv_config_entry.get(
             "power", 200
         )  # value in config is in watts
@@ -947,7 +949,9 @@ class PvInterface:
                 latitude=pv_config_entry["lat"],
                 longitude=pv_config_entry["lon"],
                 declination=pv_config_entry.get("tilt", 30),
-                azimuth=pv_config_entry.get("azimuth", 180),
+                azimuth=pv_config_entry.get(
+                    "azimuth", 0
+                ),  # 0° = South (industry standard)
                 dc_kwp=pv_config_entry.get("power", 200) / 1000,  # Convert to kW
                 efficiency_factor=pv_config_entry.get("inverterEfficiency", 0.85),
             ) as forecast:
@@ -1033,7 +1037,9 @@ class PvInterface:
         latitude = pv_config_entry["lat"]
         longitude = pv_config_entry["lon"]
         tilt = pv_config_entry.get("tilt", 30)
-        azimuth = pv_config_entry.get("azimuth", 180)
+        azimuth = pv_config_entry.get(
+            "azimuth", 0
+        )  # 0=South (industry standard: 0°=South, 90°=West, 180°=North, -90°=East)
         # Convert to kW for API and round to 4 decimal places
         installed_power_watt = round(pv_config_entry.get("power", 200) / 1000, 4)
         horizon_forecast_solar_api = ""
