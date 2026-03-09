@@ -632,6 +632,9 @@ class LoadInterface:
                 car_load_energy_wh + add_load_data_1_energy_wh
             )
 
+            # Save original household sensor value before potential modification
+            original_household_energy_wh = energy_wh
+
             if sum_controlable_energy_load_wh <= energy_wh:
                 energy_wh = energy_wh - sum_controlable_energy_load_wh
             else:
@@ -650,12 +653,15 @@ class LoadInterface:
                         + " )"
                     )
                 logger.warning(
-                    "[LOAD-IF] DATA ERROR load smaller than car load "
-                    + "- Energy for %s: %5.1f Wh (sum add energy %5.1f Wh - car load: %5.1f Wh) %s",
+                    "[LOAD-IF] DATA ERROR household load smaller than controllables (excess: %5.1f Wh) - Energy for %s - household: %5.1f Wh | car: %5.1f Wh + additional: %5.1f Wh | car+add: %5.1f Wh %s",
+                    round(
+                        sum_controlable_energy_load_wh - original_household_energy_wh, 1
+                    ),
                     current_time_slot,
-                    round(energy_wh, 1),
+                    round(original_household_energy_wh, 1),
+                    round(car_load_energy_wh, 1),
+                    round(add_load_data_1_energy_wh, 1),
                     round(sum_controlable_energy_load_wh, 1),
-                    round(car_load_energy, 1),
                     debug_url,
                 )
             if energy_wh == 0:
@@ -672,12 +678,15 @@ class LoadInterface:
                     + " )"
                 )
                 logger.debug(
-                    "[LOAD-IF] load = 0 ... Energy for %s: %5.1f Wh"
-                    + " (sum add energy %5.1f Wh - car load: %5.1f Wh - debug: %s)",
+                    "[LOAD-IF] load = 0 ... DATA ERROR household load smaller than controllables (excess: %5.1f Wh) - Energy for %s - household: %5.1f Wh | car: %5.1f Wh + additional: %5.1f Wh | car+add: %5.1f Wh - debug: %s",
+                    round(
+                        sum_controlable_energy_load_wh - original_household_energy_wh, 1
+                    ),
                     current_time_slot,
-                    round(energy_wh, 1),
+                    round(original_household_energy_wh, 1),
+                    round(car_load_energy_wh, 1),
+                    round(add_load_data_1_energy_wh, 1),
                     round(sum_controlable_energy_load_wh, 1),
-                    round(car_load_energy, 1),
                     debug_url,
                 )
 
@@ -693,11 +702,13 @@ class LoadInterface:
 
             load_profile.append(energy_wh)
             logger.debug(
-                "[LOAD-IF] Energy for %s: %5.1f Wh (sum add energy %5.1f Wh - car load: %5.1f Wh)",
+                "[LOAD-IF] Energy for %s - final: %5.1f Wh (household: %5.1f Wh | car: %5.1f Wh + additional: %5.1f Wh | car+add: %5.1f Wh)",
                 current_time_slot,
                 round(energy_wh, 1),
+                round(original_household_energy_wh, 1),
+                round(car_load_energy_wh, 1),
+                round(add_load_data_1_energy_wh, 1),
                 round(sum_controlable_energy_load_wh, 1),
-                round(car_load_energy, 1),
             )
             current_time_slot += timedelta(seconds=self.time_frame_base)
         if not load_profile:
