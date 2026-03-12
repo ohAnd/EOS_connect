@@ -57,31 +57,39 @@ class BatteryManager {
         const maxChargeFixKW = (maxChargePowerFix / 1000).toFixed(1);
         const batteryTemp = battery.temperature;
                 
-        // Temperature status and icon
+        // Temperature status and icon (based on official BYD HVM thermal specifications)
         let tempIcon = '';
         let tempColor = '#888';
         let tempStatus = '';
         if (batteryTemp !== undefined && batteryTemp !== null) {
-            if (batteryTemp < 0) {
+            if (batteryTemp < -10) {
+                tempIcon = '<i class="fa-solid fa-snowflake"></i>';
+                tempColor = '#42a5f5';
+                tempStatus = 'Charging locked (extreme cold)';
+            } else if (batteryTemp < 0) {
                 tempIcon = '<i class="fa-solid fa-snowflake"></i>';
                 tempColor = '#64b5f6';
-                tempStatus = 'Cold protection';
-            } else if (batteryTemp < 15) {
+                tempStatus = 'Strong cold derating';
+            } else if (batteryTemp < 12) {
                 tempIcon = '<i class="fa-solid fa-triangle-exclamation"></i>';
                 tempColor = '#ffa726';
-                tempStatus = 'Reduced power';
-            } else if (batteryTemp <= 45) {
+                tempStatus = 'Light derating - warming';
+            } else if (batteryTemp <= 40) {
                 tempIcon = '<i class="fa-solid fa-circle-check"></i>';
                 tempColor = '#66bb6a';
                 tempStatus = 'Optimal';
-            } else if (batteryTemp < 55) {
+            } else if (batteryTemp < 50) {
                 tempIcon = '<i class="fa-solid fa-triangle-exclamation"></i>';
                 tempColor = '#ffa726';
-                tempStatus = 'Heat warning';
+                tempStatus = 'Thermal derating';
+            } else if (batteryTemp < 60) {
+                tempIcon = '<i class="fa-solid fa-triangle-exclamation"></i>';
+                tempColor = '#f77a3b';
+                tempStatus = 'Severe heat protection';
             } else {
                 tempIcon = '<i class="fa-solid fa-fire"></i>';
                 tempColor = '#ef5350';
-                tempStatus = 'Heat protection';
+                tempStatus = 'Charging locked (overheat)';
             }
         }
 
@@ -89,8 +97,9 @@ class BatteryManager {
         let maxChargeDetails = '';
         if (chargingCurveEnabled) {
             const mobile = isMobile();
+            // Temperature affects power if outside optimal range (12-40°C per BYD HVM specs)
             const tempAffectsPower = batteryTemp !== undefined && batteryTemp !== null &&
-                                     (batteryTemp < 15 || batteryTemp > 45);
+                                     (batteryTemp < 12 || batteryTemp > 40);
             
             if (mobile) {
                 // Compact mobile view

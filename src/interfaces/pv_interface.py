@@ -95,6 +95,11 @@ class PvInterface:
                     2.5 * 60 * 60
                 )  # 2.5 hours (9.6 calls/day - under the 10 limit)
             logger.info("[PV-IF] Using extended update interval for Solcast: 2.5 hours")
+        elif self.config_source.get("source") == "victron":
+            self.update_interval = 15 * 60  # Standard 15 minutes for Victron
+            logger.info(
+                "[PV-IF] Using standard update interval for Victron: 15 minutes"
+            )
         else:
             self.update_interval = 15 * 60  # Standard 15 minutes
 
@@ -130,6 +135,44 @@ class PvInterface:
             entry_name = config_entry.get("name", "unnamed")
             logger.debug("[PV-IF] Initialize - config entry name: %s", entry_name)
 
+            # Check for Victron-specific requirements
+            if self.config_source.get("source") == "victron":
+                # Check VRM ID (from first PV forecast entry's resource_id)
+                if not self.config or len(self.config) == 0:
+                    logger.error(
+                        "[PV-IF] No PV forecast entries found in configuration"
+                    )
+                    raise ValueError(
+                        "[PV-IF] At least one PV forecast entry required for Victron"
+                    )
+
+                first_entry_resource_id = self.config[0].get("resource_id", "").strip()
+                if not first_entry_resource_id:
+                    logger.error(
+                        "[PV-IF] Victron VRM ID missing in first pv_forecast entry's resource_id"
+                    )
+                    logger.error(
+                        '[PV-IF] Please add: resource_id: "your_victron_vrm_id" in first pv_forecast entry'
+                    )
+                    raise ValueError(
+                        "[PV-IF] Victron VRM ID (resource_id in first pv_forecast entry) required"
+                    )
+
+                # Check API key (reuse api_key like Solcast)
+                if not self.config_source.get("api_key", "").strip():
+                    logger.error(
+                        "[PV-IF] Victron API key missing in pv_forecast_source section"
+                    )
+                    logger.error(
+                        '[PV-IF] Please add: api_key: "your_victron_api_token" in config.yaml'
+                    )
+                    raise ValueError(
+                        "[PV-IF] Victron API key (api_key) required - see"
+                        + " CONFIG_README.md for setup instructions"
+                    )
+
+                logger.debug("[PV-IF] Victron config validated for '%s'", entry_name)
+
             # Check for Solcast-specific requirements
             if self.config_source.get("source") == "solcast":
                 # Check API key
@@ -160,7 +203,7 @@ class PvInterface:
                     )
 
                 if config_entry.get("azimuth") is None:
-                    config_entry["azimuth"] = 180
+                    config_entry["azimuth"] = 0  # 0° = South (industry standard)
                     logger.debug(
                         "[PV-IF] Solcast config - setting default azimuth for '%s'",
                         entry_name,
@@ -188,7 +231,7 @@ class PvInterface:
             # azimuth, tilt - only solcast and evcc not required but have defaults
             if self.config_source.get("source") in ("solcast", "evcc"):
                 if config_entry.get("azimuth") is None:
-                    config_entry["azimuth"] = 180
+                    config_entry["azimuth"] = 0  # 0° = South (industry standard)
                     logger.debug(
                         "[PV-IF] Solcast config - setting default azimuth for '%s'",
                         entry_name,
@@ -605,7 +648,7 @@ class PvInterface:
 
         Notes:
             - Supported sources: "akkudoktor", "openmeteo", "forecast_solar",
-              "solcast", "default".
+              "solcast", "evcc", "victron", "default".
             - Logs a warning if the default source is used.
             - Logs an error and falls back to the default forecast if no valid
               source is configured.
@@ -623,6 +666,8 @@ class PvInterface:
             return self.__get_pv_forecast_evcc_api(config_entry)
         elif self.config_source.get("source") == "solcast":
             return self.__get_pv_forecast_solcast_api(config_entry)
+        elif self.config_source.get("source") == "victron":
+            return self.__get_pv_forecast_victron_api(config_entry)
         elif self.config_source.get("source") == "default":
             logger.warning("[PV-IF] Using default PV forecast source")
             return self.__get_default_pv_forcast(config_entry["power"])
@@ -817,7 +862,9 @@ class PvInterface:
         latitude = pv_config_entry["lat"]
         longitude = pv_config_entry["lon"]
         tilt = pv_config_entry.get("tilt", 30)  # degrees
-        azimuth = pv_config_entry.get("azimuth", 180)  # degrees (180=south)
+        azimuth = pv_config_entry.get(
+            "azimuth", 0
+        )  # degrees (0=South - industry standard)
         installed_power_watt = pv_config_entry.get(
             "power", 200
         )  # value in config is in watts
@@ -947,7 +994,9 @@ class PvInterface:
                 latitude=pv_config_entry["lat"],
                 longitude=pv_config_entry["lon"],
                 declination=pv_config_entry.get("tilt", 30),
-                azimuth=pv_config_entry.get("azimuth", 180),
+                azimuth=pv_config_entry.get(
+                    "azimuth", 0
+                ),  # 0° = South (industry standard)
                 dc_kwp=pv_config_entry.get("power", 200) / 1000,  # Convert to kW
                 efficiency_factor=pv_config_entry.get("inverterEfficiency", 0.85),
             ) as forecast:
@@ -1033,7 +1082,9 @@ class PvInterface:
         latitude = pv_config_entry["lat"]
         longitude = pv_config_entry["lon"]
         tilt = pv_config_entry.get("tilt", 30)
-        azimuth = pv_config_entry.get("azimuth", 180)
+        azimuth = pv_config_entry.get(
+            "azimuth", 0
+        )  # 0=South (industry standard: 0°=South, 90°=West, 180°=North, -90°=East)
         # Convert to kW for API and round to 4 decimal places
         installed_power_watt = round(pv_config_entry.get("power", 200) / 1000, 4)
         horizon_forecast_solar_api = ""
@@ -1464,6 +1515,205 @@ class PvInterface:
                 f"Error processing Solcast forecast data: {e}",
                 pv_config_entry,
                 "solcast",
+            )
+
+    def __get_pv_forecast_victron_api(self, pv_config_entry, hours=48):
+        """
+        Fetches PV forecast from Victron VRM API.
+
+        The Victron VRM API provides hourly solar yield forecasts in Wh.
+        This method requires resource_id (VRM installation ID from first pv_forecast entry)
+        and api_key (authentication token) configured in pv_forecast_source section.
+
+        Args:
+            pv_config_entry (dict): Configuration entry for PV system
+            hours (int): Number of hours to forecast (default 48)
+
+        Returns:
+            list: PV forecast values in Wh for each time period (hourly or 15-min)
+        """
+        # Get VRM ID from first PV forecast entry's resource_id and API key from config
+        vrm_id = self.config[0].get("resource_id", "").strip()
+        api_key = self.config_source.get("api_key", "").strip()
+
+        if not vrm_id:
+            return self._handle_interface_error(
+                "config_error",
+                "Victron VRM ID (resource_id in first pv_forecast entry) missing",
+                pv_config_entry,
+                "victron",
+            )
+
+        if not api_key:
+            return self._handle_interface_error(
+                "config_error",
+                "Victron API key (api_key) missing from pv_forecast_source configuration",
+                pv_config_entry,
+                "victron",
+            )
+
+        # Construct API endpoint
+        url = f"https://vrmapi.victronenergy.com/v2/installations/{vrm_id}/stats"
+
+        # Get timezone-aware current time
+        tz = pytz.timezone(self.time_zone)
+        current_time = datetime.now(tz).replace(minute=0, second=0, microsecond=0)
+        midnight_today = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Calculate query start and end times in Unix seconds
+        # Start from midnight today
+        start_time = midnight_today
+        end_time = start_time + timedelta(hours=hours)
+
+        start_unix = int(start_time.timestamp())
+        end_unix = int(end_time.timestamp())
+
+        # Query parameters
+        params = {
+            "start": start_unix,
+            "end": end_unix,
+            "interval": "hours",
+            "type": "forecast",
+        }
+
+        # Request headers with authorization
+        headers = {
+            "X-Authorization": f"Token {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        logger.debug(
+            "[PV-IF] Fetching PV forecast from Victron VRM API for installation: %s (hours: %d)",
+            vrm_id,
+            hours,
+        )
+
+        def request_and_parse():
+            """
+            Perform the GET request and parse the Victron JSON payload.
+            """
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            # Extract solar forecast from Victron response
+            # Structure: result.records.solar_yield_forecast
+            result = data.get("result", {})
+            records = result.get("records", {})
+            solar_forecast = records.get("solar_yield_forecast", [])
+
+            logger.debug(
+                "[PV-IF] Victron VRM API response received with %d forecast points",
+                len(solar_forecast),
+            )
+
+            return solar_forecast
+
+        def error_handler(error_type, exception):
+            return self._handle_interface_error(
+                error_type,
+                f"Victron VRM API error: {exception}",
+                pv_config_entry,
+                "victron",
+            )
+
+        # Fetch and parse the response
+        solar_forecast = self._retry_request(request_and_parse, error_handler)
+        if not solar_forecast:
+            return self._handle_interface_error(
+                "no_valid_data",
+                "No valid solar forecast data found in Victron VRM API.",
+                pv_config_entry,
+                "victron",
+            )
+
+        if not isinstance(solar_forecast, list):
+            return self._handle_interface_error(
+                "invalid_data",
+                "Victron VRM solar forecast is not a list.",
+                pv_config_entry,
+                "victron",
+            )
+
+        try:
+            # Initialize forecast array
+            pv_forecast = [0.0] * hours
+
+            # Create hour time references for alignment
+            forecast_hours = [midnight_today + timedelta(hours=i) for i in range(hours)]
+
+            # Parse Victron forecast data
+            # Format: [[unix_timestamp_ms, wh_value], [unix_timestamp_ms, wh_value], ...]
+            for forecast_point in solar_forecast:
+                if (
+                    not isinstance(forecast_point, (list, tuple))
+                    or len(forecast_point) < 2
+                ):
+                    logger.warning(
+                        "[PV-IF] Invalid Victron forecast point format: %s",
+                        forecast_point,
+                    )
+                    continue
+
+                try:
+                    # Extract timestamp (in milliseconds) and energy value (in Wh)
+                    timestamp_ms = forecast_point[0]
+                    wh_value = forecast_point[1]
+
+                    # Convert millisecond timestamp to datetime
+                    timestamp_seconds = timestamp_ms / 1000
+                    forecast_time = datetime.fromtimestamp(
+                        timestamp_seconds, tz=pytz.UTC
+                    )
+                    forecast_time = forecast_time.astimezone(tz)
+
+                    # Find which hour this forecast belongs to
+                    hour_index = None
+                    for idx, hour_ref in enumerate(forecast_hours):
+                        if (
+                            forecast_time.year == hour_ref.year
+                            and forecast_time.month == hour_ref.month
+                            and forecast_time.day == hour_ref.day
+                            and forecast_time.hour == hour_ref.hour
+                        ):
+                            hour_index = idx
+                            break
+
+                    if hour_index is not None:
+                        # Victron provides Wh values directly for the period
+                        pv_forecast[hour_index] = float(wh_value)
+
+                except (ValueError, TypeError, IndexError) as e:
+                    logger.warning(
+                        "[PV-IF] Error processing Victron forecast point: %s", e
+                    )
+                    continue
+
+            # Handle 15-min time frame if configured
+            if self.time_frame_base == 900:
+                # Convert 48 hourly values to 192 15-min values
+                pv_forecast = self._convert_hourly_to_15min(pv_forecast)
+
+            # Round values to 1 decimal place
+            pv_forecast = [round(val, 1) for val in pv_forecast]
+
+            # Clear any previous errors on success
+            self.pv_forcast_request_error["error"] = None
+
+            logger.debug(
+                "[PV-IF] Victron VRM PV forecast received with %d values, first 12h (Wh): %s",
+                len(pv_forecast),
+                pv_forecast[: min(12, len(pv_forecast))],
+            )
+
+            return pv_forecast
+
+        except (ValueError, TypeError, AttributeError) as e:
+            return self._handle_interface_error(
+                "processing_error",
+                f"Error processing Victron VRM forecast data: {e}",
+                pv_config_entry,
+                "victron",
             )
 
     def test_output(self):

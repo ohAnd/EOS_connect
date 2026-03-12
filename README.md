@@ -26,6 +26,7 @@ EOS Connect fetches real-time and forecast data, processes it via your chosen op
 - **Dynamic Web Dashboard:** Live monitoring, manual control, and visualization of your energy system.
 - **Cost Optimization:** Aligns energy usage with dynamic electricity prices (Tibber, smartenergy.at, Stromligning.dk) with hourly or quarterly distribution.
 - **Smart Price Prediction:** Energyforecast.de integration automatically learns your grid fees and taxes to provide accurate price predictions when your primary source lacks tomorrow's prices. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#energyforecast)
+- **Dynamic PV Override:** Automatically allows discharge when solar production exceeds load, preventing unwanted grid input during cloud shadows. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#dyn-override)
 - **Flexible Configuration:** Easy to set up and extend for a wide range of energy systems and user needs.
 
 ---
@@ -125,6 +126,10 @@ battery:
 # PV forecast configuration
 pv_forecast_source:
   source: akkudoktor
+  # Available sources: akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, victron
+  # For Solcast or Victron VRM, add api_key below:
+  api_key: ""
+  # api_key: your-api-token
 
 pv_forecast:
   - name: myPV
@@ -132,6 +137,10 @@ pv_forecast:
     lon: 13.4050
     azimuth: 180
     tilt: 25
+    # For Solcast or Victron VRM source, add the installation identifier as resource_id:
+    # Solcast: rooftop site ID (e.g., abcd-efgh-1234-5678)
+    # Victron: VRM installation ID (e.g., 123456)
+    # resource_id: your-resource-id-here
 
 # Note: Temperature forecast (outside temperature) is only retrieved and sent to the optimizer when `eos.source: eos_server` is set. For `evopt`, temperature is not required and not used in optimization.
 
