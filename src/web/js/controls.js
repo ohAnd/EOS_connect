@@ -537,7 +537,17 @@ class ControlsManager {
     }
 
     /**
+     * Check if mode is an EVCC charging mode (3-6)
+     * @param {number} modeNum - Mode number to check
+     * @returns {boolean} True if mode is EVCC charging
+     */
+    isEVCCMode(modeNum) {
+        return modeNum >= 3 && modeNum <= 6;
+    }
+
+    /**
      * Update current controls display
+     * Priority order: Manual Override > EVCC Modes > Dynamic Override > Normal Mode
      */
     updateCurrentControls(controlsData) {
         if (!controlsData || !controlsData.current_states) {
@@ -551,20 +561,31 @@ class ControlsManager {
         const inverterModeText = states.inverter_mode;
         const inverterModeNum = states.inverter_mode_num;
         const dynOverrideActive = states.dyn_override_discharge_allowed_active;
+        const isEVCCActive = this.isEVCCMode(inverterModeNum);
 
-        // Update overall state
+        // Update overall state display with proper priority
+        // Priority: Manual Override (orange) > EVCC (no triangle) > Dynamic Override (green) > Normal
         const cleanModeText = inverterModeText.replace("MODE ", "");
         if (overrideActive) {
+            // Manual override has highest priority
             document.getElementById('control_overall').innerHTML = `<i style="color:orange;" class="fa-solid fa-triangle-exclamation"></i> ${cleanModeText}`;
+        } else if (isEVCCActive) {
+            // EVCC modes have second priority - completely hide dynamic override
+            document.getElementById('control_overall').innerHTML = cleanModeText;
         } else if (dynOverrideActive) {
+            // Dynamic override for non-EVCC modes
             document.getElementById('control_overall').innerHTML = `<i style="color:#32CD32;" class="fa-solid fa-triangle-exclamation"></i> ${cleanModeText}`;
         } else {
+            // Normal mode
             document.getElementById('control_overall').innerHTML = cleanModeText;
         }
 
-        // Update controls based on override state
+        // Update controls based on priority (Manual Override > EVCC > Dynamic Override > Normal)
         if (overrideActive) {
             this.updateOverrideControls(states, overrideEndTime, inverterModeNum);
+        } else if (isEVCCActive) {
+            // EVCC modes completely mask dynamic override
+            this.updateEVCCControls(states, inverterModeNum);
         } else if (dynOverrideActive) {
             this.updateDynamicOverrideControls(states, inverterModeNum);
         } else {
@@ -572,7 +593,8 @@ class ControlsManager {
         }
 
         // Update mode icon and click handler
-        this.updateModeIcon(inverterModeNum, overrideActive, controlsData.battery.max_charge_power_dyn, dynOverrideActive);
+        // When EVCC is active, never show dynamic override indicators
+        this.updateModeIcon(inverterModeNum, overrideActive, controlsData.battery.max_charge_power_dyn, isEVCCActive ? false : dynOverrideActive);
 
         // Show experimental banner if optimization source is ??? (t.b.d.) - was introduced in early phase of evopt
         if (controlsData.used_optimization_source === "tbd") {
@@ -614,7 +636,31 @@ class ControlsManager {
     }
 
     /**
-     * Update controls when dynamic override is active
+     * Update controls when EVCC charging is active (Modes 3-6)
+     * EVCC completely masks dynamic override - never show any PV>Load indicators
+     */
+    updateEVCCControls(states, inverterModeNum) {
+        const modeTitle = EOS_CONNECT_ICONS[inverterModeNum]?.title || `Mode ${inverterModeNum}`;
+        
+        // Show EVCC mode information
+        document.getElementById('control_ac_charge_desc').innerText = "E-Car Charging Mode";
+        document.getElementById('control_ac_charge_desc').style.color = "";
+        document.getElementById('control_ac_charge').innerHTML = modeTitle;
+        document.getElementById('control_ac_charge').style.color = "";
+
+        // Show AC charging power for all EVCC modes
+        document.getElementById('control_dc_charge_desc').innerText = "AC Charge Power";
+        const acPowerKw = (states.current_ac_charge_power / 1000).toFixed(2);
+        document.getElementById('control_dc_charge').innerText = acPowerKw + " kW";
+
+        // EVCC always masks dynamic override - never show it
+        document.getElementById('control_discharge_allowed_desc').innerText = "";
+        document.getElementById('control_discharge_allowed').innerText = "";
+        document.getElementById('current_controls_box').style.border = "";
+    }
+
+    /**
+     * Update controls when dynamic override is active (for non-EVCC modes)
      */
     updateDynamicOverrideControls(states, inverterModeNum) {
         document.getElementById('control_ac_charge_desc').innerText = "Dynamic Override Active";
@@ -663,6 +709,8 @@ class ControlsManager {
 
     /**
      * Update the mode icon and setup click handler
+     * Priority: Manual Override (orange) > EVCC (no triangle) > Dynamic Override (green) > Normal
+     * When EVCC is active, dynOverrideActive should already be false
      */
     updateModeIcon(inverterModeNum, overrideActive, maxChargePowerDyn, dynOverrideActive = false) {
         const iconElement = document.getElementById('current_header_right');
@@ -677,9 +725,12 @@ class ControlsManager {
         iconElement.style.color = color || "";
         iconElement.title = title || "";
 
+        // Add warning/indicator icons based on priority
         if (overrideActive) {
+            // Manual override: show orange warning (highest priority)
             iconElement.innerHTML = '<i style="color:orange;" class="fa-solid fa-triangle-exclamation"></i> ' + iconElement.innerHTML;
         } else if (dynOverrideActive) {
+            // Dynamic override only (EVCC would have masked this): show green warning
             iconElement.innerHTML = '<i style="color:#32CD32;" class="fa-solid fa-triangle-exclamation"></i> ' + iconElement.innerHTML;
         }
 
