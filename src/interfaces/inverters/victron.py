@@ -20,6 +20,8 @@ logger = logging.getLogger("__main__").getChild("VictronModbus")
 logger.setLevel(logging.INFO)
 logger.info("[Inverter] Loading Victron Inverter")
 
+# Import ModbusTcpClient - make it available at module level for testing/mocking
+ModbusTcpClient = None  # Default to None if import fails
 try:
     from pymodbus.client import ModbusTcpClient
 
