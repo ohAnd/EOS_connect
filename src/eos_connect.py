@@ -27,6 +27,8 @@ from interfaces.pv_interface import PvInterface
 from interfaces.port_interface import PortInterface
 from interfaces.update_checker import UpdateChecker
 from interfaces.inverters import create_inverter
+from interfaces.inverters.null_inverter import NullInverter
+from interfaces.inverters.evcc_inverter import EvccInverter
 
 # Check Python version early
 if sys.version_info < (3, 11):
@@ -140,12 +142,14 @@ base_control = BaseControl(config_manager.config, time_zone, time_frame_base)
 # initialize the inverter interface
 inverter_interface = None
 
-# Factory aufrufen über config dic
+# Call factory via config dict
 inverter_interface = create_inverter(config_manager.config["inverter"])
 if inverter_interface is not None:
     inverter_interface.initialize()
 else:
-    logger.info("[Main] No inverter interface (display-only or EVCC mode)")
+    logger.error(
+        "[Main] Failed to initialize inverter interface - check inverter configuration"
+    )
 
 
 # callback function for evcc interface
@@ -1195,17 +1199,15 @@ def change_control_state():
     """
     inverter_fronius_en = False
     inverter_evcc_en = False
-    # Check if we have an active inverter (not NullInverter) or if EVCC mode is enabled
-    if (
-        inverter_interface is not None
-        and inverter_interface.__class__.__name__ != "NullInverter"
-    ):
-        inverter_fronius_en = True
-    elif config_manager.config["inverter"]["type"] == "evcc" or (
-        inverter_interface is not None
-        and inverter_interface.__class__.__name__ == "NullInverter"
-    ):
-        inverter_evcc_en = True
+    # Check if we have an active inverter (Fronius) or if EVCC/display-only mode is enabled
+    if inverter_interface is not None:
+        if isinstance(inverter_interface, EvccInverter):
+            inverter_evcc_en = True
+        elif isinstance(inverter_interface, NullInverter):
+            inverter_evcc_en = True
+        else:
+            # Real inverter (Fronius, Victron, etc.)
+            inverter_fronius_en = True
 
     current_overall_state = base_control.get_current_overall_state_number()
     current_overall_state_text = base_control.get_current_overall_state()
@@ -2032,10 +2034,9 @@ if __name__ == "__main__":
             http_server.stop()
             logger.info("[Main] HTTP server stopped")
 
-        # Shutdown inverter if it's a real inverter (not NullInverter/display-only mode)
-        if (
-            inverter_interface is not None
-            and inverter_interface.__class__.__name__ != "NullInverter"
+        # Shutdown real inverter if it exists (not NullInverter/display-only or EvccInverter)
+        if inverter_interface is not None and not isinstance(
+            inverter_interface, (NullInverter, EvccInverter)
         ):
             inverter_interface.shutdown()
         pv_interface.shutdown()

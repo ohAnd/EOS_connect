@@ -13,7 +13,12 @@ Common interface compliance tests are inherited from BaseInverterTestSuite.
 # pylint: disable=import-error,redefined-outer-name,too-few-public-methods
 
 import pytest
-from src.interfaces.inverters import create_inverter, NullInverter, BaseInverter
+from src.interfaces.inverters import (
+    create_inverter,
+    NullInverter,
+    EvccInverter,
+    BaseInverter,
+)
 from .base_inverter_tests import BaseInverterTestSuite
 
 
@@ -60,7 +65,7 @@ class TestNullInverterCreation:
         assert inverter.config["type"] == "default"
 
     def test_factory_creates_null_inverter_for_evcc(self):
-        """Factory should create NullInverter for type 'evcc'."""
+        """Factory should create EvccInverter for type 'evcc'."""
         config = {
             "type": "evcc",
             "max_grid_charge_rate": 5000,
@@ -68,7 +73,7 @@ class TestNullInverterCreation:
         }
         inverter = create_inverter(config)
 
-        assert isinstance(inverter, NullInverter)
+        assert isinstance(inverter, EvccInverter)
         assert isinstance(inverter, BaseInverter)
         assert inverter.config["type"] == "evcc"
 

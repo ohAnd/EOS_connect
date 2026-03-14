@@ -1,4 +1,4 @@
-"""Null Object Pattern inverter for testing and display-only mode."""
+"""Null Object Pattern inverter for display-only mode."""
 
 import logging
 from ..base_inverter import BaseInverter  # pylint: disable=relative-beyond-top-level
@@ -8,11 +8,10 @@ logger = logging.getLogger("__main__").getChild("NullInverter")
 
 class NullInverter(BaseInverter):
     """
-    No-operation inverter implementation.
+    No-operation inverter implementation for display-only mode.
 
     Used when:
     - type: "default" - Display-only mode, no inverter control
-    - type: "evcc" - EVCC handles control externally
 
     All control methods are no-ops, returning success without actual hardware interaction.
     """
@@ -24,7 +23,7 @@ class NullInverter(BaseInverter):
         super().__init__(config)
         logger.info(
             "[NullInverter] Initialized in display-only mode (type: %s)",
-            config.get("type", "unknown"),
+            config.get("type", "default"),
         )
 
     def initialize(self):

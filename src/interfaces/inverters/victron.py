@@ -67,7 +67,7 @@ class VictronInverter(BaseInverter):
             self._vebus_interval_s = interval_s
             self._vebus_keepalive_unit = int(unit)
 
-        # wenn Thread schon läuft: nur Update
+        # if thread already running: only update
         t = self._vebus_keepalive_thread
         if t and t.is_alive():
             logger.info(
@@ -265,7 +265,7 @@ class VictronInverter(BaseInverter):
             keepalive_running,
         )
 
-        # Wenn weder External Control aktiv ist noch Keepalive läuft, nichts tun
+        # If neither External Control is active nor Keepalive is running, do nothing
         if current_mode != 3 and not keepalive_running:
             logger.info(
                 "[VictronModbus] ESS already in normal mode, nothing to restore"
@@ -593,8 +593,8 @@ class VictronInverter(BaseInverter):
         """Write one or multiple holding registers (Victron Modbus TCP)."""
         slave = int(unit) if unit is not None else 1
 
-        # Für CCGX-Offsets (2600, 2705, 800, ...) ist das bereits korrekt.
-        # Falls irgendwann jemand 40001/4xxxx übergibt, macht normalize das richtig:
+        # For CCGX offsets (2600, 2705, 800, ...), this is already correct.
+        # If someone ever passes 40001/4xxxx, normalize will handle it correctly:
         reg_address = self._normalize_register_address(address)
 
         if isinstance(values, (int, float)):
@@ -637,7 +637,7 @@ class VictronInverter(BaseInverter):
         # 1) write
         res = self.write_register(unit=self.unit_id, reg=reg, value=value)
 
-        # optional: falls pymodbus response unterstützt
+        # optional: if pymodbus response supports it
         if hasattr(res, "isError") and res.isError():
             raise RuntimeError(f"Write failed for {reg.name}")
 
@@ -675,10 +675,10 @@ class VictronInverter(BaseInverter):
                 f"Register {reg.name} is marked read-only (writable=False)"
             )
 
-        address = r.address  # <- schon korrekt für CCGX Modbus TCP
+        address = r.address  # <- already correct for CCGX Modbus TCP
         words = self._encode_words(r, value)
 
-        # 1 Word => FC06, mehrere => FC10
+        # 1 Word => FC06, multiple => FC10
         if len(words) == 1:
             return self.write_holding_registers(
                 unit=unit, address=address, values=words[0]
