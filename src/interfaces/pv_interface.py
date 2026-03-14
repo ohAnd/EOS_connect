@@ -118,77 +118,98 @@ class PvInterface:
     def __check_config(self):
         """
         Checks the configuration for required parameters.
-
-        This function checks if the necessary parameters are present in the configuration.
-        If any required parameter is missing, it raises a ValueError.
+        Separates validation into two paths:
+        1. PV forecast parameters (source-specific)
+        2. Temperature forecast parameters (minimal: lat/lon only)
 
         Raises:
             ValueError: If any required parameter is missing from the configuration.
         """
+        # First check: config must be a list
+        if isinstance(self.config, dict):
+            logger.error(
+                "[PV-IF] PV forecast configuration error: pv_forecast must be a LIST"
+            )
+            logger.error("[PV-IF] Current format: pv_forecast: {name: ..., lat: ...}")
+            logger.error("[PV-IF] Expected format: pv_forecast:")
+            logger.error("[PV-IF]   - name: ...")
+            logger.error("[PV-IF]     lat: ...")
+            raise ValueError(
+                "[PV-IF] pv_forecast must be a list (with '-' in YAML), not a single object"
+            )
+
         if not len(self.config) > 0:
             logger.error("[PV-IF] Initialize - No pv entries found")
             return
 
         logger.debug("[PV-IF] Initialize - pv entries found: %s", len(self.config))
 
-        for config_entry in self.config:
-            entry_name = config_entry.get("name", "unnamed")
-            logger.debug("[PV-IF] Initialize - config entry name: %s", entry_name)
+        # VALIDATION PATH 1: Source-specific PV requirements
+        self.__validate_pv_source_requirements()
 
-            # Check for Victron-specific requirements
-            if self.config_source.get("source") == "victron":
-                # Check VRM ID (from first PV forecast entry's resource_id)
-                if not self.config or len(self.config) == 0:
-                    logger.error(
-                        "[PV-IF] No PV forecast entries found in configuration"
-                    )
-                    raise ValueError(
-                        "[PV-IF] At least one PV forecast entry required for Victron"
-                    )
+        # VALIDATION PATH 2: Common PV parameters based on source
+        self.__validate_pv_common_parameters()
 
-                first_entry_resource_id = self.config[0].get("resource_id", "").strip()
-                if not first_entry_resource_id:
-                    logger.error(
-                        "[PV-IF] Victron VRM ID missing in first pv_forecast entry's resource_id"
-                    )
-                    logger.error(
-                        '[PV-IF] Please add: resource_id: "your_victron_vrm_id" in first pv_forecast entry'
-                    )
-                    raise ValueError(
-                        "[PV-IF] Victron VRM ID (resource_id in first pv_forecast entry) required"
-                    )
+        # VALIDATION PATH 3: Temperature-specific requirements (minimal)
+        self.__validate_temperature_requirements()
 
-                # Check API key (reuse api_key like Solcast)
-                if not self.config_source.get("api_key", "").strip():
-                    logger.error(
-                        "[PV-IF] Victron API key missing in pv_forecast_source section"
-                    )
-                    logger.error(
-                        '[PV-IF] Please add: api_key: "your_victron_api_token" in config.yaml'
-                    )
-                    raise ValueError(
-                        "[PV-IF] Victron API key (api_key) required - see"
-                        + " CONFIG_README.md for setup instructions"
-                    )
+    def __validate_pv_source_requirements(self):
+        """
+        Validates source-specific PV forecast requirements.
+        Each source (Victron, Solcast, etc.) has different needs.
+        """
+        source = self.config_source.get("source", "akkudoktor")
 
-                logger.debug("[PV-IF] Victron config validated for '%s'", entry_name)
+        # Victron-specific validation
+        if source == "victron":
+            if not self.config or len(self.config) == 0:
+                logger.error("[PV-IF] No PV forecast entries found in configuration")
+                raise ValueError(
+                    "[PV-IF] At least one PV forecast entry required for Victron"
+                )
 
-            # Check for Solcast-specific requirements
-            if self.config_source.get("source") == "solcast":
-                # Check API key
-                if not self.config_source.get("api_key", "").strip():
-                    logger.error(
-                        "[PV-IF] Solcast API key missing in pv_forecast_source section"
-                    )
-                    logger.error(
-                        '[PV-IF] Please add: api_key: "your_solcast_api_key" in config.yaml'
-                    )
-                    raise ValueError(
-                        "[PV-IF] Solcast API key required - see CONFIG_README.md"
-                        + " for setup instructions"
-                    )
+            first_entry_resource_id = self.config[0].get("resource_id", "").strip()
+            if not first_entry_resource_id:
+                logger.error(
+                    "[PV-IF] Victron VRM ID missing in first pv_forecast entry's resource_id"
+                )
+                logger.error(
+                    '[PV-IF] Please add: resource_id: "your_victron_vrm_id" in first pv_forecast entry'
+                )
+                raise ValueError(
+                    "[PV-IF] Victron VRM ID (resource_id in first pv_forecast entry) required"
+                )
 
-                # Check resource_id
+            if not self.config_source.get("api_key", "").strip():
+                logger.error(
+                    "[PV-IF] Victron API key missing in pv_forecast_source section"
+                )
+                logger.error(
+                    '[PV-IF] Please add: api_key: "your_victron_api_token" in config.yaml'
+                )
+                raise ValueError(
+                    "[PV-IF] Victron API key (api_key) required - see"
+                    + " CONFIG_README.md for setup instructions"
+                )
+
+            logger.debug("[PV-IF] Victron source-specific requirements validated")
+
+        # Solcast-specific validation
+        elif source == "solcast":
+            if not self.config_source.get("api_key", "").strip():
+                logger.error(
+                    "[PV-IF] Solcast API key missing in pv_forecast_source section"
+                )
+                logger.error(
+                    '[PV-IF] Please add: api_key: "your_solcast_api_key" in config.yaml'
+                )
+                raise ValueError(
+                    "[PV-IF] Solcast API key required - see CONFIG_README.md"
+                    + " for setup instructions"
+                )
+
+            for config_entry in self.config:
+                entry_name = config_entry.get("name", "unnamed")
                 if not config_entry.get("resource_id", "").strip():
                     logger.error(
                         "[PV-IF] Resource ID missing for '%s' - required for Solcast",
@@ -202,47 +223,97 @@ class PvInterface:
                         + " CONFIG_README.md for setup instructions"
                     )
 
-                if config_entry.get("azimuth") is None:
-                    config_entry["azimuth"] = 0  # 0° = South (industry standard)
-                    logger.debug(
-                        "[PV-IF] Solcast config - setting default azimuth for '%s'",
-                        entry_name,
-                    )
-                if config_entry.get("tilt") is None:
-                    config_entry["tilt"] = 25
-                    logger.debug(
-                        "[PV-IF] Solcast config - setting default tilt for '%s'",
-                        entry_name,
-                    )
+            logger.debug("[PV-IF] Solcast source-specific requirements validated")
 
-                logger.debug("[PV-IF] Solcast config validated for '%s'", entry_name)
+    def __validate_pv_common_parameters(self):
+        """
+        Validates common PV parameters required based on source.
+        Skips parameters not needed by the specific source.
+        Sets sensible defaults where applicable.
+        """
+        source = self.config_source.get("source", "akkudoktor")
 
-            # lat, long - required for all sources for temperature forecast
-            missing = []
-            if config_entry.get("lat") is None:
-                missing.append("lat")
-            if config_entry.get("lon") is None:
-                missing.append("lon")
-            if missing:
-                raise ValueError(
-                    "[PV-IF] Missing required parameters "
-                    + f"for '{entry_name}': {', '.join(missing)}"
-                )
-            # azimuth, tilt - only solcast and evcc not required but have defaults
-            if self.config_source.get("source") in ("solcast", "evcc"):
-                if config_entry.get("azimuth") is None:
-                    config_entry["azimuth"] = 0  # 0° = South (industry standard)
-                    logger.debug(
-                        "[PV-IF] Solcast config - setting default azimuth for '%s'",
-                        entry_name,
-                    )
-                if config_entry.get("tilt") is None:
-                    config_entry["tilt"] = 25
-                    logger.debug(
-                        "[PV-IF] Solcast config - setting default tilt for '%s'",
-                        entry_name,
-                    )
+        for config_entry in self.config:
+            entry_name = config_entry.get("name", "unnamed")
+
+            # lat/lon - Required parameters depend on source and use case
+            # - Victron: only needed if temperature forecast enabled
+            # - Solcast: only needed if NO resource_id provided (rare case)
+            # - Other sources: needed for location-based forecasting
+            needs_lat_lon = False
+
+            if source == "victron":
+                # Victron only needs lat/lon for temperature forecast
+                needs_lat_lon = self.temperature_forecast_enabled
+            elif source == "solcast":
+                # Solcast: if resource_id provided, lat/lon not needed
+                # If NO resource_id, they would be needed (but Solcast requires resource_id)
+                has_resource_id = config_entry.get("resource_id", "").strip()
+                needs_lat_lon = not has_resource_id
             else:
+                # All other sources need lat/lon for their location-based API calls
+                needs_lat_lon = True
+                # Unless temperature is the only thing needed and we have a way to get temp
+                if source in ("evcc",):
+                    needs_lat_lon = self.temperature_forecast_enabled or (
+                        source != "evcc"
+                    )
+
+            if needs_lat_lon:
+                missing = []
+                if config_entry.get("lat") is None:
+                    missing.append("lat")
+                if config_entry.get("lon") is None:
+                    missing.append("lon")
+                if missing:
+                    raise ValueError(
+                        "[PV-IF] Missing required parameters "
+                        + f"for '{entry_name}': {', '.join(missing)}"
+                    )
+
+            # OPTIMIZATION: For sources that DON'T require full PV config
+            # (Victron, Solcast, etc.), set sensible defaults that also work for temperature API
+            if source in ("victron", "solcast", "evcc"):
+                # These sources don't need detailed panel orientation for PV forecasting.
+                # However, defaults must be valid for Akkudoktor temperature API which validates them.
+                # Using conservative values proven to work with Akkudoktor API.
+                defaults_set = []
+
+                if config_entry.get("azimuth") is None:
+                    config_entry["azimuth"] = (
+                        0.1  # South-facing (0.0 rejected by Akkudoktor API, use 0.1 instead)
+                    )
+                    defaults_set.append("azimuth")
+
+                if config_entry.get("tilt") is None:
+                    config_entry["tilt"] = 30.0  # Standard tilt
+                    defaults_set.append("tilt")
+
+                if config_entry.get("power") is None:
+                    config_entry["power"] = 1000.0  # Conservative 1kW estimate
+                    defaults_set.append("power")
+
+                if config_entry.get("powerInverter") is None:
+                    config_entry["powerInverter"] = 1000.0  # Conservative 1kW estimate
+                    defaults_set.append("powerInverter")
+
+                if config_entry.get("inverterEfficiency") is None:
+                    config_entry["inverterEfficiency"] = (
+                        0.95  # Modern inverter efficiency
+                    )
+                    defaults_set.append("inverterEfficiency")
+
+                if defaults_set:
+                    logger.debug(
+                        "[PV-IF] Set %s defaults for '%s' (%s)",
+                        ", ".join(defaults_set),
+                        entry_name,
+                        source,
+                    )
+
+            else:
+                # OTHER SOURCES require full PV configuration
+                # Check azimuth and tilt
                 missing = []
                 if config_entry.get("azimuth") is None:
                     missing.append("azimuth")
@@ -253,76 +324,84 @@ class PvInterface:
                         "[PV-IF] Missing required parameters "
                         + f"for '{entry_name}': {', '.join(missing)}"
                     )
-            # power - only evcc, solcast not required
-            if self.config_source.get("source") not in ("evcc", "solcast"):
-                missing_common = []
+
+                # Check power
                 if config_entry.get("power") is None:
-                    missing_common.append("power")
-                if missing_common:
                     raise ValueError(
-                        "[PV-IF] Missing required parameters"
-                        + f" for '{entry_name}': {', '.join(missing_common)}"
+                        "[PV-IF] Missing required parameter 'power' for '"
+                        + entry_name
+                        + "'"
                     )
-            else:  # to get a working temperature forecast we set dummy values here
-                config_entry["power"] = 1000
-            # powerInverter - only evcc, forecast_solar, solcast not required
-            if self.config_source.get("source") not in (
-                "evcc",
-                "forecast_solar",
-                "solcast",
-            ):
-                missing_common = []
-                if config_entry.get("powerInverter") is None:
-                    missing_common.append("powerInverter")
 
-                if missing_common:
-                    raise ValueError(
-                        "[PV-IF] Missing required parameters"
-                        + f" for '{entry_name}': {', '.join(missing_common)}"
-                    )
-            else:  # to get a working temperature forecast we set dummy values here
-                config_entry["powerInverter"] = 1000
+                # Check powerInverter (not needed for forecast_solar)
+                if source != "forecast_solar":
+                    if config_entry.get("powerInverter") is None:
+                        raise ValueError(
+                            "[PV-IF] Missing required parameter 'powerInverter' for '"
+                            + entry_name
+                            + "'"
+                        )
 
-            # inverterEfficiency - only evcc, forecast_solar not required
-            # solcast optional
-            if self.config_source.get("source") not in (
-                "evcc",
-                "forecast_solar",
-                "solcast",
-            ):
-                missing_common = []
-                if config_entry.get("inverterEfficiency") is None:
-                    missing_common.append("inverterEfficiency")
-                if missing_common:
-                    raise ValueError(
-                        "[PV-IF] Missing required parameters"
-                        + f" for '{entry_name}': {', '.join(missing_common)}"
-                    )
-            else:  # to get a working temperature forecast we set dummy values here
-                if self.config_source.get("source") == "solcast":
+                # Check inverterEfficiency (not needed for forecast_solar)
+                if source != "forecast_solar":
                     if config_entry.get("inverterEfficiency") is None:
-                        config_entry["inverterEfficiency"] = 1
-                else:
-                    config_entry["inverterEfficiency"] = 1
+                        raise ValueError(
+                            "[PV-IF] Missing required parameter 'inverterEfficiency' for '"
+                            + entry_name
+                            + "'"
+                        )
 
-            # horizon parameter check for specific sources
-            if self.config_source.get("source") in [
-                "openmeteo_local",
-                "forecast_solar",
-            ]:
-                for config_entry in self.config:
-                    if "horizon" not in config_entry or not config_entry["horizon"]:
-                        logger.warning(
-                            "[PV-IF] 'horizon' parameter missing for '%s' "
-                            + "- using default (no shading)",
-                            config_entry.get("name", "unnamed"),
-                        )
-                        # For forecast_solar, default is 24 values
-                        config_entry["horizon"] = [0] * (
-                            24
-                            if self.config_source.get("source") == "forecast_solar"
-                            else 36
-                        )
+                logger.debug(
+                    "[PV-IF] '%s' validated - all PV parameters present", entry_name
+                )
+
+            # horizon parameter for specific sources
+            if source in ("openmeteo_local", "forecast_solar"):
+                if "horizon" not in config_entry or not config_entry["horizon"]:
+                    logger.warning(
+                        "[PV-IF] 'horizon' parameter missing for '%s' "
+                        + "- using default (no shading)",
+                        entry_name,
+                    )
+                    config_entry["horizon"] = [0] * (
+                        24 if source == "forecast_solar" else 36
+                    )
+
+    def __validate_temperature_requirements(self):
+        """
+        Validates temperature forecast requirements (minimal).
+        Temperature only needs lat/lon from at least one PV entry.
+        This is optional and independent of PV source.
+        All sources can support temperature via Akkudoktor API.
+        """
+        if not self.temperature_forecast_enabled:
+            logger.debug(
+                "[PV-IF] Temperature forecast disabled - skipping temperature validation"
+            )
+            return
+
+        # Check if we have at least one config entry with lat/lon
+        if not self.config or len(self.config) == 0:
+            logger.warning(
+                "[PV-IF] No PV forecast entries found - temperature forecast will use defaults"
+            )
+            return
+
+        first_entry = self.config[0]
+        entry_name = first_entry.get("name", "unnamed")
+
+        if first_entry.get("lat") is None or first_entry.get("lon") is None:
+            logger.warning(
+                "[PV-IF] Temperature forecast requires lat/lon in first PV entry '%s'"
+                + " - will use static temperature forecast defaults (15°C)",
+                entry_name,
+            )
+            return
+
+        logger.debug(
+            "[PV-IF] Temperature forecast requirements met for '%s' (lat/lon available)",
+            entry_name,
+        )
 
     def __start_update_service(self):
         """
@@ -370,24 +449,31 @@ class PvInterface:
                     "[PV-IF] Using previous PV forecast due to error: %s",
                     self.pv_forcast_request_error["message"],
                 )
-            # # special temp forecast if pv config is not given in detail
-            if self.config and self.config[0] and self.temperature_forecast_enabled:
-                temp_result = self.__get_pv_forecast_akkudoktor_api(
-                    tgt_value="temperature", pv_config_entry=self.config[0]
-                )
-                if not temp_result:  # If empty array or None due to API error
-                    logger.warning(
-                        "[PV-IF] Temperature forecast API failed - using default"
-                        + " temperature forecast"
+            # Temperature forecast with minimal configuration (only needs lat/lon)
+            # Works for all PV sources: Victron, Solcast, Akkudoktor, etc.
+            if self.temperature_forecast_enabled:
+                temp_config = self.__get_temperature_config_entry()
+                if temp_config:
+                    temp_result = self.__get_pv_forecast_akkudoktor_api(
+                        tgt_value="temperature", pv_config_entry=temp_config
                     )
-                    self.temp_forecast_array = self.__get_default_temperature_forecast()
+                    if not temp_result:  # If empty array or None due to API error
+                        logger.warning(
+                            "[PV-IF] Temperature forecast API failed - using default"
+                            + " temperature forecast (15°C)"
+                        )
+                        self.temp_forecast_array = (
+                            self.__get_default_temperature_forecast()
+                        )
+                    else:
+                        self.temp_forecast_array = temp_result
                 else:
-                    self.temp_forecast_array = temp_result
-                    # logger.debug(
-                    #     "[PV-IF] Temperature forecast updated with %d values",
-                    #     len(temp_result),
-                    # )
+                    # lat/lon missing - already warned during config validation
+                    self.temp_forecast_array = self.__get_default_temperature_forecast()
             else:
+                logger.debug(
+                    "[PV-IF] Temperature forecast disabled - using default (15°C)"
+                )
                 self.temp_forecast_array = self.__get_default_temperature_forecast()
             logger.info("[PV-IF] PV and Temperature updated")
             # Break the sleep interval into smaller chunks to allow immediate shutdown
@@ -423,33 +509,54 @@ class PvInterface:
 
     def __create_forecast_request(self, pv_config_entry):
         """
-        Creates a forecast request URL for the EOS server.
+        Creates a forecast request parameters dict for the EOS server API.
+        Returns parameters that will be passed to requests.get(url, params=...).
+        This ensures proper numeric type handling by the requests library.
         """
-        horizon_string = ""
-        if pv_config_entry.get("horizon", "") != "":
-            horizon_string = "&horizont=" + str(pv_config_entry["horizon"])
-        # if self.time_frame_base == 900:
-        #     horizon_string += "&timeframe=minutely_15"
-        return (
-            EOS_API_GET_PV_FORECAST
-            + "?lat="
-            + str(pv_config_entry["lat"])
-            + "&lon="
-            + str(pv_config_entry["lon"])
-            + "&azimuth="
-            + str(pv_config_entry["azimuth"])
-            + "&tilt="
-            + str(pv_config_entry["tilt"])
-            + "&power="
-            + str(pv_config_entry["power"])
-            + "&powerInverter="
-            + str(pv_config_entry["powerInverter"])
-            + "&inverterEfficiency="
-            + str(pv_config_entry["inverterEfficiency"])
-            + "&timezone="
-            + str(self.time_zone)
-            + horizon_string
-        )
+        params = {
+            "lat": pv_config_entry["lat"],
+            "lon": pv_config_entry["lon"],
+            "azimuth": pv_config_entry["azimuth"],
+            "tilt": pv_config_entry["tilt"],
+            "power": pv_config_entry["power"],
+            "powerInverter": pv_config_entry["powerInverter"],
+            "inverterEfficiency": pv_config_entry["inverterEfficiency"],
+            "timezone": self.time_zone,
+        }
+
+        # horizon must be converted from list to comma-separated string
+        if pv_config_entry.get("horizon"):
+            horizon = pv_config_entry["horizon"]
+            if isinstance(horizon, list):
+                params["horizont"] = ",".join(str(h) for h in horizon)
+            else:
+                params["horizont"] = str(horizon)
+
+        return params
+
+    def __get_temperature_config_entry(self):
+        """
+        Extracts temperature configuration from PV entries.
+        Returns the first config entry (which already has all defaults set by validation).
+        Temperature uses this full config to match the standard PV request format.
+
+        Returns:
+            dict: Full configuration entry with all parameters, or None if no valid config found
+        """
+        if self.config and len(self.config) > 0:
+            first_entry = self.config[0]
+            lat = first_entry.get("lat")
+            lon = first_entry.get("lon")
+            if lat is not None and lon is not None:
+                logger.debug(
+                    "[PV-IF] Using temperature config from '%s': lat=%s, lon=%s",
+                    first_entry.get("name", "unnamed"),
+                    lat,
+                    lon,
+                )
+                return first_entry
+
+        return None
 
     def __get_default_pv_forcast(self, pv_power):
         """
@@ -622,13 +729,12 @@ class PvInterface:
     def __get_default_temperature_forecast(self):
         """
         Creates a default temperature forecast with fixed values.
-        The values are set to 20 degrees Celsius for the entire day.
+        The values are set to 15 degrees Celsius for the entire day.
         """
         # Create a 24-hour default temperature forecast
         forecast_24h = [15.0] * 24  # 15 degrees Celsius for each hour
         if self.time_frame_base == 900:
             forecast_24h = [15.0] * 96  # 15 degrees Celsius for each 15-min interval
-        logger.debug("[PV-IF] Using default temperature forecast with 15 degrees")
         return forecast_24h * 2  # Repeat for the next day (48 hours total)
 
     def __get_pv_forecast(self, config_entry):
@@ -714,10 +820,14 @@ class PvInterface:
                 "akkudoktor",
             )
 
-        forecast_request_payload = self.__create_forecast_request(pv_config_entry)
+        # Use standard request format for both PV and temperature
+        # (config_entry already has all required parameters with defaults set)
+        forecast_params = self.__create_forecast_request(pv_config_entry)
 
         def request_func():
-            response = requests.get(forecast_request_payload, timeout=5)
+            response = requests.get(
+                EOS_API_GET_PV_FORECAST, params=forecast_params, timeout=5
+            )
             response.raise_for_status()
             day_values = response.json()
             return day_values["values"]

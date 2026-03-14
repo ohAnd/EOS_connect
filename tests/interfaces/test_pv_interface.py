@@ -309,6 +309,26 @@ def test_check_config_missing_parameters():
         PvInterface({}, config, time_frame_base, {}, timezone="UTC")
 
 
+def test_pv_forecast_config_must_be_list():
+    """
+    Test that pv_forecast must be a list (with YAML '-'), not a single object.
+    This catches user config errors where they forget the '-' in YAML.
+
+    WRONG: pv_forecast:
+             name: "test"
+             lat: 50
+
+    CORRECT: pv_forecast:
+               - name: "test"
+                 lat: 50
+    """
+    # Config is a dict instead of a list - simulates wrong YAML format
+    config = {"name": "test", "lat": 50, "lon": 8}
+
+    with pytest.raises(SystemExit):
+        PvInterface({}, config, time_frame_base, {}, timezone="UTC")
+
+
 def test_summarized_pv_forecast_aggregation():
     """
     Test that get_summarized_pv_forecast correctly aggregates multiple config entries.
@@ -735,6 +755,7 @@ def test_solcast_data_adaption(monkeypatch):
         "lat": 50,
         "lon": 8,
         "resource_id": "dummy_resource",
+        "inverterEfficiency": 1.0,  # Test expects no efficiency loss
     }
     config_source = {"source": "solcast", "api_key": "dummy_key"}
 
