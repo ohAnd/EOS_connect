@@ -2,6 +2,20 @@
 
 Provides the VictronInverter class which implements the BaseInverter
 interface for Victron devices (Modbus/TCP client integration).
+
+ESS Control Logic via EOS Connect
+
+In the “Discharge Allowed” mode, the Victron ESS system remains in its normal operating state.
+This requires that ESS is enabled and operating in either “Optimized with BatteryLife” or “Optimized without BatteryLife” mode.
+In this state, the ESS continues to operate according to Victron’s internal control logic.
+When EOS Connect activates the “Avoid Discharge” mode, the ESS is switched to External Control.
+EOS Connect then writes a power setpoint of 0 W to the MultiPlus on all three phases via the VE.Bus registers.
+This prevents both battery discharge and grid import, effectively keeping the system neutral with respect to the grid.
+This functionality requires a three-phase Victron MultiPlus system. Support for single-phase systems still needs to be evaluated.
+If “Charge from Grid” is activated by EOS Connect, a positive grid power setpoint corresponding to the desired charging power is written to the MultiPlus.
+The inverter then regulates the grid import accordingly and uses the imported energy to charge the batteries.
+When EOS Connect is closed or terminated, the original ESS mode is automatically restored.
+This ensures that the Victron system returns to its normal ESS operation.
 """
 
 import logging
