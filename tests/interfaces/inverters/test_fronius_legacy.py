@@ -30,7 +30,12 @@ class TestFroniusLegacyBase(BaseInverterTestSuite):
     """
 
     inverter_class = FroniusLegacy  # type: ignore[assignment]
-    minimal_config = {"address": "192.168.1.100", "type": "fronius_gen24_legacy"}  # type: ignore[assignment]
+    minimal_config = {  # type: ignore[assignment]
+        "address": "192.168.1.100",
+        "type": "fronius_gen24_legacy",
+        "user": "customer",
+        "password": "test_password",
+    }
     expected_extended_monitoring = True  # type: ignore[assignment]
 
     @classmethod

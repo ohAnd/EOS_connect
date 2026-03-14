@@ -11,7 +11,7 @@ from .victron import VictronInverter
 from .null_inverter import NullInverter
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("__main__").getChild("Factory")
 
 # Active, modern supported inverters
 # Mapping: Config-String → Inverter class
@@ -48,6 +48,26 @@ def create_inverter(config: dict) -> BaseInverter:
     # 1) Modern, actively supported inverter
     if inverter_type in INVERTER_TYPES:
         cls = INVERTER_TYPES[inverter_type]
+
+        # Check for required configuration keys for connection-based inverters
+        if inverter_type == "fronius_gen24" or inverter_type == "fronius_gen24_legacy":
+            missing_keys = []
+            if "address" not in config or not config.get("address"):
+                missing_keys.append("address")
+            if "user" not in config or not config.get("user"):
+                missing_keys.append("user")
+            if "password" not in config or not config.get("password"):
+                missing_keys.append("password")
+
+            if missing_keys:
+                logger.error(
+                    "[Factory] Inverter type '%s' requires configuration keys: %s. "
+                    "Configuration not found. Falling back to display-only mode (default).",
+                    inverter_type,
+                    ", ".join(missing_keys),
+                )
+                return NullInverter(config)
+
         logger.info(
             "[Factory] Creating modern inverter '%s' (%s)",
             inverter_type,
@@ -58,6 +78,26 @@ def create_inverter(config: dict) -> BaseInverter:
     # 2) Legacy inverter - still supported but deprecated
     if inverter_type in LEGACY_INVERTER_TYPES:
         cls = LEGACY_INVERTER_TYPES[inverter_type]
+
+        # Check for required configuration keys for connection-based inverters
+        if inverter_type == "fronius_gen24_legacy":
+            missing_keys = []
+            if "address" not in config or not config.get("address"):
+                missing_keys.append("address")
+            if "user" not in config or not config.get("user"):
+                missing_keys.append("user")
+            if "password" not in config or not config.get("password"):
+                missing_keys.append("password")
+
+            if missing_keys:
+                logger.error(
+                    "[Factory] Inverter type '%s' requires configuration keys: %s. "
+                    "Configuration not found. Falling back to display-only mode (default).",
+                    inverter_type,
+                    ", ".join(missing_keys),
+                )
+                return NullInverter(config)
+
         logger.warning(
             "[Factory] Creating legacy inverter '%s' (%s). "
             "Consider updating to a modern type for future compatibility.",

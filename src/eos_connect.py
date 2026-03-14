@@ -11,11 +11,14 @@ import json
 import threading
 import pytz
 import requests
+from flask import Flask, Response, render_template_string, request, send_from_directory
+from version import __version__
+from config import ConfigManager
+from log_handler import MemoryLogHandler
+from constants import CURRENCY_SYMBOL_MAP, CURRENCY_MINOR_UNIT_MAP
 from interfaces.base_control import BaseControl
 from interfaces.load_interface import LoadInterface
 from interfaces.battery_interface import BatteryInterface
-from interfaces.inverter_fronius import FroniusWR
-from interfaces.inverter_fronius_v2 import FroniusWRV2
 from interfaces.evcc_interface import EvccInterface
 from interfaces.optimization_interface import OptimizationInterface
 from interfaces.price_interface import PriceInterface
@@ -23,14 +26,7 @@ from interfaces.mqtt_interface import MqttInterface
 from interfaces.pv_interface import PvInterface
 from interfaces.port_interface import PortInterface
 from interfaces.update_checker import UpdateChecker
-from interfaces.inverter_factory import create_inverter
-from src.interfaces.mqtt_interface import MqttInterface
-from src.interfaces.pv_interface import PvInterface
-from src.interfaces.port_interface import PortInterface
-
-from src.interfaces.inverter_factory import create_inverter
-
->>>>>>> e48acea (Add inverter base class and related interfaces)
+from interfaces.inverters import create_inverter
 
 # Check Python version early
 if sys.version_info < (3, 11):
@@ -144,62 +140,12 @@ base_control = BaseControl(config_manager.config, time_zone, time_frame_base)
 # initialize the inverter interface
 inverter_interface = None
 
-# Handle backward compatibility for old interface names
-# inverter_type = config_manager.config["inverter"]["type"]
-
 # Factory aufrufen über config dic
 inverter_interface = create_inverter(config_manager.config["inverter"])
-inverter_interface.initialize()
-
-""" if inverter_type == "fronius_gen24_v2":
-    logger.warning(
-        "[Config] Interface name 'fronius_gen24_v2' is deprecated. "
-        "Please update your config.yaml to use 'fronius_gen24' instead. "
-        "Using enhanced interface for compatibility."
-    )
-    inverter_type = "fronius_gen24"  # Auto-migrate to new name
-
-if inverter_type == "fronius_gen24":
-    # Enhanced V2 interface (default for existing users)
-    logger.info(
-        "[Inverter] Using enhanced Fronius GEN24 interface with firmware-based authentication"
-    )
-    inverter_config = {
-        "address": config_manager.config["inverter"]["address"],
-        "max_grid_charge_rate": config_manager.config["inverter"][
-            "max_grid_charge_rate"
-        ],
-        "max_pv_charge_rate": config_manager.config["inverter"]["max_pv_charge_rate"],
-        "user": config_manager.config["inverter"]["user"],
-        "password": config_manager.config["inverter"]["password"],
-    }
-    inverter_interface = FroniusWRV2(inverter_config)
-elif inverter_type == "fronius_gen24_legacy":
-    # Legacy V1 interface (for corner cases)
-    logger.info(
-        "[Inverter] Using legacy Fronius GEN24 interface (V1) for compatibility"
-    )
-    inverter_config = {
-        "address": config_manager.config["inverter"]["address"],
-        "max_grid_charge_rate": config_manager.config["inverter"][
-            "max_grid_charge_rate"
-        ],
-        "max_pv_charge_rate": config_manager.config["inverter"]["max_pv_charge_rate"],
-        "user": config_manager.config["inverter"]["user"],
-        "password": config_manager.config["inverter"]["password"],
-    }
-    inverter_interface = FroniusWR(inverter_config)
-elif inverter_type == "evcc":
-    logger.info(
-        "[Inverter] Inverter type %s - using the universal evcc external battery control.",
-        inverter_type,
-    )
+if inverter_interface is not None:
+    inverter_interface.initialize()
 else:
-    logger.info(
-        "[Inverter] Inverter type %s - no external connection."
-        + " Changing to show only mode.",
-        config_manager.config["inverter"]["type"],
-    ) """
+    logger.info("[Main] No inverter interface (display-only or EVCC mode)")
 
 
 # callback function for evcc interface
@@ -1157,7 +1103,10 @@ class OptimizationScheduler:
         self.__start_update_service_data_loop()
 
     def __run_data_loop(self):
-        if inverter_type in ["fronius_gen24", "fronius_gen24_legacy"]:
+        if (
+            inverter_interface is not None
+            and inverter_interface.supports_extended_monitoring
+        ):
             inverter_interface.fetch_inverter_data()
             mqtt_interface.update_publish_topics(
                 {
@@ -1246,9 +1195,16 @@ def change_control_state():
     """
     inverter_fronius_en = False
     inverter_evcc_en = False
-    if inverter_type in ["fronius_gen24", "fronius_gen24_legacy"]:
+    # Check if we have an active inverter (not NullInverter) or if EVCC mode is enabled
+    if (
+        inverter_interface is not None
+        and inverter_interface.__class__.__name__ != "NullInverter"
+    ):
         inverter_fronius_en = True
-    elif config_manager.config["inverter"]["type"] == "evcc":
+    elif config_manager.config["inverter"]["type"] == "evcc" or (
+        inverter_interface is not None
+        and inverter_interface.__class__.__name__ == "NullInverter"
+    ):
         inverter_evcc_en = True
 
     current_overall_state = base_control.get_current_overall_state_number()
@@ -1617,8 +1573,8 @@ def get_controls():
         "inverter": {
             "inverter_special_data": (
                 inverter_interface.get_inverter_current_data()
-                if inverter_type in ["fronius_gen24", "fronius_gen24_legacy"]
-                and inverter_interface is not None
+                if inverter_interface is not None
+                and inverter_interface.supports_extended_monitoring
                 else None
             )
         },
@@ -2076,11 +2032,10 @@ if __name__ == "__main__":
             http_server.stop()
             logger.info("[Main] HTTP server stopped")
 
-        # restore the old config
+        # Shutdown inverter if it's a real inverter (not NullInverter/display-only mode)
         if (
-            config_manager.config["inverter"]["type"]
-            in ["fronius_gen24", "fronius_gen24_v2", "victron"]
-            and inverter_interface is not None
+            inverter_interface is not None
+            and inverter_interface.__class__.__name__ != "NullInverter"
         ):
             inverter_interface.shutdown()
         pv_interface.shutdown()
