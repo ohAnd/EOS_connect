@@ -80,7 +80,9 @@ class NullInverter(BaseInverter):
 
     def api_set_max_pv_charge_rate(self, rate_w: int) -> bool:
         """No PV charge rate control."""
-        logger.debug("[NullInverter] api_set_max_pv_charge_rate(%d W) called (no-op)", rate_w)
+        logger.debug(
+            "[NullInverter] api_set_max_pv_charge_rate(%d W) called (no-op)", rate_w
+        )
         return True
 
     # Capability flag is set via supports_extended_monitoring_default class attribute

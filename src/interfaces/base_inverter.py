@@ -26,7 +26,9 @@ class BaseInverter(ABC):
         self.inverter_type = self.__class__.__name__
 
         # Set supports_extended_monitoring from class attribute
-        self.supports_extended_monitoring = self.__class__.supports_extended_monitoring_default
+        self.supports_extended_monitoring = (
+            self.__class__.supports_extended_monitoring_default
+        )
 
         logger.info(f"[{self.inverter_type}] Initialized for {self.address}")
 
