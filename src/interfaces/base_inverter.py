@@ -8,6 +8,9 @@ logger.setLevel(logging.INFO)
 class BaseInverter(ABC):
     """Abstrakte Basisklasse für verschiedene Wechselrichter-Typen."""
 
+    # Default value for supports_extended_monitoring (can be overridden by subclasses)
+    supports_extended_monitoring_default = False
+
     def __init__(self, config: dict):
         # ✔ komplette Config speichern (für Tests & spätere Erweiterungen)
         self.config = config
@@ -21,6 +24,9 @@ class BaseInverter(ABC):
 
         self.is_authenticated = False
         self.inverter_type = self.__class__.__name__
+
+        # Set supports_extended_monitoring from class attribute
+        self.supports_extended_monitoring = self.__class__.supports_extended_monitoring_default
 
         logger.info(f"[{self.inverter_type}] Initialized for {self.address}")
 

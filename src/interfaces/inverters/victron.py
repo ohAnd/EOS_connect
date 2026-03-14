@@ -13,7 +13,7 @@ import threading
 
 from ..base_inverter import BaseInverter  # pylint: disable=relative-beyond-top-level
 
-from .ccgx_registers_all import Reg, REGISTERS, RegisterDef
+from ..inverters.ccgx_registers_all import Reg, REGISTERS, RegisterDef
 
 
 logger = logging.getLogger("__main__").getChild("VictronModbus")
