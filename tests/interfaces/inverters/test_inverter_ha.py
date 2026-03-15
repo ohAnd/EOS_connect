@@ -14,8 +14,9 @@ import requests as req_lib
 from src.interfaces.inverters import InverterHA, BaseInverter
 from .base_inverter_tests import BaseInverterTestSuite
 
-# Accessing protected members is fine in white-box tests.
-# pylint: disable=protected-access
+# pylint: disable=import-error,redefined-outer-name,too-few-public-methods
+# pylint: disable=protected-access,missing-function-docstring
+# pylint: disable=unused-argument
 
 
 # =========================================================================
@@ -103,14 +104,13 @@ class TestInverterHAInitialization:
         inv = InverterHA(cfg)
         assert inv.url == "http://ha.local:8123"
 
-    def test_headers_contain_bearer_token(self, inverter):
-        assert inverter.headers["Authorization"] == "Bearer test-long-lived-access-token"
-        assert inverter.headers["Content-Type"] == "application/json"
+    def test_token_stored_correctly(self, inverter):
+        assert inverter.token == "test-long-lived-access-token"
 
     def test_config_sequences_loaded(self, inverter, default_config):
-        assert inverter.config_charge == default_config["charge_from_grid"]
-        assert inverter.config_avoid == default_config["avoid_discharge"]
-        assert inverter.config_discharge == default_config["discharge_allowed"]
+        assert inverter.mode_sequences["force_charge"] == default_config["charge_from_grid"]
+        assert inverter.mode_sequences["avoid_discharge"] == default_config["avoid_discharge"]
+        assert inverter.mode_sequences["allow_discharge"] == default_config["discharge_allowed"]
 
     def test_default_max_rates(self):
         cfg = {"url": "http://ha.local", "token": "tok"}
@@ -293,14 +293,14 @@ class TestSetModeForceCharge:
         result = inverter.set_mode_force_charge(charge_power_w=3000)
         assert result is True
         mock_exec.assert_called_once_with(
-            inverter.config_charge, variables={"power": 3000}
+            inverter.mode_sequences["force_charge"], variables={"power": 3000}
         )
 
     @patch.object(InverterHA, "_execute_sequence", return_value=True)
     def test_default_power_uses_max_grid_rate(self, mock_exec, inverter):
         inverter.set_mode_force_charge()
         mock_exec.assert_called_once_with(
-            inverter.config_charge,
+            inverter.mode_sequences["force_charge"],
             variables={"power": inverter.max_grid_charge_rate},
         )
 
@@ -345,7 +345,7 @@ class TestSetModeAvoidDischarge:
     def test_success(self, mock_exec, inverter):
         result = inverter.set_mode_avoid_discharge()
         assert result is True
-        mock_exec.assert_called_once_with(inverter.config_avoid)
+        mock_exec.assert_called_once_with(inverter.mode_sequences["avoid_discharge"])
 
     @patch.object(InverterHA, "_execute_sequence", return_value=True)
     def test_sets_current_mode(self, mock_exec, inverter):
@@ -373,7 +373,7 @@ class TestSetModeAllowDischarge:
     def test_success(self, mock_exec, inverter):
         result = inverter.set_mode_allow_discharge()
         assert result is True
-        mock_exec.assert_called_once_with(inverter.config_discharge)
+        mock_exec.assert_called_once_with(inverter.mode_sequences["allow_discharge"])
 
     @patch.object(InverterHA, "_execute_sequence", return_value=True)
     def test_sets_current_mode(self, mock_exec, inverter):
@@ -472,7 +472,7 @@ class TestSetAllowGridCharging:
     @patch.object(InverterHA, "_execute_sequence", return_value=True)
     def test_true_executes_charge_sequence(self, mock_exec, inverter):
         inverter.set_allow_grid_charging(True)
-        mock_exec.assert_called_once_with(inverter.config_charge)
+        mock_exec.assert_called_once_with(inverter.mode_sequences["force_charge"])
 
     @patch.object(InverterHA, "_execute_sequence")
     def test_false_does_not_execute(self, mock_exec, inverter):

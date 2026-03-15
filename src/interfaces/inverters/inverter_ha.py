@@ -30,31 +30,28 @@ class InverterHA(BaseInverter):
         if "address" not in config:
             config["address"] = config.get("url", "")
 
+        # Set defaults before super().__init__ reads them
+        config.setdefault("max_grid_charge_rate", 5000)
+        config.setdefault("max_pv_charge_rate", 5000)
+
         super().__init__(config)
 
-        # BaseInverter sets None if not in config — HA needs sensible defaults
-        if self.max_grid_charge_rate is None:
-            self.max_grid_charge_rate = 5000
-        if self.max_pv_charge_rate is None:
-            self.max_pv_charge_rate = 5000
-
+        self.is_authenticated = False
+        # Re-declare inherited attribute so pylint tracks the setter correctly
+        self.max_pv_charge_rate = self.max_pv_charge_rate
         self.url = config.get("url", "").rstrip("/")
         self.token = config.get("token", "")
-        self.headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json",
-        }
 
         # Validate configuration
         if not self.url or not self.token:
             logger.error("[InverterHA] Missing URL or Token in configuration")
 
-        # Load state configurations
-        self.config_charge = config.get("charge_from_grid", [])
-        self.config_avoid = config.get("avoid_discharge", [])
-        self.config_discharge = config.get("discharge_allowed", [])
-
-        # Internal state tracking
+        # Load state configurations and tracking
+        self.mode_sequences = {
+            "force_charge": config.get("charge_from_grid", []),
+            "avoid_discharge": config.get("avoid_discharge", []),
+            "allow_discharge": config.get("discharge_allowed", []),
+        }
         self.current_mode = None
 
         logger.info("[InverterHA] Initialized with URL: %s", self.url)
@@ -116,8 +113,12 @@ class InverterHA(BaseInverter):
                 domain_service,
                 payload,
             )
+            headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json",
+            }
             response = requests.post(
-                endpoint, headers=self.headers, json=payload, timeout=10
+                endpoint, headers=headers, json=payload, timeout=10
             )
             response.raise_for_status()
             logger.debug("[InverterHA] Service call successful")
@@ -169,13 +170,12 @@ class InverterHA(BaseInverter):
         """
         if mode == "force_charge":
             return self.set_mode_force_charge()
-        elif mode == "avoid_discharge":
+        if mode == "avoid_discharge":
             return self.set_mode_avoid_discharge()
-        elif mode == "allow_discharge":
+        if mode == "allow_discharge":
             return self.set_mode_allow_discharge()
-        else:
-            logger.error("[InverterHA] Unknown battery mode: %s", mode)
-            return False
+        logger.error("[InverterHA] Unknown battery mode: %s", mode)
+        return False
 
     def set_mode_force_charge(self, charge_power_w=None) -> bool:
         """Sets the inverter to charge from grid.
@@ -195,7 +195,7 @@ class InverterHA(BaseInverter):
             "[InverterHA] Setting mode: Force Charge (Power: %s W)", charge_power_w
         )
         result = self._execute_sequence(
-            self.config_charge, variables={"power": charge_power_w}
+            self.mode_sequences["force_charge"], variables={"power": charge_power_w}
         )
         self.current_mode = "force_charge"
         return result
@@ -207,7 +207,7 @@ class InverterHA(BaseInverter):
             True if the mode was set successfully, False otherwise.
         """
         logger.info("[InverterHA] Setting mode: Avoid Discharge")
-        result = self._execute_sequence(self.config_avoid)
+        result = self._execute_sequence(self.mode_sequences["avoid_discharge"])
         self.current_mode = "avoid_discharge"
         return result
 
@@ -218,7 +218,7 @@ class InverterHA(BaseInverter):
             True if the mode was set successfully, False otherwise.
         """
         logger.info("[InverterHA] Setting mode: Allow Discharge")
-        result = self._execute_sequence(self.config_discharge)
+        result = self._execute_sequence(self.mode_sequences["allow_discharge"])
         self.current_mode = "allow_discharge"
         return result
 
@@ -229,7 +229,7 @@ class InverterHA(BaseInverter):
             value: If True, execute the charge sequence.
         """
         if value:
-            self._execute_sequence(self.config_charge)
+            self._execute_sequence(self.mode_sequences["force_charge"])
 
     def api_set_max_pv_charge_rate(self, max_pv_charge_rate: int):
         """Set the maximum PV charge rate (stores value internally)."""
@@ -239,9 +239,9 @@ class InverterHA(BaseInverter):
         )
 
     def get_battery_info(self) -> dict:
-        """Return battery information. HA does not provide direct battery data via this interface."""
+        """Return battery info. HA does not provide direct battery data."""
         return {}
 
     def fetch_inverter_data(self) -> dict:
-        """Return inverter data. HA does not provide direct inverter data via this interface."""
+        """Return inverter data. HA does not provide direct inverter data."""
         return {}
