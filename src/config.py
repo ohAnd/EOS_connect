@@ -442,6 +442,12 @@ class ConfigManager:
         config["inverter"].yaml_add_eol_comment(
             "Max inverter PV charge rate in W - default: 5000", "max_pv_charge_rate"
         )
+        config["inverter"].yaml_add_eol_comment(
+            "Access token for Home Assistant (homeassistant only)", "token"
+        )
+        config["inverter"].yaml_add_eol_comment(
+            "URL for Home Assistant (homeassistant only)", "url"
+        )
         # evcc configuration
         config.yaml_set_comment_before_after_key("evcc", before="EVCC configuration")
         config["evcc"].yaml_add_eol_comment(

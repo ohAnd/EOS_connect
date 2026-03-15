@@ -10,6 +10,7 @@ from .fronius_v2 import FroniusV2
 from .victron import VictronInverter
 from .null_inverter import NullInverter
 from .evcc_inverter import EvccInverter
+from .inverter_ha import InverterHA
 
 __all__ = [
     "BaseInverter",
@@ -21,4 +22,5 @@ __all__ = [
     "VictronInverter",
     "NullInverter",
     "EvccInverter",
+    "InverterHA",
 ]
