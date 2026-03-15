@@ -48,6 +48,14 @@ Guidelines
 - Document new config keys / API / MQTT topics
 - Prefer clarity over cleverness
 
+## Code Ownership
+
+Some components have designated owners who maintain and review changes to those areas. This is documented in the [CODEOWNERS](/.github/CODEOWNERS) file.
+
+**Victron Inverter Implementation** (`src/interfaces/inverters/victron.py`, `src/interfaces/inverters/ccgx_registers*.py`)
+- **Owner:** @Awienert
+- These files are maintained by the original contributor. PRs modifying Victron-related code will automatically request review from @Awienert to ensure compatibility and correctness with Victron hardware.
+
 ## Supporting the Project
 
 If you find EOS Connect useful but don't have the time to contribute code, you can also support the project by [becoming a sponsor](https://github.com/sponsors/ohAnd). Your support helps keep the project active and maintained.
