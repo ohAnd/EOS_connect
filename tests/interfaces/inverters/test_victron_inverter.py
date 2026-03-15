@@ -16,7 +16,6 @@ from __future__ import annotations
 import logging
 import struct
 import pytest
-import math
 
 import src.interfaces.inverters.victron as victron_mod
 from src.interfaces.inverters import VictronInverter
@@ -33,10 +32,12 @@ class DummyResponse:
     """Minimal pymodbus-like response stub."""
 
     def __init__(self, registers=None, error: bool = False):
+        """Initialize dummy response with registers and error flag."""
         self.registers = registers or []
         self._error = error
 
-    def isError(self):
+    def isError(self):  # pylint: disable=invalid-name
+        """Return whether response indicates an error."""
         return self._error
 
 
@@ -44,6 +45,7 @@ class DummyModbusTcpClient:
     """Fake for pymodbus.client.ModbusTcpClient."""
 
     def __init__(self, host, port=502):
+        """Initialize dummy Modbus TCP client."""
         self.host = host
         self.port = port
         self.connected = False
@@ -53,14 +55,17 @@ class DummyModbusTcpClient:
         self.next_response = DummyResponse([500], error=False)
 
     def connect(self):
+        """Simulate connection to Modbus device."""
         self.connected = True
         return True
 
     def close(self):
+        """Simulate closing Modbus connection."""
         self.closed = True
         self.connected = False
 
     def read_holding_registers(self, address, count, device_id=None, unit=None):
+        """Simulate reading Modbus holding registers."""
         slave = unit if unit is not None else device_id
         self.last_read = {
             "address": int(address),
@@ -70,6 +75,7 @@ class DummyModbusTcpClient:
         return self.next_response
 
     def write_register(self, address, value, device_id=None, unit=None):
+        """Simulate writing single Modbus register."""
         slave = unit if unit is not None else device_id
         self.last_write = {
             "address": int(address),
@@ -79,6 +85,7 @@ class DummyModbusTcpClient:
         return True
 
     def write_registers(self, address, values, device_id=None, unit=None):
+        """Simulate writing multiple Modbus registers."""
         slave = unit if unit is not None else device_id
         self.last_write = {
             "address": int(address),
@@ -222,50 +229,49 @@ class TestVictronStubMethods:
 
 
 class TestVictronEncodeWords:
-    """Test _encode_words static method for various data types."""
+    """Test encode_words static method for various data types."""
 
     def test_uint16_no_scale(self):
+        """Verify uint16 encoding with no scale applied."""
         reg = RegisterDef(address=1, count=1, type="uint16", scale=1.0)
-        assert VictronInverter._encode_words(reg, 50) == [
-            50
-        ]  # pylint: disable=protected-access
+        assert VictronInverter.encode_words(reg, 50) == [50]
 
     def test_int16_negative(self):
+        """Verify int16 negative value encoding as two's complement."""
         reg = RegisterDef(address=1, count=1, type="int16", scale=1.0)
-        assert VictronInverter._encode_words(reg, -1) == [
-            0xFFFF
-        ]  # pylint: disable=protected-access
+        assert VictronInverter.encode_words(reg, -1) == [0xFFFF]
 
     def test_uint32_big_endian(self):
+        """Verify uint32 big-endian encoding across two words."""
         reg = RegisterDef(address=1, count=2, type="uint32", scale=1.0)
-        assert VictronInverter._encode_words(reg, 0x11223344) == [
+        assert VictronInverter.encode_words(reg, 0x11223344) == [
             0x1122,
             0x3344,
-        ]  # pylint: disable=protected-access
+        ]
 
     def test_int32_negative_one(self):
+        """Verify int32 negative value as two's complement across two words."""
         reg = RegisterDef(address=1, count=2, type="int32", scale=1.0)
-        assert VictronInverter._encode_words(reg, -1) == [
+        assert VictronInverter.encode_words(reg, -1) == [
             0xFFFF,
             0xFFFF,
-        ]  # pylint: disable=protected-access
+        ]
 
     def test_float32_encoding(self):
+        """Verify float32 IEEE 754 encoding across two words."""
         reg = RegisterDef(address=1, count=2, type="float32", scale=1.0)
         value = 12.5
 
         b = struct.pack(">f", float(value))
         expected = [int.from_bytes(b[0:2], "big"), int.from_bytes(b[2:4], "big")]
 
-        assert (
-            VictronInverter._encode_words(reg, value) == expected
-        )  # pylint: disable=protected-access
+        assert VictronInverter.encode_words(reg, value) == expected
 
     def test_string_padded_to_word_count(self):
+        """Verify string encoding padded to full word count with null bytes."""
         reg = RegisterDef(address=1, count=4, type="string[7]", scale=1.0)
         # 4 words => 8 bytes: "ABC" -> 41 42 43 00 00 00 00 00
-        # pylint: disable=protected-access
-        assert VictronInverter._encode_words(reg, "ABC") == [
+        assert VictronInverter.encode_words(reg, "ABC") == [
             0x4142,
             0x4300,
             0x0000,
@@ -273,11 +279,10 @@ class TestVictronEncodeWords:
         ]
 
     def test_inverse_scale_applied(self):
+        """Verify inverse scale factor is applied during encoding."""
         reg = RegisterDef(address=1, count=1, type="uint16", scale=10.0)
         # decode multiplies by 10 => write must divide by 10
-        assert VictronInverter._encode_words(reg, 50) == [
-            5
-        ]  # pylint: disable=protected-access
+        assert VictronInverter.encode_words(reg, 50) == [5]
 
     @pytest.mark.parametrize(
         "type_name,value,expected",
@@ -287,10 +292,9 @@ class TestVictronEncodeWords:
         ],
     )
     def test_64bit_types(self, type_name, value, expected):
+        """Verify uint64 and int64 encoding across four words."""
         reg = RegisterDef(address=1, count=4, type=type_name, scale=1.0)
-        assert (
-            VictronInverter._encode_words(reg, value) == expected
-        )  # pylint: disable=protected-access
+        assert VictronInverter.encode_words(reg, value) == expected
 
 
 class TestVictronForceCharge:
@@ -345,6 +349,7 @@ class TestVictronAvoidDischargeExternalControl:
     def test_set_mode_avoid_discharge_sets_hub4mode_and_starts_keepalive(
         self, monkeypatch, victron_instance
     ):
+        """Verify avoid discharge mode sets Hub4Mode and starts VE.Bus keepalive."""
         calls_write_verified = []
         calls_write_holding = []
         calls_keepalive = []

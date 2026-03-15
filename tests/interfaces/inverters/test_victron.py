@@ -21,7 +21,8 @@ class DummyResponse:
         self.registers = registers
         self._error = error
 
-    def isError(self):
+    def isError(self):  # pylint: disable=invalid-name
+        """Return whether response indicates an error."""
         return self._error
 
 
@@ -29,15 +30,18 @@ class DummyModbusTcpClient:
     """Fake ModbusTcpClient for testing without network."""
 
     def __init__(self, host, port=502):
+        """Initialize dummy Modbus TCP client."""
         self.host = host
         self.port = port
         self.connected = False
 
     def connect(self):
+        """Simulate connection to Modbus device."""
         self.connected = True
         return True
 
     def close(self):
+        """Simulate closing Modbus connection."""
         self.connected = False
 
     def read_holding_registers(
@@ -108,10 +112,12 @@ class TestVictronInverterStubImplementation:
     """
 
     def test_set_battery_mode_raises_not_implemented(self, victron_instance):
+        """Verify set_battery_mode raises NotImplementedError as stub."""
         with pytest.raises(NotImplementedError):
             victron_instance.set_battery_mode("normal")
 
     def test_get_battery_info_raises_not_implemented(self, victron_instance):
+        """Verify get_battery_info raises NotImplementedError as stub."""
         with pytest.raises(NotImplementedError):
             victron_instance.get_battery_info()
 
@@ -212,6 +218,7 @@ class TestVictronInverterFactory:
     """Tests for inverter factory creation (create_inverter)."""
 
     def test_create_inverter_returns_victron(self, monkeypatch, victron_config):
+        """Verify factory creates VictronInverter instance."""
         monkeypatch.setattr(
             victron_mod, "ModbusTcpClient", DummyModbusTcpClient, raising=True
         )

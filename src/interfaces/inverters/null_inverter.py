@@ -21,6 +21,7 @@ class NullInverter(BaseInverter):
     def __init__(self, config):
         """Initialize with minimal config."""
         super().__init__(config)
+        self.is_authenticated = False
         logger.info(
             "[NullInverter] Initialized in display-only mode (type: %s)",
             config.get("type", "default"),

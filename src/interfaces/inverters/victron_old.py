@@ -3,8 +3,7 @@
 import logging
 import hashlib
 
-# import re
-
+# pylint: disable=duplicate-code
 
 logger = logging.getLogger("__main__").getChild("VictronModbus")
 logger.setLevel(logging.INFO)
@@ -126,12 +125,15 @@ class VictronModbus:
         # Hold mode = disable discharge (0W), allow PV charging only
         # ESS max discharge current (fractional)
         # Modbus Adress 2702
-        # ESS Mode 2 - Max discharge current for ESS control-loop. The control-loop will use this value to limit the multi power setpoint.
-        # Currently a value < 50% will disable discharge completely. >=50% allows. Consider using 2704 instead.
+        # ESS Mode 2 - Max discharge current for ESS control-loop. The control-loop will
+        # use this value to limit the multi power setpoint.
+        # Currently a value < 50% will disable discharge completely. >=50% allows.
+        # Consider using 2704 instead.
 
         # ESS max charge current (fractional)
         # Modbus Adress 2703
-        # ESS Mode 3 - Max charge current for ESS control-loop. The control-loop will use this value to limit the multi power setpoint.
+        # ESS Mode 3 - Max charge current for ESS control-loop. The control-loop will
+        # use this value to limit the multi power setpoint.
         # Currently a value < 50% will disable charge completely. >=50% allows.
         self.write_holding_registers(self.unit_id, 2702, 99)
 
@@ -154,6 +156,7 @@ class VictronModbus:
         return self.set_battery_mode("normal")
 
     def close(self):
+        """Close the Modbus TCP client connection."""
         self.client.close()
         logger.info("[VictronModbus] Verbindung geschlossen")
 

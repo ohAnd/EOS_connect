@@ -5,6 +5,8 @@ inverters using their legacy API. It handles authentication, battery configurati
 time-of-use settings, and various inverter control operations.
 """
 
+# pylint: disable=duplicate-code
+
 import time
 import os
 import logging
@@ -33,7 +35,7 @@ def strip_dict(original):
     if not isinstance(original, dict):
         return original
     stripped_copy = {}
-    for key in original.keys():
+    for key in original:
         if not key.startswith("_"):
             stripped_copy[key] = original[key]
     return stripped_copy
@@ -95,6 +97,10 @@ class FroniusLegacy(BaseInverter):
         # Energy Management default initialization (overwritten later)
         self.em_mode = 0
         self.em_power = 0
+
+        # API rate limits
+        self.max_grid_charge_rate: int = 0
+        self.max_pv_charge_rate: int = 0
 
     def initialize(self):
         """Heavy initialization that performs API calls and loads full configuration."""
@@ -160,18 +166,26 @@ class FroniusLegacy(BaseInverter):
         logger.info("[Inverter] Initialization completed.")
 
     def connect_inverter(self):
+        """Connect to the Fronius inverter."""
         return super().connect_inverter()
 
     def disconnect_inverter(self):
+        """Disconnect from the Fronius inverter."""
         return super().disconnect_inverter()
 
     def get_battery_info(self):
+        """Get battery information from the inverter."""
         return super().get_battery_info()
 
     def set_battery_mode(self, mode):
+        """Set battery operating mode.
+
+        Args:
+            mode: Battery mode to set
+        """
         return super().set_battery_mode(mode)
 
-    def get_SOC(self):
+    def get_soc(self):
         """
         Retrieves the State of Charge (SOC) from the inverter.
 
@@ -353,7 +367,7 @@ class FroniusLegacy(BaseInverter):
             logger.error("[Inverter] Failed to set parameters. No response from server")
             return response
         response_dict = json.loads(response.text)
-        for expected_write_success in parameters.keys():
+        for expected_write_success in parameters:
             if expected_write_success not in response_dict["writeSuccess"]:
                 raise RuntimeError(f"failed to set {expected_write_success}")
         return response
@@ -611,9 +625,7 @@ class FroniusLegacy(BaseInverter):
         url = "http://" + self.address + path
         fullpath = path
         if params:
-            fullpath += "?" + "&".join(
-                [f"{k + '=' + str(params[k])}" for k in params.keys()]
-            )
+            fullpath += "?" + "&".join([f"{k + '=' + str(params[k])}" for k in params])
         if auth:
             headers["Authorization"] = self.get_auth_header(
                 method=method, path=fullpath

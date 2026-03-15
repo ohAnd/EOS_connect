@@ -64,6 +64,8 @@ class FroniusV2(BaseInverter):
         self.capacity = -1
         self.max_soc = 100
         self.min_soc = 5
+        self.max_grid_charge_rate = 0  # Maximum charge power from grid in watts
+        self.max_pv_charge_rate = 0  # Maximum charge power from PV in watts
 
         # --- Auth status ---
         self.subsequent_login = False
@@ -160,18 +162,22 @@ class FroniusV2(BaseInverter):
         logger.info("[Inverter] Initialization completed.")
 
     def connect_inverter(self):
+        """Connect to the inverter."""
         return super().connect_inverter()
 
     def disconnect_inverter(self):
+        """Disconnect from the inverter."""
         return super().disconnect_inverter()
 
     def get_battery_info(self):
+        """Get battery information from the inverter."""
         return super().get_battery_info()
 
     def set_battery_mode(self, mode):
+        """Set the battery operation mode."""
         return super().set_battery_mode(mode)
 
-    def get_SOC(self):
+    def get_soc(self):
         """
         Retrieves the State of Charge (SOC) from the inverter.
 
@@ -270,7 +276,7 @@ class FroniusV2(BaseInverter):
         response_dict = json.loads(response.text)
         expected_write_successes = settings_to_restore
         for expected_write_success in expected_write_successes:
-            if not expected_write_success in response_dict["writeSuccess"]:
+            if expected_write_success not in response_dict["writeSuccess"]:
                 raise RuntimeError(f"failed to set {expected_write_success}")
         # Remove after successful restore
         try:
@@ -293,7 +299,7 @@ class FroniusV2(BaseInverter):
         response_dict = json.loads(response.text)
         expected_write_successes = ["HYB_EVU_CHARGEFROMGRID"]
         for expected_write_success in expected_write_successes:
-            if not expected_write_success in response_dict["writeSuccess"]:
+            if expected_write_success not in response_dict["writeSuccess"]:
                 raise RuntimeError(f"failed to set {expected_write_success}")
         return response
 
@@ -308,7 +314,7 @@ class FroniusV2(BaseInverter):
         response_dict = json.loads(response.text)
         expected_write_successes = ["SolarAPIv1Enabled"]
         for expected_write_success in expected_write_successes:
-            if not expected_write_success in response_dict["writeSuccess"]:
+            if expected_write_success not in response_dict["writeSuccess"]:
                 raise RuntimeError(f"failed to set {expected_write_success}")
         return response
 
@@ -353,8 +359,8 @@ class FroniusV2(BaseInverter):
             logger.error("[Inverter] Failed to set parameters. No response from server")
             return response
         response_dict = json.loads(response.text)
-        for expected_write_success in parameters.keys():
-            if not expected_write_success in response_dict["writeSuccess"]:
+        for expected_write_success in parameters:
+            if expected_write_success not in response_dict["writeSuccess"]:
                 raise RuntimeError(f"failed to set {expected_write_success}")
         return response
 
@@ -459,11 +465,6 @@ class FroniusV2(BaseInverter):
         """Get the current inverter data."""
         return self.inverter_current_data
 
-    # TODO: delete later if working
-    # def supports_extended_monitoring(self) -> bool:
-    #    """Fronius V2 supports extended monitoring (temperature, fan control)."""
-    #    return True
-
     def set_mode_avoid_discharge(self):
         """Set the inverter to avoid discharging the battery."""
         timeofuselist = [
@@ -544,10 +545,11 @@ class FroniusV2(BaseInverter):
 
         try:
             time_of_use_config = json.loads(time_of_use_config_json)
-        except:  # pylint: disable=bare-except
+        except (json.JSONDecodeError, ValueError) as e:
             logger.error(
-                "[Inverter] could not parse timeofuse config from %s",
+                "[Inverter] could not parse timeofuse config from %s: %s",
                 TIMEOFUSE_CONFIG_FILENAME,
+                e,
             )
             return
 
@@ -590,7 +592,7 @@ class FroniusV2(BaseInverter):
         response_dict = json.loads(response.text)
         expected_write_successes = ["timeofuse"]
         for expected_write_success in expected_write_successes:
-            if not expected_write_success in response_dict["writeSuccess"]:
+            if expected_write_success not in response_dict["writeSuccess"]:
                 raise RuntimeError(f"failed to set {expected_write_success}")
         return response
 
@@ -806,7 +808,8 @@ class FroniusV2(BaseInverter):
         respdig = hash_func(f"{ha1}:{noncebit}")
 
         auth_header = f'Digest username="{user}", realm="{realm}", nonce="{nonce}", uri="{path}", '
-        auth_header += f'algorithm="{algorithm_header}", qop=auth, nc={ncvalue}, cnonce="{cnonce}", '
+        auth_header += f'algorithm="{algorithm_header}", qop=auth, nc={ncvalue}, '
+        auth_header += f'cnonce="{cnonce}", '
         auth_header += f'response="{respdig}"'
         return auth_header
 

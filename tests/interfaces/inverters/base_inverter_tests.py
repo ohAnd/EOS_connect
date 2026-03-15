@@ -14,8 +14,8 @@ Usage:
 
 # pylint: disable=too-few-public-methods
 
-import pytest
 from typing import Optional, Type
+import pytest
 from src.interfaces.inverters import (
     create_inverter,
     BaseInverter,

@@ -5,15 +5,22 @@ interface for Victron devices (Modbus/TCP client integration).
 
 ESS Control Logic via EOS Connect
 
-In the “Discharge Allowed” mode, the Victron ESS system remains in its normal operating state.
-This requires that ESS is enabled and operating in either “Optimized with BatteryLife” or “Optimized without BatteryLife” mode.
-In this state, the ESS continues to operate according to Victron’s internal control logic.
-When EOS Connect activates the “Avoid Discharge” mode, the ESS is switched to External Control.
-EOS Connect then writes a power setpoint of 0 W to the MultiPlus on all three phases via the VE.Bus registers.
-This prevents both battery discharge and grid import, effectively keeping the system neutral with respect to the grid.
-This functionality requires a three-phase Victron MultiPlus system. Support for single-phase systems still needs to be evaluated.
-If “Charge from Grid” is activated by EOS Connect, a positive grid power setpoint corresponding to the desired charging power is written to the MultiPlus.
-The inverter then regulates the grid import accordingly and uses the imported energy to charge the batteries.
+In the "Discharge Allowed" mode, the Victron ESS system remains in its
+normal operating state. This requires that ESS is enabled and operating in
+either "Optimized with BatteryLife" or "Optimized without BatteryLife" mode.
+In this state, the ESS continues to operate according to Victron's internal
+control logic.
+When EOS Connect activates the "Avoid Discharge" mode, the ESS is switched to
+External Control. EOS Connect then writes a power setpoint of 0 W to the
+MultiPlus on all three phases via the VE.Bus registers. This prevents both
+battery discharge and grid import, effectively keeping the system neutral with
+respect to the grid.
+This functionality requires a three-phase Victron MultiPlus system. Support for
+single-phase systems still needs to be evaluated. If "Charge from Grid" is
+activated by EOS Connect, a positive grid power setpoint corresponding to the
+desired charging power is written to the MultiPlus. The inverter then regulates
+the grid import accordingly and uses the imported energy to charge the
+batteries.
 When EOS Connect is closed or terminated, the original ESS mode is automatically restored.
 This ensures that the Victron system returns to its normal ESS operation.
 """
@@ -27,20 +34,21 @@ import threading
 
 from ..base_inverter import BaseInverter  # pylint: disable=relative-beyond-top-level
 
-from ..inverters.ccgx_registers_all import Reg, REGISTERS, RegisterDef
+from .ccgx_registers_all import Reg, REGISTERS, RegisterDef
 
+# pylint: disable=duplicate-code
 
 logger = logging.getLogger("__main__").getChild("VictronModbus")
 logger.setLevel(logging.INFO)
 logger.info("[Inverter] Loading Victron Inverter")
 
 # Import ModbusTcpClient - make it available at module level for testing/mocking
-ModbusTcpClient = None  # Default to None if import fails
 try:
     from pymodbus.client import ModbusTcpClient
 
     logger.info("[Inverter] pymodbus imported successfully")
 except ImportError as e:
+    ModbusTcpClient = None  # type: ignore
     logger.warning("[Inverter] pymodbus import failed: %s", e)
 
 
@@ -48,6 +56,8 @@ class VictronInverter(BaseInverter):
     """Victron inverter interface implementation."""
 
     supports_extended_monitoring_default = False
+    max_grid_charge_rate: int | None
+    max_pv_charge_rate: int | None
 
     def __init__(self, config):
         """Initialize the Victron inverter interface."""
@@ -60,10 +70,14 @@ class VictronInverter(BaseInverter):
         self._vebus_keepalive_thread: threading.Thread | None = None
         self._vebus_keepalive_stop = threading.Event()
         self._vebus_keepalive_lock = threading.Lock()
+        self._vebus_keepalive_unit: int = 227
 
         # welche Regs zyklisch geschrieben werden + ihre aktuellen Zielwerte (W)
         self._vebus_targets: dict[Reg, int] = {}
         self._vebus_interval_s: float = 1.0  # 500ms
+
+        # ESS state management
+        self._saved_ess_state: dict[Reg, int] | None = None
 
     def start_vebus_keepalive(
         self, targets: dict[Reg, int], interval_s: float = 1.0, unit: int = 227
@@ -85,7 +99,8 @@ class VictronInverter(BaseInverter):
         t = self._vebus_keepalive_thread
         if t and t.is_alive():
             logger.info(
-                "[VictronModbus] VE.Bus keepalive already running -> updated %d targets (interval %.2fs, unit %d)",
+                "[VictronModbus] VE.Bus keepalive updated: %d targets "
+                "(interval %.2fs, unit %d)",
                 len(targets),
                 self._vebus_interval_s,
                 self._vebus_keepalive_unit,
@@ -110,7 +125,8 @@ class VictronInverter(BaseInverter):
                             unit=u, address=rdef.address, values=int(watts)
                         )
                         # logger.info(
-                        #   "[VictronModbus] VE.Bus keepalive write: unit=%d reg=%s addr=%d value=%dW",
+                        #   "[VictronModbus] VE.Bus keepalive write: unit=%d "
+                        #   "reg=%s addr=%d value=%dW",
                         #  u,
                         # reg.name,
                         # rdef.address,
@@ -173,7 +189,8 @@ class VictronInverter(BaseInverter):
                     self.write_holding_registers(
                         unit=unit, address=rdef.address, values=0
                     )
-                except Exception as e:
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    # Fail-safe cleanup: log but continue if write fails
                     logger.warning(
                         "[VictronModbus] Failed to write 0W for %s: %s", reg.name, e
                     )
@@ -185,6 +202,7 @@ class VictronInverter(BaseInverter):
         logger.info("[VictronModbus] VE.Bus keepalive stopped")
 
     def initialize(self):
+        """Initialize Modbus connection parameters and client."""
         self.address = self.config["address"]
         self.port = 502
         self.unit_id = 100
@@ -193,15 +211,18 @@ class VictronInverter(BaseInverter):
         self.connect_inverter()
 
     def set_mode_avoid_discharge(self):
-        """Set the inverter to avoid discharging the battery."""
-        """avoid_discharge
-            Batterie: NICHT entladen
-            Batterie: darf laden (PV)
-            Netz: übernimmt Differenz"""
+        """Set the inverter to avoid discharging the battery.
 
+        Modes:
+            avoid_discharge: Battery NOT discharging
+            Battery may charge from PV
+            Grid absorbs difference
+        """
         logger.info("[VictronModbus] Setting hold mode, avoid discharge")
 
-        # ESS Externe Regelung ES Mode auf 3 und setzen dann ID 37,41 und 42 auf 0W -> es werden 0 W aus oder in richtung Grid geschoben kein Laden kein Entladen
+        # ESS Externe Regelung ES Mode auf 3 und setzen dann ID 37,41 und 42
+        # auf 0W -> es werden 0 W aus oder in richtung Grid geschoben kein Laden
+        # kein Entladen
 
         # TODO: Read old state of battery life modus
         # Save current ESS state
@@ -308,12 +329,33 @@ class VictronInverter(BaseInverter):
         logger.info("[VictronModbus] Discharge mode active (normal ESS restored)")
 
     def set_allow_grid_charging(self, value: bool):
+        """Set grid charging mode.
+
+        Args:
+            value: True to allow grid charging, False otherwise
+        """
         logger.info("[VictronModbus] Allow Gridcharging")
 
     def set_battery_mode(self, mode):
+        """Set battery operating mode.
+
+        Args:
+            mode: Battery mode to set
+
+        Raises:
+            NotImplementedError: This method is not implemented
+        """
         raise NotImplementedError
 
     def get_battery_info(self):
+        """Get battery information.
+
+        Returns:
+            Battery information dict
+
+        Raises:
+            NotImplementedError: This method is not implemented
+        """
         raise NotImplementedError
 
     def fetch_inverter_data(self):
@@ -466,7 +508,8 @@ class VictronInverter(BaseInverter):
         # stop keepalive first so it can't fight the restore
         try:
             self.stop_vebus_keepalive(write_zero=True)
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Defensive error handling: continue with restore even if keepalive stop fails
             pass
 
         # restore in order: Hub4Mode first, then BatteryLife
@@ -506,6 +549,7 @@ class VictronInverter(BaseInverter):
             return False
 
     def disconnect_inverter(self):
+        """Close the Modbus TCP client connection."""
         # close modbus socket connection
         self.client.close()
         logger.info("[VictronModbus] Verbindung geschlossen")
@@ -540,9 +584,11 @@ class VictronInverter(BaseInverter):
 
         else:
             # Reg -> RegisterDef
-            regdef = (
-                REGISTERS[address] if hasattr(address, "name") else address
-            )  # Reg oder RegisterDef
+            # Check if address is a Reg enum (has 'name' attribute) or RegisterDef directly
+            if isinstance(address, Reg):
+                regdef = REGISTERS[address]
+            else:
+                regdef = address  # Already a RegisterDef
             real_address = int(regdef.address)
             real_count = int(regdef.count)
             name = getattr(address, "value", f"addr={real_address}")
@@ -580,13 +626,12 @@ class VictronInverter(BaseInverter):
     def write_holding_registers(self, unit, address, values):
         """Write one or multiple holding registers."""
         slave = int(unit) if unit else 1
-        """
-        logger.info(
-            "[VictronModbus] Writing unit %s address %s values %s",
-            unit,
-            address,
-            values,
-        )"""
+        # logger.info(
+        #     "[VictronModbus] Writing unit %s address %s values %s",
+        #     unit,
+        #     address,
+        #     values,
+        # )
 
         # Einzelwert schreiben (Function Code 0x06)
         if isinstance(values, (int, float)):
@@ -626,19 +671,40 @@ class VictronInverter(BaseInverter):
         raise TypeError("❌ 'values' must be int, float, list or tuple")
 
     def write_register(self, unit, reg: Reg, value):
+        """Write a register value to the device.
+
+        Args:
+            unit: Modbus unit ID
+            reg: Register enum to write to
+            value: Raw register value to write
+
+        Raises:
+            ValueError: If register is not writable
+        """
         r = REGISTERS[reg]
 
         if not r.writable:
             raise ValueError(f"Register {reg.name} is not writable")
 
         # value ist bereits Rohwert (kein Scaling hier!)
-        self.write_holding_registers_new(
+        return self.write_holding_registers_new(
             unit=unit,
             address=r.address,
             values=value,
         )
 
     def _read_reg_value(self, reg: Reg) -> int:
+        """Read and decode a register value from the device.
+
+        Args:
+            reg: Register enum to read
+
+        Returns:
+            Decoded register value as integer
+
+        Raises:
+            RuntimeError: If read operation fails
+        """
         rdef = REGISTERS[reg]
         resp = self.read_registers(rdef.address, rdef.count, unit=self.unit_id)
         if resp.isError():
@@ -648,6 +714,17 @@ class VictronInverter(BaseInverter):
     def write_register_verified(
         self, reg: Reg, value: int, retries: int = 8, delay_s: float = 0.2
     ) -> None:
+        """Write a register and verify the value was written correctly.
+
+        Args:
+            reg: Register enum to write
+            value: Value to write
+            retries: Number of retry attempts for verification
+            delay_s: Delay in seconds between retries
+
+        Raises:
+            RuntimeError: If write or verification fails
+        """
         # 1) write
         res = self.write_register(unit=self.unit_id, reg=reg, value=value)
 
@@ -683,6 +760,16 @@ class VictronInverter(BaseInverter):
         return address
 
     def write_reg(self, unit: int | None, reg: Reg, value: Any):
+        """Write a register value with type encoding.
+
+        Args:
+            unit: Modbus unit ID
+            reg: Register enum to write
+            value: Value to write (will be encoded according to register type)
+
+        Raises:
+            ValueError: If register is not writable
+        """
         r = REGISTERS[reg]
         if not r.writable:
             raise ValueError(
@@ -690,7 +777,7 @@ class VictronInverter(BaseInverter):
             )
 
         address = r.address  # <- already correct for CCGX Modbus TCP
-        words = self._encode_words(r, value)
+        words = self.encode_words(r, value)
 
         # 1 Word => FC06, multiple => FC10
         if len(words) == 1:
@@ -700,7 +787,7 @@ class VictronInverter(BaseInverter):
         return self.write_holding_registers(unit=unit, address=address, values=words)
 
     @staticmethod
-    def _encode_words(reg: RegisterDef, value: Any) -> list[int]:
+    def encode_words(reg: RegisterDef, value: Any) -> list[int]:
         """
         Encode a python value into Modbus register words according to reg.type and reg.scale.
         """
@@ -817,6 +904,7 @@ class VictronInverter(BaseInverter):
         logger.info(f"[{self.inverter_type}] Session closed")
 
     def shutdown(self):
+        """Restore ESS state and close modbus session on shutdown."""
         # Vorher gespeicherten ESS Zustand wiederherstellen (Hub4Mode + BatteryLife)
         # Fallbacks sind in restore_ess_state() drin, falls nie gespeichert wurde
         logger.info("[VictronModbus] Restoring ESS state before shutdown...")

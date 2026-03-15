@@ -1,5 +1,16 @@
-# Auto-generated from CCGX-Modbus-TCP-register-list-3.60(1).xlsx
-# Filter: dbus-service-name in {'com.victronenergy.system','com.victronenergy.grid','com.victronenergy.settings'}
+"""CCGX Modbus register definitions (filtered subset).
+
+Auto-generated from CCGX-Modbus-TCP-register-list-3.60(1).xlsx.
+Filtered for: dbus-service-name in
+  - com.victronenergy.system
+  - com.victronenergy.grid
+  - com.victronenergy.settings
+
+This module provides register definitions and decoder functions for the filtered set of
+CCGX Modbus registers relevant to system, grid, and settings services.
+"""
+
+# pylint: disable=duplicate-code
 
 from __future__ import annotations
 
@@ -12,6 +23,7 @@ WORD_ORDER: str = "big"  # 'big' (default) or 'little' for multi-register values
 
 
 def _words_to_bytes(words: Sequence[int]) -> bytes:
+    """Convert a sequence of 16-bit words to bytes, handling word order."""
     w = [int(x) & 0xFFFF for x in words]
     if WORD_ORDER == "little" and len(w) > 1:
         w = list(reversed(w))
@@ -19,45 +31,54 @@ def _words_to_bytes(words: Sequence[int]) -> bytes:
 
 
 def decode_uint16(words: Sequence[int]) -> int:
+    """Decode a 16-bit unsigned integer from a sequence of words."""
     return int(words[0]) & 0xFFFF
 
 
 def decode_int16(words: Sequence[int]) -> int:
+    """Decode a 16-bit signed integer from a sequence of words."""
     v = int(words[0]) & 0xFFFF
     return v - 0x10000 if v & 0x8000 else v
 
 
 def decode_uint32(words: Sequence[int]) -> int:
+    """Decode a 32-bit unsigned integer from a sequence of words."""
     b = _words_to_bytes(words[:2])
     return int.from_bytes(b, "big", signed=False)
 
 
 def decode_int32(words: Sequence[int]) -> int:
+    """Decode a 32-bit signed integer from a sequence of words."""
     b = _words_to_bytes(words[:2])
     return int.from_bytes(b, "big", signed=True)
 
 
 def decode_float32(words: Sequence[int]) -> float:
+    """Decode a 32-bit floating-point value from a sequence of words."""
     b = _words_to_bytes(words[:2])
     return struct.unpack(">f", b)[0]
 
 
 def decode_uint64(words: Sequence[int]) -> int:
+    """Decode a 64-bit unsigned integer from a sequence of words."""
     b = _words_to_bytes(words[:4])
     return int.from_bytes(b, "big", signed=False)
 
 
 def decode_int64(words: Sequence[int]) -> int:
+    """Decode a 64-bit signed integer from a sequence of words."""
     b = _words_to_bytes(words[:4])
     return int.from_bytes(b, "big", signed=True)
 
 
 def decode_float64(words: Sequence[int]) -> float:
+    """Decode a 64-bit floating-point value from a sequence of words."""
     b = _words_to_bytes(words[:4])
     return struct.unpack(">d", b)[0]
 
 
 def decode_string(words: Sequence[int]) -> str:
+    """Decode a null-terminated string from a sequence of words."""
     b = _words_to_bytes(words)
     b = b.split(b"\x00", 1)[0]
     return b.decode("utf-8", errors="replace")
@@ -77,6 +98,23 @@ TYPE_DECODERS: dict[str, Callable[[Sequence[int]], Any]] = {
 
 @dataclass(frozen=True)
 class RegisterDef:
+    """Definition of a CCGX Modbus register.
+
+    Attributes:
+        address: Modbus register starting address.
+        count: Number of 16-bit words for this register (default 1).
+        scale: Scaling factor to apply to decoded value (default 1.0).
+        unit: Unit of measurement for this register.
+        type: Data type ('uint16', 'int16', 'uint32', 'int32', 'float32', 'float64', 'string').
+        writable: Whether this register can be written to.
+        service: Service path identifier.
+        path: Full path to this register.
+        description: Human-readable description of the register.
+        range: Valid range for this register value.
+        remarks: Additional remarks or notes about the register.
+        decoder: Optional custom decoder function (overrides type-based decoder).
+    """
+
     address: int
     count: int = 1
     scale: float = 1.0
@@ -91,6 +129,7 @@ class RegisterDef:
     decoder: Optional[Callable[[Sequence[int]], Any]] = None
 
     def decode(self, words: Sequence[int]) -> Any:
+        """Decode register value from words using the appropriate decoder."""
         t = (self.type or "uint16").strip().lower()
         dec = self.decoder
         if dec is None:
@@ -105,6 +144,14 @@ class RegisterDef:
 
 
 class Reg(Enum):
+    """Enumeration of filtered CCGX Modbus registers.
+
+    Contains register definitions for grid, settings, and system services:
+    - Grid: Electrical grid parameters (voltage, current, power, energy measurements)
+    - Settings: System configuration parameters (battery limits, capabilities, modes)
+    - System: Overall system status and power distribution measurements
+    """
+
     GRID_AC_L1_POWER = "com.victronenergy.grid:/Ac/L1/Power"
     GRID_AC_L2_POWER = "com.victronenergy.grid:/Ac/L2/Power"
     GRID_AC_L3_POWER = "com.victronenergy.grid:/Ac/L3/Power"
@@ -440,7 +487,7 @@ REGISTERS: dict[Reg, RegisterDef] = {
         path="/Serial",
         description="Serial",
         range="14 characters",
-        remarks="The grid meter serial as string (MSB of first register: first character, LSB of last register: last character).",
+        remarks="Grid meter serial as string.",
     ),
     Reg.GRID_AC_L1_VOLTAGE: RegisterDef(
         address=2616,
@@ -609,7 +656,10 @@ REGISTERS: dict[Reg, RegisterDef] = {
         path="/Ac/Energy/Forward",
         description="Total Energy from net",
         range="0 to 42949672.96",
-        remarks="Depending on the energy summation method used by the meter, this may be different to the sum of the individual counters",
+        remarks=(
+            "Depending on the energy summation method used by the meter, "
+            "this may be different to the sum of the individual counters"
+        ),
     ),
     Reg.GRID_AC_ENERGY_REVERSE: RegisterDef(
         address=2636,
@@ -739,7 +789,11 @@ REGISTERS: dict[Reg, RegisterDef] = {
         path="/Settings/Cgwacs/AcPowerSetPoint",
         description="ESS control loop setpoint",
         range="-32768 to 32767",
-        remarks="ESS Mode 2 - Setpoint for the ESS control-loop in the CCGX. The control-loop will increase/decrease the Multi charge/discharge power to get the grid reading to this setpoint",
+        remarks=(
+            "ESS Mode 2 - Setpoint for the ESS control-loop in the CCGX. "
+            "The control-loop will increase/decrease the Multi charge/discharge "
+            "power to get the grid reading to this setpoint"
+        ),
     ),
     Reg.SETTINGS_SETTINGS_CGWACS_MAXCHARGEPERCENTAGE: RegisterDef(
         address=2701,
@@ -752,7 +806,11 @@ REGISTERS: dict[Reg, RegisterDef] = {
         path="/Settings/Cgwacs/MaxChargePercentage",
         description="ESS max charge current (fractional)",
         range="0 to 100",
-        remarks="ESS Mode 2 - Max charge current for ESS control-loop. The control-loop will use this value to limit the multi power setpoint. For DVCC, use 2705 instead.",
+        remarks=(
+            "ESS Mode 2 - Max charge current for ESS control-loop. "
+            "The control-loop will use this value to limit the multi power setpoint. "
+            "For DVCC, use 2705 instead."
+        ),
     ),
     Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPERCENTAGE: RegisterDef(
         address=2702,
@@ -765,7 +823,12 @@ REGISTERS: dict[Reg, RegisterDef] = {
         path="/Settings/Cgwacs/MaxDischargePercentage",
         description="ESS max discharge current (fractional)",
         range="0 to 100",
-        remarks="ESS Mode 2 - Max discharge current for ESS control-loop. The control-loop will use this value to limit the multi power setpoint. Currently a value < 50% will disable discharge completely. >=50% allows. Consider using 2704 instead.",
+        remarks=(
+            "ESS Mode 2 - Max discharge current for ESS control-loop. "
+            "The control-loop will use this value to limit the multi power setpoint. "
+            "Currently a value < 50% will disable discharge completely. "
+            ">=50% allows. Consider using 2704 instead."
+        ),
     ),
     Reg.SETTINGS_SETTINGS_CGWACS_ACPOWERSETPOINT_2703: RegisterDef(
         address=2703,
@@ -778,7 +841,10 @@ REGISTERS: dict[Reg, RegisterDef] = {
         path="/Settings/Cgwacs/AcPowerSetPoint",
         description="ESS control loop setpoint",
         range="-3276800 to 3276700",
-        remarks="ESS Mode 2 – Same as 2700, but with a different scale factor. Meant for values larger than +-32kW.",
+        remarks=(
+            "ESS Mode 2 – Same as 2700, but with a different scale factor. "
+            "Meant for values larger than +-32kW."
+        ),
     ),
     Reg.SETTINGS_SETTINGS_CGWACS_MAXDISCHARGEPOWER: RegisterDef(
         address=2704,
@@ -817,7 +883,10 @@ REGISTERS: dict[Reg, RegisterDef] = {
         path="/Settings/Cgwacs/MaxFeedInPower",
         description="Maximum System Grid Feed In",
         range="-3276800 to 3276700",
-        remarks="-1: No limit, >=0: limited system feed-in. Applies to DC-coupled and AC-coupled feed-in.",
+        remarks=(
+            "-1: No limit, >=0: limited system feed-in. "
+            "Applies to DC-coupled and AC-coupled feed-in."
+        ),
     ),
     Reg.SETTINGS_SETTINGS_CGWACS_OVERVOLTAGEFEEDIN: RegisterDef(
         address=2707,
@@ -940,7 +1009,13 @@ REGISTERS: dict[Reg, RegisterDef] = {
         address=2900,
         count=1,
         scale=1.0,
-        unit="0=Unused, BL disabled;1=Restarting;2=Self-consumption;3=Self-consumption;4=Self-consumption;5=Discharge disabled;6=Force charge;7=Sustain;8=Low Soc Recharge;9=Keep batteries charged;10=BL Disabled;11=BL Disabled (Low SoC);12=BL Disabled (Low SOC recharge)",
+        unit=(
+            "0=Unused, BL disabled;1=Restarting;2=Self-consumption;"
+            "3=Self-consumption;4=Self-consumption;5=Discharge disabled;"
+            "6=Force charge;7=Sustain;8=Low Soc Recharge;"
+            "9=Keep batteries charged;10=BL Disabled;11=BL Disabled (Low SoC);"
+            "12=BL Disabled (Low SOC recharge)"
+        ),
         type="uint16",
         writable=True,
         service="com.victronenergy.settings",
@@ -966,7 +1041,10 @@ REGISTERS: dict[Reg, RegisterDef] = {
         address=2902,
         count=1,
         scale=1.0,
-        unit="1=ESS with Phase Compensation;2=ESS without phase compensation;3=Disabled/External Control",
+        unit=(
+            "1=ESS with Phase Compensation;2=ESS without phase compensation;"
+            "3=Disabled/External Control"
+        ),
         type="uint16",
         writable=True,
         service="com.victronenergy.settings",
@@ -986,7 +1064,14 @@ REGISTERS: dict[Reg, RegisterDef] = {
         path="/Settings/Cgwacs/BatteryLife/SocLimit",
         description="ESS BatteryLife SoC limit (read only)",
         range="",
-        remarks="This value is maintained by BatteryLife. The Active SOC limit is the lower of this value, and register 2901. Also see https://www.victronenergy.com/media/pg/Energy_Storage_System/en/controlling-depth-of-discharge.html#UUID-af4a7478-4b75-68ac-cf3c-16c381335d1e",
+        remarks=(
+            "This value is maintained by BatteryLife. "
+            "The Active SOC limit is the lower of this value, and register 2901. "
+            "Also see "
+            "https://www.victronenergy.com/media/pg/Energy_Storage_System/en/"
+            "controlling-depth-of-discharge.html#UUID-af4a7478-4b75-68ac-cf3c-"
+            "16c381335d1e"
+        ),
     ),
     Reg.SETTINGS_SETTINGS_PUMP0_AUTOSTARTENABLED: RegisterDef(
         address=4701,
@@ -1122,7 +1207,12 @@ REGISTERS: dict[Reg, RegisterDef] = {
         address=5426,
         count=1,
         scale=1.0,
-        unit="0=No restrictions between battery and the grid;1=Grid to battery energy flow is restricted;2=Battery to grid energy flow is restricted;3=No energy flow between battery and grid",
+        unit=(
+            "0=No restrictions between battery and the grid;"
+            "1=Grid to battery energy flow is restricted;"
+            "2=Battery to grid energy flow is restricted;"
+            "3=No energy flow between battery and grid"
+        ),
         type="uint16",
         writable=True,
         service="com.victronenergy.settings",
@@ -1298,7 +1388,10 @@ REGISTERS: dict[Reg, RegisterDef] = {
         path="/Ac/PvOnGenset/L1/Power",
         description="PV - AC-coupled on generator L1",
         range="0 to 65536",
-        remarks="Summation of all AC-Coupled PV Inverters on a generator. Bit theoretic; this will never be used.",
+        remarks=(
+            "Summation of all AC-Coupled PV Inverters on a generator. "
+            "Bit theoretic; this will never be used."
+        ),
     ),
     Reg.SYSTEM_AC_PVONGENSET_L2_POWER: RegisterDef(
         address=815,
@@ -1454,7 +1547,10 @@ REGISTERS: dict[Reg, RegisterDef] = {
         path="/Ac/ActiveIn/Source",
         description="Active input source",
         range="0 to 32768",
-        remarks="0 indicates that there is an active input, but it is not configured under Settings → System setup.",
+        remarks=(
+            "0 indicates that there is an active input, but it is not "
+            "configured under Settings → System setup."
+        ),
     ),
     Reg.SYSTEM_INTERNAL: RegisterDef(
         address=830,
@@ -1480,7 +1576,11 @@ REGISTERS: dict[Reg, RegisterDef] = {
         path="/Dc/Battery/Voltage",
         description="Battery Voltage (System)",
         range="0 to 6553.5",
-        remarks="Battery Voltage determined from different measurements. In order of preference: BMV-voltage (V), Multi-DC-Voltage (CV), MPPT-DC-Voltage (ScV), Charger voltage",
+        remarks=(
+            "Battery Voltage determined from different measurements. "
+            "In order of preference: BMV-voltage (V), Multi-DC-Voltage (CV), "
+            "MPPT-DC-Voltage (ScV), Charger voltage"
+        ),
     ),
     Reg.SYSTEM_DC_BATTERY_CURRENT: RegisterDef(
         address=841,
@@ -1636,7 +1736,10 @@ REGISTERS: dict[Reg, RegisterDef] = {
         path="/Dc/Vebus/Power",
         description="VE.Bus charge power (System)",
         range="-32768 to 32767",
-        remarks="System value etc. AND: Positive: power flowing from the Multi to the dc system. Negative: the other way around.",
+        remarks=(
+            "System value. Positive: power flowing from the Multi to the dc system. "
+            "Negative: the other way around."
+        ),
     ),
     Reg.SYSTEM_DC_INVERTERCHARGER_CURRENT: RegisterDef(
         address=868,
@@ -1798,7 +1901,10 @@ REGISTERS: dict[Reg, RegisterDef] = {
         address=5404,
         count=1,
         scale=1.0,
-        unit="0=No error;1=No ESS;2=ESS mode;3=No matching schedule;4=SOC low;5=Battery capacity not configured",
+        unit=(
+            "0=No error;1=No ESS;2=ESS mode;3=No matching schedule;"
+            "4=SOC low;5=Battery capacity not configured"
+        ),
         type="uint16",
         writable=True,
         service="com.victronenergy.system",
@@ -1811,7 +1917,12 @@ REGISTERS: dict[Reg, RegisterDef] = {
         address=5405,
         count=1,
         scale=1.0,
-        unit="0=No restrictions between battery and the grid;1=Grid to battery energy flow is restricted;2=Battery to grid energy flow is restricted;3=No energy flow between battery and grid",
+        unit=(
+            "0=No restrictions between battery and the grid;"
+            "1=Grid to battery energy flow is restricted;"
+            "2=Battery to grid energy flow is restricted;"
+            "3=No energy flow between battery and grid"
+        ),
         type="uint16",
         writable=True,
         service="com.victronenergy.system",

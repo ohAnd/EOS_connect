@@ -2,6 +2,8 @@
 Unit tests for the LoadInterface class in load_interface.py
 """
 
+# pylint: disable=duplicate-code
+
 import profile
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta

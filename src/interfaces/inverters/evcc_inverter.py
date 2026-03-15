@@ -22,6 +22,7 @@ class EvccInverter(BaseInverter):
     def __init__(self, config):
         """Initialize with minimal config."""
         super().__init__(config)
+        self.is_authenticated: bool = False
         logger.info(
             "[EvccInverter] Initialized in EVCC external control mode (delegating to EvccInterface)"
         )
