@@ -2046,6 +2046,7 @@
                 <tr>
                     <th>Valid Values</th>
                     <td>
+                        <code>victron</code> - Victron MultiPlus (3-phase ESS via Modbus/TCP)<br>
                         <code>fronius_gen24</code> - Fronius Gen24 (enhanced V2 interface, firmware-based auth)<br>
                         <code>fronius_gen24_legacy</code> - Fronius Gen24 (legacy V1 interface)<br>
                         <code>evcc</code> - Universal via EVCC external battery control<br>
@@ -2066,15 +2067,25 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>IP address of the inverter</td>
+                    <td>IP address of the inverter / device</td>
                 </tr>
                 <tr>
                     <th>Required</th>
-                    <td>Yes (for <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
+                    <td>Yes (for <code>victron</code>, <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
                 </tr>
                 <tr>
                     <th>Example</th>
-                    <td><code>192.168.1.12</code></td>
+                    <td>
+                        <code>192.168.1.12</code> (Fronius)<br>
+                        <code>192.168.1.50</code> (Victron CCGX/Cerbo GX)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        <strong>Victron:</strong> Set a static IP on your Victron device (CCGX, Cerbo GX, or Venus OS host). Modbus/TCP connection will use port 502 (standard).<br>
+                        <strong>Fronius:</strong> IP address of the inverter's local portal.
+                    </td>
                 </tr>
             </table>
 
@@ -2086,7 +2097,7 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>Username for inverter's local portal</td>
+                    <td>Username for inverter's local portal (Fronius only)</td>
                 </tr>
                 <tr>
                     <th>Required</th>
@@ -2106,7 +2117,7 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>Password for inverter's local portal</td>
+                    <td>Password for inverter's local portal (Fronius only)</td>
                 </tr>
                 <tr>
                     <th>Required</th>
@@ -2119,6 +2130,27 @@
                     </td>
                 </tr>
             </table>
+
+            <h3>Victron MultiPlus Configuration</h3>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Victron Support:</strong> EOS Connect supports Victron MultiPlus systems via Modbus/TCP network connection. The interface provides automated battery discharge control, charge-from-grid, and charge-from-PV modes for complete energy management.
+            </div>
+
+            <p><strong>Requirements:</strong></p>
+            <ul>
+                <li>Victron MultiPlus 3-phase system (single-phase support is experimental)</li>
+                <li>ESS (Energy Storage System) mode enabled on the Victron device</li>
+                <li>Network connectivity between EOS Connect and the Victron device's IP address</li>
+                <li>Default Modbus/TCP port: 502 (standard)</li>
+            </ul>
+
+            <p><strong>How It Works:</strong></p>
+            <ol>
+                <li><strong>Discharge Allowed Mode:</strong> Normal ESS operation - Victron's internal logic manages battery discharge and grid interaction</li>
+                <li><strong>Avoid Discharge Mode (Hold):</strong> ESS switches to External Control, setpoint writes 0W to all phases - prevents battery discharge and grid import</li>
+                <li><strong>Charge from Grid:</strong> Positive power setpoint written to MultiPlus - inverter regulates grid import to charge batteries</li>
+                <li><strong>Auto Restore:</strong> When EOS Connect disconnects, original ESS mode is automatically restored</li>
+            </ol>
 
             <h3>inverter.max_grid_charge_rate</h3>
             <table>
@@ -2588,8 +2620,8 @@ pv_forecast:
 
 # Inverter configuration
 inverter:
-  type: default  # Type of inverter - fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
-  address: 192.168.1.12 # Address of the inverter (fronius_gen24, fronius_gen24_legacy only)
+  type: default  # Type of inverter - victron, fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
+  address: 192.168.1.12 # Address of the inverter (fronius_gen24, fronius_gen24_legacy, victron)
   user: customer # Username for the inverter (fronius_gen24, fronius_gen24_legacy only)
   password: abc123 # Password for the inverter (fronius_gen24, fronius_gen24_legacy only)
   max_grid_charge_rate: 5000 # Max inverter grid charge rate in W - default: 5000
@@ -2666,7 +2698,7 @@ pv_forecast:
 
 # Inverter configuration
 inverter:
-  type: default  # Type of inverter - fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
+  type: default  # Type of inverter - victron, fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
 
 # EVCC configuration
 evcc:

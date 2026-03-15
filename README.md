@@ -51,7 +51,7 @@ Supported data sources and integrations:
 - **Home Assistant:** MQTT publishing (dashboard, control, auto-discovery) and direct API integration for sensor/entity data collection.
 - **OpenHAB:** MQTT publishing (dashboard, control, auto-discovery via MQTT binding) and direct API integration for item data collection.
 - **EVCC:** Monitors and controls EV charging modes and states.
-- **Inverter Interfaces:** Fronius GEN24 (with automatic firmware detection), legacy fallback, and more or via mqtt contols/ web api controls/ evcc external interver control.
+- **Inverter Interfaces:** Victron MultiPlus (3-phase ESS via Modbus/TCP), Fronius GEN24 (with automatic firmware detection), legacy fallback, and more via MQTT/web API/EVCC external inverter control.
 
 
 ## Quick Start
@@ -146,7 +146,7 @@ pv_forecast:
 
 # Inverter configuration
 inverter:
-  type: default  # Options: fronius_gen24, fronius_gen24_legacy, evcc, default
+  type: default  # Options: victron, fronius_gen24, fronius_gen24_legacy, evcc, default
 
 # EVCC configuration (optional)
 evcc:
