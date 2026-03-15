@@ -59,6 +59,7 @@
                     <a href="#example-minimal" class="toc-link toc-sub">→ Minimal Config</a>
                     <a href="#example-evcc" class="toc-link toc-sub">→ EVCC Setup</a>
                     <a href="#example-solcast" class="toc-link toc-sub">→ Solcast Setup</a>
+                    <a href="#example-ha-inverter" class="toc-link toc-sub">→ HA Inverter</a>
                 </nav>
             </aside>
 
@@ -2049,6 +2050,7 @@
                         <code>victron</code> - Victron MultiPlus (3-phase ESS via Modbus/TCP)<br>
                         <code>fronius_gen24</code> - Fronius Gen24 (enhanced V2 interface, firmware-based auth)<br>
                         <code>fronius_gen24_legacy</code> - Fronius Gen24 (legacy V1 interface)<br>
+                        <code>homeassistant</code> - Generic Home Assistant inverter control via service calls<br>
                         <code>evcc</code> - Universal via EVCC external battery control<br>
                         <code>default</code> - Disable control (display only)
                     </td>
@@ -2199,6 +2201,61 @@
                     <td>Limitation for calculating target PV charge power and for EOS inverter model. Currently not supported by EVCC external battery control, but shown and calculated (reachable per EOS Connect API)</td>
                 </tr>
             </table>
+
+            <h3>inverter.url</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.url</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>URL of your Home Assistant instance</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes (for <code>homeassistant</code> type only)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>http://192.168.1.129:8123</code></td>
+                </tr>
+            </table>
+
+            <h3>inverter.token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Long-lived access token from Home Assistant</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes (for <code>homeassistant</code> type only)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Create one in HA under: Profile &rarr; Long-Lived Access Tokens &rarr; Create Token.</td>
+                </tr>
+            </table>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Home Assistant Inverter Interface:</strong>
+                The <code>homeassistant</code> inverter type allows controlling any inverter/battery system that is integrated into Home Assistant via configurable service call sequences (e.g., Marstek, Sungrow, Goodwe).
+                <br><br>
+                For each EOS inverter mode, you define a list of HA service calls under <code>inverter:</code>:
+                <ul>
+                    <li><code>charge_from_grid</code> &ndash; Service calls for grid charging. Supports <code>{{ power }}</code> in <code>data_template</code> for dynamic power values from EOS.</li>
+                    <li><code>avoid_discharge</code> &ndash; Service calls to hold the battery (no discharge, PV charging allowed).</li>
+                    <li><code>discharge_allowed</code> &ndash; Service calls for normal battery discharge.</li>
+                </ul>
+                Each step specifies: <code>service</code> (e.g., <code>select.select_option</code>), <code>entity_id</code>, and <code>data</code> (static) or <code>data_template</code> (with <code>{{ power }}</code> variable).
+                See the <a href="#example-ha-inverter">Marstek example</a> below for a complete configuration.
+                For the ESPHome config to connect a Marstek M1 via RS485/Modbus, see <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this Gist</a>.
+            </div>
         </div>
 
         <div class="content-section" id="evcc">
@@ -2786,6 +2843,76 @@ pv_forecast:
                     <li>Get your API key from the account settings</li>
                     <li>Use these values in your EOS Connect configuration (including lat/lon for temperature forecasts)</li>
                 </ol>
+            </div>
+        </div>
+
+        <div class="content-section" id="example-ha-inverter">
+            <h3>Example: Using Home Assistant for Inverter Control (e.g., Marstek)</h3>
+            <p>When your inverter/battery system is integrated into Home Assistant, you can use the <code>homeassistant</code> inverter type to control it via HA service calls. This example shows a configuration for a Marstek battery system:</p>
+            <div class="config-example">
+<pre><code># Inverter Control Configuration (Marstek via Home Assistant)
+inverter:
+  type: homeassistant
+  url: http://192.168.1.129:8123
+  token: "your_long_lived_access_token_here"
+  max_grid_charge_rate: 2500
+  max_pv_charge_rate: 2500
+
+  # State: Force Charge (Grid)
+  charge_from_grid:
+    - service: select.select_option
+      entity_id: select.mt1_betriebsmodus
+      data: { "option": "Manuell" }
+    - service: select.select_option
+      entity_id: select.mt1_rs485_control_mode
+      data: { "option": "Aktiviert" }
+    - service: select.select_option
+      entity_id: select.mt1_erzwungene_operation
+      data: { "option": "Zwangsladen" }
+    - service: number.set_value
+      entity_id: number.mt1_ziel_leistung_manuell
+      data_template: { "value": "{{ power }}" }  # Dynamic power from EOS
+
+  # State: Avoid Discharge (Hold)
+  avoid_discharge:
+    - service: select.select_option
+      entity_id: select.mt1_betriebsmodus
+      data: { "option": "Anti-Feed-In" }
+    - service: select.select_option
+      entity_id: select.mt1_erzwungene_operation
+      data: { "option": "Stop" }
+    - service: number.set_value
+      entity_id: number.mt1_max_entladeleistung_limit
+      data: { "value": 0 }       # Block discharge
+    - service: number.set_value
+      entity_id: number.mt1_max_ladeleistung_limit
+      data: { "value": 2500 }    # Allow full PV charging
+
+  # State: Discharge Allowed (Normal)
+  discharge_allowed:
+    - service: select.select_option
+      entity_id: select.mt1_betriebsmodus
+      data: { "option": "Anti-Feed-In" }
+    - service: select.select_option
+      entity_id: select.mt1_erzwungene_operation
+      data: { "option": "Stop" }
+    - service: number.set_value
+      entity_id: number.mt1_max_entladeleistung_limit
+      data: { "value": 600 }     # Restore discharge limit
+    - service: number.set_value
+      entity_id: number.mt1_max_ladeleistung_limit
+      data: { "value": 2500 }</code></pre>
+            </div>
+            <div class="alert alert-info">
+                <strong>Key points:</strong>
+                <ul>
+                    <li>Replace <code>url</code> and <code>token</code> with your Home Assistant instance URL and a long-lived access token.</li>
+                    <li>Each state defines a sequence of HA service calls executed in order.</li>
+                    <li>Use <code>data_template</code> with <code>{{ power }}</code> for dynamic values (EOS provides the charge power). Use <code>data</code> for static values.</li>
+                    <li>The entity IDs and service calls depend on your specific inverter's HA integration. Adapt them to match your setup.</li>
+                    <li>This approach works for any inverter/battery that exposes control entities in Home Assistant.</li>
+                    <li>For a complete ESPHome config to connect a Marstek M1 via RS485/Modbus (M5Stack Atom), see <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this Gist</a>.</li>
+                </ul>
             </div>
         </div>
             </main>
