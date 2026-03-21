@@ -98,10 +98,6 @@ class FroniusLegacy(BaseInverter):
         self.em_mode = 0
         self.em_power = 0
 
-        # API rate limits
-        self.max_grid_charge_rate: int = 0
-        self.max_pv_charge_rate: int = 0
-
     def initialize(self):
         """Heavy initialization that performs API calls and loads full configuration."""
 
@@ -912,7 +908,9 @@ class FroniusLegacy(BaseInverter):
         logger.info(
             "[Inverter] API: Setting max_grid_charge_rate: %.1fW", max_grid_charge_rate
         )
-        self.max_grid_charge_rate = max_grid_charge_rate
+        self.max_grid_charge_rate = (
+            max_grid_charge_rate  # pylint: disable=attribute-defined-outside-init
+        )
 
     def api_set_max_pv_charge_rate(self, max_pv_charge_rate: int):
         """Set the maximum power in W that can be used to load the battery from the PV."""
@@ -924,7 +922,9 @@ class FroniusLegacy(BaseInverter):
         logger.info(
             "[Inverter] API: Setting max_pv_charge_rate: %.1fW", max_pv_charge_rate
         )
-        self.max_pv_charge_rate = max_pv_charge_rate
+        self.max_pv_charge_rate = (
+            max_pv_charge_rate  # pylint: disable=attribute-defined-outside-init
+        )
 
     # def api_set_em_mode(self, em_mode: int):
     #     """ Set the Energy Management Mode."""

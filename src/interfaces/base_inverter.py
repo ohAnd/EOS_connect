@@ -11,6 +11,17 @@ class BaseInverter(ABC):
     # Default value for supports_extended_monitoring (can be overridden by subclasses)
     supports_extended_monitoring_default = False
 
+    # Type hints for attributes set in __init__ (to satisfy pylint)
+    config: dict
+    address: str
+    user: str
+    password: str
+    max_grid_charge_rate: int | None
+    max_pv_charge_rate: int | None
+    is_authenticated: bool
+    inverter_type: str
+    supports_extended_monitoring: bool
+
     def __init__(self, config: dict):
         # ✔ komplette Config speichern (für Tests & spätere Erweiterungen)
         self.config = config
