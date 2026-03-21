@@ -744,7 +744,7 @@ class BaseControl:
             return
         # convert to seconds
         duration_seconds = 0
-        if 0 <= duration <= 12 * 60:
+        if 0 <= duration <= 24 * 60:
             duration_seconds = duration * 60
             # duration_seconds = duration * 60 / 10
         else:
