@@ -168,13 +168,14 @@ class PvInterface:
                     "[PV-IF] At least one PV forecast entry required for Victron"
                 )
 
-            first_entry_resource_id = self.config[0].get("resource_id", "").strip()
+            first_entry_resource_id = str(self.config[0].get("resource_id", "")).strip()
             if not first_entry_resource_id:
                 logger.error(
                     "[PV-IF] Victron VRM ID missing in first pv_forecast entry's resource_id"
                 )
                 logger.error(
-                    '[PV-IF] Please add: resource_id: "your_victron_vrm_id" in first pv_forecast entry'
+                    '[PV-IF] Please add: resource_id: "your_victron_vrm_id"'
+                    " in first pv_forecast entry"
                 )
                 raise ValueError(
                     "[PV-IF] Victron VRM ID (resource_id in first pv_forecast entry) required"
@@ -275,7 +276,8 @@ class PvInterface:
             # (Victron, Solcast, etc.), set sensible defaults that also work for temperature API
             if source in ("victron", "solcast", "evcc"):
                 # These sources don't need detailed panel orientation for PV forecasting.
-                # However, defaults must be valid for Akkudoktor temperature API which validates them.
+                # However, defaults must be valid for Akkudoktor temperature API
+                # which validates them.
                 # Using conservative values proven to work with Akkudoktor API.
                 defaults_set = []
 
@@ -1643,8 +1645,8 @@ class PvInterface:
             list: PV forecast values in Wh for each time period (hourly or 15-min)
         """
         # Get VRM ID from first PV forecast entry's resource_id and API key from config
-        vrm_id = self.config[0].get("resource_id", "").strip()
-        api_key = self.config_source.get("api_key", "").strip()
+        vrm_id = str(self.config[0].get("resource_id", "")).strip()
+        api_key = str(self.config_source.get("api_key", "")).strip()
 
         if not vrm_id:
             return self._handle_interface_error(
@@ -1707,9 +1709,8 @@ class PvInterface:
             data = response.json()
 
             # Extract solar forecast from Victron response
-            # Structure: result.records.solar_yield_forecast
-            result = data.get("result", {})
-            records = result.get("records", {})
+            # Structure: records.solar_yield_forecast (top-level in API response)
+            records = data.get("records", {})
             solar_forecast = records.get("solar_yield_forecast", [])
 
             logger.debug(

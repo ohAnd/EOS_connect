@@ -857,6 +857,108 @@ def test_victron_config_validation_missing_api_key():
         PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
 
 
+def test_victron_resource_id_as_integer(monkeypatch):
+    """
+    Test that resource_id given as a plain integer (unquoted in YAML) is handled
+    gracefully without crashing on .strip().
+    This simulates the YAML parse result when a user writes: resource_id: 12345678
+    instead of: resource_id: "12345678"
+    """
+    config_source = {"source": "victron", "api_key": "test_token"}
+    config = [
+        {
+            "name": "test",
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 5000,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.95,
+            "resource_id": 12345678,  # integer — unquoted YAML value
+        }
+    ]
+
+    # PvInterface init must not crash with AttributeError on .strip()
+    pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+
+    mock_response = {
+        "records": {
+            "solar_yield_forecast": [
+                [1730505600000 + (3600000 * i), 100.0] for i in range(48)
+            ]
+        }
+    }
+
+    def mock_get(*args, **kwargs):
+        class MockResponse:
+            def json(self):
+                return mock_response
+
+            def raise_for_status(self):
+                pass
+
+        return MockResponse()
+
+    monkeypatch.setattr("requests.get", mock_get)
+
+    forecast = pv._PvInterface__get_pv_forecast_victron_api(config[0], hours=48)
+
+    assert isinstance(forecast, list)
+    assert len(forecast) == 48
+    assert all(isinstance(v, (int, float)) for v in forecast)
+
+
+def test_victron_resource_id_as_string(monkeypatch):
+    """
+    Test that resource_id given as a quoted string (the documented correct format)
+    works identically.
+    This simulates: resource_id: "12345678"
+    """
+    config_source = {"source": "victron", "api_key": "test_token"}
+    config = [
+        {
+            "name": "test",
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 5000,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.95,
+            "resource_id": "12345678",  # string — quoted YAML value
+        }
+    ]
+
+    pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+
+    mock_response = {
+        "records": {
+            "solar_yield_forecast": [
+                [1730505600000 + (3600000 * i), 100.0] for i in range(48)
+            ]
+        }
+    }
+
+    def mock_get(*args, **kwargs):
+        class MockResponse:
+            def json(self):
+                return mock_response
+
+            def raise_for_status(self):
+                pass
+
+        return MockResponse()
+
+    monkeypatch.setattr("requests.get", mock_get)
+
+    forecast = pv._PvInterface__get_pv_forecast_victron_api(config[0], hours=48)
+
+    assert isinstance(forecast, list)
+    assert len(forecast) == 48
+    assert all(isinstance(v, (int, float)) for v in forecast)
+
+
 def test_victron_successful_forecast_retrieval(monkeypatch):
     """
     Test successful Victron VRM API forecast retrieval.
@@ -881,15 +983,13 @@ def test_victron_successful_forecast_retrieval(monkeypatch):
 
     # Mock Victron API response with sufficient forecast data
     mock_response = {
-        "result": {
-            "records": {
-                "solar_yield_forecast": [
-                    [1730505600000, 50.0],
-                    [1730509200000, 100.0],
-                    [1730512800000, 150.0],
-                ]
-                + [[1730505600000 + (3600000 * i), 100.0] for i in range(3, 48)]
-            }
+        "records": {
+            "solar_yield_forecast": [
+                [1730505600000, 50.0],
+                [1730509200000, 100.0],
+                [1730512800000, 150.0],
+            ]
+            + [[1730505600000 + (3600000 * i), 100.0] for i in range(3, 48)]
         }
     }
 
@@ -939,12 +1039,10 @@ def test_victron_15min_time_frame_conversion(monkeypatch):
     pv = PvInterface(config_source, config, time_frame_900, {}, timezone="UTC")
 
     mock_response = {
-        "result": {
-            "records": {
-                "solar_yield_forecast": [
-                    [1730505600000 + (3600000 * i), 400.0] for i in range(48)
-                ]
-            }
+        "records": {
+            "solar_yield_forecast": [
+                [1730505600000 + (3600000 * i), 400.0] for i in range(48)
+            ]
         }
     }
 
@@ -1054,7 +1152,7 @@ def test_victron_api_request_error_handling(monkeypatch):
 def test_victron_invalid_response_structure(monkeypatch):
     """
     Test that Victron provider handles malformed API responses.
-    Missing 'result' or 'records' keys should trigger error handling.
+    Missing 'records' key should trigger error handling.
     """
     config_source = {"source": "victron", "api_key": "test"}
     config = [
@@ -1130,7 +1228,7 @@ def test_victron_malformed_forecast_points(monkeypatch):
     for i in range(6, 48):
         forecast_points.append([1730505600000 + (3600000 * i), 50.0])
 
-    mock_response = {"result": {"records": {"solar_yield_forecast": forecast_points}}}
+    mock_response = {"records": {"solar_yield_forecast": forecast_points}}
 
     def mock_get(*args, **kwargs):
         class MockResponse:
@@ -1183,12 +1281,10 @@ def test_victron_dispatch_routing(monkeypatch):
     pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
 
     mock_response = {
-        "result": {
-            "records": {
-                "solar_yield_forecast": [
-                    [1730534400000 + (3600000 * i), 200.0] for i in range(48)
-                ]
-            }
+        "records": {
+            "solar_yield_forecast": [
+                [1730534400000 + (3600000 * i), 200.0] for i in range(48)
+            ]
         }
     }
 
