@@ -1,11 +1,11 @@
 name: Feature - build and test image
 # This workflow builds and optionally pushes a Docker image to GitHub Container Registry.
 # It is triggered on pushes to feature branches, pull requests to develop, and can be triggered manually.
-# 
+#
 # Build Modes:
 # - Automatic (push/PR): Builds image but does NOT push to GHCR (fast validation)
 # - Manual trigger: Option to build AND push to GHCR for remote testing
-# 
+#
 # The workflow uses the GITHUB_TOKEN secret for authentication with GitHub Container Registry.
 
 on:
@@ -18,7 +18,7 @@ on:
   workflow_dispatch: # allows manual triggering with option to push
     inputs:
       push_to_registry:
-        description: 'Push image to GHCR (for remote testing)'
+        description: "Push image to GHCR (for remote testing)"
         required: false
         type: boolean
         default: false
@@ -97,10 +97,12 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
+          provenance: false
+          sbom: false
           tags: |
             ghcr.io/${{ env.owner }}/eos_connect:feature-${{ env.clean_ref }}
           push: ${{ env.PUSH_ENABLED }}
-          
+
       - name: Build summary
         run: |
           echo "### Docker Build Summary :rocket:" >> $GITHUB_STEP_SUMMARY
@@ -110,7 +112,7 @@ jobs:
           echo "- **Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
           echo "- **Pushed to GHCR:** ${{ env.PUSH_ENABLED }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           if [[ "${{ env.PUSH_ENABLED }}" == "true" ]]; then
             echo "### ✅ Image Available in Registry" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY

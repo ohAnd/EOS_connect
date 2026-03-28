@@ -4,13 +4,15 @@ name: Develop - build image and push
 # The image is tagged with "develop" and a version string based on the workflow run number.
 # For pull requests, the Docker image is uploaded as an artifact instead of being pushed to the registry.
 # After publishing, old Docker images with the "develop" version suffix are cleaned up to save space.
+# Orphaned untagged SHA manifests (architecture-specific child manifests of deleted versions) are also
+# cleaned up, while preserving those still referenced by the kept tagged versions.
 # The workflow uses the GITHUB_TOKEN secret for authentication with GitHub Container Registry.
 
 # Jobs:
 # - pytest: Runs unit and regression tests using pytest.
 # - build_image: Builds the Docker image, tags it, and uploads it as an artifact for PRs.
 # - publish_image: Downloads the image artifact and pushes it to GitHub Container Registry (on push events).
-# - cleanup_old_develops: Cleans up old "develop" Docker images in the registry (on push events).
+# - cleanup_old_develops: Cleans up old "develop" tagged images and orphaned SHA manifests (on push events).
 
 on:
   push:
@@ -95,6 +97,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
+          provenance: false
+          sbom: false
           tags: |
             ghcr.io/${{ env.owner }}/eos_connect:develop
             ghcr.io/${{ env.owner }}/eos_connect:${{ env.VERSION }}
@@ -111,12 +115,47 @@ jobs:
     needs: publish_image
     runs-on: ubuntu-latest
     steps:
-      - name: Cleanup old Docker images
+      - name: Convert repository owner to lowercase
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Cleanup old tagged versions and their child SHA manifests
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Cleaning up old Docker images..."
-            ghcr_images=$(gh api -H "Authorization: token $GH_TOKEN" /user/packages/container/eos_connect/versions | jq -r '.[] | select(.metadata.container.tags[] | endswith("${{ env.VERSION_SUFFIX }}")) | .id' | tail -n +4)
-          for image_id in $ghcr_images; do
-            gh api -X DELETE -H "Authorization: token $GH_TOKEN" /user/packages/container/eos_connect/versions/$image_id
-          done
+          PACKAGE="eos_connect"
+          REGISTRY="ghcr.io"
+          IMAGE="$REGISTRY/${{ env.owner }}/$PACKAGE"
+
+          echo "$GH_TOKEN" | docker login $REGISTRY -u "${{ github.actor }}" --password-stdin
+
+          ALL_VERSIONS=$(gh api --paginate /user/packages/container/$PACKAGE/versions | jq -s 'flatten')
+
+          # Build a digest->id lookup map from all untagged versions for fast child resolution
+          SHA_TO_ID=$(echo "$ALL_VERSIONS" | jq -r '.[] | select(.metadata.container.tags | length == 0) | "\(.name) \(.id)"')
+
+          # Select old tagged develop versions to delete (keep latest 3), oldest first
+          OLD_TAGGED=$(echo "$ALL_VERSIONS" | jq -r '[.[] | select(.metadata.container.tags | map(endswith("${{ env.VERSION_SUFFIX }}")) | any)] | sort_by(.created_at) | reverse | .[3:][] | "\(.id)|\(.metadata.container.tags[0])"')
+
+          while IFS= read -r entry; do
+            [ -z "$entry" ] && continue
+            vid=$(echo "$entry" | cut -d'|' -f1)
+            tag=$(echo "$entry" | cut -d'|' -f2)
+            echo "Removing version: $tag (id: $vid)"
+
+            # Resolve child SHA manifests before deleting the parent tag
+            CHILD_SHAS=$(docker manifest inspect "$IMAGE:$tag" 2>/dev/null \
+              | jq -r '(.manifests // []) | .[].digest' 2>/dev/null || echo "")
+
+            # Delete the tagged parent first
+            gh api -X DELETE /user/packages/container/$PACKAGE/versions/$vid
+
+            # Delete all child SHA manifests immediately
+            for sha in $CHILD_SHAS; do
+              child_id=$(echo "$SHA_TO_ID" | grep "^$sha " | awk '{print $2}')
+              if [ -n "$child_id" ]; then
+                echo "  Deleting child SHA: $sha (id: $child_id)"
+                gh api -X DELETE /user/packages/container/$PACKAGE/versions/$child_id
+              fi
+            done
+          done <<< "$OLD_TAGGED"
+          echo "=== Cleanup complete ==="
