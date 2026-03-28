@@ -92,7 +92,21 @@ class BatteryInterface:
         self.url = config.get("url", "")
         self.soc_sensor = config.get("soc_sensor", "")
         self.temp_sensor = config.get("sensor_battery_temperature", "")
-        self.access_token = config.get("access_token", "")
+        raw_token = config.get("access_token", "")
+        # Strip leading/trailing whitespace that can be introduced by YAML >- block
+        # scalar style when long tokens wrap across multiple lines
+        self.access_token = str(raw_token).strip()
+        if self.access_token != raw_token:
+            logger.warning(
+                "[BATTERY-IF] access_token had leading/trailing whitespace stripped. "
+                "Check config.yaml: avoid using YAML block scalar style ('>-') for tokens."
+            )
+        elif " " in self.access_token or "\n" in self.access_token:
+            logger.warning(
+                "[BATTERY-IF] access_token contains internal whitespace. This will cause "
+                "HTTP 403 errors. In config.yaml, do NOT use '>-' block scalar style for "
+                "tokens — place the token directly after 'access_token: ' on the same line."
+            )
         self.max_charge_power_fix = config.get("max_charge_power_w", 1000)
         self.battery_data = config
         self.max_charge_power_dyn = 0
