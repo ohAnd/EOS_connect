@@ -846,47 +846,47 @@ class PriceInterface:
         # UI will handle time offset when filtering for display
 
         # Fill any remaining gap with smart price prediction or simple repetition
-        if len(extended_prices) < tgt_duration:
-            remaining_hours = tgt_duration - len(extended_prices)
+        if len(extended_prices) < actual_slots:
+            remaining_slots = actual_slots - len(extended_prices)
+            remaining_hours = (
+                remaining_slots
+                if self.time_frame_base == 3600
+                else remaining_slots // 4
+            )
             logger.debug(
-                "[PRICE-IF] Need %d more hours to reach 48h target, trying smart price prediction",
-                (
-                    remaining_hours
-                    if self.time_frame_base == 3600
-                    else remaining_hours // 4
-                ),
+                "[PRICE-IF] Need %d more slots (%d hours) to reach target, "
+                "trying smart price prediction",
+                remaining_slots,
+                remaining_hours,
             )
 
             # Try smart price prediction with energyforecast.de if enabled
             forecast_prices = self._fetch_adaptive_energyforecast_fallback(
                 known_prices_with_ts=prices_with_timestamps,
-                num_missing_hours=remaining_hours,
+                num_missing_hours=remaining_slots,
             )
             if forecast_prices:
                 logger.info(
                     "[PRICE-IF] Using energyforecast.de smart price prediction"
-                    + " to fill remaining %d hours",
-                    (
-                        remaining_hours
-                        if self.time_frame_base == 3600
-                        else remaining_hours // 4
-                    ),
+                    + " to fill remaining %d slots (%d hours)",
+                    remaining_slots,
+                    remaining_hours,
                 )
-                extended_prices.extend(forecast_prices)
-                extended_prices_direct.extend(forecast_prices)
+                extended_prices.extend(forecast_prices[:remaining_slots])
+                extended_prices_direct.extend(forecast_prices[:remaining_slots])
             else:
-                # Fall back to simple price repetition
-                logger.debug(
-                    "[PRICE-IF] Smart price prediction unavailable, using simple repetition"
-                    + " for remaining %d hours",
-                    (
-                        remaining_hours
-                        if self.time_frame_base == 3600
-                        else remaining_hours // 4
-                    ),
+                # Fall back to repeating the last known price value
+                pad_value = extended_prices[-1] if extended_prices else 0.0
+                pad_value_direct = (
+                    extended_prices_direct[-1] if extended_prices_direct else 0.0
                 )
-                extended_prices.extend(prices[:remaining_hours])
-                extended_prices_direct.extend(prices_direct[:remaining_hours])
+                logger.debug(
+                    "[PRICE-IF] Smart price prediction unavailable, padding %d slots "
+                    "with last known price (likely DST adjustment)",
+                    remaining_slots,
+                )
+                extended_prices.extend([pad_value] * remaining_slots)
+                extended_prices_direct.extend([pad_value_direct] * remaining_slots)
 
         self.current_prices_direct = extended_prices_direct.copy()
         logger.debug("[PRICE-IF] Prices from TIBBER fetched successfully.")
