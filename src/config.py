@@ -541,6 +541,12 @@ class ConfigManager:
         Check if the eos timeout is smaller than the refresh time
         and validate request_timeout range
         """
+        if "timeout" not in self.config["eos"]:
+            logger.warning(
+                "[Config] 'eos.timeout' not found in config.yaml."
+                " Using default value of 180 s. Please add 'timeout: 180' under the 'eos:' section."
+            )
+            self.config["eos"]["timeout"] = 180
         eos_timeout_seconds = self.config["eos"]["timeout"]
         refresh_time_seconds = self.config["refresh_time"] * 60
 
