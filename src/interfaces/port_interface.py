@@ -279,6 +279,8 @@ class PortInterface:
             logger_instance.info(
                 f"[PortInterface] Creating web server on {host}:{desired_port}"
             )
+            # Suppress waitress internal task-queue noise (e.g. "Task queue depth is N")
+            logging.getLogger("waitress").setLevel(logging.WARNING)
             server = waitress.create_server(app, host=host, port=desired_port)
             return _WaitressServerAdapter(server), desired_port
 
