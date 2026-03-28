@@ -9,9 +9,29 @@ import os
 import subprocess
 from contextlib import closing
 import psutil
-from gevent.pywsgi import WSGIServer
+import waitress
 
 logger = logging.getLogger(__name__)
+
+
+class _WaitressServerAdapter:
+    """
+    Adapter providing a gevent-compatible interface over a waitress WSGI server.
+
+    Exposes ``serve_forever()`` and ``stop()`` so the rest of eos_connect.py
+    does not need to know which WSGI server is in use.
+    """
+
+    def __init__(self, server):
+        self._server = server
+
+    def serve_forever(self):
+        """Start serving requests (blocking call)."""
+        self._server.run()
+
+    def stop(self):
+        """Stop the server and release the bound socket."""
+        self._server.close()
 
 
 class PortInterface:
@@ -233,7 +253,7 @@ class PortInterface:
             logger_instance: Logger instance for error reporting
 
         Returns:
-            tuple: (WSGIServer instance, actual_port) if successful
+            tuple: (_WaitressServerAdapter instance, actual_port) if successful
 
         Raises:
             RuntimeError: If the server cannot be created with detailed error message
@@ -254,42 +274,13 @@ class PortInterface:
             )
             raise RuntimeError(f"Port {desired_port} is not available")
 
-        # Try to create the server
+        # Try to create the server (waitress binds the socket at creation time)
         try:
             logger_instance.info(
                 f"[PortInterface] Creating web server on {host}:{desired_port}"
             )
-            http_server = WSGIServer(
-                (host, desired_port),
-                app,
-                log=None,
-                error_log=logger_instance,
-            )
-
-            # Additional test binding (skip in HA add-on to avoid double binding issues)
-            if not is_hassio:
-                try:
-                    with closing(
-                        socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    ) as test_sock:
-                        test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                        test_sock.bind((host, desired_port))
-                        test_sock.listen(1)
-                        logger_instance.debug(
-                            f"[PortInterface] Port {desired_port} successfully bound for testing"
-                        )
-                except socket.error as e:
-                    error_msg = PortInterface.get_user_friendly_error_message(
-                        desired_port, str(e)
-                    )
-                    logger_instance.error(
-                        f"[PortInterface] Port {desired_port} became unavailable{error_msg}"
-                    )
-                    raise RuntimeError(
-                        f"Port {desired_port} became unavailable: {e}"
-                    ) from e
-
-            return http_server, desired_port
+            server = waitress.create_server(app, host=host, port=desired_port)
+            return _WaitressServerAdapter(server), desired_port
 
         except (OSError, socket.error) as e:
             # Handle server creation errors with environment-specific guidance

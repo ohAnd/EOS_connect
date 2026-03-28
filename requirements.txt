@@ -2,7 +2,7 @@ Flask>=2.2.5
 requests>=2.26.0
 pandas>=2.2.3
 numpy>=2.0.0
-gevent>=24.2.1
+waitress>=3.0.0
 pyyaml>=6.0
 pytz>=2025.1
 ruamel.yaml==0.18.17
