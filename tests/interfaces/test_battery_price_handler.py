@@ -315,6 +315,54 @@ import pytz
 from src.interfaces.battery_price_handler import BatteryPriceHandler
 
 
+# =========================================================================
+# access_token YAML >- stripping
+# =========================================================================
+
+
+class TestBatteryPriceHandlerTokenStripping:
+    """Tests for YAML >- block-scalar whitespace stripping on access_token."""
+
+    def test_leading_trailing_whitespace_stripped(self, caplog):
+        """access_token with surrounding whitespace is stripped and a warning is logged."""
+        cfg = {
+            "source": "homeassistant",
+            "url": "http://ha",
+            "access_token": "  tok123  ",
+        }
+        handler = BatteryPriceHandler(cfg, None)
+        assert handler.access_token == "tok123"
+        assert "whitespace stripped" in caplog.text
+
+    def test_newline_stripped(self, caplog):
+        """access_token with trailing newline from YAML >- is stripped."""
+        cfg = {
+            "source": "homeassistant",
+            "url": "http://ha",
+            "access_token": "tok123\n",
+        }
+        handler = BatteryPriceHandler(cfg, None)
+        assert handler.access_token == "tok123"
+        assert "whitespace stripped" in caplog.text
+
+    def test_internal_whitespace_warns(self, caplog):
+        """access_token with internal space logs an authentication-failure warning."""
+        cfg = {"source": "homeassistant", "url": "http://ha", "access_token": "tok 123"}
+        handler = BatteryPriceHandler(cfg, None)
+        assert handler.access_token == "tok 123"
+        assert "internal whitespace" in caplog.text
+
+    def test_clean_token_no_warning(self, caplog):
+        """Clean access_token produces no whitespace warning."""
+        cfg = {
+            "source": "homeassistant",
+            "url": "http://ha",
+            "access_token": "cleantoken",
+        }
+        BatteryPriceHandler(cfg, None)
+        assert "whitespace" not in caplog.text
+
+
 @pytest.fixture
 def battery_config():
     """Returns a configuration dictionary for BatteryPriceHandler."""

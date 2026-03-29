@@ -40,7 +40,21 @@ class InverterHA(BaseInverter):
         # Re-declare inherited attribute so pylint tracks the setter correctly
         self.max_pv_charge_rate = self.max_pv_charge_rate
         self.url = config.get("url", "").rstrip("/")
-        self.token = config.get("token", "")
+        raw_token = config.get("token", "")
+        # Strip leading/trailing whitespace that can be introduced by YAML >- block
+        # scalar style when long tokens wrap across multiple lines
+        self.token = str(raw_token).strip()
+        if self.token != raw_token:
+            logger.warning(
+                "[InverterHA] token had leading/trailing whitespace stripped. "
+                "Check config.yaml: avoid using YAML block scalar style ('>-') for tokens."
+            )
+        elif " " in self.token or "\n" in self.token:
+            logger.warning(
+                "[InverterHA] token contains internal whitespace. This will cause "
+                "authentication failures. Use plain string style for long "
+                "tokens — place the token directly after 'token: ' on the same line."
+            )
 
         # Validate configuration
         if not self.url or not self.token:

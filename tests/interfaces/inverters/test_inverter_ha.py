@@ -108,9 +108,18 @@ class TestInverterHAInitialization:
         assert inverter.token == "test-long-lived-access-token"
 
     def test_config_sequences_loaded(self, inverter, default_config):
-        assert inverter.mode_sequences["force_charge"] == default_config["charge_from_grid"]
-        assert inverter.mode_sequences["avoid_discharge"] == default_config["avoid_discharge"]
-        assert inverter.mode_sequences["allow_discharge"] == default_config["discharge_allowed"]
+        assert (
+            inverter.mode_sequences["force_charge"]
+            == default_config["charge_from_grid"]
+        )
+        assert (
+            inverter.mode_sequences["avoid_discharge"]
+            == default_config["avoid_discharge"]
+        )
+        assert (
+            inverter.mode_sequences["allow_discharge"]
+            == default_config["discharge_allowed"]
+        )
 
     def test_default_max_rates(self):
         cfg = {"url": "http://ha.local", "token": "tok"}
@@ -142,6 +151,33 @@ class TestInverterHAInitialization:
 
     def test_initial_current_mode_is_none(self, inverter):
         assert inverter.current_mode is None
+
+    def test_token_leading_trailing_whitespace_stripped(self, caplog):
+        """Token with leading/trailing whitespace (YAML >- block scalar) is stripped."""
+        cfg = {"url": "http://ha.local", "token": "  mytoken  "}
+        inv = InverterHA(cfg)
+        assert inv.token == "mytoken"
+        assert "whitespace stripped" in caplog.text
+
+    def test_token_newline_stripped(self, caplog):
+        """Token with embedded newline from YAML >- multi-line block is stripped."""
+        cfg = {"url": "http://ha.local", "token": "mytoken\n"}
+        inv = InverterHA(cfg)
+        assert inv.token == "mytoken"
+        assert "whitespace stripped" in caplog.text
+
+    def test_token_internal_whitespace_warns(self, caplog):
+        """Token with internal whitespace logs an authentication-failure warning."""
+        cfg = {"url": "http://ha.local", "token": "part1 part2"}
+        inv = InverterHA(cfg)
+        assert inv.token == "part1 part2"
+        assert "internal whitespace" in caplog.text
+
+    def test_clean_token_no_warning(self, caplog):
+        """Clean token produces no whitespace warning."""
+        cfg = {"url": "http://ha.local", "token": "cleantoken"}
+        InverterHA(cfg)
+        assert "whitespace" not in caplog.text
 
 
 # =========================================================================

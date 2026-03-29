@@ -105,7 +105,21 @@ class PriceInterface:
         timezone="UTC",
     ):
         self.src = config["source"]
-        self.access_token = config.get("token", "")
+        raw_token = config.get("token", "")
+        # Strip leading/trailing whitespace that can be introduced by YAML >- block
+        # scalar style when long tokens wrap across multiple lines
+        self.access_token = str(raw_token).strip()
+        if self.access_token != raw_token:
+            logger.warning(
+                "[PRICE-IF] token had leading/trailing whitespace stripped. "
+                "Check config.yaml: avoid using YAML block scalar style ('>-') for tokens."
+            )
+        elif " " in self.access_token or "\n" in self.access_token:
+            logger.warning(
+                "[PRICE-IF] token contains internal whitespace. This will cause "
+                "authentication failures. Use plain string style for long "
+                "tokens — place the token directly after 'token: ' on the same line."
+            )
         self._stromligning_url = None
         self.fixed_price_adder_ct = config.get("fixed_price_adder_ct", 0.0)
         self.relative_price_multiplier = config.get("relative_price_multiplier", 0.0)
@@ -390,7 +404,8 @@ class PriceInterface:
 
         Returns:
             dict: Contains forecast_start_index, forecast_type, and forecast_source.
-                  - forecast_start_index: Index where prediction/repetition starts (None if all real)
+                  - forecast_start_index: Index where prediction/repetition starts
+                    (None if all real)
                   - forecast_type: "smart_forecast", "simple_repetition", or None
                   - forecast_source: Source of prediction (e.g., "energyforecast.de") or None
         """
@@ -1536,10 +1551,11 @@ class PriceInterface:
         # Convert offset from EUR/Wh to ct/kWh for logging
         offset_ct_kwh = offset * 100000
 
-        # Log sample comparison for learning quality (each as standalone entry for web UI compatibility)
+        # Log sample comparison for learning quality (each as standalone entry for web UI)
         for i in range(min(3, overlap_size)):
             logger.info(
-                "[PRICE-IF] Learning from %d samples - Sample %d: EPEX %.2f ct/kWh → Primary %.2f ct/kWh",
+                "[PRICE-IF] Learning from %d samples - "
+                "Sample %d: EPEX %.2f ct/kWh \u2192 Primary %.2f ct/kWh",
                 overlap_size,
                 i,
                 epex_samples[i] * 100000,

@@ -54,7 +54,21 @@ class BatteryPriceHandler:
         # Configuration
         self.source = config.get("source", "homeassistant")
         self.url = config.get("url", "")
-        self.access_token = config.get("access_token", "")
+        raw_token = config.get("access_token", "")
+        # Strip leading/trailing whitespace that can be introduced by YAML >- block
+        # scalar style when long tokens wrap across multiple lines
+        self.access_token = str(raw_token).strip()
+        if self.access_token != raw_token:
+            logger.warning(
+                "[BATTERY-PRICE] access_token had leading/trailing whitespace stripped. "
+                "Check config.yaml: avoid using YAML block scalar style ('>-') for tokens."
+            )
+        elif " " in self.access_token or "\n" in self.access_token:
+            logger.warning(
+                "[BATTERY-PRICE] access_token contains internal whitespace. This will cause "
+                "authentication failures. Use plain string style for long "
+                "tokens — place the token directly after 'access_token: ' on the same line."
+            )
         self.price_calculation_enabled = config.get("price_calculation_enabled", False)
         self.price_update_interval = config.get("price_update_interval", 900)  # 15 min
         self.price_history_lookback_hours = config.get(
@@ -719,7 +733,8 @@ class BatteryPriceHandler:
             grid_conv = "negative_import"  # import=-, export=+
 
         logger.info(
-            "[BATTERY-PRICE] Detected conventions: battery=%s grid=%s (counts: %d,%d,%d,%d from %d samples)",
+            "[BATTERY-PRICE] Detected conventions: battery=%s grid=%s "
+            "(counts: %d,%d,%d,%d from %d samples)",
             battery_conv,
             grid_conv,
             c1,
