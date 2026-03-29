@@ -672,12 +672,12 @@
                     <tr>
                         <td>Avoid Discharge</td>
                         <td>1</td>
-                        <td>Prevent battery discharge</td>
+                        <td>Prevent battery discharge. PV charging is controlled by the optimizer's <code>dc_charge</code> signal: if <code>dc_charge=0</code> the battery is fully isolated (no discharge, no PV charging) &mdash; <strong>Fronius Gen24 only</strong>; on other inverters PV charging is unrestricted.</td>
                     </tr>
                     <tr>
                         <td>Discharge Allowed</td>
                         <td>2</td>
-                        <td>Allow battery discharge</td>
+                        <td>Allow battery discharge. PV charging is controlled by the optimizer's <code>dc_charge</code> signal: if <code>dc_charge=0</code> the battery drains but will not be refilled by PV (e.g. during negative PV price slots) &mdash; <strong>Fronius Gen24 only</strong>; on other inverters PV charging is unrestricted.</td>
                     </tr>
                     <tr>
                         <td>Avoid Discharge EVCC FAST</td>

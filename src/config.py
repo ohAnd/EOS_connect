@@ -61,6 +61,7 @@ class ConfigManager:
                         "timeout": 180,  # Default timeout for EOS optimize request
                         "time_frame": 3600,  # Time frame for EOS optimize request in seconds
                         "dyn_override_discharge_allowed_pv_greater_load": False,  # Dynamic override for discharge when PV > Load
+                        "pv_battery_charge_control_enabled": False,  # PV battery charge control via optimizer dc_charge signal
                     }
                 ),
                 "price": CommentedMap(
@@ -235,6 +236,12 @@ class ConfigManager:
             + " - when enabled, discharge is allowed even if optimizer says avoid discharge,"
             + " if pv_forecast > load in current time slot",
             "dyn_override_discharge_allowed_pv_greater_load",
+        )
+        config["eos"].yaml_add_eol_comment(
+            "Enable PV-to-battery charge control from optimizer dc_charge signal - default: false"
+            + " - when enabled, enforces optimizer PV charge decisions slot-by-slot"
+            + " (hardware enforcement on Fronius Gen24 only)",
+            "pv_battery_charge_control_enabled",
         )
         # price configuration
         config.yaml_set_comment_before_after_key(

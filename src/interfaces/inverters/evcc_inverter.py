@@ -92,13 +92,5 @@ class EvccInverter(BaseInverter):
         logger.debug("[EvccInverter] fetch_inverter_data() called (delegated to EVCC)")
         return {}
 
-    def api_set_max_pv_charge_rate(self, rate_w: int) -> bool:
-        """PV charge rate control delegated to EvccInterface."""
-        logger.debug(
-            "[EvccInverter] api_set_max_pv_charge_rate(%d W) called (delegated to EVCC)",
-            rate_w,
-        )
-        return True
-
     # Capability flag is set via supports_extended_monitoring_default class attribute
     # and handled by BaseInverter.__init__

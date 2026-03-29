@@ -1260,11 +1260,19 @@ def change_control_state():
         round(battery_interface.get_max_charge_power()),
         config_manager.config["inverter"]["max_grid_charge_rate"],
     )
-    tgt_dc_charge_power = min(
-        base_control.get_current_dc_charge_demand(),
-        round(battery_interface.get_max_charge_power()),
-        config_manager.config["inverter"]["max_pv_charge_rate"],
+    # When pv_battery_charge_control_enabled is False, ignore the optimizer's dc_charge
+    # signal and always allow full PV charging (other inverters don't enforce it anyway).
+    _pv_charge_ctrl_enabled = config_manager.config.get("eos", {}).get(
+        "pv_battery_charge_control_enabled", False
     )
+    if _pv_charge_ctrl_enabled:
+        tgt_dc_charge_power = min(
+            base_control.get_current_dc_charge_demand(),
+            round(battery_interface.get_max_charge_power()),
+            config_manager.config["inverter"]["max_pv_charge_rate"],
+        )
+    else:
+        tgt_dc_charge_power = config_manager.config["inverter"]["max_pv_charge_rate"]
 
     # Update current battery max to actual capability (after SOC/temp derating)
     # This allows get_needed_ac_charge_power() to properly cap calculated demand
@@ -1289,12 +1297,14 @@ def change_control_state():
         # MODE_AVOID_DISCHARGE
         elif current_overall_state == 1:
             if inverter_fronius_en:
+                inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_avoid_discharge()
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("avoid_discharge")
             logger.info(
-                "[Main] Inverter mode set to %s (_____-----_____)",
+                "[Main] Inverter mode set to %s, PV charge rate: %s W (_____-----_____)",
                 current_overall_state_text,
+                tgt_dc_charge_power,
             )
         # MODE_DISCHARGE_ALLOWED
         elif current_overall_state == 2:
@@ -1304,18 +1314,21 @@ def change_control_state():
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("discharge_allowed")
             logger.info(
-                "[Main] Inverter mode set to %s (_____+++++_____)",
+                "[Main] Inverter mode set to %s, PV charge rate: %s W (_____+++++_____)",
                 current_overall_state_text,
+                tgt_dc_charge_power,
             )
         # MODE_AVOID_DISCHARGE_EVCC_FAST
         elif current_overall_state == 3:
             if inverter_fronius_en:
+                inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_avoid_discharge()
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("avoid_discharge")
             logger.info(
-                "[Main] Inverter mode set to %s (_____+---+_____)",
+                "[Main] Inverter mode set to %s, PV charge rate: %s W (_____+---+_____)",
                 current_overall_state_text,
+                tgt_dc_charge_power,
             )
         # MODE_DISCHARGE_ALLOWED_EVCC_PV
         elif current_overall_state == 4:
@@ -1325,8 +1338,9 @@ def change_control_state():
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("discharge_allowed")
             logger.info(
-                "[Main] Inverter mode set to %s (_____-+++-_____)",
+                "[Main] Inverter mode set to %s, PV charge rate: %s W (_____-+++-_____)",
                 current_overall_state_text,
+                tgt_dc_charge_power,
             )
         # MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV
         elif current_overall_state == 5:
@@ -1336,8 +1350,9 @@ def change_control_state():
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("discharge_allowed")
             logger.info(
-                "[Main] Inverter mode set to %s (_____+-+-+_____)",
+                "[Main] Inverter mode set to %s, PV charge rate: %s W (_____+-+-+_____)",
                 current_overall_state_text,
+                tgt_dc_charge_power,
             )
         # MODE_CHARGE_FROM_GRID_EVCC_FAST
         elif current_overall_state == 6:
@@ -1543,6 +1558,9 @@ def get_controls():
             "dyn_override_discharge_allowed_enabled": config_manager.config.get(
                 "eos", {}
             ).get("dyn_override_discharge_allowed_pv_greater_load", False),
+            "pv_battery_charge_control_enabled": config_manager.config.get(
+                "eos", {}
+            ).get("pv_battery_charge_control_enabled", False),
             "dyn_override_discharge_allowed_active": eos_interface.get_last_control_data()[
                 0
             ].get(

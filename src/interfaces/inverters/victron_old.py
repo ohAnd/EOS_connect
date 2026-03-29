@@ -225,20 +225,3 @@ class VictronModbus:
             f"[VictronModbus] API: Setting max_grid_charge_rate: {max_grid_charge_rate}W"
         )
         self.max_grid_charge_rate = max_grid_charge_rate
-
-    def api_set_max_pv_charge_rate(self, max_pv_charge_rate: int):
-        """Set the maximum power in W that can be used to charge the battery from PV.
-
-        Args:
-            max_pv_charge_rate: Maximum PV charge power in watts
-        """
-        if max_pv_charge_rate < 0:
-            logger.warning(
-                f"[InverterV2] API: Invalid max_pv_charge_rate {max_pv_charge_rate}W"
-            )
-            return
-
-        logger.info(
-            f"[InverterV2] API: Setting max_pv_charge_rate: {max_pv_charge_rate}W"
-        )
-        self.max_pv_charge_rate = max_pv_charge_rate

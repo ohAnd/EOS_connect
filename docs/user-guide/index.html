@@ -381,7 +381,8 @@ recorder:
             <ol>
                 <li>Check "Last Optimization" timestamp in dashboard</li>
                 <li>View "Next Optimization" countdown</li>
-                <li>Charts show planned battery SOC curve</li>
+                <li>Charts show planned battery SOC curve. When <code>pv_battery_charge_control_enabled</code> is active, PV forecast bars turn <strong>amber/darker orange</strong> for slots where the optimizer plans PV-to-battery charging (<code>dc_charge=1</code>); standard orange means no PV charging planned for that slot.</li>
+                <li>The hourly schedule table shows a <i class="fa-solid fa-solar-panel" style="color:#FFA500;"></i> solar-panel icon per slot: <strong>amber</strong> = PV charging battery planned, <strong>faded</strong> = no PV charging planned. Enforced on hardware for <strong>Fronius Gen24</strong> only.</li>
             </ol>
 
             <h3>Preventive Mode Overrides</h3>

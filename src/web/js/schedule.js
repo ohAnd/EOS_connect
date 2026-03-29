@@ -97,6 +97,9 @@ class ScheduleManager {
         var currentHour = serverTime.getHours();
         var discharge_allowed = data_response["discharge_allowed"];
         var ac_charge = data_response["ac_charge"];
+        var dc_charge = data_response["dc_charge"] || [];
+        var pv_charge_ctrl_enabled = (data_controls["current_states"] &&
+            data_controls["current_states"]["pv_battery_charge_control_enabled"]) || false;
         var inverter_mode_num = data_controls["current_states"]["inverter_mode_num"];
         var manual_override_active = data_controls["current_states"]["override_active"];
         var manual_override_active_until = data_controls["current_states"]["override_end_time"];
@@ -138,6 +141,11 @@ class ScheduleManager {
             // Transform discharge_allowed to hourly values (avg then round)
             discharge_allowed = this.convertQuarterlyToHourly(
                 discharge_allowed,
+                data_response["timestamp"]
+            ).map(val => val > 0 ? 1 : 0);
+            // Transform dc_charge to hourly values (avg then round)
+            dc_charge = this.convertQuarterlyToHourly(
+                dc_charge,
                 data_response["timestamp"]
             ).map(val => val > 0 ? 1 : 0);
         }
@@ -245,6 +253,15 @@ class ScheduleManager {
                     buttonDiv.innerHTML += " <span style='font-size: xx-small;'>" + (ac_charge[(index + currentHour)] / 1000).toFixed(1) + " kWh</span>";
                     buttonDiv.style.padding = "0 10px";
                     buttonDiv.style.width = "";
+                } else {
+                    // PV charge indicator: only shown when pv_battery_charge_control_enabled
+                    if (pv_charge_ctrl_enabled) {
+                        const pvIdx = index + currentHour;
+                        const pvChargeActive = dc_charge.length > pvIdx && dc_charge[pvIdx] > 0;
+                        buttonDiv.innerHTML += pvChargeActive
+                            ? " <i class='fa-solid fa-solar-panel' title='PV charging battery' style='font-size:xx-small; color:#FFA500;'></i>"
+                            : " <i class='fa-solid fa-solar-panel' title='No PV charging planned' style='font-size:xx-small; opacity:0.2;'></i>";
+                    }
                 }
             }
 

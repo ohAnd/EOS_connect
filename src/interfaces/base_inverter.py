@@ -123,6 +123,36 @@ class BaseInverter(ABC):
 
     # --- Gemeinsame Utility-Methoden ---
 
+    def api_set_max_pv_charge_rate(self, rate_w: int) -> bool:
+        """Store the maximum PV-to-battery charge rate in Watts.
+
+        Validates the rate, logs it, and stores it as ``self.max_pv_charge_rate``.
+        Inverters that can actively enforce the rate on hardware (e.g. via a
+        Time-of-Use API) should override this method and call
+        ``super().api_set_max_pv_charge_rate(rate_w)`` to ensure the value is
+        stored before the hardware command is applied.
+
+        Args:
+            rate_w: Maximum PV charge power in watts (must be >= 0).
+
+        Returns:
+            True if the rate was accepted and stored, False if rejected.
+        """
+        if rate_w < 0:
+            logger.warning(
+                "[%s] api_set_max_pv_charge_rate: invalid rate %sW (must be >= 0)",
+                self.inverter_type,
+                rate_w,
+            )
+            return False
+        logger.debug(
+            "[%s] api_set_max_pv_charge_rate: %.0f W stored",
+            self.inverter_type,
+            rate_w,
+        )
+        self.max_pv_charge_rate = rate_w
+        return True
+
     def disconnect(self):
         """Session schließt sich selbst."""
         logger.info(f"[{self.inverter_type}] Session closed")

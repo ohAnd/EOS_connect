@@ -464,7 +464,13 @@ class FroniusV2(BaseInverter):
         return self.inverter_current_data
 
     def set_mode_avoid_discharge(self):
-        """Set the inverter to avoid discharging the battery."""
+        """Set the inverter to avoid discharging the battery.
+
+        Always sends DISCHARGE_MAX:0 to block discharge. When the optimizer also
+        requested no PV charging (max_pv_charge_rate == 0), appends CHARGE_MAX:0
+        to block PV-to-battery charging as well, putting the battery into full
+        isolation mode (no charge, no discharge).
+        """
         timeofuselist = [
             {
                 "Active": True,
@@ -482,16 +488,11 @@ class FroniusV2(BaseInverter):
                 },
             }
         ]
-        return self.set_time_of_use(timeofuselist)
-
-    def set_mode_allow_discharge(self):
-        """Set the inverter to discharge the battery."""
-        timeofuselist = []
-        if self.max_pv_charge_rate > 0:
-            timeofuselist = [
+        if self.max_pv_charge_rate == 0:
+            timeofuselist.append(
                 {
                     "Active": True,
-                    "Power": int(self.max_pv_charge_rate),
+                    "Power": int(0),
                     "ScheduleType": "CHARGE_MAX",
                     "TimeTable": {"Start": "00:00", "End": "23:59"},
                     "Weekdays": {
@@ -504,10 +505,38 @@ class FroniusV2(BaseInverter):
                         "Sun": True,
                     },
                 }
-            ]
-        response = self.set_time_of_use(timeofuselist)
+            )
+        return self.set_time_of_use(timeofuselist)
 
-        return response
+    def set_mode_allow_discharge(self):
+        """Set the inverter to allow battery discharge.
+
+        Always sends a CHARGE_MAX rule using the current max_pv_charge_rate:
+        - rate > 0: limits PV-to-battery charging to that rate (normal operation)
+        - rate == 0: explicitly blocks PV-to-battery charging (e.g. evening
+          discharge with negative PV prices — optimizer drains battery, no refill)
+
+        Sending an empty TOU list would wipe all existing rules on the Gen24,
+        so we always send an explicit entry regardless of the rate value.
+        """
+        timeofuselist = [
+            {
+                "Active": True,
+                "Power": int(self.max_pv_charge_rate),
+                "ScheduleType": "CHARGE_MAX",
+                "TimeTable": {"Start": "00:00", "End": "23:59"},
+                "Weekdays": {
+                    "Mon": True,
+                    "Tue": True,
+                    "Wed": True,
+                    "Thu": True,
+                    "Fri": True,
+                    "Sat": True,
+                    "Sun": True,
+                },
+            }
+        ]
+        return self.set_time_of_use(timeofuselist)
 
     def set_mode_force_charge(self, chargerate=500):
         """Set the inverter to charge the battery with a specific power from GRID."""
@@ -975,20 +1004,6 @@ class FroniusV2(BaseInverter):
         )
         self.max_grid_charge_rate = (
             max_grid_charge_rate  # pylint: disable=attribute-defined-outside-init
-        )
-
-    def api_set_max_pv_charge_rate(self, max_pv_charge_rate: int):
-        """Set the maximum power in W that can be used to load the battery from the PV."""
-        if max_pv_charge_rate < 0:
-            logger.warning(
-                "[Inverter] API: Invalid max_pv_charge_rate %s", max_pv_charge_rate
-            )
-            return
-        logger.info(
-            "[Inverter] API: Setting max_pv_charge_rate: %.1fW", max_pv_charge_rate
-        )
-        self.max_pv_charge_rate = (
-            max_pv_charge_rate  # pylint: disable=attribute-defined-outside-init
         )
 
     # def api_set_em_mode(self, em_mode: int):

@@ -859,17 +859,28 @@ class VictronInverter(BaseInverter):
         )
         self.max_grid_charge_rate = max_grid_charge_rate
 
-    def api_set_max_pv_charge_rate(self, max_pv_charge_rate: int):
-        """Set the maximum power in W that can be used to load the battery from the PV."""
-        if max_pv_charge_rate < 0:
+    def api_set_max_pv_charge_rate(self, rate_w: int) -> bool:
+        """Store the PV charge rate and warn if rate=0 (not enforceable in ESS mode).
+
+        Victron ESS mode does not support blocking PV-to-battery charging via
+        the Modbus interface. The rate is still stored via the base class so
+        future logic can read it, but the Gen24-style TOU enforcement is not
+        available here.
+
+        Args:
+            rate_w: Maximum PV charge power in watts (must be >= 0).
+
+        Returns:
+            True if the rate was accepted and stored, False if rejected.
+        """
+        if not super().api_set_max_pv_charge_rate(rate_w):
+            return False
+        if rate_w == 0:
             logger.warning(
-                "[Inverter] API: Invalid max_pv_charge_rate %s", max_pv_charge_rate
+                "[VictronModbus] PV charge rate limitation (rate=0 W) requested but not "
+                "supported in Victron ESS mode — PV charging will not be blocked"
             )
-            return
-        logger.info(
-            "[Inverter] API: Setting max_pv_charge_rate: %.1fW", max_pv_charge_rate
-        )
-        self.max_pv_charge_rate = max_pv_charge_rate
+        return True
 
     def _read_battery_voltage_v(self) -> float:
         """Read current system battery voltage in V."""

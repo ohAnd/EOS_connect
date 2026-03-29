@@ -46,6 +46,7 @@
                     <a href="#load" class="toc-link">Load</a>
                     <a href="#eos" class="toc-link">EOS Server</a>
                     <a href="#dyn-override" class="toc-link toc-sub">→ Dynamic PV Override</a>
+                    <a href="#pv-charge-control" class="toc-link toc-sub">→ PV Battery Charge Control</a>
                     <a href="#price" class="toc-link">Electricity Prices</a>
                     <a href="#energyforecast" class="toc-link toc-sub">→ Smart Price Prediction</a>
                     <a href="#battery" class="toc-link">Battery</a>
@@ -81,6 +82,9 @@
                 </div>
                 <div class="feature-item">
                     <a href="#dyn-override"><i class="fas fa-zap"></i> Dynamic PV Override</a>
+                </div>
+                <div class="feature-item">
+                    <a href="#pv-charge-control"><i class="fas fa-solar-panel"></i> PV Battery Charge Control</a>
                 </div>
                 <div class="feature-item">
                     <a href="#price"><i class="fas fa-dollar-sign"></i> Electricity Prices</a>
@@ -482,6 +486,41 @@
                             <li><strong>Per time slot:</strong> Checked for each optimization interval</li>
                             <li><strong>Visual feedback:</strong> Green indicators on dashboard when active</li>
                         </ul>
+                    </td>
+                </tr>
+            </table>
+
+            <h3 id="pv-charge-control">eos.pv_battery_charge_control_enabled</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>eos.pv_battery_charge_control_enabled</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Allows the optimizer to control PV-to-battery charging on a per-slot basis using the <code>dc_charge</code> signal. When enabled, slots where the optimizer plans no PV charging (e.g. negative price slots, battery near full) will physically block PV→battery charging.</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td><code>true</code>, <code>false</code></td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>false</code> (disabled)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td style="padding: 1rem;">
+                        <ul style="margin: 0; padding-left: 20px;">
+                            <li><strong>Fronius Gen24 only:</strong> Hardware enforcement via the Time-of-Use (TOU) API. On all other inverters (Victron, Home Assistant, EVCC, default) the value is stored but PV charging is not blocked in hardware &mdash; enabling this setting has no effect on those inverters.</li>
+                            <li><strong>Forecast dependency:</strong> When enabled and the optimizer predicts load &gt; PV for a slot, PV charging is blocked even if actual sun turns out stronger than forecast. Disable if you observe unwanted PV blocking on sunny days.</li>
+                            <li><strong>Interaction with dynamic override:</strong> The dynamic override (<code>dyn_override_discharge_allowed_pv_greater_load</code>) only liberates <em>discharge</em>, not <em>PV charging</em>. If both features are on and a slot has <code>dc_charge=0</code> but override fires, the battery can discharge but PV cannot charge it (Fronius only).</li>
+                            <li><strong>Dashboard:</strong> Gold-coloured PV forecast bars and the solar-panel icon in the schedule table are only shown when this setting is enabled.</li>
+                        </ul>
+                        <div class="alert" style="background: rgba(255,165,0,0.1); border-left: 4px solid #FFA500; padding: 0.75rem; margin-top: 0.75rem; border-radius: 4px;">
+                            <i class="fas fa-exclamation-triangle" style="color: #FFA500;"></i>
+                            <strong>Fronius Gen24 only</strong> &mdash; Hardware charge blocking via TOU register. All other inverter types are unaffected regardless of this setting.
+                        </div>
                     </td>
                 </tr>
             </table>
@@ -2153,6 +2192,9 @@
                 <li><strong>Charge from Grid:</strong> Positive power setpoint written to MultiPlus - inverter regulates grid import to charge batteries</li>
                 <li><strong>Auto Restore:</strong> When EOS Connect disconnects, original ESS mode is automatically restored</li>
             </ol>
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-exclamation-triangle"></i> PV Charge Rate Limiting not supported:</strong> Victron ESS mode does not allow blocking PV-to-battery charging via the Modbus/TCP interface. The <code>inverter.max_pv_charge_rate</code> value is used by the optimizer model only. When the optimizer requests <code>dc_charge=0</code> (no PV charging) for a time slot, EOS Connect logs a warning but <strong>cannot enforce</strong> this on the hardware — PV will still charge the battery if solar energy is available.
+            </div>
 
             <h3>inverter.max_grid_charge_rate</h3>
             <table>
@@ -2198,7 +2240,11 @@
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Limitation for calculating target PV charge power and for EOS inverter model. Currently not supported by EVCC external battery control, but shown and calculated (reachable per EOS Connect API)</td>
+                    <td>
+                        Upper cap for the optimizer model and the target PV charge power calculation.<br><br>
+                        <strong>Fronius Gen24 (<code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>):</strong> Actively enforced via the Time-of-Use (TOU) API on every control cycle. When the optimizer sets <code>dc_charge=0</code> for a slot, a <code>CHARGE_MAX:0</code> TOU entry is written to the inverter, explicitly blocking PV-to-battery charging. When <code>dc_charge&gt;0</code>, a <code>CHARGE_MAX:&lt;rate&gt;</code> entry is written instead, allowing PV charging up to this wattage.<br><br>
+                        <strong>All other inverter types (Victron, HA, EVCC, default):</strong> Value is stored internally and used by the optimizer model only — no hardware PV charge limiting is performed. For Victron ESS, blocking PV charging via Modbus is not supported; a warning is logged when <code>dc_charge=0</code> is requested.
+                    </td>
                 </tr>
             </table>
 

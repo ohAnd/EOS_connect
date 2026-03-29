@@ -231,13 +231,6 @@ class InverterHA(BaseInverter):
         if value:
             self._execute_sequence(self.mode_sequences["force_charge"])
 
-    def api_set_max_pv_charge_rate(self, max_pv_charge_rate: int):
-        """Set the maximum PV charge rate (stores value internally)."""
-        self.max_pv_charge_rate = max_pv_charge_rate
-        logger.debug(
-            "[InverterHA] Updated max PV charge rate to %s", max_pv_charge_rate
-        )
-
     def get_battery_info(self) -> dict:
         """Return battery info. HA does not provide direct battery data."""
         return {}
