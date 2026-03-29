@@ -239,7 +239,14 @@ class EVOptBackend:
             n = min(lengths) if lengths else 1
 
         def normalize(arr):
-            return [float(x) for x in arr[:n]] if arr else [0.0] * n
+            """Return exactly *n* floats from arr, padding with last value if short."""
+            if not arr:
+                return [0.0] * n
+            result = [float(x) for x in arr[:n]]
+            if len(result) < n:
+                pad = result[-1] if result else 0.0
+                result.extend([pad] * (n - len(result)))
+            return result
 
         pv_ts = normalize(pv_series)
         price_ts = normalize(price_series)

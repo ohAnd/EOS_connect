@@ -1307,3 +1307,271 @@ def test_victron_dispatch_routing(monkeypatch):
     assert isinstance(forecast, list)
     assert len(forecast) == 48
     assert all(isinstance(x, (int, float)) for x in forecast)
+
+
+# ---------------------------------------------------------------------------
+# Open-Meteo DST normalisation tests
+# ---------------------------------------------------------------------------
+# These tests verify the DST guard added to two OpenMeteo methods:
+#   * __get_pv_forecast_openmeteo_api  (source: openmeteo_local)
+#   * __get_pv_forecast_openmeteo_lib  (source: openmeteo)
+#
+# Three scenarios per method:
+#   1. Normal day  – API / lib returns exactly 48 hourly elements
+#   2. Spring-forward – returns 47 elements (extra hour trimmed away)
+#   3. Fall-back       – returns 49 elements (extra hour added)
+#
+# In all cases the output must contain exactly 48 elements.
+# ---------------------------------------------------------------------------
+
+import asyncio  # noqa: E402 – used only by the openmeteo_lib tests
+import pytz  # noqa: E402
+from unittest.mock import AsyncMock, MagicMock, patch  # noqa: E402
+
+
+def _openmeteo_api_entry():
+    """
+    Return a minimal pv_config_entry suitable for __get_pv_forecast_openmeteo_api.
+
+    Returns:
+        dict: PV config entry with required keys.
+    """
+    return {
+        "lat": 50.0,
+        "lon": 8.0,
+        "name": "test_openmeteo_api",
+        "tilt": 30,
+        "azimuth": 180,
+        "power": 200,
+        "inverterEfficiency": 0.85,
+        "horizon": [0] * 36,
+    }
+
+
+def _make_api_response(n_elements):
+    """
+    Build a fake Open-Meteo hourly response with *n_elements* per array.
+
+    Args:
+        n_elements: Number of hourly entries to include.
+
+    Returns:
+        dict: Fake hourly weather response dict.
+    """
+    return {
+        "hourly": {
+            "shortwave_radiation": [500.0] * n_elements,
+            "cloudcover": [20.0] * n_elements,
+            "time": [
+                f"2026-03-29T{str(h % 24).zfill(2)}:00:00" for h in range(n_elements)
+            ],
+        }
+    }
+
+
+def _mock_retry_for_api(fake_data):
+    """
+    Build a ``_retry_request`` replacement that returns *fake_data* on the
+    second call (JSON parse).  The first call (HTTP request) returns a mock
+    response whose ``.json()`` method returns the same *fake_data*.
+
+    Args:
+        fake_data: Dict to return when the JSON-parse step is executed.
+
+    Returns:
+        Callable: Mock ``_retry_request`` implementation.
+    """
+    mock_response = MagicMock()
+    mock_response.json.return_value = fake_data
+    call_count = [0]
+
+    def _retry(func, err, *args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return mock_response  # HTTP request step
+        return func()  # JSON parse step – calls response.json()
+
+    return _retry
+
+
+class TestOpenMeteoApiDSTNormalisation:
+    """
+    Tests for __get_pv_forecast_openmeteo_api DST normalisation.
+
+    The method fetches hourly radiation/cloudcover data and builds a
+    pv_forecast list.  On a spring-forward day the API may return only
+    47 hourly entries; on a fall-back day it may return 49.  The
+    normalisation guard must ensure the output always contains exactly
+    48 elements.
+    """
+
+    _ENTRY = _openmeteo_api_entry()
+
+    def _run(self, n_api_elements):
+        """
+        Run __get_pv_forecast_openmeteo_api with *n_api_elements* hourly
+        API entries and return the forecast list.
+
+        Solar-position and AOI methods are replaced with trivial lambdas so
+        the test runs quickly without any real astronomical computation.
+
+        Args:
+            n_api_elements: Number of hourly entries to supply in the fake
+                API response (47, 48, or 49).
+
+        Returns:
+            list: Hourly PV forecast (should always be length 48).
+        """
+        pv = PvInterface({}, [], time_frame_base, {}, timezone="Europe/Berlin")
+        fake_data = _make_api_response(n_api_elements)
+        pv._retry_request = _mock_retry_for_api(fake_data)
+        pv._solar_position = lambda times, lat, lon: [
+            {"apparent_zenith": 45.0, "azimuth": 180.0} for _ in times
+        ]
+        pv._angle_of_incidence = (
+            lambda surface_tilt=0, surface_azimuth=0, solar_zenith=0, solar_azimuth=0: 45.0
+        )
+        return pv._PvInterface__get_pv_forecast_openmeteo_api(self._ENTRY)
+
+    def test_normal_day_48_elements_unchanged(self):
+        """
+        Normal day: API returns 48 hourly entries → output must have 48 elements.
+        """
+        result = self._run(48)
+        assert len(result) == 48, f"Normal day: expected 48 elements, got {len(result)}"
+
+    def test_spring_forward_47_elements_padded_to_48(self):
+        """
+        Spring-forward day: API returns only 47 hourly entries (23-hour day).
+        The DST guard must pad the output to exactly 48 elements using the
+        last available value.
+        """
+        result = self._run(47)
+        assert (
+            len(result) == 48
+        ), f"Spring-forward: expected 48 elements after padding, got {len(result)}"
+        # The 48th element must equal the 47th (last-value padding)
+        assert (
+            result[47] == result[46]
+        ), "Spring-forward: padded element must repeat the last forecast value"
+
+    def test_fall_back_49_elements_trimmed_to_48(self):
+        """
+        Fall-back day: API returns 49 hourly entries (25-hour day, or edge case
+        where more data than expected is provided).  The DST guard must trim
+        the output to exactly 48 elements.
+        """
+        result = self._run(49)
+        assert (
+            len(result) == 48
+        ), f"Fall-back: expected 48 elements after trimming, got {len(result)}"
+
+
+class TestOpenMeteoLibDSTNormalisation:
+    """
+    Tests for __get_pv_forecast_openmeteo_lib DST normalisation.
+
+    The lib-based method computes ``hours_until_tomorrow_midnight`` using
+    wall-clock arithmetic which yields 47 on a spring-forward day and 49
+    on a fall-back day.  The normalisation guard must always return 48 hourly
+    elements.
+
+    ``OpenMeteoSolarForecast`` and ``datetime.now`` are mocked so the test is
+    purely unit-level with no network traffic or real astronomical computation.
+    """
+
+    _ENTRY = {
+        "lat": 50.0,
+        "lon": 8.0,
+        "name": "test_openmeteo_lib",
+        "tilt": 30,
+        "azimuth": 0,
+        "power": 1000,
+        "inverterEfficiency": 0.9,
+    }
+
+    def _run(self, fake_now_berlin):
+        """
+        Run __get_pv_forecast_openmeteo_lib with ``datetime.now`` pinned to
+        *fake_now_berlin* and all OpenMeteoSolarForecast internals mocked.
+
+        The OpenMeteo lib usage pattern is:
+            async with OpenMeteoSolarForecast(...) as forecast:
+                estimate = await forecast.estimate()
+
+        Args:
+            fake_now_berlin: A Berlin-timezone-aware datetime representing the
+                simulated current time.
+
+        Returns:
+            list: Hourly PV forecast (should always be length 48).
+        """
+        pv = PvInterface({}, [], time_frame_base, {}, timezone="Europe/Berlin")
+
+        # Build the estimate mock: timezone + power_production_at_time
+        mock_estimate = MagicMock()
+        mock_estimate.timezone = fake_now_berlin.tzinfo
+        mock_estimate.power_production_at_time.return_value = 60.0
+
+        # The context manager yields a `forecast` object; calling
+        # `await forecast.estimate()` returns the estimate above.
+        mock_forecast = MagicMock()
+        mock_forecast.estimate = AsyncMock(return_value=mock_estimate)
+
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__.return_value = mock_forecast
+        mock_cm.__aexit__.return_value = None
+
+        class _PinnedDatetime(real_datetime.datetime):
+            """Datetime subclass with now() pinned to *fake_now_berlin*."""
+
+            _fake = fake_now_berlin
+
+            @classmethod
+            def now(cls, tz=None):
+                """Return the pinned datetime, optionally converted to *tz*."""
+                return cls._fake.astimezone(tz) if tz is not None else cls._fake
+
+        with patch(
+            "src.interfaces.pv_interface.OpenMeteoSolarForecast", return_value=mock_cm
+        ):
+            with patch("src.interfaces.pv_interface.datetime", _PinnedDatetime):
+                return pv._PvInterface__get_pv_forecast_openmeteo_lib(self._ENTRY)
+
+    def test_normal_day_returns_48_elements(self):
+        """
+        Normal day (March 1, 2026, midnight CET): the lib produces 48 hourly
+        entries for the 2-day window → output must have exactly 48 elements.
+        """
+        berlin = pytz.timezone("Europe/Berlin")
+        fake_now = berlin.localize(real_datetime.datetime(2026, 3, 1, 0, 0, 0))
+        result = self._run(fake_now)
+        assert len(result) == 48, f"Normal day: expected 48 elements, got {len(result)}"
+
+    def test_spring_forward_returns_48_elements(self):
+        """
+        Spring-forward day (March 29, 2026, midnight CET): the lib produces
+        only 47 hourly entries because today has 23 wall-clock hours.  The
+        normalisation guard must pad the output to 48 elements.
+        """
+        berlin = pytz.timezone("Europe/Berlin")
+        # 00:00 CET – before the spring-forward at 02:00
+        fake_now = berlin.localize(real_datetime.datetime(2026, 3, 29, 0, 0, 0))
+        result = self._run(fake_now)
+        assert (
+            len(result) == 48
+        ), f"Spring-forward: expected 48 elements after padding, got {len(result)}"
+
+    def test_fall_back_returns_48_elements(self):
+        """
+        Fall-back day (October 25, 2026, midnight CEST): the lib produces
+        49 hourly entries because today has 25 wall-clock hours.  The
+        normalisation guard must trim the output to 48 elements.
+        """
+        berlin = pytz.timezone("Europe/Berlin")
+        # 00:00 CEST – before the fall-back at 03:00
+        fake_now = berlin.localize(real_datetime.datetime(2026, 10, 25, 0, 0, 0))
+        result = self._run(fake_now)
+        assert (
+            len(result) == 48
+        ), f"Fall-back: expected 48 elements after trimming, got {len(result)}"
