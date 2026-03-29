@@ -26,8 +26,16 @@ class _WaitressServerAdapter:
         self._server = server
 
     def serve_forever(self):
-        """Start serving requests (blocking call)."""
+        """Start serving requests (blocking call).
+
+        Waitress swallows both KeyboardInterrupt (Ctrl-C) and SIGTERM internally
+        before returning normally, so the caller's ``except KeyboardInterrupt``
+        block would never fire.  Re-raising KeyboardInterrupt after ``run()``
+        returns restores the expected shutdown path in eos_connect.py.
+        """
         self._server.run()
+        # run() only returns because a stop signal was received
+        raise KeyboardInterrupt
 
     def stop(self):
         """Stop the server and release the bound socket."""
@@ -280,7 +288,8 @@ class PortInterface:
                 f"[PortInterface] Creating web server on {host}:{desired_port}"
             )
             # Suppress waitress internal task-queue noise (e.g. "Task queue depth is N")
-            logging.getLogger("waitress").setLevel(logging.WARNING)
+            # These are WARNING-level messages, so we need ERROR to silence them.
+            logging.getLogger("waitress").setLevel(logging.ERROR)
             server = waitress.create_server(app, host=host, port=desired_port)
             return _WaitressServerAdapter(server), desired_port
 
