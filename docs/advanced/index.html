@@ -19,7 +19,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.2.31</span>
+                <span class="version-badge">v0.2.33</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -49,6 +49,7 @@
                     <a href="#battery-fields" class="toc-link toc-sub">→ battery</a>
                     <a href="#stored-energy" class="toc-link toc-sub">→ stored_energy</a>
                     <a href="#charging-sessions" class="toc-link toc-sub">→ charging_sessions</a>
+                    <a href="#opt-request-response" class="toc-link toc-sub">→ Optimization Request/Response</a>
                     <a href="#system-mode-ref" class="toc-link toc-sub">→ System Modes</a>
                     <a href="#logging-api" class="toc-link toc-sub">→ Logging API</a>
                     <a href="#mqtt" class="toc-link">MQTT Integration</a>
@@ -643,6 +644,313 @@
     "end_time": "2024-06-01T14:00:00+02:00"
   }
 }</code></pre>
+
+            <h4 id="opt-request-response">Optimization Request & Response Reference</h4>
+            
+            <p>EOS Connect sends optimization requests to external servers (EOS or EVopt) and receives optimized control signals in return. These JSON files contain the detailed data that drives the energy optimization.</p>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Access Points:</strong> 
+                <ul>
+                    <li><code>/json/optimize_request.json</code> - Last request data sent to optimization server</li>
+                    <li><code>/json/optimize_response.json</code> - Last optimization results received</li>
+                    <li>Configuration: Set <code><a href="../user-guide/configuration.html#eos" style="color: inherit; text-decoration: underline;">time_frame</a></code> in config.yaml to control request interval. See <a href="../user-guide/configuration.html#time-slot-config" style="color: inherit; text-decoration: underline;">Time Slot Configuration</a> for details (default: 3600s)</li>
+                </ul>
+            </div>
+
+            <h5>Optimization Request Structure (optimize_request.json)</h5>
+            
+            <p>The request contains all current system state and forecast data sent to the optimization server:</p>
+
+            <h6>Top-Level Sections</h6>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Section</th>
+                        <th>Type</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>ems</code></td>
+                        <td>Object</td>
+                        <td>Energy management system data - forecasts and pricing</td>
+                    </tr>
+                    <tr>
+                        <td><code>pv_akku</code></td>
+                        <td>Object</td>
+                        <td>Battery (Akkumulator) specifications and current state</td>
+                    </tr>
+                    <tr>
+                        <td><code>inverter</code></td>
+                        <td>Object</td>
+                        <td>Inverter specifications and power limits</td>
+                    </tr>
+                    <tr>
+                        <td><code>eauto</code></td>
+                        <td>Object</td>
+                        <td>Electric vehicle battery specifications (if EV charging enabled)</td>
+                    </tr>
+                    <tr>
+                        <td><code>dishwasher</code></td>
+                        <td>Object</td>
+                        <td>Flexible load specifications (e.g., dishwasher, heat pump)</td>
+                    </tr>
+                    <tr>
+                        <td><code>temperature_forecast</code></td>
+                        <td>Array</td>
+                        <td>Temperature forecast (array length depends on <code>time_frame</code> config: 192 slots for 15-min or 48 for 60-min intervals)</td>
+                    </tr>
+                    <tr>
+                        <td><code>start_solution</code></td>
+                        <td>Array</td>
+                        <td>Initial optimization hint from previous run (optimization acceleration)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h6>EMS (Energy Management System) Fields</h6>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Type</th>
+                        <th>Unit</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>pv_prognose_wh</code></td>
+                        <td>Array</td>
+                        <td>Wh/slot</td>
+                        <td>PV power forecast (one value per time slot; length varies: 192 for 15-min slots or 48 for 60-min slots)</td>
+                    </tr>
+                    <tr>
+                        <td><code>strompreis_euro_pro_wh</code></td>
+                        <td>Array</td>
+                        <td>€/Wh</td>
+                        <td>Electricity purchase price forecast (length varies by time_frame config)</td>
+                    </tr>
+                    <tr>
+                        <td><code>einspeiseverguetung_euro_pro_wh</code></td>
+                        <td>Array</td>
+                        <td>€/Wh</td>
+                        <td>Feed-in tariff for selling to grid (length varies by time_frame config)</td>
+                    </tr>
+                    <tr>
+                        <td><code>preis_euro_pro_wh_akku</code></td>
+                        <td>Array</td>
+                        <td>€/Wh</td>
+                        <td>Battery storage cost considering wear/efficiency (length varies by time_frame config)</td>
+                    </tr>
+                    <tr>
+                        <td><code>gesamtlast</code></td>
+                        <td>Array</td>
+                        <td>Wh/slot</td>
+                        <td>Total household load forecast (length varies by time_frame config)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h6>Battery (pv_akku) Fields</h6>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Type</th>
+                        <th>Unit</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>capacity_wh</code></td>
+                        <td>Float</td>
+                        <td>Wh</td>
+                        <td>Total battery capacity</td>
+                    </tr>
+                    <tr>
+                        <td><code>charging_efficiency</code></td>
+                        <td>Float</td>
+                        <td>0-1</td>
+                        <td>Efficiency during charging (e.g., 0.92 = 92%)</td>
+                    </tr>
+                    <tr>
+                        <td><code>discharging_efficiency</code></td>
+                        <td>Float</td>
+                        <td>0-1</td>
+                        <td>Efficiency during discharging</td>
+                    </tr>
+                    <tr>
+                        <td><code>max_charge_power_w</code></td>
+                        <td>Float</td>
+                        <td>W</td>
+                        <td>Maximum charging power capability</td>
+                    </tr>
+                    <tr>
+                        <td><code>initial_soc_percentage</code></td>
+                        <td>Float</td>
+                        <td>%</td>
+                        <td>Current state of charge (0-100%)</td>
+                    </tr>
+                    <tr>
+                        <td><code>min_soc_percentage</code></td>
+                        <td>Float</td>
+                        <td>%</td>
+                        <td>Minimum allowed discharge level for longevity</td>
+                    </tr>
+                    <tr>
+                        <td><code>max_soc_percentage</code></td>
+                        <td>Float</td>
+                        <td>%</td>
+                        <td>Maximum allowed charge level for longevity</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h5>Optimization Response Structure (optimize_response.json)</h5>
+            
+            <p>The response contains time-series control signals and detailed optimization results:</p>
+
+            <h6>Control Signals (Time Series Arrays)</h6>
+            <p>All control signals are time-series arrays with length determined by the <code>time_frame</code> configuration (typically 192 values for 15-minute slots or 48 for 60-minute slots):</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Signal</th>
+                        <th>Type</th>
+                        <th>Value Range</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>ac_charge</code></td>
+                        <td>Array[Float]</td>
+                        <td>0 - max_power_w</td>
+                        <td><strong>AC Charging Power:</strong> Grid-to-battery charging power for each time slot (array length depends on optimizer config)</td>
+                    </tr>
+                    <tr>
+                        <td><code>dc_charge</code></td>
+                        <td>Array[Float]</td>
+                        <td>0 - max_power_w</td>
+                        <td><strong>DC Charging Power (Fronius Gen24 only):</strong> Controls PV-to-battery charging per slot. Value of 0 blocks PV charging (array length depends on optimizer config)</td>
+                    </tr>
+                    <tr>
+                        <td><code>discharge_allowed</code></td>
+                        <td>Array[Boolean]</td>
+                        <td>true / false</td>
+                        <td><strong>Discharge Permission:</strong> Whether battery can discharge to the load in this slot</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h6>Result Summary Fields</h6>
+            <p>The <code>result</code> object contains aggregated optimization outcomes:</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Type</th>
+                        <th>Unit</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>Gesamtbilanz_Euro</code></td>
+                        <td>Float</td>
+                        <td>€</td>
+                        <td><strong>Net Balance:</strong> Total costs minus feed-in revenues (negative = savings)</td>
+                    </tr>
+                    <tr>
+                        <td><code>Gesamtkosten_Euro</code></td>
+                        <td>Float</td>
+                        <td>€</td>
+                        <td><strong>Total Costs:</strong> Grid purchased energy cost</td>
+                    </tr>
+                    <tr>
+                        <td><code>Gesamteinnahmen_Euro</code></td>
+                        <td>Float</td>
+                        <td>€</td>
+                        <td><strong>Total Income:</strong> Revenue from feeding energy to grid</td>
+                    </tr>
+                    <tr>
+                        <td><code>Gesamt_Verluste</code></td>
+                        <td>Float</td>
+                        <td>Wh</td>
+                        <td><strong>Total Losses:</strong> Battery inefficiency losses over the optimization forecast period</td>
+                    </tr>
+                    <tr>
+                        <td><code>akku_soc_pro_stunde</code></td>
+                        <td>Array[Float]</td>
+                        <td>%</td>
+                        <td><strong>Battery SOC Forecast:</strong> Predicted state of charge per time slot (array length depends on optimizer config)</td>
+                    </tr>
+                    <tr>
+                        <td><code>Netzbezug_Wh_pro_Stunde</code></td>
+                        <td>Array[Float]</td>
+                        <td>Wh</td>
+                        <td><strong>Grid Import per Slot:</strong> Grid energy purchases per time slot (array length depends on optimizer config)</td>
+                    </tr>
+                    <tr>
+                        <td><code>Netzeinspeisung_Wh_pro_Stunde</code></td>
+                        <td>Array[Float]</td>
+                        <td>Wh</td>
+                        <td><strong>Grid Export per Slot:</strong> Grid energy feed-in per time slot (array length depends on optimizer config)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h6>Metadata Fields</h6>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Type</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>timestamp</code></td>
+                        <td>String (ISO 8601)</td>
+                        <td>When this optimization was calculated</td>
+                    </tr>
+                    <tr>
+                        <td><code>eautocharge_hours_float</code></td>
+                        <td>Float or null</td>
+                        <td>Optimized EV charging window duration (if EV charging enabled)</td>
+                    </tr>
+                    <tr>
+                        <td><code>start_solution</code></td>
+                        <td>Array</td>
+                        <td>Optimization hint for next run (internal use)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h6>Using Response Data for Home Assistant Automations</h6>
+            <p>You can call the <code>/json/optimize_response.json</code> REST API endpoint to extract forecast data for automations:</p>
+
+            <pre><code>curl http://localhost:8081/json/optimize_response.json | jq '.result.akku_soc_pro_stunde[0]'</code></pre>
+
+            <p><strong>Example Use Cases:</strong></p>
+            <ul>
+                <li><strong>Forecast SOC:</strong> Get <code>result.akku_soc_pro_stunde</code> array to predict battery charge level across the forecast horizon</li>
+                <li><strong>Grid Cost Savings:</strong> Use <code>result.Gesamtbilanz_Euro</code> to display savings from optimized operation</li>
+                <li><strong>Load Shifting Automation:</strong> Use <code>discharge_allowed[next_slot]</code> to schedule flexible loads when battery can discharge</li>
+                <li><strong>Solar Curtailment:</strong> Monitor <code>result.Netzeinspeisung_Wh_pro_Stunde</code> to optimize PV feed-in patterns</li>
+            </ul>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Time Slot Configuration:</strong> 
+                The length of forecast and control arrays depends on your <code>time_frame</code> setting and optimizer backend. See <a href="../user-guide/configuration.html#time-slot-config" style="color: inherit; text-decoration: underline;">Time Slot Configuration & Optimizer Constraints</a> for details on array lengths and which optimizers support 15-minute vs. 60-minute intervals.
+            </div>
 
             <h3 id="system-mode-ref">System Mode Reference</h3>
             <table>

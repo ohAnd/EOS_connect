@@ -20,7 +20,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.2.31</span>
+                <span class="version-badge">v0.2.33</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -54,6 +54,9 @@
                     <a href="#inverter" class="toc-link">Inverter</a>
                     <a href="#evcc" class="toc-link">EVCC</a>
                     <a href="#mqtt" class="toc-link">MQTT</a>
+                    <a href="#optimization-config" class="toc-link">Optimization Configuration</a>
+                    <a href="#timing-controls" class="toc-link toc-sub">→ Timing Controls</a>
+                    <a href="#time-slot-config" class="toc-link toc-sub">→ Time Slot Configuration</a>
                     <a href="#other" class="toc-link">Other Settings</a>
                     <a href="#examples" class="toc-link">Config Examples</a>
                     <a href="#example-full" class="toc-link toc-sub">→ Full Config</a>
@@ -423,7 +426,7 @@
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Smaller values = more detailed optimization but higher computational load</td>
+                    <td>Smaller values = more detailed optimization but higher computational load. See <a href="#time-slot-config" style="color: inherit; text-decoration: underline;">Time Slot Configuration & Optimizer Constraints</a> for supported values and optimizer limitations.</td>
                 </tr>
             </table>
 
@@ -2502,6 +2505,66 @@
             </table>
         </div>
 
+        <!-- Optimization Configuration Section -->
+        <div class="content-section" id="optimization-config">
+            <h2><i class="fas fa-cog"></i> Optimization Configuration</h2>
+            <p>Important timing and configuration concepts for optimization requests and responses.</p>
+
+            <h3 id="timing-controls">Understanding refresh_time and time_frame</h3>
+            <div class="alert alert-warning">
+                <h4><i class="fas fa-clock"></i> Two Different Timing Controls</h4>
+                <p>These two parameters control different aspects of optimization:</p>
+                <ul>
+                    <li><strong>refresh_time</strong>: Sets how often EOS Connect sends a new optimization request to the optimizer server (e.g., every 3 minutes)</li>
+                    <li><strong>time_frame</strong> (in EOS section): Sets the granularity of the optimization and forecast arrays inside each request (e.g., 900 for 15-minute steps, 3600 for hourly steps)</li>
+                </ul>
+                <p>The combination of <code>refresh_time</code> and <code>time_frame</code> allows you to control both how frequently the system updates and how detailed the optimization is.</p>
+            </div>
+
+            <h3 id="time-slot-config">Time Slot Configuration & Optimizer Constraints</h3>
+            <p>The <code>time_frame</code> setting determines the granularity of optimization data:</p>
+            
+            <table>
+                <tr>
+                    <th>Time Frame</th>
+                    <th>Array Length</th>
+                    <th>Forecast Horizon</th>
+                    <th>EOS Server</th>
+                    <th>EVopt</th>
+                </tr>
+                <tr>
+                    <td><code>3600</code> (60 minutes)</td>
+                    <td>48 values</td>
+                    <td>2 days</td>
+                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
+                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
+                </tr>
+                <tr>
+                    <td><code>900</code> (15 minutes)</td>
+                    <td>192 values</td>
+                    <td>2 days (more granular)</td>
+                    <td><i class="fas fa-times" style="color: red;"></i> Not Supported</td>
+                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
+                </tr>
+            </table>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Optimizer Constraints:</strong>
+                <ul>
+                    <li><strong>EOS Server (Akkudoktor EOS):</strong> Only supports 60-minute slots (<code>time_frame: 3600</code>). If you set <code>time_frame: 900</code> with EOS Server, it will be automatically corrected to 3600 at startup with a warning.</li>
+                    <li><strong>EVopt:</strong> Supports both 60-minute (<code>3600</code>) and 15-minute (<code>900</code>) time frames for more granular optimization. Use 900 if you need more detailed control over battery charging/discharging and solar feed-in patterns.</li>
+                </ul>
+            </div>
+
+            <div class="alert alert-tip">
+                <strong><i class="fas fa-lightbulb"></i> When to Use Which Time Frame:</strong>
+                <ul>
+                    <li><strong>Use 3600s (hourly):</strong> If using EOS Server, or if you prefer simpler hourly optimization with lower computational cost</li>
+                    <li><strong>Use 900s (15-min):</strong> If using EVopt and want finer-grained optimization for precise battery and solar control</li>
+                </ul>
+            </div>
+        </div>
+
         <div class="content-section" id="other">
             <h2><i class="fas fa-cog"></i> Other Configuration Settings</h2>
             <p>General application settings and behavior.</p>
@@ -2636,16 +2699,70 @@
                 <h4><i class="fas fa-clock"></i> Two Different Timing Controls</h4>
                 <p>These two parameters control different aspects of optimization:</p>
                 <ul>
-                    <li><strong>refresh_time</strong>: Sets how often EOS Connect sends a new optimization request to the EOS server (e.g., every 3 minutes)</li>
+                    <li><strong>refresh_time</strong>: Sets how often EOS Connect sends a new optimization request to the optimizer server (e.g., every 3 minutes)</li>
                     <li><strong>time_frame</strong> (in EOS section): Sets the granularity of the optimization and forecast arrays inside each request (e.g., 900 for 15-minute steps, 3600 for hourly steps)</li>
                 </ul>
-                <p><strong>Backend Capabilities:</strong></p>
-                <ul>
-                  <li><strong>EOS Server:</strong> Only supports <code>3600</code> (hourly) - 15-minute intervals are not supported</li>
-                  <li><strong>EVopt:</strong> Supports both <code>3600</code> (hourly) and <code>900</code> (15-minute) for more precise optimization</li>
-                </ul>
-                <p>If you set <code>time_frame: 900</code> with <code>eos_server</code>, it will be automatically corrected to 3600 at startup with a warning.</p>
                 <p>The combination of <code>refresh_time</code> and <code>time_frame</code> allows you to control both how frequently the system updates and how detailed the optimization is.</p>
+            </div>
+        </div>
+
+        <!-- Optimization Configuration Section -->
+        <div class="content-section" id="optimization-config">
+            <h2><i class="fas fa-cog"></i> Optimization Configuration</h2>
+            <p>Important timing and configuration concepts for optimization requests and responses.</p>
+
+            <h3 id="timing-controls">Understanding refresh_time and time_frame</h3>
+            <div class="alert alert-warning">
+                <h4><i class="fas fa-clock"></i> Two Different Timing Controls</h4>
+                <p>These two parameters control different aspects of optimization:</p>
+                <ul>
+                    <li><strong>refresh_time</strong>: Sets how often EOS Connect sends a new optimization request to the optimizer server (e.g., every 3 minutes)</li>
+                    <li><strong>time_frame</strong> (in EOS section): Sets the granularity of the optimization and forecast arrays inside each request (e.g., 900 for 15-minute steps, 3600 for hourly steps)</li>
+                </ul>
+                <p>The combination of <code>refresh_time</code> and <code>time_frame</code> allows you to control both how frequently the system updates and how detailed the optimization is.</p>
+            </div>
+
+            <h3 id="time-slot-config">Time Slot Configuration & Optimizer Constraints</h3>
+            <p>The <code>time_frame</code> setting determines the granularity of optimization data:</p>
+            
+            <table>
+                <tr>
+                    <th>Time Frame</th>
+                    <th>Array Length</th>
+                    <th>Forecast Horizon</th>
+                    <th>EOS Server</th>
+                    <th>EVopt</th>
+                </tr>
+                <tr>
+                    <td><code>3600</code> (60 minutes)</td>
+                    <td>48 values</td>
+                    <td>2 days</td>
+                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
+                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
+                </tr>
+                <tr>
+                    <td><code>900</code> (15 minutes)</td>
+                    <td>192 values</td>
+                    <td>2 days (more granular)</td>
+                    <td><i class="fas fa-times" style="color: red;"></i> Not Supported</td>
+                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
+                </tr>
+            </table>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Optimizer Constraints:</strong>
+                <ul>
+                    <li><strong>EOS Server (Akkudoktor EOS):</strong> Only supports 60-minute slots (<code>time_frame: 3600</code>). If you set <code>time_frame: 900</code> with EOS Server, it will be automatically corrected to 3600 at startup with a warning.</li>
+                    <li><strong>EVopt:</strong> Supports both 60-minute (<code>3600</code>) and 15-minute (<code>900</code>) time frames for more granular optimization. Use 900 if you need more detailed control over battery charging/discharging and solar feed-in patterns.</li>
+                </ul>
+            </div>
+
+            <div class="alert alert-tip">
+                <strong><i class="fas fa-lightbulb"></i> When to Use Which Time Frame:</strong>
+                <ul>
+                    <li><strong>Use 3600s (hourly):</strong> If using EOS Server, or if you prefer simpler hourly optimization with lower computational cost</li>
+                    <li><strong>Use 900s (15-min):</strong> If using EVopt and want finer-grained optimization for precise battery and solar control</li>
+                </ul>
             </div>
         </div>
 
