@@ -50,6 +50,7 @@
                     <a href="#price" class="toc-link">Electricity Prices</a>
                     <a href="#energyforecast" class="toc-link toc-sub">→ Smart Price Prediction</a>
                     <a href="#battery" class="toc-link">Battery</a>
+                    <a href="#battery-price-calc" class="toc-link toc-sub">&rarr; Dynamic Price Calculation</a>
                     <a href="#pv" class="toc-link">PV Forecasts</a>
                     <a href="#inverter" class="toc-link">Inverter</a>
                     <a href="#evcc" class="toc-link">EVCC</a>
@@ -1400,6 +1401,7 @@
                 </tr>
             </table>
 
+            <h3 id="battery-price-calc"><i class="fas fa-calculator"></i> Dynamic Battery Price Calculation</h3>
             <div class="alert alert-info">
                 <h4><i class="fas fa-calculator"></i> Dynamic Battery Price Calculation</h4>
                 <p>EOS Connect can automatically calculate the real cost of energy in your battery by analyzing historical charging events using a Last-In, First-Out (LIFO) inventory model.</p>
@@ -1407,7 +1409,7 @@
                 <h5>How it Works:</h5>
                 <ol>
                     <li><strong>Event Detection:</strong> The system scans historical data (default 96h) to identify "charging events" where battery power was above the <code>charging_threshold_w</code>.</li>
-                    <li><strong>Source Attribution:</strong> For each event, it compares battery power with PV production and grid import. If grid import is significant (above <code>grid_charge_threshold_w</code>), energy is attributed to grid charging at the market price. PV surplus energy is attributed to solar charging at zero cost (since PV generation has no per-kWh cost).</li>
+                    <li><strong>Source Attribution:</strong> For each event, it compares battery power with PV production and grid import. If grid import is significant (above <code>grid_charge_threshold_w</code>), energy is attributed to grid charging at the market price. PV surplus energy is attributed to solar charging at zero cost by default (since PV generation has no per-kWh marginal cost). Optionally, you can assign the feed-in tariff as an opportunity cost for PV-sourced energy by enabling <code>battery_price_include_feedin</code> — in that case the configured <code>price.feed_in_price</code> is used as the PV energy cost.</li>
                     <li><strong>Inventory Valuation (LIFO):</strong> Instead of a simple average, the system uses a <strong>Last-In, First-Out</strong> model. It looks at the most recent charging sessions that match your current battery level. This ensures the price reflects the actual "value" of the energy currently inside the battery.</li>
                     <li><strong>Optimizer Integration:</strong> The resulting price is used by the optimizer to decide when it's profitable to discharge the battery.</li>
                     <li><strong>Efficiency:</strong> To minimize API load, the system uses a two-step fetching strategy: it first fetches low-resolution data to find events, then high-resolution data only for specific periods when the battery was actually charging.</li>
@@ -1600,6 +1602,33 @@
                 <tr>
                     <th>Default</th>
                     <td><code>100.0</code></td>
+                </tr>
+            </table>
+
+            <h3>battery.battery_price_include_feedin</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.battery_price_include_feedin</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Include the feed-in tariff as an opportunity cost for PV-sourced energy in the battery price calculation</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>false</code> - PV-sourced energy costs €0 (default, free solar energy)<br>
+                        <code>true</code> - PV-sourced energy is valued at <code>price.feed_in_price</code> (€/kWh) as opportunity cost
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>false</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>When enabled, the battery price will be higher when the battery was primarily charged from PV, reflecting the revenue that could have been earned by exporting that energy instead. Requires <code>price.feed_in_price</code> to be set correctly.</td>
                 </tr>
             </table>
         </div>

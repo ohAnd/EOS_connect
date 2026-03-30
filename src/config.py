@@ -108,6 +108,7 @@ class ConfigManager:
                         "price_sensor": "",
                         "charging_threshold_w": 50.0,
                         "grid_charge_threshold_w": 100.0,
+                        "battery_price_include_feedin": False,  # include feed-in price as PV opportunity cost in battery price calculation
                     }
                 ),
                 "pv_forecast_source": CommentedMap(
@@ -360,6 +361,11 @@ class ConfigManager:
         config["battery"].yaml_add_eol_comment(
             "minimum grid surplus to consider as grid charging (W)",
             "grid_charge_threshold_w",
+        )
+        config["battery"].yaml_add_eol_comment(
+            "include feed-in price as opportunity cost for PV-sourced energy"
+            + " in battery price calculation - default: false",
+            "battery_price_include_feedin",
         )
 
         # pv forecast source configuration
