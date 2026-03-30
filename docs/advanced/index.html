@@ -1281,6 +1281,8 @@ battery:
   soc_sensor: Battery_SOC</code></pre>
 
             <h3>EVCC Integration</h3>
+            <p>EOS Connect integrates with EVCC at multiple levels: data ingestion, charging state monitoring, and optimizer decision adaptation.</p>
+
             <h4>As Data Source</h4>
             <pre><code>evcc:
   url: http://192.168.1.100:7070
@@ -1288,14 +1290,85 @@ battery:
 pv_forecast_source:
   source: evcc  # Use EVCC's PV forecasts</code></pre>
 
-            <h4>As Control Target</h4>
-            <p>EOS Connect can monitor and control EVCC charging modes:</p>
-            <ul>
-                <li>PV-only charging</li>
-                <li>Min+PV mode</li>
-                <li>Fast charge</li>
-                <li>Off</li>
-            </ul>
+            <h4>Charging State Monitoring</h4>
+            <p>EOS Connect continuously monitors EVCC's charging state and charging mode. When the system detects that the EV is actively charging (any mode except "off"), it adapts its control strategy to account for the additional load and EV charging priorities:</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>EVCC Charging Mode</th>
+                        <th>EOS Connect Reaction</th>
+                        <th>Optimizer Decision Override</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Fast Charge</strong><br/>(<code>now</code>, <code>pv+now</code>, <code>minpv+now</code>, etc.)</td>
+                        <td>Prioritizes EV charging from grid/available power</td>
+                        <td><strong>Prevents battery discharge</strong> to ensure maximum power available for the car. Even if optimizer suggests discharge, battery is held to support immediate EV charging needs.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>PV Mode</strong><br/>(<code>pv</code>)</td>
+                        <td>Coordinates battery and PV to support EV charging</td>
+                        <td><strong>Allows battery discharge</strong> if needed to support PV-sourced charging. Battery can discharge to help PV power reach the car.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Min+PV Mode</strong><br/>(<code>minpv</code>)</td>
+                        <td>Allows battery discharge for efficient EV charging</td>
+                        <td><strong>Allows battery discharge</strong> with minimum grid feed. Battery discharges to supplement PV and minimize grid import while EV charges.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Off</strong></td>
+                        <td>Normal optimizer control (no EV charging)</td>
+                        <td>No override — optimizer decisions apply normally</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h4>Example Scenarios</h4>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-traffic-light"></i> Scenario 1: Fast Charge Mode</strong><br/>
+                <ul>
+                    <li><strong>Time:</strong> 14:30, sunny day, PV generating 3kW</li>
+                    <li><strong>Optimizer decision:</strong> "Discharge allowed" (prices favorable for battery use)</li>
+                    <li><strong>EV charging mode:</strong> "now" (fast charge)</li>
+                    <li><strong>EOS Connect action:</strong> Overrides optimizer to "Avoid discharge" — prioritizes grid/PV to charge EV immediately instead</li>
+                    <li><strong>Control state:</strong> "MODE_AVOID_DISCHARGE_EVCC_FAST"</li>
+                </ul>
+            </div>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-sun"></i> Scenario 2: PV Mode</strong><br/>
+                <ul>
+                    <li><strong>Time:</strong> 16:45, cloudy afternoon, PV generating 1.5kW</li>
+                    <li><strong>Optimizer decision:</strong> "Charge from grid" (low prices)</li>
+                    <li><strong>EV charging mode:</strong> "pv" (prefer solar)</li>
+                    <li><strong>EOS Connect action:</strong> Allows battery to discharge to assist PV charging the EV. Total available for EV = PV (1.5kW) + Battery discharge (up to configured limit)</li>
+                    <li><strong>Control state:</strong> "MODE_DISCHARGE_ALLOWED_EVCC_PV"</li>
+                </ul>
+            </div>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-battery-half"></i> Scenario 3: No EV Charging</strong><br/>
+                <ul>
+                    <li><strong>Condition:</strong> EV not plugged in or EVCC in "off" mode</li>
+                    <li><strong>EOS Connect action:</strong> Operates in normal optimizer control mode — no EVCC-specific overrides applied</li>
+                    <li><strong>Control state:</strong> "MODE_CHARGE_FROM_GRID", "MODE_AVOID_DISCHARGE", or "MODE_DISCHARGE_ALLOWED" (standard modes)</li>
+                </ul>
+            </div>
+
+            <h4>Configuration</h4>
+            <pre><code># EVCC server connection (required for monitoring)
+evcc:
+  url: http://192.168.1.100:7070  # EVCC API endpoint
+
+# Car charge is automatically integrated into load calculations
+load:
+  car_charge_load_sensor: sensor.evcc_mqtt_evcc_charge_power  # EV charging power in watts</code></pre>
+
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-info-circle"></i> Note:</strong> EOS Connect <strong>monitors</strong> EVCC charging for decision adaptation but does <strong>not control</strong> EVCC charging modes. EVCC charging mode selection (off/pv/fast) remains under EVCC's own logic or manual user control.
+            </div>
 
             <h3>Fronius Inverter Integration</h3>
             <h4>Enhanced Interface (Recommended)</h4>
