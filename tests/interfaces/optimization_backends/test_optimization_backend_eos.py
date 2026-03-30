@@ -689,3 +689,393 @@ def test_is_eos_version_at_least(current_version, compare_to, expected):
     backend.eos_version = current_version
 
     assert backend.is_eos_version_at_least(compare_to) is expected
+
+
+# ---------------------------------------------------------------------------
+# DST-handling tests
+# ---------------------------------------------------------------------------
+from datetime import (
+    datetime as _real_datetime,
+)  # noqa: E402 – used only in this section
+
+
+class TestDSTHandling:
+    """
+    Tests for ``_get_expected_hourly_slots`` and ``_adjust_arrays_for_dst``
+    covering three DST scenarios:
+
+    1. Normal day   – 48 hourly slots (no DST change in 2-day window)
+    2. Spring-forward – 47 hourly slots (CET → CEST; today has 23 wall-clock hours)
+    3. Fall-back      – 49 hourly slots (CEST → CET; today has 25 wall-clock hours)
+    """
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _backend_no_net(base_url, time_frame_base, berlin_timezone):
+        """
+        Instantiate EOSBackend without any network access by simulating a
+        connection error during ``_retrieve_eos_version``.
+
+        Args:
+            base_url: Server base URL fixture.
+            time_frame_base: Slot duration in seconds (3600 or 900).
+            berlin_timezone: pytz timezone for Europe/Berlin.
+
+        Returns:
+            EOSBackend: Newly created backend instance with default eos_version.
+        """
+        with patch(
+            "src.interfaces.optimization_backends.optimization_backend_eos.requests.get"
+        ) as mock_get:
+            mock_get.side_effect = requests.exceptions.ConnectionError()
+            return EOSBackend(base_url, time_frame_base, berlin_timezone)
+
+    @staticmethod
+    def _make_request(length=48):
+        """
+        Build a minimal EOS-format request with all time-series arrays of
+        the given *length*.
+
+        Args:
+            length: Number of elements in each time-series array.
+
+        Returns:
+            dict: Minimal EOS request payload.
+        """
+        return {
+            "ems": {
+                "pv_prognose_wh": [10.0] * length,
+                "strompreis_euro_pro_wh": [0.0003] * length,
+                "einspeiseverguetung_euro_pro_wh": [0.00008] * length,
+                "gesamtlast": [400.0] * length,
+            },
+            "temperature_forecast": [15.0] * length,
+        }
+
+    # ------------------------------------------------------------------
+    # _get_expected_hourly_slots
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "year,month,day,expected_slots",
+        [
+            (2026, 3, 1, 48),  # Normal day – no DST change in the 2-day window
+            (2026, 3, 29, 47),  # Spring-forward (CET → CEST): 2-day window = 47 h
+            (2026, 10, 25, 49),  # Fall-back (CEST → CET): 2-day window = 49 h
+        ],
+    )
+    def test_get_expected_hourly_slots(
+        self, base_url, berlin_timezone, year, month, day, expected_slots
+    ):
+        """
+        _get_expected_hourly_slots() must return 48 on a normal day,
+        47 on a spring-forward day, and 49 on a fall-back day.
+
+        The method computes the number of hours between today's midnight and
+        the midnight two days later using pytz-aware datetimes so DST
+        transitions are reflected correctly.
+
+        Args:
+            base_url: Server URL fixture.
+            berlin_timezone: Europe/Berlin timezone fixture.
+            year, month, day: Date to simulate as "today".
+            expected_slots: Expected slot count for that date.
+        """
+        backend = self._backend_no_net(base_url, 3600, berlin_timezone)
+        tz = berlin_timezone
+        fixed_now = tz.localize(_real_datetime(year, month, day, 8, 0, 0))
+
+        class _MockDatetime(_real_datetime):
+            """Datetime subclass that returns a fixed 'now' for DST testing."""
+
+            @classmethod
+            def now(cls, tz_arg=None):
+                """Return the fixed DST-test datetime optionally converted to *tz_arg*."""
+                if tz_arg is not None:
+                    return fixed_now.astimezone(tz_arg)
+                return fixed_now
+
+        with patch(
+            "src.interfaces.optimization_backends.optimization_backend_eos.datetime",
+            _MockDatetime,
+        ):
+            result = backend._get_expected_hourly_slots()
+
+        assert result == expected_slots
+
+    # ------------------------------------------------------------------
+    # _adjust_arrays_for_dst – hourly mode (time_frame_base = 3600)
+    # ------------------------------------------------------------------
+
+    def test_adjust_arrays_normal_day_is_noop(self, base_url, berlin_timezone):
+        """
+        On a normal day (expected_hourly=48) _adjust_arrays_for_dst must
+        leave all request arrays completely unchanged.
+
+        Args:
+            base_url: Server URL fixture.
+            berlin_timezone: Europe/Berlin timezone fixture.
+        """
+        backend = self._backend_no_net(base_url, 3600, berlin_timezone)
+        req = self._make_request(48)
+        original_pv = req["ems"]["pv_prognose_wh"][:]
+        original_temp = req["temperature_forecast"][:]
+
+        backend._adjust_arrays_for_dst(req, 48)
+
+        assert req["ems"]["pv_prognose_wh"] == original_pv
+        assert req["temperature_forecast"] == original_temp
+        assert len(req["ems"]["gesamtlast"]) == 48
+
+    def test_adjust_arrays_spring_forward_hourly_trims_to_47(
+        self, base_url, berlin_timezone
+    ):
+        """
+        Spring-forward day (expected_hourly=47): all 48-element arrays in the
+        EOS request must be trimmed to exactly 47 elements.
+
+        Args:
+            base_url: Server URL fixture.
+            berlin_timezone: Europe/Berlin timezone fixture.
+        """
+        backend = self._backend_no_net(base_url, 3600, berlin_timezone)
+        req = self._make_request(48)
+
+        backend._adjust_arrays_for_dst(req, 47)
+
+        ems_keys = (
+            "pv_prognose_wh",
+            "strompreis_euro_pro_wh",
+            "einspeiseverguetung_euro_pro_wh",
+            "gesamtlast",
+        )
+        for key in ems_keys:
+            assert len(req["ems"][key]) == 47, f"ems['{key}'] should have 47 elements"
+        assert len(req["temperature_forecast"]) == 47
+
+    def test_adjust_arrays_fall_back_hourly_pads_to_49(self, base_url, berlin_timezone):
+        """
+        Fall-back day (expected_hourly=49): all 48-element arrays must be
+        padded to exactly 49 elements by repeating the last value.
+
+        Args:
+            base_url: Server URL fixture.
+            berlin_timezone: Europe/Berlin timezone fixture.
+        """
+        backend = self._backend_no_net(base_url, 3600, berlin_timezone)
+        req = self._make_request(48)
+
+        backend._adjust_arrays_for_dst(req, 49)
+
+        ems_keys = (
+            "pv_prognose_wh",
+            "strompreis_euro_pro_wh",
+            "einspeiseverguetung_euro_pro_wh",
+            "gesamtlast",
+        )
+        for key in ems_keys:
+            assert len(req["ems"][key]) == 49, f"ems['{key}'] should have 49 elements"
+            # Padding must use the last known value, not a zero stub
+            assert req["ems"][key][48] == req["ems"][key][47]
+        assert len(req["temperature_forecast"]) == 49
+        assert req["temperature_forecast"][48] == req["temperature_forecast"][47]
+
+    # ------------------------------------------------------------------
+    # _adjust_arrays_for_dst – 15-minute mode (time_frame_base = 900)
+    # ------------------------------------------------------------------
+
+    def test_adjust_arrays_spring_forward_15min_trims_to_188(
+        self, base_url, berlin_timezone
+    ):
+        """
+        Spring-forward in 15-min mode (expected_hourly=47):
+        192-element arrays must be trimmed to 47 * 4 = 188 elements.
+
+        Args:
+            base_url: Server URL fixture.
+            berlin_timezone: Europe/Berlin timezone fixture.
+        """
+        backend = self._backend_no_net(base_url, 900, berlin_timezone)
+        req = self._make_request(192)
+
+        backend._adjust_arrays_for_dst(req, 47)
+
+        ems_keys = (
+            "pv_prognose_wh",
+            "strompreis_euro_pro_wh",
+            "einspeiseverguetung_euro_pro_wh",
+            "gesamtlast",
+        )
+        for key in ems_keys:
+            assert len(req["ems"][key]) == 188, f"ems['{key}'] should have 188 elements"
+        assert len(req["temperature_forecast"]) == 188
+
+    def test_adjust_arrays_fall_back_15min_pads_to_196(self, base_url, berlin_timezone):
+        """
+        Fall-back in 15-min mode (expected_hourly=49):
+        192-element arrays must be padded to 49 * 4 = 196 elements.
+
+        Args:
+            base_url: Server URL fixture.
+            berlin_timezone: Europe/Berlin timezone fixture.
+        """
+        backend = self._backend_no_net(base_url, 900, berlin_timezone)
+        req = self._make_request(192)
+
+        backend._adjust_arrays_for_dst(req, 49)
+
+        ems_keys = (
+            "pv_prognose_wh",
+            "strompreis_euro_pro_wh",
+            "einspeiseverguetung_euro_pro_wh",
+            "gesamtlast",
+        )
+        for key in ems_keys:
+            assert len(req["ems"][key]) == 196, f"ems['{key}'] should have 196 elements"
+            # Padding must repeat the last original element
+            assert req["ems"][key][195] == req["ems"][key][191]
+        assert len(req["temperature_forecast"]) == 196
+        assert req["temperature_forecast"][195] == req["temperature_forecast"][191]
+
+    # ------------------------------------------------------------------
+    # Edge cases
+    # ------------------------------------------------------------------
+
+    def test_adjust_arrays_missing_temperature_is_skipped(
+        self, base_url, berlin_timezone
+    ):
+        """
+        If *temperature_forecast* is absent from the request,
+        _adjust_arrays_for_dst must silently skip it and not raise.
+
+        Args:
+            base_url: Server URL fixture.
+            berlin_timezone: Europe/Berlin timezone fixture.
+        """
+        backend = self._backend_no_net(base_url, 3600, berlin_timezone)
+        req = {
+            "ems": {
+                "pv_prognose_wh": [10.0] * 48,
+                "strompreis_euro_pro_wh": [0.0003] * 48,
+                "einspeiseverguetung_euro_pro_wh": [0.00008] * 48,
+                "gesamtlast": [400.0] * 48,
+            }
+            # No temperature_forecast key – must not raise
+        }
+        backend._adjust_arrays_for_dst(req, 47)  # should not raise
+        assert len(req["ems"]["pv_prognose_wh"]) == 47
+        assert "temperature_forecast" not in req
+
+    # ------------------------------------------------------------------
+    # Modern EOS (>= 0.1.0) must NOT trim/pad – regression for the
+    # spring-forward 2026 "no solution stored by run" fault.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _backend_modern_eos(
+        base_url, time_frame_base, berlin_timezone, ver="0.2.0.dev84352035"
+    ):
+        """
+        Create an EOSBackend whose eos_version is set to *ver* (>= 0.1.0)
+        without performing any real network calls.
+
+        Args:
+            base_url: Server base URL fixture.
+            time_frame_base: Slot duration in seconds (3600 or 900).
+            berlin_timezone: pytz timezone for Europe/Berlin.
+            ver: Version string to assign (must be >= 0.1.0).
+
+        Returns:
+            EOSBackend: Instance with eos_version set to *ver*.
+        """
+        backend = EOSBackend.__new__(EOSBackend)
+        backend.base_url = base_url
+        backend.time_frame_base = time_frame_base
+        backend.time_zone = berlin_timezone
+        backend.eos_version = ver
+        return backend
+
+    def test_modern_eos_spring_forward_arrays_unchanged(
+        self, base_url, berlin_timezone
+    ):
+        """
+        EOS >= 0.1.0 with spring-forward (expected_hourly=47):
+        arrays must remain exactly 48 elements – no trimming.
+
+        This is the regression test for the March 29, 2026 bug where trimming
+        to 47 caused EOS 0.2.0.dev84352035 to return
+        "Optimize error: no solution stored by run."
+
+        Args:
+            base_url: Server URL fixture.
+            berlin_timezone: Europe/Berlin timezone fixture.
+        """
+        backend = self._backend_modern_eos(base_url, 3600, berlin_timezone)
+        req = self._make_request(48)
+        original_pv = req["ems"]["pv_prognose_wh"][:]
+        original_temp = req["temperature_forecast"][:]
+
+        backend._adjust_arrays_for_dst(req, 47)  # spring-forward – must be no-op
+
+        assert (
+            req["ems"]["pv_prognose_wh"] == original_pv
+        ), "pv_prognose_wh must not be trimmed for EOS >= 0.1.0"
+        assert (
+            req["temperature_forecast"] == original_temp
+        ), "temperature_forecast must not be trimmed for EOS >= 0.1.0"
+        assert (
+            len(req["ems"]["gesamtlast"]) == 48
+        ), "gesamtlast must remain 48 elements for EOS >= 0.1.0 on spring-forward day"
+
+    def test_modern_eos_fall_back_arrays_unchanged(self, base_url, berlin_timezone):
+        """
+        EOS >= 0.1.0 with fall-back (expected_hourly=49):
+        arrays must remain exactly 48 elements – no padding.
+
+        Args:
+            base_url: Server URL fixture.
+            berlin_timezone: Europe/Berlin timezone fixture.
+        """
+        backend = self._backend_modern_eos(base_url, 3600, berlin_timezone)
+        req = self._make_request(48)
+        original_load = req["ems"]["gesamtlast"][:]
+
+        backend._adjust_arrays_for_dst(req, 49)  # fall-back – must be no-op
+
+        assert (
+            req["ems"]["gesamtlast"] == original_load
+        ), "gesamtlast must not be padded for EOS >= 0.1.0"
+        assert (
+            len(req["ems"]["pv_prognose_wh"]) == 48
+        ), "pv_prognose_wh must remain 48 elements for EOS >= 0.1.0 on fall-back day"
+
+    def test_modern_eos_spring_forward_15min_arrays_unchanged(
+        self, base_url, berlin_timezone
+    ):
+        """
+        EOS >= 0.1.0 with spring-forward, 15-min mode:
+        192-element arrays must remain 192 elements – no trimming.
+
+        Args:
+            base_url: Server URL fixture.
+            berlin_timezone: Europe/Berlin timezone fixture.
+        """
+        backend = self._backend_modern_eos(base_url, 900, berlin_timezone)
+        req = self._make_request(192)
+
+        backend._adjust_arrays_for_dst(req, 47)  # spring-forward, 15-min – no-op
+
+        ems_keys = (
+            "pv_prognose_wh",
+            "strompreis_euro_pro_wh",
+            "einspeiseverguetung_euro_pro_wh",
+            "gesamtlast",
+        )
+        for key in ems_keys:
+            assert (
+                len(req["ems"][key]) == 192
+            ), f"ems['{key}'] must remain 192 elements for EOS >= 0.1.0 in 15-min mode"
+        assert len(req["temperature_forecast"]) == 192

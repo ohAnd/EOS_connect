@@ -1080,6 +1080,16 @@ class PvInterface:
             pv_forecast.append(round(energy_wh, 1))
 
         pv_forecast = [float(x) for x in pv_forecast]
+
+        # Normalise to exactly 48 hourly slots so DST days never produce
+        # a short or long array that would break downstream consumers.
+        target_hourly = 48
+        if len(pv_forecast) > target_hourly:
+            pv_forecast = pv_forecast[:target_hourly]
+        elif len(pv_forecast) < target_hourly:
+            pad_val = pv_forecast[-1] if pv_forecast else 0.0
+            pv_forecast.extend([pad_val] * (target_hourly - len(pv_forecast)))
+
         logger.debug(
             "[PV-IF] Open-Meteo PV forecast for '%s' (Wh): %s",
             pv_config_entry["name"],
@@ -1166,6 +1176,16 @@ class PvInterface:
                 # time_point = now + timedelta(hours=hour, minutes=0)
                 # logger.debug("TEST - : %s - %s", current_hour_energy, time_point)
                 pv_forecast.append(current_hour_energy)
+
+            # Normalise to exactly 48 hourly slots so DST days never produce
+            # a short or long array.  The openmeteo lib computes
+            # hours_until_tomorrow_midnight in wall-clock time, which yields
+            # 47 on spring-forward and 49 on fall-back days.
+            target_hourly = 48
+            if len(pv_forecast) > target_hourly:
+                pv_forecast = pv_forecast[:target_hourly]
+            elif len(pv_forecast) < target_hourly:
+                pv_forecast.extend([0.0] * (target_hourly - len(pv_forecast)))
 
             # Clear any previous errors on success
             self.pv_forcast_request_error["error"] = None
