@@ -515,10 +515,18 @@ class PvInterface:
         Returns parameters that will be passed to requests.get(url, params=...).
         This ensures proper numeric type handling by the requests library.
         """
+        # Akkudoktor API rejects azimuth=0.0 with HTTP 400 ("wrongParameters").
+        # Use 0.1 as a safe substitute that represents South-facing panels.
+        raw_azimuth = (
+            float(pv_config_entry["azimuth"])
+            if pv_config_entry.get("azimuth") is not None
+            else 0.0
+        )
+        akkudoktor_azimuth = raw_azimuth if raw_azimuth != 0.0 else 0.1
         params = {
             "lat": pv_config_entry["lat"],
             "lon": pv_config_entry["lon"],
-            "azimuth": pv_config_entry["azimuth"],
+            "azimuth": akkudoktor_azimuth,
             "tilt": pv_config_entry["tilt"],
             "power": pv_config_entry["power"],
             "powerInverter": pv_config_entry["powerInverter"],
