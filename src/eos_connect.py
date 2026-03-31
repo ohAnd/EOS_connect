@@ -300,8 +300,12 @@ load_interface = LoadInterface(
     request_timeout=config_manager.config.get("request_timeout", 10),
 )
 
+battery_config = dict(config_manager.config["battery"])
+battery_config["feed_in_price"] = config_manager.config.get("price", {}).get(
+    "feed_in_price", 0.0
+)
 battery_interface = BatteryInterface(
-    config_manager.config["battery"],
+    battery_config,
     on_bat_max_changed=None,
     load_interface=load_interface,
     timezone=time_zone,

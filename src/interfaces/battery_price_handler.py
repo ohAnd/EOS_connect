@@ -3,6 +3,10 @@ Battery Price Calculation Handler
 
 This module provides dynamic battery energy price calculation functionality
 by analyzing historical charging events and attributing energy sources (PV vs Grid).
+Grid‑sourced energy is valued using historical price data.  PV‑sourced energy is
+assigned a cost derived from the configuration parameter `feed_in_price` (€/kWh),
+which is converted internally to €/Wh. The combined weighted average is returned
+as the current battery €/Wh price.
 """
 
 import logging
@@ -87,10 +91,15 @@ class BatteryPriceHandler:
         self.capacity_wh = config.get("capacity_wh", 10000)
         self.min_soc_percentage = config.get("min_soc_percentage", 10)
         self.price_euro_per_wh_accu = config.get("price_euro_per_wh_accu", 0.00004)
-
         # Thresholds to filter sensor noise and transients
         self.charging_threshold_w = config.get("charging_threshold_w", 50.0)
         self.grid_charge_threshold_w = config.get("grid_charge_threshold_w", 100.0)
+
+        # Feed-in price as opportunity cost for PV-sourced energy (injected from price section)
+        self.battery_price_include_feedin = config.get(
+            "battery_price_include_feedin", False
+        )
+        self.pv_cost_euro_per_kwh = config.get("feed_in_price", 0.0)  # €/kWh
 
         # State
         self.price_euro_per_wh = self.price_euro_per_wh_accu
@@ -320,8 +329,16 @@ class BatteryPriceHandler:
             if battery_in_wh <= 0.001:
                 continue
 
-            # Apply efficiency to the cost
-            event_cost = event_totals["grid_cost_euro"] / self.charge_efficiency
+            # Apply efficiency to the cost.
+            # Optionally include PV opportunity cost derived from feed-in price.
+            pv_cost = (
+                (energy_from_pv * self.pv_cost_euro_per_kwh / 1000.0)
+                if self.battery_price_include_feedin
+                else 0.0
+            )
+            event_cost = (
+                event_totals["grid_cost_euro"] + pv_cost
+            ) / self.charge_efficiency
 
             all_sessions_data.append(
                 {
