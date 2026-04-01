@@ -173,10 +173,19 @@ def import_config():
 def wizard_status():
     """Return wizard completion state."""
     completed = _store.get("_wizard_completed", False)
+    migrated = _store.get("_migrated_from_yaml", False)
     return jsonify({
-        "pending": not completed,
-        "completed": completed,
+        "pending": not completed and not migrated,
+        "completed": bool(completed),
+        "migrated": bool(migrated),
     })
+
+
+@config_bp.route("/wizard-complete", methods=["POST"])
+def wizard_complete():
+    """Mark the wizard as completed."""
+    _store.set("_wizard_completed", True)
+    return jsonify({"completed": True})
 
 
 # ------------------------------------------------------------------

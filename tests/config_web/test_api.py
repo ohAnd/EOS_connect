@@ -191,3 +191,65 @@ class TestConfigAPI:
         data = resp.get_json()
         assert data["completed"] is True
         assert data["pending"] is False
+
+
+@pytest.fixture
+def fresh_client(tmp_path):
+    """Create a Flask test client with NO migration (fresh install)."""
+    app = Flask(__name__)
+    app.config["TESTING"] = True
+
+    schema = ConfigSchema()
+    store = ConfigStore(str(tmp_path / "fresh.db"))
+    store.open()
+
+    config = _sample_config()
+    module = _FakeModule(config, store, schema)
+    init_api(store, schema, module)
+    app.register_blueprint(config_bp)
+
+    with app.test_client() as c:
+        yield c
+
+    store.close()
+
+
+class TestWizardAPI:
+    """Tests for the setup wizard endpoints."""
+
+    def test_wizard_pending_on_fresh_install(self, fresh_client):
+        """Fresh install (no migration, no wizard) should be pending."""
+        resp = fresh_client.get("/api/config/wizard-status")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["pending"] is True
+        assert data["completed"] is False
+        assert data["migrated"] is False
+
+    def test_wizard_not_pending_after_migration(self, client):
+        """Migrated install should not be pending."""
+        resp = client.get("/api/config/wizard-status")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["pending"] is False
+        assert data["migrated"] is True
+
+    def test_wizard_complete_marks_done(self, fresh_client):
+        """POST /api/config/wizard-complete should mark wizard as completed."""
+        resp = fresh_client.post("/api/config/wizard-complete")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["completed"] is True
+
+        # Verify status is now completed and not pending
+        resp2 = fresh_client.get("/api/config/wizard-status")
+        data2 = resp2.get_json()
+        assert data2["pending"] is False
+        assert data2["completed"] is True
+
+    def test_wizard_complete_idempotent(self, fresh_client):
+        """Calling wizard-complete twice should succeed both times."""
+        fresh_client.post("/api/config/wizard-complete")
+        resp = fresh_client.post("/api/config/wizard-complete")
+        assert resp.status_code == 200
+        assert resp.get_json()["completed"] is True

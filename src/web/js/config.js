@@ -171,6 +171,12 @@ class ConfigurationManager {
                 <select class="config-level-select"
                         onchange="configurationManager._setLevel(this.value)"
                         title="Disclosure level">${opts}</select>
+                <button onclick="closeFullScreenOverlay(); showSetupWizard();"
+                        style="margin-left:auto;background:#4a9eff;color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:0.8em;cursor:pointer;display:inline-flex;align-items:center;gap:5px;"
+                        title="Run Setup Wizard">
+                    <i class="fas fa-wand-magic-sparkles"></i>
+                    <span class="config-desktop-only">Wizard</span>
+                </button>
             </div>`;
     }
 

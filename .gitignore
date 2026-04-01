@@ -15,3 +15,4 @@ pytest.ini
 src/config.yaml.bak
 test_config_ui.py
 src/data/eos_connect.db
+src/data/eos_connect.db-wal

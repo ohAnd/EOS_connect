@@ -237,6 +237,11 @@ async function init() {
             document.getElementById('overlay').style.display = 'none';
         }
 
+        // Check if setup wizard should be shown (first launch)
+        if (typeof checkWizardStatus === "function") {
+            checkWizardStatus();
+        }
+
         // Update all displays
         showStatistics(data_request, data_response, data_controls);
         showSchedule(data_request, data_response, data_controls, data_priceInfo);
