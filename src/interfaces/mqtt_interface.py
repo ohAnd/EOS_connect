@@ -560,6 +560,18 @@ class MqttInterface:
         logger.debug(
             "[MQTT] Received message on topic '%s': %s", msg.topic, msg.payload.decode()
         )
+        # Ignore retained messages: they are re-delivered on every MQTT reconnect
+        # and would silently override config values (e.g. soc_min, soc_max) with
+        # stale values from a previous session.  Live commands from HA / automations
+        # arrive with retain=False and are always processed normally.
+        if msg.retain:
+            logger.info(
+                "[MQTT] Skipping retained message on topic '%s' (value: %s) "
+                "- config.yaml takes priority on reconnect.",
+                msg.topic,
+                msg.payload.decode(),
+            )
+            return
         topic = msg.topic.replace(self.base_topic + "/", "", 1).removesuffix("/set")
         if topic in self.topics_publish:
             try:

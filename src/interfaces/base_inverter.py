@@ -1,0 +1,162 @@
+from abc import ABC, abstractmethod
+import logging
+
+logger = logging.getLogger("__main__").getChild("BaseInverter")
+logger.setLevel(logging.INFO)
+
+
+class BaseInverter(ABC):
+    """Abstrakte Basisklasse für verschiedene Wechselrichter-Typen."""
+
+    # Default value for supports_extended_monitoring (can be overridden by subclasses)
+    supports_extended_monitoring_default = False
+
+    # Type hints for attributes set in __init__ (to satisfy pylint)
+    config: dict
+    address: str
+    user: str
+    password: str
+    max_grid_charge_rate: int | None
+    max_pv_charge_rate: int | None
+    is_authenticated: bool
+    inverter_type: str
+    supports_extended_monitoring: bool
+
+    def __init__(self, config: dict):
+        # ✔ komplette Config speichern (für Tests & spätere Erweiterungen)
+        self.config = config
+
+        # ✔ weiterhin einzelne Werte extrahieren
+        self.address = config.get("address")
+        self.user = config.get("user", "customer").lower()
+        self.password = config.get("password", "")
+        self.max_grid_charge_rate = config.get("max_grid_charge_rate")
+        self.max_pv_charge_rate = config.get("max_pv_charge_rate")
+
+        self.is_authenticated = False
+        self.inverter_type = self.__class__.__name__
+
+        # Set supports_extended_monitoring from class attribute
+        self.supports_extended_monitoring = (
+            self.__class__.supports_extended_monitoring_default
+        )
+
+        logger.info(f"[{self.inverter_type}] Initialized for {self.address}")
+
+    # --- Optionale Authentifizierung ---
+
+    @abstractmethod
+    def initialize(self):
+        """Heavy initialization (API calls)."""
+        pass
+
+    def authenticate(self) -> bool:
+        """
+        Optionale Authentifizierung.
+        Standardmäßig tut diese Methode nichts und gibt True zurück.
+        Subklassen können sie überschreiben, wenn sie Auth benötigen.
+        """
+        logger.debug(f"[{self.inverter_type}] No authentication required")
+        self.is_authenticated = True
+        return True
+
+    # --- Pflichtmethoden für alle Inverter ---
+
+    @abstractmethod
+    def set_battery_mode(self, mode: str) -> bool:
+        """Setzt den Batteriemodus (z. B. normal, hold, charge)."""
+        pass
+
+    # --- EOS Connect Helfer ---
+
+    @abstractmethod
+    def set_mode_avoid_discharge(self) -> bool:
+        """Vermeidet Entladung (Hold Mode)"""
+        return self.set_battery_mode("hold")
+
+    @abstractmethod
+    def set_mode_allow_discharge(self) -> bool:
+        """Erlaubt Entladung (Normal Mode)"""
+        return self.set_battery_mode("normal")
+
+    @abstractmethod
+    def set_allow_grid_charging(self, value: bool):
+        pass
+
+    @abstractmethod
+    def get_battery_info(self) -> dict:
+        """Liest aktuelle Batterieinformationen."""
+        pass
+
+    @abstractmethod
+    def fetch_inverter_data(self) -> dict:
+        """Liest aktuelle Inverterdaten."""
+        pass
+
+    @abstractmethod
+    def set_mode_force_charge(self, charge_power_w: int) -> bool:
+        """
+        Force charge mode with specific power.
+        Jede Subklasse muss diese Methode implementieren.
+        """
+        pass
+
+    @abstractmethod
+    def connect_inverter(self) -> bool:
+        """
+        Establishes a connection to the inverter.
+
+        This method is required to be implemented by all subclasses.
+        It should return True if the connection was successful, False otherwise.
+        """
+        pass
+
+    @abstractmethod
+    def disconnect_inverter(self) -> bool:
+        """
+        Disconnect from the inverter.
+
+        This method is required to be implemented by all subclasses.
+        It should return True if the disconnection was successful, False otherwise.
+        """
+        pass
+
+    # --- Gemeinsame Utility-Methoden ---
+
+    def api_set_max_pv_charge_rate(self, rate_w: int) -> bool:
+        """Store the maximum PV-to-battery charge rate in Watts.
+
+        Validates the rate, logs it, and stores it as ``self.max_pv_charge_rate``.
+        Inverters that can actively enforce the rate on hardware (e.g. via a
+        Time-of-Use API) should override this method and call
+        ``super().api_set_max_pv_charge_rate(rate_w)`` to ensure the value is
+        stored before the hardware command is applied.
+
+        Args:
+            rate_w: Maximum PV charge power in watts (must be >= 0).
+
+        Returns:
+            True if the rate was accepted and stored, False if rejected.
+        """
+        if rate_w < 0:
+            logger.warning(
+                "[%s] api_set_max_pv_charge_rate: invalid rate %sW (must be >= 0)",
+                self.inverter_type,
+                rate_w,
+            )
+            return False
+        logger.debug(
+            "[%s] api_set_max_pv_charge_rate: %.0f W stored",
+            self.inverter_type,
+            rate_w,
+        )
+        self.max_pv_charge_rate = rate_w
+        return True
+
+    def disconnect(self):
+        """Session schließt sich selbst."""
+        logger.info(f"[{self.inverter_type}] Session closed")
+
+    def shutdown(self):
+        """Standard-Shutdown (kann überschrieben werden)."""
+        self.disconnect()

@@ -3,6 +3,10 @@ Battery Price Calculation Handler
 
 This module provides dynamic battery energy price calculation functionality
 by analyzing historical charging events and attributing energy sources (PV vs Grid).
+Grid‑sourced energy is valued using historical price data.  PV‑sourced energy is
+assigned a cost derived from the configuration parameter `feed_in_price` (€/kWh),
+which is converted internally to €/Wh. The combined weighted average is returned
+as the current battery €/Wh price.
 """
 
 import logging
@@ -54,7 +58,21 @@ class BatteryPriceHandler:
         # Configuration
         self.source = config.get("source", "homeassistant")
         self.url = config.get("url", "")
-        self.access_token = config.get("access_token", "")
+        raw_token = config.get("access_token", "")
+        # Strip leading/trailing whitespace that can be introduced by YAML >- block
+        # scalar style when long tokens wrap across multiple lines
+        self.access_token = str(raw_token).strip()
+        if self.access_token != raw_token:
+            logger.warning(
+                "[BATTERY-PRICE] access_token had leading/trailing whitespace stripped. "
+                "Check config.yaml: avoid using YAML block scalar style ('>-') for tokens."
+            )
+        elif " " in self.access_token or "\n" in self.access_token:
+            logger.warning(
+                "[BATTERY-PRICE] access_token contains internal whitespace. This will cause "
+                "authentication failures. Use plain string style for long "
+                "tokens — place the token directly after 'access_token: ' on the same line."
+            )
         self.price_calculation_enabled = config.get("price_calculation_enabled", False)
         self.price_update_interval = config.get("price_update_interval", 900)  # 15 min
         self.price_history_lookback_hours = config.get(
@@ -73,10 +91,15 @@ class BatteryPriceHandler:
         self.capacity_wh = config.get("capacity_wh", 10000)
         self.min_soc_percentage = config.get("min_soc_percentage", 10)
         self.price_euro_per_wh_accu = config.get("price_euro_per_wh_accu", 0.00004)
-
         # Thresholds to filter sensor noise and transients
         self.charging_threshold_w = config.get("charging_threshold_w", 50.0)
         self.grid_charge_threshold_w = config.get("grid_charge_threshold_w", 100.0)
+
+        # Feed-in price as opportunity cost for PV-sourced energy (injected from price section)
+        self.battery_price_include_feedin = config.get(
+            "battery_price_include_feedin", False
+        )
+        self.pv_cost_euro_per_kwh = config.get("feed_in_price", 0.0)  # €/kWh
 
         # State
         self.price_euro_per_wh = self.price_euro_per_wh_accu
@@ -306,8 +329,16 @@ class BatteryPriceHandler:
             if battery_in_wh <= 0.001:
                 continue
 
-            # Apply efficiency to the cost
-            event_cost = event_totals["grid_cost_euro"] / self.charge_efficiency
+            # Apply efficiency to the cost.
+            # Optionally include PV opportunity cost derived from feed-in price.
+            pv_cost = (
+                (energy_from_pv * self.pv_cost_euro_per_kwh / 1000.0)
+                if self.battery_price_include_feedin
+                else 0.0
+            )
+            event_cost = (
+                event_totals["grid_cost_euro"] + pv_cost
+            ) / self.charge_efficiency
 
             all_sessions_data.append(
                 {
@@ -719,7 +750,8 @@ class BatteryPriceHandler:
             grid_conv = "negative_import"  # import=-, export=+
 
         logger.info(
-            "[BATTERY-PRICE] Detected conventions: battery=%s grid=%s (counts: %d,%d,%d,%d from %d samples)",
+            "[BATTERY-PRICE] Detected conventions: battery=%s grid=%s "
+            "(counts: %d,%d,%d,%d from %d samples)",
             battery_conv,
             grid_conv,
             c1,

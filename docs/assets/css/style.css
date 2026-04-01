@@ -41,6 +41,11 @@ body {
     z-index: 1000;
 }
 
+/* Offset anchor jump targets so the sticky header doesn't obscure the headline */
+h1[id], h2[id], h3[id], h4[id] {
+    scroll-margin-top: 8rem;
+}
+
 /* Draft Banner - Fixed overlay on top of header */
 .draft-banner {
     background: linear-gradient(135deg, rgba(255, 107, 107, 0.7) 0%, rgba(254, 202, 87, 0.7) 100%);

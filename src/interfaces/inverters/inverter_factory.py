@@ -1,0 +1,117 @@
+"""Factory for creating inverter instances based on configuration."""
+
+import logging
+from typing import Type
+from ..base_inverter import BaseInverter  # pylint: disable=relative-beyond-top-level
+
+# Import all inverter implementations directly from their modules
+from .fronius_legacy import FroniusLegacy
+from .fronius_v2 import FroniusV2
+from .victron import VictronInverter
+from .null_inverter import NullInverter
+from .evcc_inverter import EvccInverter
+from .inverter_ha import InverterHA
+
+
+logger = logging.getLogger("__main__").getChild("Factory")
+
+# Active, modern supported inverters
+# Mapping: Config-String → Inverter class
+INVERTER_TYPES: dict[str, Type[BaseInverter]] = {
+    "victron": VictronInverter,
+    "fronius_gen24": FroniusV2,
+    "homeassistant": InverterHA,
+    "evcc": EvccInverter,  # EVCC handles control externally
+    "default": NullInverter,  # Display-only mode
+}
+
+# Deprecated, technically replaced inverters
+# Mapping: Config-String → Inverter class
+LEGACY_INVERTER_TYPES: dict[str, Type[BaseInverter]] = {
+    "fronius_gen24_legacy": FroniusLegacy,
+    "fronius_gen24_v2": FroniusV2,  # Deprecated name, maps to same modern class
+}
+
+
+def create_inverter(config: dict) -> BaseInverter:
+    """
+    Factory function to create inverter instances based on configuration.
+
+    Args:
+        config: Dictionary containing 'type' key and inverter-specific configuration
+
+    Returns:
+        Configured inverter instance
+
+    Raises:
+        ValueError: If inverter type is unknown
+    """
+    inverter_type = config.get("type", "").lower()
+
+    # 1) Modern, actively supported inverter
+    if inverter_type in INVERTER_TYPES:
+        cls = INVERTER_TYPES[inverter_type]
+
+        # Check for required configuration keys for connection-based inverters
+        if inverter_type == "fronius_gen24" or inverter_type == "fronius_gen24_legacy":
+            missing_keys = []
+            if "address" not in config or not config.get("address"):
+                missing_keys.append("address")
+            if "user" not in config or not config.get("user"):
+                missing_keys.append("user")
+            if "password" not in config or not config.get("password"):
+                missing_keys.append("password")
+
+            if missing_keys:
+                logger.error(
+                    "[Factory] Inverter type '%s' requires configuration keys: %s. "
+                    "Configuration not found. Falling back to display-only mode (default).",
+                    inverter_type,
+                    ", ".join(missing_keys),
+                )
+                return NullInverter(config)
+
+        logger.info(
+            "[Factory] Creating modern inverter '%s' (%s)",
+            inverter_type,
+            cls.__name__,
+        )
+        return cls(config)
+
+    # 2) Legacy inverter - still supported but deprecated
+    if inverter_type in LEGACY_INVERTER_TYPES:
+        cls = LEGACY_INVERTER_TYPES[inverter_type]
+
+        # Check for required configuration keys for connection-based inverters
+        if inverter_type == "fronius_gen24_legacy":
+            missing_keys = []
+            if "address" not in config or not config.get("address"):
+                missing_keys.append("address")
+            if "user" not in config or not config.get("user"):
+                missing_keys.append("user")
+            if "password" not in config or not config.get("password"):
+                missing_keys.append("password")
+
+            if missing_keys:
+                logger.error(
+                    "[Factory] Inverter type '%s' requires configuration keys: %s. "
+                    "Configuration not found. Falling back to display-only mode (default).",
+                    inverter_type,
+                    ", ".join(missing_keys),
+                )
+                return NullInverter(config)
+
+        logger.warning(
+            "[Factory] Creating legacy inverter '%s' (%s). "
+            "Consider updating to a modern type for future compatibility.",
+            inverter_type,
+            cls.__name__,
+        )
+        return cls(config)
+
+    # 3) Unknown type
+    supported = list(INVERTER_TYPES.keys()) + list(LEGACY_INVERTER_TYPES.keys())
+    raise ValueError(
+        f"Unknown inverter type: '{inverter_type}'. "
+        f"Supported types: {', '.join(supported)}"
+    )

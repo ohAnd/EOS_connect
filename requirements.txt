@@ -2,7 +2,7 @@ Flask>=2.2.5
 requests>=2.26.0
 pandas>=2.2.3
 numpy>=2.0.0
-gevent>=24.2.1
+waitress>=3.0.0
 pyyaml>=6.0
 pytz>=2025.1
 ruamel.yaml==0.18.17
@@ -11,3 +11,4 @@ packaging>=23.2
 # pvlib>=0.13.0
 open-meteo-solar-forecast>=0.1.22
 psutil>=7.0.0
+pymodbus>=3.0.0

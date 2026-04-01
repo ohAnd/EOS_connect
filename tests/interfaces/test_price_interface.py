@@ -11,6 +11,49 @@ from src.interfaces.price_interface import PriceInterface, STROMLIGNING_API_BASE
 # pylint: disable=protected-access
 
 
+# =========================================================================
+# price token YAML >- stripping
+# =========================================================================
+
+
+def _make_price_iface(token, monkeypatch):
+    """Helper: build a PriceInterface with the given token, suppressing the update service."""
+    monkeypatch.setattr(
+        "src.interfaces.price_interface.PriceInterface."
+        "_PriceInterface__start_update_service",
+        lambda self: None,
+    )
+    cfg = {"source": "tibber", "token": token}
+    return PriceInterface(cfg, 3600)
+
+
+class TestPriceInterfaceTokenStripping:
+    """Tests for YAML >- block-scalar whitespace stripping on the price token."""
+
+    def test_leading_trailing_whitespace_stripped(self, monkeypatch, caplog):
+        """token with surrounding whitespace is stripped and a warning is logged."""
+        iface = _make_price_iface("  mytoken  ", monkeypatch)
+        assert iface.access_token == "mytoken"
+        assert "whitespace stripped" in caplog.text
+
+    def test_newline_stripped(self, monkeypatch, caplog):
+        """token with trailing newline from YAML >- is stripped."""
+        iface = _make_price_iface("mytoken\n", monkeypatch)
+        assert iface.access_token == "mytoken"
+        assert "whitespace stripped" in caplog.text
+
+    def test_internal_whitespace_warns(self, monkeypatch, caplog):
+        """token with internal space logs an authentication-failure warning."""
+        iface = _make_price_iface("part1 part2", monkeypatch)
+        assert iface.access_token == "part1 part2"
+        assert "internal whitespace" in caplog.text
+
+    def test_clean_token_no_warning(self, monkeypatch, caplog):
+        """Clean token produces no whitespace warning."""
+        _make_price_iface("cleantoken", monkeypatch)
+        assert "whitespace" not in caplog.text
+
+
 def _build_sample_response():
     """Create a minimal Stromligning payload fixture."""
     # First 16 entries (4 hours) from sample_response.json

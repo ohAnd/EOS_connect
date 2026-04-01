@@ -315,6 +315,54 @@ import pytz
 from src.interfaces.battery_price_handler import BatteryPriceHandler
 
 
+# =========================================================================
+# access_token YAML >- stripping
+# =========================================================================
+
+
+class TestBatteryPriceHandlerTokenStripping:
+    """Tests for YAML >- block-scalar whitespace stripping on access_token."""
+
+    def test_leading_trailing_whitespace_stripped(self, caplog):
+        """access_token with surrounding whitespace is stripped and a warning is logged."""
+        cfg = {
+            "source": "homeassistant",
+            "url": "http://ha",
+            "access_token": "  tok123  ",
+        }
+        handler = BatteryPriceHandler(cfg, None)
+        assert handler.access_token == "tok123"
+        assert "whitespace stripped" in caplog.text
+
+    def test_newline_stripped(self, caplog):
+        """access_token with trailing newline from YAML >- is stripped."""
+        cfg = {
+            "source": "homeassistant",
+            "url": "http://ha",
+            "access_token": "tok123\n",
+        }
+        handler = BatteryPriceHandler(cfg, None)
+        assert handler.access_token == "tok123"
+        assert "whitespace stripped" in caplog.text
+
+    def test_internal_whitespace_warns(self, caplog):
+        """access_token with internal space logs an authentication-failure warning."""
+        cfg = {"source": "homeassistant", "url": "http://ha", "access_token": "tok 123"}
+        handler = BatteryPriceHandler(cfg, None)
+        assert handler.access_token == "tok 123"
+        assert "internal whitespace" in caplog.text
+
+    def test_clean_token_no_warning(self, caplog):
+        """Clean access_token produces no whitespace warning."""
+        cfg = {
+            "source": "homeassistant",
+            "url": "http://ha",
+            "access_token": "cleantoken",
+        }
+        BatteryPriceHandler(cfg, None)
+        assert "whitespace" not in caplog.text
+
+
 @pytest.fixture
 def battery_config():
     """Returns a configuration dictionary for BatteryPriceHandler."""
@@ -510,3 +558,204 @@ def test_power_split_with_pv_and_grid():
     # - Grid surplus: 2000W → to battery (1500W remaining capacity)
     assert pv_to_bat == 1500.0, "PV surplus should charge battery"
     assert grid_to_bat == 1500.0, "Grid should cover remaining battery charge"
+
+
+# =========================================================================
+# battery_price_include_feedin — PV opportunity-cost toggle
+# =========================================================================
+
+
+class TestBatteryPriceIncludeFeedin:
+    """Tests for the battery_price_include_feedin / feed_in_price feature.
+
+    Verifies that:
+    - Attributes default correctly when not configured.
+    - Configured values are stored correctly.
+    - PV opportunity cost is zero when the toggle is disabled (default).
+    - PV opportunity cost is applied correctly when the toggle is enabled.
+    - End-to-end _calculate_total_costs produces a higher weighted price with
+      the toggle on vs. off when the battery was charged from PV.
+    """
+
+    # ------------------------------------------------------------------
+    # Init / attribute defaults
+    # ------------------------------------------------------------------
+
+    def test_default_values_when_keys_absent(self):
+        """Handler defaults battery_price_include_feedin=False, pv_cost_euro_per_kwh=0.0."""
+        handler = BatteryPriceHandler({}, None)
+        assert handler.battery_price_include_feedin is False
+        assert handler.pv_cost_euro_per_kwh == pytest.approx(0.0)
+
+    def test_configured_toggle_true_stored(self):
+        """battery_price_include_feedin=True is read and stored."""
+        cfg = {"battery_price_include_feedin": True, "feed_in_price": 0.08}
+        handler = BatteryPriceHandler(cfg, None)
+        assert handler.battery_price_include_feedin is True
+
+    def test_configured_feed_in_price_stored(self):
+        """feed_in_price value from config is stored as pv_cost_euro_per_kwh."""
+        cfg = {"battery_price_include_feedin": True, "feed_in_price": 0.0794}
+        handler = BatteryPriceHandler(cfg, None)
+        assert handler.pv_cost_euro_per_kwh == pytest.approx(0.0794)
+
+    def test_feed_in_price_defaults_to_zero_when_absent(self):
+        """pv_cost_euro_per_kwh defaults to 0.0 when feed_in_price is not in config."""
+        cfg = {"battery_price_include_feedin": True}
+        handler = BatteryPriceHandler(cfg, None)
+        assert handler.pv_cost_euro_per_kwh == pytest.approx(0.0)
+
+    # ------------------------------------------------------------------
+    # _calculate_total_costs: toggle-off means pv_cost = 0
+    # ------------------------------------------------------------------
+
+    def _make_handler(self, include_feedin: bool, feed_in_price: float = 0.08):
+        """Build a BatteryPriceHandler with the feedin toggle set as requested."""
+        config = {
+            "charging_threshold_w": 50.0,
+            "grid_charge_threshold_w": 100.0,
+            "charge_efficiency": 1.0,  # neutral: no efficiency adjustment in assertions
+            "battery_price_include_feedin": include_feedin,
+            "feed_in_price": feed_in_price,
+        }
+        return BatteryPriceHandler(
+            config=config,
+            load_interface=None,
+            timezone=pytz.UTC,
+        )
+
+    def _make_pv_charge_dataset(self):
+        """Build a minimal charging event + historical_data for a pure-PV session.
+
+        Scenario: 1 hour, battery charges at 1 kW purely from PV (no grid import).
+        Price data is present but irrelevant for a PV-only session without the toggle.
+        """
+        now = datetime.now(pytz.UTC)
+        one_hour = timedelta(hours=1)
+
+        charging_event = {
+            "start_time": now,
+            "end_time": now + one_hour,
+            "power_points": [
+                {"timestamp": now, "value": 1000.0},
+                {"timestamp": now + one_hour, "value": 1000.0},
+            ],
+        }
+
+        historical_data = {
+            "battery_power": _fake_series([1000.0, 1000.0]),  # charging
+            "pv_power": _fake_series([1000.0, 1000.0]),  # PV covers everything
+            "grid_power": _fake_series([0.0, 0.0]),  # no grid
+            "load_power": _fake_series([0.0, 0.0]),  # no load
+            "price_data": _fake_series([0.30, 0.30]),  # €0.30/kWh (irrelevant here)
+        }
+
+        return [charging_event], historical_data
+
+    def test_pv_cost_zero_when_toggle_off(self):
+        """With toggle off, _calculate_total_costs returns zero cost for a pure-PV session."""
+        handler = self._make_handler(include_feedin=False, feed_in_price=0.08)
+        events, historical = self._make_pv_charge_dataset()
+
+        # Lookback 2 h so the event is within window
+        result = handler._calculate_total_costs(
+            charging_events=events,
+            historical_data=historical,
+            lookback_hours=2,
+        )
+
+        assert result is not None, "Should return a result dict"
+        assert result["total_cost"] == pytest.approx(
+            0.0, abs=1e-6
+        ), "PV-only session should have zero cost when toggle is off"
+
+    def test_pv_cost_nonzero_when_toggle_on(self):
+        """With toggle on, _calculate_total_costs applies feed_in_price to PV energy."""
+        feed_in = 0.08  # €/kWh
+        handler = self._make_handler(include_feedin=True, feed_in_price=feed_in)
+        events, historical = self._make_pv_charge_dataset()
+
+        result = handler._calculate_total_costs(
+            charging_events=events,
+            historical_data=historical,
+            lookback_hours=2,
+        )
+
+        assert result is not None
+        assert result["total_energy_charged"] > 0, "Energy should have been recorded"
+        # ~1 kWh charged from PV at €0.08/kWh → weighted price ≈ 0.08 €/kWh
+        weighted_price_euro_per_kwh = (
+            result["total_cost"] / result["total_energy_charged"] * 1000.0
+        )
+        assert weighted_price_euro_per_kwh == pytest.approx(
+            feed_in, rel=0.05
+        ), f"Expected ~{feed_in} €/kWh for pure-PV session with toggle on"
+
+    def test_toggle_on_yields_higher_price_than_toggle_off(self):
+        """Enabling the feedin toggle must produce a strictly higher battery price than disabling it
+        for a session that includes PV charging and a nonzero feed_in_price."""
+        events, historical = self._make_pv_charge_dataset()
+
+        handler_off = self._make_handler(include_feedin=False, feed_in_price=0.08)
+        handler_on = self._make_handler(include_feedin=True, feed_in_price=0.08)
+
+        result_off = handler_off._calculate_total_costs(
+            charging_events=events,
+            historical_data=historical,
+            lookback_hours=2,
+        )
+        result_on = handler_on._calculate_total_costs(
+            charging_events=events,
+            historical_data=historical,
+            lookback_hours=2,
+        )
+
+        assert result_on is not None
+        assert result_off is not None
+        # total_energy_charged is the same in both runs; compare total_cost directly
+        assert (
+            result_on["total_cost"] > result_off["total_cost"]
+        ), "Toggle-on price should exceed toggle-off price for PV-sourced energy"
+
+    def test_grid_cost_unaffected_by_toggle(self):
+        """Grid-sourced energy cost must be identical whether the feedin toggle is on or off."""
+        now = datetime.now(pytz.UTC)
+        one_hour = timedelta(hours=1)
+
+        charging_event = {
+            "start_time": now,
+            "end_time": now + one_hour,
+            "power_points": [
+                {"timestamp": now, "value": 1000.0},
+                {"timestamp": now + one_hour, "value": 1000.0},
+            ],
+        }
+
+        # Pure grid session: pv=0, grid imports all
+        historical_data = {
+            "battery_power": _fake_series([1000.0, 1000.0]),
+            "pv_power": _fake_series([0.0, 0.0]),
+            "grid_power": _fake_series([1000.0, 1000.0]),  # grid import covers battery
+            "load_power": _fake_series([0.0, 0.0]),
+            "price_data": _fake_series([0.25, 0.25]),
+        }
+
+        handler_off = self._make_handler(include_feedin=False, feed_in_price=0.08)
+        handler_on = self._make_handler(include_feedin=True, feed_in_price=0.08)
+
+        result_off = handler_off._calculate_total_costs(
+            charging_events=[charging_event],
+            historical_data=historical_data,
+            lookback_hours=2,
+        )
+        result_on = handler_on._calculate_total_costs(
+            charging_events=[charging_event],
+            historical_data=historical_data,
+            lookback_hours=2,
+        )
+
+        assert result_off is not None
+        assert result_on is not None
+        assert result_off["total_cost"] == pytest.approx(
+            result_on["total_cost"], rel=1e-6
+        ), "Grid-only session cost must be the same regardless of the feedin toggle"

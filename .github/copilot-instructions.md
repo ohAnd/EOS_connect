@@ -30,7 +30,7 @@
 
 #### Documentation Update Workflow
 
-**When preparing to commit (NEVER commit automatically):**
+**When preparing to commit (NEVER stage changed files and commit automatically - always review changes first and ask for confirmation):**
 
 1. **Update README.md** - Minimal info only, focus on quick start + links to GitHub Pages
 2. **Update src/CONFIG_README.md** - Essential configuration overview + links to full docs

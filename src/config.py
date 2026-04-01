@@ -61,6 +61,7 @@ class ConfigManager:
                         "timeout": 180,  # Default timeout for EOS optimize request
                         "time_frame": 3600,  # Time frame for EOS optimize request in seconds
                         "dyn_override_discharge_allowed_pv_greater_load": False,  # Dynamic override for discharge when PV > Load
+                        "pv_battery_charge_control_enabled": False,  # PV battery charge control via optimizer dc_charge signal
                     }
                 ),
                 "price": CommentedMap(
@@ -107,6 +108,7 @@ class ConfigManager:
                         "price_sensor": "",
                         "charging_threshold_w": 50.0,
                         "grid_charge_threshold_w": 100.0,
+                        "battery_price_include_feedin": False,  # include feed-in price as PV opportunity cost in battery price calculation
                     }
                 ),
                 "pv_forecast_source": CommentedMap(
@@ -236,6 +238,12 @@ class ConfigManager:
             + " if pv_forecast > load in current time slot",
             "dyn_override_discharge_allowed_pv_greater_load",
         )
+        config["eos"].yaml_add_eol_comment(
+            "Enable PV-to-battery charge control from optimizer dc_charge signal - default: false"
+            + " - when enabled, enforces optimizer PV charge decisions slot-by-slot"
+            + " (hardware enforcement on Fronius Gen24 only)",
+            "pv_battery_charge_control_enabled",
+        )
         # price configuration
         config.yaml_set_comment_before_after_key(
             "price", before="Electricity price configuration"
@@ -354,6 +362,11 @@ class ConfigManager:
             "minimum grid surplus to consider as grid charging (W)",
             "grid_charge_threshold_w",
         )
+        config["battery"].yaml_add_eol_comment(
+            "include feed-in price as opportunity cost for PV-sourced energy"
+            + " in battery price calculation - default: false",
+            "battery_price_include_feedin",
+        )
 
         # pv forecast source configuration
         config.yaml_set_comment_before_after_key(
@@ -441,6 +454,12 @@ class ConfigManager:
         )
         config["inverter"].yaml_add_eol_comment(
             "Max inverter PV charge rate in W - default: 5000", "max_pv_charge_rate"
+        )
+        config["inverter"].yaml_add_eol_comment(
+            "Access token for Home Assistant (homeassistant only)", "token"
+        )
+        config["inverter"].yaml_add_eol_comment(
+            "URL for Home Assistant (homeassistant only)", "url"
         )
         # evcc configuration
         config.yaml_set_comment_before_after_key("evcc", before="EVCC configuration")
@@ -535,6 +554,12 @@ class ConfigManager:
         Check if the eos timeout is smaller than the refresh time
         and validate request_timeout range
         """
+        if "timeout" not in self.config["eos"]:
+            logger.warning(
+                "[Config] 'eos.timeout' not found in config.yaml."
+                " Using default value of 180 s. Please add 'timeout: 180' under the 'eos:' section."
+            )
+            self.config["eos"]["timeout"] = 180
         eos_timeout_seconds = self.config["eos"]["timeout"]
         refresh_time_seconds = self.config["refresh_time"] * 60
 

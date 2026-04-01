@@ -20,7 +20,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.2.31</span>
+                <span class="version-badge">v0.2.33</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -46,19 +46,25 @@
                     <a href="#load" class="toc-link">Load</a>
                     <a href="#eos" class="toc-link">EOS Server</a>
                     <a href="#dyn-override" class="toc-link toc-sub">→ Dynamic PV Override</a>
+                    <a href="#pv-charge-control" class="toc-link toc-sub">→ PV Battery Charge Control</a>
                     <a href="#price" class="toc-link">Electricity Prices</a>
                     <a href="#energyforecast" class="toc-link toc-sub">→ Smart Price Prediction</a>
                     <a href="#battery" class="toc-link">Battery</a>
+                    <a href="#battery-price-calc" class="toc-link toc-sub">&rarr; Dynamic Price Calculation</a>
                     <a href="#pv" class="toc-link">PV Forecasts</a>
                     <a href="#inverter" class="toc-link">Inverter</a>
                     <a href="#evcc" class="toc-link">EVCC</a>
                     <a href="#mqtt" class="toc-link">MQTT</a>
+                    <a href="#optimization-config" class="toc-link">Optimization Configuration</a>
+                    <a href="#timing-controls" class="toc-link toc-sub">→ Timing Controls</a>
+                    <a href="#time-slot-config" class="toc-link toc-sub">→ Time Slot Configuration</a>
                     <a href="#other" class="toc-link">Other Settings</a>
                     <a href="#examples" class="toc-link">Config Examples</a>
                     <a href="#example-full" class="toc-link toc-sub">→ Full Config</a>
                     <a href="#example-minimal" class="toc-link toc-sub">→ Minimal Config</a>
                     <a href="#example-evcc" class="toc-link toc-sub">→ EVCC Setup</a>
                     <a href="#example-solcast" class="toc-link toc-sub">→ Solcast Setup</a>
+                    <a href="#example-ha-inverter" class="toc-link toc-sub">→ HA Inverter</a>
                 </nav>
             </aside>
 
@@ -80,6 +86,9 @@
                 </div>
                 <div class="feature-item">
                     <a href="#dyn-override"><i class="fas fa-zap"></i> Dynamic PV Override</a>
+                </div>
+                <div class="feature-item">
+                    <a href="#pv-charge-control"><i class="fas fa-solar-panel"></i> PV Battery Charge Control</a>
                 </div>
                 <div class="feature-item">
                     <a href="#price"><i class="fas fa-dollar-sign"></i> Electricity Prices</a>
@@ -418,7 +427,7 @@
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Smaller values = more detailed optimization but higher computational load</td>
+                    <td>Smaller values = more detailed optimization but higher computational load. See <a href="#time-slot-config" style="color: inherit; text-decoration: underline;">Time Slot Configuration & Optimizer Constraints</a> for supported values and optimizer limitations.</td>
                 </tr>
             </table>
 
@@ -481,6 +490,41 @@
                             <li><strong>Per time slot:</strong> Checked for each optimization interval</li>
                             <li><strong>Visual feedback:</strong> Green indicators on dashboard when active</li>
                         </ul>
+                    </td>
+                </tr>
+            </table>
+
+            <h3 id="pv-charge-control">eos.pv_battery_charge_control_enabled</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>eos.pv_battery_charge_control_enabled</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Allows the optimizer to control PV-to-battery charging on a per-slot basis using the <code>dc_charge</code> signal. When enabled, slots where the optimizer plans no PV charging (e.g. negative price slots, battery near full) will physically block PV→battery charging.</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td><code>true</code>, <code>false</code></td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>false</code> (disabled)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td style="padding: 1rem;">
+                        <ul style="margin: 0; padding-left: 20px;">
+                            <li><strong>Fronius Gen24 only:</strong> Hardware enforcement via the Time-of-Use (TOU) API. On all other inverters (Victron, Home Assistant, EVCC, default) the value is stored but PV charging is not blocked in hardware &mdash; enabling this setting has no effect on those inverters.</li>
+                            <li><strong>Forecast dependency:</strong> When enabled and the optimizer predicts load &gt; PV for a slot, PV charging is blocked even if actual sun turns out stronger than forecast. Disable if you observe unwanted PV blocking on sunny days.</li>
+                            <li><strong>Interaction with dynamic override:</strong> The dynamic override (<code>dyn_override_discharge_allowed_pv_greater_load</code>) only liberates <em>discharge</em>, not <em>PV charging</em>. If both features are on and a slot has <code>dc_charge=0</code> but override fires, the battery can discharge but PV cannot charge it (Fronius only).</li>
+                            <li><strong>Dashboard:</strong> Gold-coloured PV forecast bars and the solar-panel icon in the schedule table are only shown when this setting is enabled.</li>
+                        </ul>
+                        <div class="alert" style="background: rgba(255,165,0,0.1); border-left: 4px solid #FFA500; padding: 0.75rem; margin-top: 0.75rem; border-radius: 4px;">
+                            <i class="fas fa-exclamation-triangle" style="color: #FFA500;"></i>
+                            <strong>Fronius Gen24 only</strong> &mdash; Hardware charge blocking via TOU register. All other inverter types are unaffected regardless of this setting.
+                        </div>
                     </td>
                 </tr>
             </table>
@@ -1360,6 +1404,7 @@
                 </tr>
             </table>
 
+            <h3 id="battery-price-calc"><i class="fas fa-calculator"></i> Dynamic Battery Price Calculation</h3>
             <div class="alert alert-info">
                 <h4><i class="fas fa-calculator"></i> Dynamic Battery Price Calculation</h4>
                 <p>EOS Connect can automatically calculate the real cost of energy in your battery by analyzing historical charging events using a Last-In, First-Out (LIFO) inventory model.</p>
@@ -1367,7 +1412,7 @@
                 <h5>How it Works:</h5>
                 <ol>
                     <li><strong>Event Detection:</strong> The system scans historical data (default 96h) to identify "charging events" where battery power was above the <code>charging_threshold_w</code>.</li>
-                    <li><strong>Source Attribution:</strong> For each event, it compares battery power with PV production and grid import. If grid import is significant (above <code>grid_charge_threshold_w</code>), energy is attributed to grid charging at the market price. PV surplus energy is attributed to solar charging at zero cost (since PV generation has no per-kWh cost).</li>
+                    <li><strong>Source Attribution:</strong> For each event, it compares battery power with PV production and grid import. If grid import is significant (above <code>grid_charge_threshold_w</code>), energy is attributed to grid charging at the market price. PV surplus energy is attributed to solar charging at zero cost by default (since PV generation has no per-kWh marginal cost). Optionally, you can assign the feed-in tariff as an opportunity cost for PV-sourced energy by enabling <code>battery_price_include_feedin</code> — in that case the configured <code>price.feed_in_price</code> is used as the PV energy cost.</li>
                     <li><strong>Inventory Valuation (LIFO):</strong> Instead of a simple average, the system uses a <strong>Last-In, First-Out</strong> model. It looks at the most recent charging sessions that match your current battery level. This ensures the price reflects the actual "value" of the energy currently inside the battery.</li>
                     <li><strong>Optimizer Integration:</strong> The resulting price is used by the optimizer to decide when it's profitable to discharge the battery.</li>
                     <li><strong>Efficiency:</strong> To minimize API load, the system uses a two-step fetching strategy: it first fetches low-resolution data to find events, then high-resolution data only for specific periods when the battery was actually charging.</li>
@@ -1560,6 +1605,33 @@
                 <tr>
                     <th>Default</th>
                     <td><code>100.0</code></td>
+                </tr>
+            </table>
+
+            <h3>battery.battery_price_include_feedin</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.battery_price_include_feedin</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Include the feed-in tariff as an opportunity cost for PV-sourced energy in the battery price calculation</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>false</code> - PV-sourced energy costs €0 (default, free solar energy)<br>
+                        <code>true</code> - PV-sourced energy is valued at <code>price.feed_in_price</code> (€/kWh) as opportunity cost
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>false</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>When enabled, the battery price will be higher when the battery was primarily charged from PV, reflecting the revenue that could have been earned by exporting that energy instead. Requires <code>price.feed_in_price</code> to be set correctly.</td>
                 </tr>
             </table>
         </div>
@@ -2046,8 +2118,10 @@
                 <tr>
                     <th>Valid Values</th>
                     <td>
+                        <code>victron</code> - Victron MultiPlus (3-phase ESS via Modbus/TCP)<br>
                         <code>fronius_gen24</code> - Fronius Gen24 (enhanced V2 interface, firmware-based auth)<br>
                         <code>fronius_gen24_legacy</code> - Fronius Gen24 (legacy V1 interface)<br>
+                        <code>homeassistant</code> - Generic Home Assistant inverter control via service calls<br>
                         <code>evcc</code> - Universal via EVCC external battery control<br>
                         <code>default</code> - Disable control (display only)
                     </td>
@@ -2066,15 +2140,25 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>IP address of the inverter</td>
+                    <td>IP address of the inverter / device</td>
                 </tr>
                 <tr>
                     <th>Required</th>
-                    <td>Yes (for <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
+                    <td>Yes (for <code>victron</code>, <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
                 </tr>
                 <tr>
                     <th>Example</th>
-                    <td><code>192.168.1.12</code></td>
+                    <td>
+                        <code>192.168.1.12</code> (Fronius)<br>
+                        <code>192.168.1.50</code> (Victron CCGX/Cerbo GX)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        <strong>Victron:</strong> Set a static IP on your Victron device (CCGX, Cerbo GX, or Venus OS host). Modbus/TCP connection will use port 502 (standard).<br>
+                        <strong>Fronius:</strong> IP address of the inverter's local portal.
+                    </td>
                 </tr>
             </table>
 
@@ -2086,7 +2170,7 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>Username for inverter's local portal</td>
+                    <td>Username for inverter's local portal (Fronius only)</td>
                 </tr>
                 <tr>
                     <th>Required</th>
@@ -2106,7 +2190,7 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>Password for inverter's local portal</td>
+                    <td>Password for inverter's local portal (Fronius only)</td>
                 </tr>
                 <tr>
                     <th>Required</th>
@@ -2119,6 +2203,30 @@
                     </td>
                 </tr>
             </table>
+
+            <h3>Victron MultiPlus Configuration</h3>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Victron Support:</strong> EOS Connect supports Victron MultiPlus systems via Modbus/TCP network connection. The interface provides automated battery discharge control, charge-from-grid, and charge-from-PV modes for complete energy management.
+            </div>
+
+            <p><strong>Requirements:</strong></p>
+            <ul>
+                <li>Victron MultiPlus 3-phase system (single-phase support is experimental)</li>
+                <li>ESS (Energy Storage System) mode enabled on the Victron device</li>
+                <li>Network connectivity between EOS Connect and the Victron device's IP address</li>
+                <li>Default Modbus/TCP port: 502 (standard)</li>
+            </ul>
+
+            <p><strong>How It Works:</strong></p>
+            <ol>
+                <li><strong>Discharge Allowed Mode:</strong> Normal ESS operation - Victron's internal logic manages battery discharge and grid interaction</li>
+                <li><strong>Avoid Discharge Mode (Hold):</strong> ESS switches to External Control, setpoint writes 0W to all phases - prevents battery discharge and grid import</li>
+                <li><strong>Charge from Grid:</strong> Positive power setpoint written to MultiPlus - inverter regulates grid import to charge batteries</li>
+                <li><strong>Auto Restore:</strong> When EOS Connect disconnects, original ESS mode is automatically restored</li>
+            </ol>
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-exclamation-triangle"></i> PV Charge Rate Limiting not supported:</strong> Victron ESS mode does not allow blocking PV-to-battery charging via the Modbus/TCP interface. The <code>inverter.max_pv_charge_rate</code> value is used by the optimizer model only. When the optimizer requests <code>dc_charge=0</code> (no PV charging) for a time slot, EOS Connect logs a warning but <strong>cannot enforce</strong> this on the hardware — PV will still charge the battery if solar energy is available.
+            </div>
 
             <h3>inverter.max_grid_charge_rate</h3>
             <table>
@@ -2164,9 +2272,68 @@
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Limitation for calculating target PV charge power and for EOS inverter model. Currently not supported by EVCC external battery control, but shown and calculated (reachable per EOS Connect API)</td>
+                    <td>
+                        Upper cap for the optimizer model and the target PV charge power calculation.<br><br>
+                        <strong>Fronius Gen24 (<code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>):</strong> Actively enforced via the Time-of-Use (TOU) API on every control cycle. When the optimizer sets <code>dc_charge=0</code> for a slot, a <code>CHARGE_MAX:0</code> TOU entry is written to the inverter, explicitly blocking PV-to-battery charging. When <code>dc_charge&gt;0</code>, a <code>CHARGE_MAX:&lt;rate&gt;</code> entry is written instead, allowing PV charging up to this wattage.<br><br>
+                        <strong>All other inverter types (Victron, HA, EVCC, default):</strong> Value is stored internally and used by the optimizer model only — no hardware PV charge limiting is performed. For Victron ESS, blocking PV charging via Modbus is not supported; a warning is logged when <code>dc_charge=0</code> is requested.
+                    </td>
                 </tr>
             </table>
+
+            <h3>inverter.url</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.url</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>URL of your Home Assistant instance</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes (for <code>homeassistant</code> type only)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>http://192.168.1.129:8123</code></td>
+                </tr>
+            </table>
+
+            <h3>inverter.token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Long-lived access token from Home Assistant</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes (for <code>homeassistant</code> type only)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Create one in HA under: Profile &rarr; Long-Lived Access Tokens &rarr; Create Token.</td>
+                </tr>
+            </table>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Home Assistant Inverter Interface:</strong>
+                The <code>homeassistant</code> inverter type allows controlling any inverter/battery system that is integrated into Home Assistant via configurable service call sequences (e.g., Marstek, Sungrow, Goodwe).
+                <br><br>
+                For each EOS inverter mode, you define a list of HA service calls under <code>inverter:</code>:
+                <ul>
+                    <li><code>charge_from_grid</code> &ndash; Service calls for grid charging. Supports <code>{{ power }}</code> in <code>data_template</code> for dynamic power values from EOS.</li>
+                    <li><code>avoid_discharge</code> &ndash; Service calls to hold the battery (no discharge, PV charging allowed).</li>
+                    <li><code>discharge_allowed</code> &ndash; Service calls for normal battery discharge.</li>
+                </ul>
+                Each step specifies: <code>service</code> (e.g., <code>select.select_option</code>), <code>entity_id</code>, and <code>data</code> (static) or <code>data_template</code> (with <code>{{ power }}</code> variable).
+                See the <a href="#example-ha-inverter">Marstek example</a> below for a complete configuration.
+                For the ESPHome config to connect a Marstek M1 via RS485/Modbus, see <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this Gist</a>.
+            </div>
         </div>
 
         <div class="content-section" id="evcc">
@@ -2367,6 +2534,66 @@
             </table>
         </div>
 
+        <!-- Optimization Configuration Section -->
+        <div class="content-section" id="optimization-config">
+            <h2><i class="fas fa-cog"></i> Optimization Configuration</h2>
+            <p>Important timing and configuration concepts for optimization requests and responses.</p>
+
+            <h3 id="timing-controls">Understanding refresh_time and time_frame</h3>
+            <div class="alert alert-warning">
+                <h4><i class="fas fa-clock"></i> Two Different Timing Controls</h4>
+                <p>These two parameters control different aspects of optimization:</p>
+                <ul>
+                    <li><strong>refresh_time</strong>: Sets how often EOS Connect sends a new optimization request to the optimizer server (e.g., every 3 minutes)</li>
+                    <li><strong>time_frame</strong> (in EOS section): Sets the granularity of the optimization and forecast arrays inside each request (e.g., 900 for 15-minute steps, 3600 for hourly steps)</li>
+                </ul>
+                <p>The combination of <code>refresh_time</code> and <code>time_frame</code> allows you to control both how frequently the system updates and how detailed the optimization is.</p>
+            </div>
+
+            <h3 id="time-slot-config">Time Slot Configuration & Optimizer Constraints</h3>
+            <p>The <code>time_frame</code> setting determines the granularity of optimization data:</p>
+            
+            <table>
+                <tr>
+                    <th>Time Frame</th>
+                    <th>Array Length</th>
+                    <th>Forecast Horizon</th>
+                    <th>EOS Server</th>
+                    <th>EVopt</th>
+                </tr>
+                <tr>
+                    <td><code>3600</code> (60 minutes)</td>
+                    <td>48 values</td>
+                    <td>2 days</td>
+                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
+                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
+                </tr>
+                <tr>
+                    <td><code>900</code> (15 minutes)</td>
+                    <td>192 values</td>
+                    <td>2 days (more granular)</td>
+                    <td><i class="fas fa-times" style="color: red;"></i> Not Supported</td>
+                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
+                </tr>
+            </table>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Optimizer Constraints:</strong>
+                <ul>
+                    <li><strong>EOS Server (Akkudoktor EOS):</strong> Only supports 60-minute slots (<code>time_frame: 3600</code>). If you set <code>time_frame: 900</code> with EOS Server, it will be automatically corrected to 3600 at startup with a warning.</li>
+                    <li><strong>EVopt:</strong> Supports both 60-minute (<code>3600</code>) and 15-minute (<code>900</code>) time frames for more granular optimization. Use 900 if you need more detailed control over battery charging/discharging and solar feed-in patterns.</li>
+                </ul>
+            </div>
+
+            <div class="alert alert-tip">
+                <strong><i class="fas fa-lightbulb"></i> When to Use Which Time Frame:</strong>
+                <ul>
+                    <li><strong>Use 3600s (hourly):</strong> If using EOS Server, or if you prefer simpler hourly optimization with lower computational cost</li>
+                    <li><strong>Use 900s (15-min):</strong> If using EVopt and want finer-grained optimization for precise battery and solar control</li>
+                </ul>
+            </div>
+        </div>
+
         <div class="content-section" id="other">
             <h2><i class="fas fa-cog"></i> Other Configuration Settings</h2>
             <p>General application settings and behavior.</p>
@@ -2501,16 +2728,70 @@
                 <h4><i class="fas fa-clock"></i> Two Different Timing Controls</h4>
                 <p>These two parameters control different aspects of optimization:</p>
                 <ul>
-                    <li><strong>refresh_time</strong>: Sets how often EOS Connect sends a new optimization request to the EOS server (e.g., every 3 minutes)</li>
+                    <li><strong>refresh_time</strong>: Sets how often EOS Connect sends a new optimization request to the optimizer server (e.g., every 3 minutes)</li>
                     <li><strong>time_frame</strong> (in EOS section): Sets the granularity of the optimization and forecast arrays inside each request (e.g., 900 for 15-minute steps, 3600 for hourly steps)</li>
                 </ul>
-                <p><strong>Backend Capabilities:</strong></p>
-                <ul>
-                  <li><strong>EOS Server:</strong> Only supports <code>3600</code> (hourly) - 15-minute intervals are not supported</li>
-                  <li><strong>EVopt:</strong> Supports both <code>3600</code> (hourly) and <code>900</code> (15-minute) for more precise optimization</li>
-                </ul>
-                <p>If you set <code>time_frame: 900</code> with <code>eos_server</code>, it will be automatically corrected to 3600 at startup with a warning.</p>
                 <p>The combination of <code>refresh_time</code> and <code>time_frame</code> allows you to control both how frequently the system updates and how detailed the optimization is.</p>
+            </div>
+        </div>
+
+        <!-- Optimization Configuration Section -->
+        <div class="content-section" id="optimization-config">
+            <h2><i class="fas fa-cog"></i> Optimization Configuration</h2>
+            <p>Important timing and configuration concepts for optimization requests and responses.</p>
+
+            <h3 id="timing-controls">Understanding refresh_time and time_frame</h3>
+            <div class="alert alert-warning">
+                <h4><i class="fas fa-clock"></i> Two Different Timing Controls</h4>
+                <p>These two parameters control different aspects of optimization:</p>
+                <ul>
+                    <li><strong>refresh_time</strong>: Sets how often EOS Connect sends a new optimization request to the optimizer server (e.g., every 3 minutes)</li>
+                    <li><strong>time_frame</strong> (in EOS section): Sets the granularity of the optimization and forecast arrays inside each request (e.g., 900 for 15-minute steps, 3600 for hourly steps)</li>
+                </ul>
+                <p>The combination of <code>refresh_time</code> and <code>time_frame</code> allows you to control both how frequently the system updates and how detailed the optimization is.</p>
+            </div>
+
+            <h3 id="time-slot-config">Time Slot Configuration & Optimizer Constraints</h3>
+            <p>The <code>time_frame</code> setting determines the granularity of optimization data:</p>
+            
+            <table>
+                <tr>
+                    <th>Time Frame</th>
+                    <th>Array Length</th>
+                    <th>Forecast Horizon</th>
+                    <th>EOS Server</th>
+                    <th>EVopt</th>
+                </tr>
+                <tr>
+                    <td><code>3600</code> (60 minutes)</td>
+                    <td>48 values</td>
+                    <td>2 days</td>
+                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
+                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
+                </tr>
+                <tr>
+                    <td><code>900</code> (15 minutes)</td>
+                    <td>192 values</td>
+                    <td>2 days (more granular)</td>
+                    <td><i class="fas fa-times" style="color: red;"></i> Not Supported</td>
+                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
+                </tr>
+            </table>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Optimizer Constraints:</strong>
+                <ul>
+                    <li><strong>EOS Server (Akkudoktor EOS):</strong> Only supports 60-minute slots (<code>time_frame: 3600</code>). If you set <code>time_frame: 900</code> with EOS Server, it will be automatically corrected to 3600 at startup with a warning.</li>
+                    <li><strong>EVopt:</strong> Supports both 60-minute (<code>3600</code>) and 15-minute (<code>900</code>) time frames for more granular optimization. Use 900 if you need more detailed control over battery charging/discharging and solar feed-in patterns.</li>
+                </ul>
+            </div>
+
+            <div class="alert alert-tip">
+                <strong><i class="fas fa-lightbulb"></i> When to Use Which Time Frame:</strong>
+                <ul>
+                    <li><strong>Use 3600s (hourly):</strong> If using EOS Server, or if you prefer simpler hourly optimization with lower computational cost</li>
+                    <li><strong>Use 900s (15-min):</strong> If using EVopt and want finer-grained optimization for precise battery and solar control</li>
+                </ul>
             </div>
         </div>
 
@@ -2588,8 +2869,8 @@ pv_forecast:
 
 # Inverter configuration
 inverter:
-  type: default  # Type of inverter - fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
-  address: 192.168.1.12 # Address of the inverter (fronius_gen24, fronius_gen24_legacy only)
+  type: default  # Type of inverter - victron, fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
+  address: 192.168.1.12 # Address of the inverter (fronius_gen24, fronius_gen24_legacy, victron)
   user: customer # Username for the inverter (fronius_gen24, fronius_gen24_legacy only)
   password: abc123 # Password for the inverter (fronius_gen24, fronius_gen24_legacy only)
   max_grid_charge_rate: 5000 # Max inverter grid charge rate in W - default: 5000
@@ -2666,7 +2947,7 @@ pv_forecast:
 
 # Inverter configuration
 inverter:
-  type: default  # Type of inverter - fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
+  type: default  # Type of inverter - victron, fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
 
 # EVCC configuration
 evcc:
@@ -2754,6 +3035,76 @@ pv_forecast:
                     <li>Get your API key from the account settings</li>
                     <li>Use these values in your EOS Connect configuration (including lat/lon for temperature forecasts)</li>
                 </ol>
+            </div>
+        </div>
+
+        <div class="content-section" id="example-ha-inverter">
+            <h3>Example: Using Home Assistant for Inverter Control (e.g., Marstek)</h3>
+            <p>When your inverter/battery system is integrated into Home Assistant, you can use the <code>homeassistant</code> inverter type to control it via HA service calls. This example shows a configuration for a Marstek battery system:</p>
+            <div class="config-example">
+<pre><code># Inverter Control Configuration (Marstek via Home Assistant)
+inverter:
+  type: homeassistant
+  url: http://192.168.1.129:8123
+  token: "your_long_lived_access_token_here"
+  max_grid_charge_rate: 2500
+  max_pv_charge_rate: 2500
+
+  # State: Force Charge (Grid)
+  charge_from_grid:
+    - service: select.select_option
+      entity_id: select.mt1_betriebsmodus
+      data: { "option": "Manuell" }
+    - service: select.select_option
+      entity_id: select.mt1_rs485_control_mode
+      data: { "option": "Aktiviert" }
+    - service: select.select_option
+      entity_id: select.mt1_erzwungene_operation
+      data: { "option": "Zwangsladen" }
+    - service: number.set_value
+      entity_id: number.mt1_ziel_leistung_manuell
+      data_template: { "value": "{{ power }}" }  # Dynamic power from EOS
+
+  # State: Avoid Discharge (Hold)
+  avoid_discharge:
+    - service: select.select_option
+      entity_id: select.mt1_betriebsmodus
+      data: { "option": "Anti-Feed-In" }
+    - service: select.select_option
+      entity_id: select.mt1_erzwungene_operation
+      data: { "option": "Stop" }
+    - service: number.set_value
+      entity_id: number.mt1_max_entladeleistung_limit
+      data: { "value": 0 }       # Block discharge
+    - service: number.set_value
+      entity_id: number.mt1_max_ladeleistung_limit
+      data: { "value": 2500 }    # Allow full PV charging
+
+  # State: Discharge Allowed (Normal)
+  discharge_allowed:
+    - service: select.select_option
+      entity_id: select.mt1_betriebsmodus
+      data: { "option": "Anti-Feed-In" }
+    - service: select.select_option
+      entity_id: select.mt1_erzwungene_operation
+      data: { "option": "Stop" }
+    - service: number.set_value
+      entity_id: number.mt1_max_entladeleistung_limit
+      data: { "value": 600 }     # Restore discharge limit
+    - service: number.set_value
+      entity_id: number.mt1_max_ladeleistung_limit
+      data: { "value": 2500 }</code></pre>
+            </div>
+            <div class="alert alert-info">
+                <strong>Key points:</strong>
+                <ul>
+                    <li>Replace <code>url</code> and <code>token</code> with your Home Assistant instance URL and a long-lived access token.</li>
+                    <li>Each state defines a sequence of HA service calls executed in order.</li>
+                    <li>Use <code>data_template</code> with <code>{{ power }}</code> for dynamic values (EOS provides the charge power). Use <code>data</code> for static values.</li>
+                    <li>The entity IDs and service calls depend on your specific inverter's HA integration. Adapt them to match your setup.</li>
+                    <li>This approach works for any inverter/battery that exposes control entities in Home Assistant.</li>
+                    <li>For a complete ESPHome config to connect a Marstek M1 via RS485/Modbus (M5Stack Atom), see <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this Gist</a>.</li>
+                </ul>
             </div>
         </div>
             </main>

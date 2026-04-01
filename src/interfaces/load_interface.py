@@ -37,7 +37,21 @@ class LoadInterface:
         self.load_sensor = config.get("load_sensor", "")
         self.car_charge_load_sensor = config.get("car_charge_load_sensor", "")
         self.additional_load_1_sensor = config.get("additional_load_1_sensor", "")
-        self.access_token = config.get("access_token", "")
+        raw_token = config.get("access_token", "")
+        # Strip leading/trailing whitespace that can be introduced by YAML >- block
+        # scalar style when long tokens wrap across multiple lines
+        self.access_token = str(raw_token).strip()
+        if self.access_token != raw_token:
+            logger.warning(
+                "[LOAD-IF] access_token had leading/trailing whitespace stripped. "
+                "Check config.yaml: avoid using YAML block scalar style ('>-') for tokens."
+            )
+        elif " " in self.access_token or "\n" in self.access_token:
+            logger.warning(
+                "[LOAD-IF] access_token contains internal whitespace. This will cause "
+                "HTTP 403 errors. In config.yaml, do NOT use '>-' block scalar style for "
+                "tokens — place the token directly after 'access_token: ' on the same line."
+            )
 
         # retry config
         self.max_retries = config.get("max_retries", 5)

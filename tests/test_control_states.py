@@ -12,10 +12,12 @@ Example use case (from user):
 - Zendure Solarflow 800 Pro can charge from grid (1000W) + PV (2000W) but max 2000W total
 """
 
-import pytest
-import pytz
+# pylint: disable=redefined-outer-name,protected-access,import-error,duplicate-code
+
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+import pytz
+import pytest
 from src.interfaces.base_control import BaseControl
 
 
@@ -107,9 +109,10 @@ class TestGridChargeLimiting:
             max_grid_charge_rate,
         )
 
-        assert (
-            tgt_ac_charge_power == 1000
-        ), f"AC charge should be limited to max_grid_charge_rate (1000W), got {tgt_ac_charge_power}W"
+        assert tgt_ac_charge_power == 1000, (
+            f"AC charge should be limited to max_grid_charge_rate (1000W), "
+            f"got {tgt_ac_charge_power}W"
+        )
 
     @patch("src.interfaces.base_control.datetime")
     def test_ac_charge_not_limited_when_below_grid_rate(
