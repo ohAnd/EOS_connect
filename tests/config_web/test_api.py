@@ -135,7 +135,7 @@ class TestConfigAPI:
         assert resp.status_code == 404
 
     def test_update_config(self, client):
-        """PUT /api/config/ should update values."""
+        """PUT /api/config/ should update values and report hot_reloaded."""
         resp = client.put(
             "/api/config/",
             data=json.dumps({"price.feed_in_price": 0.12}),
@@ -144,6 +144,9 @@ class TestConfigAPI:
         assert resp.status_code == 200
         data = resp.get_json()
         assert "price.feed_in_price" in data["updated"]
+        # feed_in_price has hot_reload=True and no restart_required label
+        assert "price.feed_in_price" in data["hot_reloaded"]
+        assert "price.feed_in_price" not in data.get("restart_required", [])
 
     def test_update_invalid_key(self, client):
         """PUT /api/config/ with unknown key should return 422."""

@@ -820,13 +820,18 @@ class ConfigurationManager {
                 }
             });
 
-            // Handle restart-required
-            if (result.restart_required && result.restart_required.length > 0) {
+            // Handle restart-required vs hot-reloaded
+            const hasRestart = result.restart_required && result.restart_required.length > 0;
+            const hasHotReload = result.hot_reloaded && result.hot_reloaded.length > 0;
+
+            if (hasRestart) {
                 this.restartFields = [
                     ...new Set([...this.restartFields, ...result.restart_required]),
                 ];
                 this._showRestartBanner();
                 this._showToast(`Saved. Restart required for: ${result.restart_required.length} field(s).`, "warning");
+            } else if (hasHotReload) {
+                this._showToast(`Saved & applied live (${result.hot_reloaded.length} field(s)). No restart needed.`, "success");
             } else {
                 this._showToast("Configuration saved successfully.", "success");
             }

@@ -92,6 +92,7 @@ def update_config():
 
     changed_keys = []
     restart_required = []
+    hot_reloaded = []
 
     for key, value in data.items():
         field_def = _schema.get(key)
@@ -104,6 +105,8 @@ def update_config():
 
         if "restart_required" in field_def.labels:
             restart_required.append(key)
+        elif field_def.hot_reload:
+            hot_reloaded.append(key)
 
     # Rebuild merged config so get_config() reflects changes
     _module.rebuild_config()
@@ -111,6 +114,7 @@ def update_config():
     return jsonify({
         "updated": changed_keys,
         "restart_required": restart_required,
+        "hot_reloaded": hot_reloaded,
     })
 
 
