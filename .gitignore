@@ -12,3 +12,6 @@ src/interfaces/config/timeofuse_config.json
 src/json/optimize_request.test.json
 src/json/optimize_response.test.json
 pytest.ini
+src/config.yaml.bak
+test_config_ui.py
+src/data/eos_connect.db

@@ -1,0 +1,549 @@
+/* ============================================================
+   Configuration Overlay — Web Config UI
+   Follows existing dark theme from style.css
+   ============================================================ */
+
+/* --- Layout: side nav + content area --- */
+.config-layout {
+    display: flex;
+    height: 100%;
+    gap: 0;
+}
+
+.config-nav {
+    width: 200px;
+    min-width: 200px;
+    background-color: rgba(0, 0, 0, 0.25);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    overflow-y: auto;
+    padding: 8px 0;
+    flex-shrink: 0;
+}
+
+.config-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+}
+
+/* --- Nav items --- */
+.config-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    cursor: pointer;
+    color: #b0b0b0;
+    font-size: 0.9em;
+    transition: background-color 0.2s, color 0.2s;
+    border-left: 3px solid transparent;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.config-nav-item:hover {
+    background-color: rgba(100, 100, 100, 0.4);
+    color: #e0e0e0;
+}
+
+.config-nav-item.active {
+    background-color: rgba(74, 158, 255, 0.12);
+    color: #4a9eff;
+    border-left-color: #4a9eff;
+    font-weight: 600;
+}
+
+.config-nav-item i {
+    width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+/* --- Section header --- */
+.config-section-title {
+    font-size: 1.2em;
+    font-weight: bold;
+    color: #e0e0e0;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.config-section-desc {
+    font-size: 0.85em;
+    color: #888;
+    margin-bottom: 20px;
+}
+
+/* --- Display groups --- */
+.config-group {
+    background-color: rgba(0, 0, 0, 0.25);
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+    border-left: 3px solid rgba(74, 158, 255, 0.4);
+}
+
+.config-group-title {
+    font-size: 0.85em;
+    font-weight: 600;
+    color: #4a9eff;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* --- Field rows --- */
+.config-field {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.config-field:last-child {
+    border-bottom: none;
+}
+
+.config-field.hidden {
+    display: none;
+}
+
+.config-field-label {
+    flex: 0 0 220px;
+    font-size: 0.9em;
+    color: #ccc;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.config-field-input {
+    flex: 1;
+    min-width: 180px;
+}
+
+/* --- Input elements --- */
+.config-input,
+.config-select {
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 0.9em;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background-color: rgba(58, 58, 58, 0.8);
+    color: #e0e0e0;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    box-sizing: border-box;
+}
+
+.config-input:focus,
+.config-select:focus {
+    outline: none;
+    border-color: #4a9eff;
+    box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.2);
+}
+
+.config-input.invalid {
+    border-color: #dc3545;
+    box-shadow: 0 0 0 2px rgba(220, 53, 69, 0.2);
+}
+
+.config-input.changed {
+    border-color: #ffc107;
+}
+
+.config-select {
+    cursor: pointer;
+}
+
+/* Remove number spinner */
+.config-input[type="number"]::-webkit-inner-spin-button,
+.config-input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+.config-input[type="number"] {
+    -moz-appearance: textfield;
+}
+
+/* --- Password toggle --- */
+.config-password-wrap {
+    position: relative;
+    width: 100%;
+}
+
+.config-password-wrap .config-input {
+    padding-right: 38px;
+}
+
+.config-password-toggle {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 0.85em;
+    padding: 4px;
+    transition: color 0.2s;
+}
+
+.config-password-toggle:hover {
+    color: #e0e0e0;
+}
+
+/* --- Toggle switch (for booleans) --- */
+.config-toggle {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+.config-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.config-toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(255, 255, 255, 0.15);
+    transition: background-color 0.3s;
+    border-radius: 24px;
+}
+
+.config-toggle-slider::before {
+    content: "";
+    position: absolute;
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: #ccc;
+    transition: transform 0.3s, background-color 0.3s;
+    border-radius: 50%;
+}
+
+.config-toggle input:checked + .config-toggle-slider {
+    background-color: #4a9eff;
+}
+
+.config-toggle input:checked + .config-toggle-slider::before {
+    transform: translateX(20px);
+    background-color: #fff;
+}
+
+/* --- Labels / badges --- */
+.config-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.7em;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-weight: 600;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.config-badge-experimental {
+    background-color: rgba(23, 162, 184, 0.2);
+    color: #17a2b8;
+}
+
+.config-badge-deprecated {
+    background-color: rgba(255, 193, 7, 0.2);
+    color: #ffc107;
+}
+
+.config-badge-restart {
+    background-color: rgba(255, 152, 0, 0.15);
+    color: #ff9800;
+}
+
+.config-badge-hot {
+    background-color: rgba(40, 167, 69, 0.2);
+    color: #28a745;
+}
+
+/* --- Help tooltip --- */
+.config-help-btn {
+    background: none;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    font-size: 0.8em;
+    padding: 2px 4px;
+    border-radius: 50%;
+    transition: color 0.2s, background-color 0.2s;
+    flex-shrink: 0;
+}
+
+.config-help-btn:hover {
+    color: #4a9eff;
+    background-color: rgba(74, 158, 255, 0.1);
+}
+
+.config-help-text {
+    display: none;
+    width: 100%;
+    font-size: 0.8em;
+    color: #999;
+    padding: 6px 0 2px 0;
+    line-height: 1.4;
+}
+
+.config-help-text.visible {
+    display: block;
+}
+
+.config-help-text a {
+    color: #4a9eff;
+    text-decoration: none;
+}
+
+.config-help-text a:hover {
+    text-decoration: underline;
+}
+
+/* --- Level switcher --- */
+.config-level-select {
+    padding: 5px 10px;
+    font-size: 0.85em;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background-color: rgba(58, 58, 58, 0.9);
+    color: #e0e0e0;
+    cursor: pointer;
+}
+
+/* --- Action bar (save / reset) --- */
+.config-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    flex-wrap: wrap;
+}
+
+.config-btn {
+    padding: 9px 18px;
+    font-size: 0.9em;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+}
+
+.config-btn-primary {
+    background-color: #4a9eff;
+    color: #fff;
+}
+
+.config-btn-primary:hover {
+    background-color: #357abd;
+    transform: translateY(-1px);
+}
+
+.config-btn-primary:disabled {
+    background-color: rgba(74, 158, 255, 0.4);
+    cursor: not-allowed;
+    transform: none;
+}
+
+.config-btn-secondary {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #ccc;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.config-btn-secondary:hover {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.config-btn-danger {
+    background-color: rgba(220, 53, 69, 0.15);
+    color: #dc3545;
+    border: 1px solid rgba(220, 53, 69, 0.3);
+}
+
+.config-btn-danger:hover {
+    background-color: rgba(220, 53, 69, 0.25);
+}
+
+/* --- Restart banner --- */
+.config-restart-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background-color: rgba(255, 152, 0, 0.15);
+    border: 1px solid rgba(255, 152, 0, 0.3);
+    border-radius: 6px;
+    color: #ff9800;
+    font-size: 0.85em;
+    margin-bottom: 16px;
+}
+
+.config-restart-banner.visible {
+    display: flex;
+}
+
+/* --- Validation error --- */
+.config-field-error {
+    width: 100%;
+    font-size: 0.8em;
+    color: #dc3545;
+    padding: 2px 0;
+    display: none;
+}
+
+.config-field-error.visible {
+    display: block;
+}
+
+/* --- Unsaved dot --- */
+.config-unsaved-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: #ffc107;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+/* --- Search bar --- */
+.config-search {
+    padding: 6px 10px;
+    font-size: 0.85em;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background-color: rgba(58, 58, 58, 0.8);
+    color: #e0e0e0;
+    width: 180px;
+    transition: border-color 0.2s, width 0.2s;
+}
+
+.config-search:focus {
+    outline: none;
+    border-color: #4a9eff;
+    width: 220px;
+}
+
+/* --- Responsive: mobile stacked --- */
+@media (max-width: 768px) {
+    .config-layout {
+        flex-direction: column;
+    }
+
+    .config-nav {
+        width: 100%;
+        min-width: unset;
+        border-right: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        max-height: none;
+        padding: 4px 0;
+    }
+
+    .config-nav.collapsed {
+        display: none;
+    }
+
+    .config-content {
+        padding: 12px;
+    }
+
+    .config-content.hidden {
+        display: none;
+    }
+
+    .config-field-label {
+        flex: 0 0 100%;
+    }
+
+    .config-field-input {
+        width: 100%;
+    }
+
+    .config-mobile-back {
+        display: inline-flex !important;
+    }
+
+    .config-search {
+        width: 100%;
+    }
+
+    .config-search:focus {
+        width: 100%;
+    }
+}
+
+/* Hide mobile back button on desktop */
+.config-mobile-back {
+    display: none !important;
+}
+
+@media (max-width: 768px) {
+    .config-mobile-back {
+        display: inline-flex !important;
+    }
+}
+
+/* --- PV Forecast array card --- */
+.config-pv-card {
+    background-color: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 12px;
+}
+
+.config-pv-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    font-weight: 600;
+    color: #e0e0e0;
+}
+
+.config-pv-add {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    margin-top: 8px;
+    color: #4a9eff;
+    background: none;
+    border: 1px dashed rgba(74, 158, 255, 0.4);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: all 0.2s;
+}
+
+.config-pv-add:hover {
+    background-color: rgba(74, 158, 255, 0.1);
+    border-color: #4a9eff;
+}

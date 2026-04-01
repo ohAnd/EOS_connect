@@ -29,6 +29,7 @@ from interfaces.update_checker import UpdateChecker
 from interfaces.inverters import create_inverter
 from interfaces.inverters.null_inverter import NullInverter
 from interfaces.inverters.evcc_inverter import EvccInverter
+from config_web import ConfigWebModule
 
 # Check Python version early
 if sys.version_info < (3, 11):
@@ -1391,6 +1392,10 @@ mqtt_interface.on_mqtt_command = mqtt_control_callback
 # web server
 app = Flask(__name__)
 
+# Initialize web-based configuration system
+config_web = ConfigWebModule(config_manager, app)
+config_web.start()
+
 
 # legacy web site support
 @app.route("/index_legacy.html", methods=["GET"])
@@ -2067,6 +2072,7 @@ if __name__ == "__main__":
         evcc_interface.shutdown()
         battery_interface.shutdown()
         update_checker.shutdown()
+        config_web.stop()
         logger.info("[Main] Server stopped gracefully")
     finally:
         logging.shutdown()  # This will call close() on all handlers

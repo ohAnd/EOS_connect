@@ -33,6 +33,29 @@ class ConfigManager:
         self.config = self.default_config.copy()
         self.load_config()
 
+    @property
+    def data_dir(self) -> str:
+        """Resolve the persistent data directory for SQLite DB and other data files.
+
+        Resolution order:
+        1. HA addon environment -> /data/
+        2. ``data_path`` in config.yaml -> custom path
+        3. Default -> ./data/ relative to application directory
+        """
+        # HA addon detection (same logic as PortInterface.is_running_in_hassio)
+        if (
+            os.environ.get("HASSIO") is not None
+            or os.environ.get("HASSIO_TOKEN") is not None
+            or os.path.exists("/data/options.json")
+        ):
+            return "/data"
+
+        custom = self.config.get("data_path")
+        if custom:
+            return str(custom)
+
+        return os.path.join(self.current_dir, "data")
+
     def create_default_config(self):
         """
         Creates the default configuration with comments.
