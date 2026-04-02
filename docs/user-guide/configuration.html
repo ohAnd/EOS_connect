@@ -60,6 +60,7 @@
                     <a href="#time-slot-config" class="toc-link toc-sub">→ Time Slot Configuration</a>
                     <a href="#other" class="toc-link">Other Settings</a>
                     <a href="#examples" class="toc-link">Config Examples</a>
+                    <a href="#param-reference" class="toc-link">Parameter Reference</a>
                     <a href="#example-full" class="toc-link toc-sub">→ Full Config</a>
                     <a href="#example-minimal" class="toc-link toc-sub">→ Minimal Config</a>
                     <a href="#example-evcc" class="toc-link toc-sub">→ EVCC Setup</a>
@@ -3107,9 +3108,85 @@ inverter:
                 </ul>
             </div>
         </div>
+        <!-- Auto-generated Parameter Reference -->
+        <div class="content-section" id="param-reference">
+            <h2><i class="fas fa-table"></i> Complete Parameter Reference</h2>
+            <p>Auto-generated from the configuration schema. This table is always in sync with the latest codebase.</p>
+            <div id="schema-tables-container">
+                <p style="color:#888;"><i class="fas fa-spinner fa-spin"></i> Loading parameter reference...</p>
+            </div>
+        </div>
+
             </main>
         </div>
     </div>
+
+    <!-- Schema-driven parameter reference -->
+    <script>
+    (async function() {
+        const container = document.getElementById('schema-tables-container');
+        if (!container) return;
+        try {
+            const res = await fetch('../assets/data/config_schema.json');
+            if (!res.ok) { container.innerHTML = '<p style="color:#888;">Parameter reference not available.</p>'; return; }
+            const fields = await res.json();
+
+            // Group by section
+            const sections = {};
+            const sectionOrder = [];
+            fields.forEach(f => {
+                if (!sections[f.section]) { sections[f.section] = []; sectionOrder.push(f.section); }
+                sections[f.section].push(f);
+            });
+
+            const sectionIcons = {
+                data_source: 'fa-plug', load: 'fa-bolt', eos: 'fa-server',
+                price: 'fa-coins', battery: 'fa-battery-full',
+                pv_forecast_source: 'fa-sun', pv_forecast: 'fa-solar-panel',
+                inverter: 'fa-microchip', evcc: 'fa-car',
+                mqtt: 'fa-tower-broadcast', system: 'fa-gears'
+            };
+            const sectionNames = {
+                data_source: 'Data Source', load: 'Load', eos: 'Optimizer',
+                price: 'Price', battery: 'Battery',
+                pv_forecast_source: 'PV Source', pv_forecast: 'PV Forecast',
+                inverter: 'Inverter', evcc: 'EVCC',
+                mqtt: 'MQTT', system: 'System'
+            };
+
+            let html = '';
+            sectionOrder.forEach(sec => {
+                const icon = sectionIcons[sec] || 'fa-cog';
+                const name = sectionNames[sec] || sec;
+                html += `<h3><i class="fas ${icon}"></i> ${name}</h3>`;
+                html += '<div style="overflow-x:auto;"><table>';
+                html += '<thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Level</th><th>Description</th></tr></thead><tbody>';
+                sections[sec].forEach(f => {
+                    const labels = (f.labels || []).map(l => {
+                        if (l === 'restart_required') return '<span style="color:#ffc107;font-size:0.8em;" title="Restart required"><i class="fas fa-rotate"></i></span>';
+                        if (l === 'experimental') return '<span style="color:#17a2b8;font-size:0.8em;" title="Experimental"><i class="fas fa-flask"></i></span>';
+                        if (l === 'deprecated') return '<span style="color:#dc3545;font-size:0.8em;" title="Deprecated"><i class="fas fa-triangle-exclamation"></i></span>';
+                        return '';
+                    }).join(' ');
+                    const hotReload = f.hot_reload ? '<span style="color:#28a745;font-size:0.8em;" title="Hot-reloadable (no restart needed)"><i class="fas fa-bolt"></i></span>' : '';
+                    const def = f.type === 'password' ? '••••' : (f.default === '' ? '<em>empty</em>' : f.default);
+                    html += `<tr><td><code>${f.key}</code> ${labels} ${hotReload}</td><td>${f.type}</td><td><code>${def}</code></td><td>${f.level}</td><td>${f.description}</td></tr>`;
+                });
+                html += '</tbody></table></div>';
+            });
+
+            html += '<p style="color:#888;font-size:0.85em;margin-top:16px;"><i class="fas fa-info-circle"></i> '
+                + '<i class="fas fa-rotate" style="color:#ffc107;"></i> = Restart required &nbsp; '
+                + '<i class="fas fa-bolt" style="color:#28a745;"></i> = Hot-reloadable &nbsp; '
+                + '<i class="fas fa-flask" style="color:#17a2b8;"></i> = Experimental &nbsp; '
+                + '<i class="fas fa-triangle-exclamation" style="color:#dc3545;"></i> = Deprecated</p>';
+
+            container.innerHTML = html;
+        } catch (err) {
+            container.innerHTML = '<p style="color:#888;">Could not load parameter reference.</p>';
+        }
+    })();
+    </script>
 
     <!-- Footer -->
     <footer class="footer">

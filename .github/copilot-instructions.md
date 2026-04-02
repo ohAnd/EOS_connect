@@ -107,6 +107,17 @@ When making ANY code changes:
   - Purpose: Provide accessible docs while feature is on develop (GitHub Pages shows main only)
   - **Reminder**: Check for and remove any similar `*_TESTING.md` files before merging features to main
 
+### Config Schema Maintenance
+
+- Every new config field **MUST** be added to `src/config_web/schema.py`
+- Schema fields: `key`, `type`, `default`, `section`, `level`, `label`, `description`, `help_url`, `validation`, `depends_on`, `hot_reload`, `display_group`
+- After schema changes, run: `python scripts/export_config_schema.py`
+- The Config Schema is the **SINGLE SOURCE OF TRUTH** for field metadata
+- Web UI and GitHub Pages docs both consume the exported JSON (`docs/assets/data/config_schema.json`)
+- New fields must specify a `level`: `getting_started`, `standard`, or `expert`
+- New experimental features should use the label `"experimental"`
+- Hot-reloadable fields (applied without restart) must set `hot_reload=True` and have corresponding logic in `src/config_web/hot_reload.py`
+
 ### Testing
 
 - Tests are located in `/tests` folder
