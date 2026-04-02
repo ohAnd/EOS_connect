@@ -10,6 +10,35 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
+# Keys that stay in config.yaml / options.json (bootstrap) — NOT stored in SQLite.
+# Includes both config.yaml names and HA addon options.json names.
+BOOTSTRAP_KEYS = frozenset({
+    "eos_connect_web_port",
+    "web_port",
+    "time_zone",
+    "log_level",
+    "data_path",
+})
+
+
+# Section display metadata — single source of truth for icons and labels.
+# Consumed by the web UI (config.js), the docs (configuration.html),
+# and the JSON export script.
+SECTION_META = {
+    "data_source":        {"icon": "fa-plug",           "label": "Data Source"},
+    "load":               {"icon": "fa-bolt",           "label": "Load"},
+    "eos":                {"icon": "fa-server",         "label": "Optimizer"},
+    "price":              {"icon": "fa-coins",          "label": "Price"},
+    "battery":            {"icon": "fa-battery-full",   "label": "Battery"},
+    "pv_forecast_source": {"icon": "fa-sun",            "label": "PV Source"},
+    "pv_forecast":        {"icon": "fa-solar-panel",    "label": "PV Forecast"},
+    "inverter":           {"icon": "fa-microchip",      "label": "Inverter"},
+    "evcc":               {"icon": "fa-car",            "label": "EVCC"},
+    "mqtt":               {"icon": "fa-tower-broadcast", "label": "MQTT"},
+    "system":             {"icon": "fa-gears",          "label": "System"},
+}
+
+
 @dataclass
 class FieldDef:
     """Definition of a single configuration field."""
@@ -92,6 +121,11 @@ class ConfigSchema:
                 "display_group": f.display_group,
             })
         return result
+
+    @staticmethod
+    def section_meta() -> dict:
+        """Return section display metadata (icons and labels)."""
+        return dict(SECTION_META)
 
     def defaults_dict(self) -> dict:
         """

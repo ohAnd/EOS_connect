@@ -134,7 +134,12 @@ class SetupWizard {
         if (!valuesRes.ok) {
             throw new Error(`Values: ${valuesRes.status}`);
         }
-        this.schema = await schemaRes.json();
+        const schemaData = await schemaRes.json();
+        this.schema = schemaData.fields || schemaData;
+        // Update section metadata from schema (SPOT)
+        if (schemaData.sections) {
+            CONFIG_SECTIONS = schemaData.sections;
+        }
         const raw = await valuesRes.json();
         this.values = {};
         for (const [k, v] of Object.entries(raw)) {

@@ -24,7 +24,10 @@ from src.config_web.schema import ConfigSchema  # noqa: E402
 def export_schema():
     """Export the full config schema to JSON."""
     schema = ConfigSchema()
-    data = schema.to_json()
+    data = {
+        "fields": schema.to_json(),
+        "sections": schema.section_meta(),
+    }
 
     output_dir = os.path.join(project_root, "docs", "assets", "data")
     os.makedirs(output_dir, exist_ok=True)
@@ -33,7 +36,7 @@ def export_schema():
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    print(f"Exported {len(data)} fields to {output_path}")
+    print(f"Exported {len(data['fields'])} fields to {output_path}")
     return output_path
 
 

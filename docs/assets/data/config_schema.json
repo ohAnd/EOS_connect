@@ -1,1583 +1,1631 @@
-[
-  {
-    "key": "data_source.type",
-    "type": "select",
-    "default": "default",
-    "section": "data_source",
-    "level": "getting_started",
-    "description": "Primary data source for load and battery data",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#data-source",
-    "validation": {
-      "choices": [
-        "homeassistant",
-        "openhab",
-        "default"
-      ]
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Connection"
-  },
-  {
-    "key": "data_source.url",
-    "type": "str",
-    "default": "http://homeassistant:8123",
-    "section": "data_source",
-    "level": "getting_started",
-    "description": "URL of your Home Assistant or OpenHAB instance",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#data-source",
-    "validation": {
-      "pattern": "^https?://.+"
-    },
-    "depends_on": {
-      "data_source.type": [
-        "homeassistant",
-        "openhab"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Connection"
-  },
-  {
-    "key": "data_source.access_token",
-    "type": "password",
-    "default": "",
-    "section": "data_source",
-    "level": "getting_started",
-    "description": "Long-lived access token for Home Assistant",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#data-source",
-    "validation": {},
-    "depends_on": {
-      "data_source.type": [
-        "homeassistant"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Connection"
-  },
-  {
-    "key": "load.source",
-    "type": "select",
-    "default": "default",
-    "section": "load",
-    "level": "expert",
-    "description": "Override data source for load (uses global data source if empty)",
-    "labels": [
-      "deprecated",
-      "restart_required"
-    ],
-    "help_url": "",
-    "validation": {
-      "choices": [
-        "homeassistant",
-        "openhab",
-        "default",
-        ""
-      ]
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Connection Override"
-  },
-  {
-    "key": "load.url",
-    "type": "str",
-    "default": "http://homeassistant:8123",
-    "section": "load",
-    "level": "expert",
-    "description": "Override URL for load interface (uses global data source URL if empty)",
-    "labels": [
-      "deprecated",
-      "restart_required"
-    ],
-    "help_url": "",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Connection Override"
-  },
-  {
-    "key": "load.access_token",
-    "type": "password",
-    "default": "abc123",
-    "section": "load",
-    "level": "expert",
-    "description": "Override access token for load interface",
-    "labels": [
-      "deprecated",
-      "restart_required"
-    ],
-    "help_url": "",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Connection Override"
-  },
-  {
-    "key": "load.load_sensor",
-    "type": "sensor",
-    "default": "Load_Power",
-    "section": "load",
-    "level": "getting_started",
-    "description": "Entity/item for load power data in watts",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#load",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Sensors"
-  },
-  {
-    "key": "load.car_charge_load_sensor",
-    "type": "sensor",
-    "default": "Wallbox_Power",
-    "section": "load",
-    "level": "standard",
-    "description": "Entity/item for wallbox power data in watts (leave empty if not used)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#load",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Sensors"
-  },
-  {
-    "key": "load.additional_load_1_sensor",
-    "type": "sensor",
-    "default": "additional_load_1_sensor",
-    "section": "load",
-    "level": "standard",
-    "description": "Entity/item for additional load power in watts (leave empty if not used)",
-    "labels": [],
-    "help_url": "configuration.html#load",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Additional Load"
-  },
-  {
-    "key": "load.additional_load_1_runtime",
-    "type": "int",
-    "default": 0,
-    "section": "load",
-    "level": "standard",
-    "description": "Runtime for additional load 1 in minutes (0 = not used)",
-    "labels": [],
-    "help_url": "configuration.html#load",
-    "validation": {
-      "min": 0
-    },
-    "depends_on": {
-      "load.additional_load_1_sensor": "!empty"
-    },
-    "hot_reload": false,
-    "display_group": "Additional Load"
-  },
-  {
-    "key": "load.additional_load_1_consumption",
-    "type": "int",
-    "default": 0,
-    "section": "load",
-    "level": "standard",
-    "description": "Consumption for additional load 1 in Wh for one hour (0 = not used)",
-    "labels": [],
-    "help_url": "configuration.html#load",
-    "validation": {
-      "min": 0
-    },
-    "depends_on": {
-      "load.additional_load_1_sensor": "!empty"
-    },
-    "hot_reload": false,
-    "display_group": "Additional Load"
-  },
-  {
-    "key": "eos.source",
-    "type": "select",
-    "default": "eos_server",
-    "section": "eos",
-    "level": "getting_started",
-    "description": "Optimization backend — EOS Server or EVopt",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#eos",
-    "validation": {
-      "choices": [
-        "eos_server",
-        "evopt",
-        "default"
-      ]
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Server"
-  },
-  {
-    "key": "eos.server",
-    "type": "str",
-    "default": "192.168.100.100",
-    "section": "eos",
-    "level": "getting_started",
-    "description": "EOS or EVopt server address",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#eos",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Server"
-  },
-  {
-    "key": "eos.port",
-    "type": "int",
-    "default": 8503,
-    "section": "eos",
-    "level": "getting_started",
-    "description": "Port for EOS server (8503) or EVopt server (7050)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#eos",
-    "validation": {
-      "min": 1,
-      "max": 65535
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Server"
-  },
-  {
-    "key": "eos.time_frame",
-    "type": "select",
-    "default": 3600,
-    "section": "eos",
-    "level": "standard",
-    "description": "Time frame for optimization requests in seconds",
-    "labels": [],
-    "help_url": "configuration.html#eos",
-    "validation": {
-      "choices": [
-        900,
-        3600
-      ]
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Optimization"
-  },
-  {
-    "key": "eos.timeout",
-    "type": "int",
-    "default": 180,
-    "section": "eos",
-    "level": "standard",
-    "description": "Timeout for optimization requests in seconds",
-    "labels": [],
-    "help_url": "configuration.html#eos",
-    "validation": {
-      "min": 10,
-      "max": 600
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Optimization"
-  },
-  {
-    "key": "eos.dyn_override_discharge_allowed_pv_greater_load",
-    "type": "bool",
-    "default": false,
-    "section": "eos",
-    "level": "standard",
-    "description": "Allow discharge when PV forecast exceeds load, even if optimizer says avoid",
-    "labels": [],
-    "help_url": "configuration.html#eos",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Advanced"
-  },
-  {
-    "key": "eos.pv_battery_charge_control_enabled",
-    "type": "bool",
-    "default": false,
-    "section": "eos",
-    "level": "expert",
-    "description": "Enable PV-to-battery charge control from optimizer dc_charge signal (Fronius Gen24 only)",
-    "labels": [
-      "experimental"
-    ],
-    "help_url": "configuration.html#eos",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Advanced"
-  },
-  {
-    "key": "price.source",
-    "type": "select",
-    "default": "default",
-    "section": "price",
-    "level": "getting_started",
-    "description": "Data source for electricity prices",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#price",
-    "validation": {
-      "choices": [
-        "tibber",
-        "smartenergy_at",
-        "stromligning",
-        "fixed_24h",
-        "default"
-      ]
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Provider"
-  },
-  {
-    "key": "price.token",
-    "type": "password",
-    "default": "tibberBearerToken",
-    "section": "price",
-    "level": "getting_started",
-    "description": "API token for price provider (Tibber bearer token, Stromligning supplierId/productId)",
-    "labels": [],
-    "help_url": "configuration.html#price",
-    "validation": {},
-    "depends_on": {
-      "price.source": [
-        "tibber",
-        "stromligning"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Provider"
-  },
-  {
-    "key": "price.fixed_price_adder_ct",
-    "type": "float",
-    "default": 0.0,
-    "section": "price",
-    "level": "standard",
-    "description": "Fixed cost addition in ct per kWh",
-    "labels": [],
-    "help_url": "configuration.html#price",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": true,
-    "display_group": "Price Adjustments"
-  },
-  {
-    "key": "price.relative_price_multiplier",
-    "type": "float",
-    "default": 0.0,
-    "section": "price",
-    "level": "standard",
-    "description": "Relative cost multiplier applied to (base + fixed adder). E.g. 0.05 = 5%",
-    "labels": [],
-    "help_url": "configuration.html#price",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": true,
-    "display_group": "Price Adjustments"
-  },
-  {
-    "key": "price.fixed_24h_array",
-    "type": "str",
-    "default": "10.1,10.1,10.1,10.1,10.1,23,28.23,28.23,28.23,28.23,28.23,23.52,23.52,23.52,23.52,28.17,28.17,34.28,34.28,34.28,34.28,34.28,28,23",
-    "section": "price",
-    "level": "standard",
-    "description": "24 comma-separated prices in ct/kWh for each hour (used with fixed_24h source)",
-    "labels": [],
-    "help_url": "configuration.html#price",
-    "validation": {},
-    "depends_on": {
-      "price.source": [
-        "fixed_24h"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Fixed Prices"
-  },
-  {
-    "key": "price.feed_in_price",
-    "type": "float",
-    "default": 0.0,
-    "section": "price",
-    "level": "getting_started",
-    "description": "Feed-in price for the grid in €/kWh",
-    "labels": [],
-    "help_url": "configuration.html#price",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": true,
-    "display_group": "Price Adjustments"
-  },
-  {
-    "key": "price.negative_price_switch",
-    "type": "bool",
-    "default": false,
-    "section": "price",
-    "level": "standard",
-    "description": "No payment when stock price is negative",
-    "labels": [],
-    "help_url": "configuration.html#price",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": true,
-    "display_group": "Price Adjustments"
-  },
-  {
-    "key": "price.energyforecast_enabled",
-    "type": "bool",
-    "default": false,
-    "section": "price",
-    "level": "standard",
-    "description": "Enable smart price prediction via energyforecast.de",
-    "labels": [
-      "experimental",
-      "restart_required"
-    ],
-    "help_url": "configuration.html#energyforecast",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "EnergyForecast"
-  },
-  {
-    "key": "price.energyforecast_token",
-    "type": "password",
-    "default": "demo_token",
-    "section": "price",
-    "level": "standard",
-    "description": "API token from energyforecast.de",
-    "labels": [
-      "experimental"
-    ],
-    "help_url": "configuration.html#energyforecast",
-    "validation": {},
-    "depends_on": {
-      "price.energyforecast_enabled": [
-        true
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "EnergyForecast"
-  },
-  {
-    "key": "price.energyforecast_market_zone",
-    "type": "select",
-    "default": "DE-LU",
-    "section": "price",
-    "level": "standard",
-    "description": "Market zone for energy forecast",
-    "labels": [
-      "experimental"
-    ],
-    "help_url": "configuration.html#energyforecast",
-    "validation": {
-      "choices": [
-        "DE-LU",
-        "AT",
-        "FR",
-        "NL",
-        "BE",
-        "PL",
-        "DK1",
-        "DK2"
-      ]
-    },
-    "depends_on": {
-      "price.energyforecast_enabled": [
-        true
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "EnergyForecast"
-  },
-  {
-    "key": "battery.source",
-    "type": "select",
-    "default": "default",
-    "section": "battery",
-    "level": "expert",
-    "description": "Override data source for battery (uses global data source if empty)",
-    "labels": [
-      "deprecated",
-      "restart_required"
-    ],
-    "help_url": "",
-    "validation": {
-      "choices": [
-        "homeassistant",
-        "openhab",
-        "default",
-        ""
-      ]
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Connection Override"
-  },
-  {
-    "key": "battery.url",
-    "type": "str",
-    "default": "http://homeassistant:8123",
-    "section": "battery",
-    "level": "expert",
-    "description": "Override URL for battery interface",
-    "labels": [
-      "deprecated",
-      "restart_required"
-    ],
-    "help_url": "",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Connection Override"
-  },
-  {
-    "key": "battery.access_token",
-    "type": "password",
-    "default": "abc123",
-    "section": "battery",
-    "level": "expert",
-    "description": "Override access token for battery interface",
-    "labels": [
-      "deprecated",
-      "restart_required"
-    ],
-    "help_url": "",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Connection Override"
-  },
-  {
-    "key": "battery.soc_sensor",
-    "type": "sensor",
-    "default": "battery_SOC",
-    "section": "battery",
-    "level": "getting_started",
-    "description": "Entity/item for battery state of charge",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#battery",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Core"
-  },
-  {
-    "key": "battery.capacity_wh",
-    "type": "int",
-    "default": 11059,
-    "section": "battery",
-    "level": "getting_started",
-    "description": "Battery capacity in Wh",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#battery",
-    "validation": {
-      "min": 100,
-      "max": 1000000
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Core"
-  },
-  {
-    "key": "battery.charge_efficiency",
-    "type": "float",
-    "default": 0.88,
-    "section": "battery",
-    "level": "standard",
-    "description": "Charging efficiency (0.0 to 1.0)",
-    "labels": [],
-    "help_url": "configuration.html#battery",
-    "validation": {
-      "min": 0.1,
-      "max": 1.0
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Core"
-  },
-  {
-    "key": "battery.discharge_efficiency",
-    "type": "float",
-    "default": 0.88,
-    "section": "battery",
-    "level": "standard",
-    "description": "Discharging efficiency (0.0 to 1.0)",
-    "labels": [],
-    "help_url": "configuration.html#battery",
-    "validation": {
-      "min": 0.1,
-      "max": 1.0
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Core"
-  },
-  {
-    "key": "battery.max_charge_power_w",
-    "type": "int",
-    "default": 5000,
-    "section": "battery",
-    "level": "standard",
-    "description": "Maximum charging power in watts",
-    "labels": [],
-    "help_url": "configuration.html#battery",
-    "validation": {
-      "min": 100,
-      "max": 100000
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Core"
-  },
-  {
-    "key": "battery.min_soc_percentage",
-    "type": "int",
-    "default": 5,
-    "section": "battery",
-    "level": "getting_started",
-    "description": "Minimum battery SOC in percent",
-    "labels": [],
-    "help_url": "configuration.html#battery",
-    "validation": {
-      "min": 0,
-      "max": 100
-    },
-    "depends_on": null,
-    "hot_reload": true,
-    "display_group": "SOC Limits"
-  },
-  {
-    "key": "battery.max_soc_percentage",
-    "type": "int",
-    "default": 100,
-    "section": "battery",
-    "level": "getting_started",
-    "description": "Maximum battery SOC in percent",
-    "labels": [],
-    "help_url": "configuration.html#battery",
-    "validation": {
-      "min": 0,
-      "max": 100
-    },
-    "depends_on": null,
-    "hot_reload": true,
-    "display_group": "SOC Limits"
-  },
-  {
-    "key": "battery.charging_curve_enabled",
-    "type": "bool",
-    "default": true,
-    "section": "battery",
-    "level": "standard",
-    "description": "Enable charging curve for controlled charging power according to SOC",
-    "labels": [],
-    "help_url": "configuration.html#battery",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Charging"
-  },
-  {
-    "key": "battery.sensor_battery_temperature",
-    "type": "sensor",
-    "default": "",
-    "section": "battery",
-    "level": "standard",
-    "description": "Sensor for battery temperature in °C (leave empty if not available)",
-    "labels": [],
-    "help_url": "configuration.html#battery",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Sensors"
-  },
-  {
-    "key": "battery.price_euro_per_wh_accu",
-    "type": "float",
-    "default": 0.0,
-    "section": "battery",
-    "level": "standard",
-    "description": "Static battery price in €/Wh (0 = use dynamic or ignore)",
-    "labels": [],
-    "help_url": "configuration.html#battery",
-    "validation": {
-      "min": 0.0
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Battery Price"
-  },
-  {
-    "key": "battery.price_euro_per_wh_sensor",
-    "type": "sensor",
-    "default": "",
-    "section": "battery",
-    "level": "expert",
-    "description": "Sensor/item providing battery energy cost in €/Wh",
-    "labels": [],
-    "help_url": "configuration.html#battery",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Battery Price"
-  },
-  {
-    "key": "battery.price_calculation_enabled",
-    "type": "bool",
-    "default": false,
-    "section": "battery",
-    "level": "standard",
-    "description": "Enable dynamic battery price calculation based on history",
-    "labels": [],
-    "help_url": "configuration.html#battery-price",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Battery Price"
-  },
-  {
-    "key": "battery.price_update_interval",
-    "type": "int",
-    "default": 900,
-    "section": "battery",
-    "level": "expert",
-    "description": "Interval for price update in seconds",
-    "labels": [],
-    "help_url": "configuration.html#battery-price",
-    "validation": {
-      "min": 60,
-      "max": 86400
-    },
-    "depends_on": {
-      "battery.price_calculation_enabled": [
-        true
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Battery Price"
-  },
-  {
-    "key": "battery.price_history_lookback_hours",
-    "type": "int",
-    "default": 96,
-    "section": "battery",
-    "level": "expert",
-    "description": "Hours of history to analyze for price calculation",
-    "labels": [],
-    "help_url": "configuration.html#battery-price",
-    "validation": {
-      "min": 1,
-      "max": 720
-    },
-    "depends_on": {
-      "battery.price_calculation_enabled": [
-        true
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Battery Price"
-  },
-  {
-    "key": "battery.battery_power_sensor",
-    "type": "sensor",
-    "default": "",
-    "section": "battery",
-    "level": "standard",
-    "description": "Sensor for battery power in W (positive = charging)",
-    "labels": [],
-    "help_url": "configuration.html#battery-price",
-    "validation": {},
-    "depends_on": {
-      "battery.price_calculation_enabled": [
-        true
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Battery Price Sensors"
-  },
-  {
-    "key": "battery.pv_power_sensor",
-    "type": "sensor",
-    "default": "",
-    "section": "battery",
-    "level": "standard",
-    "description": "Sensor for PV power in W",
-    "labels": [],
-    "help_url": "configuration.html#battery-price",
-    "validation": {},
-    "depends_on": {
-      "battery.price_calculation_enabled": [
-        true
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Battery Price Sensors"
-  },
-  {
-    "key": "battery.grid_power_sensor",
-    "type": "sensor",
-    "default": "",
-    "section": "battery",
-    "level": "standard",
-    "description": "Sensor for grid power in W (positive = import)",
-    "labels": [],
-    "help_url": "configuration.html#battery-price",
-    "validation": {},
-    "depends_on": {
-      "battery.price_calculation_enabled": [
-        true
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Battery Price Sensors"
-  },
-  {
-    "key": "battery.load_power_sensor",
-    "type": "sensor",
-    "default": "",
-    "section": "battery",
-    "level": "standard",
-    "description": "Sensor for load power in W",
-    "labels": [],
-    "help_url": "configuration.html#battery-price",
-    "validation": {},
-    "depends_on": {
-      "battery.price_calculation_enabled": [
-        true
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Battery Price Sensors"
-  },
-  {
-    "key": "battery.price_sensor",
-    "type": "sensor",
-    "default": "",
-    "section": "battery",
-    "level": "standard",
-    "description": "Sensor for electricity price in €/kWh or ct/kWh",
-    "labels": [],
-    "help_url": "configuration.html#battery-price",
-    "validation": {},
-    "depends_on": {
-      "battery.price_calculation_enabled": [
-        true
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Battery Price Sensors"
-  },
-  {
-    "key": "battery.charging_threshold_w",
-    "type": "float",
-    "default": 50.0,
-    "section": "battery",
-    "level": "expert",
-    "description": "Minimum battery power to consider as charging (W)",
-    "labels": [],
-    "help_url": "configuration.html#battery-price",
-    "validation": {
-      "min": 0.0
-    },
-    "depends_on": {
-      "battery.price_calculation_enabled": [
-        true
-      ]
-    },
-    "hot_reload": true,
-    "display_group": "Battery Price Thresholds"
-  },
-  {
-    "key": "battery.grid_charge_threshold_w",
-    "type": "float",
-    "default": 100.0,
-    "section": "battery",
-    "level": "expert",
-    "description": "Minimum grid surplus to consider as grid charging (W)",
-    "labels": [],
-    "help_url": "configuration.html#battery-price",
-    "validation": {
-      "min": 0.0
-    },
-    "depends_on": {
-      "battery.price_calculation_enabled": [
-        true
-      ]
-    },
-    "hot_reload": true,
-    "display_group": "Battery Price Thresholds"
-  },
-  {
-    "key": "battery.battery_price_include_feedin",
-    "type": "bool",
-    "default": false,
-    "section": "battery",
-    "level": "expert",
-    "description": "Include feed-in price as opportunity cost for PV-sourced energy",
-    "labels": [],
-    "help_url": "configuration.html#battery-price",
-    "validation": {},
-    "depends_on": {
-      "battery.price_calculation_enabled": [
-        true
-      ]
-    },
-    "hot_reload": true,
-    "display_group": "Battery Price"
-  },
-  {
-    "key": "pv_forecast_source.source",
-    "type": "select",
-    "default": "akkudoktor",
-    "section": "pv_forecast_source",
-    "level": "getting_started",
-    "description": "Solar forecast data provider",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#pv-forecast",
-    "validation": {
-      "choices": [
-        "akkudoktor",
-        "openmeteo",
-        "openmeteo_local",
-        "forecast_solar",
-        "evcc",
-        "solcast",
-        "victron",
-        "default"
-      ]
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Provider"
-  },
-  {
-    "key": "pv_forecast_source.api_key",
-    "type": "password",
-    "default": "",
-    "section": "pv_forecast_source",
-    "level": "getting_started",
-    "description": "API key for Solcast or Victron (required when using those providers)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#pv-forecast",
-    "validation": {},
-    "depends_on": {
-      "pv_forecast_source.source": [
-        "solcast",
-        "victron"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Provider"
-  },
-  {
-    "key": "pv_forecast.name",
-    "type": "str",
-    "default": "myPvInstallation1",
-    "section": "pv_forecast",
-    "level": "getting_started",
-    "description": "User-defined name for this PV installation (must be unique)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#pv-forecast",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Installation"
-  },
-  {
-    "key": "pv_forecast.lat",
-    "type": "float",
-    "default": 47.5,
-    "section": "pv_forecast",
-    "level": "getting_started",
-    "description": "Latitude of the PV installation",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#pv-forecast",
-    "validation": {
-      "min": -90,
-      "max": 90
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Installation"
-  },
-  {
-    "key": "pv_forecast.lon",
-    "type": "float",
-    "default": 8.5,
-    "section": "pv_forecast",
-    "level": "getting_started",
-    "description": "Longitude of the PV installation",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#pv-forecast",
-    "validation": {
-      "min": -180,
-      "max": 180
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Installation"
-  },
-  {
-    "key": "pv_forecast.azimuth",
-    "type": "float",
-    "default": 90.0,
-    "section": "pv_forecast",
-    "level": "getting_started",
-    "description": "Panel azimuth angle (-180 to 180, 0=south, 90=west, -90=east)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#pv-forecast",
-    "validation": {
-      "min": -180,
-      "max": 180
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Installation"
-  },
-  {
-    "key": "pv_forecast.tilt",
-    "type": "float",
-    "default": 30.0,
-    "section": "pv_forecast",
-    "level": "getting_started",
-    "description": "Panel tilt angle (0=flat, 90=vertical)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#pv-forecast",
-    "validation": {
-      "min": 0,
-      "max": 90
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Installation"
-  },
-  {
-    "key": "pv_forecast.power",
-    "type": "int",
-    "default": 4600,
-    "section": "pv_forecast",
-    "level": "getting_started",
-    "description": "Peak power of PV system in Wp",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#pv-forecast",
-    "validation": {
-      "min": 1
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Installation"
-  },
-  {
-    "key": "pv_forecast.powerInverter",
-    "type": "int",
-    "default": 5000,
-    "section": "pv_forecast",
-    "level": "standard",
-    "description": "Inverter power in W",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#pv-forecast",
-    "validation": {
-      "min": 1
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Installation"
-  },
-  {
-    "key": "pv_forecast.inverterEfficiency",
-    "type": "float",
-    "default": 0.9,
-    "section": "pv_forecast",
-    "level": "standard",
-    "description": "Inverter efficiency (0.0 to 1.0)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#pv-forecast",
-    "validation": {
-      "min": 0.1,
-      "max": 1.0
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Installation"
-  },
-  {
-    "key": "pv_forecast.horizon",
-    "type": "str",
-    "default": "10,20,10,15",
-    "section": "pv_forecast",
-    "level": "standard",
-    "description": "Comma-separated horizon values for shading calculation",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#pv-forecast",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Installation"
-  },
-  {
-    "key": "pv_forecast.resource_id",
-    "type": "str",
-    "default": "",
-    "section": "pv_forecast",
-    "level": "standard",
-    "description": "Resource ID for Solcast API (only needed for Solcast provider)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#pv-forecast",
-    "validation": {},
-    "depends_on": {
-      "pv_forecast_source.source": [
-        "solcast"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Installation"
-  },
-  {
-    "key": "inverter.type",
-    "type": "select",
-    "default": "default",
-    "section": "inverter",
-    "level": "getting_started",
-    "description": "Inverter type for battery control (default = display only, no control)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#inverter",
-    "validation": {
-      "choices": [
-        "fronius_gen24",
-        "fronius_gen24_legacy",
-        "victron",
-        "evcc",
-        "default"
-      ]
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Hardware"
-  },
-  {
-    "key": "inverter.address",
-    "type": "str",
-    "default": "192.168.1.12",
-    "section": "inverter",
-    "level": "getting_started",
-    "description": "IP address of the inverter",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#inverter",
-    "validation": {},
-    "depends_on": {
-      "inverter.type": [
-        "fronius_gen24",
-        "fronius_gen24_legacy",
-        "victron"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Hardware"
-  },
-  {
-    "key": "inverter.user",
-    "type": "str",
-    "default": "customer",
-    "section": "inverter",
-    "level": "getting_started",
-    "description": "Username for inverter login (Fronius only)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#inverter",
-    "validation": {},
-    "depends_on": {
-      "inverter.type": [
-        "fronius_gen24",
-        "fronius_gen24_legacy"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Hardware"
-  },
-  {
-    "key": "inverter.password",
-    "type": "password",
-    "default": "abc123",
-    "section": "inverter",
-    "level": "getting_started",
-    "description": "Password for inverter login (Fronius only)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#inverter",
-    "validation": {},
-    "depends_on": {
-      "inverter.type": [
-        "fronius_gen24",
-        "fronius_gen24_legacy"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Hardware"
-  },
-  {
-    "key": "inverter.max_grid_charge_rate",
-    "type": "int",
-    "default": 5000,
-    "section": "inverter",
-    "level": "standard",
-    "description": "Maximum inverter grid charge rate in W",
-    "labels": [],
-    "help_url": "configuration.html#inverter",
-    "validation": {
-      "min": 0,
-      "max": 100000
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Power Limits"
-  },
-  {
-    "key": "inverter.max_pv_charge_rate",
-    "type": "int",
-    "default": 5000,
-    "section": "inverter",
-    "level": "standard",
-    "description": "Maximum inverter PV charge rate in W",
-    "labels": [],
-    "help_url": "configuration.html#inverter",
-    "validation": {
-      "min": 0,
-      "max": 100000
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Power Limits"
-  },
-  {
-    "key": "evcc.url",
-    "type": "str",
-    "default": "http://yourEVCCserver:7070",
-    "section": "evcc",
-    "level": "standard",
-    "description": "URL to your EVCC installation (leave default or empty if not used)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#evcc",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Connection"
-  },
-  {
-    "key": "mqtt.enabled",
-    "type": "bool",
-    "default": false,
-    "section": "mqtt",
-    "level": "standard",
-    "description": "Enable MQTT integration",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#mqtt",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "Connection"
-  },
-  {
-    "key": "mqtt.broker",
-    "type": "str",
-    "default": "homeassistant",
-    "section": "mqtt",
-    "level": "standard",
-    "description": "MQTT broker hostname or IP",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#mqtt",
-    "validation": {},
-    "depends_on": {
-      "mqtt.enabled": [
-        true,
-        "enabled"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Connection"
-  },
-  {
-    "key": "mqtt.port",
-    "type": "int",
-    "default": 1883,
-    "section": "mqtt",
-    "level": "standard",
-    "description": "MQTT broker port",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#mqtt",
-    "validation": {
-      "min": 1,
-      "max": 65535
-    },
-    "depends_on": {
-      "mqtt.enabled": [
-        true,
-        "enabled"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Connection"
-  },
-  {
-    "key": "mqtt.user",
-    "type": "str",
-    "default": "username",
-    "section": "mqtt",
-    "level": "standard",
-    "description": "MQTT username",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#mqtt",
-    "validation": {},
-    "depends_on": {
-      "mqtt.enabled": [
-        true,
-        "enabled"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Authentication"
-  },
-  {
-    "key": "mqtt.password",
-    "type": "password",
-    "default": "password",
-    "section": "mqtt",
-    "level": "standard",
-    "description": "MQTT password",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#mqtt",
-    "validation": {},
-    "depends_on": {
-      "mqtt.enabled": [
-        true,
-        "enabled"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Authentication"
-  },
-  {
-    "key": "mqtt.tls",
-    "type": "bool",
-    "default": false,
-    "section": "mqtt",
-    "level": "expert",
-    "description": "Use TLS for MQTT connection",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#mqtt",
-    "validation": {},
-    "depends_on": {
-      "mqtt.enabled": [
-        true,
-        "enabled"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Connection"
-  },
-  {
-    "key": "mqtt.ha_mqtt_auto_discovery",
-    "type": "bool",
-    "default": true,
-    "section": "mqtt",
-    "level": "standard",
-    "description": "Enable Home Assistant MQTT auto-discovery",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#mqtt",
-    "validation": {},
-    "depends_on": {
-      "mqtt.enabled": [
-        true,
-        "enabled"
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Home Assistant"
-  },
-  {
-    "key": "mqtt.ha_mqtt_auto_discovery_prefix",
-    "type": "str",
-    "default": "homeassistant",
-    "section": "mqtt",
-    "level": "expert",
-    "description": "Prefix for HA MQTT auto-discovery topics",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#mqtt",
-    "validation": {},
-    "depends_on": {
-      "mqtt.ha_mqtt_auto_discovery": [
-        true
-      ]
-    },
-    "hot_reload": false,
-    "display_group": "Home Assistant"
-  },
-  {
-    "key": "refresh_time",
-    "type": "int",
-    "default": 3,
-    "section": "system",
-    "level": "standard",
-    "description": "EOS Connect refresh time in minutes",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#system",
-    "validation": {
-      "min": 1,
-      "max": 60
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "General"
-  },
-  {
-    "key": "time_zone",
-    "type": "str",
-    "default": "Europe/Berlin",
-    "section": "system",
-    "level": "getting_started",
-    "description": "Time zone for the application (e.g. Europe/Berlin, US/Eastern)",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#system",
-    "validation": {},
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "General"
-  },
-  {
-    "key": "eos_connect_web_port",
-    "type": "int",
-    "default": 8081,
-    "section": "system",
-    "level": "standard",
-    "description": "Web server port for EOS Connect",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#system",
-    "validation": {
-      "min": 1024,
-      "max": 65535
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "General"
-  },
-  {
-    "key": "log_level",
-    "type": "select",
-    "default": "info",
-    "section": "system",
-    "level": "standard",
-    "description": "Application log level",
-    "labels": [
-      "restart_required"
-    ],
-    "help_url": "configuration.html#system",
-    "validation": {
-      "choices": [
-        "debug",
-        "info",
-        "warning",
-        "error"
-      ]
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "General"
-  },
-  {
-    "key": "request_timeout",
-    "type": "int",
-    "default": 10,
-    "section": "system",
-    "level": "expert",
-    "description": "Timeout for Home Assistant / OpenHAB API calls in seconds",
-    "labels": [],
-    "help_url": "configuration.html#system",
-    "validation": {
-      "min": 5,
-      "max": 120
-    },
-    "depends_on": null,
-    "hot_reload": false,
-    "display_group": "General"
+{
+  "fields": [
+    {
+      "key": "data_source.type",
+      "type": "select",
+      "default": "default",
+      "section": "data_source",
+      "level": "getting_started",
+      "description": "Primary data source for load and battery data",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#data-source",
+      "validation": {
+        "choices": [
+          "homeassistant",
+          "openhab",
+          "default"
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Connection"
+    },
+    {
+      "key": "data_source.url",
+      "type": "str",
+      "default": "http://homeassistant:8123",
+      "section": "data_source",
+      "level": "getting_started",
+      "description": "URL of your Home Assistant or OpenHAB instance",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#data-source",
+      "validation": {
+        "pattern": "^https?://.+"
+      },
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Connection"
+    },
+    {
+      "key": "data_source.access_token",
+      "type": "password",
+      "default": "",
+      "section": "data_source",
+      "level": "getting_started",
+      "description": "Long-lived access token for Home Assistant",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#data-source",
+      "validation": {},
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Connection"
+    },
+    {
+      "key": "load.source",
+      "type": "select",
+      "default": "default",
+      "section": "load",
+      "level": "expert",
+      "description": "Override data source for load (uses global data source if empty)",
+      "labels": [
+        "deprecated",
+        "restart_required"
+      ],
+      "help_url": "",
+      "validation": {
+        "choices": [
+          "homeassistant",
+          "openhab",
+          "default",
+          ""
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Connection Override"
+    },
+    {
+      "key": "load.url",
+      "type": "str",
+      "default": "http://homeassistant:8123",
+      "section": "load",
+      "level": "expert",
+      "description": "Override URL for load interface (uses global data source URL if empty)",
+      "labels": [
+        "deprecated",
+        "restart_required"
+      ],
+      "help_url": "",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Connection Override"
+    },
+    {
+      "key": "load.access_token",
+      "type": "password",
+      "default": "abc123",
+      "section": "load",
+      "level": "expert",
+      "description": "Override access token for load interface",
+      "labels": [
+        "deprecated",
+        "restart_required"
+      ],
+      "help_url": "",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Connection Override"
+    },
+    {
+      "key": "load.load_sensor",
+      "type": "sensor",
+      "default": "Load_Power",
+      "section": "load",
+      "level": "getting_started",
+      "description": "Entity/item for load power data in watts",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#load",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Sensors"
+    },
+    {
+      "key": "load.car_charge_load_sensor",
+      "type": "sensor",
+      "default": "Wallbox_Power",
+      "section": "load",
+      "level": "standard",
+      "description": "Entity/item for wallbox power data in watts (leave empty if not used)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#load",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Sensors"
+    },
+    {
+      "key": "load.additional_load_1_sensor",
+      "type": "sensor",
+      "default": "additional_load_1_sensor",
+      "section": "load",
+      "level": "standard",
+      "description": "Entity/item for additional load power in watts (leave empty if not used)",
+      "labels": [],
+      "help_url": "configuration.html#load",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Additional Load"
+    },
+    {
+      "key": "load.additional_load_1_runtime",
+      "type": "int",
+      "default": 0,
+      "section": "load",
+      "level": "standard",
+      "description": "Runtime for additional load 1 in minutes (0 = not used)",
+      "labels": [],
+      "help_url": "configuration.html#load",
+      "validation": {
+        "min": 0
+      },
+      "depends_on": {
+        "load.additional_load_1_sensor": "!empty"
+      },
+      "hot_reload": false,
+      "display_group": "Additional Load"
+    },
+    {
+      "key": "load.additional_load_1_consumption",
+      "type": "int",
+      "default": 0,
+      "section": "load",
+      "level": "standard",
+      "description": "Consumption for additional load 1 in Wh for one hour (0 = not used)",
+      "labels": [],
+      "help_url": "configuration.html#load",
+      "validation": {
+        "min": 0
+      },
+      "depends_on": {
+        "load.additional_load_1_sensor": "!empty"
+      },
+      "hot_reload": false,
+      "display_group": "Additional Load"
+    },
+    {
+      "key": "eos.source",
+      "type": "select",
+      "default": "eos_server",
+      "section": "eos",
+      "level": "getting_started",
+      "description": "Optimization backend — EOS Server or EVopt",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "choices": [
+          "eos_server",
+          "evopt",
+          "default"
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Server"
+    },
+    {
+      "key": "eos.server",
+      "type": "str",
+      "default": "192.168.100.100",
+      "section": "eos",
+      "level": "getting_started",
+      "description": "EOS or EVopt server address",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Server"
+    },
+    {
+      "key": "eos.port",
+      "type": "int",
+      "default": 8503,
+      "section": "eos",
+      "level": "getting_started",
+      "description": "Port for EOS server (8503) or EVopt server (7050)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 1,
+        "max": 65535
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Server"
+    },
+    {
+      "key": "eos.time_frame",
+      "type": "select",
+      "default": 3600,
+      "section": "eos",
+      "level": "standard",
+      "description": "Time frame for optimization requests in seconds",
+      "labels": [],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "choices": [
+          900,
+          3600
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Optimization"
+    },
+    {
+      "key": "eos.timeout",
+      "type": "int",
+      "default": 180,
+      "section": "eos",
+      "level": "standard",
+      "description": "Timeout for optimization requests in seconds",
+      "labels": [],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 10,
+        "max": 600
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Optimization"
+    },
+    {
+      "key": "eos.dyn_override_discharge_allowed_pv_greater_load",
+      "type": "bool",
+      "default": false,
+      "section": "eos",
+      "level": "standard",
+      "description": "Allow discharge when PV forecast exceeds load, even if optimizer says avoid",
+      "labels": [],
+      "help_url": "configuration.html#eos",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Advanced"
+    },
+    {
+      "key": "eos.pv_battery_charge_control_enabled",
+      "type": "bool",
+      "default": false,
+      "section": "eos",
+      "level": "expert",
+      "description": "Enable PV-to-battery charge control from optimizer dc_charge signal (Fronius Gen24 only)",
+      "labels": [
+        "experimental"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Advanced"
+    },
+    {
+      "key": "price.source",
+      "type": "select",
+      "default": "default",
+      "section": "price",
+      "level": "getting_started",
+      "description": "Data source for electricity prices",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#price",
+      "validation": {
+        "choices": [
+          "tibber",
+          "smartenergy_at",
+          "stromligning",
+          "fixed_24h",
+          "default"
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Provider"
+    },
+    {
+      "key": "price.token",
+      "type": "password",
+      "default": "tibberBearerToken",
+      "section": "price",
+      "level": "getting_started",
+      "description": "API token for price provider (Tibber bearer token, Stromligning supplierId/productId)",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {},
+      "depends_on": {
+        "price.source": [
+          "tibber",
+          "stromligning"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Provider"
+    },
+    {
+      "key": "price.fixed_price_adder_ct",
+      "type": "float",
+      "default": 0.0,
+      "section": "price",
+      "level": "standard",
+      "description": "Fixed cost addition in ct per kWh",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Price Adjustments"
+    },
+    {
+      "key": "price.relative_price_multiplier",
+      "type": "float",
+      "default": 0.0,
+      "section": "price",
+      "level": "standard",
+      "description": "Relative cost multiplier applied to (base + fixed adder). E.g. 0.05 = 5%",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Price Adjustments"
+    },
+    {
+      "key": "price.fixed_24h_array",
+      "type": "str",
+      "default": "10.1,10.1,10.1,10.1,10.1,23,28.23,28.23,28.23,28.23,28.23,23.52,23.52,23.52,23.52,28.17,28.17,34.28,34.28,34.28,34.28,34.28,28,23",
+      "section": "price",
+      "level": "standard",
+      "description": "24 comma-separated prices in ct/kWh for each hour (used with fixed_24h source)",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {},
+      "depends_on": {
+        "price.source": [
+          "fixed_24h"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Fixed Prices"
+    },
+    {
+      "key": "price.feed_in_price",
+      "type": "float",
+      "default": 0.0,
+      "section": "price",
+      "level": "getting_started",
+      "description": "Feed-in price for the grid in €/kWh",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Price Adjustments"
+    },
+    {
+      "key": "price.negative_price_switch",
+      "type": "bool",
+      "default": false,
+      "section": "price",
+      "level": "standard",
+      "description": "No payment when stock price is negative",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Price Adjustments"
+    },
+    {
+      "key": "price.energyforecast_enabled",
+      "type": "bool",
+      "default": false,
+      "section": "price",
+      "level": "standard",
+      "description": "Enable smart price prediction via energyforecast.de",
+      "labels": [
+        "experimental",
+        "restart_required"
+      ],
+      "help_url": "configuration.html#energyforecast",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "EnergyForecast"
+    },
+    {
+      "key": "price.energyforecast_token",
+      "type": "password",
+      "default": "demo_token",
+      "section": "price",
+      "level": "standard",
+      "description": "API token from energyforecast.de",
+      "labels": [
+        "experimental"
+      ],
+      "help_url": "configuration.html#energyforecast",
+      "validation": {},
+      "depends_on": {
+        "price.energyforecast_enabled": [
+          true
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "EnergyForecast"
+    },
+    {
+      "key": "price.energyforecast_market_zone",
+      "type": "select",
+      "default": "DE-LU",
+      "section": "price",
+      "level": "standard",
+      "description": "Market zone for energy forecast",
+      "labels": [
+        "experimental"
+      ],
+      "help_url": "configuration.html#energyforecast",
+      "validation": {
+        "choices": [
+          "DE-LU",
+          "AT",
+          "FR",
+          "NL",
+          "BE",
+          "PL",
+          "DK1",
+          "DK2"
+        ]
+      },
+      "depends_on": {
+        "price.energyforecast_enabled": [
+          true
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "EnergyForecast"
+    },
+    {
+      "key": "battery.source",
+      "type": "select",
+      "default": "default",
+      "section": "battery",
+      "level": "expert",
+      "description": "Override data source for battery (uses global data source if empty)",
+      "labels": [
+        "deprecated",
+        "restart_required"
+      ],
+      "help_url": "",
+      "validation": {
+        "choices": [
+          "homeassistant",
+          "openhab",
+          "default",
+          ""
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Connection Override"
+    },
+    {
+      "key": "battery.url",
+      "type": "str",
+      "default": "http://homeassistant:8123",
+      "section": "battery",
+      "level": "expert",
+      "description": "Override URL for battery interface",
+      "labels": [
+        "deprecated",
+        "restart_required"
+      ],
+      "help_url": "",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Connection Override"
+    },
+    {
+      "key": "battery.access_token",
+      "type": "password",
+      "default": "abc123",
+      "section": "battery",
+      "level": "expert",
+      "description": "Override access token for battery interface",
+      "labels": [
+        "deprecated",
+        "restart_required"
+      ],
+      "help_url": "",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Connection Override"
+    },
+    {
+      "key": "battery.soc_sensor",
+      "type": "sensor",
+      "default": "battery_SOC",
+      "section": "battery",
+      "level": "getting_started",
+      "description": "Entity/item for battery state of charge",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#battery",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Core"
+    },
+    {
+      "key": "battery.capacity_wh",
+      "type": "int",
+      "default": 11059,
+      "section": "battery",
+      "level": "getting_started",
+      "description": "Battery capacity in Wh",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#battery",
+      "validation": {
+        "min": 100,
+        "max": 1000000
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Core"
+    },
+    {
+      "key": "battery.charge_efficiency",
+      "type": "float",
+      "default": 0.88,
+      "section": "battery",
+      "level": "standard",
+      "description": "Charging efficiency (0.0 to 1.0)",
+      "labels": [],
+      "help_url": "configuration.html#battery",
+      "validation": {
+        "min": 0.1,
+        "max": 1.0
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Core"
+    },
+    {
+      "key": "battery.discharge_efficiency",
+      "type": "float",
+      "default": 0.88,
+      "section": "battery",
+      "level": "standard",
+      "description": "Discharging efficiency (0.0 to 1.0)",
+      "labels": [],
+      "help_url": "configuration.html#battery",
+      "validation": {
+        "min": 0.1,
+        "max": 1.0
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Core"
+    },
+    {
+      "key": "battery.max_charge_power_w",
+      "type": "int",
+      "default": 5000,
+      "section": "battery",
+      "level": "standard",
+      "description": "Maximum charging power in watts",
+      "labels": [],
+      "help_url": "configuration.html#battery",
+      "validation": {
+        "min": 100,
+        "max": 100000
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Core"
+    },
+    {
+      "key": "battery.min_soc_percentage",
+      "type": "int",
+      "default": 5,
+      "section": "battery",
+      "level": "getting_started",
+      "description": "Minimum battery SOC in percent",
+      "labels": [],
+      "help_url": "configuration.html#battery",
+      "validation": {
+        "min": 0,
+        "max": 100
+      },
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "SOC Limits"
+    },
+    {
+      "key": "battery.max_soc_percentage",
+      "type": "int",
+      "default": 100,
+      "section": "battery",
+      "level": "getting_started",
+      "description": "Maximum battery SOC in percent",
+      "labels": [],
+      "help_url": "configuration.html#battery",
+      "validation": {
+        "min": 0,
+        "max": 100
+      },
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "SOC Limits"
+    },
+    {
+      "key": "battery.charging_curve_enabled",
+      "type": "bool",
+      "default": true,
+      "section": "battery",
+      "level": "standard",
+      "description": "Enable charging curve for controlled charging power according to SOC",
+      "labels": [],
+      "help_url": "configuration.html#battery",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Charging"
+    },
+    {
+      "key": "battery.sensor_battery_temperature",
+      "type": "sensor",
+      "default": "",
+      "section": "battery",
+      "level": "standard",
+      "description": "Sensor for battery temperature in °C (leave empty if not available)",
+      "labels": [],
+      "help_url": "configuration.html#battery",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Sensors"
+    },
+    {
+      "key": "battery.price_euro_per_wh_accu",
+      "type": "float",
+      "default": 0.0,
+      "section": "battery",
+      "level": "standard",
+      "description": "Static battery price in €/Wh (0 = use dynamic or ignore)",
+      "labels": [],
+      "help_url": "configuration.html#battery",
+      "validation": {
+        "min": 0.0
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Battery Price"
+    },
+    {
+      "key": "battery.price_euro_per_wh_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "battery",
+      "level": "expert",
+      "description": "Sensor/item providing battery energy cost in €/Wh",
+      "labels": [],
+      "help_url": "configuration.html#battery",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Battery Price"
+    },
+    {
+      "key": "battery.price_calculation_enabled",
+      "type": "bool",
+      "default": false,
+      "section": "battery",
+      "level": "standard",
+      "description": "Enable dynamic battery price calculation based on history",
+      "labels": [],
+      "help_url": "configuration.html#battery-price",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Battery Price"
+    },
+    {
+      "key": "battery.price_update_interval",
+      "type": "int",
+      "default": 900,
+      "section": "battery",
+      "level": "expert",
+      "description": "Interval for price update in seconds",
+      "labels": [],
+      "help_url": "configuration.html#battery-price",
+      "validation": {
+        "min": 60,
+        "max": 86400
+      },
+      "depends_on": {
+        "battery.price_calculation_enabled": [
+          true
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Battery Price"
+    },
+    {
+      "key": "battery.price_history_lookback_hours",
+      "type": "int",
+      "default": 96,
+      "section": "battery",
+      "level": "expert",
+      "description": "Hours of history to analyze for price calculation",
+      "labels": [],
+      "help_url": "configuration.html#battery-price",
+      "validation": {
+        "min": 1,
+        "max": 720
+      },
+      "depends_on": {
+        "battery.price_calculation_enabled": [
+          true
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Battery Price"
+    },
+    {
+      "key": "battery.battery_power_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "battery",
+      "level": "standard",
+      "description": "Sensor for battery power in W (positive = charging)",
+      "labels": [],
+      "help_url": "configuration.html#battery-price",
+      "validation": {},
+      "depends_on": {
+        "battery.price_calculation_enabled": [
+          true
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Battery Price Sensors"
+    },
+    {
+      "key": "battery.pv_power_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "battery",
+      "level": "standard",
+      "description": "Sensor for PV power in W",
+      "labels": [],
+      "help_url": "configuration.html#battery-price",
+      "validation": {},
+      "depends_on": {
+        "battery.price_calculation_enabled": [
+          true
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Battery Price Sensors"
+    },
+    {
+      "key": "battery.grid_power_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "battery",
+      "level": "standard",
+      "description": "Sensor for grid power in W (positive = import)",
+      "labels": [],
+      "help_url": "configuration.html#battery-price",
+      "validation": {},
+      "depends_on": {
+        "battery.price_calculation_enabled": [
+          true
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Battery Price Sensors"
+    },
+    {
+      "key": "battery.load_power_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "battery",
+      "level": "standard",
+      "description": "Sensor for load power in W",
+      "labels": [],
+      "help_url": "configuration.html#battery-price",
+      "validation": {},
+      "depends_on": {
+        "battery.price_calculation_enabled": [
+          true
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Battery Price Sensors"
+    },
+    {
+      "key": "battery.price_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "battery",
+      "level": "standard",
+      "description": "Sensor for electricity price in €/kWh or ct/kWh",
+      "labels": [],
+      "help_url": "configuration.html#battery-price",
+      "validation": {},
+      "depends_on": {
+        "battery.price_calculation_enabled": [
+          true
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Battery Price Sensors"
+    },
+    {
+      "key": "battery.charging_threshold_w",
+      "type": "float",
+      "default": 50.0,
+      "section": "battery",
+      "level": "expert",
+      "description": "Minimum battery power to consider as charging (W)",
+      "labels": [],
+      "help_url": "configuration.html#battery-price",
+      "validation": {
+        "min": 0.0
+      },
+      "depends_on": {
+        "battery.price_calculation_enabled": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Battery Price Thresholds"
+    },
+    {
+      "key": "battery.grid_charge_threshold_w",
+      "type": "float",
+      "default": 100.0,
+      "section": "battery",
+      "level": "expert",
+      "description": "Minimum grid surplus to consider as grid charging (W)",
+      "labels": [],
+      "help_url": "configuration.html#battery-price",
+      "validation": {
+        "min": 0.0
+      },
+      "depends_on": {
+        "battery.price_calculation_enabled": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Battery Price Thresholds"
+    },
+    {
+      "key": "battery.battery_price_include_feedin",
+      "type": "bool",
+      "default": false,
+      "section": "battery",
+      "level": "expert",
+      "description": "Include feed-in price as opportunity cost for PV-sourced energy",
+      "labels": [],
+      "help_url": "configuration.html#battery-price",
+      "validation": {},
+      "depends_on": {
+        "battery.price_calculation_enabled": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Battery Price"
+    },
+    {
+      "key": "pv_forecast_source.source",
+      "type": "select",
+      "default": "akkudoktor",
+      "section": "pv_forecast_source",
+      "level": "getting_started",
+      "description": "Solar forecast data provider",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {
+        "choices": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar",
+          "evcc",
+          "solcast",
+          "victron",
+          "default"
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Provider"
+    },
+    {
+      "key": "pv_forecast_source.api_key",
+      "type": "password",
+      "default": "",
+      "section": "pv_forecast_source",
+      "level": "getting_started",
+      "description": "API key for Solcast or Victron (required when using those providers)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {},
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "solcast",
+          "victron"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Provider"
+    },
+    {
+      "key": "pv_forecast.name",
+      "type": "str",
+      "default": "myPvInstallation1",
+      "section": "pv_forecast",
+      "level": "getting_started",
+      "description": "User-defined name for this PV installation (must be unique)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Installation"
+    },
+    {
+      "key": "pv_forecast.lat",
+      "type": "float",
+      "default": 47.5,
+      "section": "pv_forecast",
+      "level": "getting_started",
+      "description": "Latitude of the PV installation",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {
+        "min": -90,
+        "max": 90
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Installation"
+    },
+    {
+      "key": "pv_forecast.lon",
+      "type": "float",
+      "default": 8.5,
+      "section": "pv_forecast",
+      "level": "getting_started",
+      "description": "Longitude of the PV installation",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {
+        "min": -180,
+        "max": 180
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Installation"
+    },
+    {
+      "key": "pv_forecast.azimuth",
+      "type": "float",
+      "default": 90.0,
+      "section": "pv_forecast",
+      "level": "getting_started",
+      "description": "Panel azimuth angle (-180 to 180, 0=south, 90=west, -90=east)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {
+        "min": -180,
+        "max": 180
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Installation"
+    },
+    {
+      "key": "pv_forecast.tilt",
+      "type": "float",
+      "default": 30.0,
+      "section": "pv_forecast",
+      "level": "getting_started",
+      "description": "Panel tilt angle (0=flat, 90=vertical)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {
+        "min": 0,
+        "max": 90
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Installation"
+    },
+    {
+      "key": "pv_forecast.power",
+      "type": "int",
+      "default": 4600,
+      "section": "pv_forecast",
+      "level": "getting_started",
+      "description": "Peak power of PV system in Wp",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {
+        "min": 1
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Installation"
+    },
+    {
+      "key": "pv_forecast.powerInverter",
+      "type": "int",
+      "default": 5000,
+      "section": "pv_forecast",
+      "level": "standard",
+      "description": "Inverter power in W",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {
+        "min": 1
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Installation"
+    },
+    {
+      "key": "pv_forecast.inverterEfficiency",
+      "type": "float",
+      "default": 0.9,
+      "section": "pv_forecast",
+      "level": "standard",
+      "description": "Inverter efficiency (0.0 to 1.0)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {
+        "min": 0.1,
+        "max": 1.0
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Installation"
+    },
+    {
+      "key": "pv_forecast.horizon",
+      "type": "str",
+      "default": "10,20,10,15",
+      "section": "pv_forecast",
+      "level": "standard",
+      "description": "Comma-separated horizon values for shading calculation",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Installation"
+    },
+    {
+      "key": "pv_forecast.resource_id",
+      "type": "str",
+      "default": "",
+      "section": "pv_forecast",
+      "level": "standard",
+      "description": "Resource ID for Solcast API (only needed for Solcast provider)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {},
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "solcast"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Installation"
+    },
+    {
+      "key": "inverter.type",
+      "type": "select",
+      "default": "default",
+      "section": "inverter",
+      "level": "getting_started",
+      "description": "Inverter type for battery control (default = display only, no control)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#inverter",
+      "validation": {
+        "choices": [
+          "fronius_gen24",
+          "fronius_gen24_legacy",
+          "victron",
+          "evcc",
+          "default"
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Hardware"
+    },
+    {
+      "key": "inverter.address",
+      "type": "str",
+      "default": "192.168.1.12",
+      "section": "inverter",
+      "level": "getting_started",
+      "description": "IP address of the inverter",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#inverter",
+      "validation": {},
+      "depends_on": {
+        "inverter.type": [
+          "fronius_gen24",
+          "fronius_gen24_legacy",
+          "victron"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Hardware"
+    },
+    {
+      "key": "inverter.user",
+      "type": "str",
+      "default": "customer",
+      "section": "inverter",
+      "level": "getting_started",
+      "description": "Username for inverter login (Fronius only)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#inverter",
+      "validation": {},
+      "depends_on": {
+        "inverter.type": [
+          "fronius_gen24",
+          "fronius_gen24_legacy"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Hardware"
+    },
+    {
+      "key": "inverter.password",
+      "type": "password",
+      "default": "abc123",
+      "section": "inverter",
+      "level": "getting_started",
+      "description": "Password for inverter login (Fronius only)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#inverter",
+      "validation": {},
+      "depends_on": {
+        "inverter.type": [
+          "fronius_gen24",
+          "fronius_gen24_legacy"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Hardware"
+    },
+    {
+      "key": "inverter.max_grid_charge_rate",
+      "type": "int",
+      "default": 5000,
+      "section": "inverter",
+      "level": "standard",
+      "description": "Maximum inverter grid charge rate in W",
+      "labels": [],
+      "help_url": "configuration.html#inverter",
+      "validation": {
+        "min": 0,
+        "max": 100000
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Power Limits"
+    },
+    {
+      "key": "inverter.max_pv_charge_rate",
+      "type": "int",
+      "default": 5000,
+      "section": "inverter",
+      "level": "standard",
+      "description": "Maximum inverter PV charge rate in W",
+      "labels": [],
+      "help_url": "configuration.html#inverter",
+      "validation": {
+        "min": 0,
+        "max": 100000
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Power Limits"
+    },
+    {
+      "key": "evcc.url",
+      "type": "str",
+      "default": "http://yourEVCCserver:7070",
+      "section": "evcc",
+      "level": "standard",
+      "description": "URL to your EVCC installation (leave default or empty if not used)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#evcc",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Connection"
+    },
+    {
+      "key": "mqtt.enabled",
+      "type": "bool",
+      "default": false,
+      "section": "mqtt",
+      "level": "standard",
+      "description": "Enable MQTT integration",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#mqtt",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Connection"
+    },
+    {
+      "key": "mqtt.broker",
+      "type": "str",
+      "default": "homeassistant",
+      "section": "mqtt",
+      "level": "standard",
+      "description": "MQTT broker hostname or IP",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#mqtt",
+      "validation": {},
+      "depends_on": {
+        "mqtt.enabled": [
+          true,
+          "enabled"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Connection"
+    },
+    {
+      "key": "mqtt.port",
+      "type": "int",
+      "default": 1883,
+      "section": "mqtt",
+      "level": "standard",
+      "description": "MQTT broker port",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#mqtt",
+      "validation": {
+        "min": 1,
+        "max": 65535
+      },
+      "depends_on": {
+        "mqtt.enabled": [
+          true,
+          "enabled"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Connection"
+    },
+    {
+      "key": "mqtt.user",
+      "type": "str",
+      "default": "username",
+      "section": "mqtt",
+      "level": "standard",
+      "description": "MQTT username",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#mqtt",
+      "validation": {},
+      "depends_on": {
+        "mqtt.enabled": [
+          true,
+          "enabled"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Authentication"
+    },
+    {
+      "key": "mqtt.password",
+      "type": "password",
+      "default": "password",
+      "section": "mqtt",
+      "level": "standard",
+      "description": "MQTT password",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#mqtt",
+      "validation": {},
+      "depends_on": {
+        "mqtt.enabled": [
+          true,
+          "enabled"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Authentication"
+    },
+    {
+      "key": "mqtt.tls",
+      "type": "bool",
+      "default": false,
+      "section": "mqtt",
+      "level": "expert",
+      "description": "Use TLS for MQTT connection",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#mqtt",
+      "validation": {},
+      "depends_on": {
+        "mqtt.enabled": [
+          true,
+          "enabled"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Connection"
+    },
+    {
+      "key": "mqtt.ha_mqtt_auto_discovery",
+      "type": "bool",
+      "default": true,
+      "section": "mqtt",
+      "level": "standard",
+      "description": "Enable Home Assistant MQTT auto-discovery",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#mqtt",
+      "validation": {},
+      "depends_on": {
+        "mqtt.enabled": [
+          true,
+          "enabled"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Home Assistant"
+    },
+    {
+      "key": "mqtt.ha_mqtt_auto_discovery_prefix",
+      "type": "str",
+      "default": "homeassistant",
+      "section": "mqtt",
+      "level": "expert",
+      "description": "Prefix for HA MQTT auto-discovery topics",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#mqtt",
+      "validation": {},
+      "depends_on": {
+        "mqtt.ha_mqtt_auto_discovery": [
+          true
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Home Assistant"
+    },
+    {
+      "key": "refresh_time",
+      "type": "int",
+      "default": 3,
+      "section": "system",
+      "level": "standard",
+      "description": "EOS Connect refresh time in minutes",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#system",
+      "validation": {
+        "min": 1,
+        "max": 60
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "General"
+    },
+    {
+      "key": "time_zone",
+      "type": "str",
+      "default": "Europe/Berlin",
+      "section": "system",
+      "level": "getting_started",
+      "description": "Time zone for the application (e.g. Europe/Berlin, US/Eastern)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#system",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "General"
+    },
+    {
+      "key": "eos_connect_web_port",
+      "type": "int",
+      "default": 8081,
+      "section": "system",
+      "level": "standard",
+      "description": "Web server port for EOS Connect",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#system",
+      "validation": {
+        "min": 1024,
+        "max": 65535
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "General"
+    },
+    {
+      "key": "log_level",
+      "type": "select",
+      "default": "info",
+      "section": "system",
+      "level": "standard",
+      "description": "Application log level",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#system",
+      "validation": {
+        "choices": [
+          "debug",
+          "info",
+          "warning",
+          "error"
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "General"
+    },
+    {
+      "key": "request_timeout",
+      "type": "int",
+      "default": 10,
+      "section": "system",
+      "level": "expert",
+      "description": "Timeout for Home Assistant / OpenHAB API calls in seconds",
+      "labels": [],
+      "help_url": "configuration.html#system",
+      "validation": {
+        "min": 5,
+        "max": 120
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "General"
+    }
+  ],
+  "sections": {
+    "data_source": {
+      "icon": "fa-plug",
+      "label": "Data Source"
+    },
+    "load": {
+      "icon": "fa-bolt",
+      "label": "Load"
+    },
+    "eos": {
+      "icon": "fa-server",
+      "label": "Optimizer"
+    },
+    "price": {
+      "icon": "fa-coins",
+      "label": "Price"
+    },
+    "battery": {
+      "icon": "fa-battery-full",
+      "label": "Battery"
+    },
+    "pv_forecast_source": {
+      "icon": "fa-sun",
+      "label": "PV Source"
+    },
+    "pv_forecast": {
+      "icon": "fa-solar-panel",
+      "label": "PV Forecast"
+    },
+    "inverter": {
+      "icon": "fa-microchip",
+      "label": "Inverter"
+    },
+    "evcc": {
+      "icon": "fa-car",
+      "label": "EVCC"
+    },
+    "mqtt": {
+      "icon": "fa-tower-broadcast",
+      "label": "MQTT"
+    },
+    "system": {
+      "icon": "fa-gears",
+      "label": "System"
+    }
   }
-]
+}

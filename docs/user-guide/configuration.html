@@ -3129,7 +3129,9 @@ inverter:
         try {
             const res = await fetch('../assets/data/config_schema.json');
             if (!res.ok) { container.innerHTML = '<p style="color:#888;">Parameter reference not available.</p>'; return; }
-            const fields = await res.json();
+            const schemaData = await res.json();
+            const fields = schemaData.fields || schemaData;
+            const sectionMeta = schemaData.sections || {};
 
             // Group by section
             const sections = {};
@@ -3139,25 +3141,11 @@ inverter:
                 sections[f.section].push(f);
             });
 
-            const sectionIcons = {
-                data_source: 'fa-plug', load: 'fa-bolt', eos: 'fa-server',
-                price: 'fa-coins', battery: 'fa-battery-full',
-                pv_forecast_source: 'fa-sun', pv_forecast: 'fa-solar-panel',
-                inverter: 'fa-microchip', evcc: 'fa-car',
-                mqtt: 'fa-tower-broadcast', system: 'fa-gears'
-            };
-            const sectionNames = {
-                data_source: 'Data Source', load: 'Load', eos: 'Optimizer',
-                price: 'Price', battery: 'Battery',
-                pv_forecast_source: 'PV Source', pv_forecast: 'PV Forecast',
-                inverter: 'Inverter', evcc: 'EVCC',
-                mqtt: 'MQTT', system: 'System'
-            };
-
             let html = '';
             sectionOrder.forEach(sec => {
-                const icon = sectionIcons[sec] || 'fa-cog';
-                const name = sectionNames[sec] || sec;
+                const meta = sectionMeta[sec] || { icon: 'fa-cog', label: sec };
+                const icon = meta.icon || 'fa-cog';
+                const name = meta.label || sec;
                 html += `<h3><i class="fas ${icon}"></i> ${name}</h3>`;
                 html += '<div style="overflow-x:auto;"><table>';
                 html += '<thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Level</th><th>Description</th></tr></thead><tbody>';

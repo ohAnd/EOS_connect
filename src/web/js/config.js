@@ -9,19 +9,9 @@
 /* global showFullScreenOverlay, closeFullScreenOverlay, isMobile */
 
 // ── Section metadata (icon + display name) ──────────────────────
-const CONFIG_SECTIONS = {
-    data_source:       { icon: "fa-plug",              label: "Data Source" },
-    load:              { icon: "fa-bolt",               label: "Load" },
-    eos:               { icon: "fa-server",             label: "Optimizer" },
-    price:             { icon: "fa-coins",              label: "Price" },
-    battery:           { icon: "fa-battery-full",       label: "Battery" },
-    pv_forecast_source:{ icon: "fa-sun",                label: "PV Source" },
-    pv_forecast:       { icon: "fa-solar-panel",        label: "PV Forecast" },
-    inverter:          { icon: "fa-microchip",          label: "Inverter" },
-    evcc:              { icon: "fa-car",                label: "EVCC" },
-    mqtt:              { icon: "fa-tower-broadcast",    label: "MQTT" },
-    system:            { icon: "fa-gears",              label: "System" },
-};
+// Populated from /api/config/schema at runtime (SPOT from schema.py).
+// Fallback values used only when schema hasn't loaded yet.
+let CONFIG_SECTIONS = {};
 
 const LEVEL_ORDER = { getting_started: 0, standard: 1, expert: 2 };
 
@@ -88,7 +78,12 @@ class ConfigurationManager {
             throw new Error(`Values: ${valuesRes.status}`);
         }
 
-        this.schema = await schemaRes.json();
+        const schemaData = await schemaRes.json();
+        this.schema = schemaData.fields || schemaData;
+        // Populate section metadata from schema (SPOT)
+        if (schemaData.sections) {
+            CONFIG_SECTIONS = schemaData.sections;
+        }
         const raw = await valuesRes.json();
 
         // Flatten export to dot-notation

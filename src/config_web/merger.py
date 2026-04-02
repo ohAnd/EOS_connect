@@ -11,20 +11,12 @@ import logging
 from typing import Any
 
 from .store import ConfigStore
-from .schema import ConfigSchema
+from .schema import ConfigSchema, BOOTSTRAP_KEYS
 
 logger = logging.getLogger("__main__")
 
 # Sections that receive data_source inheritance
 _DATA_SOURCE_SECTIONS = ("load", "battery")
-
-# Bootstrap keys that come from config.yaml, not SQLite
-_BOOTSTRAP_KEYS = frozenset({
-    "eos_connect_web_port",
-    "time_zone",
-    "log_level",
-    "data_path",
-})
 
 
 def build_merged_config(
@@ -71,7 +63,7 @@ def build_merged_config(
     # Top-level (system) keys
     for field_def in schema.get_section("system"):
         key = field_def.key
-        if key in _BOOTSTRAP_KEYS:
+        if key in BOOTSTRAP_KEYS:
             result[key] = bootstrap_config.get(key, field_def.default)
         elif key in all_settings:
             result[key] = all_settings[key]

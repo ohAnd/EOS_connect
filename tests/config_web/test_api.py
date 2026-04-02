@@ -107,12 +107,16 @@ class TestConfigAPI:
     """Tests for the config REST API."""
 
     def test_get_schema(self, client):
-        """GET /api/config/schema should return schema JSON."""
+        """GET /api/config/schema should return schema JSON with fields and sections."""
         resp = client.get("/api/config/schema")
         assert resp.status_code == 200
         data = resp.get_json()
-        assert isinstance(data, list)
-        assert len(data) > 50
+        assert isinstance(data, dict)
+        assert "fields" in data
+        assert "sections" in data
+        assert len(data["fields"]) > 50
+        assert isinstance(data["sections"], dict)
+        assert "data_source" in data["sections"]
 
     def test_get_config(self, client):
         """GET /api/config/ should return current config."""

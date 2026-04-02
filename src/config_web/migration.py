@@ -15,19 +15,9 @@ import os
 from typing import Any
 
 from .store import ConfigStore
-from .schema import ConfigSchema
+from .schema import ConfigSchema, BOOTSTRAP_KEYS
 
 logger = logging.getLogger("__main__")
-
-# Keys that stay in config.yaml / options.json (bootstrap) and are NOT migrated to SQLite.
-# Includes both the config.yaml names and the HA addon options.json names.
-_BOOTSTRAP_KEYS = frozenset({
-    "eos_connect_web_port",
-    "web_port",
-    "time_zone",
-    "log_level",
-    "data_path",
-})
 
 
 def migrate_yaml_to_store(config_dict: dict, store: ConfigStore, schema: ConfigSchema) -> bool:
@@ -56,7 +46,7 @@ def migrate_yaml_to_store(config_dict: dict, store: ConfigStore, schema: ConfigS
     for key, value in flat.items():
         # Skip bootstrap keys
         top_key = key.split(".")[0] if "." in key else key
-        if top_key in _BOOTSTRAP_KEYS or key in _BOOTSTRAP_KEYS:
+        if top_key in BOOTSTRAP_KEYS or key in BOOTSTRAP_KEYS:
             continue
         # Skip None values
         if value is None:
@@ -120,7 +110,7 @@ def migrate_ha_options_to_store(
         return False
 
     # Check whether options.json has more than just bootstrap keys
-    non_bootstrap = {k for k in options if k not in _BOOTSTRAP_KEYS}
+    non_bootstrap = {k for k in options if k not in BOOTSTRAP_KEYS}
     if not non_bootstrap:
         logger.debug("[Migration] options.json contains only bootstrap keys — skipping")
         return False
@@ -135,7 +125,7 @@ def migrate_ha_options_to_store(
 
     for key, value in flat.items():
         top_key = key.split(".")[0] if "." in key else key
-        if top_key in _BOOTSTRAP_KEYS or key in _BOOTSTRAP_KEYS:
+        if top_key in BOOTSTRAP_KEYS or key in BOOTSTRAP_KEYS:
             continue
         if value is None:
             continue

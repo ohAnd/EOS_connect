@@ -49,8 +49,10 @@ class TestExportSchema:
         with open(json_path, encoding="utf-8") as f:
             data = json.load(f)
 
-        assert isinstance(data, list)
-        assert len(data) > 50
+        assert isinstance(data, dict)
+        assert "fields" in data
+        assert "sections" in data
+        assert len(data["fields"]) > 50
 
     def test_exported_json_matches_schema(self):
         """Every field in the schema registry should appear in the export."""
@@ -66,7 +68,8 @@ class TestExportSchema:
         with open(json_path, encoding="utf-8") as f:
             data = json.load(f)
 
-        exported_keys = {entry["key"] for entry in data}
+        fields = data["fields"] if isinstance(data, dict) else data
+        exported_keys = {entry["key"] for entry in fields}
         schema_keys = {f.key for f in self.schema.all_fields()}
 
         assert exported_keys == schema_keys, (
@@ -89,8 +92,9 @@ class TestExportSchema:
         with open(json_path, encoding="utf-8") as f:
             data = json.load(f)
 
+        fields = data["fields"] if isinstance(data, dict) else data
         required_keys = {"key", "type", "default", "section", "level", "description"}
-        for entry in data:
+        for entry in fields:
             missing = required_keys - set(entry.keys())
             assert not missing, (
                 f"Field '{entry.get('key', '?')}' missing keys: {missing}"
@@ -103,3 +107,39 @@ class TestExportSchema:
         deserialized = json.loads(serialized)
         assert len(deserialized) == len(schema_json)
         assert deserialized[0]["key"] == schema_json[0]["key"]
+
+    def test_section_meta_covers_all_sections(self):
+        """SECTION_META must have an entry for every section defined in schema fields."""
+        from src.config_web.schema import SECTION_META
+        schema_sections = set(self.schema.sections())
+        meta_sections = set(SECTION_META.keys())
+        missing = schema_sections - meta_sections
+        assert not missing, (
+            f"SECTION_META missing entries for sections: {missing}"
+        )
+
+    def test_section_meta_has_icon_and_label(self):
+        """Every SECTION_META entry must have both 'icon' and 'label'."""
+        from src.config_web.schema import SECTION_META
+        for section, meta in SECTION_META.items():
+            assert "icon" in meta, f"SECTION_META['{section}'] missing 'icon'"
+            assert "label" in meta, f"SECTION_META['{section}'] missing 'label'"
+
+    def test_exported_json_includes_sections(self):
+        """The exported JSON should contain section metadata."""
+        project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        json_path = os.path.join(
+            project_root, "docs", "assets", "data", "config_schema.json"
+        )
+        if not os.path.exists(json_path):
+            pytest.skip("config_schema.json not found; run export script first")
+
+        with open(json_path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        assert "sections" in data
+        assert isinstance(data["sections"], dict)
+        assert "data_source" in data["sections"]
+        assert data["sections"]["data_source"]["icon"] == "fa-plug"

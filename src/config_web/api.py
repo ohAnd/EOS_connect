@@ -35,8 +35,11 @@ def init_api(store, schema, module):
 
 @config_bp.route("/schema", methods=["GET"])
 def get_schema():
-    """Return the full config schema as JSON."""
-    return jsonify(_schema.to_json())
+    """Return the full config schema as JSON, including section metadata."""
+    return jsonify({
+        "fields": _schema.to_json(),
+        "sections": _schema.section_meta(),
+    })
 
 
 # ------------------------------------------------------------------
