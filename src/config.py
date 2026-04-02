@@ -3,6 +3,7 @@ This module provides the ConfigManager class for managing configuration settings
 of the application. The configuration settings are stored in a 'config.yaml' file.
 """
 
+import json
 import os
 import sys
 import logging
@@ -42,12 +43,7 @@ class ConfigManager:
         2. ``data_path`` in config.yaml -> custom path
         3. Default -> ./data/ relative to application directory
         """
-        # HA addon detection (same logic as PortInterface.is_running_in_hassio)
-        if (
-            os.environ.get("HASSIO") is not None
-            or os.environ.get("HASSIO_TOKEN") is not None
-            or os.path.exists("/data/options.json")
-        ):
+        if self.is_ha_addon:
             return "/data"
 
         custom = self.config.get("data_path")
@@ -55,6 +51,51 @@ class ConfigManager:
             return str(custom)
 
         return os.path.join(self.current_dir, "data")
+
+    @property
+    def is_ha_addon(self) -> bool:
+        """Return True when running inside a Home Assistant add-on."""
+        return (
+            os.environ.get("HASSIO") is not None
+            or os.environ.get("HASSIO_TOKEN") is not None
+            or os.path.exists("/data/options.json")
+        )
+
+    # HA bootstrap key mapping: options.json key -> config dict key
+    _HA_BOOTSTRAP_MAP = {
+        "web_port": "eos_connect_web_port",
+        "eos_connect_web_port": "eos_connect_web_port",
+        "time_zone": "time_zone",
+        "log_level": "log_level",
+    }
+
+    def load_ha_bootstrap(self) -> dict:
+        """Read bootstrap values from HA addon ``/data/options.json``.
+
+        Returns:
+            Dict of bootstrap key/value pairs that were applied, empty if not
+            running in HA or if options.json is missing/invalid.
+        """
+        options_path = "/data/options.json"
+        if not self.is_ha_addon or not os.path.exists(options_path):
+            return {}
+
+        try:
+            with open(options_path, "r", encoding="utf-8") as f:
+                options = json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("[Config] Failed to read %s: %s", options_path, exc)
+            return {}
+
+        applied = {}
+        for opt_key, cfg_key in self._HA_BOOTSTRAP_MAP.items():
+            if opt_key in options and options[opt_key] is not None:
+                self.config[cfg_key] = options[opt_key]
+                applied[cfg_key] = options[opt_key]
+
+        if applied:
+            logger.info("[Config] Applied HA addon bootstrap values: %s", list(applied.keys()))
+        return applied
 
     def create_default_config(self):
         """
@@ -550,6 +591,9 @@ class ConfigManager:
         If the file exists, it loads the configuration values.
         If the file does not exist, it creates a new 'config.yaml' file with default values and
         prompts the user to restart the server after configuring the settings.
+
+        When running as an HA addon, bootstrap values from ``/data/options.json``
+        override the corresponding config.yaml values.
         """
         if os.path.exists(self.config_file):
             with open(self.config_file, "r", encoding="utf-8") as f:
@@ -557,12 +601,21 @@ class ConfigManager:
             self.check_eos_timeout_and_refreshtime()
             self.check_energyforecast_config()
         else:
-            self.write_config()
-            print("Config file not found. Created a new one with default values.")
-            print(
-                "Please restart the server after configuring the settings in config.yaml"
-            )
-            sys.exit(0)
+            # In HA addon mode, config.yaml may not exist — that's OK
+            if self.is_ha_addon:
+                logger.info(
+                    "[Config] No config.yaml found (HA addon mode) — using defaults"
+                )
+            else:
+                self.write_config()
+                print("Config file not found. Created a new one with default values.")
+                print(
+                    "Please restart the server after configuring the settings in config.yaml"
+                )
+                sys.exit(0)
+
+        # In HA addon mode, bootstrap values from options.json take precedence
+        self.load_ha_bootstrap()
 
     def write_config(self):
         """

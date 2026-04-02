@@ -46,6 +46,7 @@
                     <a href="#contributing" class="toc-link">Contributing</a>
                     <a href="#testing" class="toc-link">Testing</a>
                     <a href="#dev-setup" class="toc-link">Dev Setup</a>
+                    <a href="#ha-addon" class="toc-link">HA Addon Integration</a>
                 </nav>
             </aside>
 
@@ -516,6 +517,66 @@ set EOS_CONNECT_PORT=8081</code></pre>
                 </div>
             </div>
         </div>
+
+        <!-- HA Addon Integration -->
+        <div class="content-section" id="ha-addon">
+            <h2><i class="fas fa-house-signal"></i> HA Addon Integration</h2>
+            <p>EOS Connect runs as a Home Assistant add-on via the <a href="https://github.com/ohAnd/ha_addons" target="_blank">ohAnd/ha_addons</a> repository. The web-based config system changes how configuration is handled.</p>
+
+            <h3>How it Works</h3>
+            <table>
+                <thead><tr><th>Aspect</th><th>Old (config.yaml only)</th><th>New (SQLite + web UI)</th></tr></thead>
+                <tbody>
+                    <tr><td>Config storage</td><td>HA writes <code>/data/options.json</code> with all settings</td><td>SQLite at <code>/data/eos_connect.db</code>, web UI for editing</td></tr>
+                    <tr><td>HA addon options</td><td>Full config in <code>options.json</code></td><td>Bootstrap only: <code>web_port</code>, <code>time_zone</code>, <code>log_level</code></td></tr>
+                    <tr><td>User edits config</td><td>HA addon config panel</td><td>EOS Connect web UI (<code>/config</code>)</td></tr>
+                    <tr><td>Data persistence</td><td><code>/data/options.json</code> (HA managed)</td><td><code>/data/eos_connect.db</code> (persistent volume)</td></tr>
+                </tbody>
+            </table>
+
+            <h3>Detection &amp; Data Path</h3>
+            <p><code>ConfigManager.is_ha_addon</code> returns <code>True</code> when any of these are true:</p>
+            <ul>
+                <li><code>HASSIO</code> environment variable is set</li>
+                <li><code>HASSIO_TOKEN</code> environment variable is set</li>
+                <li><code>/data/options.json</code> exists</li>
+            </ul>
+            <p>When detected, <code>data_dir</code> resolves to <code>/data</code> and the SQLite DB is created at <code>/data/eos_connect.db</code>.</p>
+
+            <h3>Bootstrap from <code>options.json</code></h3>
+            <p>Bootstrap values (<code>web_port</code>, <code>time_zone</code>, <code>log_level</code>) are read from <code>/data/options.json</code> and override <code>config.yaml</code> defaults. These are the only settings managed through the HA addon config panel.</p>
+
+            <h3>Legacy Migration</h3>
+            <p>Older HA addon versions provided ALL configuration options in <code>options.json</code>. On first run with the new system:</p>
+            <ol>
+                <li>If SQLite store is empty AND <code>options.json</code> has non-bootstrap keys:</li>
+                <li><code>migrate_ha_options_to_store()</code> imports all non-bootstrap values into SQLite</li>
+                <li>Bootstrap keys are skipped (they stay in <code>options.json</code>)</li>
+                <li>The migration is one-time and idempotent</li>
+            </ol>
+
+            <h3>Required Changes in <code>ha_addons</code> Repo</h3>
+            <p>The following changes are needed in <a href="https://github.com/ohAnd/ha_addons" target="_blank">ohAnd/ha_addons</a>:</p>
+            <div class="code-block"><pre><code># eos_connect/config.yaml (addon manifest)
+options:
+  web_port: 8081
+  time_zone: "Europe/Berlin"
+  log_level: "INFO"
+
+schema:
+  web_port: int
+  time_zone: str
+  log_level: list(DEBUG|INFO|WARNING|ERROR)
+
+# Add persistent data mapping
+map:
+  - addon_config:rw   # persistent /data/ for SQLite DB
+
+# Point to EOS Connect web UI
+webui: http://[HOST]:[PORT:8081]</code></pre></div>
+            <p>The same changes apply to both <code>eos_connect/config.yaml</code> and <code>eos_connect_develop/config.yaml</code>. Update <code>translations/en.yaml</code> to match the reduced option set.</p>
+        </div>
+
             </main>
         </div>
     </div>

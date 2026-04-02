@@ -4,9 +4,14 @@ Auto-Migration — Imports existing config.yaml values into the SQLite config st
 On first run (empty database), reads the current config dict from ConfigManager,
 flattens all values to dot-notation keys, imports them into the store, and creates
 the new ``data_source`` section from the ``load`` section connection values.
+
+When running as an HA addon, a legacy ``/data/options.json`` that contains more
+than bootstrap keys is also auto-migrated to SQLite.
 """
 
+import json
 import logging
+import os
 from typing import Any
 
 from .store import ConfigStore
@@ -14,9 +19,11 @@ from .schema import ConfigSchema
 
 logger = logging.getLogger("__main__")
 
-# Keys that stay in config.yaml (bootstrap) and are NOT migrated to SQLite
+# Keys that stay in config.yaml / options.json (bootstrap) and are NOT migrated to SQLite.
+# Includes both the config.yaml names and the HA addon options.json names.
 _BOOTSTRAP_KEYS = frozenset({
     "eos_connect_web_port",
+    "web_port",
     "time_zone",
     "log_level",
     "data_path",
@@ -66,6 +73,83 @@ def migrate_yaml_to_store(config_dict: dict, store: ConfigStore, schema: ConfigS
 
     logger.info(
         "[Migration] Migrated %d settings from config.yaml to SQLite",
+        migrated_count,
+    )
+    return True
+
+
+def migrate_ha_options_to_store(
+    store: ConfigStore, schema: ConfigSchema, options_path: str = "/data/options.json"
+) -> bool:
+    """
+    Migrate a legacy Home Assistant addon ``options.json`` to the SQLite store.
+
+    Older HA addon versions stored the full configuration in ``options.json``
+    (all fields, not just bootstrap). This function detects that situation and
+    imports the non-bootstrap values into SQLite so users keep their settings
+    after upgrading.
+
+    The migration is skipped when:
+    - The store already has data (migration already ran).
+    - ``options.json`` does not exist.
+    - ``options.json`` contains only bootstrap keys (new addon version).
+
+    Args:
+        store: An opened ConfigStore instance.
+        schema: The ConfigSchema registry.
+        options_path: Path to the HA options file (overridable for testing).
+
+    Returns:
+        True if migration was performed, False if skipped.
+    """
+    if not store.is_empty():
+        logger.debug("[Migration] Store already has data — skipping HA options migration")
+        return False
+
+    if not os.path.exists(options_path):
+        return False
+
+    try:
+        with open(options_path, "r", encoding="utf-8") as f:
+            options = json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("[Migration] Failed to read %s: %s", options_path, exc)
+        return False
+
+    if not isinstance(options, dict):
+        return False
+
+    # Check whether options.json has more than just bootstrap keys
+    non_bootstrap = {k for k in options if k not in _BOOTSTRAP_KEYS}
+    if not non_bootstrap:
+        logger.debug("[Migration] options.json contains only bootstrap keys — skipping")
+        return False
+
+    logger.info(
+        "[Migration] Legacy HA options.json detected (%d non-bootstrap keys) — migrating to SQLite",
+        len(non_bootstrap),
+    )
+
+    flat = _flatten_config(options)
+    migrated_count = 0
+
+    for key, value in flat.items():
+        top_key = key.split(".")[0] if "." in key else key
+        if top_key in _BOOTSTRAP_KEYS or key in _BOOTSTRAP_KEYS:
+            continue
+        if value is None:
+            continue
+        store.set(key, value)
+        migrated_count += 1
+
+    # Create unified data_source from load/battery sections
+    _create_data_source(options, store)
+
+    store.set("_migrated_from_ha_options", True)
+    store.set("_wizard_completed", True)
+
+    logger.info(
+        "[Migration] Migrated %d settings from HA options.json to SQLite",
         migrated_count,
     )
     return True

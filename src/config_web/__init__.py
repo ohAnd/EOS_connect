@@ -20,7 +20,7 @@ import os
 
 from .schema import ConfigSchema
 from .store import ConfigStore
-from .migration import migrate_yaml_to_store
+from .migration import migrate_yaml_to_store, migrate_ha_options_to_store
 from .merger import build_merged_config
 from .api import config_bp, init_api
 
@@ -60,6 +60,10 @@ class ConfigWebModule:
         db_path = os.path.join(self._data_dir, "eos_connect.db")
         self._store = ConfigStore(db_path)
         self._store.open()
+
+        # In HA addon mode, try migrating legacy options.json first
+        if self._config_manager.is_ha_addon:
+            migrate_ha_options_to_store(self._store, self._schema)
 
         # Migrate config.yaml to SQLite on first run
         migrate_yaml_to_store(
