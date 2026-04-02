@@ -1396,6 +1396,15 @@ app = Flask(__name__)
 config_web = ConfigWebModule(config_manager, app)
 config_web.start()
 
+# Register hot-reload: live config changes are applied without restart
+from config_web.hot_reload import HotReloadAdapter  # pylint: disable=wrong-import-position
+
+hot_reload_adapter = HotReloadAdapter(
+    price_interface=price_interface,
+    battery_interface=battery_interface,
+)
+config_web.register_hot_reload_callback(hot_reload_adapter.on_config_changed)
+
 
 # legacy web site support
 @app.route("/index_legacy.html", methods=["GET"])
