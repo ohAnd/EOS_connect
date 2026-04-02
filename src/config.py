@@ -69,6 +69,13 @@ class ConfigManager:
         "log_level": "log_level",
     }
 
+    # Environment variable bootstrap mapping: ENV name -> config dict key
+    _ENV_BOOTSTRAP_MAP = {
+        "EOS_WEB_PORT": "eos_connect_web_port",
+        "EOS_TIMEZONE": "time_zone",
+        "EOS_LOG_LEVEL": "log_level",
+    }
+
     def load_ha_bootstrap(self) -> dict:
         """Read bootstrap values from HA addon ``/data/options.json``.
 
@@ -95,6 +102,33 @@ class ConfigManager:
 
         if applied:
             logger.info("[Config] Applied HA addon bootstrap values: %s", list(applied.keys()))
+        return applied
+
+    def load_env_bootstrap(self) -> dict:
+        """Read bootstrap values from environment variables.
+
+        Supports ``EOS_WEB_PORT``, ``EOS_TIMEZONE``, and ``EOS_LOG_LEVEL``.
+        These take precedence over config.yaml and options.json values.
+
+        Returns:
+            Dict of bootstrap key/value pairs that were applied.
+        """
+        applied = {}
+        for env_key, cfg_key in self._ENV_BOOTSTRAP_MAP.items():
+            value = os.environ.get(env_key)
+            if value:
+                # Coerce port to int
+                if cfg_key == "eos_connect_web_port":
+                    try:
+                        value = int(value)
+                    except ValueError:
+                        logger.warning("[Config] Invalid %s value: %s", env_key, value)
+                        continue
+                self.config[cfg_key] = value
+                applied[cfg_key] = value
+
+        if applied:
+            logger.info("[Config] Applied env bootstrap values: %s", list(applied.keys()))
         return applied
 
     def create_default_config(self):
@@ -589,11 +623,13 @@ class ConfigManager:
         """
         Reads the configuration from 'config.yaml' file located in the current directory.
         If the file exists, it loads the configuration values.
-        If the file does not exist, it creates a new 'config.yaml' file with default values and
-        prompts the user to restart the server after configuring the settings.
+        If the file does not exist, defaults are used and the setup wizard will
+        guide the user through initial configuration.
 
         When running as an HA addon, bootstrap values from ``/data/options.json``
-        override the corresponding config.yaml values.
+        override the corresponding config.yaml values. Environment variables
+        (``EOS_WEB_PORT``, ``EOS_TIMEZONE``, ``EOS_LOG_LEVEL``) take highest
+        precedence.
         """
         if os.path.exists(self.config_file):
             with open(self.config_file, "r", encoding="utf-8") as f:
@@ -601,21 +637,20 @@ class ConfigManager:
             self.check_eos_timeout_and_refreshtime()
             self.check_energyforecast_config()
         else:
-            # In HA addon mode, config.yaml may not exist — that's OK
             if self.is_ha_addon:
                 logger.info(
                     "[Config] No config.yaml found (HA addon mode) — using defaults"
                 )
             else:
-                self.write_config()
-                print("Config file not found. Created a new one with default values.")
-                print(
-                    "Please restart the server after configuring the settings in config.yaml"
+                logger.info(
+                    "[Config] No config.yaml found — using defaults, "
+                    "setup wizard will guide initial configuration"
                 )
-                sys.exit(0)
 
-        # In HA addon mode, bootstrap values from options.json take precedence
+        # In HA addon mode, bootstrap values from options.json override config.yaml
         self.load_ha_bootstrap()
+        # Environment variables take highest precedence
+        self.load_env_bootstrap()
 
     def write_config(self):
         """

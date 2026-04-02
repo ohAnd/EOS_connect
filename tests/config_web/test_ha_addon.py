@@ -55,6 +55,11 @@ class TestHaAddonDetection:
         from src.config import ConfigManager
         return ConfigManager(str(tmp_path))
 
+    def _make_cm_no_yaml(self, tmp_path):
+        """Create a ConfigManager without config.yaml (first-run scenario)."""
+        from src.config import ConfigManager
+        return ConfigManager(str(tmp_path))
+
     def test_not_ha_when_no_markers(self, monkeypatch, tmp_path):
         """Should return False without any HA markers."""
         monkeypatch.delenv("HASSIO", raising=False)
@@ -75,6 +80,16 @@ class TestHaAddonDetection:
         monkeypatch.setenv("HASSIO_TOKEN", "abc123")
         cm = self._make_cm(tmp_path)
         assert cm.is_ha_addon is True
+
+    def test_first_run_no_config_yaml(self, monkeypatch, tmp_path):
+        """ConfigManager should NOT sys.exit when config.yaml is missing."""
+        monkeypatch.delenv("HASSIO", raising=False)
+        monkeypatch.delenv("HASSIO_TOKEN", raising=False)
+        # This should NOT raise SystemExit
+        cm = self._make_cm_no_yaml(tmp_path)
+        assert cm.config is not None
+        # Defaults should be populated
+        assert "load" in cm.config
 
 
 # -----------------------------------------------------------------------
@@ -101,6 +116,61 @@ class TestHaBootstrap:
         if not os.path.exists("/data/options.json"):
             result = cm.load_ha_bootstrap()
             assert result == {}
+
+
+class TestEnvBootstrap:
+    """Tests for ConfigManager.load_env_bootstrap()."""
+
+    def _make_cm(self, tmp_path):
+        """Create a ConfigManager with a dummy config.yaml."""
+        from ruamel.yaml import YAML
+        yaml = YAML()
+        cfg_path = tmp_path / "config.yaml"
+        yaml.dump({"time_zone": "UTC"}, cfg_path.open("w"))
+        from src.config import ConfigManager
+        return ConfigManager(str(tmp_path))
+
+    def test_env_web_port(self, monkeypatch, tmp_path):
+        """EOS_WEB_PORT should override config web port."""
+        monkeypatch.setenv("EOS_WEB_PORT", "9090")
+        cm = self._make_cm(tmp_path)
+        # load_env_bootstrap was already called in load_config, but call again to test
+        result = cm.load_env_bootstrap()
+        assert cm.config["eos_connect_web_port"] == 9090
+
+    def test_env_timezone(self, monkeypatch, tmp_path):
+        """EOS_TIMEZONE should override config timezone."""
+        monkeypatch.setenv("EOS_TIMEZONE", "US/Eastern")
+        cm = self._make_cm(tmp_path)
+        assert cm.config["time_zone"] == "US/Eastern"
+
+    def test_env_log_level(self, monkeypatch, tmp_path):
+        """EOS_LOG_LEVEL should override config log level."""
+        monkeypatch.setenv("EOS_LOG_LEVEL", "DEBUG")
+        cm = self._make_cm(tmp_path)
+        assert cm.config["log_level"] == "DEBUG"
+
+    def test_env_invalid_port_ignored(self, monkeypatch, tmp_path):
+        """Invalid port value should be ignored."""
+        monkeypatch.setenv("EOS_WEB_PORT", "not_a_number")
+        cm = self._make_cm(tmp_path)
+        # Should keep the default, not crash
+        assert isinstance(cm.config["eos_connect_web_port"], int)
+
+    def test_env_empty_values_ignored(self, monkeypatch, tmp_path):
+        """Empty env vars should not override config values."""
+        monkeypatch.setenv("EOS_WEB_PORT", "")
+        cm = self._make_cm(tmp_path)
+        result = cm.load_env_bootstrap()
+        assert "eos_connect_web_port" not in result
+
+    def test_env_overrides_ha_bootstrap(self, monkeypatch, tmp_path):
+        """ENV vars should take precedence over HA options.json values."""
+        monkeypatch.setenv("HASSIO", "1")
+        monkeypatch.setenv("EOS_TIMEZONE", "Asia/Tokyo")
+        cm = self._make_cm(tmp_path)
+        # ENV should win over any HA bootstrap
+        assert cm.config["time_zone"] == "Asia/Tokyo"
 
     def test_bootstrap_reads_values(self, monkeypatch, tmp_path):
         """Should apply bootstrap values from options.json to config dict."""
