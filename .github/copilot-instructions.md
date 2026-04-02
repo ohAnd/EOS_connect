@@ -118,6 +118,66 @@ When making ANY code changes:
 - New experimental features should use the label `"experimental"`
 - Hot-reloadable fields (applied without restart) must set `hot_reload=True` and have corresponding logic in `src/config_web/hot_reload.py`
 
+### Config Web Module Architecture
+
+The web-based configuration system lives in `src/config_web/` as a self-contained module. Understanding this architecture is essential for any config-related work.
+
+#### Module Structure
+
+| File            | Purpose                                                                         |
+| --------------- | ------------------------------------------------------------------------------- |
+| `__init__.py`   | `ConfigWebModule` facade — single entry point for the main app                  |
+| `schema.py`     | **SPOT** — All field definitions (`FieldDef`), `BOOTSTRAP_KEYS`, `SECTION_META` |
+| `store.py`      | SQLite persistence (WAL mode, thread-safe, change callbacks)                    |
+| `migration.py`  | config.yaml → SQLite and HA options.json → SQLite migration                     |
+| `merger.py`     | Builds merged config dict in same shape as old `config_manager.config`          |
+| `api.py`        | Flask Blueprint with 10 REST endpoints at `/api/config/`                        |
+| `hot_reload.py` | `HotReloadAdapter` — applies live changes to running interfaces                 |
+
+#### Key Design Principles
+
+- **Zero interface changes**: Interfaces receive the same dict shape they always did. The merger produces an identical structure.
+- **SPOT (Single Point of Truth)**: `schema.py` defines all field metadata. The web UI, REST API validation, docs export, and merger all consume it.
+- **Bootstrap vs Store**: ~5 bootstrap keys (`BOOTSTRAP_KEYS` in schema.py) stay in config.yaml/ENV/HA options. Everything else lives in SQLite.
+- **Section metadata**: `SECTION_META` in schema.py defines icons + labels for all sections. Frontend and docs read from this — never hardcode section display info elsewhere.
+
+#### Adding a New Config Field (Checklist)
+
+1. Add `FieldDef(...)` to `_ALL_FIELDS` in `src/config_web/schema.py`
+2. Run `python scripts/export_config_schema.py` to update docs JSON
+3. **Done** — Web UI, API validation, docs table, migration, and merger all pick it up automatically
+4. If hot-reloadable: also add to `_PRICE_FIELD_MAP` or `_BATTERY_SOC_FIELDS` in `hot_reload.py`
+
+#### Adding a New Config Section
+
+1. Add fields with the new `section` name in `schema.py`
+2. Add entry to `SECTION_META` dict in `schema.py` (icon + label)
+3. Run `python scripts/export_config_schema.py`
+4. **Done** — Frontend falls back gracefully but `SECTION_META` gives it the right icon/label
+
+#### REST API Endpoints (all under `/api/config/`)
+
+| Method | Path                | Purpose                                                    |
+| ------ | ------------------- | ---------------------------------------------------------- |
+| GET    | `/schema`           | Full schema JSON (fields + section metadata)               |
+| GET    | `/`                 | Current config values (passwords masked)                   |
+| PUT    | `/`                 | Partial update (validates, categorizes restart/hot-reload) |
+| GET    | `/section/<name>`   | Single section values                                      |
+| POST   | `/validate`         | Validate without saving                                    |
+| GET    | `/restart-required` | Pending restart-required fields                            |
+| GET    | `/export`           | Export all settings as flat JSON                           |
+| POST   | `/import`           | Import settings from JSON                                  |
+| GET    | `/wizard-status`    | Setup wizard completion state                              |
+| POST   | `/wizard-complete`  | Mark wizard as completed                                   |
+
+#### SPOT Pipeline Flow
+
+```
+schema.py (Python) → export_config_schema.py → config_schema.json (docs)
+                   → /api/config/schema (live API) → config.js (web UI)
+                   → /api/config/schema (live API) → wizard.js (setup wizard)
+```
+
 ### Testing
 
 - Tests are located in `/tests` folder

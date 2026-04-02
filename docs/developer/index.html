@@ -46,6 +46,7 @@
                     <a href="#contributing" class="toc-link">Contributing</a>
                     <a href="#testing" class="toc-link">Testing</a>
                     <a href="#dev-setup" class="toc-link">Dev Setup</a>
+                    <a href="#config-web" class="toc-link">Config Web Module</a>
                     <a href="#ha-addon" class="toc-link">HA Addon Integration</a>
                 </nav>
             </aside>
@@ -90,6 +91,14 @@
                 <p>Setting up development environment</p>
                 <a href="#dev-setup" class="btn">Setup →</a>
             </div>
+            <div class="block-card">
+                <div class="card-header">
+                    <div class="icon"><i class="fas fa-gear"></i></div>
+                    <h3>Config Web Module</h3>
+                </div>
+                <p>Web-based configuration system architecture</p>
+                <a href="#config-web" class="btn">Explore →</a>
+            </div>
         </div>
 
         <!-- Architecture -->
@@ -104,7 +113,11 @@
                 </div>
                 <div class="feature-item">
                     <h4>config.py</h4>
-                    <p>Configuration loading and validation</p>
+                    <p>Bootstrap configuration, HA addon detection, ENV variable loading</p>
+                </div>
+                <div class="feature-item">
+                    <h4>config_web/</h4>
+                    <p>Web-based configuration module (schema, SQLite store, REST API, hot-reload)</p>
                 </div>
                 <div class="feature-item">
                     <h4>interfaces/</h4>
@@ -112,7 +125,7 @@
                 </div>
                 <div class="feature-item">
                     <h4>web/</h4>
-                    <p>Web dashboard (HTML/CSS/JS)</p>
+                    <p>Web dashboard, config UI, setup wizard (HTML/CSS/JS)</p>
                 </div>
             </div>
 
@@ -187,7 +200,13 @@
    ├─ Execute inverter commands (inverter_interface)
    ├─ Update EVCC (evcc_interface)
    ├─ Publish to MQTT (mqtt_interface)
-   └─ Serve via web API</code></pre>
+   └─ Serve via web API
+
+2. Config Web Module (parallel)
+   ├─ Serve config REST API (/api/config/...)
+   ├─ On PUT: validate → store in SQLite → rebuild merged config
+   ├─ Hot-reloadable fields → apply instantly via HotReloadAdapter
+   └─ Restart-required fields → flag in UI, apply on next restart</code></pre>
         </div>
 
         <!-- Contributing -->
@@ -298,16 +317,37 @@ chore: update dependencies</code></pre>
             <p>Tests are organized to mirror the source structure:</p>
             <pre><code>tests/
 ├── test_control_states.py
+├── config_web/
+│   ├── test_api.py
+│   ├── test_export_schema.py
+│   ├── test_ha_addon.py
+│   ├── test_hot_reload.py
+│   ├── test_merger.py
+│   ├── test_migration.py
+│   ├── test_schema.py
+│   └── test_store.py
 └── interfaces/
     ├── test_base_control.py
+    ├── test_base_inverter.py
     ├── test_battery_interface.py
-    ├── test_inverter_fronius_v2.py
+    ├── test_battery_price_handler.py
+    ├── test_dynamic_override.py
     ├── test_load_interface.py
     ├── test_optimization_interface.py
     ├── test_price_interface.py
     ├── test_pv_interface.py
+    ├── test_update_checker.py
+    ├── inverters/
+    │   ├── test_base_inverter.py
+    │   ├── test_fronius_legacy.py
+    │   ├── test_fronius_v2.py
+    │   ├── test_inverter_ha.py
+    │   ├── test_null_inverter.py
+    │   ├── test_victron.py
+    │   └── test_victron_inverter.py
     └── optimization_backends/
-        └── test_optimization_backend_eos.py</code></pre>
+        ├── test_optimization_backend_eos.py
+        └── test_optimization_backend_evopt.py</code></pre>
 
             <h3>Running Tests</h3>
             <pre><code># Run all tests
@@ -429,34 +469,178 @@ set EOS_CONNECT_LOG_LEVEL=debug
 set EOS_CONNECT_PORT=8081</code></pre>
         </div>
 
+        <!-- Config Web Module -->
+        <div class="content-section" id="config-web">
+            <h2><i class="fas fa-gear"></i> Config Web Module</h2>
+            <p>The web-based configuration system lives in <code>src/config_web/</code> as a self-contained module. It replaces direct YAML editing with a browser UI, SQLite persistence, and a REST API &mdash; while keeping every existing interface working unchanged.</p>
+
+            <h3>Module Files</h3>
+            <table>
+                <thead><tr><th>File</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td><code>__init__.py</code></td><td><strong>ConfigWebModule</strong> facade &mdash; single entry point used by <code>eos_connect.py</code></td></tr>
+                    <tr><td><code>schema.py</code></td><td><strong>SPOT (Single Point of Truth)</strong> &mdash; all <code>FieldDef</code> entries, <code>BOOTSTRAP_KEYS</code>, <code>SECTION_META</code></td></tr>
+                    <tr><td><code>store.py</code></td><td>SQLite persistence (WAL mode, thread-safe, change callbacks)</td></tr>
+                    <tr><td><code>migration.py</code></td><td><code>config.yaml</code> &rarr; SQLite and HA <code>options.json</code> &rarr; SQLite migration</td></tr>
+                    <tr><td><code>merger.py</code></td><td>Builds merged config dict &mdash; same shape interfaces always received</td></tr>
+                    <tr><td><code>api.py</code></td><td>Flask Blueprint with 10 REST endpoints at <code>/api/config/</code></td></tr>
+                    <tr><td><code>hot_reload.py</code></td><td><code>HotReloadAdapter</code> &mdash; applies selected changes to running interfaces without restart</td></tr>
+                </tbody>
+            </table>
+
+            <h3>Key Design Principles</h3>
+            <ul>
+                <li><strong>Zero interface changes:</strong> The merger produces the same dict shape interfaces always consumed. No code changes needed in existing interfaces.</li>
+                <li><strong>SPOT:</strong> <code>schema.py</code> defines all field metadata. The web UI, REST API validation, docs export, and merger all consume it &mdash; never duplicate field definitions.</li>
+                <li><strong>Bootstrap vs Store:</strong> ~5 bootstrap keys (<code>web_port</code>, <code>time_zone</code>, <code>log_level</code>, &hellip;) stay in <code>config.yaml</code> / ENV / HA options. Everything else lives in SQLite.</li>
+                <li><strong>3-level progressive disclosure:</strong> Fields have a <code>level</code> (<code>getting_started</code>, <code>standard</code>, <code>expert</code>) controlling visibility in the setup wizard and config UI.</li>
+            </ul>
+
+            <h3>SPOT Pipeline</h3>
+            <pre><code>schema.py (Python FieldDefs)
+   │
+   ├──► export_config_schema.py ──► docs/assets/data/config_schema.json
+   │                                     (consumed by GitHub Pages docs)
+   │
+   └──► /api/config/schema (live REST endpoint)
+              │
+              ├──► config.js  (ConfigurationManager reads fields + sections)
+              └──► wizard.js  (SetupWizard reads fields + sections)</code></pre>
+            <p>When you change a field definition in <code>schema.py</code>, the web UI, API validation, docs table, and merger all update automatically. Run <code>python scripts/export_config_schema.py</code> to regenerate the docs JSON.</p>
+
+            <h3>Data Flow: Config Lifecycle</h3>
+            <pre><code>Startup:
+  config.yaml ──► ConfigManager (bootstrap keys)
+       │
+       ▼
+  migration.py: YAML values + HA options.json ──► SQLite store
+       │
+       ▼
+  merger.py: bootstrap + SQLite + defaults ──► merged config dict
+       │
+       ▼
+  Interfaces receive merged dict (same shape as before)
+
+Runtime (user saves via web UI):
+  Browser PUT /api/config/ ──► api.py validates against schema
+       │
+       ▼
+  store.py writes to SQLite ──► merger rebuilds config dict
+       │
+       ├──► hot_reload.py applies hot-reloadable fields instantly
+       └──► restart-required fields flagged in UI banner</code></pre>
+
+            <h3>REST API Endpoints</h3>
+            <p>All endpoints are under <code>/api/config/</code>:</p>
+            <table>
+                <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>GET</td><td><code>/schema</code></td><td>Full schema JSON (fields + section metadata)</td></tr>
+                    <tr><td>GET</td><td><code>/</code></td><td>Current config values (passwords masked)</td></tr>
+                    <tr><td>PUT</td><td><code>/</code></td><td>Partial update (validates, categorizes restart vs hot-reload)</td></tr>
+                    <tr><td>GET</td><td><code>/section/&lt;name&gt;</code></td><td>Single section values</td></tr>
+                    <tr><td>POST</td><td><code>/validate</code></td><td>Validate without saving</td></tr>
+                    <tr><td>GET</td><td><code>/restart-required</code></td><td>Pending restart-required fields</td></tr>
+                    <tr><td>GET</td><td><code>/export</code></td><td>Export all settings as flat JSON</td></tr>
+                    <tr><td>POST</td><td><code>/import</code></td><td>Import settings from JSON</td></tr>
+                    <tr><td>GET</td><td><code>/wizard-status</code></td><td>Setup wizard completion state</td></tr>
+                    <tr><td>POST</td><td><code>/wizard-complete</code></td><td>Mark wizard as completed</td></tr>
+                </tbody>
+            </table>
+
+            <h3>Hot Reload</h3>
+            <p><code>HotReloadAdapter</code> registers interface references at startup. When hot-reloadable fields are saved, changes are applied immediately without restart:</p>
+            <ul>
+                <li><strong>Price fields</strong> &mdash; tibber token, awattar country, energycharts zone, etc.</li>
+                <li><strong>Battery SOC fields</strong> &mdash; min/max SOC percentages</li>
+            </ul>
+            <p>Fields that require a restart (e.g., MQTT broker URL, web port) are flagged in the API response, and the UI shows a restart banner.</p>
+
+            <h3>Frontend Architecture</h3>
+            <table>
+                <thead><tr><th>File</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td><code>config.js</code></td><td><code>ConfigurationManager</code> class &mdash; fetches schema, renders section tabs, field inputs, handles save/validate/import/export</td></tr>
+                    <tr><td><code>wizard.js</code></td><td><code>SetupWizard</code> class &mdash; first-run wizard showing <code>getting_started</code> fields only</td></tr>
+                    <tr><td><code>config.css</code></td><td>Config page styles (section sidebar, field groups, badges)</td></tr>
+                    <tr><td><code>wizard.css</code></td><td>Wizard overlay and step styles</td></tr>
+                </tbody>
+            </table>
+            <p>Both <code>config.js</code> and <code>wizard.js</code> read the <code>CONFIG_SECTIONS</code> from the API response (<code>schemaData.sections</code>) &mdash; section icons and labels are never hardcoded in the frontend.</p>
+
+            <h3>How to Add a New Config Field</h3>
+            <ol>
+                <li>Add a <code>FieldDef(...)</code> to <code>_ALL_FIELDS</code> in <code>src/config_web/schema.py</code></li>
+                <li>Run <code>python scripts/export_config_schema.py</code> to update docs JSON</li>
+                <li><strong>Done</strong> &mdash; Web UI, API validation, docs table, migration, and merger all pick it up automatically</li>
+                <li>If the field is hot-reloadable: add mapping to <code>_PRICE_FIELD_MAP</code> or <code>_BATTERY_SOC_FIELDS</code> in <code>hot_reload.py</code></li>
+            </ol>
+
+            <h3>How to Add a New Config Section</h3>
+            <ol>
+                <li>Add fields with the new <code>section</code> name in <code>schema.py</code></li>
+                <li>Add an entry to <code>SECTION_META</code> dict in <code>schema.py</code> (icon + label)</li>
+                <li>Run <code>python scripts/export_config_schema.py</code></li>
+                <li><strong>Done</strong> &mdash; Frontend falls back gracefully, but <code>SECTION_META</code> gives it the correct icon and label</li>
+            </ol>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-lightbulb"></i> Tip:</strong> The <code>schema.py</code> file is the single source of truth. If you need to change a field's label, default value, validation, or section &mdash; change it there and re-export.
+            </div>
+        </div>
+
         <!-- Project Structure -->
         <div class="content-section">
             <h2><i class="fas fa-folder"></i> Project Structure</h2>
             <pre><code>EOS_connect/
 ├── src/
 │   ├── eos_connect.py         # Main application
-│   ├── config.py              # Configuration management
-│   ├── config.yaml            # User configuration
+│   ├── config.py              # Bootstrap configuration
+│   ├── config.yaml            # Bootstrap + fallback config
 │   ├── constants.py           # Constants and enums
 │   ├── log_handler.py         # Logging setup
 │   ├── version.py             # Version information
+│   ├── config_web/            # Web-based config system
+│   │   ├── __init__.py        # ConfigWebModule facade
+│   │   ├── schema.py          # SPOT — all field definitions
+│   │   ├── store.py           # SQLite persistence (WAL)
+│   │   ├── migration.py       # YAML/HA → SQLite migration
+│   │   ├── merger.py          # Builds merged config dict
+│   │   ├── api.py             # Flask Blueprint REST API
+│   │   └── hot_reload.py      # Live-apply changes
 │   ├── interfaces/            # Data interfaces
 │   │   ├── base_control.py
+│   │   ├── base_inverter.py
 │   │   ├── battery_interface.py
+│   │   ├── battery_price_handler.py
 │   │   ├── evcc_interface.py
-│   │   ├── inverter_fronius_v2.py
 │   │   ├── load_interface.py
 │   │   ├── mqtt_interface.py
 │   │   ├── optimization_interface.py
+│   │   ├── port_interface.py
 │   │   ├── price_interface.py
-│   │   └── pv_interface.py
-│   ├── web/                   # Web dashboard
+│   │   ├── pv_interface.py
+│   │   ├── update_checker.py
+│   │   ├── inverters/         # Inverter implementations
+│   │   └── optimization_backends/
+│   ├── web/                   # Web dashboard + config UI
 │   │   ├── index.html
 │   │   ├── css/
+│   │   │   ├── style.css      # Main dashboard styles
+│   │   │   ├── config.css     # Config UI styles
+│   │   │   └── wizard.css     # Setup wizard styles
 │   │   └── js/
+│   │       ├── main.js        # Dashboard entry point
+│   │       ├── config.js      # ConfigurationManager
+│   │       ├── wizard.js      # SetupWizard
+│   │       └── ...            # Other dashboard modules
 │   └── json/                  # JSON schemas and examples
-├── tests/                     # Test suite
+├── scripts/
+│   └── export_config_schema.py  # SPOT → docs JSON export
+├── tests/                     # Test suite (659+ tests)
 ├── docs/                      # Documentation (GitHub Pages)
+│   └── assets/data/
+│       └── config_schema.json # Exported schema for docs
 ├── docker-compose.yml         # Docker deployment
 ├── Dockerfile                 # Docker image
 ├── requirements.txt           # Python dependencies
