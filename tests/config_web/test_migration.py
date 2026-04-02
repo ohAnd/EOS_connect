@@ -5,7 +5,7 @@ Unit tests for the config.yaml to SQLite migration.
 import pytest
 from src.config_web.store import ConfigStore
 from src.config_web.schema import ConfigSchema
-from src.config_web.migration import migrate_yaml_to_store
+from src.config_web.migration import migrate_yaml_to_store, _flatten_config
 
 
 @pytest.fixture
@@ -203,3 +203,58 @@ class TestMigration:
 
         assert store.get("data_source.type") == "openhab"
         assert store.get("data_source.url") == "http://openhab:8080"
+
+
+class TestFlattenConfig:
+    """Tests for the _flatten_config() helper."""
+
+    def test_flat_keys_unchanged(self):
+        """Top-level scalar keys should pass through as-is."""
+        result = _flatten_config({"refresh_time": 3, "time_zone": "UTC"})
+        assert result == {"refresh_time": 3, "time_zone": "UTC"}
+
+    def test_nested_dict_flattened(self):
+        """Nested dicts should be flattened to dot-notation."""
+        result = _flatten_config({"load": {"source": "ha", "url": "http://x"}})
+        assert result == {"load.source": "ha", "load.url": "http://x"}
+
+    def test_list_stored_as_is(self):
+        """Lists should be stored as a single value, not flattened."""
+        result = _flatten_config({"pv_forecast": [{"name": "A"}, {"name": "B"}]})
+        assert result == {"pv_forecast": [{"name": "A"}, {"name": "B"}]}
+
+    def test_none_values_preserved(self):
+        """None values should be included in flatten output."""
+        result = _flatten_config({"load": {"sensor": None}})
+        assert "load.sensor" in result
+        assert result["load.sensor"] is None
+
+    def test_empty_dict_flattened(self):
+        """Empty nested dict should produce no keys."""
+        result = _flatten_config({"load": {}})
+        assert result == {}
+
+    def test_empty_string_preserved(self):
+        """Empty strings should be preserved."""
+        result = _flatten_config({"load": {"sensor": ""}})
+        assert result["load.sensor"] == ""
+
+    def test_bool_values_preserved(self):
+        """Boolean values should keep their type."""
+        result = _flatten_config({"mqtt": {"enabled": False, "tls": True}})
+        assert result["mqtt.enabled"] is False
+        assert result["mqtt.tls"] is True
+
+    def test_mixed_types(self):
+        """Mix of scalars, nested dicts, lists, and booleans."""
+        config = {
+            "refresh_time": 5,
+            "load": {"source": "ha"},
+            "pv_forecast": [{"name": "Roof"}],
+            "mqtt": {"enabled": True},
+        }
+        result = _flatten_config(config)
+        assert result["refresh_time"] == 5
+        assert result["load.source"] == "ha"
+        assert isinstance(result["pv_forecast"], list)
+        assert result["mqtt.enabled"] is True

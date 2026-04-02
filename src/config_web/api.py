@@ -68,7 +68,7 @@ def get_section(section):
         return jsonify(_mask_passwords_flat(result))
 
     section_data = config.get(section, {})
-    return jsonify(_mask_passwords_flat(section_data))
+    return jsonify(_mask_passwords_flat(section_data, section=section))
 
 
 # ------------------------------------------------------------------
@@ -263,25 +263,37 @@ def _coerce_value(field_def, value):
     return value
 
 
-def _mask_passwords(config: dict) -> dict:
+def _mask_passwords(config: dict, prefix: str = "") -> dict:
     """Recursively mask password fields in a nested config dict."""
     result = {}
     for key, value in config.items():
+        full_key = f"{prefix}.{key}" if prefix else key
         if isinstance(value, dict):
-            result[key] = _mask_passwords(value)
+            result[key] = _mask_passwords(value, full_key)
         elif isinstance(value, list):
             result[key] = value
         else:
-            # Check if any schema field matching this key is a password
-            result[key] = value
+            field_def = _schema.get(full_key)
+            if field_def and field_def.field_type == "password":
+                result[key] = "********" if value else ""
+            else:
+                result[key] = value
     return result
 
 
-def _mask_passwords_flat(data: dict) -> dict:
-    """Mask password fields in a flat dict."""
+def _mask_passwords_flat(data: dict, section: str = "") -> dict:
+    """Mask password fields in a flat dict.
+
+    Args:
+        data: Flat dict of config values.
+        section: Optional section prefix for schema lookup when keys
+            lack dot-notation (e.g. section='inverter' + key='password'
+            looks up 'inverter.password' in schema).
+    """
     result = {}
     for key, value in data.items():
-        field_def = _schema.get(key) if "." in key else None
+        lookup_key = key if "." in key else f"{section}.{key}" if section else key
+        field_def = _schema.get(lookup_key)
         if field_def and field_def.field_type == "password":
             result[key] = "********" if value else ""
         else:

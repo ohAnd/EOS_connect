@@ -187,6 +187,102 @@ class TestConfigAPI:
         assert isinstance(data, dict)
         assert len(data) > 0
 
+    def test_import_config(self, client):
+        """POST /api/config/import should import flat key/value pairs."""
+        payload = {"battery.capacity_wh": 20000, "eos.port": 9999}
+        resp = client.post(
+            "/api/config/import",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["imported"] == 2
+
+        # Verify values were actually stored
+        resp2 = client.get("/api/config/export")
+        exported = resp2.get_json()
+        assert exported["battery.capacity_wh"] == 20000
+        assert exported["eos.port"] == 9999
+
+    def test_import_invalid_body(self, client):
+        """POST /api/config/import with non-dict body should return 400."""
+        resp = client.post(
+            "/api/config/import",
+            data=json.dumps([1, 2, 3]),
+            content_type="application/json",
+        )
+        assert resp.status_code == 400
+
+    def test_password_masking_in_get_config(self, client):
+        """GET /api/config/ should mask password fields."""
+        # Set a password value first
+        client.put(
+            "/api/config/",
+            data=json.dumps({"price.token": "my_secret_token"}),
+            content_type="application/json",
+        )
+        resp = client.get("/api/config/")
+        data = resp.get_json()
+        assert data["price"]["token"] == "********"
+
+    def test_password_masking_in_section(self, client):
+        """GET /api/config/section/inverter should mask password fields."""
+        client.put(
+            "/api/config/",
+            data=json.dumps({"inverter.password": "secret123"}),
+            content_type="application/json",
+        )
+        resp = client.get("/api/config/section/inverter")
+        data = resp.get_json()
+        assert data["password"] == "********"
+
+    def test_empty_password_not_masked(self, client):
+        """Empty password should show as empty, not asterisks."""
+        client.put(
+            "/api/config/",
+            data=json.dumps({"inverter.password": ""}),
+            content_type="application/json",
+        )
+        resp = client.get("/api/config/section/inverter")
+        data = resp.get_json()
+        assert data["password"] == ""
+
+    def test_restart_required_endpoint(self, client):
+        """GET /api/config/restart-required should return fields list."""
+        resp = client.get("/api/config/restart-required")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "fields" in data
+        assert isinstance(data["fields"], list)
+
+    def test_update_restart_required_field(self, client):
+        """PUT with restart_required field should report it in response."""
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({"mqtt.broker": "new-broker"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "mqtt.broker" in data["restart_required"]
+        assert "mqtt.broker" not in data["hot_reloaded"]
+
+    def test_update_multiple_values(self, client):
+        """PUT with multiple values should update all."""
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({
+                "battery.capacity_wh": 15000,
+                "eos.port": 7050,
+                "price.feed_in_price": 0.10,
+            }),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data["updated"]) == 3
+
     def test_wizard_status(self, client):
         """GET /api/config/wizard-status should report wizard as completed after migration."""
         resp = client.get("/api/config/wizard-status")
