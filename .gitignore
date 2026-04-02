@@ -14,5 +14,6 @@ src/json/optimize_response.test.json
 pytest.ini
 src/config.yaml.bak
 test_config_ui.py
-src/data/eos_connect.db
-src/data/eos_connect.db-wal
+*.db
+*.db-wal
+*.db-shm
