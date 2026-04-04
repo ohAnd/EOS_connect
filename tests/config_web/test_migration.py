@@ -5,7 +5,13 @@ Unit tests for the config.yaml to SQLite migration.
 import pytest
 from src.config_web.store import ConfigStore
 from src.config_web.schema import ConfigSchema
-from src.config_web.migration import migrate_yaml_to_store, _flatten_config
+from src.config_web.migration import (
+    migrate_yaml_to_store,
+    _flatten_config,
+    _has_user_configured_values,
+    _coerce_migrated_value,
+    _create_data_source,
+)
 
 
 @pytest.fixture
@@ -258,3 +264,327 @@ class TestFlattenConfig:
         assert result["load.source"] == "ha"
         assert isinstance(result["pv_forecast"], list)
         assert result["mqtt.enabled"] is True
+
+
+def _default_config():
+    """Return a config dict that mimics ConfigManager defaults (fresh install)."""
+    return {
+        "load": {
+            "source": "default",
+            "url": "http://homeassistant:8123",
+            "access_token": "abc123",
+            "load_sensor": "Load_Power",
+        },
+        "eos": {"source": "default", "server": "192.168.100.100", "port": 8503},
+        "price": {"source": "default", "token": "tibberBearerToken"},
+        "battery": {
+            "source": "default",
+            "url": "http://homeassistant:8123",
+            "soc_sensor": "battery_SOC",
+        },
+    }
+
+
+class TestHasUserConfiguredValues:
+    """Tests for _has_user_configured_values()."""
+
+    def test_all_defaults_returns_false(self):
+        """Config with only default placeholder values → fresh install."""
+        assert _has_user_configured_values(_default_config()) is False
+
+    def test_load_source_homeassistant(self):
+        """Real load source value detected as user-configured."""
+        cfg = _default_config()
+        cfg["load"]["source"] = "homeassistant"
+        assert _has_user_configured_values(cfg) is True
+
+    def test_battery_source_openhab(self):
+        """Real battery source detected as user-configured."""
+        cfg = _default_config()
+        cfg["battery"]["source"] = "openhab"
+        assert _has_user_configured_values(cfg) is True
+
+    def test_price_source_tibber(self):
+        """Real price source detected as user-configured."""
+        cfg = _default_config()
+        cfg["price"]["source"] = "tibber"
+        assert _has_user_configured_values(cfg) is True
+
+    def test_eos_source_eos_server(self):
+        """Real EOS source detected as user-configured."""
+        cfg = _default_config()
+        cfg["eos"]["source"] = "eos_server"
+        assert _has_user_configured_values(cfg) is True
+
+    def test_eos_source_evopt(self):
+        """EVopt source detected as user-configured."""
+        cfg = _default_config()
+        cfg["eos"]["source"] = "evopt"
+        assert _has_user_configured_values(cfg) is True
+
+    def test_real_load_sensor(self):
+        """Non-placeholder load sensor detected as user-configured."""
+        cfg = _default_config()
+        cfg["load"]["load_sensor"] = "sensor.power_consumption"
+        assert _has_user_configured_values(cfg) is True
+
+    def test_real_soc_sensor(self):
+        """Non-placeholder SOC sensor detected as user-configured."""
+        cfg = _default_config()
+        cfg["battery"]["soc_sensor"] = "sensor.battery_status"
+        assert _has_user_configured_values(cfg) is True
+
+    def test_empty_string_source_is_default(self):
+        """Empty string sources are treated as unconfigured."""
+        cfg = _default_config()
+        cfg["load"]["source"] = ""
+        cfg["eos"]["source"] = ""
+        cfg["price"]["source"] = ""
+        cfg["battery"]["source"] = ""
+        assert _has_user_configured_values(cfg) is False
+
+    def test_none_source_is_default(self):
+        """None sources are treated as unconfigured."""
+        cfg = _default_config()
+        cfg["load"]["source"] = None
+        cfg["eos"]["source"] = None
+        cfg["price"]["source"] = None
+        cfg["battery"]["source"] = None
+        assert _has_user_configured_values(cfg) is False
+
+    def test_empty_config_dict(self):
+        """Completely empty config is a fresh install."""
+        assert _has_user_configured_values({}) is False
+
+    def test_missing_sections(self):
+        """Missing sections treated as defaults."""
+        assert _has_user_configured_values({"refresh_time": 3}) is False
+
+    def test_placeholder_sensors_remain_default(self):
+        """Placeholder sensor names (Load_Power, battery_SOC) are not real config."""
+        cfg = _default_config()
+        cfg["load"]["load_sensor"] = "Load_Power"
+        cfg["battery"]["soc_sensor"] = "battery_SOC"
+        assert _has_user_configured_values(cfg) is False
+
+
+class TestCoerceMigratedValue:
+    """Tests for _coerce_migrated_value()."""
+
+    @pytest.fixture
+    def schema(self):
+        """Fresh schema instance."""
+        return ConfigSchema()
+
+    def test_bool_enabled_string(self, schema):
+        """Legacy 'enabled' string coerced to True for bool fields."""
+        assert _coerce_migrated_value(schema, "mqtt.enabled", "enabled") is True
+
+    def test_bool_disabled_string(self, schema):
+        """Legacy 'disabled' string coerced to False for bool fields."""
+        assert _coerce_migrated_value(schema, "mqtt.enabled", "disabled") is False
+
+    def test_bool_true_string(self, schema):
+        """String 'true' coerced to True for bool fields."""
+        assert _coerce_migrated_value(schema, "mqtt.enabled", "true") is True
+
+    def test_bool_yes_string(self, schema):
+        """String 'yes' coerced to True for bool fields."""
+        assert _coerce_migrated_value(schema, "mqtt.enabled", "yes") is True
+
+    def test_bool_false_string(self, schema):
+        """String 'false' coerced to False for bool fields."""
+        assert _coerce_migrated_value(schema, "mqtt.enabled", "false") is False
+
+    def test_bool_native_passthrough(self, schema):
+        """Native bool values pass through unchanged."""
+        assert _coerce_migrated_value(schema, "mqtt.enabled", True) is True
+        assert _coerce_migrated_value(schema, "mqtt.enabled", False) is False
+
+    def test_int_from_string(self, schema):
+        """String coerced to int for int fields."""
+        result = _coerce_migrated_value(schema, "battery.capacity_wh", "15000")
+        assert result == 15000
+        assert isinstance(result, int)
+
+    def test_int_native_passthrough(self, schema):
+        """Native int values pass through unchanged."""
+        assert _coerce_migrated_value(schema, "battery.capacity_wh", 15000) == 15000
+
+    def test_int_invalid_string(self, schema):
+        """Non-numeric string for int field returns original value."""
+        assert _coerce_migrated_value(schema, "battery.capacity_wh", "abc") == "abc"
+
+    def test_float_from_string(self, schema):
+        """String coerced to float for float fields."""
+        result = _coerce_migrated_value(schema, "price.feed_in_price", "0.08")
+        assert result == 0.08
+        assert isinstance(result, float)
+
+    def test_float_native_passthrough(self, schema):
+        """Native float values pass through unchanged."""
+        assert _coerce_migrated_value(schema, "price.feed_in_price", 0.08) == 0.08
+
+    def test_float_invalid_string(self, schema):
+        """Non-numeric string for float field returns original value."""
+        assert _coerce_migrated_value(schema, "price.feed_in_price", "abc") == "abc"
+
+    def test_invalid_choice_falls_back_to_default(self, schema):
+        """Value not in schema choices replaced with schema default."""
+        result = _coerce_migrated_value(schema, "eos.source", "invalid_backend")
+        eos_default = schema.get("eos.source").default
+        assert result == eos_default
+
+    def test_default_not_in_choices(self, schema):
+        """ConfigManager's 'default' placeholder falls back to schema default."""
+        result = _coerce_migrated_value(schema, "eos.source", "default")
+        eos_default = schema.get("eos.source").default
+        assert result == eos_default
+
+    def test_valid_choice_passes_through(self, schema):
+        """Valid choice value passes through unchanged."""
+        assert _coerce_migrated_value(schema, "eos.source", "eos_server") == "eos_server"
+        assert _coerce_migrated_value(schema, "eos.source", "evopt") == "evopt"
+
+    def test_unknown_key_returns_value(self, schema):
+        """Unknown schema key returns value unchanged."""
+        assert _coerce_migrated_value(schema, "nonexistent.key", "whatever") == "whatever"
+
+    def test_string_field_no_coercion(self, schema):
+        """String fields are not coerced (except choices validation)."""
+        assert _coerce_migrated_value(schema, "load.load_sensor", "sensor.power") == "sensor.power"
+
+
+class TestCreateDataSource:
+    """Tests for _create_data_source()."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        """Empty ConfigStore in a temp directory."""
+        s = ConfigStore(str(tmp_path / "test.db"))
+        s.open()
+        yield s
+        s.close()
+
+    def test_from_load_homeassistant(self, store):
+        """data_source created from load section when source is homeassistant."""
+        config = {
+            "load": {
+                "source": "homeassistant",
+                "url": "http://ha:8123",
+                "access_token": "token123",
+            },
+            "battery": {"source": "default"},
+        }
+        _create_data_source(config, store)
+
+        assert store.get("data_source.type") == "homeassistant"
+        assert store.get("data_source.url") == "http://ha:8123"
+        assert store.get("data_source.access_token") == "token123"
+
+    def test_from_load_openhab(self, store):
+        """data_source created from load section when source is openhab."""
+        config = {
+            "load": {
+                "source": "openhab",
+                "url": "http://oh:8080",
+                "access_token": "",
+            },
+            "battery": {"source": "default"},
+        }
+        _create_data_source(config, store)
+
+        assert store.get("data_source.type") == "openhab"
+        assert store.get("data_source.url") == "http://oh:8080"
+
+    def test_fallback_to_battery_when_load_default(self, store):
+        """data_source falls back to battery when load source is 'default'."""
+        config = {
+            "load": {"source": "default", "url": "", "access_token": ""},
+            "battery": {
+                "source": "openhab",
+                "url": "http://openhab:8080",
+                "access_token": "bat_token",
+            },
+        }
+        _create_data_source(config, store)
+
+        assert store.get("data_source.type") == "openhab"
+        assert store.get("data_source.url") == "http://openhab:8080"
+        assert store.get("data_source.access_token") == "bat_token"
+
+    def test_both_default_stays_default(self, store):
+        """data_source stays 'default' when both load and battery are default."""
+        config = {
+            "load": {"source": "default", "url": "", "access_token": ""},
+            "battery": {"source": "default", "url": "", "access_token": ""},
+        }
+        _create_data_source(config, store)
+
+        assert store.get("data_source.type") == "default"
+
+    def test_missing_sections(self, store):
+        """data_source handles missing load/battery sections gracefully."""
+        _create_data_source({}, store)
+
+        assert store.get("data_source.type") == "default"
+        assert store.get("data_source.url") == ""
+        assert store.get("data_source.access_token") == ""
+
+    def test_load_url_preserved_when_battery_fallback(self, store):
+        """Load URL used as fallback when battery provides source but no URL."""
+        config = {
+            "load": {
+                "source": "default",
+                "url": "http://ha:8123",
+                "access_token": "load_token",
+            },
+            "battery": {"source": "homeassistant"},
+        }
+        _create_data_source(config, store)
+
+        assert store.get("data_source.type") == "homeassistant"
+        # Battery section has no url, so load's url is preserved as fallback
+        assert store.get("data_source.url") == "http://ha:8123"
+
+
+class TestMigrationWizardFlag:
+    """Tests for wizard flag behavior during migration."""
+
+    @pytest.fixture
+    def schema(self):
+        """Fresh schema instance."""
+        return ConfigSchema()
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        """Empty ConfigStore in a temp directory."""
+        s = ConfigStore(str(tmp_path / "test.db"))
+        s.open()
+        yield s
+        s.close()
+
+    def test_fresh_install_wizard_not_completed(self, store, schema):
+        """Fresh install (all defaults) should NOT mark wizard completed."""
+        config = _default_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        assert store.get("_wizard_completed") is None
+        assert store.get("_migrated_from_yaml") is None
+
+    def test_real_config_wizard_completed(self, store, schema):
+        """Real user config migration marks wizard completed."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        assert store.get("_wizard_completed") is True
+        assert store.get("_migrated_from_yaml") is True
+
+    def test_fresh_install_still_stores_values(self, store, schema):
+        """Fresh install still migrates values to store (just no wizard flag)."""
+        config = _default_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        assert not store.is_empty()
+        # Values are stored even though wizard is not marked complete
+        assert store.get("eos.port") is not None
