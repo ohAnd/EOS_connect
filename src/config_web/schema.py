@@ -293,7 +293,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Optimization backend — EOS Server or EVopt",
         labels=["restart_required"],
         help_url="configuration.html#eos",
-        validation={"choices": ["eos_server", "evopt", "default"]},
+        validation={"choices": ["eos_server", "evopt"]},
         display_group="Server",
     ),
     FieldDef(

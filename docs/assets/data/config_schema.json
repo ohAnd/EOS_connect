@@ -225,8 +225,7 @@
       "validation": {
         "choices": [
           "eos_server",
-          "evopt",
-          "default"
+          "evopt"
         ]
       },
       "depends_on": null,

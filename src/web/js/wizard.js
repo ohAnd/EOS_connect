@@ -95,6 +95,12 @@ class SetupWizard {
      * Launch the setup wizard overlay.
      */
     async show() {
+        // Hide the startup error/loading overlay so the wizard is fully visible
+        const startupOverlay = document.getElementById("overlay");
+        if (startupOverlay) {
+            startupOverlay.style.display = "none";
+        }
+
         showFullScreenOverlay("Setup Wizard", `
             <div style="display:flex;justify-content:center;align-items:center;height:100%;color:#888;">
                 <i class="fas fa-spinner fa-spin" style="font-size:2em;margin-right:12px;"></i>
@@ -741,18 +747,28 @@ class SetupWizard {
             // Mark wizard complete
             await fetch("/api/config/wizard-complete", { method: "POST" });
 
-            // Show success briefly
+            // Show success with restart instruction — don't auto-close,
+            // because the server needs a restart to pick up the new config.
             document.getElementById("full_screen_content").innerHTML = `
-                <div style="display:flex;flex-direction:column;justify-content:center;align-items:center;height:100%;text-align:center;">
+                <div style="display:flex;flex-direction:column;justify-content:center;align-items:center;height:100%;text-align:center;padding:20px;">
                     <i class="fas fa-check-circle" style="font-size:3em;color:#28a745;margin-bottom:16px;"></i>
                     <h2 style="color:#fff;margin-bottom:8px;">Setup Complete!</h2>
-                    <p style="color:#aaa;">EOS Connect is now configured. A restart may be needed for some changes to take effect.</p>
+                    <p style="color:#aaa;max-width:480px;margin-bottom:24px;">
+                        Your configuration has been saved.
+                        Please <strong style="color:#ffc107;">restart EOS Connect</strong> for the new settings to take effect.
+                    </p>
+                    <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;">
+                        <button onclick="closeFullScreenOverlay();"
+                                style="background:#4a9eff;color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:0.95em;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
+                            <i class="fas fa-times"></i> Close
+                        </button>
+                        <button onclick="closeFullScreenOverlay(); if(typeof showConfigurationMenu === 'function') showConfigurationMenu();"
+                                style="background:rgba(74,158,255,0.15);color:#fff;border:2px solid rgba(74,158,255,0.4);border-radius:8px;padding:10px 24px;font-size:0.95em;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
+                            <i class="fas fa-cog"></i> Open Configuration
+                        </button>
+                    </div>
                 </div>
             `;
-
-            setTimeout(() => {
-                closeFullScreenOverlay();
-            }, 2500);
 
         } catch (err) {
             console.error("[SetupWizard] Save error:", err);
@@ -885,12 +901,19 @@ function showSetupWizard() {
 
 /**
  * Check wizard status on page load and auto-trigger if pending.
- * Called once after the dashboard finishes loading.
+ * Guarded so it only fires once — the 1 s init() loop must not
+ * re-trigger the wizard after the user has started interacting.
  */
+let _wizardCheckDone = false;
 async function checkWizardStatus() {
+    if (_wizardCheckDone) {
+        return;
+    }
+    _wizardCheckDone = true;
     try {
         const res = await fetch("/api/config/wizard-status");
         if (!res.ok) {
+            _wizardCheckDone = false;   // allow retry on transient failure
             return;
         }
         const status = await res.json();
@@ -898,6 +921,6 @@ async function checkWizardStatus() {
             showSetupWizard();
         }
     } catch {
-        // Config module may not be available — silently ignore
+        _wizardCheckDone = false;       // allow retry on transient failure
     }
 }
