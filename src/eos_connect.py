@@ -89,29 +89,6 @@ time_zone = pytz.timezone(config_manager.config["time_zone"])
 LOGLEVEL = config_manager.config["log_level"].upper()
 logger.setLevel(LOGLEVEL)
 
-# Set global time frame base with validation and fallback
-time_frame_base = config_manager.config.get("eos", {}).get("time_frame", 3600)
-eos_source = config_manager.config.get("eos", {}).get("source", "eos_server")
-
-try:
-    time_frame_base = int(time_frame_base)
-except (TypeError, ValueError):
-    logger.warning(
-        "[Config] Invalid time_frame type (%r); defaulting to 3600", time_frame_base
-    )
-    time_frame_base = 3600
-
-if time_frame_base not in (900, 3600):
-    logger.warning(
-        "[Config] Invalid time_frame (%s); defaulting to 3600", time_frame_base
-    )
-    time_frame_base = 3600
-elif time_frame_base == 900 and eos_source != "evopt":
-    logger.warning(
-        "[Config] 15-min time_frame only supported with EVopt source; defaulting to 3600"
-    )
-    time_frame_base = 3600
-
 # Now upgrade to timezone-aware formatter after config is loaded
 timezone_formatter = TimezoneFormatter(
     "%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S", tz=time_zone
@@ -144,6 +121,30 @@ except Exception:
         "[Main] Config database startup failed — continuing with config.yaml values. "
         "Check data directory permissions and disk space."
     )
+
+# Set global time frame base AFTER DB merge (so DB values are respected)
+# with validation and fallback
+time_frame_base = config_manager.config.get("eos", {}).get("time_frame", 3600)
+eos_source = config_manager.config.get("eos", {}).get("source", "eos_server")
+
+try:
+    time_frame_base = int(time_frame_base)
+except (TypeError, ValueError):
+    logger.warning(
+        "[Config] Invalid time_frame type (%r); defaulting to 3600", time_frame_base
+    )
+    time_frame_base = 3600
+
+if time_frame_base not in (900, 3600):
+    logger.warning(
+        "[Config] Invalid time_frame (%s); defaulting to 3600", time_frame_base
+    )
+    time_frame_base = 3600
+elif time_frame_base == 900 and eos_source != "evopt":
+    logger.warning(
+        "[Config] 15-min time_frame only supported with EVopt source; defaulting to 3600"
+    )
+    time_frame_base = 3600
 
 # initialize eos interface
 eos_interface = OptimizationInterface(
