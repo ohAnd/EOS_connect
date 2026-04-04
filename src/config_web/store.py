@@ -172,6 +172,36 @@ class ConfigStore:
         logger.info("[ConfigStore] Imported %d settings", count)
         return count
 
+    def set_batch(self, items: dict[str, Any]) -> int:
+        """
+        Atomically store multiple key/value pairs in a single transaction.
+
+        Unlike repeated ``set()`` calls, this commits once at the end so the
+        operation is all-or-nothing.  Change callbacks are NOT fired (intended
+        for migration/import, not live editing).
+
+        Args:
+            items: Flat dict of key/value pairs to store.
+
+        Returns:
+            Number of keys written.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        count = 0
+        with self._lock:
+            for key, value in items.items():
+                json_value = json.dumps(value)
+                self._conn.execute(
+                    """INSERT INTO settings (key, value, updated_at)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                                      updated_at = excluded.updated_at""",
+                    (key, json_value, now),
+                )
+                count += 1
+            self._conn.commit()
+        return count
+
     def export_dict(self) -> dict[str, Any]:
         """Alias for get_all() — export all settings as flat dict."""
         return self.get_all()

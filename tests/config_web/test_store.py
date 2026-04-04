@@ -113,6 +113,34 @@ class TestConfigStore:
         assert len(changes) == 1
         assert changes[0] == ("cb_key", None, "val1")
 
+    def test_set_batch_basic(self, store):
+        """set_batch should atomically write multiple keys."""
+        count = store.set_batch({"x": 1, "y": "two", "z": [3]})
+        assert count == 3
+        assert store.get("x") == 1
+        assert store.get("y") == "two"
+        assert store.get("z") == [3]
+
+    def test_set_batch_empty(self, store):
+        """set_batch with empty dict writes nothing."""
+        count = store.set_batch({})
+        assert count == 0
+        assert store.is_empty()
+
+    def test_set_batch_overwrite(self, store):
+        """set_batch should overwrite existing keys."""
+        store.set("x", "old")
+        store.set_batch({"x": "new", "y": 42})
+        assert store.get("x") == "new"
+        assert store.get("y") == 42
+
+    def test_change_callback_multiple(self, store):
+        """Change callbacks should fire on subsequent changes."""
+        changes = []
+        store.register_change_callback(
+            lambda key, old, new: changes.append((key, old, new))
+        )
+        store.set("cb_key", "val1")
         store.set("cb_key", "val2")
         assert len(changes) == 2
         assert changes[1] == ("cb_key", "val1", "val2")

@@ -27,6 +27,7 @@ Legacy single-phase (kept for compatibility)::
 
 import logging
 import os
+import sqlite3
 
 from .schema import ConfigSchema
 from .store import ConfigStore
@@ -86,7 +87,25 @@ class ConfigWebModule:
         """
         db_path = os.path.join(self._data_dir, "eos_connect.db")
         self._store = ConfigStore(db_path)
-        self._store.open()
+        try:
+            self._store.open()
+        except sqlite3.DatabaseError:
+            logger.warning(
+                "[ConfigWeb] Database corrupt — removing %s and creating fresh store",
+                db_path,
+            )
+            try:
+                os.remove(db_path)
+            except OSError:
+                pass
+            # Also remove WAL/SHM sidecar files if present
+            for suffix in ("-wal", "-shm"):
+                try:
+                    os.remove(db_path + suffix)
+                except OSError:
+                    pass
+            self._store = ConfigStore(db_path)
+            self._store.open()
 
         # In HA addon mode, try migrating legacy options.json first
         if self._config_manager.is_ha_addon:

@@ -41,7 +41,7 @@ def migrate_yaml_to_store(config_dict: dict, store: ConfigStore, schema: ConfigS
     logger.info("[Migration] Empty store detected — migrating config.yaml to SQLite")
 
     flat = _flatten_config(config_dict)
-    migrated_count = 0
+    batch = {}
 
     for key, value in flat.items():
         # Skip bootstrap keys
@@ -53,18 +53,27 @@ def migrate_yaml_to_store(config_dict: dict, store: ConfigStore, schema: ConfigS
             continue
         # Coerce value to match schema type (e.g. "enabled" → True for bool)
         value = _coerce_migrated_value(schema, key, value)
-        store.set(key, value)
-        migrated_count += 1
+        batch[key] = value
 
     # Create unified data_source from load section
-    _create_data_source(config_dict, store)
+    ds_batch = _create_data_source_batch(config_dict)
+    batch.update(ds_batch)
 
     # Detect whether this is a real user config or just ConfigManager defaults.
     # A real config has at least one source field set to a non-default value.
     is_real_config = _has_user_configured_values(config_dict)
     if is_real_config:
-        store.set("_migrated_from_yaml", True)
-        store.set("_wizard_completed", True)  # existing config = not a fresh install
+        batch["_migrated_from_yaml"] = True
+        batch["_wizard_completed"] = True
+
+    # Atomic write — all or nothing
+    try:
+        migrated_count = store.set_batch(batch)
+    except Exception:
+        logger.exception("[Migration] Failed to write settings to SQLite — migration aborted")
+        return False
+
+    if is_real_config:
         logger.info(
             "[Migration] Migrated %d settings from config.yaml to SQLite",
             migrated_count,
@@ -132,7 +141,7 @@ def migrate_ha_options_to_store(
     )
 
     flat = _flatten_config(options)
-    migrated_count = 0
+    batch = {}
 
     for key, value in flat.items():
         top_key = key.split(".")[0] if "." in key else key
@@ -140,14 +149,21 @@ def migrate_ha_options_to_store(
             continue
         if value is None:
             continue
-        store.set(key, value)
-        migrated_count += 1
+        batch[key] = value
 
     # Create unified data_source from load/battery sections
-    _create_data_source(options, store)
+    ds_batch = _create_data_source_batch(options)
+    batch.update(ds_batch)
 
-    store.set("_migrated_from_ha_options", True)
-    store.set("_wizard_completed", True)
+    batch["_migrated_from_ha_options"] = True
+    batch["_wizard_completed"] = True
+
+    # Atomic write — all or nothing
+    try:
+        migrated_count = store.set_batch(batch)
+    except Exception:
+        logger.exception("[Migration] Failed to write HA options to SQLite — migration aborted")
+        return False
 
     logger.info(
         "[Migration] Migrated %d settings from HA options.json to SQLite",
@@ -255,10 +271,11 @@ def _flatten_config(config_dict: dict, prefix: str = "") -> dict[str, Any]:
     return result
 
 
-def _create_data_source(config_dict: dict, store: ConfigStore) -> None:
+def _create_data_source_batch(config_dict: dict) -> dict[str, Any]:
     """
-    Create the unified ``data_source`` section from ``load`` section values.
+    Build the unified ``data_source`` section from ``load`` section values.
 
+    Returns a dict of key/value pairs to include in the migration batch.
     If load has a real source (homeassistant/openhab), use those values.
     Otherwise try battery section as fallback.
     """
@@ -278,12 +295,25 @@ def _create_data_source(config_dict: dict, store: ConfigStore) -> None:
             url = battery.get("url", url)
             token = battery.get("access_token", token)
 
-    store.set("data_source.type", source)
-    store.set("data_source.url", url)
-    store.set("data_source.access_token", token)
-
     logger.info(
         "[Migration] Created data_source: type=%s, url=%s",
         source,
         url,
     )
+    return {
+        "data_source.type": source,
+        "data_source.url": url,
+        "data_source.access_token": token,
+    }
+
+
+def _create_data_source(config_dict: dict, store: ConfigStore) -> None:
+    """
+    Create the unified ``data_source`` section from ``load`` section values.
+
+    Legacy wrapper — writes directly to store. Kept for backward compatibility
+    with existing tests.
+    """
+    batch = _create_data_source_batch(config_dict)
+    for key, value in batch.items():
+        store.set(key, value)

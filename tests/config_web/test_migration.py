@@ -3,6 +3,7 @@ Unit tests for the config.yaml to SQLite migration.
 """
 
 import pytest
+from unittest.mock import patch, MagicMock
 from src.config_web.store import ConfigStore
 from src.config_web.schema import ConfigSchema
 from src.config_web.migration import (
@@ -11,6 +12,7 @@ from src.config_web.migration import (
     _has_user_configured_values,
     _coerce_migrated_value,
     _create_data_source,
+    _create_data_source_batch,
 )
 
 
@@ -588,3 +590,123 @@ class TestMigrationWizardFlag:
         assert not store.is_empty()
         # Values are stored even though wizard is not marked complete
         assert store.get("eos.port") is not None
+
+
+class TestStoreBatch:
+    """Tests for the atomic set_batch method."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        """Empty ConfigStore in a temp directory."""
+        s = ConfigStore(str(tmp_path / "test.db"))
+        s.open()
+        yield s
+        s.close()
+
+    def test_set_batch_writes_all_keys(self, store):
+        """set_batch should write all keys atomically."""
+        batch = {"a": 1, "b": "hello", "c": True, "d": [1, 2, 3]}
+        count = store.set_batch(batch)
+
+        assert count == 4
+        assert store.get("a") == 1
+        assert store.get("b") == "hello"
+        assert store.get("c") is True
+        assert store.get("d") == [1, 2, 3]
+
+    def test_set_batch_empty_dict(self, store):
+        """set_batch with empty dict should write nothing."""
+        count = store.set_batch({})
+        assert count == 0
+        assert store.is_empty()
+
+    def test_set_batch_does_not_fire_callbacks(self, store):
+        """set_batch should not fire change callbacks (migration use case)."""
+        callback = MagicMock()
+        store.register_change_callback(callback)
+        store.set_batch({"key1": "val1", "key2": "val2"})
+        callback.assert_not_called()
+
+
+class TestCreateDataSourceBatch:
+    """Tests for _create_data_source_batch returning dict instead of writing."""
+
+    def test_returns_dict_from_load(self):
+        """Should return data_source keys from load section."""
+        config = {
+            "load": {
+                "source": "homeassistant",
+                "url": "http://ha:8123",
+                "access_token": "tok123",
+            }
+        }
+        result = _create_data_source_batch(config)
+
+        assert result == {
+            "data_source.type": "homeassistant",
+            "data_source.url": "http://ha:8123",
+            "data_source.access_token": "tok123",
+        }
+
+    def test_fallback_to_battery(self):
+        """Should fall back to battery when load source is default."""
+        config = {
+            "load": {"source": "default", "url": "", "access_token": ""},
+            "battery": {
+                "source": "openhab",
+                "url": "http://oh:8080",
+                "access_token": "bat_tok",
+            },
+        }
+        result = _create_data_source_batch(config)
+
+        assert result["data_source.type"] == "openhab"
+        assert result["data_source.url"] == "http://oh:8080"
+        assert result["data_source.access_token"] == "bat_tok"
+
+
+class TestAtomicMigration:
+    """Tests verifying that migration uses atomic batch writes."""
+
+    @pytest.fixture
+    def schema(self):
+        return ConfigSchema()
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = ConfigStore(str(tmp_path / "test.db"))
+        s.open()
+        yield s
+        s.close()
+
+    def test_migration_uses_set_batch(self, store, schema):
+        """Migration should call set_batch, not individual set() calls."""
+        config = _sample_config()
+        with patch.object(store, "set_batch", wraps=store.set_batch) as mock_batch:
+            migrate_yaml_to_store(config, store, schema)
+            mock_batch.assert_called_once()
+
+    def test_failed_batch_leaves_store_empty(self, store, schema):
+        """If set_batch fails, store should remain empty (no partial data)."""
+        config = _sample_config()
+        with patch.object(store, "set_batch", side_effect=Exception("disk full")):
+            result = migrate_yaml_to_store(config, store, schema)
+
+        assert result is False
+        assert store.is_empty()
+
+    def test_migration_retryable_after_failure(self, store, schema):
+        """After a failed migration, next restart should retry successfully."""
+        config = _sample_config()
+
+        # First attempt fails
+        with patch.object(store, "set_batch", side_effect=Exception("disk full")):
+            migrate_yaml_to_store(config, store, schema)
+
+        assert store.is_empty()
+
+        # Second attempt succeeds
+        result = migrate_yaml_to_store(config, store, schema)
+        assert result is True
+        assert not store.is_empty()
+        assert store.get("_wizard_completed") is True

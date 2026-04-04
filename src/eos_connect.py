@@ -137,7 +137,13 @@ logger.info(
 # will therefore receive the correct, authoritative values directly — no
 # post-init re-sync is needed.
 config_web = ConfigWebModule(config_manager)
-config_web.start_db()
+try:
+    config_web.start_db()
+except Exception:
+    logger.exception(
+        "[Main] Config database startup failed — continuing with config.yaml values. "
+        "Check data directory permissions and disk space."
+    )
 
 # initialize eos interface
 eos_interface = OptimizationInterface(
@@ -1401,7 +1407,10 @@ mqtt_interface.on_mqtt_command = mqtt_control_callback
 app = Flask(__name__)
 
 # Phase 2: register the Flask REST API now that app exists.
-config_web.start_api(app)
+try:
+    config_web.start_api(app)
+except Exception:
+    logger.exception("[Main] Config web API registration failed — config UI unavailable")
 
 # Register hot-reload: live config changes are applied without restart
 from config_web.hot_reload import HotReloadAdapter  # pylint: disable=wrong-import-position
