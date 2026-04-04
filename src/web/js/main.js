@@ -278,7 +278,7 @@ setInterval(init, 1000);
 // Show the restart-required hint on the startup overlay when config changes are pending.
 (async function _checkStartupRestartHint() {
     try {
-        const res = await fetch("/api/config/restart-required");
+        const res = await fetch("api/config/restart-required");
         if (!res.ok) return;
         const data = await res.json();
         if (data.fields && data.fields.length > 0) {

@@ -131,8 +131,8 @@ class SetupWizard {
      */
     async _loadData() {
         const [schemaRes, valuesRes] = await Promise.all([
-            fetch("/api/config/schema"),
-            fetch("/api/config/export"),
+            fetch("api/config/schema"),
+            fetch("api/config/export"),
         ]);
         if (!schemaRes.ok) {
             throw new Error(`Schema: ${schemaRes.status}`);
@@ -734,7 +734,7 @@ class SetupWizard {
             }
 
             // Save config
-            const saveRes = await fetch("/api/config/", {
+            const saveRes = await fetch("api/config/", {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
@@ -745,7 +745,7 @@ class SetupWizard {
             }
 
             // Mark wizard complete
-            await fetch("/api/config/wizard-complete", { method: "POST" });
+            await fetch("api/config/wizard-complete", { method: "POST" });
 
             // Show success with restart instruction — don't auto-close,
             // because the server needs a restart to pick up the new config.
@@ -911,7 +911,7 @@ async function checkWizardStatus() {
     }
     _wizardCheckDone = true;
     try {
-        const res = await fetch("/api/config/wizard-status");
+        const res = await fetch("api/config/wizard-status");
         if (!res.ok) {
             _wizardCheckDone = false;   // allow retry on transient failure
             return;

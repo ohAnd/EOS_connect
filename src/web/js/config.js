@@ -69,8 +69,8 @@ class ConfigurationManager {
      */
     async _loadData() {
         const [schemaRes, valuesRes] = await Promise.all([
-            fetch("/api/config/schema"),
-            fetch("/api/config/export"),
+            fetch("api/config/schema"),
+            fetch("api/config/export"),
         ]);
 
         if (!schemaRes.ok) {
@@ -105,7 +105,7 @@ class ConfigurationManager {
 
         // Load any pending restart-required fields from the server
         try {
-            const rrRes = await fetch("/api/config/restart-required");
+            const rrRes = await fetch("api/config/restart-required");
             if (rrRes.ok) {
                 const rrData = await rrRes.json();
                 if (rrData.fields && rrData.fields.length > 0) {
@@ -920,7 +920,7 @@ class ConfigurationManager {
 
         // Validate first
         try {
-            const valRes = await fetch("/api/config/validate", {
+            const valRes = await fetch("api/config/validate", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(changes),
@@ -936,7 +936,7 @@ class ConfigurationManager {
 
         // Save
         try {
-            const res = await fetch("/api/config/", {
+            const res = await fetch("api/config/", {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(changes),
@@ -1016,7 +1016,7 @@ class ConfigurationManager {
      */
     async _exportConfig() {
         try {
-            const res = await fetch("/api/config/export");
+            const res = await fetch("api/config/export");
             if (!res.ok) {
                 this._showToast("Export failed: " + res.status, "error");
                 return;
@@ -1053,7 +1053,7 @@ class ConfigurationManager {
                 return;
             }
 
-            const res = await fetch("/api/config/import", {
+            const res = await fetch("api/config/import", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(data),
@@ -1196,7 +1196,7 @@ class ConfigurationManager {
         }
         this._restartPollTimer = setInterval(async () => {
             try {
-                const res = await fetch("/api/config/restart-required");
+                const res = await fetch("api/config/restart-required");
                 if (!res.ok) {
                     return;
                 }
@@ -1420,7 +1420,7 @@ function showConfigurationMenu() {
  * requiring the config overlay to be opened first.
  */
 document.addEventListener("DOMContentLoaded", () => {
-    fetch("/api/config/restart-required")
+    fetch("api/config/restart-required")
         .then(r => r.ok ? r.json() : null)
         .then(data => {
             if (data && data.fields && data.fields.length > 0) {
