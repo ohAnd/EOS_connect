@@ -433,12 +433,10 @@ pip install -r requirements.txt
 # 4. Install development dependencies
 pip install black pylint pytest pytest-cov
 
-# 5. Copy and edit config
-cp src/config.yaml.example src/config.yaml
-# Edit src/config.yaml with your settings
-
-# 6. Run EOS Connect
-python src/eos_connect.py</code></pre>
+# 5. Run EOS Connect
+python src/eos_connect.py
+# On first launch, a Setup Wizard in the web UI guides you through configuration.
+# Only bootstrap settings (port, timezone, log level) can optionally be set in config.yaml.</code></pre>
 
             <h3>VS Code Configuration</h3>
             <p>Recommended <code>.vscode/settings.json</code>:</p>

@@ -79,7 +79,7 @@
                     <div class="icon"><i class="fas fa-cog"></i></div>
                     <h3>Configuration</h3>
                 </div>
-                <p>Complete configuration reference for config.yaml</p>
+                <p>Complete configuration reference for all settings</p>
                 <a href="configuration.html" class="btn">Configure →</a>
             </div>
             <div class="block-card">
@@ -142,24 +142,13 @@ pip install -r requirements.txt
 python src/eos_connect.py</code></pre>
 
             <h3>Step 3: Configure</h3>
-            <p>Edit <code>src/config.yaml</code> with your system details:</p>
-            <pre><code># Minimum configuration
-eos:
-  server: 192.168.1.94  # Your EOS server IP
-  port: 8503
-  time_frame: 900  # 15-minute intervals
-
-battery:
-  capacity_wh: 11059
-  max_charge_power_w: 5000
-
-pv_forecast:
-  - name: myPV
-    lat: 52.5200
-    lon: 13.4050
-    azimuth: 180
-    tilt: 25
-    power: 5000</code></pre>
+            <p>On first start, EOS Connect launches a <strong>Setup Wizard</strong> that guides you through the essential configuration. All settings are managed through the built-in web UI — no manual file editing required.</p>
+            <p>The only file you may optionally create is <code>src/config.yaml</code> with bootstrap settings:</p>
+            <pre><code># config.yaml — bootstrap settings only (optional)
+eos_connect_web_port: 8081  # Web server port
+time_zone: Europe/Berlin    # System time zone
+log_level: info             # Log level: debug, info, warning, error</code></pre>
+            <p><strong>Upgrading from an older version?</strong> EOS Connect automatically migrates your existing <code>config.yaml</code> settings into its database on first start. After migration, you can reduce <code>config.yaml</code> to just the bootstrap keys above.</p>
 
             <h3>Step 4: Access Web Dashboard</h3>
             <p>Open your browser to:</p>
@@ -299,7 +288,7 @@ recorder:
         <!-- Configuration Overview -->
         <div class="content-section" id="configuration">
             <h2><i class="fas fa-cog"></i> Configuration Overview</h2>
-            <p>EOS Connect uses a YAML configuration file (<code>config.yaml</code>) with the following main sections:</p>
+            <p>EOS Connect is configured through a <strong>web-based configuration UI</strong>. On first launch, a Setup Wizard guides you through essential settings. All configuration is stored in SQLite and organized into the following sections:</p>
 
             <table>
                 <thead>
@@ -655,7 +644,7 @@ docker-compose up -d</code></pre>
                     <tr>
                         <td>Price calculation disabled in logs</td>
                         <td><code>price_calculation_enabled: false</code> in config</td>
-                        <td>Set to <code>true</code> in <code>config.yaml</code> and restart application</td>
+                        <td>Enable in the web configuration UI (<i class="fas fa-cog"></i> Settings → Price) and restart application</td>
                     </tr>
                 </tbody>
             </table>
@@ -767,14 +756,11 @@ docker-compose up -d</code></pre>
             </ul>
 
             <h4>Configuration</h4>
-            <p>To monitor battery temperature, ensure the following is configured in your <code>config.yaml</code>:</p>
-            <pre><code>battery:
-  sensor_battery_temperature: sensor.your_battery_temp_sensor  # Required for temperature monitoring
-  # Temperature threshold defaults (adjust if needed):
-  # Cold protection: &lt; 0°C
-  # Reduced power: 0-15°C or 45-55°C  
-  # Optimal range: 15-45°C
-  # Heat protection: &gt; 55°C</code></pre>
+            <p>To monitor battery temperature, configure the following in the web UI (<i class="fas fa-cog"></i> Settings → Battery):</p>
+            <ul>
+                <li><strong>sensor_battery_temperature</strong> — set to your battery temperature sensor entity (e.g., <code>sensor.your_battery_temp_sensor</code>)</li>
+                <li>Temperature threshold defaults: Cold protection &lt; 0°C, Reduced power 0–15°C or 45–55°C, Optimal 15–45°C, Heat protection &gt; 55°C</li>
+            </ul>
             <p>See <a href="configuration.html#battery-configuration">Battery Configuration</a> for detailed settings.</p>
         </div>
 

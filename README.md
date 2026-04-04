@@ -70,7 +70,9 @@ Supported data sources and integrations:
    - If you prefer the lightweight EVopt backend, install [thecem/hassio-evopt](https://github.com/thecem/hassio-evopt) and make sure it is running.
 
 4. **Configure:**
-    - Configuration is managed directly via the Home Assistant add-on UI. No manual editing of the config file is required—the add-on processes your settings in the background and applies them to EOS Connect automatically.
+    - On first start, a **Setup Wizard** guides you through initial configuration via the web UI.
+    - All settings are managed through the EOS Connect web interface — no manual editing of config files required.
+    - The HA addon only handles bootstrap settings (web port, timezone, log level). All other configuration is stored in EOS Connect's built-in database.
     - See the [user-guide/configuration](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html) for full details.
 
 5. **Start & Access:**
@@ -98,83 +100,34 @@ This allows the add-on to correctly see and use your physical CPU's instructions
 
 ---
 
-## Minimal Configuration Example
+## Configuration
+
+EOS Connect uses a **web-based configuration system**. All settings are managed through the built-in web UI at `http://localhost:8081`.
+
+### First Start (Setup Wizard)
+On first launch, a **Setup Wizard** guides you through the essential configuration steps:
+1. Data source (Home Assistant / OpenHAB / default)
+2. Optimization backend (EOS Server / EVopt)
+3. Battery, price, PV forecast, and inverter settings
+
+After the wizard completes, restart EOS Connect to apply the settings.
+
+### Bootstrap Config (`config.yaml`)
+Only 3 infrastructure settings live in `config.yaml` — everything else is stored in the database and managed via the web UI:
+
 ```yaml
-# Load configuration
-load:
-  source: default  # Uses a static load profile
-
-# EOS server configuration
-eos:
-  source: eos_server
-  server: 192.168.1.94  # Replace with your EOS/EVopt server IP
-  port: 8503
-  time_frame: 3600 # EOS server supports 3600 only (hourly); EVopt supports 3600 or 900 (15-minute)
-
-# Electricity price configuration
-price:
-  source: default  # Uses Akkudoktor price API
-
-# Battery configuration
-battery:
-  source: default
-  capacity_wh: 10000
-  max_charge_power_w: 5000
-  charge_efficiency: 0.9
-  discharge_efficiency: 0.9
-
-# PV forecast configuration
-pv_forecast_source:
-  source: akkudoktor
-  # Available sources: akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, victron
-  # For Solcast or Victron VRM, add api_key below:
-  api_key: ""
-  # api_key: your-api-token
-
-pv_forecast:
-  - name: myPV
-    lat: 52.5200
-    lon: 13.4050
-    azimuth: 180
-    tilt: 25
-    # For Solcast or Victron VRM source, add the installation identifier as resource_id:
-    # Solcast: rooftop site ID (e.g., abcd-efgh-1234-5678)
-    # Victron: VRM installation ID (e.g., 123456)
-    # resource_id: your-resource-id-here
-
-# Note: Temperature forecast (outside temperature) is only retrieved and sent to the optimizer when `eos.source: eos_server` is set. For `evopt`, temperature is not required and not used in optimization.
-
-# Inverter configuration
-inverter:
-  type: default  # Options: victron, fronius_gen24, fronius_gen24_legacy, homeassistant, evcc, default
-
-# EVCC configuration (optional)
-evcc:
-  url: ""  # Set to your EVCC URL if used, e.g., http://evcc:7070
-
-# MQTT configuration (optional)
-mqtt:
-  enabled: false
-  broker: localhost # URL for MQTT server - default: mqtt://yourMQTTserver
-  port: 1883 # Port for MQTT server - default: 1883
-  user: mqtt_user # Username for MQTT server - default: mqtt
-  password: mqtt_password # Password for MQTT server - default: mqtt
-
-# General settings
-refresh_time: 3  # Optimization refresh interval in minutes
-time_zone: Europe/Berlin
-eos_connect_web_port: 8081
-log_level: info
-request_timeout: 10
+# config.yaml — bootstrap settings only
+eos_connect_web_port: 8081  # Web server port
+time_zone: Europe/Berlin    # System time zone
+log_level: info             # Log level: debug, info, warning, error
 ```
 
-<div style="margin-top: 1em; padding: 0.8em; background: #222; border-radius: 10px; color: #eee;">
-<i class="fas fa-info-circle" style="color: #4a9eff;"></i>
- <strong>Note:</strong> This minimal configuration is sufficient for basic operation with static profiles and default APIs.<br>
-For advanced integrations (Home Assistant, OpenHAB, Solcast, Fronius, Tibber, etc.), <strong>additional fields are required</strong> (e.g., <code>url</code>, <code>access_token</code>, <code>soc_sensor</code>, <code>api_key</code>, <code>resource_id</code>, etc.).<br>
-See the <a href="https://ohAnd.github.io/EOS_connect/user-guide/configuration.html" style="color: #4a9eff;">full configuration documentation</a> for details on all options and required fields for your setup.
-</div>
-```
+> **Upgrading from an older version?** On first start, EOS Connect automatically migrates your existing `config.yaml` settings into the database. After migration, you can reduce `config.yaml` to just the bootstrap keys above.
+
+### Changing Configuration
+- Open `http://localhost:8081` and click the gear icon to access the configuration page
+- Changes marked as **"hot-reloadable"** (e.g., feed-in price, SOC limits) take effect immediately
+- Other changes require a restart (the UI shows which fields need restart)
 ---
 
 ## Troubleshooting & Advanced Configuration

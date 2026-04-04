@@ -183,3 +183,164 @@ schema.py (Python) → export_config_schema.py → config_schema.json (docs)
 - Tests are located in `/tests` folder
 - Mirror the source structure in test organization
 - Use pytest for all testing
+
+### Design Rules & Lessons Learned
+
+These rules emerged from comprehensive manual testing (154 test cases) and must be followed in all future development.
+
+#### Configuration Architecture
+
+- **config.yaml is bootstrap-only**: After migration, config.yaml contains only `eos_connect_web_port`, `time_zone`, `log_level`, and optionally `data_path`. All other settings live in SQLite and are managed via the web UI.
+- **Never add non-bootstrap keys to config.yaml**: New config fields go into `schema.py` only. The web UI, API, migration, and merger all pick them up automatically.
+- **ConfigManager defaults must use valid values**: `create_default_config()` in `config.py` must use values that pass schema validation. The placeholder `"default"` caused a crash when OptimizationInterface received it as `eos.source`. Always use a real schema-valid default.
+- **Schema choices are authoritative**: The `validation.choices` list in `FieldDef` is the single source of truth. Migration coercion validates against it and falls back to `field_def.default` for invalid values.
+
+#### Fresh Install vs Migration Detection
+
+- **`_has_user_configured_values()`** distinguishes real user configs from ConfigManager defaults by checking sentinel fields (source values, sensor names)
+- **Wizard flag logic**: `_wizard_completed` is only set when real user config is detected during migration. Fresh installs (all defaults) leave this unset so the setup wizard appears.
+- **Never hardcode wizard completion** in migration without checking for real values
+
+#### Web UI Integration Rules
+
+- **1-second polling loop**: `main.js` runs `init()` every second via `setInterval`. Any check triggered from `init()` must be guarded to avoid re-triggering (e.g., `_wizardCheckDone` flag in wizard.js)
+- **Error overlay interaction**: The startup error overlay (`#overlay`) blocks the full page. Any overlay (wizard, config) that needs to appear on top must hide `#overlay` first.
+- **Restart guidance**: When config changes require restart, show clear visual hints (amber banner) on both the wizard completion screen and the dashboard error overlay.
+- **z-index management**: Wizard and full-screen overlays must have higher z-index than the startup overlay
+
+#### Hot Reload Design
+
+- **Schema flag drives behavior**: Set `hot_reload=True` in `FieldDef` to mark a field as live-reloadable
+- **Adapter pattern**: `HotReloadAdapter` receives change callbacks from `ConfigStore` and applies them to running interface instances
+- **Attribute mapping**: Each hot-reload field maps to a specific interface attribute name + coercion function
+- **Side-effects**: Some changes trigger recalculations (e.g., feed-in price change triggers `__create_feedin_prices()`)
+- **Config dict sync**: For battery SOC fields, update both the interface method (`set_min_soc()`) AND the `battery_data` dict to prevent clamping against stale values
+
+#### Validation & Security
+
+- **Max length validation**: All string fields should have reasonable `max_length` validation to prevent abuse
+- **HTML injection prevention**: User input displayed in the web UI must be text-only (no innerHTML with user data)
+- **Latin-1 password encoding**: Passwords containing non-Latin-1 characters cause Modbus/network errors. Validate at the API layer.
+- **Unicode safety**: All text fields must handle Unicode correctly (UTF-8 throughout)
+
+### Hot Reload — Current State & Expansion Priority
+
+#### Currently Hot-Reloadable (9 fields, applied without restart)
+
+**Price fields (4)** — via `_PRICE_FIELD_MAP` in `hot_reload.py`:
+
+- `price.fixed_price_adder_ct` → `PriceInterface.fixed_price_adder_ct`
+- `price.relative_price_multiplier` → `PriceInterface.relative_price_multiplier`
+- `price.feed_in_price` → `PriceInterface.feed_in_tariff_price` (+ recalculates feed-in prices)
+- `price.negative_price_switch` → `PriceInterface.negative_price_switch` (+ recalculates feed-in prices)
+
+**Battery fields (5)** — via `_BATTERY_SOC_FIELDS` in `hot_reload.py`:
+
+- `battery.min_soc_percentage` → `BatteryInterface.set_min_soc()` + `battery_data` dict
+- `battery.max_soc_percentage` → `BatteryInterface.set_max_soc()` + `battery_data` dict
+- `battery.charging_threshold_w` (schema flag set, adapter logic in battery price handler)
+- `battery.grid_charge_threshold_w` (schema flag set, adapter logic in battery price handler)
+- `battery.battery_price_include_feedin` (schema flag set, adapter logic in battery price handler)
+
+#### Expansion Priority List
+
+Fields grouped by predicted code complexity and user impact. Each group shares interface patterns, so implementing one makes the rest in that group trivial.
+
+**Priority 1 — Simple attribute swaps (low effort, high user value)**
+
+These fields are simple instance attributes that can be set at runtime:
+
+| Group           | Fields                                                                                        | Interface                           | Change Required                                                             |
+| --------------- | --------------------------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------- |
+| EOS tuning      | `eos.timeout`, `eos.time_frame`                                                               | OptimizationInterface               | Add to field map; attrs already stored as `self.timeout`, `self.time_frame` |
+| EOS flags       | `eos.dyn_override_discharge_allowed_pv_greater_load`, `eos.pv_battery_charge_control_enabled` | BaseControl / OptimizationInterface | Simple bool attrs on the control instance                                   |
+| Inverter limits | `inverter.max_grid_charge_rate`, `inverter.max_pv_charge_rate`                                | BaseInverter subclass               | Attrs already on inverter instances                                         |
+| System          | `request_timeout`                                                                             | All interfaces                      | Update shared timeout value                                                 |
+| System          | `refresh_time`                                                                                | Main loop                           | Update `setInterval` timing — need to store as mutable                      |
+
+**Priority 2 — Requires recalculation or reconnect (medium effort)**
+
+These need more than a simple attribute swap:
+
+| Group              | Fields                                                                                                           | Interface           | Change Required                                  |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------ |
+| Battery capacity   | `battery.capacity_wh`, `battery.charge_efficiency`, `battery.discharge_efficiency`, `battery.max_charge_power_w` | BatteryInterface    | Update battery_data dict + recalc charging curve |
+| Battery price calc | `battery.price_update_interval`, `battery.price_history_lookback_hours`, `battery.price_euro_per_wh_accu`        | BatteryPriceHandler | Restart timer or update interval                 |
+| Price fixed array  | `price.fixed_24h_array`                                                                                          | PriceInterface      | Re-parse array + recalc prices                   |
+
+**Priority 3 — Requires interface reconstruction (high effort, rare changes)**
+
+These change fundamental interface identity (source, URL, credentials). Users rarely change these after initial setup:
+
+| Group           | Fields                                                                            | Interface             | Change Required                               |
+| --------------- | --------------------------------------------------------------------------------- | --------------------- | --------------------------------------------- |
+| Data source     | `data_source.type`, `data_source.url`, `data_source.access_token`                 | Load, Battery         | Full interface re-init (different API client) |
+| Sensor names    | `load.load_sensor`, `battery.soc_sensor`, all sensor fields                       | Load, Battery         | Could swap attrs, but untested behavior       |
+| MQTT connection | `mqtt.broker`, `mqtt.port`, `mqtt.user`, `mqtt.password`, `mqtt.tls`              | MqttInterface         | Disconnect + reconnect                        |
+| MQTT features   | `mqtt.ha_mqtt_auto_discovery`, `mqtt.ha_mqtt_auto_discovery_prefix`               | MqttInterface         | Re-publish discovery messages                 |
+| Inverter type   | `inverter.type`, `inverter.address`, `inverter.user`, `inverter.password`         | InverterFactory       | Full reconstruction via factory               |
+| PV sources      | `pv_forecast_source.source`, `pv_forecast_source.api_key`, all pv_forecast fields | PvInterface           | Re-init with new source/installations         |
+| Price source    | `price.source`, `price.token`                                                     | PriceInterface        | Different API client                          |
+| EOS backend     | `eos.source`, `eos.server`, `eos.port`                                            | OptimizationInterface | Different backend class                       |
+| EVCC            | `evcc.url`                                                                        | EvccInterface         | New HTTP client                               |
+
+**Priority 4 — Bootstrap keys (never hot-reloadable)**
+
+These affect the application infrastructure itself:
+
+- `eos_connect_web_port` — Flask server port (requires process restart)
+- `time_zone` — System-wide timezone (affects all timestamp handling)
+- `log_level` — Logging configuration (could be hot-reloaded but low priority)
+
+#### Adding a New Hot-Reload Field (Checklist)
+
+1. Set `hot_reload=True` in the `FieldDef` in `schema.py`
+2. Add field mapping to `hot_reload.py`:
+   - Simple attribute: add to `_PRICE_FIELD_MAP` or create new map
+   - Method call: add elif branch in the appropriate `_apply_*` method
+3. If side-effects needed (recalculation), add trigger set like `_FEEDIN_TRIGGERS`
+4. Add tests in `tests/config_web/test_hot_reload.py`
+5. Run `python scripts/export_config_schema.py`
+
+### HA Addon Integration
+
+#### Bootstrap Contract with ha_addons Repo
+
+The HA addon (`ohAnd/ha_addons`) must provide exactly these options in its `config.yaml`:
+
+```yaml
+options:
+  web_port: 8081
+  time_zone: "Europe/Berlin"
+  log_level: "INFO"
+
+schema:
+  web_port: int
+  time_zone: str
+  log_level: list(DEBUG|INFO|WARNING|ERROR)
+```
+
+These map to EOS Connect's `BOOTSTRAP_KEYS` via `_HA_BOOTSTRAP_MAP` in `config.py`.
+
+#### What the Addon Must NOT Do
+
+- **Do not include non-bootstrap config options** in `config.yaml`/`options.json` — all other settings are managed by the web UI and stored in SQLite
+- **Do not mount config.yaml into the container** — it's optional; if absent, defaults are used and the wizard guides setup
+- **Do not write to `/data/eos_connect.db`** — EOS Connect owns this file exclusively
+
+#### What the Addon Must Provide
+
+- **Persistent `/data/` volume**: SQLite DB lives at `/data/eos_connect.db`
+- **Network access**: Port forwarding for the web UI (default 8081)
+- **`HASSIO` or `HASSIO_TOKEN` env var**: Set by HA automatically, triggers addon mode
+- **`/data/options.json`**: HA writes this with the 3 bootstrap values
+- **webui declaration**: `http://[HOST]:[PORT:8081]` for HA sidebar integration
+
+#### Legacy Migration Path
+
+When upgrading from an old addon version that had full config in `options.json`:
+
+1. EOS Connect detects non-bootstrap keys in `/data/options.json`
+2. `migrate_ha_options_to_store()` imports them into SQLite
+3. Old `options.json` keys are left in place (HA manages that file)
+4. Wizard is marked complete — user sees their existing config in the web UI
