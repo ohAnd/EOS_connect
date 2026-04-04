@@ -92,11 +92,12 @@ class HotReloadAdapter:
             logger.warning("[HotReload] Cannot coerce %s=%r: %s", key, new_value, exc)
             return
 
+        old_val = getattr(self._price, attr, "?")
         setattr(self._price, attr, coerced)
         self._applied_keys.append(key)
         logger.info(
             "[HotReload] Updated price.%s = %s (was %s)",
-            attr, coerced, getattr(self._price, attr, "?"),
+            attr, coerced, old_val,
         )
 
         # Recalculate feed-in prices when feed_in_price or negative_price_switch change
@@ -133,12 +134,17 @@ class HotReloadAdapter:
             return
 
         if key == "battery.min_soc_percentage":
+            # Update the configured floor in battery_data first so set_min_soc()
+            # doesn't clamp against the old configured value.
+            self._battery.battery_data["min_soc_percentage"] = int_value
             self._battery.set_min_soc(int_value)
             self._applied_keys.append(key)
             logger.info(
                 "[HotReload] Updated battery min SOC = %d%%", int_value
             )
         elif key == "battery.max_soc_percentage":
+            # Update the configured ceiling in battery_data first.
+            self._battery.battery_data["max_soc_percentage"] = int_value
             self._battery.set_max_soc(int_value)
             self._applied_keys.append(key)
             logger.info(

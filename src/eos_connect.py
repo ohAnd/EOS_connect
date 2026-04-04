@@ -131,6 +131,14 @@ logger.info(
     config_manager.config["time_zone"],
     LOGLEVEL,
 )
+
+# Phase 1: open the config DB and deep-update config_manager.config with any
+# values the user changed via the web UI.  All interfaces constructed below
+# will therefore receive the correct, authoritative values directly — no
+# post-init re-sync is needed.
+config_web = ConfigWebModule(config_manager)
+config_web.start_db()
+
 # initialize eos interface
 eos_interface = OptimizationInterface(
     config=config_manager.config["eos"],
@@ -1392,9 +1400,8 @@ mqtt_interface.on_mqtt_command = mqtt_control_callback
 # web server
 app = Flask(__name__)
 
-# Initialize web-based configuration system
-config_web = ConfigWebModule(config_manager, app)
-config_web.start()
+# Phase 2: register the Flask REST API now that app exists.
+config_web.start_api(app)
 
 # Register hot-reload: live config changes are applied without restart
 from config_web.hot_reload import HotReloadAdapter  # pylint: disable=wrong-import-position

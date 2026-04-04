@@ -291,6 +291,7 @@ function closeDropdownMenu() {
  */
 const MenuNotifications = {
     displayedColor: null, // What's actually displayed: null, 'red', 'orange', 'white', 'gray'
+    _configRestartPending: false, // True when config restart is pending (protects orange from logging clear)
 
     /**
      * Initialize the notification system
@@ -412,9 +413,15 @@ const MenuNotifications = {
             // Convert our color system to old status system for dropdown
             let status = null;
             if (this.displayedColor === 'red') status = 'error';
-            else if (this.displayedColor === 'orange') status = 'warning';
+            else if (this.displayedColor === 'orange' && !this._configRestartPending) status = 'warning';
 
             this.addDropdownNotification(alarmsItem, status);
+        }
+
+        // Add orange dot to Configuration menu item if restart pending
+        const configItem = dropdown.querySelector('div[onclick*="showConfigurationMenu"]');
+        if (configItem) {
+            this.addDropdownNotification(configItem, this._configRestartPending ? 'warning' : null);
         }
 
         // Add blue dot to Info menu item if update available
@@ -515,15 +522,39 @@ const MenuNotifications = {
     
     /**
      * Clear logging-related dots (red/orange only)
-     * Won't touch blue (update) dots
+     * Won't touch blue (update) dots or config-restart orange dots
      */
     clearLoggingDot() {
+        if (this.displayedColor === 'orange' && this._configRestartPending) {
+            console.log('[MenuNotifications] Keeping orange dot - config restart pending');
+            return;
+        }
         if (this.displayedColor === 'red' || this.displayedColor === 'orange') {
             this.displayedColor = null;
             this.renderDot();
             console.log('[MenuNotifications] Logging dot cleared (was: red/orange)');
         } else {
             console.log('[MenuNotifications] Not clearing dot - not a logging color (current: ' + this.displayedColor + ')');
+        }
+    },
+
+    /**
+     * Set or clear the config restart-pending state.
+     * When pending, shows an orange dot that logging won't clear.
+     * @param {boolean} pending - True to show restart dot, false to clear
+     */
+    setRestartPending(pending) {
+        this._configRestartPending = pending;
+        if (pending) {
+            this.showDot('orange');
+            console.log('[MenuNotifications] Config restart pending - orange dot protected');
+        } else {
+            this._configRestartPending = false;
+            if (this.displayedColor === 'orange') {
+                this.displayedColor = null;
+                this.renderDot();
+            }
+            console.log('[MenuNotifications] Config restart cleared');
         }
     }
 };

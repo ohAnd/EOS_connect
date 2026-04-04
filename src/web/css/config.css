@@ -113,6 +113,10 @@
     display: none;
 }
 
+.config-group.hidden {
+    display: none;
+}
+
 .config-field-label {
     flex: 0 0 220px;
     font-size: 0.9em;
@@ -153,8 +157,12 @@
     box-shadow: 0 0 0 2px rgba(220, 53, 69, 0.2);
 }
 
-.config-input.changed {
-    border-color: #ffc107;
+.config-input.changed,
+.config-select.changed,
+.config-input.changed:focus,
+.config-select.changed:focus {
+    border-color: #ffc107 !important;
+    box-shadow: 0 0 0 2px rgba(255, 193, 7, 0.35) !important;
 }
 
 .config-select {
@@ -245,6 +253,11 @@
 .config-toggle input:checked + .config-toggle-slider::before {
     transform: translateX(20px);
     background-color: #fff;
+}
+
+.config-toggle.changed .config-toggle-slider {
+    outline: 2px solid #ffc107;
+    outline-offset: 2px;
 }
 
 /* --- Labels / badges --- */
@@ -422,6 +435,10 @@
     display: block;
 }
 
+.config-field-error.visible.warning {
+    color: #ffc107;
+}
+
 /* --- Unsaved dot --- */
 .config-unsaved-dot {
     display: inline-block;
@@ -507,6 +524,37 @@
 @media (max-width: 768px) {
     .config-mobile-back {
         display: inline-flex !important;
+    }
+
+    /* Keep header items from overflowing on narrow screens */
+    .config-desktop-only {
+        display: none !important;
+    }
+
+    .config-level-select {
+        max-width: 120px;
+        font-size: 0.8em;
+        padding: 4px 6px;
+    }
+
+    /* Hide import/export from header on mobile — shown in actions bar instead */
+    .config-header-tool {
+        display: none !important;
+    }
+
+    /* Show import/export in actions bar on mobile */
+    .config-actions-tool {
+        display: inline-flex !important;
+    }
+}
+
+/* Import/export in actions bar: hidden on desktop (shown in header).
+   IMPORTANT: this rule must come AFTER the media query block so that
+   min-width desktop can override. Using min-width instead of !important
+   ordering to avoid CSS cascade conflicts. */
+@media (min-width: 769px) {
+    .config-actions-tool {
+        display: none !important;
     }
 }
 

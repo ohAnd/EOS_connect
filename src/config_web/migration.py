@@ -51,6 +51,8 @@ def migrate_yaml_to_store(config_dict: dict, store: ConfigStore, schema: ConfigS
         # Skip None values
         if value is None:
             continue
+        # Coerce value to match schema type (e.g. "enabled" → True for bool)
+        value = _coerce_migrated_value(schema, key, value)
         store.set(key, value)
         migrated_count += 1
 
@@ -143,6 +145,32 @@ def migrate_ha_options_to_store(
         migrated_count,
     )
     return True
+
+
+def _coerce_migrated_value(schema: ConfigSchema, key: str, value: Any) -> Any:
+    """
+    Coerce a migrated value to match the schema field type.
+
+    Handles legacy YAML values like "enabled"/"disabled" for bool fields.
+    """
+    field_def = schema.get(key)
+    if field_def is None:
+        return value
+
+    ft = field_def.field_type
+    if ft == "bool" and isinstance(value, str):
+        return value.lower() in ("true", "1", "yes", "enabled")
+    if ft == "int":
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return value
+    if ft == "float":
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return value
+    return value
 
 
 def _flatten_config(config_dict: dict, prefix: str = "") -> dict[str, Any]:

@@ -28,6 +28,7 @@ class ConfigurationManager {
         this.activeSection = null;
         this.toastContainer = null;
         this.restartFields = [];   // fields changed that need restart
+        this._restartPollTimer = null; // interval ID for restart polling
     }
 
     // ── Public entry point ──────────────────────────────────────
@@ -48,6 +49,7 @@ class ConfigurationManager {
         try {
             await this._loadData();
             this._renderFull();
+            this._notifyRestartState();
         } catch (err) {
             console.error("[ConfigurationManager] Failed to load config:", err);
             document.getElementById("full_screen_content").innerHTML = `
@@ -100,6 +102,19 @@ class ConfigurationManager {
         }
 
         this.originalValues = JSON.parse(JSON.stringify(this.values));
+
+        // Load any pending restart-required fields from the server
+        try {
+            const rrRes = await fetch("/api/config/restart-required");
+            if (rrRes.ok) {
+                const rrData = await rrRes.json();
+                if (rrData.fields && rrData.fields.length > 0) {
+                    this.restartFields = rrData.fields;
+                }
+            }
+        } catch (_) {
+            // Ignore — non-critical
+        }
     }
 
     // ── Full render ─────────────────────────────────────────────
@@ -155,23 +170,40 @@ class ConfigurationManager {
         ).join("");
 
         return `
-            <div style="display:flex;align-items:center;gap:10px;flex:1;">
+            <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;flex-wrap:wrap;">
                 <button class="config-mobile-back config-btn config-btn-secondary"
                         onclick="configurationManager._mobileBack()"
                         style="padding:6px 10px;font-size:0.85em;">
                     <i class="fas fa-arrow-left"></i>
                 </button>
                 <i class="fas fa-gear" style="color:#cccccc;"></i>
-                <span>Configuration</span>
+                <span class="config-desktop-only">Configuration</span>
                 <select class="config-level-select"
                         onchange="configurationManager._setLevel(this.value)"
                         title="Disclosure level">${opts}</select>
-                <button onclick="closeFullScreenOverlay(); showSetupWizard();"
-                        style="margin-left:auto;background:#4a9eff;color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:0.8em;cursor:pointer;display:inline-flex;align-items:center;gap:5px;"
-                        title="Run Setup Wizard">
-                    <i class="fas fa-wand-magic-sparkles"></i>
-                    <span class="config-desktop-only">Wizard</span>
-                </button>
+                <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+                    <button onclick="configurationManager._exportConfig()"
+                            class="config-btn config-btn-secondary config-header-tool"
+                            style="padding:5px 10px;font-size:0.8em;"
+                            title="Export Configuration">
+                        <i class="fas fa-download"></i>
+                    </button>
+                    <button onclick="document.getElementById('cfg-import-file').click()"
+                            class="config-btn config-btn-secondary config-header-tool"
+                            style="padding:5px 10px;font-size:0.8em;"
+                            title="Import Configuration">
+                        <i class="fas fa-upload"></i>
+                    </button>
+                    <input type="file" id="cfg-import-file" accept=".json"
+                           style="display:none;"
+                           onchange="configurationManager._importConfig(this.files[0])">
+                    <button onclick="closeFullScreenOverlay(); showSetupWizard();"
+                            style="background:#4a9eff;color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:0.8em;cursor:pointer;display:inline-flex;align-items:center;gap:5px;"
+                            title="Run Setup Wizard">
+                        <i class="fas fa-wand-magic-sparkles"></i>
+                        <span class="config-desktop-only">Wizard</span>
+                    </button>
+                </div>
             </div>`;
     }
 
@@ -260,6 +292,11 @@ class ConfigurationManager {
                 contentEl.innerHTML = this._renderSection(section);
             }
         }
+
+        // Show restart banner if fields pending from a previous save
+        if (this.restartFields.length > 0) {
+            this._showRestartBanner();
+        }
     }
 
     /**
@@ -337,7 +374,8 @@ class ConfigurationManager {
 
         for (const [groupName, groupFields] of groups) {
             if (groupName) {
-                html += `<div class="config-group">
+                const allHidden = groupFields.every(f => this._isDependencyHidden(f));
+                html += `<div class="config-group${allHidden ? ' hidden' : ''}" data-group="${groupName}">
                     <div class="config-group-title">${groupName}</div>
                     ${groupFields.map(f => this._renderField(f)).join("")}
                 </div>`;
@@ -398,7 +436,7 @@ class ConfigurationManager {
 
         // Help button
         const helpBtn = f.description
-            ? `<button class="config-help-btn" onclick="configurationManager._toggleHelp('${f.key}')" title="Help">
+            ? `<button class="config-help-btn" tabindex="-1" onclick="configurationManager._toggleHelp('${f.key}')" title="Help">
                  <i class="fas fa-circle-question"></i>
                </button>`
             : "";
@@ -451,10 +489,13 @@ class ConfigurationManager {
             attrs += ` step="any"`;
         }
         const displayVal = val !== null && val !== undefined ? val : "";
-        return `<input class="config-input" type="${inputType}"
+        const changedCls = this._isChanged(f.key) ? " changed" : "";
+        const maxLen = inputType === "text" ? ` maxlength="2000"` : "";
+        return `<input class="config-input${changedCls}" type="${inputType}"
                        data-key="${f.key}"
                        value="${this._escapeAttr(String(displayVal))}"
-                       ${attrs}
+                       ${attrs}${maxLen}
+                       oninput="configurationManager._onFieldChange('${f.key}', this.value)"
                        onchange="configurationManager._onFieldChange('${f.key}', this.value)">`;
     }
 
@@ -470,7 +511,8 @@ class ConfigurationManager {
             const selected = String(c) === String(val) ? "selected" : "";
             return `<option value="${this._escapeAttr(String(c))}" ${selected}>${c}</option>`;
         }).join("");
-        return `<select class="config-select" data-key="${f.key}"
+        const changedCls = this._isChanged(f.key) ? " changed" : "";
+        return `<select class="config-select${changedCls}" data-key="${f.key}"
                         onchange="configurationManager._onFieldChange('${f.key}', this.value)">
                     ${opts}
                 </select>`;
@@ -483,8 +525,10 @@ class ConfigurationManager {
      * @returns {string} Toggle HTML
      */
     _renderToggle(f, val) {
-        const checked = val === true || val === "true" || val === "True" ? "checked" : "";
-        return `<label class="config-toggle">
+        const checked = val === true || val === "true" || val === "True"
+            || val === "enabled" || val === "yes" || val === "1" ? "checked" : "";
+        const changedCls = this._isChanged(f.key) ? " changed" : "";
+        return `<label class="config-toggle${changedCls}" data-toggle-key="${f.key}">
             <input type="checkbox" data-key="${f.key}" ${checked}
                    onchange="configurationManager._onFieldChange('${f.key}', this.checked)">
             <span class="config-toggle-slider"></span>
@@ -499,11 +543,13 @@ class ConfigurationManager {
      */
     _renderPassword(f, val) {
         const displayVal = val !== null && val !== undefined ? val : "";
+        const changedCls = this._isChanged(f.key) ? " changed" : "";
         return `<div class="config-password-wrap">
-            <input class="config-input" type="password"
+            <input class="config-input${changedCls}" type="password"
                    id="cfg-pw-${this._cssKey(f.key)}"
                    data-key="${f.key}"
                    value="${this._escapeAttr(String(displayVal))}"
+                   oninput="configurationManager._onFieldChange('${f.key}', this.value)"
                    onchange="configurationManager._onFieldChange('${f.key}', this.value)">
             <button class="config-password-toggle"
                     onclick="configurationManager._togglePassword('${f.key}')"
@@ -619,7 +665,12 @@ class ConfigurationManager {
 
         for (const f of pvFields) {
             const subKey = f.key.split(".").pop();
-            this.values[`pv_forecast.${newIdx}.${subKey}`] = f.default;
+            let defaultVal = f.default;
+            // Auto-increment name to avoid duplicates
+            if (subKey === "name") {
+                defaultVal = `myPvInstallation${newIdx + 1}`;
+            }
+            this.values[`pv_forecast.${newIdx}.${subKey}`] = defaultVal;
         }
 
         // Re-render
@@ -674,10 +725,29 @@ class ConfigurationManager {
                     onclick="configurationManager._resetSection('${section}')">
                 <i class="fas fa-undo"></i> Reset
             </button>
+            <button class="config-btn config-btn-secondary config-actions-tool"
+                    onclick="configurationManager._exportConfig()"
+                    title="Export Configuration">
+                <i class="fas fa-download"></i>
+            </button>
+            <button class="config-btn config-btn-secondary config-actions-tool"
+                    onclick="document.getElementById('cfg-import-file').click()"
+                    title="Import Configuration">
+                <i class="fas fa-upload"></i>
+            </button>
         </div>`;
     }
 
     // ── Field change handling ───────────────────────────────────
+
+    /**
+     * Check if a field value differs from its original (loaded) value.
+     * @param {string} key - Dot-notation key
+     * @returns {boolean} True if changed
+     */
+    _isChanged(key) {
+        return String(this.values[key] ?? "") !== String(this.originalValues[key] ?? "");
+    }
 
     /**
      * Handle a field value change from the UI.
@@ -691,13 +761,23 @@ class ConfigurationManager {
         this._updateDependencies(key);
 
         // Mark the input as changed
-        const input = document.querySelector(`[data-key="${key}"]`);
+        const input = document.querySelector(`input[data-key="${key}"], select[data-key="${key}"]`);
         if (input && input.classList) {
             const original = this.originalValues[key];
             if (String(value) !== String(original)) {
                 input.classList.add("changed");
             } else {
                 input.classList.remove("changed");
+            }
+        }
+        // For toggles, also mark/unmark the visible <label> wrapper
+        const toggleLabel = document.querySelector(`label[data-toggle-key="${key}"]`);
+        if (toggleLabel) {
+            const original = this.originalValues[key];
+            if (String(value) !== String(original)) {
+                toggleLabel.classList.add("changed");
+            } else {
+                toggleLabel.classList.remove("changed");
             }
         }
     }
@@ -756,6 +836,22 @@ class ConfigurationManager {
                 }
             }
         }
+        this._updateGroupVisibility();
+    }
+
+    /**
+     * Hide group containers when all their child fields are hidden.
+     */
+    _updateGroupVisibility() {
+        document.querySelectorAll(".config-group[data-group]").forEach(groupEl => {
+            const fields = groupEl.querySelectorAll(".config-field");
+            const allHidden = fields.length > 0 && [...fields].every(f => f.classList.contains("hidden"));
+            if (allHidden) {
+                groupEl.classList.add("hidden");
+            } else {
+                groupEl.classList.remove("hidden");
+            }
+        });
     }
 
     // ── Save / Reset ────────────────────────────────────────────
@@ -765,10 +861,61 @@ class ConfigurationManager {
      * @param {string} section - Section key
      */
     async _saveSection(section) {
+        // Clear any previous validation errors
+        this._clearValidationErrors();
+
         const changes = this._getChangedValues(section);
         if (Object.keys(changes).length === 0) {
             this._showToast("No changes to save.", "info");
             return;
+        }
+
+        // --- Client-side pre-validation ---
+        const clientErrors = [];
+        const emptyPasswords = [];
+
+        for (const [key, value] of Object.entries(changes)) {
+            const fd = this.schema.find(f => f.key === key);
+            if (!fd) continue;
+
+            if (typeof value === "string") {
+                if (value.length > 2000) {
+                    clientErrors.push({
+                        key,
+                        error: `Value too long (${value.length} chars, max 2000)`,
+                    });
+                } else if ((fd.type === "str" || fd.type === "sensor")
+                            && /<[a-zA-Z/!]/.test(value)) {
+                    clientErrors.push({
+                        key,
+                        error: "HTML tags are not allowed in this field",
+                    });
+                }
+            }
+
+            if (fd.type === "password" && value === "") {
+                emptyPasswords.push(key);
+            }
+        }
+
+        if (clientErrors.length > 0) {
+            this._showValidationErrors(clientErrors);
+            return;
+        }
+
+        if (emptyPasswords.length > 0) {
+            // Show inline warning per field (non-blocking)
+            for (const key of emptyPasswords) {
+                const errEl = document.getElementById(`cfg-err-${this._cssKey(key)}`);
+                if (errEl) {
+                    errEl.textContent = "Saved empty — ensure no credentials are required here.";
+                    errEl.classList.add("visible", "warning");
+                }
+            }
+            this._showToast(
+                `${emptyPasswords.length} password field(s) saved empty.`,
+                "warning",
+            );
         }
 
         // Validate first
@@ -814,6 +961,11 @@ class ConfigurationManager {
                     el.classList.remove("changed");
                 }
             });
+            document.querySelectorAll(".config-toggle.changed").forEach(el => {
+                if (changes[el.dataset.toggleKey] !== undefined) {
+                    el.classList.remove("changed");
+                }
+            });
 
             // Handle restart-required vs hot-reloaded
             const hasRestart = result.restart_required && result.restart_required.length > 0;
@@ -824,6 +976,7 @@ class ConfigurationManager {
                     ...new Set([...this.restartFields, ...result.restart_required]),
                 ];
                 this._showRestartBanner();
+                this._notifyRestartState();
                 this._showToast(`Saved. Restart required for: ${result.restart_required.length} field(s).`, "warning");
             } else if (hasHotReload) {
                 this._showToast(`Saved & applied live (${result.hot_reloaded.length} field(s)). No restart needed.`, "success");
@@ -854,6 +1007,84 @@ class ConfigurationManager {
         // Re-render section
         this._selectSection(section);
         this._showToast("Reset to last saved values.", "info");
+    }
+
+    // ── Import / Export ─────────────────────────────────────────
+
+    /**
+     * Export the full configuration as a downloadable JSON file.
+     */
+    async _exportConfig() {
+        try {
+            const res = await fetch("/api/config/export");
+            if (!res.ok) {
+                this._showToast("Export failed: " + res.status, "error");
+                return;
+            }
+            const data = await res.json();
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `eos_connect_config_${new Date().toISOString().slice(0, 10)}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            this._showToast("Configuration exported.", "success");
+        } catch (err) {
+            this._showToast("Export failed: " + (err.message || err), "error");
+        }
+    }
+
+    /**
+     * Import configuration from a JSON file.
+     * @param {File} file - The selected JSON file
+     */
+    async _importConfig(file) {
+        if (!file) {
+            return;
+        }
+        try {
+            const text = await file.text();
+            const data = JSON.parse(text);
+            if (typeof data !== "object" || Array.isArray(data)) {
+                this._showToast("Import failed: file must contain a JSON object.", "error");
+                return;
+            }
+
+            const res = await fetch("/api/config/import", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(data),
+            });
+
+            const result = await res.json();
+            if (!res.ok) {
+                const errMsg = result.error || result.errors?.map(e => e.error).join(", ") || res.status;
+                this._showToast("Import failed: " + errMsg, "error");
+                return;
+            }
+
+            const count = result.imported || 0;
+            const skipped = result.skipped || 0;
+            let msg = `Imported ${count} setting(s).`;
+            if (skipped > 0) {
+                msg += ` Skipped ${skipped} unknown key(s).`;
+            }
+
+            // Reload data to reflect imported values
+            await this._loadData();
+            this._selectSection(this.currentSection || this._orderedSections()[0]);
+            this._showToast(msg, "success");
+        } catch (err) {
+            this._showToast("Import failed: " + (err.message || err), "error");
+        }
+        // Reset file input so the same file can be re-imported
+        const fileInput = document.getElementById("cfg-import-file");
+        if (fileInput) {
+            fileInput.value = "";
+        }
     }
 
     /**
@@ -893,15 +1124,21 @@ class ConfigurationManager {
      * Show validation errors on the form.
      * @param {Object[]} errors - Array of {key, error} objects
      */
-    _showValidationErrors(errors) {
-        // Clear previous errors
+    /**
+     * Clear all validation error indicators from the form.
+     */
+    _clearValidationErrors() {
         document.querySelectorAll(".config-field-error.visible").forEach(el => {
-            el.classList.remove("visible");
+            el.classList.remove("visible", "warning");
             el.textContent = "";
         });
         document.querySelectorAll(".config-input.invalid").forEach(el => {
             el.classList.remove("invalid");
         });
+    }
+
+    _showValidationErrors(errors) {
+        this._clearValidationErrors();
 
         for (const e of errors) {
             const errEl = document.getElementById(`cfg-err-${this._cssKey(e.key)}`);
@@ -932,6 +1169,56 @@ class ConfigurationManager {
         if (msg) {
             msg.textContent = `Restart required for: ${this.restartFields.join(", ")}`;
         }
+    }
+
+    /**
+     * Notify external UI about restart-pending state.
+     * Shows an orange dot on the hamburger menu when restart is needed.
+     */
+    _notifyRestartState() {
+        if (typeof MenuNotifications !== "undefined") {
+            MenuNotifications.setRestartPending(this.restartFields.length > 0);
+        }
+        // Start polling to auto-clear after server restart
+        this._startRestartPoll();
+    }
+
+    /**
+     * Poll /api/config/restart-required to detect when server has restarted
+     * (which clears the pending list). Clears banner + dot when empty.
+     */
+    _startRestartPoll() {
+        if (this._restartPollTimer) {
+            clearInterval(this._restartPollTimer);
+        }
+        if (this.restartFields.length === 0) {
+            return;
+        }
+        this._restartPollTimer = setInterval(async () => {
+            try {
+                const res = await fetch("/api/config/restart-required");
+                if (!res.ok) {
+                    return;
+                }
+                const data = await res.json();
+                if (!data.fields || data.fields.length === 0) {
+                    // Server has restarted — clear banner and dot
+                    this.restartFields = [];
+                    clearInterval(this._restartPollTimer);
+                    this._restartPollTimer = null;
+                    const banner = document.getElementById("cfg-restart-banner");
+                    if (banner) {
+                        banner.classList.remove("visible");
+                    }
+                    if (typeof MenuNotifications !== "undefined") {
+                        MenuNotifications.setRestartPending(false);
+                    }
+                    this._showToast("Server restarted. Changes applied.", "success");
+                }
+            } catch (_) {
+                // Server might be restarting — ignore
+            }
+        }, 10000); // Check every 10 seconds
     }
 
     // ── Toast notifications ─────────────────────────────────────
@@ -1126,3 +1413,26 @@ function showConfigurationMenu() {
     }
     configurationManager.showConfigurationMenu();
 }
+
+/**
+ * On page load, check if a restart is pending and show the dot immediately.
+ * This ensures the notification is visible after page reload without
+ * requiring the config overlay to be opened first.
+ */
+document.addEventListener("DOMContentLoaded", () => {
+    fetch("/api/config/restart-required")
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+            if (data && data.fields && data.fields.length > 0) {
+                if (!configurationManager) {
+                    configurationManager = new ConfigurationManager();
+                }
+                configurationManager.restartFields = data.fields;
+                if (typeof MenuNotifications !== "undefined") {
+                    MenuNotifications.setRestartPending(true);
+                }
+                configurationManager._startRestartPoll();
+            }
+        })
+        .catch(() => {}); // non-critical
+});

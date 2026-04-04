@@ -666,6 +666,19 @@ class PriceInterface:
                 "[PRICE-IF] Price source '%s' currently not supported.", self.src
             )
             return []  # Changed from self.default_prices to []
+
+        # HTTP headers only accept ASCII/latin-1 — reject tokens that would
+        # cause a UnicodeEncodeError deep in the requests stack.
+        try:
+            self.access_token.encode("latin-1")
+        except UnicodeEncodeError:
+            logger.error(
+                "[PRICE-IF] Tibber access token contains non-latin-1 characters "
+                "and cannot be used in an HTTP header. "
+                "Check your price.token configuration."
+            )
+            return []
+
         headers = {
             "Authorization": self.access_token,
             "Content-Type": "application/json",
@@ -717,6 +730,13 @@ class PriceInterface:
                 e,
             )
             return []  # Changed from self.default_prices to []
+        except UnicodeEncodeError as e:
+            logger.error(
+                "[PRICE-IF] Tibber token contains characters not valid in HTTP headers: %s. "
+                "Check your price.token configuration.",
+                e,
+            )
+            return []
 
         response.raise_for_status()
         data = response.json()

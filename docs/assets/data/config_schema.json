@@ -162,7 +162,9 @@
       "section": "load",
       "level": "standard",
       "description": "Entity/item for additional load power in watts (leave empty if not used)",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#load",
       "validation": {},
       "depends_on": null,
@@ -176,7 +178,9 @@
       "section": "load",
       "level": "standard",
       "description": "Runtime for additional load 1 in minutes (0 = not used)",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#load",
       "validation": {
         "min": 0
@@ -194,7 +198,9 @@
       "section": "load",
       "level": "standard",
       "description": "Consumption for additional load 1 in Wh for one hour (0 = not used)",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#load",
       "validation": {
         "min": 0
@@ -269,7 +275,9 @@
       "section": "eos",
       "level": "standard",
       "description": "Time frame for optimization requests in seconds",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#eos",
       "validation": {
         "choices": [
@@ -288,7 +296,9 @@
       "section": "eos",
       "level": "standard",
       "description": "Timeout for optimization requests in seconds",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#eos",
       "validation": {
         "min": 10,
@@ -305,7 +315,9 @@
       "section": "eos",
       "level": "standard",
       "description": "Allow discharge when PV forecast exceeds load, even if optimizer says avoid",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#eos",
       "validation": {},
       "depends_on": null,
@@ -320,7 +332,8 @@
       "level": "expert",
       "description": "Enable PV-to-battery charge control from optimizer dc_charge signal (Fronius Gen24 only)",
       "labels": [
-        "experimental"
+        "experimental",
+        "restart_required"
       ],
       "help_url": "configuration.html#eos",
       "validation": {},
@@ -359,7 +372,9 @@
       "section": "price",
       "level": "getting_started",
       "description": "API token for price provider (Tibber bearer token, Stromligning supplierId/productId)",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#price",
       "validation": {},
       "depends_on": {
@@ -406,7 +421,9 @@
       "section": "price",
       "level": "standard",
       "description": "24 comma-separated prices in ct/kWh for each hour (used with fixed_24h source)",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#price",
       "validation": {},
       "depends_on": {
@@ -460,7 +477,7 @@
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
-      "display_group": "EnergyForecast"
+      "display_group": "Energy Price Forecast"
     },
     {
       "key": "price.energyforecast_token",
@@ -470,7 +487,8 @@
       "level": "standard",
       "description": "API token from energyforecast.de",
       "labels": [
-        "experimental"
+        "experimental",
+        "restart_required"
       ],
       "help_url": "configuration.html#energyforecast",
       "validation": {},
@@ -480,7 +498,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "EnergyForecast"
+      "display_group": "Energy Price Forecast"
     },
     {
       "key": "price.energyforecast_market_zone",
@@ -488,9 +506,10 @@
       "default": "DE-LU",
       "section": "price",
       "level": "standard",
-      "description": "Market zone for energy forecast",
+      "description": "Market zone for energy price forecast",
       "labels": [
-        "experimental"
+        "experimental",
+        "restart_required"
       ],
       "help_url": "configuration.html#energyforecast",
       "validation": {
@@ -511,7 +530,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "EnergyForecast"
+      "display_group": "Energy Price Forecast"
     },
     {
       "key": "battery.source",
@@ -613,7 +632,9 @@
       "section": "battery",
       "level": "standard",
       "description": "Charging efficiency (0.0 to 1.0)",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery",
       "validation": {
         "min": 0.1,
@@ -630,7 +651,9 @@
       "section": "battery",
       "level": "standard",
       "description": "Discharging efficiency (0.0 to 1.0)",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery",
       "validation": {
         "min": 0.1,
@@ -647,7 +670,9 @@
       "section": "battery",
       "level": "standard",
       "description": "Maximum charging power in watts",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery",
       "validation": {
         "min": 100,
@@ -698,7 +723,9 @@
       "section": "battery",
       "level": "standard",
       "description": "Enable charging curve for controlled charging power according to SOC",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery",
       "validation": {},
       "depends_on": null,
@@ -712,7 +739,9 @@
       "section": "battery",
       "level": "standard",
       "description": "Sensor for battery temperature in °C (leave empty if not available)",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery",
       "validation": {},
       "depends_on": null,
@@ -726,7 +755,9 @@
       "section": "battery",
       "level": "standard",
       "description": "Static battery price in €/Wh (0 = use dynamic or ignore)",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery",
       "validation": {
         "min": 0.0
@@ -742,7 +773,9 @@
       "section": "battery",
       "level": "expert",
       "description": "Sensor/item providing battery energy cost in €/Wh",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery",
       "validation": {},
       "depends_on": null,
@@ -756,7 +789,9 @@
       "section": "battery",
       "level": "standard",
       "description": "Enable dynamic battery price calculation based on history",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery-price",
       "validation": {},
       "depends_on": null,
@@ -770,7 +805,9 @@
       "section": "battery",
       "level": "expert",
       "description": "Interval for price update in seconds",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery-price",
       "validation": {
         "min": 60,
@@ -791,7 +828,9 @@
       "section": "battery",
       "level": "expert",
       "description": "Hours of history to analyze for price calculation",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery-price",
       "validation": {
         "min": 1,
@@ -812,7 +851,9 @@
       "section": "battery",
       "level": "standard",
       "description": "Sensor for battery power in W (positive = charging)",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery-price",
       "validation": {},
       "depends_on": {
@@ -830,7 +871,9 @@
       "section": "battery",
       "level": "standard",
       "description": "Sensor for PV power in W",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery-price",
       "validation": {},
       "depends_on": {
@@ -848,7 +891,9 @@
       "section": "battery",
       "level": "standard",
       "description": "Sensor for grid power in W (positive = import)",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery-price",
       "validation": {},
       "depends_on": {
@@ -866,7 +911,9 @@
       "section": "battery",
       "level": "standard",
       "description": "Sensor for load power in W",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery-price",
       "validation": {},
       "depends_on": {
@@ -884,7 +931,9 @@
       "section": "battery",
       "level": "standard",
       "description": "Sensor for electricity price in €/kWh or ct/kWh",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#battery-price",
       "validation": {},
       "depends_on": {
@@ -1201,12 +1250,55 @@
           "fronius_gen24_legacy",
           "victron",
           "evcc",
+          "homeassistant",
           "default"
         ]
       },
       "depends_on": null,
       "hot_reload": false,
       "display_group": "Hardware"
+    },
+    {
+      "key": "inverter.url",
+      "type": "str",
+      "default": "",
+      "section": "inverter",
+      "level": "getting_started",
+      "description": "Home Assistant URL for inverter control (e.g. http://homeassistant.local:8123)",
+      "labels": [
+        "restart_required",
+        "deprecated"
+      ],
+      "help_url": "configuration.html#inverter",
+      "validation": {},
+      "depends_on": {
+        "inverter.type": [
+          "homeassistant"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Home Assistant"
+    },
+    {
+      "key": "inverter.token",
+      "type": "password",
+      "default": "",
+      "section": "inverter",
+      "level": "getting_started",
+      "description": "Long-lived access token for Home Assistant inverter control",
+      "labels": [
+        "restart_required",
+        "deprecated"
+      ],
+      "help_url": "configuration.html#inverter",
+      "validation": {},
+      "depends_on": {
+        "inverter.type": [
+          "homeassistant"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Home Assistant"
     },
     {
       "key": "inverter.address",
@@ -1279,7 +1371,9 @@
       "section": "inverter",
       "level": "standard",
       "description": "Maximum inverter grid charge rate in W",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#inverter",
       "validation": {
         "min": 0,
@@ -1296,7 +1390,9 @@
       "section": "inverter",
       "level": "standard",
       "description": "Maximum inverter PV charge rate in W",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#inverter",
       "validation": {
         "min": 0,
@@ -1480,6 +1576,10 @@
       "help_url": "configuration.html#mqtt",
       "validation": {},
       "depends_on": {
+        "mqtt.enabled": [
+          true,
+          "enabled"
+        ],
         "mqtt.ha_mqtt_auto_discovery": [
           true
         ]
@@ -1571,7 +1671,9 @@
       "section": "system",
       "level": "expert",
       "description": "Timeout for Home Assistant / OpenHAB API calls in seconds",
-      "labels": [],
+      "labels": [
+        "restart_required"
+      ],
       "help_url": "configuration.html#system",
       "validation": {
         "min": 5,

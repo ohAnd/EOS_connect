@@ -98,7 +98,7 @@ def update_config():
     hot_reloaded = []
 
     for key, value in data.items():
-        field_def = _schema.get(key)
+        field_def = _resolve_schema_key(key)
         if field_def is None:
             continue
 
@@ -113,6 +113,12 @@ def update_config():
 
     # Rebuild merged config so get_config() reflects changes
     _module.rebuild_config()
+
+    # Persist restart-required fields for banner across reloads
+    if restart_required:
+        existing = _store.get("_restart_pending", []) or []
+        merged = list(set(existing + restart_required))
+        _store.set("_restart_pending", merged)
 
     return jsonify({
         "updated": changed_keys,
@@ -145,8 +151,8 @@ def validate_config():
 @config_bp.route("/restart-required", methods=["GET"])
 def get_restart_required():
     """Return list of fields that have been changed and require a restart."""
-    # Track restart-required changes in session — for now return empty
-    return jsonify({"fields": []})
+    fields = _store.get("_restart_pending", []) or []
+    return jsonify({"fields": fields})
 
 
 # ------------------------------------------------------------------
@@ -157,7 +163,14 @@ def get_restart_required():
 def export_config():
     """Export current config as a flat JSON dict (for backup)."""
     all_settings = _store.export_dict()
-    return jsonify(all_settings)
+    # Exclude internal keys (prefixed with _) and raw array keys that are
+    # redundant with their indexed children (e.g. "pv_forecast" array is
+    # already present as "pv_forecast.0.azimuth" etc.)
+    filtered = {
+        k: v for k, v in all_settings.items()
+        if not k.startswith("_") and _resolve_schema_key(k) is not None
+    }
+    return jsonify(filtered)
 
 
 @config_bp.route("/import", methods=["POST"])
@@ -167,9 +180,22 @@ def import_config():
     if not data or not isinstance(data, dict):
         return jsonify({"error": "Request body must be a JSON object"}), 400
 
-    count = _store.import_dict(data)
+    # Filter to known keys only, skip internal keys
+    valid_data = {}
+    skipped = 0
+    for key, value in data.items():
+        if key.startswith("_"):
+            skipped += 1
+            continue
+        field_def = _resolve_schema_key(key)
+        if field_def is None:
+            skipped += 1
+            continue
+        valid_data[key] = _coerce_value(field_def, value)
+
+    count = _store.import_dict(valid_data) if valid_data else 0
     _module.rebuild_config()
-    return jsonify({"imported": count})
+    return jsonify({"imported": count, "skipped": skipped})
 
 
 # ------------------------------------------------------------------
@@ -199,11 +225,28 @@ def wizard_complete():
 # Helpers
 # ------------------------------------------------------------------
 
+def _resolve_schema_key(key: str):
+    """Resolve a key to its schema definition, handling PV array indexed keys.
+
+    PV forecast keys are stored as ``pv_forecast.0.name``, ``pv_forecast.1.azimuth``,
+    etc., but the schema defines them as ``pv_forecast.name``, ``pv_forecast.azimuth``.
+    """
+    field_def = _schema.get(key)
+    if field_def is not None:
+        return field_def
+    # Try stripping array index: pv_forecast.0.name → pv_forecast.name
+    m = re.match(r'^(\w+)\.\d+\.(.+)$', key)
+    if m:
+        template_key = f"{m.group(1)}.{m.group(2)}"
+        return _schema.get(template_key)
+    return None
+
+
 def _validate_updates(data: dict) -> list[dict]:
     """Validate a dict of {key: value} against the schema. Returns list of error dicts."""
     errors = []
     for key, value in data.items():
-        field_def = _schema.get(key)
+        field_def = _resolve_schema_key(key)
         if field_def is None:
             errors.append({"key": key, "error": "Unknown configuration key"})
             continue
@@ -217,6 +260,24 @@ def _validate_updates(data: dict) -> list[dict]:
 
 def _validate_single(field_def, value) -> str:
     """Validate a single value against its field definition. Returns error string or ''."""
+    # --- Global checks applied before schema-specific validation ---
+
+    # Max string length (defence against absurdly long values)
+    if isinstance(value, str) and len(value) > 2000:
+        return f"Value too long ({len(value)} chars, max 2000)"
+
+    # HTML/script injection (str and sensor fields only — passwords may contain symbols)
+    if field_def.field_type in ("str", "sensor") and isinstance(value, str):
+        if re.search(r"<[a-zA-Z/!]", value):
+            return "HTML tags are not allowed in this field"
+
+    # Password/token fields must be ASCII-safe for use in HTTP headers
+    if field_def.field_type == "password" and isinstance(value, str) and value:
+        try:
+            value.encode("latin-1")
+        except UnicodeEncodeError:
+            return "Token/password must contain only ASCII characters (HTTP header restriction)"
+
     v = field_def.validation
     if not v:
         return ""
@@ -244,6 +305,10 @@ def _validate_single(field_def, value) -> str:
     if "pattern" in v and isinstance(value, str):
         if not re.match(v["pattern"], value):
             return f"Must match pattern: {v['pattern']}"
+
+    # Required (empty check for fields marked required)
+    if v.get("required") and (value is None or value == ""):
+        return "This field is required"
 
     return ""
 
