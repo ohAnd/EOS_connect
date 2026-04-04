@@ -1,0 +1,389 @@
+/* ─── Setup Wizard Styles ─────────────────────────────────────── */
+
+.wizard-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 16px;
+}
+
+/* ── Progress bar ─────────────────────────────────────────────── */
+
+.wizard-progress {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 16px 0 8px;
+    flex-shrink: 0;
+}
+
+.wizard-progress-step {
+    width: 32px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.15);
+    transition: background 0.3s ease;
+}
+
+.wizard-progress-step.completed {
+    background: #4a9eff;
+}
+
+.wizard-progress-step.active {
+    background: #4a9eff;
+    box-shadow: 0 0 6px rgba(74, 158, 255, 0.5);
+}
+
+.wizard-step-label {
+    text-align: center;
+    font-size: 0.8em;
+    color: #888;
+    padding-bottom: 12px;
+}
+
+/* ── Step content ─────────────────────────────────────────────── */
+
+.wizard-step {
+    flex: 1;
+    overflow-y: auto;
+    padding-bottom: 16px;
+}
+
+.wizard-step-title {
+    font-size: 1.4em;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 6px;
+}
+
+.wizard-step-description {
+    font-size: 0.9em;
+    color: #aaa;
+    margin-bottom: 20px;
+    line-height: 1.5;
+}
+
+/* ── Welcome step ─────────────────────────────────────────────── */
+
+.wizard-welcome {
+    text-align: center;
+    padding: 30px 20px;
+}
+
+.wizard-welcome-icon {
+    font-size: 3em;
+    color: #4a9eff;
+    margin-bottom: 20px;
+}
+
+.wizard-welcome h2 {
+    font-size: 1.6em;
+    color: #fff;
+    margin-bottom: 12px;
+}
+
+.wizard-welcome p {
+    color: #aaa;
+    line-height: 1.6;
+    margin-bottom: 16px;
+    font-size: 0.95em;
+}
+
+.wizard-welcome-features {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 20px;
+    text-align: left;
+}
+
+.wizard-feature {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.wizard-feature i {
+    color: #4a9eff;
+    font-size: 1.1em;
+    width: 20px;
+    text-align: center;
+}
+
+.wizard-feature span {
+    font-size: 0.85em;
+    color: #ccc;
+}
+
+/* ── Review step ──────────────────────────────────────────────── */
+
+.wizard-review-section {
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+}
+
+.wizard-review-section h4 {
+    color: #4a9eff;
+    font-size: 0.9em;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.wizard-review-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+    font-size: 0.85em;
+}
+
+.wizard-review-row .label {
+    color: #888;
+}
+
+.wizard-review-row .value {
+    color: #ddd;
+    max-width: 60%;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wizard-review-row .value.password {
+    color: #666;
+}
+
+/* ── Form fields (reuse config styles where possible) ─────────── */
+
+.wizard-field {
+    margin-bottom: 16px;
+}
+
+.wizard-field label {
+    display: block;
+    font-size: 0.85em;
+    color: #ccc;
+    margin-bottom: 5px;
+    font-weight: 500;
+}
+
+.wizard-field label .required {
+    color: #dc3545;
+    margin-left: 2px;
+}
+
+.wizard-field input[type="text"],
+.wizard-field input[type="number"],
+.wizard-field input[type="password"],
+.wizard-field select {
+    width: 100%;
+    padding: 10px 12px;
+    background-color: rgba(58, 58, 58, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    color: #e0e0e0;
+    font-size: 0.95em;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    box-sizing: border-box;
+}
+
+.wizard-field select {
+    cursor: pointer;
+}
+
+.wizard-field select option {
+    background-color: rgb(58, 58, 58);
+    color: #e0e0e0;
+}
+
+.wizard-field input:focus,
+.wizard-field select:focus {
+    border-color: #4a9eff;
+    box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.2);
+}
+
+.wizard-field .field-hint {
+    font-size: 0.78em;
+    color: #777;
+    margin-top: 4px;
+}
+
+.wizard-field .field-error {
+    font-size: 0.8em;
+    color: #dc3545;
+    margin-top: 4px;
+    display: none;
+}
+
+.wizard-field.has-error input,
+.wizard-field.has-error select {
+    border-color: #dc3545;
+}
+
+.wizard-field.has-error .field-error {
+    display: block;
+}
+
+/* ── Conditional fields ───────────────────────────────────────── */
+
+.wizard-conditional {
+    transition: max-height 0.3s ease, opacity 0.3s ease;
+    overflow: hidden;
+}
+
+.wizard-conditional.hidden {
+    max-height: 0;
+    opacity: 0;
+    margin: 0;
+    padding: 0;
+}
+
+/* ── Skip toggle ──────────────────────────────────────────────── */
+
+.wizard-skip-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    cursor: pointer;
+}
+
+.wizard-skip-row input[type="checkbox"] {
+    accent-color: #4a9eff;
+    width: 18px;
+    height: 18px;
+}
+
+.wizard-skip-row span {
+    font-size: 0.9em;
+    color: #aaa;
+}
+
+/* ── Navigation buttons ───────────────────────────────────────── */
+
+.wizard-nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+}
+
+.wizard-btn {
+    padding: 10px 24px;
+    border-radius: 8px;
+    border: none;
+    font-size: 0.95em;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.wizard-btn-back {
+    background: rgba(255, 255, 255, 0.08);
+    color: #ccc;
+}
+
+.wizard-btn-back:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.wizard-btn-next {
+    background: #4a9eff;
+    color: #fff;
+    font-weight: 600;
+}
+
+.wizard-btn-next:hover {
+    background: #5aadff;
+}
+
+.wizard-btn-next:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.wizard-btn-skip {
+    background: transparent;
+    color: #888;
+    font-size: 0.85em;
+}
+
+.wizard-btn-skip:hover {
+    color: #bbb;
+}
+
+/* ── Password toggle inside wizard ────────────────────────────── */
+
+.wizard-password-wrap {
+    position: relative;
+}
+
+.wizard-password-wrap input {
+    padding-right: 40px;
+}
+
+.wizard-password-toggle {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 0.9em;
+    padding: 4px;
+}
+
+.wizard-password-toggle:hover {
+    color: #ccc;
+}
+
+/* ── Mobile responsive ────────────────────────────────────────── */
+
+@media (max-width: 600px) {
+    .wizard-container {
+        padding: 0 10px;
+    }
+
+    .wizard-welcome-features {
+        grid-template-columns: 1fr;
+    }
+
+    .wizard-step-title {
+        font-size: 1.2em;
+    }
+
+    .wizard-btn {
+        padding: 10px 16px;
+        font-size: 0.85em;
+    }
+
+    .wizard-review-row {
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .wizard-review-row .value {
+        max-width: 100%;
+        text-align: left;
+    }
+}

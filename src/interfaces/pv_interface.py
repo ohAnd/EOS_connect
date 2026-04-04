@@ -186,7 +186,7 @@ class PvInterface:
                     "[PV-IF] Victron API key missing in pv_forecast_source section"
                 )
                 logger.error(
-                    '[PV-IF] Please add: api_key: "your_victron_api_token" in config.yaml'
+                    '[PV-IF] Please set api_key in Settings → PV Forecast'
                 )
                 raise ValueError(
                     "[PV-IF] Victron API key (api_key) required - see"
@@ -202,7 +202,7 @@ class PvInterface:
                     "[PV-IF] Solcast API key missing in pv_forecast_source section"
                 )
                 logger.error(
-                    '[PV-IF] Please add: api_key: "your_solcast_api_key" in config.yaml'
+                    '[PV-IF] Please set api_key in Settings → PV Forecast'
                 )
                 raise ValueError(
                     "[PV-IF] Solcast API key required - see CONFIG_README.md"
@@ -217,7 +217,7 @@ class PvInterface:
                         entry_name,
                     )
                     logger.error(
-                        '[PV-IF] Please add: resource_id: "your_resource_id" in config.yaml'
+                        '[PV-IF] Please set resource_id in Settings → PV Forecast'
                     )
                     raise ValueError(
                         f"[PV-IF] Solcast resource_id required for '{entry_name}' - see"

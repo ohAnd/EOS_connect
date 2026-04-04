@@ -654,7 +654,7 @@
                 <ul>
                     <li><code>/json/optimize_request.json</code> - Last request data sent to optimization server</li>
                     <li><code>/json/optimize_response.json</code> - Last optimization results received</li>
-                    <li>Configuration: Set <code><a href="../user-guide/configuration.html#eos" style="color: inherit; text-decoration: underline;">time_frame</a></code> in config.yaml to control request interval. See <a href="../user-guide/configuration.html#time-slot-config" style="color: inherit; text-decoration: underline;">Time Slot Configuration</a> for details (default: 3600s)</li>
+                    <li>Configuration: Set <code><a href="../user-guide/configuration.html#eos" style="color: inherit; text-decoration: underline;">time_frame</a></code> in the web UI (<i class="fas fa-cog"></i> Settings → EOS) to control request interval. See <a href="../user-guide/configuration.html#time-slot-config" style="color: inherit; text-decoration: underline;">Time Slot Configuration</a> for details (default: 3600s)</li>
                 </ul>
             </div>
 
@@ -1570,14 +1570,16 @@ mosquitto_pub -t "myhome/eos_connect/control/overall_state/set" -m "0"</code></p
             </ol>
 
             <h4>Using Sensors</h4>
-            <p>Configure sensor sources in config.yaml:</p>
-            <pre><code>battery:
+            <p>Configure sensor sources in the web UI (<i class="fas fa-cog"></i> Settings → Data Source, Battery):</p>
+            <pre><code># Example settings:
+battery:
   source: homeassistant
   url: http://homeassistant:8123
   access_token: "your_long_lived_access_token"
   soc_sensor: sensor.battery_soc</code></pre>
 
             <h3>OpenHAB Integration</h3>
+            <p>Example configuration (set via web UI):</p>
             <pre><code>load:
   source: openhab
   url: http://openhab:8080

@@ -29,6 +29,7 @@ from interfaces.update_checker import UpdateChecker
 from interfaces.inverters import create_inverter
 from interfaces.inverters.null_inverter import NullInverter
 from interfaces.inverters.evcc_inverter import EvccInverter
+from config_web import ConfigWebModule
 
 # Check Python version early
 if sys.version_info < (3, 11):
@@ -130,6 +131,20 @@ logger.info(
     config_manager.config["time_zone"],
     LOGLEVEL,
 )
+
+# Phase 1: open the config DB and deep-update config_manager.config with any
+# values the user changed via the web UI.  All interfaces constructed below
+# will therefore receive the correct, authoritative values directly — no
+# post-init re-sync is needed.
+config_web = ConfigWebModule(config_manager)
+try:
+    config_web.start_db()
+except Exception:
+    logger.exception(
+        "[Main] Config database startup failed — continuing with config.yaml values. "
+        "Check data directory permissions and disk space."
+    )
+
 # initialize eos interface
 eos_interface = OptimizationInterface(
     config=config_manager.config["eos"],
@@ -1391,6 +1406,21 @@ mqtt_interface.on_mqtt_command = mqtt_control_callback
 # web server
 app = Flask(__name__)
 
+# Phase 2: register the Flask REST API now that app exists.
+try:
+    config_web.start_api(app)
+except Exception:
+    logger.exception("[Main] Config web API registration failed — config UI unavailable")
+
+# Register hot-reload: live config changes are applied without restart
+from config_web.hot_reload import HotReloadAdapter  # pylint: disable=wrong-import-position
+
+hot_reload_adapter = HotReloadAdapter(
+    price_interface=price_interface,
+    battery_interface=battery_interface,
+)
+config_web.register_hot_reload_callback(hot_reload_adapter.on_config_changed)
+
 
 # legacy web site support
 @app.route("/index_legacy.html", methods=["GET"])
@@ -2067,6 +2097,7 @@ if __name__ == "__main__":
         evcc_interface.shutdown()
         battery_interface.shutdown()
         update_checker.shutdown()
+        config_web.stop()
         logger.info("[Main] Server stopped gracefully")
     finally:
         logging.shutdown()  # This will call close() on all handlers
