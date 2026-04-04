@@ -33,18 +33,22 @@ def init_api(store, schema, module):
 # Schema
 # ------------------------------------------------------------------
 
+
 @config_bp.route("/schema", methods=["GET"])
 def get_schema():
     """Return the full config schema as JSON, including section metadata."""
-    return jsonify({
-        "fields": _schema.to_json(),
-        "sections": _schema.section_meta(),
-    })
+    return jsonify(
+        {
+            "fields": _schema.to_json(),
+            "sections": _schema.section_meta(),
+        }
+    )
 
 
 # ------------------------------------------------------------------
 # Read config
 # ------------------------------------------------------------------
+
 
 @config_bp.route("/", methods=["GET"])
 def get_config():
@@ -77,6 +81,7 @@ def get_section(section):
 # ------------------------------------------------------------------
 # Update config
 # ------------------------------------------------------------------
+
 
 @config_bp.route("/", methods=["PUT"])
 def update_config():
@@ -120,16 +125,19 @@ def update_config():
         merged = list(set(existing + restart_required))
         _store.set("_restart_pending", merged)
 
-    return jsonify({
-        "updated": changed_keys,
-        "restart_required": restart_required,
-        "hot_reloaded": hot_reloaded,
-    })
+    return jsonify(
+        {
+            "updated": changed_keys,
+            "restart_required": restart_required,
+            "hot_reloaded": hot_reloaded,
+        }
+    )
 
 
 # ------------------------------------------------------------------
 # Validate
 # ------------------------------------------------------------------
+
 
 @config_bp.route("/validate", methods=["POST"])
 def validate_config():
@@ -148,6 +156,7 @@ def validate_config():
 # Restart-required status
 # ------------------------------------------------------------------
 
+
 @config_bp.route("/restart-required", methods=["GET"])
 def get_restart_required():
     """Return list of fields that have been changed and require a restart."""
@@ -159,6 +168,7 @@ def get_restart_required():
 # Export / Import
 # ------------------------------------------------------------------
 
+
 @config_bp.route("/export", methods=["GET"])
 def export_config():
     """Export current config as a flat JSON dict (for backup)."""
@@ -167,7 +177,8 @@ def export_config():
     # redundant with their indexed children (e.g. "pv_forecast" array is
     # already present as "pv_forecast.0.azimuth" etc.)
     filtered = {
-        k: v for k, v in all_settings.items()
+        k: v
+        for k, v in all_settings.items()
         if not k.startswith("_") and _resolve_schema_key(k) is not None
     }
     return jsonify(filtered)
@@ -202,16 +213,19 @@ def import_config():
 # Wizard status
 # ------------------------------------------------------------------
 
+
 @config_bp.route("/wizard-status", methods=["GET"])
 def wizard_status():
     """Return wizard completion state."""
     completed = _store.get("_wizard_completed", False)
     migrated = _store.get("_migrated_from_yaml", False)
-    return jsonify({
-        "pending": not completed and not migrated,
-        "completed": bool(completed),
-        "migrated": bool(migrated),
-    })
+    return jsonify(
+        {
+            "pending": not completed and not migrated,
+            "completed": bool(completed),
+            "migrated": bool(migrated),
+        }
+    )
 
 
 @config_bp.route("/wizard-complete", methods=["POST"])
@@ -225,6 +239,7 @@ def wizard_complete():
 # Helpers
 # ------------------------------------------------------------------
 
+
 def _resolve_schema_key(key: str):
     """Resolve a key to its schema definition, handling PV array indexed keys.
 
@@ -235,7 +250,7 @@ def _resolve_schema_key(key: str):
     if field_def is not None:
         return field_def
     # Try stripping array index: pv_forecast.0.name → pv_forecast.name
-    m = re.match(r'^(\w+)\.\d+\.(.+)$', key)
+    m = re.match(r"^(\w+)\.\d+\.(.+)$", key)
     if m:
         template_key = f"{m.group(1)}.{m.group(2)}"
         return _schema.get(template_key)
@@ -327,7 +342,21 @@ def _coerce_value(field_def, value):
         if isinstance(value, str):
             return value.lower() in ("true", "1", "yes", "enabled")
         return bool(value)
-    # str, select, password, sensor — keep as-is
+    if ft == "select" and isinstance(value, str):
+        # The browser always sends strings; coerce to match the type of the
+        # choices list so that e.g. "3600" matches int choice 3600.
+        choices = (field_def.validation or {}).get("choices", [])
+        if choices and isinstance(choices[0], int):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                pass
+        if choices and isinstance(choices[0], float):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+    # str, password, sensor — keep as-is
     return value
 
 
