@@ -99,13 +99,13 @@ class BatteryInterface:
         if self.access_token != raw_token:
             logger.warning(
                 "[BATTERY-IF] access_token had leading/trailing whitespace stripped. "
-                "Check config.yaml: avoid using YAML block scalar style ('>-') for tokens."
+                "Check your access token setting for unintended spaces."
             )
         elif " " in self.access_token or "\n" in self.access_token:
             logger.warning(
                 "[BATTERY-IF] access_token contains internal whitespace. This will cause "
-                "HTTP 403 errors. In config.yaml, do NOT use '>-' block scalar style for "
-                "tokens — place the token directly after 'access_token: ' on the same line."
+                "HTTP 403 errors. Re-enter the token in Settings → Data Source "
+                "without extra spaces or line breaks."
             )
         self.max_charge_power_fix = config.get("max_charge_power_w", 1000)
         self.battery_data = config

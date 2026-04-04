@@ -667,8 +667,7 @@ class ConfigManager:
         """
         if "timeout" not in self.config["eos"]:
             logger.warning(
-                "[Config] 'eos.timeout' not found in config.yaml."
-                " Using default value of 180 s. Please add 'timeout: 180' under the 'eos:' section."
+                "[Config] 'eos.timeout' not found — using default value of 180 s."
             )
             self.config["eos"]["timeout"] = 180
         eos_timeout_seconds = self.config["eos"]["timeout"]
@@ -733,7 +732,7 @@ class ConfigManager:
         if market_zone not in valid_zones:
             logger.error(
                 "[Config] Invalid energyforecast_market_zone '%s'. "
-                "Must be one of: %s. Please correct in config.yaml",
+                "Must be one of: %s. Please correct in Settings → Price.",
                 market_zone,
                 ", ".join(valid_zones),
             )
