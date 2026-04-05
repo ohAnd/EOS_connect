@@ -71,7 +71,7 @@ def build_merged_config(
             result[key] = bootstrap_config.get(key, field_def.default)
 
     # pv_forecast — list of installations
-    result["pv_forecast"] = _build_pv_forecast(all_settings, bootstrap_config, defaults)
+    result["pv_forecast"] = _build_pv_forecast(all_settings, bootstrap_config, defaults, schema)
 
     # Resolve data_source -> load/battery connection fields
     _apply_data_source_inheritance(result, all_settings)
@@ -114,18 +114,52 @@ def _build_pv_forecast(
     all_settings: dict[str, Any],
     bootstrap_config: dict,
     defaults: dict,
+    schema: ConfigSchema,
 ) -> list:
     """
-    Rebuild the pv_forecast list.
+    Rebuild the pv_forecast list from store values.
 
-    The migration stores the entire list under the key ``pv_forecast``.
-    If not found in the store, fall back to the bootstrap config.
+    Two storage formats are supported:
+    1. Web UI format (preferred): indexed keys like ``pv_forecast.0.name``, ``pv_forecast.1.lat``, etc.
+    2. Migration format (fallback): entire list under key ``"pv_forecast"``
+
+    Missing fields in entries are filled with schema defaults.
+    Falls back to bootstrap config if neither is found.
     """
+    # Try format 1: indexed keys (from web UI) — preferred, checked first
+    result_dict = {}
+    for key, value in all_settings.items():
+        if key.startswith("pv_forecast."):
+            # Extract index and subkey: pv_forecast.0.name -> (0, "name")
+            parts = key.split(".")
+            if len(parts) >= 3 and parts[1].isdigit():
+                idx = int(parts[1])
+                subkey = ".".join(parts[2:])
+                if idx not in result_dict:
+                    result_dict[idx] = {}
+                result_dict[idx][subkey] = value
+
+    if result_dict:
+        # Rebuild list from dict, sorted by index, filling in missing fields from schema
+        result_list = []
+        for i in sorted(result_dict.keys()):
+            entry = result_dict[i].copy()
+            # Fill in missing fields with schema defaults
+            for field_def in schema.get_section("pv_forecast"):
+                # Extract the field name (e.g., "pv_forecast.name" -> "name")
+                field_name = field_def.key.split(".")[-1]
+                if field_name not in entry:
+                    entry[field_name] = field_def.default
+            result_list.append(entry)
+        return result_list
+
+    # Try format 2: single key (from migration) — fallback
     if "pv_forecast" in all_settings:
         stored = all_settings["pv_forecast"]
         if isinstance(stored, list):
             return stored
 
+    # Last resort: fallback to bootstrap config or defaults
     return bootstrap_config.get(
         "pv_forecast",
         defaults.get("pv_forecast", []),

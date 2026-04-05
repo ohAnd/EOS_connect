@@ -656,21 +656,51 @@ class ConfigurationManager {
     }
 
     /**
-     * Add a new empty PV installation.
+     * Add a new PV installation.
+     * If installations exist, copy values from the last one.
+     * Otherwise use schema defaults.
+     * New fields are NOT added to originalValues so they appear as "changed".
      */
     _addPvInstallation() {
         const installations = this._getPvInstallations();
         const newIdx = installations.length;
         const pvFields = this.schema.filter(f => f.section === "pv_forecast");
+        
+        // Get the last installation to use as template (if exists)
+        const lastInstallation = installations.length > 0 ? installations[installations.length - 1] : null;
 
         for (const f of pvFields) {
             const subKey = f.key.split(".").pop();
-            let defaultVal = f.default;
-            // Auto-increment name to avoid duplicates
+            const fullKey = `pv_forecast.${newIdx}.${subKey}`;
+            let value;
+
             if (subKey === "name") {
-                defaultVal = `myPvInstallation${newIdx + 1}`;
+                // Auto-generate name: copy last name and append index, or use default
+                if (lastInstallation && lastInstallation.name) {
+                    // Find a unique name by appending number
+                    let baseName = lastInstallation.name.replace(/\d+$/, ""); // Remove trailing numbers
+                    let counter = newIdx + 1;
+                    value = `${baseName}${counter}`;
+                    // Ensure uniqueness
+                    while (installations.some(inst => inst.name === value)) {
+                        counter++;
+                        value = `${baseName}${counter}`;
+                    }
+                } else {
+                    // Use default numbering
+                    value = `myPvInstallation${newIdx + 1}`;
+                }
+            } else if (lastInstallation && subKey in lastInstallation) {
+                // Copy value from last installation (except name)
+                value = lastInstallation[subKey];
+            } else {
+                // Use schema default
+                value = f.default;
             }
-            this.values[`pv_forecast.${newIdx}.${subKey}`] = defaultVal;
+
+            this.values[fullKey] = value;
+            // DO NOT add to originalValues — this marks all fields as "changed"
+            // which ensures they will be sent to the API on save
         }
 
         // Re-render
