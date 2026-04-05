@@ -2,7 +2,8 @@
 Unit tests for the HotReloadAdapter.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+import time
 import pytest
 
 from src.config_web.hot_reload import HotReloadAdapter
@@ -29,7 +30,33 @@ def battery_interface():
     mock = MagicMock()
     mock.min_soc_set = 5
     mock.max_soc_set = 100
+    mock.battery_data = {"min_soc_percentage": 5, "max_soc_percentage": 100}
     return mock
+
+
+@pytest.fixture
+def pv_interface():
+    """Mock PvInterface exposing reload_config."""
+    mock = MagicMock()
+    mock.reload_config = MagicMock()
+    return mock
+
+
+@pytest.fixture
+def merged_config_provider():
+    """Return a callable config provider used by PV hot reload."""
+    config = {
+        "pv_forecast_source": {"source": "akkudoktor", "api_key": ""},
+        "pv_forecast": [{"name": "RoofA", "lat": 47.5, "lon": 8.5}],
+        "evcc": {"url": "http://evcc:7070"},
+        "eos": {"source": "eos_server"},
+        "time_zone": "Europe/Berlin",
+    }
+
+    def _provider():
+        return config
+
+    return _provider
 
 
 @pytest.fixture
@@ -123,3 +150,46 @@ class TestHotReloadGeneral:
         assert len(adapter.last_applied) == 1
         adapter.on_config_changed("mqtt.broker", "a", "b")
         assert adapter.last_applied == []
+
+
+class TestHotReloadPv:
+    """Tests for PV source/entry hot-reload behavior."""
+
+    def test_pv_source_reload_applies_live(self, pv_interface, merged_config_provider):
+        """Changing PV source key should reload PvInterface from merged config."""
+        adapter = HotReloadAdapter(
+            pv_interface=pv_interface,
+            config_provider=merged_config_provider,
+            pv_reload_debounce_seconds=0,
+        )
+
+        adapter.on_config_changed("pv_forecast_source.source", "evcc", "akkudoktor")
+
+        pv_interface.reload_config.assert_called_once_with(
+            config_source={"source": "akkudoktor", "api_key": ""},
+            config=[{"name": "RoofA", "lat": 47.5, "lon": 8.5}],
+            config_special={"url": "http://evcc:7070"},
+            temperature_forecast_enabled=True,
+            timezone="Europe/Berlin",
+        )
+        assert "pv_forecast_source.source" in adapter.last_applied
+
+    def test_pv_changes_are_debounced_to_single_reload(
+        self,
+        pv_interface,
+        merged_config_provider,
+    ):
+        """Multiple PV key updates in one save should trigger one reload."""
+        adapter = HotReloadAdapter(
+            pv_interface=pv_interface,
+            config_provider=merged_config_provider,
+            pv_reload_debounce_seconds=0.02,
+        )
+
+        adapter.on_config_changed("pv_forecast.0.lat", 47.0, 47.5)
+        adapter.on_config_changed("pv_forecast.0.lon", 8.0, 8.5)
+        time.sleep(0.08)
+
+        pv_interface.reload_config.assert_called_once()
+        assert "pv_forecast.0.lat" in adapter.last_applied
+        assert "pv_forecast.0.lon" in adapter.last_applied

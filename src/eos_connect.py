@@ -1419,6 +1419,8 @@ from config_web.hot_reload import HotReloadAdapter  # pylint: disable=wrong-impo
 hot_reload_adapter = HotReloadAdapter(
     price_interface=price_interface,
     battery_interface=battery_interface,
+    pv_interface=pv_interface,
+    config_provider=config_web.get_config,
 )
 config_web.register_hot_reload_callback(hot_reload_adapter.on_config_changed)
 

@@ -83,25 +83,9 @@ class PvInterface:
 
         self._update_thread = None
         self._stop_event = threading.Event()
-        # Adjust update interval based on provider
-        if self.config_source.get("source") == "solcast":
-            if len(self.config) == 2:
-                # for each update 2 calls will be needed
-                self.update_interval = (
-                    6 * 60 * 60
-                )  # all 6 hours 2 calls (8 calls/day - under the 10 limit)
-            if len(self.config) == 1:
-                self.update_interval = (
-                    2.5 * 60 * 60
-                )  # 2.5 hours (9.6 calls/day - under the 10 limit)
-            logger.info("[PV-IF] Using extended update interval for Solcast: 2.5 hours")
-        elif self.config_source.get("source") == "victron":
-            self.update_interval = 15 * 60  # Standard 15 minutes for Victron
-            logger.info(
-                "[PV-IF] Using standard update interval for Victron: 15 minutes"
-            )
-        else:
-            self.update_interval = 15 * 60  # Standard 15 minutes
+        self._reload_lock = threading.Lock()
+        self.update_interval = 15 * 60
+        self.__configure_update_interval()
 
         try:
             self.__check_config()  # Validate configuration parameters
@@ -114,6 +98,88 @@ class PvInterface:
 
         logger.info("[PV-IF] Initialized")
         self.__start_update_service()  # Start the background thread for periodic updates
+
+    def __configure_update_interval(self):
+        """Set update interval based on active PV provider and installation count."""
+        source = self.config_source.get("source")
+        if source == "solcast":
+            if len(self.config) >= 2:
+                # For each update 2 calls may be needed.
+                self.update_interval = 6 * 60 * 60
+            else:
+                self.update_interval = 2.5 * 60 * 60
+            logger.info("[PV-IF] Using extended update interval for Solcast: 2.5 hours")
+        elif source == "victron":
+            self.update_interval = 15 * 60
+            logger.info("[PV-IF] Using standard update interval for Victron: 15 minutes")
+        else:
+            self.update_interval = 15 * 60
+
+    def reload_config(
+        self,
+        config_source,
+        config,
+        config_special,
+        temperature_forecast_enabled,
+        timezone,
+    ):
+        """
+        Reload PV configuration at runtime without restarting the full application.
+
+        Validates new settings before applying. On validation failure, the previous
+        configuration is restored and update service continues running.
+        """
+        with self._reload_lock:
+            old_state = {
+                "config": self.config,
+                "config_source": self.config_source,
+                "config_special": self.config_special,
+                "temperature_forecast_enabled": self.temperature_forecast_enabled,
+                "time_zone": self.time_zone,
+                "update_interval": self.update_interval,
+            }
+
+            # Pause update loop before replacing runtime config.
+            self.shutdown()
+
+            self.config = config
+            self.config_source = config_source
+            self.config_special = config_special
+            self.temperature_forecast_enabled = temperature_forecast_enabled
+            self.time_zone = timezone
+            self.pv_forcast_request_error = {
+                "error": None,
+                "timestamp": None,
+                "message": None,
+                "config_entry": None,
+                "source": None,
+            }
+
+            try:
+                self.__configure_update_interval()
+                self.__check_config()
+                self.configuration_valid = True
+                logger.info(
+                    "[PV-IF] Live config reload applied (source=%s, entries=%d)",
+                    self.config_source.get("source", "akkudoktor"),
+                    len(self.config),
+                )
+            except ValueError as exc:
+                logger.warning("[PV-IF] Live config reload rejected: %s", exc)
+                self.config = old_state["config"]
+                self.config_source = old_state["config_source"]
+                self.config_special = old_state["config_special"]
+                self.temperature_forecast_enabled = old_state[
+                    "temperature_forecast_enabled"
+                ]
+                self.time_zone = old_state["time_zone"]
+                self.update_interval = old_state["update_interval"]
+                # Revalidate old config defensively (should always pass).
+                self.__check_config()
+                self.configuration_valid = True
+                raise
+            finally:
+                self.__start_update_service()
 
     def __check_config(self):
         """

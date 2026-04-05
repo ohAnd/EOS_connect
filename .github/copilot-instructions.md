@@ -225,7 +225,7 @@ These rules emerged from comprehensive manual testing (154 test cases) and must 
 
 ### Hot Reload — Current State & Expansion Priority
 
-#### Currently Hot-Reloadable (9 fields, applied without restart)
+#### Currently Hot-Reloadable (18 fields, applied without restart)
 
 **Price fields (4)** — via `_PRICE_FIELD_MAP` in `hot_reload.py`:
 
@@ -234,13 +234,30 @@ These rules emerged from comprehensive manual testing (154 test cases) and must 
 - `price.feed_in_price` → `PriceInterface.feed_in_tariff_price` (+ recalculates feed-in prices)
 - `price.negative_price_switch` → `PriceInterface.negative_price_switch` (+ recalculates feed-in prices)
 
-**Battery fields (5)** — via `_BATTERY_SOC_FIELDS` in `hot_reload.py`:
+**Battery fields (2)** — via `_BATTERY_SOC_FIELDS` in `hot_reload.py`:
 
 - `battery.min_soc_percentage` → `BatteryInterface.set_min_soc()` + `battery_data` dict
 - `battery.max_soc_percentage` → `BatteryInterface.set_max_soc()` + `battery_data` dict
-- `battery.charging_threshold_w` (schema flag set, adapter logic in battery price handler)
-- `battery.grid_charge_threshold_w` (schema flag set, adapter logic in battery price handler)
-- `battery.battery_price_include_feedin` (schema flag set, adapter logic in battery price handler)
+
+**PV fields (12)** — via debounced `PvInterface.reload_config()` in `hot_reload.py`:
+
+- `pv_forecast_source.source`
+- `pv_forecast_source.api_key`
+- `pv_forecast.name`
+- `pv_forecast.lat`
+- `pv_forecast.lon`
+- `pv_forecast.azimuth`
+- `pv_forecast.tilt`
+- `pv_forecast.power`
+- `pv_forecast.powerInverter`
+- `pv_forecast.inverterEfficiency`
+- `pv_forecast.horizon`
+- `pv_forecast.resource_id`
+
+Notes:
+
+- PV updates are **debounced/coalesced**: multiple `pv_forecast*` key writes during one Save trigger one live reload.
+- Reload path re-validates config and safely restarts PV update service without restarting the app.
 
 #### Expansion Priority List
 
@@ -272,17 +289,17 @@ These need more than a simple attribute swap:
 
 These change fundamental interface identity (source, URL, credentials). Users rarely change these after initial setup:
 
-| Group           | Fields                                                                            | Interface             | Change Required                               |
-| --------------- | --------------------------------------------------------------------------------- | --------------------- | --------------------------------------------- |
-| Data source     | `data_source.type`, `data_source.url`, `data_source.access_token`                 | Load, Battery         | Full interface re-init (different API client) |
-| Sensor names    | `load.load_sensor`, `battery.soc_sensor`, all sensor fields                       | Load, Battery         | Could swap attrs, but untested behavior       |
-| MQTT connection | `mqtt.broker`, `mqtt.port`, `mqtt.user`, `mqtt.password`, `mqtt.tls`              | MqttInterface         | Disconnect + reconnect                        |
-| MQTT features   | `mqtt.ha_mqtt_auto_discovery`, `mqtt.ha_mqtt_auto_discovery_prefix`               | MqttInterface         | Re-publish discovery messages                 |
-| Inverter type   | `inverter.type`, `inverter.address`, `inverter.user`, `inverter.password`         | InverterFactory       | Full reconstruction via factory               |
-| PV sources      | `pv_forecast_source.source`, `pv_forecast_source.api_key`, all pv_forecast fields | PvInterface           | Re-init with new source/installations         |
-| Price source    | `price.source`, `price.token`                                                     | PriceInterface        | Different API client                          |
-| EOS backend     | `eos.source`, `eos.server`, `eos.port`                                            | OptimizationInterface | Different backend class                       |
-| EVCC            | `evcc.url`                                                                        | EvccInterface         | New HTTP client                               |
+| Group           | Fields                                                                    | Interface             | Change Required                               |
+| --------------- | ------------------------------------------------------------------------- | --------------------- | --------------------------------------------- |
+| Data source     | `data_source.type`, `data_source.url`, `data_source.access_token`         | Load, Battery         | Full interface re-init (different API client) |
+| Sensor names    | `load.load_sensor`, `battery.soc_sensor`, all sensor fields               | Load, Battery         | Could swap attrs, but untested behavior       |
+| MQTT connection | `mqtt.broker`, `mqtt.port`, `mqtt.user`, `mqtt.password`, `mqtt.tls`      | MqttInterface         | Disconnect + reconnect                        |
+| MQTT features   | `mqtt.ha_mqtt_auto_discovery`, `mqtt.ha_mqtt_auto_discovery_prefix`       | MqttInterface         | Re-publish discovery messages                 |
+| Inverter type   | `inverter.type`, `inverter.address`, `inverter.user`, `inverter.password` | InverterFactory       | Full reconstruction via factory               |
+| PV sources      | Implemented                                                               | PvInterface           | Hot-reload via debounced `reload_config()`    |
+| Price source    | `price.source`, `price.token`                                             | PriceInterface        | Different API client                          |
+| EOS backend     | `eos.source`, `eos.server`, `eos.port`                                    | OptimizationInterface | Different backend class                       |
+| EVCC            | `evcc.url`                                                                | EvccInterface         | New HTTP client                               |
 
 **Priority 4 — Bootstrap keys (never hot-reloadable)**
 
@@ -295,9 +312,12 @@ These affect the application infrastructure itself:
 #### Adding a New Hot-Reload Field (Checklist)
 
 1. Set `hot_reload=True` in the `FieldDef` in `schema.py`
-2. Add field mapping to `hot_reload.py`:
+2. Add field handling in `hot_reload.py`:
    - Simple attribute: add to `_PRICE_FIELD_MAP` or create new map
-   - Method call: add elif branch in the appropriate `_apply_*` method
+
+- Method call: add `elif` branch in the appropriate `_apply_*` method
+- Full interface reconfigure: add prefix/group handling + debounced reload path
+
 3. If side-effects needed (recalculation), add trigger set like `_FEEDIN_TRIGGERS`
 4. Add tests in `tests/config_web/test_hot_reload.py`
 5. Run `python scripts/export_config_schema.py`
@@ -462,6 +482,7 @@ RUN echo "::group::Finalizing Application" && \
 ```
 
 **Why**: The symlink overwrites any `config.yaml` with `options.json` content. Since `options.json` now only has bootstrap keys, this would make ConfigManager see only 3 values and generate 100% defaults for everything else — breaking existing users. Without the symlink, EOS Connect:
+
 1. Uses its internal defaults from `create_default_config()`
 2. Overlays bootstrap values from `/data/options.json` via `load_ha_bootstrap()`
 3. Migrates any legacy full `options.json` values to SQLite on first run
@@ -472,6 +493,7 @@ RUN echo "::group::Finalizing Application" && \
 ### 4. `build.yaml` — NO CHANGES NEEDED
 
 The build base images, args, and labels remain unchanged:
+
 ```yaml
 build_from:
   aarch64: "ghcr.io/home-assistant/aarch64-base-python:3.13-alpine3.22"
@@ -492,12 +514,14 @@ Include a clear migration note for existing users:
 EOS Connect now uses a built-in web UI for all configuration.
 
 **For existing users (upgrading)**:
+
 - Your current settings are automatically migrated to the new system on first startup
 - The addon config panel now only shows: Web Port, Time Zone, Log Level
 - All other settings are managed through the EOS Connect web UI (Settings icon)
 - No action needed — your configuration is preserved
 
 **For new users**:
+
 - After installation, open the EOS Connect web UI
 - A Setup Wizard will guide you through initial configuration
 - The addon config panel only needs Web Port, Time Zone, and Log Level
@@ -514,22 +538,22 @@ EOS Connect now uses a built-in web UI for all configuration.
 
 **Critical test scenarios for the addon**:
 
-| Scenario | Expected Result |
-|----------|----------------|
-| Existing user upgrades (full options.json) | Auto-migration imports all settings to SQLite, wizard skipped, app works immediately |
-| Existing user with only default values | Migration stores defaults, wizard appears for real configuration |
-| New install (fresh options.json with 3 keys) | Fresh install, wizard appears, user configures via web UI |
-| User downgrades to old addon version | Old version reads options.json which still has bootstrap keys — but all other settings are lost (document as one-way migration) |
+| Scenario                                     | Expected Result                                                                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Existing user upgrades (full options.json)   | Auto-migration imports all settings to SQLite, wizard skipped, app works immediately                                            |
+| Existing user with only default values       | Migration stores defaults, wizard appears for real configuration                                                                |
+| New install (fresh options.json with 3 keys) | Fresh install, wizard appears, user configures via web UI                                                                       |
+| User downgrades to old addon version         | Old version reads options.json which still has bootstrap keys — but all other settings are lost (document as one-way migration) |
 
 ### 8. Summary of File Changes
 
-| File | Change Type | Effort |
-|------|-------------|--------|
-| `config.yaml` | **Rewrite** — reduce from ~100 to 3 options | Medium (careful removal) |
-| `translations/en.yaml` | **Rewrite** — reduce from ~200 to 3 entries | Low |
-| `Dockerfile` | **One-line removal** — delete `ln -sf` symlink | Trivial |
-| `build.yaml` | No changes | — |
-| `.github/workflows/` | No changes | — |
-| CHANGELOG / release notes | Add migration note | Low |
+| File                      | Change Type                                    | Effort                   |
+| ------------------------- | ---------------------------------------------- | ------------------------ |
+| `config.yaml`             | **Rewrite** — reduce from ~100 to 3 options    | Medium (careful removal) |
+| `translations/en.yaml`    | **Rewrite** — reduce from ~200 to 3 entries    | Low                      |
+| `Dockerfile`              | **One-line removal** — delete `ln -sf` symlink | Trivial                  |
+| `build.yaml`              | No changes                                     | —                        |
+| `.github/workflows/`      | No changes                                     | —                        |
+| CHANGELOG / release notes | Add migration note                             | Low                      |
 
 > **Important**: Apply identical changes to both `eos_connect/` and `eos_connect_develop/` directories. The only differences between them should be `name`, `version`, `slug`, and `image` fields in `config.yaml`.

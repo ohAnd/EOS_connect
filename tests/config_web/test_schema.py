@@ -99,5 +99,7 @@ class TestConfigSchema:
         """Certain price/battery fields should be marked hot_reload."""
         assert self.schema.get("price.feed_in_price").hot_reload is True
         assert self.schema.get("battery.min_soc_percentage").hot_reload is True
+        assert self.schema.get("pv_forecast_source.source").hot_reload is True
+        assert self.schema.get("pv_forecast.tilt").hot_reload is True
         # Restart-required fields should NOT be hot_reload
         assert self.schema.get("mqtt.broker").hot_reload is False
