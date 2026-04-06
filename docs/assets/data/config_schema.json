@@ -295,16 +295,14 @@
       "section": "eos",
       "level": "standard",
       "description": "Timeout for optimization requests in seconds",
-      "labels": [
-        "restart_required"
-      ],
+      "labels": [],
       "help_url": "configuration.html#eos",
       "validation": {
         "min": 10,
         "max": 600
       },
       "depends_on": null,
-      "hot_reload": false,
+      "hot_reload": true,
       "display_group": "Optimization"
     },
     {
@@ -314,13 +312,11 @@
       "section": "eos",
       "level": "standard",
       "description": "Allow discharge when PV forecast exceeds load, even if optimizer says avoid",
-      "labels": [
-        "restart_required"
-      ],
+      "labels": [],
       "help_url": "configuration.html#eos",
       "validation": {},
       "depends_on": null,
-      "hot_reload": false,
+      "hot_reload": true,
       "display_group": "Advanced"
     },
     {
@@ -331,13 +327,12 @@
       "level": "expert",
       "description": "Enable PV-to-battery charge control from optimizer dc_charge signal (Fronius Gen24 only)",
       "labels": [
-        "experimental",
-        "restart_required"
+        "experimental"
       ],
       "help_url": "configuration.html#eos",
       "validation": {},
       "depends_on": null,
-      "hot_reload": false,
+      "hot_reload": true,
       "display_group": "Advanced"
     },
     {

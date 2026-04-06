@@ -929,9 +929,7 @@ class OptimizationScheduler:
         mqtt_interface.update_publish_topics(
             {"optimization/state": {"value": self.get_current_state()["request_state"]}}
         )
-        optimized_response, avg_runtime = eos_interface.optimize(
-            json_optimize_input, config_manager.config["eos"]["timeout"]
-        )
+        optimized_response, avg_runtime = eos_interface.optimize(json_optimize_input)
         # Store the runtime for use in sleep calculation (defensive against None)
         try:
             if avg_runtime is None:
@@ -1282,9 +1280,7 @@ def change_control_state():
     )
     # When pv_battery_charge_control_enabled is False, ignore the optimizer's dc_charge
     # signal and always allow full PV charging (other inverters don't enforce it anyway).
-    _pv_charge_ctrl_enabled = config_manager.config.get("eos", {}).get(
-        "pv_battery_charge_control_enabled", False
-    )
+    _pv_charge_ctrl_enabled = eos_interface.pv_battery_charge_control_enabled
     if _pv_charge_ctrl_enabled:
         tgt_dc_charge_power = min(
             base_control.get_current_dc_charge_demand(),
@@ -1423,6 +1419,7 @@ hot_reload_adapter = HotReloadAdapter(
     price_interface=price_interface,
     battery_interface=battery_interface,
     pv_interface=pv_interface,
+    optimization_interface=eos_interface,
     config_provider=config_web.get_config,
 )
 config_web.register_hot_reload_callback(hot_reload_adapter.on_config_changed)
@@ -1595,12 +1592,8 @@ def get_controls():
             "inverter_mode_num": current_inverter_mode_num,
             "override_active": base_control.get_override_active_and_endtime()[0],
             "override_end_time": base_control.get_override_active_and_endtime()[1],
-            "dyn_override_discharge_allowed_enabled": config_manager.config.get(
-                "eos", {}
-            ).get("dyn_override_discharge_allowed_pv_greater_load", False),
-            "pv_battery_charge_control_enabled": config_manager.config.get(
-                "eos", {}
-            ).get("pv_battery_charge_control_enabled", False),
+            "dyn_override_discharge_allowed_enabled": eos_interface.dyn_override_discharge_allowed,
+            "pv_battery_charge_control_enabled": eos_interface.pv_battery_charge_control_enabled,
             "dyn_override_discharge_allowed_active": eos_interface.get_last_control_data()[
                 0
             ].get(

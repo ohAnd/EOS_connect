@@ -14,6 +14,11 @@ Supported fields (Priority 1 — Price):
 Supported fields (Priority 2 — Battery SOC):
 - ``battery.min_soc_percentage``
 - ``battery.max_soc_percentage``
+
+Supported fields (Priority 1 — Optimizer):
+- ``eos.timeout``
+- ``eos.dyn_override_discharge_allowed_pv_greater_load``
+- ``eos.pv_battery_charge_control_enabled``
 """
 
 import logging
@@ -35,6 +40,13 @@ _BATTERY_SOC_FIELDS = {
     "battery.max_soc_percentage",
 }
 
+# Map of optimizer config keys to (interface_attr_name, coerce_fn)
+_OPTIMIZER_FIELD_MAP = {
+    "eos.timeout": ("timeout", int),
+    "eos.dyn_override_discharge_allowed_pv_greater_load": ("dyn_override_discharge_allowed", bool),
+    "eos.pv_battery_charge_control_enabled": ("pv_battery_charge_control_enabled", bool),
+}
+
 # Feed-in related fields that require recalculating feed-in prices
 _FEEDIN_TRIGGERS = {
     "price.feed_in_price",
@@ -54,6 +66,10 @@ class HotReloadAdapter:
     Args:
         price_interface: Running PriceInterface instance (or None).
         battery_interface: Running BatteryInterface instance (or None).
+        pv_interface: Running PvInterface instance (or None).
+        optimization_interface: Running OptimizationInterface instance (or None).
+        config_provider: Callable that returns the current merged config dict (or None).
+        pv_reload_debounce_seconds: Debounce delay for PV reloads (default 0.3s).
     """
 
     def __init__(
@@ -61,12 +77,14 @@ class HotReloadAdapter:
         price_interface=None,
         battery_interface=None,
         pv_interface=None,
+        optimization_interface=None,
         config_provider=None,
         pv_reload_debounce_seconds=0.3,
     ):
         self._price = price_interface
         self._battery = battery_interface
         self._pv = pv_interface
+        self._optimizer = optimization_interface
         self._config_provider = config_provider
         self._pv_reload_debounce_seconds = pv_reload_debounce_seconds
         self._pv_reload_timer = None
@@ -95,6 +113,8 @@ class HotReloadAdapter:
             self._apply_price(key, new_value)
         elif key in _BATTERY_SOC_FIELDS:
             self._apply_battery_soc(key, new_value)
+        elif key in _OPTIMIZER_FIELD_MAP:
+            self._apply_optimizer(key, new_value)
         elif key.startswith(_PV_KEY_PREFIXES):
             self._schedule_pv_reload(key)
         else:
@@ -141,6 +161,27 @@ class HotReloadAdapter:
             logger.debug(
                 "[HotReload] Could not recalculate feed-in prices: %s", exc
             )
+
+    def _apply_optimizer(self, key, new_value):
+        """Apply an optimizer config change."""
+        if self._optimizer is None:
+            logger.debug("[HotReload] No optimizer interface — skipping %s", key)
+            return
+
+        attr, coerce = _OPTIMIZER_FIELD_MAP[key]
+        try:
+            coerced = coerce(new_value)
+        except (TypeError, ValueError) as exc:
+            logger.warning("[HotReload] Cannot coerce %s=%r: %s", key, new_value, exc)
+            return
+
+        old_val = getattr(self._optimizer, attr, "?")
+        setattr(self._optimizer, attr, coerced)
+        self._applied_keys.append(key)
+        logger.info(
+            "[HotReload] Updated optimizer.%s = %s (was %s)",
+            attr, coerced, old_val,
+        )
 
     def _apply_battery_soc(self, key, new_value):
         """Apply a battery SOC config change."""

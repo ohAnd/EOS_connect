@@ -43,6 +43,16 @@ def pv_interface():
 
 
 @pytest.fixture
+def optimization_interface():
+    """Mock OptimizationInterface with hot-reloadable attributes."""
+    mock = MagicMock()
+    mock.timeout = 180
+    mock.dyn_override_discharge_allowed = False
+    mock.pv_battery_charge_control_enabled = False
+    return mock
+
+
+@pytest.fixture
 def merged_config_provider():
     """Return a callable config provider used by PV hot reload."""
     config = {
@@ -193,3 +203,52 @@ class TestHotReloadPv:
         pv_interface.reload_config.assert_called_once()
         assert "pv_forecast.0.lat" in adapter.last_applied
         assert "pv_forecast.0.lon" in adapter.last_applied
+
+
+class TestHotReloadOptimizer:
+    """Tests for optimizer hot-reload."""
+
+    def test_timeout_change(self, optimization_interface):
+        """Changing eos.timeout should update the interface attr."""
+        adapter = HotReloadAdapter(optimization_interface=optimization_interface)
+        adapter.on_config_changed("eos.timeout", 180, 240)
+        assert optimization_interface.timeout == 240
+        assert "eos.timeout" in adapter.last_applied
+
+    def test_dyn_override_change(self, optimization_interface):
+        """Changing dyn_override flag should update the interface attr."""
+        adapter = HotReloadAdapter(optimization_interface=optimization_interface)
+        adapter.on_config_changed(
+            "eos.dyn_override_discharge_allowed_pv_greater_load", False, True
+        )
+        assert optimization_interface.dyn_override_discharge_allowed is True
+        assert "eos.dyn_override_discharge_allowed_pv_greater_load" in adapter.last_applied
+
+    def test_pv_battery_charge_control_change(self, optimization_interface):
+        """Changing pv_battery_charge_control_enabled should update the interface attr."""
+        adapter = HotReloadAdapter(optimization_interface=optimization_interface)
+        adapter.on_config_changed("eos.pv_battery_charge_control_enabled", False, True)
+        assert optimization_interface.pv_battery_charge_control_enabled is True
+        assert "eos.pv_battery_charge_control_enabled" in adapter.last_applied
+
+    def test_timeout_type_coercion(self, optimization_interface):
+        """Timeout should be coerced to int."""
+        adapter = HotReloadAdapter(optimization_interface=optimization_interface)
+        adapter.on_config_changed("eos.timeout", 180, "250")
+        assert optimization_interface.timeout == 250
+        assert isinstance(optimization_interface.timeout, int)
+
+    def test_invalid_timeout_value(self, optimization_interface):
+        """Non-numeric timeout value should be handled gracefully."""
+        adapter = HotReloadAdapter(optimization_interface=optimization_interface)
+        adapter.on_config_changed("eos.timeout", 180, "invalid")
+        assert optimization_interface.timeout == 180
+        assert adapter.last_applied == []
+
+    def test_no_optimizer_interface_no_crash(self):
+        """Adapter with no optimizer interface should handle keys without error."""
+        adapter = HotReloadAdapter(optimization_interface=None)
+        adapter.on_config_changed("eos.timeout", 180, 240)
+        adapter.on_config_changed("eos.dyn_override_discharge_allowed_pv_greater_load", False, True)
+        assert adapter.last_applied == []
+

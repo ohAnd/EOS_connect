@@ -295,7 +295,7 @@ These rules emerged from comprehensive manual testing (154 test cases) and must 
 
 ### Hot Reload — Current State & Expansion Priority
 
-#### Currently Hot-Reloadable (18 fields, applied without restart)
+#### Currently Hot-Reloadable (21 fields, applied without restart)
 
 **Price fields (4)** — via `_PRICE_FIELD_MAP` in `hot_reload.py`:
 
@@ -308,6 +308,12 @@ These rules emerged from comprehensive manual testing (154 test cases) and must 
 
 - `battery.min_soc_percentage` → `BatteryInterface.set_min_soc()` + `battery_data` dict
 - `battery.max_soc_percentage` → `BatteryInterface.set_max_soc()` + `battery_data` dict
+
+**Optimizer fields (3)** — via `_OPTIMIZER_FIELD_MAP` in `hot_reload.py`:
+
+- `eos.timeout` → `OptimizationInterface.timeout`
+- `eos.dyn_override_discharge_allowed_pv_greater_load` → `OptimizationInterface.dyn_override_discharge_allowed`
+- `eos.pv_battery_charge_control_enabled` → `OptimizationInterface.pv_battery_charge_control_enabled`
 
 **PV fields (12)** — via debounced `PvInterface.reload_config()` in `hot_reload.py`:
 
@@ -328,6 +334,7 @@ Notes:
 
 - PV updates are **debounced/coalesced**: multiple `pv_forecast*` key writes during one Save trigger one live reload.
 - Reload path re-validates config and safely restarts PV update service without restarting the app.
+- Optimizer fields use direct attribute updates with type coercion; changes apply immediately to the optimization process.
 
 #### Expansion Priority List
 
@@ -337,13 +344,21 @@ Fields grouped by predicted code complexity and user impact. Each group shares i
 
 These fields are simple instance attributes that can be set at runtime:
 
-| Group           | Fields                                                                                        | Interface                           | Change Required                                                             |
+| Group           | Fields                                                                                        | Interface                           | Status                                                                      |
 | --------------- | --------------------------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------- |
-| EOS tuning      | `eos.timeout`, `eos.time_frame`                                                               | OptimizationInterface               | Add to field map; attrs already stored as `self.timeout`, `self.time_frame` |
-| EOS flags       | `eos.dyn_override_discharge_allowed_pv_greater_load`, `eos.pv_battery_charge_control_enabled` | BaseControl / OptimizationInterface | Simple bool attrs on the control instance                                   |
-| Inverter limits | `inverter.max_grid_charge_rate`, `inverter.max_pv_charge_rate`                                | BaseInverter subclass               | Attrs already on inverter instances                                         |
-| System          | `request_timeout`                                                                             | All interfaces                      | Update shared timeout value                                                 |
-| System          | `refresh_time`                                                                                | Main loop                           | Update `setInterval` timing — need to store as mutable                      |
+| EOS tuning      | `eos.timeout`, `eos.dyn_override_discharge_allowed_pv_greater_load`, `eos.pv_battery_charge_control_enabled` | OptimizationInterface | ✅ **IMPLEMENTED** |
+| System timing   | `refresh_time`                                                                                | OptimizationScheduler               | Next to implement                                      |
+| System timing   | `eos.time_frame` (900 or 3600)                                                                | All interfaces                      | Requires cache invalidation (see Priority 1.5)        |
+| Inverter limits | `inverter.max_grid_charge_rate`, `inverter.max_pv_charge_rate`                                | BaseInverter subclass               | Could implement next                                   |
+| System          | `request_timeout`                                                                             | All interfaces                      | Lower priority                                        |
+
+**Priority 1.5 — Attribute swap + cache clear (medium effort, high user value)**
+
+Simple attribute updates but require recalculation or cache invalidation:
+
+| Group              | Fields                                    | Interface                    | Change Required                                  |
+| ------------------ | ----------------------------------------- | ---------------------------- | ------------------------------------------------ |
+| EOS time slot      | `eos.time_frame`                          | OptimizationInterface + all data providers | Update timeframe on all interfaces + clear forecast caches |
 
 **Priority 2 — Requires recalculation or reconnect (medium effort)**
 
@@ -354,6 +369,7 @@ These need more than a simple attribute swap:
 | Battery capacity   | `battery.capacity_wh`, `battery.charge_efficiency`, `battery.discharge_efficiency`, `battery.max_charge_power_w` | BatteryInterface    | Update battery_data dict + recalc charging curve |
 | Battery price calc | `battery.price_update_interval`, `battery.price_history_lookback_hours`, `battery.price_euro_per_wh_accu`        | BatteryPriceHandler | Restart timer or update interval                 |
 | Price fixed array  | `price.fixed_24h_array`                                                                                          | PriceInterface      | Re-parse array + recalc prices                   |
+| EOS time slot      | `eos.time_frame` (see Priority 1.5)                                                                              | Multiple            | Debounced reload with cache clear                |
 
 **Priority 3 — Requires interface reconstruction (high effort, rare changes)**
 

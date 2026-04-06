@@ -339,10 +339,11 @@ _ALL_FIELDS: list[FieldDef] = [
         section="eos",
         level="standard",
         description="Timeout for optimization requests in seconds",
-        labels=["restart_required"],
+        labels=[],
         help_url="configuration.html#eos",
         validation={"min": 10, "max": 600},
         display_group="Optimization",
+        hot_reload=True,
     ),
     FieldDef(
         key="eos.dyn_override_discharge_allowed_pv_greater_load",
@@ -351,9 +352,10 @@ _ALL_FIELDS: list[FieldDef] = [
         section="eos",
         level="standard",
         description="Allow discharge when PV forecast exceeds load, even if optimizer says avoid",
-        labels=["restart_required"],
+        labels=[],
         help_url="configuration.html#eos",
         display_group="Advanced",
+        hot_reload=True,
     ),
     FieldDef(
         key="eos.pv_battery_charge_control_enabled",
@@ -362,9 +364,10 @@ _ALL_FIELDS: list[FieldDef] = [
         section="eos",
         level="expert",
         description="Enable PV-to-battery charge control from optimizer dc_charge signal (Fronius Gen24 only)",
-        labels=["experimental", "restart_required"],
+        labels=["experimental"],
         help_url="configuration.html#eos",
         display_group="Advanced",
+        hot_reload=True,
     ),
 
     # ===== PRICE =====
