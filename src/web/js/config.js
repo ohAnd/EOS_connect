@@ -12,6 +12,7 @@
 // Populated from /api/config/schema at runtime (SPOT from schema.py).
 // Fallback values used only when schema hasn't loaded yet.
 let CONFIG_SECTIONS = {};
+let SECTION_ORDER = [];  // Track explicit section order from API
 
 const LEVEL_ORDER = { getting_started: 0, standard: 1, expert: 2 };
 
@@ -85,6 +86,12 @@ class ConfigurationManager {
         // Populate section metadata from schema (SPOT)
         if (schemaData.sections) {
             CONFIG_SECTIONS = schemaData.sections;
+            console.log("[ConfigManager] Loaded sections order:", Object.keys(CONFIG_SECTIONS));
+        }
+        // Use explicit section order from API if available
+        if (schemaData.section_order) {
+            SECTION_ORDER = schemaData.section_order;
+            console.log("[ConfigManager] Explicit section order from API:", SECTION_ORDER);
         }
         const raw = await valuesRes.json();
 
@@ -224,17 +231,20 @@ class ConfigurationManager {
     // ── Navigation ──────────────────────────────────────────────
 
     /**
-     * Get the ordered list of section keys.
-     * @returns {string[]} Section keys
+     * Get the ordered list of section keys from SECTION_META.
+     * Uses explicit section order from API if available, otherwise uses CONFIG_SECTIONS keys.
+     * @returns {string[]} Section keys in correct order
      */
     _orderedSections() {
-        const seen = [];
-        for (const f of this.schema) {
-            if (!seen.includes(f.section)) {
-                seen.push(f.section);
-            }
+        // Prefer explicit order from API (section_order array)
+        if (SECTION_ORDER && SECTION_ORDER.length > 0) {
+            console.log("[ConfigManager] Using explicit SECTION_ORDER:", SECTION_ORDER);
+            return SECTION_ORDER;
         }
-        return seen;
+        // Fallback to Object.keys order (should preserve insertion order in modern JS)
+        const ordered = Object.keys(CONFIG_SECTIONS);
+        console.log("[ConfigManager] Using Object.keys() order:", ordered);
+        return ordered;
     }
 
     /**
@@ -365,6 +375,12 @@ class ConfigurationManager {
         let html = `<div class="config-restart-banner" id="cfg-restart-banner">
             <i class="fas fa-rotate"></i>
             <span id="cfg-restart-msg">Restart required for changes to take effect.</span>
+        </div>`;
+
+        // Unmet dependencies banner
+        html += `<div class="config-unmet-deps-banner" id="cfg-unmet-deps-banner">
+            <i class="fas fa-times-circle" style="color: #ffc107; margin-right: 12px;"></i>
+            <div id="cfg-unmet-deps-content"></div>
         </div>`;
 
         html += `<div class="config-section-title">
@@ -507,9 +523,40 @@ class ConfigurationManager {
      */
     _renderSelect(f, val) {
         const choices = (f.validation && f.validation.choices) || [];
+        
         const opts = choices.map(c => {
             const selected = String(c) === String(val) ? "selected" : "";
-            return `<option value="${this._escapeAttr(String(c))}" ${selected}>${c}</option>`;
+            
+            // Conditional disabling for specific fields
+            let disabled = "";
+            let title = "";
+            let displayLabel = c;  // Label to show in dropdown
+            
+            // Disable "evcc" option in pv_forecast_source.source if evcc.url is not configured
+            if (f.key === "pv_forecast_source.source" && String(c) === "evcc") {
+                const evccUrl = this.values["evcc.url"] || "http://yourEVCCserver:7070";
+                // Check if URL is at default or empty
+                const isDefault = evccUrl.trim() === "" || evccUrl === "http://yourEVCCserver:7070";
+                if (isDefault) {
+                    disabled = "disabled";
+                    title = "title='Configure EVCC URL first'";
+                    displayLabel = `${c} (not available)`;
+                }
+            }
+            
+            // Disable "evcc" option in inverter.type if evcc.url is not configured
+            if (f.key === "inverter.type" && String(c) === "evcc") {
+                const evccUrl = this.values["evcc.url"] || "http://yourEVCCserver:7070";
+                // Check if URL is at default or empty
+                const isDefault = evccUrl.trim() === "" || evccUrl === "http://yourEVCCserver:7070";
+                if (isDefault) {
+                    disabled = "disabled";
+                    title = "title='Configure EVCC URL first'";
+                    displayLabel = `${c} (not available)`;
+                }
+            }
+            
+            return `<option value="${this._escapeAttr(String(c))}" ${selected} ${disabled} ${title} style="${disabled ? 'color: #888; font-style: italic;' : ''}">${displayLabel}</option>`;
         }).join("");
         const changedCls = this._isChanged(f.key) ? " changed" : "";
         return `<select class="config-select${changedCls}" data-key="${f.key}"
@@ -980,6 +1027,12 @@ class ConfigurationManager {
 
             const result = await res.json();
 
+            // Handle unmet dependencies (blocking condition)
+            if (!result.success && result.unmet_dependencies && result.unmet_dependencies.length > 0) {
+                this._showUnmetDependencies(result.unmet_dependencies);
+                return;
+            }
+
             // Update originals for saved keys
             for (const k of Object.keys(changes)) {
                 this.originalValues[k] = this.values[k];
@@ -1249,6 +1302,35 @@ class ConfigurationManager {
                 // Server might be restarting — ignore
             }
         }, 10000); // Check every 10 seconds
+    }
+
+    /**
+     * Display unmet dependencies banner with details and links to required fields.
+     * @param {Array} dependencies - List of {field, reason, requires} objects
+     */
+    _showUnmetDependencies(dependencies) {
+        const banner = document.getElementById("cfg-unmet-deps-banner");
+        const content = document.getElementById("cfg-unmet-deps-content");
+        
+        if (banner && content) {
+            let html = `
+                <div style="color: #ffc107; font-weight: bold; margin-bottom: 12px;">
+                    <i class="fas fa-exclamation-triangle"></i> Cannot save: required settings not configured
+                </div>
+                <ul style="margin: 0; padding-left: 20px; font-size: 0.9em;">
+            `;
+            for (const dep of dependencies) {
+                html += `<li style="margin-bottom: 8px;">
+                    <strong>${dep.field}</strong>: ${dep.reason}
+                    <br><small style="color: #bbb;">Requires: <strong>${dep.requires}</strong></small>
+                </li>`;
+            }
+            html += `</ul>`;
+            
+            content.innerHTML = html;
+            banner.classList.add("visible");
+            this._showToast("Cannot save: required dependencies not configured", "error");
+        }
     }
 
     // ── Toast notifications ─────────────────────────────────────

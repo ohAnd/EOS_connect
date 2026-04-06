@@ -20,7 +20,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.2.33</span>
+                <span class="version-badge">v0.3.34</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -43,17 +43,18 @@
             <aside class="toc-sidebar">
                 <h3>On This Page</h3>
                 <nav class="toc-nav">
-                    <a href="#load" class="toc-link">Load</a>
-                    <a href="#eos" class="toc-link">EOS Server</a>
+                    <a href="#optimizer" class="toc-link">Optimizer</a>
                     <a href="#dyn-override" class="toc-link toc-sub">→ Dynamic PV Override</a>
                     <a href="#pv-charge-control" class="toc-link toc-sub">→ PV Battery Charge Control</a>
-                    <a href="#price" class="toc-link">Electricity Prices</a>
-                    <a href="#energyforecast" class="toc-link toc-sub">→ Smart Price Prediction</a>
+                    <a href="#evcc" class="toc-link">EVCC</a>
+                    <a href="#inverter" class="toc-link">Inverter</a>
+                    <a href="#data-source" class="toc-link">Data Source</a>
                     <a href="#battery" class="toc-link">Battery</a>
                     <a href="#battery-price-calc" class="toc-link toc-sub">&rarr; Dynamic Price Calculation</a>
+                    <a href="#load" class="toc-link">Load</a>
+                    <a href="#price" class="toc-link">Electricity Prices</a>
+                    <a href="#energyforecast" class="toc-link toc-sub">→ Smart Price Prediction</a>
                     <a href="#pv" class="toc-link">PV Forecasts</a>
-                    <a href="#inverter" class="toc-link">Inverter</a>
-                    <a href="#evcc" class="toc-link">EVCC</a>
                     <a href="#mqtt" class="toc-link">MQTT</a>
                     <a href="#optimization-config" class="toc-link">Optimization Configuration</a>
                     <a href="#timing-controls" class="toc-link toc-sub">→ Timing Controls</a>
@@ -80,31 +81,28 @@
             <h2><i class="fas fa-list"></i> Quick Navigation</h2>
             <div class="feature-grid">
                 <div class="feature-item">
-                    <a href="#load"><i class="fas fa-plug"></i> Load Configuration</a>
+                    <a href="#optimizer"><i class="fas fa-server"></i> Optimizer</a>
                 </div>
                 <div class="feature-item">
-                    <a href="#eos"><i class="fas fa-server"></i> EOS Server</a>
-                </div>
-                <div class="feature-item">
-                    <a href="#dyn-override"><i class="fas fa-zap"></i> Dynamic PV Override</a>
-                </div>
-                <div class="feature-item">
-                    <a href="#pv-charge-control"><i class="fas fa-solar-panel"></i> PV Battery Charge Control</a>
-                </div>
-                <div class="feature-item">
-                    <a href="#price"><i class="fas fa-dollar-sign"></i> Electricity Prices</a>
-                </div>
-                <div class="feature-item">
-                    <a href="#battery"><i class="fas fa-battery-full"></i> Battery</a>
-                </div>
-                <div class="feature-item">
-                    <a href="#pv"><i class="fas fa-sun"></i> PV Forecasts</a>
+                    <a href="#evcc"><i class="fas fa-car"></i> EVCC</a>
                 </div>
                 <div class="feature-item">
                     <a href="#inverter"><i class="fas fa-solar-panel"></i> Inverter</a>
                 </div>
                 <div class="feature-item">
-                    <a href="#evcc"><i class="fas fa-car"></i> EVCC</a>
+                    <a href="#data-source"><i class="fas fa-database"></i> Data Source</a>
+                </div>
+                <div class="feature-item">
+                    <a href="#battery"><i class="fas fa-battery-full"></i> Battery</a>
+                </div>
+                <div class="feature-item">
+                    <a href="#load"><i class="fas fa-plug"></i> Load Configuration</a>
+                </div>
+                <div class="feature-item">
+                    <a href="#price"><i class="fas fa-dollar-sign"></i> Electricity Prices</a>
+                </div>
+                <div class="feature-item">
+                    <a href="#pv"><i class="fas fa-sun"></i> PV Forecasts</a>
                 </div>
                 <div class="feature-item">
                     <a href="#mqtt"><i class="fas fa-network-wired"></i> MQTT</a>
@@ -118,213 +116,9 @@
             </div>
         </div>
 
-        <!-- Load Configuration -->
-        <div class="content-section" id="load">
-            <h2><i class="fas fa-plug"></i> Load Configuration</h2>
-            <p>Configure how EOS Connect reads your household power consumption data.</p>
-
-            <h3>load.source</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.source</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Data source for load power consumption</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td><code>homeassistant</code>, <code>openhab</code>, <code>default</code></td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>default</code> (uses static consumption profile)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>source: homeassistant</code></td>
-                </tr>
-            </table>
-
-            <h3>load.url</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.url</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>URL to your Home Assistant or OpenHAB instance</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td><code>http://&lt;hostname_or_ip&gt;:&lt;port&gt;</code></td>
-                </tr>
-                <tr>
-                    <th>Examples</th>
-                    <td>
-                        <code>http://homeassistant:8123</code><br>
-                        <code>http://192.168.1.100:8080</code>
-                    </td>
-                </tr>
-            </table>
-
-            <h3>load.access_token</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.access_token</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Long-lived access token for Home Assistant</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes for Home Assistant, optional for OpenHAB</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>In Home Assistant: Profile → Long-Lived Access Tokens → Create Token<br>Leave empty if not needed: <code>access_token:</code></td>
-                </tr>
-            </table>
-
-            <h3>load.load_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.load_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Entity/item name for total household power consumption</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W) or energy (Wh) for Home Assistant energy entities</td>
-                </tr>
-                <tr>
-                    <th>Examples</th>
-                    <td>
-                        <code>sensor.house_power</code> (Home Assistant)<br>
-                        <code>PowerMeter_Load</code> (OpenHAB)
-                    </td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Represents overall net household load (total house consumption). Positive (consumption) or negative (feed-in) values are converted to absolute positive internally. Home Assistant <strong>energy</strong> entities (device_class: <code>energy</code>) are supported and converted to average power per time frame. Feature contributed by <a href="https://github.com/forouher" target="_blank">Dariush Forouher</a>.</td>
-                </tr>
-            </table>
-
-            <h3>load.car_charge_load_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.car_charge_load_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Entity/item for EV charger power consumption (optional)</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>sensor.wallbox_power</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Separates controllable EV charging from base household load for more accurate optimization. This load is <strong>subtracted</strong> from the main load sensor value. Leave empty if not needed: <code>car_charge_load_sensor:</code></td>
-                </tr>
-            </table>
-
-            <h3>load.additional_load_1_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.additional_load_1_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Entity/item for additional controllable load (e.g., heat pump, dishwasher)</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>sensor.heatpump_power</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Separates additional controllable devices from base household load. This load is <strong>subtracted</strong> from the main load sensor value. Leave empty if not needed: <code>additional_load_1_sensor:</code></td>
-                </tr>
-            </table>
-
-            <h3>load.additional_load_1_runtime</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.additional_load_1_runtime</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Expected runtime of additional load</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Minutes</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>0</code> (not used)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>120</code> (2 hours)</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Helps optimization engine plan when to run the additional load</td>
-                </tr>
-            </table>
-
-            <h3>load.additional_load_1_consumption</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.additional_load_1_consumption</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Energy consumption of additional load for ONE hour</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watt-hours (Wh)</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>0</code> (not used)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>2000</code> (2 kWh per hour)</td>
-                </tr>
-            </table>
-        </div>
-
-        <!-- EOS Server Configuration -->
-        <div class="content-section" id="eos">
-            <h2><i class="fas fa-server"></i> EOS Server Configuration</h2>
+        <!-- Optimizer Configuration -->
+        <div class="content-section" id="optimizer">
+            <h2><i class="fas fa-server"></i> Optimizer Configuration</h2>
             <p>Configure the connection to your external optimization backend (Akkudoktor EOS or EVopt).</p>
 
             <h3>eos.source</h3>
@@ -589,33 +383,72 @@
             </div>
         </div>
 
-        <!-- Price Configuration -->
-        <div class="content-section" id="price">
-            <h2><i class="fas fa-dollar-sign"></i> Electricity Price Configuration</h2>
-            <p>Configure dynamic electricity pricing for cost optimization.</p>
+        
+<div class="content-section" id="evcc">
+            <h2><i class="fas fa-car"></i> EVCC Configuration</h2>
             
-            <div class="alert alert-warning">
-                <strong><i class="fas fa-exclamation-triangle"></i> Important:</strong> All price values must use the same base - either all prices include taxes and fees, or all prices exclude taxes and fees. Mixing different bases will lead to incorrect optimization results.
+            <div class="alert alert-info">
+                <strong><i class="fas fa-lightbulb"></i> Optional Section:</strong> Define EVCC URL here to use EVCC as:
+                <ul style="margin-top: 10px; margin-bottom: 0;">
+                    <li><strong>Data source for PV forecasts</strong> — Retrieve solar generation forecasts from your EVCC system</li>
+                    <li><strong>Inverter control gateway</strong> — Manage battery charging through EVCC's external battery control interface</li>
+                    <li><strong>Car charging dependent control</strong> — Coordinate EV charging with optimization decisions</li>
+                </ul>
+                <p style="margin-top: 10px; margin-bottom: 0;"><strong>If not using EVCC:</strong> Simply skip this section and leave the URL empty. Other configuration sections do not depend on EVCC.</p>
             </div>
 
-            <h3>price.source</h3>
+            <h3>evcc.url</h3>
             <table>
                 <tr>
                     <th>Parameter</th>
-                    <td><code>price.source</code></td>
+                    <td><code>evcc.url</code></td>
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>Provider for dynamic electricity prices</td>
+                    <td>URL for the EVCC instance</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>http://192.168.1.100:7070</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        Leave empty if not used: <code>url:</code> or <code>url: ""</code><br><br>
+                        <strong>Important:</strong> When using <code>evcc</code> as the <code>pv_forecast_source</code>, this EVCC configuration must be properly configured. EOS Connect will retrieve PV forecasts directly from the EVCC API instead of using individual PV installation configurations. In this case, the <code>pv_forecast</code> section requires at least one entry with valid <code>lat</code> and <code>lon</code> coordinates for temperature forecasts.
+                    </td>
+                </tr>
+            </table>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> EVCC as Inverter Controller:</strong> When <code>inverter.type</code> is set to <code>evcc</code>, EOS Connect uses EVCC's external battery control feature to manage battery charging. This provides a universal interface that works with many inverter types supported by EVCC.
+            </div>
+        </div>
+
+        
+<div class="content-section" id="inverter">
+            <h2><i class="fas fa-solar-panel"></i> Inverter Configuration</h2>
+            <p>Configure inverter control for automated battery management.</p>
+
+            <h3>inverter.type</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.type</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Type of inverter for automated control</td>
                 </tr>
                 <tr>
                     <th>Valid Values</th>
                     <td>
-                        <code>tibber</code> - Tibber API<br>
-                        <code>smartenergy_at</code> - Austrian provider<br>
-                        <code>stromligning</code> - Danish provider<br>
-                        <code>fixed_24h</code> - Custom 24-hour array<br>
-                        <code>default</code> - Akkudoktor API
+                        <code>victron</code> - Victron MultiPlus (3-phase ESS via Modbus/TCP)<br>
+                        <code>fronius_gen24</code> - Fronius Gen24 (enhanced V2 interface, firmware-based auth)<br>
+                        <code>fronius_gen24_legacy</code> - Fronius Gen24 (legacy V1 interface)<br>
+                        <code>homeassistant</code> - Generic Home Assistant inverter control via service calls<br>
+                        <code>evcc</code> - Universal via EVCC external battery control<br>
+                        <code>default</code> - Disable control (display only)
                     </td>
                 </tr>
                 <tr>
@@ -624,380 +457,251 @@
                 </tr>
             </table>
 
-            <h3>price.token</h3>
+            <h3>inverter.address</h3>
             <table>
                 <tr>
                     <th>Parameter</th>
-                    <td><code>price.token</code></td>
+                    <td><code>inverter.address</code></td>
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>API token or configuration string for price provider</td>
+                    <td>IP address of the inverter / device</td>
                 </tr>
                 <tr>
-                    <th>Valid Values</th>
+                    <th>Required</th>
+                    <td>Yes (for <code>victron</code>, <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
                     <td>
-                        <strong>Tibber:</strong> Your API token from <a href="https://developer.tibber.com" target="_blank">developer.tibber.com</a><br>
-                        <strong>Strømligning:</strong> <code>supplierId/productId[/customerGroupId]</code>
-                    </td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>radius_c/velkommen_gron_el/c</code> (Strømligning)</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Leave empty if not needed: <code>token:</code></td>
-                </tr>
-            </table>
-
-            <h3>price.fixed_price_adder_ct</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>price.fixed_price_adder_ct</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Fixed cost addition per kWh (e.g., grid fees, taxes)</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Cents per kWh (ct/kWh)</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>0</code></td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>8.5</code> (adds 8.5 ct/kWh)</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Only use with <code>source: default</code> (Akkudoktor) to add fixed costs to base prices. <strong>Not applied to other price sources.</strong></td>
-                </tr>
-            </table>
-
-            <h3>price.relative_price_multiplier</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>price.relative_price_multiplier</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Percentage markup applied to (base price + fixed_price_adder_ct)</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>Decimal (e.g., <code>0.05</code> for 5%)</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>0</code></td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>0.19</code> (adds 19% VAT)</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Only use with <code>source: default</code> (Akkudoktor) for percentage-based fees. <strong>Not applied to other price sources.</strong></td>
-                </tr>
-            </table>
-
-            <h3>price.fixed_24h_array</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>price.fixed_24h_array</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>24-hour array of fixed prices for each hour of the day</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Cents per kWh (ct/kWh)</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>Comma-separated list of 24 values (no brackets)<br>
-                        Hour 0 (00:00-01:00), Hour 1 (01:00-02:00), ..., Hour 23 (23:00-24:00)
-                    </td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td style="word-break: break-all;">
-                        <code>10.5,10.5,10.5,10.5,10.5,23.0,<br>
-                        28.2,28.2,28.2,28.2,28.2,23.5,<br>
-                        23.5,23.5,23.5,28.2,28.2,34.3,<br>
-                        34.3,34.3,34.3,34.3,28.0,23.0</code>
+                        <code>192.168.1.12</code> (Fronius)<br>
+                        <code>192.168.1.50</code> (Victron CCGX/Cerbo GX)
                     </td>
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Only use when <code>source: fixed_24h</code></td>
-                </tr>
-            </table>
-
-            <h3>price.feed_in_price</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>price.feed_in_price</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Compensation you receive for feeding energy back to the grid</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Euro per kWh (€/kWh)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>0.08</code> (8 cents per kWh)</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Must use the same tax/fee basis as your purchase prices. Typical range: 0.05 - 0.12 €/kWh</td>
-                </tr>
-            </table>
-
-            <h3>price.negative_price_switch</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>price.negative_price_switch</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>How to handle negative electricity market prices</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
                     <td>
-                        <code>true</code> - Limit feed-in price to €0 when market price is negative<br>
-                        <code>false</code> - Always use the configured feed_in_price
+                        <strong>Victron:</strong> Set a static IP on your Victron device (CCGX, Cerbo GX, or Venus OS host). Modbus/TCP connection will use port 502 (standard).<br>
+                        <strong>Fronius:</strong> IP address of the inverter's local portal.
                     </td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>false</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Use <code>true</code> if your feed-in tariff pays €0 during negative market prices</td>
                 </tr>
             </table>
 
-            <h3 id="energyforecast"><i class="fas fa-brain"></i> Smart Price Prediction (Energyforecast.de)</h3>
-            <div class="alert alert-success">
-                <strong><i class="fas fa-lightbulb"></i> New Feature:</strong> Energyforecast.de integration provides <strong>smart price prediction</strong> when your primary price source lacks tomorrow's prices. The system automatically learns your grid fees and taxes pattern to provide accurate predictions.
+            <h3>inverter.user</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.user</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Username for inverter's local portal (Fronius only)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes (for <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>customer</code></td>
+                </tr>
+            </table>
+
+            <h3>inverter.password</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.password</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Password for inverter's local portal (Fronius only)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes (for <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        <strong>Fronius Gen24 enhanced interface:</strong> Automatically detects firmware version and uses appropriate auth method. If you updated firmware to 1.38.6-1+ or newer, you may need to reset password in WebUI (http://your-inverter-ip/) under Settings → User Management.
+                    </td>
+                </tr>
+            </table>
+
+            <h3>Victron MultiPlus Configuration</h3>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Victron Support:</strong> EOS Connect supports Victron MultiPlus systems via Modbus/TCP network connection. The interface provides automated battery discharge control, charge-from-grid, and charge-from-PV modes for complete energy management.
             </div>
 
-            <h4>How It Works</h4>
-            <p>Instead of simple price repetition or fixed markups, EOS Connect:</p>
+            <p><strong>Requirements:</strong></p>
+            <ul>
+                <li>Victron MultiPlus 3-phase system (single-phase support is experimental)</li>
+                <li>ESS (Energy Storage System) mode enabled on the Victron device</li>
+                <li>Network connectivity between EOS Connect and the Victron device's IP address</li>
+                <li>Default Modbus/TCP port: 502 (standard)</li>
+            </ul>
+
+            <p><strong>How It Works:</strong></p>
             <ol>
-                <li><strong>Learns</strong> the relationship between your primary source (e.g., Tibber) and EPEX spot prices</li>
-                <li><strong>Calculates</strong> both multiplicative factor (for VAT) and offset (for grid fees)</li>
-                <li><strong>Applies</strong> this learned pattern to future EPEX forecasts</li>
+                <li><strong>Discharge Allowed Mode:</strong> Normal ESS operation - Victron's internal logic manages battery discharge and grid interaction</li>
+                <li><strong>Avoid Discharge Mode (Hold):</strong> ESS switches to External Control, setpoint writes 0W to all phases - prevents battery discharge and grid import</li>
+                <li><strong>Charge from Grid:</strong> Positive power setpoint written to MultiPlus - inverter regulates grid import to charge batteries</li>
+                <li><strong>Auto Restore:</strong> When EOS Connect disconnects, original ESS mode is automatically restored</li>
             </ol>
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-exclamation-triangle"></i> PV Charge Rate Limiting not supported:</strong> Victron ESS mode does not allow blocking PV-to-battery charging via the Modbus/TCP interface. The <code>inverter.max_pv_charge_rate</code> value is used by the optimizer model only. When the optimizer requests <code>dc_charge=0</code> (no PV charging) for a time slot, EOS Connect logs a warning but <strong>cannot enforce</strong> this on the hardware — PV will still charge the battery if solar energy is available.
+            </div>
+
+            <h3>inverter.max_grid_charge_rate</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.max_grid_charge_rate</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Maximum grid charge rate</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>5000</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Limitation for calculating target grid charge power and for EOS inverter model. Currently not supported by EVCC external battery control, but shown and calculated (reachable per EOS Connect API)</td>
+                </tr>
+            </table>
+
+            <h3>inverter.max_pv_charge_rate</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.max_pv_charge_rate</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Maximum PV charge rate</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>5000</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        Upper cap for the optimizer model and the target PV charge power calculation.<br><br>
+                        <strong>Fronius Gen24 (<code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>):</strong> Actively enforced via the Time-of-Use (TOU) API on every control cycle. When the optimizer sets <code>dc_charge=0</code> for a slot, a <code>CHARGE_MAX:0</code> TOU entry is written to the inverter, explicitly blocking PV-to-battery charging. When <code>dc_charge&gt;0</code>, a <code>CHARGE_MAX:&lt;rate&gt;</code> entry is written instead, allowing PV charging up to this wattage.<br><br>
+                        <strong>All other inverter types (Victron, HA, EVCC, default):</strong> Value is stored internally and used by the optimizer model only — no hardware PV charge limiting is performed. For Victron ESS, blocking PV charging via Modbus is not supported; a warning is logged when <code>dc_charge=0</code> is requested.
+                    </td>
+                </tr>
+            </table>
 
             <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> Example:</strong> Your Tibber prices: 20-35 ct/kWh, EPEX spot: 8-15 ct/kWh → System learns: <code>customer_price = 2.1 × epex_spot + 9.5 ct/kWh</code>. Tomorrow's EPEX forecast (12 ct/kWh) → Adapted price: <code>2.1 × 12 + 9.5 = 34.7 ct/kWh</code>
-            </div>
-
-            <h4>When It Activates</h4>
-            <ul>
-                <li><strong>Primary Source First:</strong> Uses your configured source (Tibber, SmartEnergy, etc.)</li>
-                <li><strong>Smart Detection:</strong> Only triggers when tomorrow's prices aren't available</li>
-                <li><strong>Seamless:</strong> Real prices when available, intelligent predictions when needed</li>
-            </ul>
-
-            <h4>Configuration Parameters</h4>
-
-            <h3>price.energyforecast_enabled</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>price.energyforecast_enabled</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Enable smart price prediction with energyforecast.de</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>
-                        <code>true</code> - Enable smart price prediction<br>
-                        <code>false</code> - Disable (use simple price repetition)
-                    </td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>false</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Only used when primary source lacks tomorrow's prices</td>
-                </tr>
-            </table>
-
-            <h3>price.energyforecast_token</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>price.energyforecast_token</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>API token from energyforecast.de</td>
-                </tr>
-                <tr>
-                    <th>How to Get</th>
-                    <td>Register at <a href="https://www.energyforecast.de/api_keys" target="_blank">energyforecast.de/api_keys</a></td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>demo_token</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>
-                        <strong>Demo token:</strong> Limited rate limits, for testing only<br>
-                        <strong>Free tier:</strong> 48-hour forecasts (sufficient for most users)<br>
-                        <strong>Paid tier:</strong> 96-hour forecasts + higher limits<br><br>
-                        EOS Connect automatically validates and warns if using demo_token in production.
-                    </td>
-                </tr>
-            </table>
-
-            <h3>price.energyforecast_market_zone</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>price.energyforecast_market_zone</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>European EPEX spot market zone</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>
-                        <code>DE-LU</code> - Germany/Luxembourg<br>
-                        <code>AT</code> - Austria<br>
-                        <code>FR</code> - France<br>
-                        <code>NL</code> - Netherlands<br>
-                        <code>BE</code> - Belgium<br>
-                        <code>PL</code> - Poland<br>
-                        <code>DK1</code> - Denmark West<br>
-                        <code>DK2</code> - Denmark East
-                    </td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>DE-LU</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Must match your location for accurate EPEX spot prices. Invalid zones automatically default to DE-LU with a warning.</td>
-                </tr>
-            </table>
-
-            <h4>Example Configuration</h4>
-            <pre><code>price:
-  source: tibber
-  token: "YOUR_TIBBER_TOKEN"
-  feed_in_price: 0.08
-  negative_price_switch: true
-  
-  # Smart price prediction with energyforecast.de
-  energyforecast_enabled: true
-  energyforecast_token: "YOUR_ENERGYFORECAST_TOKEN"
-  energyforecast_market_zone: "DE-LU"</code></pre>
-
-            <h4>Benefits</h4>
-            <ul>
-                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>Early optimization:</strong> Start at 11am instead of waiting for 1pm Tibber update</li>
-                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>Smart learning:</strong> Automatically adapts to YOUR grid fees and taxes</li>
-                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>Handles negatives:</strong> Correctly applies grid fees even when EPEX is negative</li>
-                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>No manual calibration:</strong> No need for <code>fixed_price_adder_ct</code></li>
-                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>31.4% more accurate:</strong> Than simple price repetition (validated with real data)</li>
-            </ul>
-
-            <h4>Technical Details</h4>
-            <p><strong>Adaptive Learning Algorithm:</strong></p>
-            <ul>
-                <li>Uses linear regression: <code>customer_price = factor × epex_spot + offset</code></li>
-                <li>Factor (typically 1.5-3.0): Captures VAT and percentage markups</li>
-                <li>Offset (typically 5-15 ct/kWh): Captures fixed grid fees and taxes</li>
-                <li>Timestamp-based alignment ensures accuracy regardless of fetch timing</li>
-                <li>Requires minimum 6 hours of overlapping data for learning</li>
-            </ul>
-
-            <p><strong>Safety Checks:</strong></p>
-            <ul>
-                <li>Factor must be between 0.5 and 5.0</li>
-                <li>Offset must be within ±50 ct/kWh</li>
-                <li>Falls back to simple repetition if validation fails</li>
-            </ul>
-
-            <p><strong>Supported Price Sources:</strong></p>
-            <ul>
-                <li><i class="fas fa-bolt" style="color: #4a9eff;"></i> Tibber (EUR - with smart price prediction)</li>
-                <li><i class="fas fa-plug" style="color: #4a9eff;"></i> SmartEnergy AT (EUR - with smart price prediction)</li>
-                <li><i class="fas fa-ban" style="color: #999;"></i> Stromligning (DKK - currency not yet supported)</li>
-                <li><i class="fas fa-ban" style="color: #999;"></i> Akkudoktor (no effect - uses optimization prices)</li>
-            </ul>
-
-            <h4>Limitations</h4>
-            <ul>
-                <li><i class="fas fa-euro-sign" style="color: #ff9800;"></i> <strong>EUR prices only:</strong> Currently supports EUR-based price sources (Tibber, SmartEnergy AT)</li>
-                <li><i class="fas fa-globe" style="color: #ff9800;"></i> <strong>Currency conversion:</strong> Support for DKK (Stromligning) and other currencies will be added when requested by users</li>
-                <li><i class="fas fa-clock" style="color: #ff9800;"></i> <strong>Minimum overlap:</strong> Requires at least 6 hours of overlapping price data to learn the pattern</li>
-            </ul>
-
-            <h4>Troubleshooting</h4>
-            <table>
-                <tr>
-                    <th style="width: 250px;">Issue</th>
-                    <th>Solution</th>
-                </tr>
-                <tr>
-                    <td>Prediction not activating</td>
-                    <td>Verify <code>energyforecast_enabled: true</code> and check logs for learning messages. Test before 1pm with Tibber.</td>
-                </tr>
-                <tr>
-                    <td>"Insufficient overlap"</td>
-                    <td>Need at least 6 hours of valid price data from primary source. Check primary source is returning data correctly.</td>
-                </tr>
-                <tr>
-                    <td>"Factor outside valid range"</td>
-                    <td>Suggests data quality issues. Check logs for actual learned values. Typical factors: 1.5-3.0.</td>
-                </tr>
-                <tr>
-                    <td>"Access denied" error</td>
-                    <td>Verify API token at <a href="https://www.energyforecast.de/api_keys" target="_blank">energyforecast.de/api_keys</a>. Try with <code>demo_token</code> to test connectivity.</td>
-                </tr>
-            </table>
-
-            <div class="alert alert-warning">
-                <strong><i class="fas fa-info-circle"></i> API Usage:</strong> Smart Price Prediction uses energyforecast.de's API with intelligent throttling:
-                <ul style="margin-top: 10px; margin-bottom: 0;">
-                    <li><strong>Smart caching:</strong> API calls limited to maximum once per hour, with auto-call at midnight</li>
-                    <li><strong>Typical usage:</strong> ~13 API calls/day when predictions needed (e.g., Tibber 00:00-13:00)</li>
-                    <li><strong>Rate limit:</strong> Free tier = 50 calls/day (plenty of margin for safety)</li>
-                    <li><strong>Note:</strong> Cached predictions used within each hour to avoid hitting rate limits</li>
+                <strong><i class="fas fa-info-circle"></i> Home Assistant Inverter Interface:</strong>
+                The <code>homeassistant</code> inverter type allows controlling any inverter/battery system that is integrated into Home Assistant via configurable service call sequences (e.g., Marstek, Sungrow, Goodwe).
+                <br><br>
+                For each EOS inverter mode, you define a list of HA service calls under <code>inverter:</code>:
+                <ul>
+                    <li><code>charge_from_grid</code> &ndash; Service calls for grid charging. Supports <code>{{ power }}</code> in <code>data_template</code> for dynamic power values from EOS.</li>
+                    <li><code>avoid_discharge</code> &ndash; Service calls to hold the battery (no discharge, PV charging allowed).</li>
+                    <li><code>discharge_allowed</code> &ndash; Service calls for normal battery discharge.</li>
                 </ul>
+                Each step specifies: <code>service</code> (e.g., <code>select.select_option</code>), <code>entity_id</code>, and <code>data</code> (static) or <code>data_template</code> (with <code>{{ power }}</code> variable).
+                See the <a href="#example-ha-inverter">Marstek example</a> below for a complete configuration.
+                For the ESPHome config to connect a Marstek M1 via RS485/Modbus, see <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this Gist</a>.
             </div>
         </div>
 
-        <!-- Continue with Battery, PV, Inverter, EVCC, MQTT, Other sections... -->
-        <!-- Due to length, I'll create a placeholder for now -->
+        
+<!-- Due to length, I'll create a placeholder for now -->
+
+        <div class="content-section" id="data-source">
+            <h2><i class="fas fa-database"></i> Data Source</h2>
+            <p>Define the primary data connection that EOS Connect uses to read sensor values and send control commands.</p>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-key"></i> Set Once, Used Everywhere:</strong> 
+                Once you configure this section, it becomes the single connection point for <strong>all</strong> sensor references in other sections. 
+                For example:
+                <ul style="margin-top: 10px; margin-bottom: 0;">
+                    <li><code>battery.soc_sensor</code> refers to an entity or item from this source</li>
+                    <li><code>load.load_sensor</code> refers to an entity or item from this source</li>
+                    <li><code>pv_forecast.inverter_id</code> uses this source's API for PV data</li>
+                </ul>
+                <p style="margin-top: 10px; margin-bottom: 0;"><strong>You do not need to configure this in each section separately.</strong> This is your only connection configuration.</p>
+            </div>
+
+            <h3>data_source.type</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>data_source.type</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>The primary integration platform for sensor data</td>
+                </tr>
+                <tr>
+                    <th>Options</th>
+                    <td>
+                        <code>homeassistant</code> &ndash; Home Assistant (recommended for most users)<br>
+                        <code>openhab</code> &ndash; OpenHAB system
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>homeassistant</code></td>
+                </tr>
+            </table>
+
+            <h3>data_source.url</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>data_source.url</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Connection URL or IP address of your data source</td>
+                </tr>
+                <tr>
+                    <th>Examples</th>
+                    <td>
+                        <code>http://192.168.1.100:8123</code> (Home Assistant)<br>
+                        <code>http://192.168.1.100:8080</code> (OpenHAB)
+                    </td>
+                </tr>
+            </table>
+
+            <h3>data_source.access_token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>data_source.access_token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Authentication token for accessing your data source API</td>
+                </tr>
+                <tr>
+                    <th>For Home Assistant</th>
+                    <td>Create a <strong>Long-Lived Access Token</strong>: Profile → Long-Lived Access Tokens → Create Token</td>
+                </tr>
+                <tr>
+                    <th>For OpenHAB</th>
+                    <td>Find or create an API token in OpenHAB settings</td>
+                </tr>
+            </table>
+        </div>
 
         <div class="content-section" id="battery">
             <h2><i class="fas fa-battery-full"></i> Battery Configuration</h2>
@@ -1637,7 +1341,622 @@
             </table>
         </div>
 
-        <div class="content-section" id="pv">
+        
+<!-- Load Configuration -->
+        <div class="content-section" id="load">
+            <h2><i class="fas fa-plug"></i> Load Configuration</h2>
+            <p>Configure how EOS Connect reads your household power consumption data.</p>
+
+            <h3>load.source</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.source</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Data source for load power consumption</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td><code>homeassistant</code>, <code>openhab</code>, <code>default</code></td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>default</code> (uses static consumption profile)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>source: homeassistant</code></td>
+                </tr>
+            </table>
+
+            <h3>load.url</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.url</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>URL to your Home Assistant or OpenHAB instance</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td><code>http://&lt;hostname_or_ip&gt;:&lt;port&gt;</code></td>
+                </tr>
+                <tr>
+                    <th>Examples</th>
+                    <td>
+                        <code>http://homeassistant:8123</code><br>
+                        <code>http://192.168.1.100:8080</code>
+                    </td>
+                </tr>
+            </table>
+
+            <h3>load.access_token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.access_token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Long-lived access token for Home Assistant</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes for Home Assistant, optional for OpenHAB</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>In Home Assistant: Profile → Long-Lived Access Tokens → Create Token<br>Leave empty if not needed: <code>access_token:</code></td>
+                </tr>
+            </table>
+
+            <h3>load.load_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.load_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Entity/item name for total household power consumption</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W) or energy (Wh) for Home Assistant energy entities</td>
+                </tr>
+                <tr>
+                    <th>Examples</th>
+                    <td>
+                        <code>sensor.house_power</code> (Home Assistant)<br>
+                        <code>PowerMeter_Load</code> (OpenHAB)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Represents overall net household load (total house consumption). Positive (consumption) or negative (feed-in) values are converted to absolute positive internally. Home Assistant <strong>energy</strong> entities (device_class: <code>energy</code>) are supported and converted to average power per time frame. Feature contributed by <a href="https://github.com/forouher" target="_blank">Dariush Forouher</a>.</td>
+                </tr>
+            </table>
+
+            <h3>load.car_charge_load_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.car_charge_load_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Entity/item for EV charger power consumption (optional)</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>sensor.wallbox_power</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Separates controllable EV charging from base household load for more accurate optimization. This load is <strong>subtracted</strong> from the main load sensor value. Leave empty if not needed: <code>car_charge_load_sensor:</code></td>
+                </tr>
+            </table>
+
+            <h3>load.additional_load_1_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.additional_load_1_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Entity/item for additional controllable load (e.g., heat pump, dishwasher)</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>sensor.heatpump_power</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Separates additional controllable devices from base household load. This load is <strong>subtracted</strong> from the main load sensor value. Leave empty if not needed: <code>additional_load_1_sensor:</code></td>
+                </tr>
+            </table>
+
+            <h3>load.additional_load_1_runtime</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.additional_load_1_runtime</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Expected runtime of additional load</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Minutes</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>0</code> (not used)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>120</code> (2 hours)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Helps optimization engine plan when to run the additional load</td>
+                </tr>
+            </table>
+
+            <h3>load.additional_load_1_consumption</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.additional_load_1_consumption</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Energy consumption of additional load for ONE hour</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watt-hours (Wh)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>0</code> (not used)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>2000</code> (2 kWh per hour)</td>
+                </tr>
+            </table>
+        </div>
+
+        
+<!-- Price Configuration -->
+        <div class="content-section" id="price">
+            <h2><i class="fas fa-dollar-sign"></i> Electricity Price Configuration</h2>
+            <p>Configure dynamic electricity pricing for cost optimization.</p>
+            
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-exclamation-triangle"></i> Important:</strong> All price values must use the same base - either all prices include taxes and fees, or all prices exclude taxes and fees. Mixing different bases will lead to incorrect optimization results.
+            </div>
+
+            <h3>price.source</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.source</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Provider for dynamic electricity prices</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>tibber</code> - Tibber API<br>
+                        <code>smartenergy_at</code> - Austrian provider<br>
+                        <code>stromligning</code> - Danish provider<br>
+                        <code>fixed_24h</code> - Custom 24-hour array<br>
+                        <code>default</code> - Akkudoktor API
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>default</code></td>
+                </tr>
+            </table>
+
+            <h3>price.token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>API token or configuration string for price provider</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <strong>Tibber:</strong> Your API token from <a href="https://developer.tibber.com" target="_blank">developer.tibber.com</a><br>
+                        <strong>Strømligning:</strong> <code>supplierId/productId[/customerGroupId]</code>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>radius_c/velkommen_gron_el/c</code> (Strømligning)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Leave empty if not needed: <code>token:</code></td>
+                </tr>
+            </table>
+
+            <h3>price.fixed_price_adder_ct</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.fixed_price_adder_ct</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Fixed cost addition per kWh (e.g., grid fees, taxes)</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Cents per kWh (ct/kWh)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>0</code></td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>8.5</code> (adds 8.5 ct/kWh)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Only use with <code>source: default</code> (Akkudoktor) to add fixed costs to base prices. <strong>Not applied to other price sources.</strong></td>
+                </tr>
+            </table>
+
+            <h3>price.relative_price_multiplier</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.relative_price_multiplier</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Percentage markup applied to (base price + fixed_price_adder_ct)</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>Decimal (e.g., <code>0.05</code> for 5%)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>0</code></td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>0.19</code> (adds 19% VAT)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Only use with <code>source: default</code> (Akkudoktor) for percentage-based fees. <strong>Not applied to other price sources.</strong></td>
+                </tr>
+            </table>
+
+            <h3>price.fixed_24h_array</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.fixed_24h_array</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>24-hour array of fixed prices for each hour of the day</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Cents per kWh (ct/kWh)</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>Comma-separated list of 24 values (no brackets)<br>
+                        Hour 0 (00:00-01:00), Hour 1 (01:00-02:00), ..., Hour 23 (23:00-24:00)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td style="word-break: break-all;">
+                        <code>10.5,10.5,10.5,10.5,10.5,23.0,<br>
+                        28.2,28.2,28.2,28.2,28.2,23.5,<br>
+                        23.5,23.5,23.5,28.2,28.2,34.3,<br>
+                        34.3,34.3,34.3,34.3,28.0,23.0</code>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Only use when <code>source: fixed_24h</code></td>
+                </tr>
+            </table>
+
+            <h3>price.feed_in_price</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.feed_in_price</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Compensation you receive for feeding energy back to the grid</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Euro per kWh (€/kWh)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>0.08</code> (8 cents per kWh)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Must use the same tax/fee basis as your purchase prices. Typical range: 0.05 - 0.12 €/kWh</td>
+                </tr>
+            </table>
+
+            <h3>price.negative_price_switch</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.negative_price_switch</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>How to handle negative electricity market prices</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>true</code> - Limit feed-in price to €0 when market price is negative<br>
+                        <code>false</code> - Always use the configured feed_in_price
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>false</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Use <code>true</code> if your feed-in tariff pays €0 during negative market prices</td>
+                </tr>
+            </table>
+
+            <h3 id="energyforecast"><i class="fas fa-brain"></i> Smart Price Prediction (Energyforecast.de)</h3>
+            <div class="alert alert-success">
+                <strong><i class="fas fa-lightbulb"></i> New Feature:</strong> Energyforecast.de integration provides <strong>smart price prediction</strong> when your primary price source lacks tomorrow's prices. The system automatically learns your grid fees and taxes pattern to provide accurate predictions.
+            </div>
+
+            <h4>How It Works</h4>
+            <p>Instead of simple price repetition or fixed markups, EOS Connect:</p>
+            <ol>
+                <li><strong>Learns</strong> the relationship between your primary source (e.g., Tibber) and EPEX spot prices</li>
+                <li><strong>Calculates</strong> both multiplicative factor (for VAT) and offset (for grid fees)</li>
+                <li><strong>Applies</strong> this learned pattern to future EPEX forecasts</li>
+            </ol>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Example:</strong> Your Tibber prices: 20-35 ct/kWh, EPEX spot: 8-15 ct/kWh → System learns: <code>customer_price = 2.1 × epex_spot + 9.5 ct/kWh</code>. Tomorrow's EPEX forecast (12 ct/kWh) → Adapted price: <code>2.1 × 12 + 9.5 = 34.7 ct/kWh</code>
+            </div>
+
+            <h4>When It Activates</h4>
+            <ul>
+                <li><strong>Primary Source First:</strong> Uses your configured source (Tibber, SmartEnergy, etc.)</li>
+                <li><strong>Smart Detection:</strong> Only triggers when tomorrow's prices aren't available</li>
+                <li><strong>Seamless:</strong> Real prices when available, intelligent predictions when needed</li>
+            </ul>
+
+            <h4>Configuration Parameters</h4>
+
+            <h3>price.energyforecast_enabled</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.energyforecast_enabled</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Enable smart price prediction with energyforecast.de</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>true</code> - Enable smart price prediction<br>
+                        <code>false</code> - Disable (use simple price repetition)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>false</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Only used when primary source lacks tomorrow's prices</td>
+                </tr>
+            </table>
+
+            <h3>price.energyforecast_token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.energyforecast_token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>API token from energyforecast.de</td>
+                </tr>
+                <tr>
+                    <th>How to Get</th>
+                    <td>Register at <a href="https://www.energyforecast.de/api_keys" target="_blank">energyforecast.de/api_keys</a></td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>demo_token</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        <strong>Demo token:</strong> Limited rate limits, for testing only<br>
+                        <strong>Free tier:</strong> 48-hour forecasts (sufficient for most users)<br>
+                        <strong>Paid tier:</strong> 96-hour forecasts + higher limits<br><br>
+                        EOS Connect automatically validates and warns if using demo_token in production.
+                    </td>
+                </tr>
+            </table>
+
+            <h3>price.energyforecast_market_zone</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.energyforecast_market_zone</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>European EPEX spot market zone</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>DE-LU</code> - Germany/Luxembourg<br>
+                        <code>AT</code> - Austria<br>
+                        <code>FR</code> - France<br>
+                        <code>NL</code> - Netherlands<br>
+                        <code>BE</code> - Belgium<br>
+                        <code>PL</code> - Poland<br>
+                        <code>DK1</code> - Denmark West<br>
+                        <code>DK2</code> - Denmark East
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>DE-LU</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Must match your location for accurate EPEX spot prices. Invalid zones automatically default to DE-LU with a warning.</td>
+                </tr>
+            </table>
+
+            <h4>Example Configuration</h4>
+            <pre><code>price:
+  source: tibber
+  token: "YOUR_TIBBER_TOKEN"
+  feed_in_price: 0.08
+  negative_price_switch: true
+  
+  # Smart price prediction with energyforecast.de
+  energyforecast_enabled: true
+  energyforecast_token: "YOUR_ENERGYFORECAST_TOKEN"
+  energyforecast_market_zone: "DE-LU"</code></pre>
+
+            <h4>Benefits</h4>
+            <ul>
+                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>Early optimization:</strong> Start at 11am instead of waiting for 1pm Tibber update</li>
+                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>Smart learning:</strong> Automatically adapts to YOUR grid fees and taxes</li>
+                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>Handles negatives:</strong> Correctly applies grid fees even when EPEX is negative</li>
+                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>No manual calibration:</strong> No need for <code>fixed_price_adder_ct</code></li>
+                <li><i class="fas fa-check-circle" style="color: #4caf50;"></i> <strong>31.4% more accurate:</strong> Than simple price repetition (validated with real data)</li>
+            </ul>
+
+            <h4>Technical Details</h4>
+            <p><strong>Adaptive Learning Algorithm:</strong></p>
+            <ul>
+                <li>Uses linear regression: <code>customer_price = factor × epex_spot + offset</code></li>
+                <li>Factor (typically 1.5-3.0): Captures VAT and percentage markups</li>
+                <li>Offset (typically 5-15 ct/kWh): Captures fixed grid fees and taxes</li>
+                <li>Timestamp-based alignment ensures accuracy regardless of fetch timing</li>
+                <li>Requires minimum 6 hours of overlapping data for learning</li>
+            </ul>
+
+            <p><strong>Safety Checks:</strong></p>
+            <ul>
+                <li>Factor must be between 0.5 and 5.0</li>
+                <li>Offset must be within ±50 ct/kWh</li>
+                <li>Falls back to simple repetition if validation fails</li>
+            </ul>
+
+            <p><strong>Supported Price Sources:</strong></p>
+            <ul>
+                <li><i class="fas fa-bolt" style="color: #4a9eff;"></i> Tibber (EUR - with smart price prediction)</li>
+                <li><i class="fas fa-plug" style="color: #4a9eff;"></i> SmartEnergy AT (EUR - with smart price prediction)</li>
+                <li><i class="fas fa-ban" style="color: #999;"></i> Stromligning (DKK - currency not yet supported)</li>
+                <li><i class="fas fa-ban" style="color: #999;"></i> Akkudoktor (no effect - uses optimization prices)</li>
+            </ul>
+
+            <h4>Limitations</h4>
+            <ul>
+                <li><i class="fas fa-euro-sign" style="color: #ff9800;"></i> <strong>EUR prices only:</strong> Currently supports EUR-based price sources (Tibber, SmartEnergy AT)</li>
+                <li><i class="fas fa-globe" style="color: #ff9800;"></i> <strong>Currency conversion:</strong> Support for DKK (Stromligning) and other currencies will be added when requested by users</li>
+                <li><i class="fas fa-clock" style="color: #ff9800;"></i> <strong>Minimum overlap:</strong> Requires at least 6 hours of overlapping price data to learn the pattern</li>
+            </ul>
+
+            <h4>Troubleshooting</h4>
+            <table>
+                <tr>
+                    <th style="width: 250px;">Issue</th>
+                    <th>Solution</th>
+                </tr>
+                <tr>
+                    <td>Prediction not activating</td>
+                    <td>Verify <code>energyforecast_enabled: true</code> and check logs for learning messages. Test before 1pm with Tibber.</td>
+                </tr>
+                <tr>
+                    <td>"Insufficient overlap"</td>
+                    <td>Need at least 6 hours of valid price data from primary source. Check primary source is returning data correctly.</td>
+                </tr>
+                <tr>
+                    <td>"Factor outside valid range"</td>
+                    <td>Suggests data quality issues. Check logs for actual learned values. Typical factors: 1.5-3.0.</td>
+                </tr>
+                <tr>
+                    <td>"Access denied" error</td>
+                    <td>Verify API token at <a href="https://www.energyforecast.de/api_keys" target="_blank">energyforecast.de/api_keys</a>. Try with <code>demo_token</code> to test connectivity.</td>
+                </tr>
+            </table>
+
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-info-circle"></i> API Usage:</strong> Smart Price Prediction uses energyforecast.de's API with intelligent throttling:
+                <ul style="margin-top: 10px; margin-bottom: 0;">
+                    <li><strong>Smart caching:</strong> API calls limited to maximum once per hour, with auto-call at midnight</li>
+                    <li><strong>Typical usage:</strong> ~13 API calls/day when predictions needed (e.g., Tibber 00:00-13:00)</li>
+                    <li><strong>Rate limit:</strong> Free tier = 50 calls/day (plenty of margin for safety)</li>
+                    <li><strong>Note:</strong> Cached predictions used within each hour to avoid hitting rate limits</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Continue with Battery, PV, Inverter, EVCC, MQTT, Other sections... -->
+        
+<div class="content-section" id="pv">
             <h2><i class="fas fa-sun"></i> PV Forecast Configuration</h2>
             <p>Configure solar generation forecasts from various providers.</p>
 
@@ -2102,274 +2421,8 @@
             </ol>
         </div>
 
-        <div class="content-section" id="inverter">
-            <h2><i class="fas fa-solar-panel"></i> Inverter Configuration</h2>
-            <p>Configure inverter control for automated battery management.</p>
-
-            <h3>inverter.type</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.type</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Type of inverter for automated control</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>
-                        <code>victron</code> - Victron MultiPlus (3-phase ESS via Modbus/TCP)<br>
-                        <code>fronius_gen24</code> - Fronius Gen24 (enhanced V2 interface, firmware-based auth)<br>
-                        <code>fronius_gen24_legacy</code> - Fronius Gen24 (legacy V1 interface)<br>
-                        <code>homeassistant</code> - Generic Home Assistant inverter control via service calls<br>
-                        <code>evcc</code> - Universal via EVCC external battery control<br>
-                        <code>default</code> - Disable control (display only)
-                    </td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>default</code></td>
-                </tr>
-            </table>
-
-            <h3>inverter.address</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.address</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>IP address of the inverter / device</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes (for <code>victron</code>, <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td>
-                        <code>192.168.1.12</code> (Fronius)<br>
-                        <code>192.168.1.50</code> (Victron CCGX/Cerbo GX)
-                    </td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>
-                        <strong>Victron:</strong> Set a static IP on your Victron device (CCGX, Cerbo GX, or Venus OS host). Modbus/TCP connection will use port 502 (standard).<br>
-                        <strong>Fronius:</strong> IP address of the inverter's local portal.
-                    </td>
-                </tr>
-            </table>
-
-            <h3>inverter.user</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.user</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Username for inverter's local portal (Fronius only)</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes (for <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>customer</code></td>
-                </tr>
-            </table>
-
-            <h3>inverter.password</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.password</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Password for inverter's local portal (Fronius only)</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes (for <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>
-                        <strong>Fronius Gen24 enhanced interface:</strong> Automatically detects firmware version and uses appropriate auth method. If you updated firmware to 1.38.6-1+ or newer, you may need to reset password in WebUI (http://your-inverter-ip/) under Settings → User Management.
-                    </td>
-                </tr>
-            </table>
-
-            <h3>Victron MultiPlus Configuration</h3>
-            <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> Victron Support:</strong> EOS Connect supports Victron MultiPlus systems via Modbus/TCP network connection. The interface provides automated battery discharge control, charge-from-grid, and charge-from-PV modes for complete energy management.
-            </div>
-
-            <p><strong>Requirements:</strong></p>
-            <ul>
-                <li>Victron MultiPlus 3-phase system (single-phase support is experimental)</li>
-                <li>ESS (Energy Storage System) mode enabled on the Victron device</li>
-                <li>Network connectivity between EOS Connect and the Victron device's IP address</li>
-                <li>Default Modbus/TCP port: 502 (standard)</li>
-            </ul>
-
-            <p><strong>How It Works:</strong></p>
-            <ol>
-                <li><strong>Discharge Allowed Mode:</strong> Normal ESS operation - Victron's internal logic manages battery discharge and grid interaction</li>
-                <li><strong>Avoid Discharge Mode (Hold):</strong> ESS switches to External Control, setpoint writes 0W to all phases - prevents battery discharge and grid import</li>
-                <li><strong>Charge from Grid:</strong> Positive power setpoint written to MultiPlus - inverter regulates grid import to charge batteries</li>
-                <li><strong>Auto Restore:</strong> When EOS Connect disconnects, original ESS mode is automatically restored</li>
-            </ol>
-            <div class="alert alert-warning">
-                <strong><i class="fas fa-exclamation-triangle"></i> PV Charge Rate Limiting not supported:</strong> Victron ESS mode does not allow blocking PV-to-battery charging via the Modbus/TCP interface. The <code>inverter.max_pv_charge_rate</code> value is used by the optimizer model only. When the optimizer requests <code>dc_charge=0</code> (no PV charging) for a time slot, EOS Connect logs a warning but <strong>cannot enforce</strong> this on the hardware — PV will still charge the battery if solar energy is available.
-            </div>
-
-            <h3>inverter.max_grid_charge_rate</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.max_grid_charge_rate</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Maximum grid charge rate</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>5000</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Limitation for calculating target grid charge power and for EOS inverter model. Currently not supported by EVCC external battery control, but shown and calculated (reachable per EOS Connect API)</td>
-                </tr>
-            </table>
-
-            <h3>inverter.max_pv_charge_rate</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.max_pv_charge_rate</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Maximum PV charge rate</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>5000</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>
-                        Upper cap for the optimizer model and the target PV charge power calculation.<br><br>
-                        <strong>Fronius Gen24 (<code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>):</strong> Actively enforced via the Time-of-Use (TOU) API on every control cycle. When the optimizer sets <code>dc_charge=0</code> for a slot, a <code>CHARGE_MAX:0</code> TOU entry is written to the inverter, explicitly blocking PV-to-battery charging. When <code>dc_charge&gt;0</code>, a <code>CHARGE_MAX:&lt;rate&gt;</code> entry is written instead, allowing PV charging up to this wattage.<br><br>
-                        <strong>All other inverter types (Victron, HA, EVCC, default):</strong> Value is stored internally and used by the optimizer model only — no hardware PV charge limiting is performed. For Victron ESS, blocking PV charging via Modbus is not supported; a warning is logged when <code>dc_charge=0</code> is requested.
-                    </td>
-                </tr>
-            </table>
-
-            <h3>inverter.url</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.url</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>URL of your Home Assistant instance</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes (for <code>homeassistant</code> type only)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>http://192.168.1.129:8123</code></td>
-                </tr>
-            </table>
-
-            <h3>inverter.token</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.token</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Long-lived access token from Home Assistant</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes (for <code>homeassistant</code> type only)</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Create one in HA under: Profile &rarr; Long-Lived Access Tokens &rarr; Create Token.</td>
-                </tr>
-            </table>
-
-            <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> Home Assistant Inverter Interface:</strong>
-                The <code>homeassistant</code> inverter type allows controlling any inverter/battery system that is integrated into Home Assistant via configurable service call sequences (e.g., Marstek, Sungrow, Goodwe).
-                <br><br>
-                For each EOS inverter mode, you define a list of HA service calls under <code>inverter:</code>:
-                <ul>
-                    <li><code>charge_from_grid</code> &ndash; Service calls for grid charging. Supports <code>{{ power }}</code> in <code>data_template</code> for dynamic power values from EOS.</li>
-                    <li><code>avoid_discharge</code> &ndash; Service calls to hold the battery (no discharge, PV charging allowed).</li>
-                    <li><code>discharge_allowed</code> &ndash; Service calls for normal battery discharge.</li>
-                </ul>
-                Each step specifies: <code>service</code> (e.g., <code>select.select_option</code>), <code>entity_id</code>, and <code>data</code> (static) or <code>data_template</code> (with <code>{{ power }}</code> variable).
-                See the <a href="#example-ha-inverter">Marstek example</a> below for a complete configuration.
-                For the ESPHome config to connect a Marstek M1 via RS485/Modbus, see <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this Gist</a>.
-            </div>
-        </div>
-
-        <div class="content-section" id="evcc">
-            <h2><i class="fas fa-car"></i> EVCC Configuration</h2>
-            <p>Configure integration with EVCC for EV charging management and PV forecast retrieval.</p>
-
-            <h3>evcc.url</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>evcc.url</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>URL for the EVCC instance</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>http://192.168.1.100:7070</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>
-                        Leave empty if not used: <code>url:</code> or <code>url: ""</code><br><br>
-                        <strong>Important:</strong> When using <code>evcc</code> as the <code>pv_forecast_source</code>, this EVCC configuration must be properly configured. EOS Connect will retrieve PV forecasts directly from the EVCC API instead of using individual PV installation configurations. In this case, the <code>pv_forecast</code> section requires at least one entry with valid <code>lat</code> and <code>lon</code> coordinates for temperature forecasts.
-                    </td>
-                </tr>
-            </table>
-
-            <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> EVCC as Inverter Controller:</strong> When <code>inverter.type</code> is set to <code>evcc</code>, EOS Connect uses EVCC's external battery control feature to manage battery charging. This provides a universal interface that works with many inverter types supported by EVCC.
-            </div>
-        </div>
-
-        <div class="content-section" id="mqtt">
+        
+<div class="content-section" id="mqtt">
             <h2><i class="fas fa-network-wired"></i> MQTT Configuration</h2>
             <p>Configure MQTT broker connection and Home Assistant Auto Discovery.</p>
 
@@ -2533,66 +2586,6 @@
                     <td>Only change if you've customized Home Assistant's discovery prefix</td>
                 </tr>
             </table>
-        </div>
-
-        <!-- Optimization Configuration Section -->
-        <div class="content-section" id="optimization-config">
-            <h2><i class="fas fa-cog"></i> Optimization Configuration</h2>
-            <p>Important timing and configuration concepts for optimization requests and responses.</p>
-
-            <h3 id="timing-controls">Understanding refresh_time and time_frame</h3>
-            <div class="alert alert-warning">
-                <h4><i class="fas fa-clock"></i> Two Different Timing Controls</h4>
-                <p>These two parameters control different aspects of optimization:</p>
-                <ul>
-                    <li><strong>refresh_time</strong>: Sets how often EOS Connect sends a new optimization request to the optimizer server (e.g., every 3 minutes)</li>
-                    <li><strong>time_frame</strong> (in EOS section): Sets the granularity of the optimization and forecast arrays inside each request (e.g., 900 for 15-minute steps, 3600 for hourly steps)</li>
-                </ul>
-                <p>The combination of <code>refresh_time</code> and <code>time_frame</code> allows you to control both how frequently the system updates and how detailed the optimization is.</p>
-            </div>
-
-            <h3 id="time-slot-config">Time Slot Configuration & Optimizer Constraints</h3>
-            <p>The <code>time_frame</code> setting determines the granularity of optimization data:</p>
-            
-            <table>
-                <tr>
-                    <th>Time Frame</th>
-                    <th>Array Length</th>
-                    <th>Forecast Horizon</th>
-                    <th>EOS Server</th>
-                    <th>EVopt</th>
-                </tr>
-                <tr>
-                    <td><code>3600</code> (60 minutes)</td>
-                    <td>48 values</td>
-                    <td>2 days</td>
-                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
-                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
-                </tr>
-                <tr>
-                    <td><code>900</code> (15 minutes)</td>
-                    <td>192 values</td>
-                    <td>2 days (more granular)</td>
-                    <td><i class="fas fa-times" style="color: red;"></i> Not Supported</td>
-                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
-                </tr>
-            </table>
-
-            <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> Optimizer Constraints:</strong>
-                <ul>
-                    <li><strong>EOS Server (Akkudoktor EOS):</strong> Only supports 60-minute slots (<code>time_frame: 3600</code>). If you set <code>time_frame: 900</code> with EOS Server, it will be automatically corrected to 3600 at startup with a warning.</li>
-                    <li><strong>EVopt:</strong> Supports both 60-minute (<code>3600</code>) and 15-minute (<code>900</code>) time frames for more granular optimization. Use 900 if you need more detailed control over battery charging/discharging and solar feed-in patterns.</li>
-                </ul>
-            </div>
-
-            <div class="alert alert-tip">
-                <strong><i class="fas fa-lightbulb"></i> When to Use Which Time Frame:</strong>
-                <ul>
-                    <li><strong>Use 3600s (hourly):</strong> If using EOS Server, or if you prefer simpler hourly optimization with lower computational cost</li>
-                    <li><strong>Use 900s (15-min):</strong> If using EVopt and want finer-grained optimization for precise battery and solar control</li>
-                </ul>
-            </div>
         </div>
 
         <div class="content-section" id="other">
@@ -2798,314 +2791,191 @@
 
         <!-- Configuration Examples Section -->
         <div class="content-section" id="examples">
-            <h2><i class="fas fa-file-code"></i> Configuration Examples</h2>
-            <p>Complete example configurations for different use cases.</p>
+            <h2><i class="fas fa-lightbulb"></i> Configuration Scenarios</h2>
+            <p>Common setup scenarios and how to configure them using the web UI. For each scenario, follow the Setup Wizard or navigate to the corresponding sections in <strong>Settings</strong>.</p>
 
-            <h3 id="example-full">Full Configuration Example</h3>
-            <p>This complete example will be automatically generated at first startup. Copy and customize for your setup:</p>
-                        <pre><code class="yaml"># Load configuration
-load:
-    source: default  # Data source for load power - openhab, homeassistant, default (using a static load profile)
-    url: http://homeassistant:8123 # URL for openhab or homeassistant (e.g. http://openhab:8080 or http://homeassistant:8123)
-    access_token: abc123 # access token for homeassistant (optional)
-    load_sensor: Load_Power # item / entity for load power data in watts (or HA energy entity in Wh)
-    car_charge_load_sensor: Wallbox_Power # item / entity for wallbox power data in watts. (If not needed, set to "")
-    additional_load_1_sensor: "additional_load_1_sensor" # item / entity for additional load power. (If not needed set to "")
-    additional_load_1_runtime: 2 # runtime for additional load 1 in minutes - default: 0 (If not needed set to "")
-    additional_load_1_consumption: 1500 # consumption for additional load 1 in Wh - default: 0 (If not needed set to "")
-
-# EOS server configuration
-eos:
-  source: eos_server  # EOS server source - eos_server, evopt, default (default uses eos_server)
-  server: 192.168.1.94  # EOS server address
-  port: 8503 # port for EOS server - default: 8503
-  timeout: 180 # timeout for EOS optimize request in seconds - default: 180
-  time_frame: 3600 # granularity of optimization steps in seconds (3600=hourly for EOS server; 900=15min for EVopt only)
-
-# Electricity price configuration
-price:
-  source: default  # data source for electricity price tibber, smartenergy_at, stromligning, fixed_24h, default (default uses akkudoktor)
-  token: tibberBearerToken # Token for electricity price (for Stromligning use supplierId/productId[/customerGroupId])
-  fixed_price_adder_ct: 2.5 # Describes the fixed cost addition in ct per kWh.
-  relative_price_multiplier: 0.05 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
-  fixed_24h_array: 10.41, 10.42, 10.42, 10.42, 10.42, 23.52, 28.17, 28.17, 28.17, 28.17, 28.17, 23.52, 23.52, 23.52, 23.52, 28.17, 28.17, 34.28, 34.28, 34.28, 34.28, 34.28, 28.17, 23.52 # 24 hours array with fixed prices over the day
-  feed_in_price: 0.0 # feed in price for the grid in €/kWh
-  negative_price_switch: false # switch for no payment if negative stock price is given
-
-# battery configuration
-battery:
-  source: default  # Data source for battery soc - openhab, homeassistant, default
-  url: http://homeassistant:8123 # URL for openhab or homeassistant (e.g. http://openhab:7070 or http://homeassistant:8123)
-  soc_sensor: battery_SOC # item / entity for battery SOC data in [0..1]
-  access_token: abc123 # access token for homeassistant (optional)
-  capacity_wh: 11059 # battery capacity in Wh
-  charge_efficiency: 0.88 # efficiency for charging the battery in [0..1]
-  discharge_efficiency: 0.88 # efficiency for discharging the battery in [0..1]
-  max_charge_power_w: 5000 # max charging power in W
-  min_soc_percentage: 5 # min battery soc in %
-  max_soc_percentage: 100 # max battery soc in %
-  price_euro_per_wh_accu: 0 # price for battery in €/Wh
-  price_euro_per_wh_sensor: "" # Home Assistant entity (e.g. sensor.battery_price) providing €/Wh
-  charging_curve_enabled: true # enable dynamic charging curve for battery (SOC-based + temperature-based if sensor configured)
-  sensor_battery_temperature: "" # sensor for battery temperature in °C (e.g., sensor.byd_battery_box_premium_hv_temperatur) - enables temperature protection
-
-# List of PV forecast source configuration
-pv_forecast_source:
-  source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default (default uses akkudoktor)
-  api_key: "" # API key for Solcast (required only when source is 'solcast')
-
-# List of PV forecast configurations. Add multiple entries as needed.
-# See Akkudoktor API (https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast) for more details.
-pv_forecast:
-  - name: myPvInstallation1  # User-defined identifier for the PV installation, have to be unique if you use more installations
-    lat: 52.5200 # Latitude for PV forecast
-    lon: 13.4050 # Longitude for PV forecast
-    azimuth: 90.0 # Azimuth for PV forecast
-    tilt: 30.0 # Tilt for PV forecast
-    power: 4600 # Power for PV forecast
-    powerInverter: 5000 # Power Inverter for PV forecast
-    inverterEfficiency: 0.9 # Inverter Efficiency for PV forecast
-    horizon: 10,20,10,15 # Horizon to calculate shading up to 360 values to describe shading situation for your PV.
-    resource_id: "" # Resource ID for Solcast (required only when source is 'solcast')
-
-# Inverter configuration
-inverter:
-  type: default  # Type of inverter - victron, fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
-  address: 192.168.1.12 # Address of the inverter (fronius_gen24, fronius_gen24_legacy, victron)
-  user: customer # Username for the inverter (fronius_gen24, fronius_gen24_legacy only)
-  password: abc123 # Password for the inverter (fronius_gen24, fronius_gen24_legacy only)
-  max_grid_charge_rate: 5000 # Max inverter grid charge rate in W - default: 5000
-  max_pv_charge_rate: 5000 # Max inverter PV charge rate in W - default: 5000
-
-# EVCC configuration
-evcc:
-  url: http://yourEVCCserver:7070  # URL to your evcc installation, if not used set to "" or leave as http://yourEVCCserver:7070
-
-# MQTT configuration
-mqtt:
-  enabled: false # Enable MQTT - default: false
-  broker: localhost # URL for MQTT server - default: mqtt://yourMQTTserver
-  port: 1883 # Port for MQTT server - default: 1883
-  user: mqtt_user # Username for MQTT server - default: mqtt
-  password: mqtt_password # Password for MQTT server - default: mqtt
-  tls: false # Use TLS for MQTT server - default: false
-  ha_mqtt_auto_discovery: true # Enable Home Assistant MQTT auto discovery - default: true
-  ha_mqtt_auto_discovery_prefix: homeassistant # Prefix for Home Assistant MQTT auto discovery - default: homeassistant
-
-# General application settings
-refresh_time: 3 # Default refresh time of EOS connect in minutes - default: 3
-time_zone: Europe/Berlin # Default time zone - default: Europe/Berlin
-eos_connect_web_port: 8081 # Default port for EOS connect server - default: 8081
-log_level: info # Log level for the application : debug, info, warning, error - default: info
-request_timeout: 10 # Request timeout for Home Assistant and OpenHAB API calls in seconds (5-120) - default: 10</code></pre>
-
-            <h3 id="example-minimal">Minimal Configuration Example</h3>
-            <p>Minimum required configuration for basic operation (copy and customize):</p>
+            <h3 id="example-full">Scenario 1: Basic Home Assistant Setup (Recommended)</h3>
+            <p>The most common configuration for users with Home Assistant and a battery system.</p>
             <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> Note:</strong> Within HA addon, unused parameters will be automatically added after saving. For standalone installations, use empty strings <code>""</code> for unused parameters.
+                <strong><i class="fas fa-info-circle"></i> Setup Flow:</strong>
+                <ol>
+                    <li><strong>Optimizer:</strong> Leave as default (EOS Server)</li>
+                    <li><strong>Data Source:</strong> Select Home Assistant, enter your HA URL and long-lived access token</li>
+                    <li><strong>Battery:</strong> Select your battery SOC entity from HA, enter capacity and efficiency specs</li>
+                    <li><strong>Load:</strong> Select your household load power entity</li>
+                    <li><strong>Electricity Prices:</strong> Choose your price provider (Tibber, fixed prices, etc.)</li>
+                    <li><strong>PV Forecasts:</strong> Enter location (lat/lon) and PV system specs (power, azimuth, tilt)</li>
+                    <li><strong>Optional - Inverter Control:</strong> If you have a Victron or Fronius inverter, configure it here</li>
+                    <li><strong>Optional - MQTT:</strong> Enable MQTT and HA auto-discovery for additional integrations</li>
+                </ol>
             </div>
-                        <pre><code class="yaml"># Load configuration
-load:
-    source: default  # Data source for load power - openhab, homeassistant, default (using a static load profile)
-    load_sensor: Load_Power # item / entity for load power data in watts (or HA energy entity in Wh)
-    car_charge_load_sensor: "" # item / entity for wallbox power data in watts. (If not needed, set to "")
-
-# EOS server configuration
-eos:
-  source: eos_server  # EOS server source - eos_server, evopt, default (default uses eos_server)
-  server: 192.168.1.94  # EOS server address
-  port: 8503 # port for EOS server - default: 8503
-  timeout: 180 # timeout for EOS optimize request in seconds - default: 180
-  time_frame: 3600 # granularity of optimization steps in seconds (3600=hourly for EOS server; 900=15min for EVopt only)
-
-# Electricity price configuration
-price:
-  source: default  # data source for electricity price tibber, smartenergy_at, stromligning, fixed_24h, default (default uses akkudoktor)
-  token: "" # Provide Tibber token or Stromligning supplierId/productId[/customerGroupId] when needed
-  fixed_price_adder_ct: 0 # Describes the fixed cost addition in ct per kWh.
-  relative_price_multiplier: 0 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
-
-# battery configuration
-battery:
-  source: default  # Data source for battery soc - openhab, homeassistant, default
-  capacity_wh: 11059 # battery capacity in Wh
-  charge_efficiency: 0.88 # efficiency for charging the battery in [0..1]
-  discharge_efficiency: 0.88 # efficiency for discharging the battery in [0..1]
-  max_charge_power_w: 5000 # max charging power in W
-
-# List of PV forecast source configuration
-pv_forecast_source:
-  source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default (default uses akkudoktor)
-
-# List of PV forecast configurations. Add multiple entries as needed.
-# See Akkudoktor API (https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast) for more details.
-pv_forecast:
-  - name: myPvInstallation1  # User-defined identifier for the PV installation, have to be unique if you use more installations
-    lat: 52.5200 # Latitude for PV forecast
-    lon: 13.4050 # Longitude for PV forecast
-    azimuth: 90.0 # Azimuth for PV forecast
-    tilt: 30.0 # Tilt for PV forecast
-
-# Inverter configuration
-inverter:
-  type: default  # Type of inverter - victron, fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
-
-# EVCC configuration
-evcc:
-  url: ""  # URL to your evcc installation, if not used set to ""
-
-# MQTT configuration
-mqtt:
-  enabled: false # Enable MQTT - default: false
-
-# General application settings
-refresh_time: 3 # Default refresh time of EOS connect in minutes - default: 3
-time_zone: Europe/Berlin # Default time zone - default: Europe/Berlin
-eos_connect_web_port: 8081 # Default port for EOS connect server - default: 8081
-log_level: info # Log level for the application : debug, info, warning, error - default: info
-request_timeout: 10 # Request timeout for Home Assistant and OpenHAB API calls in seconds (5-120) - default: 10</code></pre>
-
-            <h3 id="example-evcc">Example: Using EVCC for PV Forecasts</h3>
-            <p>When using EVCC as your PV forecast source, configuration is simplified as EVCC provides aggregated forecast data (copy and customize):</p>
-            <pre><code class="yaml"># PV forecast source configuration - using EVCC
-pv_forecast_source:
-  source: evcc # Use EVCC for PV forecasts
-
-pv_forecast:
-  - name: "Location for Temperature" # At least one entry needed for temperature forecasts
-    lat: 52.5200 # Required for temperature forecasts used by EOS optimization
-    lon: 13.4050 # Required for temperature forecasts used by EOS optimization
-    # Other parameters (azimuth, tilt, power, etc.) not used for PV forecasts but can be included
-
-# EVCC configuration - REQUIRED when using evcc as pv_forecast_source
-evcc:
-  url: http://192.168.1.100:7070  # URL to your EVCC installation</code></pre>
-            <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> Important:</strong>
-                <ul>
-                    <li>EVCC handles all PV installation details and provides aggregated forecasts</li>
-                    <li>The <code>pv_forecast</code> section requires at least one entry with valid <code>lat</code> and <code>lon</code> coordinates for temperature forecasts</li>
-                    <li>Temperature forecasts are essential for EOS optimization, regardless of PV forecast source - they are always retrieved from Akkudoktor</li>
-                    <li>The <code>evcc.url</code> must point to a reachable EVCC instance with API access enabled</li>
-                </ul>
+            <div class="alert alert-success">
+                <strong><i class="fas fa-check-circle"></i> Result:</strong> EOS Connect will receive your battery SOC, load, and PV forecast data from HA, calculate optimal battery charge/discharge timing, and display recommendations in the web dashboard.
             </div>
 
-            <h3 id="example-solcast">Example: Using Solcast for PV Forecasts</h3>
-            <p>When using Solcast, you need to configure rooftop sites in the Solcast dashboard first (copy and customize):</p>
-            <pre><code class="yaml"># PV forecast source configuration - using Solcast
-pv_forecast_source:
-  source: solcast # Use Solcast for PV forecasts
-  api_key: "your_solcast_api_key_here" # Your Solcast API key (required)
+            <h3 id="example-minimal">Scenario 2: Minimal Setup (Read-Only Monitoring)</h3>
+            <p>Monitor battery optimization recommendations without hardware control. Useful for testing or observation-only setups.</p>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Setup Steps:</strong>
+                <ol>
+                    <li><strong>Data Source:</strong> Home Assistant (or OpenHAB)</li>
+                    <li><strong>Battery:</strong> Configure only SOC entity and capacity</li>
+                    <li><strong>Load:</strong> Select load sensor (or use default static profile if unavailable)</li>
+                    <li><strong>Electricity Prices:</strong> Select price source</li>
+                    <li><strong>PV Forecasts:</strong> Minimal: lat/lon only for location</li>
+                    <li><strong>Leave blank:</strong> Inverter section (read-only mode)</li>
+                </ol>
+                <p style="margin-top: 10px;"><strong>Benefit:</strong> EOS Connect calculates and displays battery optimization targets. You can manually implement the recommendations or implement hardware control later.</p>
+            </div>
 
-# PV forecast configurations using Solcast resource IDs
-pv_forecast:
-  - name: "Main Roof South"
-    resource_id: "abcd-efgh-1234-5678" # Resource ID from Solcast dashboard
-    lat: 52.5200 # Required for temperature forecasts used by EOS optimization
-    lon: 13.4050 # Required for temperature forecasts used by EOS optimization
-    power: 5000 # Still needed for system scaling
-    powerInverter: 5000 # Still needed for system scaling
-    inverterEfficiency: 0.95 # Still needed for system scaling
-    # azimuth, tilt, horizon not used for PV forecasts - configured in Solcast dashboard
-  - name: "Garage East"
-    resource_id: "ijkl-mnop-9999-0000" # Different resource ID for second installation
-    lat: 52.5200 # Same location coordinates can be used for multiple installations
-    lon: 13.4050
-    power: 2500
-    powerInverter: 2500
-    inverterEfficiency: 0.92</code></pre>
-
-            <div class="alert alert-warning">
-                <h4><i class="fas fa-exclamation-triangle"></i> Solcast Rate Limiting</h4>
-                <ul>
-                    <li>Each PV installation requires a separate rooftop site configured in your Solcast account</li>
-                    <li>Physical PV parameters (tilt, azimuth) are configured in the Solcast dashboard, not in EOS Connect</li>
-                    <li><strong>Location coordinates (lat, lon) are still required</strong> for temperature forecasts that EOS uses for optimization calculations</li>
-                    <li>The <code>resource_id</code> is obtained from your Solcast rooftop site configuration</li>
-                    <li><code>power</code>, <code>powerInverter</code>, and <code>inverterEfficiency</code> are still required for proper system scaling</li>
-                    <li><strong>Free Solcast accounts are limited to 10 API calls per day</strong></li>
-                    <li><strong>EOS Connect automatically extends update intervals to 2.5 hours when using Solcast</strong> to stay within the 10 calls/day limit (9.6 calls/day actual usage)</li>
-                    <li>Multiple PV installations result in multiple API calls per update cycle - consider this when planning your configuration</li>
-                    <li>If you exceed rate limits, EOS Connect will use the previous forecast data until the next successful API call</li>
+            <h3 id="example-evcc">Scenario 3: Using EVCC for PV Forecasts & Car Charging</h3>
+            <p>Integrate EVCC as your PV forecast source and leverage it for EV charging coordination.</p>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> EVCC allows EOS Connect to:</strong>
+                <ul style="margin-top: 10px; margin-bottom: 0;">
+                    <li>Retrieve PV forecast data from EVCC instead of manual entry</li>
+                    <li>Get real-time car charging power consumption</li>
+                    <li>Coordinate battery optimization with EV charging decisions</li>
                 </ul>
-                <p><strong>Setting up Solcast:</strong></p>
+            </div>
+            <div class="alert alert-info" style="margin-top: 15px;">
+                <strong><i class="fas fa-cog"></i> Web UI Configuration:</strong>
+                <ol>
+                    <li><strong>EVCC Section:</strong> Enter your EVCC server URL (e.g., <code>http://192.168.1.100:7070</code>)</li>
+                    <li><strong>PV Forecasts — Source:</strong> Select "EVCC"</li>
+                    <li><strong>PV Forecasts — Configuration:</strong> Add one entry for your location with lat/lon (for temperature-based optimization)</li>
+                    <li><strong>Load Section:</strong> Optionally set <code>car_charge_load_sensor</code> to your wallbox power entity for better load tracking</li>
+                </ol>
+                <p style="margin-top: 10px;"><strong>Result:</strong> EOS Connect automatically fetches your PV systems and forecast data from EVCC, simplifying setup.</p>
+            </div>
+
+            <h3 id="example-solcast">Scenario 4: Using Solcast for Detailed PV Forecasts</h3>
+            <p>Integrate Solcast for high-accuracy solar irradiance forecasts from satellite data.</p>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Before starting:</strong>
                 <ol>
                     <li>Create a free account at <a href="https://solcast.com" target="_blank">solcast.com</a></li>
-                    <li>Configure a "Rooftop Site" with your PV system details (location, tilt, azimuth, capacity)</li>
-                    <li>Copy the Resource ID from your rooftop site</li>
-                    <li>Get your API key from the account settings</li>
-                    <li>Use these values in your EOS Connect configuration (including lat/lon for temperature forecasts)</li>
+                    <li>Add a "Rooftop Site" for each PV installation (define location, tilt, azimuth, capacity)</li>
+                    <li>Copy the Resource IDs from your rooftop sites</li>
+                    <li>Get your Solcast API key from account settings</li>
                 </ol>
+            </div>
+            <div class="alert alert-info" style="margin-top: 15px;">
+                <strong><i class="fas fa-cog"></i> Web UI Configuration:</strong>
+                <ol>
+                    <li><strong>PV Forecasts — Source:</strong> Select "solcast"</li>
+                    <li><strong>PV Forecasts — API Key:</strong> Paste your Solcast API key</li>
+                    <li><strong>PV Forecasts — Configurations:</strong> For each PV installation, add:
+                        <ul style="margin-top: 8px;">
+                            <li><strong>Name:</strong> "Main Roof" or "Garage East" (identify each installation)</li>
+                            <li><strong>Resource ID:</strong> From your Solcast rooftop site</li>
+                            <li><strong>Lat/Lon:</strong> Location coordinates (used for temperature-based optimization)</li>
+                            <li><strong>Power, Azimuth, Tilt:</strong> System specs (for scaling calculations)</li>
+                        </ul>
+                    </li>
+                </ol>
+                <p style="margin-top: 10px;"><strong>⚠️ Important - Solcast Rate Limiting:</strong></p>
+                <ul>
+                    <li>Free accounts: <strong>10 API calls per day</strong></li>
+                    <li>EOS Connect automatically extends refresh intervals to 2.5 hours to stay within limits</li>
+                    <li>If you exceed limits, the system uses the previous forecast until the next successful call</li>
+                </ul>
+            </div>
+
+            <h3 id="example-advanced">Scenario 5: Advanced Setup with Victron Inverter & Multiple PV Sites</h3>
+            <p>Complete integration with Victron hardware, multiple PV installations, and real-time control.</p>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Setup Steps:</strong>
+                <ol>
+                    <li><strong>Data Source:</strong> Home Assistant (with Victron integration)</li>
+                    <li><strong>Optimizer:</strong> Configure EOS Server address and port</li>
+                    <li><strong>Battery:</strong> Select Victron battery SOC from HA entities</li>
+                    <li><strong>Load:</strong> Select grid/AC load sensor</li>
+                    <li><strong>Electricity Prices:</strong> Configure your price provider</li>
+                    <li><strong>PV Forecasts:</strong> Add multiple installations:
+                        <ul>
+                            <li>Installation 1: "South Roof" (5kW)</li>
+                            <li>Installation 2: "East Roof" (3kW)</li>
+                        </ul>
+                    </li>
+                    <li><strong>Inverter Section:</strong>
+                        <ul>
+                            <li><strong>Type:</strong> "victron"</li>
+                            <li><strong>Address:</strong> Your Victron GX Device IP</li>
+                        </ul>
+                    </li>
+                    <li><strong>Battery Settings:</strong> Lower min SOC (e.g., 10%) for more aggressive optimization</li>
+                    <li><strong>Optional — Dynamic Price Calculation:</strong> Enable battery price learning to value stored energy</li>
+                </ol>
+                <p style="margin-top: 10px;"><strong>Result:</strong> EOS Connect actively controls your Victron inverter/battery system based on prices and solar forecasts for all PV installations.</p>
+            </div>
+
+            <h3 id="example-mqtt">Scenario 6: MQTT Integration & Home Assistant Auto-Discovery</h3>
+            <p>Stream EOS Connect data to MQTT and auto-discover devices in Home Assistant.</p>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Setup Steps:</strong>
+                <ol>
+                    <li><strong>MQTT Section:</strong>
+                        <ul>
+                            <li><strong>Enable MQTT:</strong> Toggle ON</li>
+                            <li><strong>Broker:</strong> Your MQTT broker IP (e.g., 192.168.1.50)</li>
+                            <li><strong>Port:</strong> MQTT port (default 1883)</li>
+                            <li><strong>User/Password:</strong> MQTT credentials if required</li>
+                            <li><strong>TLS:</strong> Enable if your broker uses TLS</li>
+                        </ul>
+                    </li>
+                    <li><strong>Home Assistant Auto-Discovery:</strong>
+                        <ul>
+                            <li>Enable <code>ha_mqtt_auto_discovery</code></li>
+                            <li>Leave prefix as "homeassistant" (unless customized in HA)</li>
+                        </ul>
+                    </li>
+                    <li><strong>Restart:</strong> EOS Connect and HA will auto-discover the new MQTT devices</li>
+                </ol>
+                <p style="margin-top: 10px;"><strong>Result:</strong> EOS Connect publishes optimization data, battery targets, and system status to MQTT. Home Assistant automatically creates entities for:
+                    <ul style="margin-top: 8px;">
+                        <li>Battery charge/discharge targets</li>
+                        <li>Current optimization state</li>
+                        <li>System status and errors</li>
+                    </ul>
+                </p>
             </div>
         </div>
 
         <div class="content-section" id="example-ha-inverter">
-            <h3>Example: Using Home Assistant for Inverter Control (e.g., Marstek)</h3>
-            <p>When your inverter/battery system is integrated into Home Assistant, you can use the <code>homeassistant</code> inverter type to control it via HA service calls. This example shows a configuration for a Marstek battery system:</p>
-            <div class="config-example">
-<pre><code># Inverter Control Configuration (Marstek via Home Assistant)
-inverter:
-  type: homeassistant
-  url: http://192.168.1.129:8123
-  token: "your_long_lived_access_token_here"
-  max_grid_charge_rate: 2500
-  max_pv_charge_rate: 2500
-
-  # State: Force Charge (Grid)
-  charge_from_grid:
-    - service: select.select_option
-      entity_id: select.mt1_betriebsmodus
-      data: { "option": "Manuell" }
-    - service: select.select_option
-      entity_id: select.mt1_rs485_control_mode
-      data: { "option": "Aktiviert" }
-    - service: select.select_option
-      entity_id: select.mt1_erzwungene_operation
-      data: { "option": "Zwangsladen" }
-    - service: number.set_value
-      entity_id: number.mt1_ziel_leistung_manuell
-      data_template: { "value": "{{ power }}" }  # Dynamic power from EOS
-
-  # State: Avoid Discharge (Hold)
-  avoid_discharge:
-    - service: select.select_option
-      entity_id: select.mt1_betriebsmodus
-      data: { "option": "Anti-Feed-In" }
-    - service: select.select_option
-      entity_id: select.mt1_erzwungene_operation
-      data: { "option": "Stop" }
-    - service: number.set_value
-      entity_id: number.mt1_max_entladeleistung_limit
-      data: { "value": 0 }       # Block discharge
-    - service: number.set_value
-      entity_id: number.mt1_max_ladeleistung_limit
-      data: { "value": 2500 }    # Allow full PV charging
-
-  # State: Discharge Allowed (Normal)
-  discharge_allowed:
-    - service: select.select_option
-      entity_id: select.mt1_betriebsmodus
-      data: { "option": "Anti-Feed-In" }
-    - service: select.select_option
-      entity_id: select.mt1_erzwungene_operation
-      data: { "option": "Stop" }
-    - service: number.set_value
-      entity_id: number.mt1_max_entladeleistung_limit
-      data: { "value": 600 }     # Restore discharge limit
-    - service: number.set_value
-      entity_id: number.mt1_max_ladeleistung_limit
-      data: { "value": 2500 }</code></pre>
-            </div>
+            <h3>Scenario 7: Custom Inverter Control via Home Assistant</h3>
+            <p>Control any inverter or battery system through Home Assistant service calls. Useful for systems like Marstek, Sungrow, Goodwe, or custom ESPHome integrations.</p>
             <div class="alert alert-info">
-                <strong>Key points:</strong>
-                <ul>
-                    <li>Replace <code>url</code> and <code>token</code> with your Home Assistant instance URL and a long-lived access token.</li>
-                    <li>Each state defines a sequence of HA service calls executed in order.</li>
-                    <li>Use <code>data_template</code> with <code>{{ power }}</code> for dynamic values (EOS provides the charge power). Use <code>data</code> for static values.</li>
-                    <li>The entity IDs and service calls depend on your specific inverter's HA integration. Adapt them to match your setup.</li>
-                    <li>This approach works for any inverter/battery that exposes control entities in Home Assistant.</li>
-                    <li>For a complete ESPHome config to connect a Marstek M1 via RS485/Modbus (M5Stack Atom), see <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this Gist</a>.</li>
+                <strong><i class="fas fa-cog"></i> Prerequisites:</strong>
+                <ol>
+                    <li>Your inverter/battery system must be integrated into Home Assistant with exposed entities (select, number, switch, etc.)</li>
+                    <li>Know the entity IDs and service calls needed to control your specific system</li>
+                    <li>Have Home Assistant admin access to create service call automations (or use Direct REST API if supported)</li>
+                </ol>
+            </div>
+            <div class="alert alert-info" style="margin-top: 15px;">
+                <strong><i class="fas fa-cog"></i> Web UI Configuration:</strong>
+                <ol>
+                    <li><strong>Inverter Section — Type:</strong> Select "homeassistant"</li>
+                    <li><strong>Power Limits:</strong> Set max grid charge and PV charge rates in watts</li>
+                    <li><strong>Service Call Mappings:</strong> For each control state (charge_from_grid, avoid_discharge, discharge_allowed):
+                        <ul style="margin-top: 8px;">
+                            <li>Define the sequence of HA service calls</li>
+                            <li>Each call specifies: service domain, entity ID, and data</li>
+                            <li>Use <code>{{ power }}</code> template variable in <code>data_template</code> for dynamic power from EOS</li>
+                        </ul>
+                    </li>
+                </ol>
+                <p style="margin-top: 10px;"><strong>Example service call sequence for Marstek:</strong></p>
+                <ul style="margin-top: 8px;">
+                    <li><code>select.select_option</code> → entity: <code>select.mt1_betriebsmodus</code> → option: "Manuell"</li>
+                    <li><code>select.select_option</code> → entity: <code>select.mt1_erzwungene_operation</code> → option: "Zwangsladen"</li>
+                    <li><code>number.set_value</code> → entity: <code>number.mt1_ziel_leistung_manuell</code> → value: <code>{{ power }}</code></li>
                 </ul>
+                <p style="margin-top: 10px;"><strong>Result:</strong> EOS Connect sends optimized battery commands to HA, which executes your custom service call sequence on the inverter.</p>
+            </div>
+            <div class="alert alert-success">
+                <strong><i class="fas fa-lightbulb"></i> For Marstek Setup:</strong> See <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this complete ESPHome integration guide</a> for connecting a Marstek M1 via RS485/Modbus.
             </div>
         </div>
         <!-- Auto-generated Parameter Reference -->
@@ -3128,10 +2998,20 @@ inverter:
         if (!container) return;
         try {
             const res = await fetch('../assets/data/config_schema.json');
-            if (!res.ok) { container.innerHTML = '<p style="color:#888;">Parameter reference not available.</p>'; return; }
+            if (!res.ok) { 
+                console.error('Failed to load schema:', res.status, res.statusText);
+                container.innerHTML = '<p style="color:#888;">Parameter reference not available (HTTP ' + res.status + ').</p>'; 
+                return; 
+            }
             const schemaData = await res.json();
             const fields = schemaData.fields || schemaData;
             const sectionMeta = schemaData.sections || {};
+
+            if (!fields || fields.length === 0) {
+                console.error('No fields found in schema');
+                container.innerHTML = '<p style="color:#888;">No configuration fields found in schema.</p>';
+                return;
+            }
 
             // Group by section
             const sections = {};
@@ -3171,7 +3051,8 @@ inverter:
 
             container.innerHTML = html;
         } catch (err) {
-            container.innerHTML = '<p style="color:#888;">Could not load parameter reference.</p>';
+            console.error('Error loading parameter reference:', err);
+            container.innerHTML = '<p style="color:#888;">Could not load parameter reference: ' + err.message + '</p>';
         }
     })();
     </script>

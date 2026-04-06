@@ -21,6 +21,7 @@ class SetupWizard {
         /**
          * Each step maps to one or more schema sections.
          * Only getting_started-level fields are shown.
+         * Order reflects recommended setup flow: Optimizer → EVCC → Inverter → Data Source → Battery → Load → Price → PV → Review
          */
         this.steps = [
             {
@@ -31,6 +32,28 @@ class SetupWizard {
                 description: "",
             },
             {
+                id: "eos",
+                title: "Optimizer",
+                icon: "fa-server",
+                sections: ["eos"],
+                description: "Select and configure the optimization backend (EOS Server or EVopt).",
+            },
+            {
+                id: "evcc",
+                title: "EVCC (Optional)",
+                icon: "fa-car",
+                sections: ["evcc"],
+                description: "Optional — Define here to use EVCC as a data source for PV forecasts, as an inverter control gateway, and/or for car charging dependent control. If not used, simply skip this step.",
+                isOptional: true,
+            },
+            {
+                id: "inverter",
+                title: "Inverter",
+                icon: "fa-microchip",
+                sections: ["inverter"],
+                description: "Select your inverter type for battery charge control (display-only if not using hardware control).",
+            },
+            {
                 id: "data_source",
                 title: "Data Source",
                 icon: "fa-plug",
@@ -38,18 +61,18 @@ class SetupWizard {
                 description: "Connect to Home Assistant or OpenHAB to read sensor data.",
             },
             {
-                id: "eos",
-                title: "Optimizer",
-                icon: "fa-server",
-                sections: ["eos"],
-                description: "Select and configure the optimization backend.",
-            },
-            {
                 id: "battery",
                 title: "Battery",
                 icon: "fa-battery-full",
                 sections: ["battery"],
                 description: "Set your battery capacity and SOC limits.",
+            },
+            {
+                id: "load",
+                title: "Load",
+                icon: "fa-bolt",
+                sections: ["load"],
+                description: "Set the sensor entity for household load data.",
             },
             {
                 id: "price",
@@ -60,24 +83,10 @@ class SetupWizard {
             },
             {
                 id: "pv",
-                title: "PV Forecast",
+                title: "PV Installations",
                 icon: "fa-solar-panel",
                 sections: ["pv_forecast_source", "pv_forecast"],
-                description: "Configure your solar forecast provider and PV installation.",
-            },
-            {
-                id: "inverter",
-                title: "Inverter",
-                icon: "fa-microchip",
-                sections: ["inverter"],
-                description: "Select your inverter for battery charge control.",
-            },
-            {
-                id: "load",
-                title: "Load Sensor",
-                icon: "fa-bolt",
-                sections: ["load"],
-                description: "Set the sensor entity for household load data.",
+                description: "Configure your solar forecast provider and PV installations.",
             },
             {
                 id: "review",
@@ -234,12 +243,14 @@ class SetupWizard {
                 energy optimization system running. You can always change these later
                 in the full Configuration menu.</p>
                 <div class="wizard-welcome-features">
-                    <div class="wizard-feature"><i class="fas fa-plug"></i><span>Data Source</span></div>
                     <div class="wizard-feature"><i class="fas fa-server"></i><span>Optimizer</span></div>
-                    <div class="wizard-feature"><i class="fas fa-battery-full"></i><span>Battery</span></div>
-                    <div class="wizard-feature"><i class="fas fa-coins"></i><span>Pricing</span></div>
-                    <div class="wizard-feature"><i class="fas fa-solar-panel"></i><span>PV Forecast</span></div>
+                    <div class="wizard-feature"><i class="fas fa-car"></i><span>EVCC</span></div>
                     <div class="wizard-feature"><i class="fas fa-microchip"></i><span>Inverter</span></div>
+                    <div class="wizard-feature"><i class="fas fa-plug"></i><span>Data Source</span></div>
+                    <div class="wizard-feature"><i class="fas fa-battery-full"></i><span>Battery</span></div>
+                    <div class="wizard-feature"><i class="fas fa-bolt"></i><span>Load</span></div>
+                    <div class="wizard-feature"><i class="fas fa-coins"></i><span>Pricing</span></div>
+                    <div class="wizard-feature"><i class="fas fa-solar-panel"></i><span>PV Installations</span></div>
                 </div>
             </div>
         `;
@@ -321,7 +332,35 @@ class SetupWizard {
         let opts = "";
         for (const c of choices) {
             const sel = String(c) === String(value) ? " selected" : "";
-            opts += `<option value="${this._escapeAttr(String(c))}"${sel}>${this._escapeHtml(String(c))}</option>`;
+            
+            // Conditional disabling for specific fields
+            let disabled = "";
+            let title = "";
+            let displayLabel = c;
+            
+            // Disable "evcc" option in pv_forecast_source.source if evcc.url is not configured
+            if (f.key === "pv_forecast_source.source" && String(c) === "evcc") {
+                const evccUrl = this.values["evcc.url"] || "http://yourEVCCserver:7070";
+                const isDefault = evccUrl.trim() === "" || evccUrl === "http://yourEVCCserver:7070";
+                if (isDefault) {
+                    disabled = "disabled";
+                    title = "title='Configure EVCC URL first'";
+                    displayLabel = `${c} (not available)`;
+                }
+            }
+            
+            // Disable "evcc" option in inverter.type if evcc.url is not configured
+            if (f.key === "inverter.type" && String(c) === "evcc") {
+                const evccUrl = this.values["evcc.url"] || "http://yourEVCCserver:7070";
+                const isDefault = evccUrl.trim() === "" || evccUrl === "http://yourEVCCserver:7070";
+                if (isDefault) {
+                    disabled = "disabled";
+                    title = "title='Configure EVCC URL first'";
+                    displayLabel = `${c} (not available)`;
+                }
+            }
+            
+            opts += `<option value="${this._escapeAttr(String(c))}"${sel} ${disabled} ${title} style="${disabled ? 'color: #888; font-style: italic;' : ''}">${this._escapeHtml(displayLabel)}</option>`;
         }
         return `<select id="wiz-${cssKey}" data-key="${this._escapeAttr(f.key)}">${opts}</select>`;
     }
@@ -474,7 +513,15 @@ class SetupWizard {
             </button>`;
         }
 
-        return `<div class="wizard-nav">${backBtn}${nextBtn}</div>`;
+        // Add skip button for optional steps
+        let skipBtn = "";
+        if (step.isOptional && !isFirst && !isLast) {
+            skipBtn = `<button class="wizard-btn wizard-btn-skip" id="wiz-skip">
+                Skip
+            </button>`;
+        }
+
+        return `<div class="wizard-nav">${backBtn}${skipBtn}${nextBtn}</div>`;
     }
 
     // ── Event binding ───────────────────────────────────────────
@@ -492,6 +539,12 @@ class SetupWizard {
         const nextBtn = document.getElementById("wiz-next");
         if (nextBtn) {
             nextBtn.addEventListener("click", () => this._goNext());
+        }
+
+        // Skip button (for optional steps)
+        const skipBtn = document.getElementById("wiz-skip");
+        if (skipBtn) {
+            skipBtn.addEventListener("click", () => this._skip());
         }
 
         // Password toggles
@@ -590,6 +643,20 @@ class SetupWizard {
     /**
      * Go to the previous step.
      */
+    /**
+     * Skip the current optional step.
+     */
+    _skip() {
+        const step = this.steps[this.currentStep];
+        if (step.isOptional) {
+            this.skippedSteps.add(step.id);
+            if (this.currentStep < this.steps.length - 1) {
+                this.currentStep++;
+                this._render();
+            }
+        }
+    }
+
     _goBack() {
         if (this.currentStep > 0) {
             this._collectCurrentStep();

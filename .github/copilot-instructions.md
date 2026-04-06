@@ -118,6 +118,73 @@ When making ANY code changes:
 - New experimental features should use the label `"experimental"`
 - Hot-reloadable fields (applied without restart) must set `hot_reload=True` and have corresponding logic in `src/config_web/hot_reload.py`
 
+#### Section Ordering & Wizard Flow
+
+**`SECTION_META` dict order in `schema.py` defines:**
+
+- Configuration menu section order in the web UI (Settings)
+- Setup Wizard step order (recommended sequence for new users)
+- Both frontend JS (`config.js`, `wizard.js`) automatically use this ordering via the API response (`section_order` array)
+- **Current order (recommended setup flow):** `eos` → `evcc` → `inverter` → `data_source` → `battery` → `load` → `price` → `pv_forecast_source` → `pv_forecast` → `mqtt` → `system`
+
+**Rationale for this order:**
+
+1. **Optimizer** (eos) — Core backend selection
+2. **EVCC** (evcc) — Optional, but must configure before Inverter (if used as controller)
+3. **Inverter** (inverter) — Can reference EVCC as controller type
+4. **Data Source** (data_source) — Load/battery data collection
+5. **Battery** (battery) → **Load** (load) → **Price** (price) — Hardware setup
+6. **PV Source** (pv_forecast_source) → **PV Installations** (pv_forecast) — Forecast configuration
+7. **MQTT** (mqtt) → **System** (system) — Integration & system settings
+
+When reordering sections, update SECTION_META in `schema.py` — it drives all three implementations: config UI, wizard, and exported docs JSON.
+
+#### Field Dependencies (Cross-Field Validation)
+
+Use `depends_on` field attribute to enforce cross-field dependencies:
+
+**Current dependency rules:**
+
+- **`inverter.type` → `evcc.url`**: If user selects "evcc" as inverter controller but `evcc.url` is empty or default, the option is greyed out with tooltip "Configure EVCC URL first". API validation returns `unmet_dependencies` error and prevents save.
+- **`pv_forecast_source.source` → `evcc.url`**: If user selects "evcc" as PV source but `evcc.url` is empty or default, the option is greyed out. API validation blocks save with "EVCC selected as PV source but EVCC URL not configured".
+- `pv_forecast_source.api_key`: Only visible if source is "solcast" or "victron"
+- `mqtt.broker`: Only visible when `mqtt.enabled` is true
+
+**Dependency validation across UI layers:**
+
+1. **Frontend - Config Screen** (`src/web/js/config.js`):
+   - Greyed out/disabled options with visual styling:
+     - Color: `#888` (dark grey)
+     - Font: italic
+     - Label suffix: `(not available)`
+     - Tooltip: "Configure EVCC URL first"
+   - User cannot click disabled option
+   - Dependency check on field change
+
+2. **Frontend - Wizard** (`src/web/js/wizard.js`):
+   - Same visual styling as config screen (grey, italic, "(not available)")
+   - Dependencies re-evaluated when moving between steps
+   - Handles both scenarios: empty EVCC URL OR skipped EVCC step
+   - Disabled options prevent selection but remain visible for user awareness
+
+3. **Backend API** (`src/config_web/api.py` — `/api/config/` PUT endpoint):
+   - `_check_dependencies()` validates cross-field rules at save time
+   - Returns `unmet_dependencies` array with details: `{"field": "...", "reason": "...", "requires": "...", "blocking": True}`
+   - Prevents save without frontend intervention
+   - Enables backend-only validation and audit
+
+4. **UI Response** (`src/web/js/config.js` - `_showUnmetDependencies()`):
+   - Shows red error banner: "Cannot save: required dependencies not configured"
+   - Lists blocking dependencies with field names and links
+   - Auto-dismisses when user corrects the issue
+
+**To add new dependency:**
+
+1. Add `depends_on={"field_name": "condition"}` to target field in schema.py
+2. Backend validation automatically picked up at save time
+3. Add conditional disabling logic to `_renderSelect()` in both `config.js` and `wizard.js` if visual UI disabling needed (frontend pre-validation)
+4. Update this documentation
+
 ### Config Web Module Architecture
 
 The web-based configuration system lives in `src/config_web/` as a self-contained module. Understanding this architecture is essential for any config-related work.
@@ -139,7 +206,9 @@ The web-based configuration system lives in `src/config_web/` as a self-containe
 - **Zero interface changes**: Interfaces receive the same dict shape they always did. The merger produces an identical structure.
 - **SPOT (Single Point of Truth)**: `schema.py` defines all field metadata. The web UI, REST API validation, docs export, and merger all consume it.
 - **Bootstrap vs Store**: ~5 bootstrap keys (`BOOTSTRAP_KEYS` in schema.py) stay in config.yaml/ENV/HA options. Everything else lives in SQLite.
-- **Section metadata**: `SECTION_META` in schema.py defines icons + labels for all sections. Frontend and docs read from this — never hardcode section display info elsewhere.
+- **Section metadata**: `SECTION_META` in schema.py defines icons + labels + **order** for all sections. Frontend automatically reads order via `section_order` array in `/api/config/schema` response — never hardcode section display info elsewhere.
+- **Section ordering propagation**: `SECTION_META` order flows through: schema.py → api.py (`/schema` endpoint) → config.js/wizard.js → user-visible UI order.
+- **Dependencies**: Cross-field validation at API layer with frontend pre-validation for UX. Disabled options show as greyed with visual indicators so users understand they're available but currently blocked.
 
 #### Adding a New Config Field (Checklist)
 
@@ -147,28 +216,29 @@ The web-based configuration system lives in `src/config_web/` as a self-containe
 2. Run `python scripts/export_config_schema.py` to update docs JSON
 3. **Done** — Web UI, API validation, docs table, migration, and merger all pick it up automatically
 4. If hot-reloadable: also add to `_PRICE_FIELD_MAP` or `_BATTERY_SOC_FIELDS` in `hot_reload.py`
+5. If field depends on another field: add `depends_on` param; API validation and UI greyout handle it automatically
 
 #### Adding a New Config Section
 
 1. Add fields with the new `section` name in `schema.py`
-2. Add entry to `SECTION_META` dict in `schema.py` (icon + label)
+2. Add entry to `SECTION_META` dict in `schema.py` (icon + label), **placing in desired order**
 3. Run `python scripts/export_config_schema.py`
-4. **Done** — Frontend falls back gracefully but `SECTION_META` gives it the right icon/label
+4. **Done** — Frontend falls back gracefully, section appears in correct order in UI + wizard
 
 #### REST API Endpoints (all under `/api/config/`)
 
-| Method | Path                | Purpose                                                    |
-| ------ | ------------------- | ---------------------------------------------------------- |
-| GET    | `/schema`           | Full schema JSON (fields + section metadata)               |
-| GET    | `/`                 | Current config values (passwords masked)                   |
-| PUT    | `/`                 | Partial update (validates, categorizes restart/hot-reload) |
-| GET    | `/section/<name>`   | Single section values                                      |
-| POST   | `/validate`         | Validate without saving                                    |
-| GET    | `/restart-required` | Pending restart-required fields                            |
-| GET    | `/export`           | Export all settings as flat JSON                           |
-| POST   | `/import`           | Import settings from JSON                                  |
-| GET    | `/wizard-status`    | Setup wizard completion state                              |
-| POST   | `/wizard-complete`  | Mark wizard as completed                                   |
+| Method | Path                | Purpose                                                                 |
+| ------ | ------------------- | ----------------------------------------------------------------------- |
+| GET    | `/schema`           | Full schema JSON (fields + section metadata + dependencies)             |
+| GET    | `/`                 | Current config values (passwords masked)                                |
+| PUT    | `/`                 | Partial update; returns `unmet_dependencies` if cross-field check fails |
+| GET    | `/section/<name>`   | Single section values                                                   |
+| POST   | `/validate`         | Validate without saving                                                 |
+| GET    | `/restart-required` | Pending restart-required fields                                         |
+| GET    | `/export`           | Export all settings as flat JSON                                        |
+| POST   | `/import`           | Import settings from JSON                                               |
+| GET    | `/wizard-status`    | Setup wizard completion state                                           |
+| POST   | `/wizard-complete`  | Mark wizard as completed                                                |
 
 #### SPOT Pipeline Flow
 

@@ -422,6 +422,22 @@
     display: flex;
 }
 
+/* --- Unmet dependencies banner --- */
+.config-unmet-deps-banner {
+    display: none;
+    padding: 12px 16px;
+    background-color: rgba(220, 53, 69, 0.15);
+    border: 1px solid rgba(220, 53, 69, 0.3);
+    border-radius: 6px;
+    color: #dc3545;
+    font-size: 0.85em;
+    margin-bottom: 16px;
+}
+
+.config-unmet-deps-banner.visible {
+    display: block;
+}
+
 /* --- Validation error --- */
 .config-field-error {
     width: 100%;

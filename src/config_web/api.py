@@ -7,9 +7,10 @@ All routes are registered via a Flask Blueprint so that the main app
 only needs one line: ``app.register_blueprint(config_bp)``.
 """
 
+import json
 import logging
 import re
-from flask import Blueprint, jsonify, request as flask_request
+from flask import Blueprint, jsonify, request as flask_request, Response
 
 logger = logging.getLogger("__main__")
 
@@ -37,12 +38,18 @@ def init_api(store, schema, module):
 @config_bp.route("/schema", methods=["GET"])
 def get_schema():
     """Return the full config schema as JSON, including section metadata."""
-    return jsonify(
-        {
-            "fields": _schema.to_json(),
-            "sections": _schema.section_meta(),
-        }
+    sections_dict = _schema.section_meta()
+    data = {
+        "fields": _schema.to_json(),
+        "sections": sections_dict,
+        "section_order": list(sections_dict.keys()),  # Explicit order as array
+    }
+    # Use json.dumps with sort_keys=False to preserve SECTION_META insertion order
+    response = Response(
+        json.dumps(data, sort_keys=False, ensure_ascii=False),
+        mimetype="application/json"
     )
+    return response
 
 
 # ------------------------------------------------------------------
@@ -89,14 +96,29 @@ def update_config():
     Partial update — accepts a flat dict of dot-notation keys + values.
 
     Example body: ``{"price.feed_in_price": 0.08, "battery.min_soc_percentage": 10}``
+    
+    Returns:
+    - If validation errors: status 422 with "errors"
+    - If unmet dependencies (fields required by other fields): status 200 with "unmet_dependencies" + no save
+    - If success: status 200 with "updated", "restart_required", "hot_reloaded"
     """
     data = flask_request.get_json(silent=True)
     if not data or not isinstance(data, dict):
         return jsonify({"error": "Request body must be a JSON object"}), 400
 
+    # Validate values
     errors = _validate_updates(data)
     if errors:
         return jsonify({"errors": errors}), 422
+
+    # Check cross-field dependencies (these don't block, but are returned as unmet_dependencies)
+    unmet_deps = _check_dependencies(data)
+    if unmet_deps:
+        return jsonify({
+            "success": False,
+            "unmet_dependencies": unmet_deps,
+            "message": "Cannot save: required dependencies not configured"
+        }), 200
 
     changed_keys = []
     restart_required = []
@@ -127,6 +149,7 @@ def update_config():
 
     return jsonify(
         {
+            "success": True,
             "updated": changed_keys,
             "restart_required": restart_required,
             "hot_reloaded": hot_reloaded,
@@ -255,6 +278,74 @@ def _resolve_schema_key(key: str):
         template_key = f"{m.group(1)}.{m.group(2)}"
         return _schema.get(template_key)
     return None
+
+
+def _check_dependencies(data: dict) -> list[dict]:
+    """
+    Check cross-field dependencies. Returns list of unmet dependency objects.
+    
+    Examples:
+    - If pv_forecast_source.source="evcc", then evcc.url must be populated
+    - If mqtt.enabled=True, then mqtt.broker must be populated
+    
+    Each dependency object has: {"field": "...", "reason": "...", "requires": "..."}
+    """
+    dependencies = []
+    
+    # Get current config for fields not in the update
+    current_config = _module.get_config()
+    
+    # Helper: get effective value (from update data or current config)
+    def get_value(key):
+        if key in data:
+            return data[key]
+        # Navigate nested key in current config
+        parts = key.split(".")
+        val = current_config
+        for part in parts:
+            if isinstance(val, dict):
+                val = val.get(part)
+            else:
+                return None
+        return val
+    
+    # PV Source: if "evcc" selected, EVCC URL must be configured
+    pv_source = get_value("pv_forecast_source.source")
+    if pv_source == "evcc":
+        evcc_url = get_value("evcc.url")
+        if not evcc_url or evcc_url.strip() == "":
+            dependencies.append({
+                "field": "pv_forecast_source.source",
+                "reason": "EVCC selected as PV source but EVCC URL is not configured",
+                "requires": "evcc.url",
+                "blocking": True,
+            })
+    
+    # Inverter: if "evcc" selected, EVCC URL must be configured
+    inverter_type = get_value("inverter.type")
+    if inverter_type == "evcc":
+        evcc_url = get_value("evcc.url")
+        if not evcc_url or evcc_url.strip() == "" or evcc_url == "http://yourEVCCserver:7070":
+            dependencies.append({
+                "field": "inverter.type",
+                "reason": "EVCC selected as inverter controller but EVCC URL is not configured",
+                "requires": "evcc.url",
+                "blocking": True,
+            })
+    
+    # MQTT: if enabled, broker must be set
+    mqtt_enabled = get_value("mqtt.enabled")
+    if mqtt_enabled:
+        mqtt_broker = get_value("mqtt.broker")
+        if not mqtt_broker or mqtt_broker.strip() == "":
+            dependencies.append({
+                "field": "mqtt.enabled",
+                "reason": "MQTT enabled but broker address not configured",
+                "requires": "mqtt.broker",
+                "blocking": True,
+            })
+    
+    return dependencies
 
 
 def _validate_updates(data: dict) -> list[dict]:

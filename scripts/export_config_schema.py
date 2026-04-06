@@ -34,7 +34,7 @@ def export_schema():
 
     output_path = os.path.join(output_dir, "config_schema.json")
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        json.dump(data, f, indent=2, ensure_ascii=False, sort_keys=False)
 
     print(f"Exported {len(data['fields'])} fields to {output_path}")
     return output_path

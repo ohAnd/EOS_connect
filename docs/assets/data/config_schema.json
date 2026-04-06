@@ -1382,7 +1382,7 @@
       "type": "str",
       "default": "http://yourEVCCserver:7070",
       "section": "evcc",
-      "level": "standard",
+      "level": "getting_started",
       "description": "URL to your EVCC installation (leave default or empty if not used)",
       "labels": [
         "restart_required"
@@ -1660,25 +1660,33 @@
     }
   ],
   "sections": {
+    "eos": {
+      "icon": "fa-server",
+      "label": "Optimizer"
+    },
+    "evcc": {
+      "icon": "fa-car",
+      "label": "EVCC"
+    },
+    "inverter": {
+      "icon": "fa-microchip",
+      "label": "Inverter"
+    },
     "data_source": {
       "icon": "fa-plug",
       "label": "Data Source"
+    },
+    "battery": {
+      "icon": "fa-battery-full",
+      "label": "Battery"
     },
     "load": {
       "icon": "fa-bolt",
       "label": "Load"
     },
-    "eos": {
-      "icon": "fa-server",
-      "label": "Optimizer"
-    },
     "price": {
       "icon": "fa-coins",
       "label": "Price"
-    },
-    "battery": {
-      "icon": "fa-battery-full",
-      "label": "Battery"
     },
     "pv_forecast_source": {
       "icon": "fa-sun",
@@ -1686,15 +1694,7 @@
     },
     "pv_forecast": {
       "icon": "fa-solar-panel",
-      "label": "PV Forecast"
-    },
-    "inverter": {
-      "icon": "fa-microchip",
-      "label": "Inverter"
-    },
-    "evcc": {
-      "icon": "fa-car",
-      "label": "EVCC"
+      "label": "PV Installations"
     },
     "mqtt": {
       "icon": "fa-tower-broadcast",

@@ -1407,6 +1407,9 @@ mqtt_interface.on_mqtt_command = mqtt_control_callback
 # web server
 app = Flask(__name__)
 
+# Ensure JSON responses preserve dict insertion order (SECTION_META order)
+app.config['JSON_SORT_KEYS'] = False
+
 # Phase 2: register the Flask REST API now that app exists.
 try:
     config_web.start_api(app)

@@ -105,12 +105,19 @@ This allows the add-on to correctly see and use your physical CPU's instructions
 EOS Connect uses a **web-based configuration system**. All settings are managed through the built-in web UI at `http://localhost:8081`.
 
 ### First Start (Setup Wizard)
-On first launch, a **Setup Wizard** guides you through the essential configuration steps:
-1. Data source (Home Assistant / OpenHAB / default)
-2. Optimization backend (EOS Server / EVopt)
-3. Battery, price, PV forecast, and inverter settings
+On first launch, a **Setup Wizard** guides you through the essential configuration steps in optimal order:
+1. **Optimizer** — Select your optimization backend (EOS Server or EVopt)
+2. **EVCC** (Optional) — Configure if you want to use EVCC for PV forecasts, inverter control gateway, or car charging dependent control. Can be skipped if not using EVCC.
+3. **Inverter** — Select your inverter type for battery control (display-only if not using hardware control). Can use EVCC as controller if configured in step 2.
+4. **Data Source** — Connect to Home Assistant, OpenHAB, or use default sensors
+5. **Battery** — Set capacity and SOC limits
+6. **Load** — Connect your load sensor
+7. **Price** — Choose your electricity pricing provider
+8. **PV Installations** — Configure your solar forecast provider and PV systems
 
 After the wizard completes, restart EOS Connect to apply the settings.
+
+**Note:** EVCC configuration must come before Inverter so you can select EVCC as your inverter controller type. If EVCC URL is not configured, the option will be greyed out in both the Inverter and PV Source selection fields.
 
 ### Bootstrap Config (`config.yaml`)
 Only 3 infrastructure settings live in `config.yaml` — everything else is stored in the database and managed via the web UI:
