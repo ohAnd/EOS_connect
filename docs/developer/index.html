@@ -492,6 +492,7 @@ set EOS_CONNECT_PORT=8081</code></pre>
                 <li><strong>SPOT:</strong> <code>schema.py</code> defines all field metadata. The web UI, REST API validation, docs export, and merger all consume it &mdash; never duplicate field definitions.</li>
                 <li><strong>Bootstrap vs Store:</strong> ~5 bootstrap keys (<code>web_port</code>, <code>time_zone</code>, <code>log_level</code>, &hellip;) stay in <code>config.yaml</code> / ENV / HA options. Everything else lives in SQLite.</li>
                 <li><strong>3-level progressive disclosure:</strong> Fields have a <code>level</code> (<code>getting_started</code>, <code>standard</code>, <code>expert</code>) controlling visibility in the setup wizard and config UI.</li>
+                <li><strong>Static asset caching:</strong> HTML is revalidated on each load, while local CSS/JS assets use versioned URLs (<code>?v=&lt;app_version&gt;</code>) so browsers can cache aggressively and still fetch new assets automatically after upgrades.</li>
             </ul>
 
             <h3>SPOT Pipeline</h3>

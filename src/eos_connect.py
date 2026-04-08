@@ -11,7 +11,14 @@ import json
 import threading
 import pytz
 import requests
-from flask import Flask, Response, render_template_string, request, send_from_directory
+from flask import (
+    Flask,
+    Response,
+    make_response,
+    render_template_string,
+    request,
+    send_from_directory,
+)
 from version import __version__
 from config import ConfigManager
 from log_handler import MemoryLogHandler
@@ -1424,6 +1431,8 @@ hot_reload_adapter = HotReloadAdapter(
 )
 config_web.register_hot_reload_callback(hot_reload_adapter.on_config_changed)
 
+ASSET_CACHE_MAX_AGE_SECONDS = 31536000
+
 
 # legacy web site support
 @app.route("/index_legacy.html", methods=["GET"])
@@ -1435,7 +1444,14 @@ def main_page_legacy():
     and returns it as a rendered template string.
     """
     with open(base_path + "/web/index_legacy.html", "r", encoding="utf-8") as html_file:
-        return render_template_string(html_file.read())
+        rendered_html = render_template_string(
+            html_file.read(), asset_version=__version__
+        )
+    response = make_response(rendered_html)
+    response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 # new web site support
@@ -1450,7 +1466,14 @@ def main_page():
     and returns it as a rendered template string.
     """
     with open(base_path + "/web/index.html", "r", encoding="utf-8") as html_file:
-        return render_template_string(html_file.read())
+        rendered_html = render_template_string(
+            html_file.read(), asset_version=__version__
+        )
+    response = make_response(rendered_html)
+    response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.route("/js/<filename>")
@@ -1475,7 +1498,10 @@ def serve_js_files(filename):
 
         # logger.debug("[Web] Serving JavaScript file: %s", filename)
         return send_from_directory(
-            js_directory, filename, mimetype="application/javascript"
+            js_directory,
+            filename,
+            mimetype="application/javascript",
+            max_age=ASSET_CACHE_MAX_AGE_SECONDS,
         )
 
     except (OSError, IOError, ValueError) as e:
@@ -1504,7 +1530,12 @@ def serve_css_files(filename):
             return "Not Found", 404
 
         # logger.debug("[Web] Serving CSS file: %s", filename)
-        return send_from_directory(web_directory, filename, mimetype="text/css")
+        return send_from_directory(
+            web_directory,
+            filename,
+            mimetype="text/css",
+            max_age=ASSET_CACHE_MAX_AGE_SECONDS,
+        )
 
     except (OSError, IOError, ValueError) as e:
         logger.error("[Web] Error serving CSS file %s: %s", filename, e)
