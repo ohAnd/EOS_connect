@@ -1434,27 +1434,7 @@ config_web.register_hot_reload_callback(hot_reload_adapter.on_config_changed)
 ASSET_CACHE_MAX_AGE_SECONDS = 31536000
 
 
-# legacy web site support
-@app.route("/index_legacy.html", methods=["GET"])
-def main_page_legacy():
-    """
-    Renders the main page of the web application.
-
-    This function reads the content of the 'index.html' file located in the 'web' directory
-    and returns it as a rendered template string.
-    """
-    with open(base_path + "/web/index_legacy.html", "r", encoding="utf-8") as html_file:
-        rendered_html = render_template_string(
-            html_file.read(), asset_version=__version__
-        )
-    response = make_response(rendered_html)
-    response.headers["Cache-Control"] = "no-cache, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
-
-
-# new web site support
+# web site support
 
 
 @app.route("/", methods=["GET"])
