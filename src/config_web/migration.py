@@ -246,21 +246,29 @@ def _flatten_config(config_dict: dict, prefix: str = "") -> dict[str, Any]:
     """
     Flatten a nested config dict to dot-notation keys.
 
-    Lists (like pv_forecast) are stored as a single JSON list value
-    under the section key directly, since they have dynamic length.
+    Lists of dicts (like pv_forecast) are expanded into indexed keys
+    so that the web UI and export API can consume them directly.
+    Plain lists (non-dict items) are stored as-is.
 
     Examples:
-        {"load": {"source": "ha"}} -> {"load.source": "ha"}
-        {"refresh_time": 3}        -> {"refresh_time": 3}
-        {"pv_forecast": [...]}     -> {"pv_forecast": [...]}
+        {"load": {"source": "ha"}}          -> {"load.source": "ha"}
+        {"refresh_time": 3}                  -> {"refresh_time": 3}
+        {"pv_forecast": [{"name": "Roof"}]} -> {"pv_forecast.0.name": "Roof"}
     """
     result = {}
     for key, value in config_dict.items():
         full_key = f"{prefix}{key}" if not prefix else f"{prefix}.{key}"
 
         if isinstance(value, list):
-            # Store lists as-is (e.g. pv_forecast array)
-            result[full_key if prefix else key] = value
+            base = full_key if prefix else key
+            if value and isinstance(value[0], dict):
+                # Expand list-of-dicts to indexed keys (e.g. pv_forecast)
+                for idx, item in enumerate(value):
+                    for sub_key, sub_val in item.items():
+                        result[f"{base}.{idx}.{sub_key}"] = sub_val
+            else:
+                # Plain lists stored as-is
+                result[base] = value
         elif isinstance(value, dict):
             # Recurse into nested dicts
             nested = _flatten_config(value, full_key if prefix else key)

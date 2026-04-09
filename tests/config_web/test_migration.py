@@ -181,15 +181,17 @@ class TestMigration:
         assert store.get("price.source") == "tibber"
         assert store.get("battery.capacity_wh") == 10000
 
-    def test_pv_forecast_list_migrated(self, store, schema):
-        """The pv_forecast list should be stored as a single JSON list."""
+    def test_pv_forecast_migrated_as_indexed_keys(self, store, schema):
+        """PV installations should be stored as indexed keys after migration."""
         config = _sample_config()
         migrate_yaml_to_store(config, store, schema)
 
-        pv = store.get("pv_forecast")
-        assert isinstance(pv, list)
-        assert len(pv) == 1
-        assert pv[0]["name"] == "Roof"
+        # Blob key should NOT exist
+        assert store.get("pv_forecast") is None
+        # Indexed keys should exist
+        assert store.get("pv_forecast.0.name") == "Roof"
+        assert store.get("pv_forecast.0.lat") == 48.0
+        assert store.get("pv_forecast.0.power") == 4600
 
     def test_wizard_marked_completed(self, store, schema):
         """Existing config migration should mark wizard as completed."""
@@ -226,10 +228,18 @@ class TestFlattenConfig:
         result = _flatten_config({"load": {"source": "ha", "url": "http://x"}})
         assert result == {"load.source": "ha", "load.url": "http://x"}
 
-    def test_list_stored_as_is(self):
-        """Lists should be stored as a single value, not flattened."""
+    def test_list_of_dicts_expanded_to_indexed_keys(self):
+        """Lists of dicts should be expanded to indexed dot-notation keys."""
         result = _flatten_config({"pv_forecast": [{"name": "A"}, {"name": "B"}]})
-        assert result == {"pv_forecast": [{"name": "A"}, {"name": "B"}]}
+        assert result == {
+            "pv_forecast.0.name": "A",
+            "pv_forecast.1.name": "B",
+        }
+
+    def test_plain_list_stored_as_is(self):
+        """Plain lists (non-dict items) should be stored as a single value."""
+        result = _flatten_config({"tags": ["a", "b", "c"]})
+        assert result == {"tags": ["a", "b", "c"]}
 
     def test_none_values_preserved(self):
         """None values should be included in flatten output."""
@@ -264,7 +274,7 @@ class TestFlattenConfig:
         result = _flatten_config(config)
         assert result["refresh_time"] == 5
         assert result["load.source"] == "ha"
-        assert isinstance(result["pv_forecast"], list)
+        assert result["pv_forecast.0.name"] == "Roof"
         assert result["mqtt.enabled"] is True
 
 
