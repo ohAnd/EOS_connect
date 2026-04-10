@@ -569,7 +569,23 @@ class BatteryInterface:
             float: The dynamically calculated maximum charge power in watts.
         """
         if not self.battery_data.get("charging_curve_enabled", True):
-            self.max_charge_power_dyn = self.max_charge_power_fix
+            max_charge_power = self.max_charge_power_fix
+            if max_charge_power != self.last_max_charge_power_dyn:
+                self.max_charge_power_dyn = max_charge_power
+                self.last_max_charge_power_dyn = max_charge_power
+                logger.info(
+                    "[BATTERY-IF] Max charge power: %s W (charging curve disabled, fixed)",
+                    self.max_charge_power_dyn,
+                )
+
+                if self.base_control:
+                    self.base_control.set_current_bat_charge_max(self.max_charge_power_dyn)
+
+                if self.on_bat_max_changed:
+                    self.on_bat_max_changed()
+            else:
+                self.max_charge_power_dyn = max_charge_power
+
             logger.debug(
                 "[BATTERY-IF] Charging curve disabled, using fixed max charge power."
             )
