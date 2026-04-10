@@ -23,7 +23,11 @@ from version import __version__
 from config import ConfigManager
 from log_handler import MemoryLogHandler
 from constants import CURRENCY_SYMBOL_MAP, CURRENCY_MINOR_UNIT_MAP
-from interfaces.base_control import BaseControl
+from interfaces.base_control import (
+    BaseControl,
+    calculate_tgt_dc_charge_power,
+    mode_uses_dc_charge_limit,
+)
 from interfaces.load_interface import LoadInterface
 from interfaces.battery_interface import BatteryInterface
 from interfaces.evcc_interface import EvccInterface
@@ -1285,17 +1289,17 @@ def change_control_state():
         round(battery_interface.get_max_charge_power()),
         config_manager.config["inverter"]["max_grid_charge_rate"],
     )
-    # When pv_battery_charge_control_enabled is False, ignore the optimizer's dc_charge
-    # signal and always allow full PV charging (other inverters don't enforce it anyway).
+    # When pv_battery_charge_control_enabled is False, ignore optimizer dc_charge
+    # demand, but still respect battery and inverter hard caps.
     _pv_charge_ctrl_enabled = eos_interface.pv_battery_charge_control_enabled
-    if _pv_charge_ctrl_enabled:
-        tgt_dc_charge_power = min(
-            base_control.get_current_dc_charge_demand(),
-            round(battery_interface.get_max_charge_power()),
-            config_manager.config["inverter"]["max_pv_charge_rate"],
-        )
-    else:
-        tgt_dc_charge_power = config_manager.config["inverter"]["max_pv_charge_rate"]
+    tgt_dc_charge_power = calculate_tgt_dc_charge_power(
+        current_dc_charge_demand_w=base_control.get_current_dc_charge_demand(),
+        battery_max_charge_w=round(battery_interface.get_max_charge_power()),
+        inverter_max_pv_charge_rate_w=config_manager.config["inverter"][
+            "max_pv_charge_rate"
+        ],
+        pv_battery_charge_control_enabled=_pv_charge_ctrl_enabled,
+    )
 
     # Update current battery max to actual capability (after SOC/temp derating)
     # This allows get_needed_ac_charge_power() to properly cap calculated demand
@@ -1306,6 +1310,9 @@ def change_control_state():
     # Check if the overall state of the inverter was changed recently and consume the event
     if base_control.was_overall_state_changed_recently(consume=True):
         logger.debug("[Main] Overall state changed recently")
+        if inverter_fronius_en and mode_uses_dc_charge_limit(current_overall_state):
+            inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
+
         # MODE_CHARGE_FROM_GRID
         if current_overall_state == 0:
             if inverter_fronius_en:
@@ -1320,7 +1327,6 @@ def change_control_state():
         # MODE_AVOID_DISCHARGE
         elif current_overall_state == 1:
             if inverter_fronius_en:
-                inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_avoid_discharge()
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("avoid_discharge")
@@ -1332,7 +1338,6 @@ def change_control_state():
         # MODE_DISCHARGE_ALLOWED
         elif current_overall_state == 2:
             if inverter_fronius_en:
-                inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_allow_discharge()
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("discharge_allowed")
@@ -1344,7 +1349,6 @@ def change_control_state():
         # MODE_AVOID_DISCHARGE_EVCC_FAST
         elif current_overall_state == 3:
             if inverter_fronius_en:
-                inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_avoid_discharge()
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("avoid_discharge")
@@ -1356,7 +1360,6 @@ def change_control_state():
         # MODE_DISCHARGE_ALLOWED_EVCC_PV
         elif current_overall_state == 4:
             if inverter_fronius_en:
-                inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_allow_discharge()
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("discharge_allowed")
@@ -1368,7 +1371,6 @@ def change_control_state():
         # MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV
         elif current_overall_state == 5:
             if inverter_fronius_en:
-                inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_allow_discharge()
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("discharge_allowed")
@@ -1390,6 +1392,7 @@ def change_control_state():
             )
         elif current_overall_state < 0:
             logger.warning("[Main] Inverter mode not initialized yet")
+
         return True
 
     # Log the current state if no recent changes were made

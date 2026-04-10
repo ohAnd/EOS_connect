@@ -20,6 +20,14 @@ MODE_DISCHARGE_ALLOWED_EVCC_PV = 4
 MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV = 5
 MODE_CHARGE_FROM_GRID_EVCC_FAST = 6
 
+_DC_CHARGE_LIMITED_MODES = {
+    MODE_AVOID_DISCHARGE,
+    MODE_DISCHARGE_ALLOWED,
+    MODE_AVOID_DISCHARGE_EVCC_FAST,
+    MODE_DISCHARGE_ALLOWED_EVCC_PV,
+    MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV,
+}
+
 state_mapping = {
     -2: "BACK TO AUTO",
     -1: "MODE Startup",
@@ -31,6 +39,33 @@ state_mapping = {
     5: "MODE DISCHARGE ALLOWED EVCC MIN+PV",
     6: "MODE CHARGE FROM GRID EVCC FAST",
 }
+
+
+def mode_uses_dc_charge_limit(overall_state: int) -> bool:
+    """Return whether a mode should apply the DC charge limit command.
+
+    For Fronius-based inverter control, only discharge/avoid-discharge modes
+    should propagate a DC max PV charge rate to Time-of-Use rules.
+    """
+    return overall_state in _DC_CHARGE_LIMITED_MODES
+
+
+def calculate_tgt_dc_charge_power(
+    current_dc_charge_demand_w: float,
+    battery_max_charge_w: float,
+    inverter_max_pv_charge_rate_w: float,
+    pv_battery_charge_control_enabled: bool,
+) -> float:
+    """Calculate target DC charge power for inverter command handling.
+
+    The battery dynamic max and inverter PV max are hard safety caps and must
+    always be respected. The optimizer dc_charge demand is applied only when
+    PV charge control is enabled.
+    """
+    hard_cap_w = min(battery_max_charge_w, inverter_max_pv_charge_rate_w)
+    if pv_battery_charge_control_enabled:
+        return min(current_dc_charge_demand_w, hard_cap_w)
+    return hard_cap_w
 
 
 class BaseControl:

@@ -14,7 +14,11 @@ import pytest
 import pytz
 from datetime import datetime
 from unittest.mock import patch
-from src.interfaces.base_control import BaseControl
+from src.interfaces.base_control import (
+    BaseControl,
+    calculate_tgt_dc_charge_power,
+    mode_uses_dc_charge_limit,
+)
 
 
 @pytest.fixture
@@ -256,6 +260,57 @@ class TestMQTTInverterParity:
         assert (
             inverter_power == mqtt_power == power_value
         ), "MQTT and Inverter must always show the same power value"
+
+
+class TestDCChargeTargetCalculation:
+    """Regression tests for DC charge target calculations in control flow."""
+
+    def test_disabled_flag_ignores_optimizer_but_keeps_hard_caps(self):
+        """When disabled, optimizer demand is ignored but battery/inverter caps apply."""
+        target = calculate_tgt_dc_charge_power(
+            current_dc_charge_demand_w=4500,
+            battery_max_charge_w=2300,
+            inverter_max_pv_charge_rate_w=4500,
+            pv_battery_charge_control_enabled=False,
+        )
+        assert target == 2300
+
+    def test_enabled_flag_respects_optimizer_demand(self):
+        """When enabled, optimizer demand can reduce PV charging below hard cap."""
+        target = calculate_tgt_dc_charge_power(
+            current_dc_charge_demand_w=900,
+            battery_max_charge_w=2300,
+            inverter_max_pv_charge_rate_w=4500,
+            pv_battery_charge_control_enabled=True,
+        )
+        assert target == 900
+
+    def test_enabled_flag_is_limited_by_inverter_max_rate(self):
+        """Enabled mode still respects inverter max PV charge rate."""
+        target = calculate_tgt_dc_charge_power(
+            current_dc_charge_demand_w=4200,
+            battery_max_charge_w=5000,
+            inverter_max_pv_charge_rate_w=3000,
+            pv_battery_charge_control_enabled=True,
+        )
+        assert target == 3000
+
+    @pytest.mark.parametrize(
+        "overall_state,expected",
+        [
+            (-1, False),
+            (0, False),
+            (1, True),
+            (2, True),
+            (3, True),
+            (4, True),
+            (5, True),
+            (6, False),
+        ],
+    )
+    def test_mode_dependency_for_dc_charge_limit_command(self, overall_state, expected):
+        """Only discharge/avoid-discharge states should update DC charge max."""
+        assert mode_uses_dc_charge_limit(overall_state) is expected
 
 
 class TestEffectiveDischargeAllowed:
