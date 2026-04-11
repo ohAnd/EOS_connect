@@ -31,6 +31,12 @@ def battery_interface():
     mock.min_soc_set = 5
     mock.max_soc_set = 100
     mock.battery_data = {"min_soc_percentage": 5, "max_soc_percentage": 100}
+    mock.price_handler = MagicMock()
+    mock.price_handler.battery_price_include_feedin = False
+    mock.price_handler.charging_threshold_w = 50.0
+    mock.price_handler.grid_charge_threshold_w = 100.0
+    mock.price_handler.pv_cost_euro_per_kwh = 0.0
+    mock.price_handler.last_price_calculation = object()
     return mock
 
 
@@ -138,6 +144,31 @@ class TestHotReloadBattery:
         battery_interface.set_min_soc.assert_not_called()
         assert adapter.last_applied == []
 
+    def test_battery_price_include_feedin(self, adapter, battery_interface):
+        """Changing include_feedin should update BatteryPriceHandler live."""
+        adapter.on_config_changed(
+            "battery.battery_price_include_feedin",
+            False,
+            True,
+        )
+        assert battery_interface.price_handler.battery_price_include_feedin is True
+        assert battery_interface.price_handler.last_price_calculation is None
+        assert "battery.battery_price_include_feedin" in adapter.last_applied
+
+    def test_battery_charging_threshold(self, adapter, battery_interface):
+        """Changing charging threshold should update BatteryPriceHandler live."""
+        adapter.on_config_changed("battery.charging_threshold_w", 50.0, 75.0)
+        assert battery_interface.price_handler.charging_threshold_w == 75.0
+        assert battery_interface.price_handler.last_price_calculation is None
+        assert "battery.charging_threshold_w" in adapter.last_applied
+
+    def test_battery_grid_charge_threshold(self, adapter, battery_interface):
+        """Changing grid charge threshold should update BatteryPriceHandler live."""
+        adapter.on_config_changed("battery.grid_charge_threshold_w", 100.0, 150.0)
+        assert battery_interface.price_handler.grid_charge_threshold_w == 150.0
+        assert battery_interface.price_handler.last_price_calculation is None
+        assert "battery.grid_charge_threshold_w" in adapter.last_applied
+
 
 class TestHotReloadGeneral:
     """Tests for general hot-reload adapter behavior."""
@@ -160,6 +191,18 @@ class TestHotReloadGeneral:
         assert len(adapter.last_applied) == 1
         adapter.on_config_changed("mqtt.broker", "a", "b")
         assert adapter.last_applied == []
+
+    def test_feed_in_price_updates_battery_price_handler(
+        self,
+        adapter,
+        price_interface,
+        battery_interface,
+    ):
+        """Changing feed_in_price should propagate to BatteryPriceHandler live."""
+        adapter.on_config_changed("price.feed_in_price", 0.0, 0.08)
+        assert price_interface.feed_in_tariff_price == 0.08
+        assert battery_interface.price_handler.pv_cost_euro_per_kwh == 0.08
+        assert battery_interface.price_handler.last_price_calculation is None
 
 
 class TestHotReloadPv:

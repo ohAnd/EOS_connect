@@ -40,6 +40,12 @@ _BATTERY_SOC_FIELDS = {
     "battery.max_soc_percentage",
 }
 
+_BATTERY_PRICE_FIELD_MAP = {
+    "battery.battery_price_include_feedin": ("battery_price_include_feedin", bool),
+    "battery.charging_threshold_w": ("charging_threshold_w", float),
+    "battery.grid_charge_threshold_w": ("grid_charge_threshold_w", float),
+}
+
 # Map of optimizer config keys to (interface_attr_name, coerce_fn)
 _OPTIMIZER_FIELD_MAP = {
     "eos.timeout": ("timeout", int),
@@ -113,6 +119,8 @@ class HotReloadAdapter:
             self._apply_price(key, new_value)
         elif key in _BATTERY_SOC_FIELDS:
             self._apply_battery_soc(key, new_value)
+        elif key in _BATTERY_PRICE_FIELD_MAP:
+            self._apply_battery_price(key, new_value)
         elif key in _OPTIMIZER_FIELD_MAP:
             self._apply_optimizer(key, new_value)
         elif key.startswith(_PV_KEY_PREFIXES):
@@ -141,9 +149,32 @@ class HotReloadAdapter:
             attr, coerced, old_val,
         )
 
+        # Keep BatteryPriceHandler opportunity cost in sync with live feed-in changes.
+        if key == "price.feed_in_price":
+            self._apply_battery_feedin_price(coerced)
+
         # Recalculate feed-in prices when feed_in_price or negative_price_switch change
         if key in _FEEDIN_TRIGGERS:
             self._recalculate_feedin()
+
+    def _apply_battery_feedin_price(self, feedin_price):
+        """Apply live feed-in price updates to the battery price handler."""
+        if self._battery is None:
+            return
+
+        price_handler = getattr(self._battery, "price_handler", None)
+        if price_handler is None:
+            return
+
+        old_val = getattr(price_handler, "pv_cost_euro_per_kwh", "?")
+        price_handler.pv_cost_euro_per_kwh = feedin_price
+        # Force a fresh historical calculation on next battery update cycle.
+        price_handler.last_price_calculation = None
+        logger.info(
+            "[HotReload] Updated battery price feed-in cost = %s (was %s)",
+            feedin_price,
+            old_val,
+        )
 
     def _recalculate_feedin(self):
         """Recalculate feed-in prices on the price interface."""
@@ -212,6 +243,36 @@ class HotReloadAdapter:
             logger.info(
                 "[HotReload] Updated battery max SOC = %d%%", int_value
             )
+
+    def _apply_battery_price(self, key, new_value):
+        """Apply a battery-price config change to the live BatteryPriceHandler."""
+        if self._battery is None:
+            logger.debug("[HotReload] No battery interface — skipping %s", key)
+            return
+
+        price_handler = getattr(self._battery, "price_handler", None)
+        if price_handler is None:
+            logger.debug("[HotReload] No battery price handler — skipping %s", key)
+            return
+
+        attr, coerce = _BATTERY_PRICE_FIELD_MAP[key]
+        try:
+            coerced = coerce(new_value)
+        except (TypeError, ValueError) as exc:
+            logger.warning("[HotReload] Cannot coerce %s=%r: %s", key, new_value, exc)
+            return
+
+        old_val = getattr(price_handler, attr, "?")
+        setattr(price_handler, attr, coerced)
+        # Ensure next loop uses the updated settings immediately.
+        price_handler.last_price_calculation = None
+        self._applied_keys.append(key)
+        logger.info(
+            "[HotReload] Updated battery price.%s = %s (was %s)",
+            attr,
+            coerced,
+            old_val,
+        )
 
     def _schedule_pv_reload(self, key):
         """Debounce PV reload to avoid one reload per updated PV field."""
