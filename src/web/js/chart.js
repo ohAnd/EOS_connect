@@ -65,10 +65,25 @@ class ChartManager {
             }
         );
 
+        // Use gesamtlast from request as pure household load.
+        // EOS server includes AC charging energy in Last_Wh_pro_Stunde; using gesamtlast
+        // gives consistent display across both EOS and EVopt backends.
+        let gesamtlastSliced;
+        if (time_frame_base === 900) {
+            gesamtlastSliced = data_request["ems"]["gesamtlast"]
+                .slice(currentSlot)
+                .concat(data_request["ems"]["gesamtlast"].slice(0, currentSlot))
+                .slice(0, data_response["result"]["Last_Wh_pro_Stunde"].length);
+        } else {
+            gesamtlastSliced = data_request["ems"]["gesamtlast"]
+                .slice(currentHour)
+                .concat(data_request["ems"]["gesamtlast"].slice(24, 48))
+                .slice(0, data_response["result"]["Last_Wh_pro_Stunde"].length);
+        }
         // Calculate consumption (excluding home appliances)
-        this.chartInstance.data.datasets[0].data = data_response["result"]["Last_Wh_pro_Stunde"].map((value, index) => {
-            const actHomeApplianceValue = data_response["result"]["Home_appliance_wh_per_hour"].map(value => value)
-            return ((value - actHomeApplianceValue[index]) / 1000).toFixed(3);
+        this.chartInstance.data.datasets[0].data = gesamtlastSliced.map((value, index) => {
+            const actHomeApplianceValue = data_response["result"]["Home_appliance_wh_per_hour"][index] || 0;
+            return ((value - actHomeApplianceValue) / 1000).toFixed(3);
         });
 
         // Home appliances
@@ -128,13 +143,21 @@ class ChartManager {
                 originalAcChargeValue = data_response["ac_charge"].slice(current_quarterly_slot).concat(data_response["ac_charge"].slice(24, 48))[index] * max_charge_power_w;
             }
 
+            // EVopt: subtract planned AC charge from grid.
+            // EOS: Last_Wh_pro_Stunde already contains optimizer-added load, which can differ
+            // from planned AC charge, so subtract the embedded optimizer load component instead.
+            const responseLoadWh = data_response["result"]["Last_Wh_pro_Stunde"][index] || 0;
+            const householdLoadWh = gesamtlastSliced[index] || 0;
+            const optimizerAddedLoadWh = evopt_in_charge
+                ? originalAcChargeValue
+                : Math.max(0, responseLoadWh - householdLoadWh);
 
-            let gridValue = (value - originalAcChargeValue) / 1000;
+            let gridValue = (value - optimizerAddedLoadWh) / 1000;
             let adjustedAcChargeValue = originalAcChargeValue / 1000;
 
             // Validation for invalid numbers
             if (isNaN(gridValue) || !isFinite(gridValue)) {
-                console.warn(`Invalid grid calculation at index ${index}: Netzbezug=${value}, AC_charge=${originalAcChargeValue}, using 0 for grid`);
+                console.warn(`Invalid grid calculation at index ${index}: Netzbezug=${value}, optimizer_added_load=${optimizerAddedLoadWh}, using 0 for grid`);
                 gridValue = 0;
                 adjustedAcChargeValue = (value / 1000); // Treat all as AC charge
             }
