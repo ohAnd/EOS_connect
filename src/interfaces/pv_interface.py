@@ -1428,6 +1428,7 @@ class PvInterface:
                 "evcc",
             )
 
+
         result = self._retry_request(request_and_parse, error_handler)
         if not result:
             return self._handle_interface_error(
@@ -1445,6 +1446,11 @@ class PvInterface:
                 pv_config_entry,
                 "evcc",
             )
+
+        # --- Read use_real_data_correction from pv_forecast_source config ---
+        use_real_data_correction = True
+        if hasattr(self, "config_source") and isinstance(self.config_source, dict):
+            use_real_data_correction = self.config_source.get("use_real_data_correction", True)
 
         try:
             # Get timezone-aware current time
@@ -1487,18 +1493,31 @@ class PvInterface:
                     forecast_15min[i] = forecast_lookup.get(interval_time, 0.0)
                 pv_forecast = forecast_15min
 
-            # Apply scaling factor
-            try:
-                scale_factor = float(solar_forecast_scale)
-            except (TypeError, ValueError):
-                scale_factor = 1.0
 
-            if scale_factor <= 0:
-                logger.debug(
-                    "[PV-IF] EVCC PV forecast scale factor invalid (%s) - using 1.0",
-                    scale_factor,
-                )
+            # Apply scaling factor if enabled
+            if use_real_data_correction:
+                try:
+                    scale_factor = float(solar_forecast_scale)
+                    if scale_factor < 0.1:
+                        scale_factor = 0.5
+                        logger.debug(
+                            "[PV-IF] EVCC PV forecast scale factor too low (< 0.1 - %s) - using 0.5",
+                            scale_factor,
+                        )
+                except (TypeError, ValueError):
+                    scale_factor = 1.0
+                if scale_factor <= 0:
+                    logger.debug(
+                        "[PV-IF] EVCC PV forecast scale factor invalid (%s) - using 1.0",
+                        scale_factor,
+                    )
+                    scale_factor = 1.0
+            else:
                 scale_factor = 1.0
+                logger.debug(
+                    "[PV-IF] EVCC PV forecast: Real data correction disabled," + 
+                    " forcing scale factor to 1.0"
+                )
 
             pv_forecast = [round(val * scale_factor, 1) for val in pv_forecast]
 

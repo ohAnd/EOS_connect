@@ -363,7 +363,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default=False,
         section="eos",
         level="expert",
-        description="Enable PV-to-battery charge control from optimizer dc_charge signal (Fronius Gen24 only)",
+        description="Enable PV-to-battery charge control from optimizer dc_charge signal"+
+        " (Fronius Gen24 only)",
         labels=["experimental"],
         help_url="configuration.html#eos",
         display_group="Advanced",
@@ -813,6 +814,20 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         depends_on={"pv_forecast_source.source": ["solcast", "victron"]},
+        display_group="Provider",
+    ),
+
+    # Use real data correction for EVCC PV forecast (source-level)
+    FieldDef(
+        key="pv_forecast_source.use_real_data_correction",
+        field_type="bool",
+        default=True,
+        section="pv_forecast_source",
+        level="standard",
+        description="Apply the scaling factor from EVCC forecast API to correct PV forecast values"+
+        " using real measured data. If disabled, no scaling is applied (scale = 1.0).",
+        help_url="configuration.html#pv-forecast-evcc",
+        depends_on={"pv_forecast_source.source": ["evcc"]},
         display_group="Provider",
     ),
 

@@ -1993,6 +1993,43 @@
                 </tr>
             </table>
 
+            <h3 id="pv-forecast-evcc">pv_forecast_source.use_real_data_correction</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>pv_forecast_source.use_real_data_correction</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Apply the scaling factor from the EVCC forecast API to correct PV forecast values using real measured data. If disabled, no scaling is applied (scale = 1.0).</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td><code>true</code> (enabled), <code>false</code> (disabled)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>true</code></td>
+                </tr>
+                <tr>
+                    <th>When to Enable</th>
+                    <td>Enable for most users. Disabling is only recommended for debugging or if you want to ignore EVCC's real data correction and use raw forecast values.</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        <ul>
+                            <li>When enabled, EOS Connect multiplies the PV forecast values from EVCC by the <code>scale</code> factor provided by the EVCC API. This corrects the forecast using real measured data from your system.</li>
+                            <li>If the scale factor is missing or invalid, <code>1.0</code> is used (no correction).</li>
+                            <li>If the scale factor is less than <code>0.1</code>, <code>0.5</code> is used (to avoid extreme downscaling).</li>
+                            <li>If the scale factor is zero or negative, <code>1.0</code> is used (no correction).</li>
+                            <li>When disabled, the scale factor is always set to <code>1.0</code> (no correction applied).</li>
+                            <li>This option only appears when <code>pv_forecast_source.source</code> is set to <code>evcc</code>.</li>
+                        </ul>
+                    </td>
+                </tr>
+            </table>
+
             <h3>pv_forecast_source.api_key</h3>
             <table>
                 <tr>

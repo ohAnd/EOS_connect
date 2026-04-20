@@ -1308,6 +1308,174 @@ def test_victron_dispatch_routing(monkeypatch):
     assert len(forecast) == 48
     assert all(isinstance(x, (int, float)) for x in forecast)
 
+# ---------------------------------------------------------------------------
+# evcc tests
+# ---------------------------------------------------------------------------
+
+def test_evcc_scaling_enabled_applies_scale_factor(monkeypatch):
+
+    def test_evcc_scaling_disabled_uses_1(monkeypatch):
+        """
+        Test that EVCC PV forecast does NOT apply the scale factor when use_real_data_correction is False.
+        """
+        # Prepare config
+        config_entry = {
+            "name": "evcc_test",
+            "lat": 50,
+            "lon": 8,
+            "power": 100,
+        }
+        config_source = {"source": "evcc", "use_real_data_correction": False}
+
+        # Dummy forecast: 10 Wh for each hour (simulate 48h, valid timestamps)
+        import pytz
+        base = real_datetime.datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        dummy_times = [(base + real_datetime.timedelta(hours=h), 10.0) for h in range(48)]
+        # Simulate EVCC API returns scale=1.5 (should be ignored)
+        dummy_scale = "1.5"
+
+        # Patch _retry_request to return (forecast, scale)
+        def mock_retry_request(request_func, error_handler, **kwargs):
+            return ([{"ts": t[0].isoformat(), "val": t[1] / 0.25} for t in dummy_times], dummy_scale)
+
+        monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
+
+        # Patch timezone to UTC
+        pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
+        pv.time_frame_base = 3600
+        pv.time_zone = "UTC"
+
+        # Call the EVCC forecast method
+        result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
+        print("EVCC scaling disabled test result:", result)
+
+        # Each value should be 10.0 (no scaling)
+        assert isinstance(result, list)
+        assert len(result) == 48
+        assert all(abs(x - 10.0) < 1e-6 for x in result)
+    """
+    Test that EVCC PV forecast applies the scale factor when use_real_data_correction is True.
+    """
+    # Prepare config
+    config_entry = {
+        "name": "evcc_test",
+        "lat": 50,
+        "lon": 8,
+        "power": 100,
+    }
+    config_source = {"source": "evcc", "use_real_data_correction": True}
+
+    # Dummy forecast: 10 Wh for each hour (simulate 48h, valid timestamps)
+    import pytz
+    base = real_datetime.datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    dummy_times = [(base + real_datetime.timedelta(hours=h), 10.0) for h in range(48)]
+    # Simulate EVCC API returns scale=1.5
+    dummy_scale = "1.5"
+
+    # Patch _retry_request to return (forecast, scale)
+    def mock_retry_request(request_func, error_handler, **kwargs):
+        return ([{"ts": t[0].isoformat(), "val": t[1] / 0.25} for t in dummy_times], dummy_scale)
+
+    monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
+
+    # Patch timezone to UTC
+    pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
+    # Patch time_frame_base to 3600 (hourly)
+    pv.time_frame_base = 3600
+
+    # Patch pytz.timezone to UTC
+    import pytz
+    pv.time_zone = "UTC"
+
+
+    # Call the EVCC forecast method
+    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
+    print("EVCC scaling test result:", result)
+
+    # Each value should be 10.0 * 1.5 = 15.0
+    assert isinstance(result, list)
+    assert len(result) == 48
+    assert all(abs(x - 15.0) < 1e-6 for x in result)
+
+def test_evcc_scaling_disabled_uses_1(monkeypatch):
+    """
+    Test that EVCC PV forecast does NOT apply the scale factor when use_real_data_correction is False.
+    """
+    # Prepare config
+    config_entry = {
+        "name": "evcc_test",
+        "lat": 50,
+        "lon": 8,
+        "power": 100,
+    }
+    config_source = {"source": "evcc", "use_real_data_correction": False}
+
+    # Dummy forecast: 10 Wh for each hour (simulate 48h, valid timestamps)
+    import pytz
+    base = real_datetime.datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    dummy_times = [(base + real_datetime.timedelta(hours=h), 10.0) for h in range(48)]
+    # Simulate EVCC API returns scale=1.5 (should be ignored)
+    dummy_scale = "1.5"
+
+    # Patch _retry_request to return (forecast, scale)
+    def mock_retry_request(request_func, error_handler, **kwargs):
+        return ([{"ts": t[0].isoformat(), "val": t[1] / 0.25} for t in dummy_times], dummy_scale)
+
+    monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
+
+    # Patch timezone to UTC
+    pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
+    pv.time_frame_base = 3600
+    pv.time_zone = "UTC"
+
+    # Call the EVCC forecast method
+    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
+    print("EVCC scaling disabled test result:", result)
+
+    # Each value should be 10.0 (no scaling)
+    assert isinstance(result, list)
+    assert len(result) == 48
+    assert all(abs(x - 10.0) < 1e-6 for x in result)
+
+def test_evcc_scale_below_point_one_uses_half(monkeypatch):
+    """
+    Test that EVCC PV forecast uses scale factor 0.5 if the API returns a value < 0.1.
+    """
+    # Prepare config
+    config_entry = {
+        "name": "evcc_test",
+        "lat": 50,
+        "lon": 8,
+        "power": 100,
+    }
+    config_source = {"source": "evcc", "use_real_data_correction": True}
+
+    # Dummy forecast: 10 Wh for each hour (simulate 48h, valid timestamps)
+    import pytz
+    base = real_datetime.datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    dummy_times = [(base + real_datetime.timedelta(hours=h), 10.0) for h in range(48)]
+    # Simulate EVCC API returns scale=0.05 (should use 0.5 instead)
+    dummy_scale = "0.05"
+
+    # Patch _retry_request to return (forecast, scale)
+    def mock_retry_request(request_func, error_handler, **kwargs):
+        return ([{"ts": t[0].isoformat(), "val": t[1] / 0.25} for t in dummy_times], dummy_scale)
+
+    monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
+
+    # Patch timezone to UTC
+    pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
+    pv.time_frame_base = 3600
+    pv.time_zone = "UTC"
+
+    # Call the EVCC forecast method
+    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
+    print("EVCC scale < 0.1 test result:", result)
+
+    # Each value should be 10.0 * 0.5 = 5.0
+    assert isinstance(result, list)
+    assert len(result) == 48
+    assert all(abs(x - 5.0) < 1e-6 for x in result)
 
 # ---------------------------------------------------------------------------
 # Open-Meteo DST normalisation tests

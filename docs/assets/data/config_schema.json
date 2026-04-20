@@ -1041,6 +1041,24 @@
       "display_group": "Provider"
     },
     {
+      "key": "pv_forecast_source.use_real_data_correction",
+      "type": "bool",
+      "default": true,
+      "section": "pv_forecast_source",
+      "level": "standard",
+      "description": "Apply the scaling factor from EVCC forecast API to correct PV forecast values using real measured data. If disabled, no scaling is applied (scale = 1.0).",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast-evcc",
+      "validation": {},
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "evcc"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Provider"
+    },
+    {
       "key": "pv_forecast.name",
       "type": "str",
       "default": "myPvInstallation1",
