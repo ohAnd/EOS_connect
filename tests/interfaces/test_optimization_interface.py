@@ -317,6 +317,15 @@ def test_dummy_backend_integration(monkeypatch, time_frame_base, berlin_timezone
         )
         self.time_frame_base = time_frame_base
         self.time_zone = timezone
+        self.config = config
+        self.timeout = config.get("timeout", 180)
+        self.dyn_override_discharge_allowed = config.get(
+            "dyn_override_discharge_allowed_pv_greater_load", False
+        )
+        self.pv_battery_charge_control_enabled = config.get(
+            "pv_battery_charge_control_enabled", False
+        )
+        
         if self.eos_source == "dummy":
             self.backend = DummyBackend(
                 self.base_url, self.time_frame_base, self.time_zone
@@ -324,14 +333,17 @@ def test_dummy_backend_integration(monkeypatch, time_frame_base, berlin_timezone
             self.backend_type = "dummy"
         else:
             orig_init(self, config, time_frame_base, timezone)
+        
         self.last_start_solution = None
         self.home_appliance_released = False
         self.home_appliance_start_hour = None
+        self.last_eos_request = None
         self.last_control_data = [
             {
                 "ac_charge_demand": 0,
                 "dc_charge_demand": 0,
                 "discharge_allowed": False,
+                "dyn_override_active": False,
                 "error": 0,
                 "hour": -1,
             },
@@ -339,6 +351,7 @@ def test_dummy_backend_integration(monkeypatch, time_frame_base, berlin_timezone
                 "ac_charge_demand": 0,
                 "dc_charge_demand": 0,
                 "discharge_allowed": False,
+                "dyn_override_active": False,
                 "error": 0,
                 "hour": -1,
             },

@@ -20,7 +20,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.2.33</span>
+                <span class="version-badge">v0.3.34</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -43,23 +43,25 @@
             <aside class="toc-sidebar">
                 <h3>On This Page</h3>
                 <nav class="toc-nav">
-                    <a href="#load" class="toc-link">Load</a>
-                    <a href="#eos" class="toc-link">EOS Server</a>
+                    <a href="#optimizer" class="toc-link">Optimizer</a>
                     <a href="#dyn-override" class="toc-link toc-sub">→ Dynamic PV Override</a>
                     <a href="#pv-charge-control" class="toc-link toc-sub">→ PV Battery Charge Control</a>
-                    <a href="#price" class="toc-link">Electricity Prices</a>
-                    <a href="#energyforecast" class="toc-link toc-sub">→ Smart Price Prediction</a>
+                    <a href="#evcc" class="toc-link">EVCC</a>
+                    <a href="#inverter" class="toc-link">Inverter</a>
+                    <a href="#data-source" class="toc-link">Data Source</a>
                     <a href="#battery" class="toc-link">Battery</a>
                     <a href="#battery-price-calc" class="toc-link toc-sub">&rarr; Dynamic Price Calculation</a>
+                    <a href="#load" class="toc-link">Load</a>
+                    <a href="#price" class="toc-link">Electricity Prices</a>
+                    <a href="#energyforecast" class="toc-link toc-sub">→ Smart Price Prediction</a>
                     <a href="#pv" class="toc-link">PV Forecasts</a>
-                    <a href="#inverter" class="toc-link">Inverter</a>
-                    <a href="#evcc" class="toc-link">EVCC</a>
                     <a href="#mqtt" class="toc-link">MQTT</a>
                     <a href="#optimization-config" class="toc-link">Optimization Configuration</a>
                     <a href="#timing-controls" class="toc-link toc-sub">→ Timing Controls</a>
                     <a href="#time-slot-config" class="toc-link toc-sub">→ Time Slot Configuration</a>
                     <a href="#other" class="toc-link">Other Settings</a>
                     <a href="#examples" class="toc-link">Config Examples</a>
+                    <a href="#param-reference" class="toc-link">Parameter Reference</a>
                     <a href="#example-full" class="toc-link toc-sub">→ Full Config</a>
                     <a href="#example-minimal" class="toc-link toc-sub">→ Minimal Config</a>
                     <a href="#example-evcc" class="toc-link toc-sub">→ EVCC Setup</a>
@@ -71,7 +73,7 @@
             <main class="main-content">
         <div class="hero">
             <h1>Configuration Reference</h1>
-            <p>Complete guide to all config.yaml parameters with explanations and practical examples</p>
+            <p>Complete guide to all configuration parameters with explanations and practical examples</p>
         </div>
 
         <!-- Table of Contents -->
@@ -79,31 +81,28 @@
             <h2><i class="fas fa-list"></i> Quick Navigation</h2>
             <div class="feature-grid">
                 <div class="feature-item">
-                    <a href="#load"><i class="fas fa-plug"></i> Load Configuration</a>
+                    <a href="#optimizer"><i class="fas fa-server"></i> Optimizer</a>
                 </div>
                 <div class="feature-item">
-                    <a href="#eos"><i class="fas fa-server"></i> EOS Server</a>
-                </div>
-                <div class="feature-item">
-                    <a href="#dyn-override"><i class="fas fa-zap"></i> Dynamic PV Override</a>
-                </div>
-                <div class="feature-item">
-                    <a href="#pv-charge-control"><i class="fas fa-solar-panel"></i> PV Battery Charge Control</a>
-                </div>
-                <div class="feature-item">
-                    <a href="#price"><i class="fas fa-dollar-sign"></i> Electricity Prices</a>
-                </div>
-                <div class="feature-item">
-                    <a href="#battery"><i class="fas fa-battery-full"></i> Battery</a>
-                </div>
-                <div class="feature-item">
-                    <a href="#pv"><i class="fas fa-sun"></i> PV Forecasts</a>
+                    <a href="#evcc"><i class="fas fa-car"></i> EVCC</a>
                 </div>
                 <div class="feature-item">
                     <a href="#inverter"><i class="fas fa-solar-panel"></i> Inverter</a>
                 </div>
                 <div class="feature-item">
-                    <a href="#evcc"><i class="fas fa-car"></i> EVCC</a>
+                    <a href="#data-source"><i class="fas fa-database"></i> Data Source</a>
+                </div>
+                <div class="feature-item">
+                    <a href="#battery"><i class="fas fa-battery-full"></i> Battery</a>
+                </div>
+                <div class="feature-item">
+                    <a href="#load"><i class="fas fa-plug"></i> Load Configuration</a>
+                </div>
+                <div class="feature-item">
+                    <a href="#price"><i class="fas fa-dollar-sign"></i> Electricity Prices</a>
+                </div>
+                <div class="feature-item">
+                    <a href="#pv"><i class="fas fa-sun"></i> PV Forecasts</a>
                 </div>
                 <div class="feature-item">
                     <a href="#mqtt"><i class="fas fa-network-wired"></i> MQTT</a>
@@ -117,213 +116,9 @@
             </div>
         </div>
 
-        <!-- Load Configuration -->
-        <div class="content-section" id="load">
-            <h2><i class="fas fa-plug"></i> Load Configuration</h2>
-            <p>Configure how EOS Connect reads your household power consumption data.</p>
-
-            <h3>load.source</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.source</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Data source for load power consumption</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td><code>homeassistant</code>, <code>openhab</code>, <code>default</code></td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>default</code> (uses static consumption profile)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>source: homeassistant</code></td>
-                </tr>
-            </table>
-
-            <h3>load.url</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.url</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>URL to your Home Assistant or OpenHAB instance</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td><code>http://&lt;hostname_or_ip&gt;:&lt;port&gt;</code></td>
-                </tr>
-                <tr>
-                    <th>Examples</th>
-                    <td>
-                        <code>http://homeassistant:8123</code><br>
-                        <code>http://192.168.1.100:8080</code>
-                    </td>
-                </tr>
-            </table>
-
-            <h3>load.access_token</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.access_token</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Long-lived access token for Home Assistant</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes for Home Assistant, optional for OpenHAB</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>In Home Assistant: Profile → Long-Lived Access Tokens → Create Token<br>Leave empty if not needed: <code>access_token:</code></td>
-                </tr>
-            </table>
-
-            <h3>load.load_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.load_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Entity/item name for total household power consumption</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W) or energy (Wh) for Home Assistant energy entities</td>
-                </tr>
-                <tr>
-                    <th>Examples</th>
-                    <td>
-                        <code>sensor.house_power</code> (Home Assistant)<br>
-                        <code>PowerMeter_Load</code> (OpenHAB)
-                    </td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Represents overall net household load (total house consumption). Positive (consumption) or negative (feed-in) values are converted to absolute positive internally. Home Assistant <strong>energy</strong> entities (device_class: <code>energy</code>) are supported and converted to average power per time frame. Feature contributed by <a href="https://github.com/forouher" target="_blank">Dariush Forouher</a>.</td>
-                </tr>
-            </table>
-
-            <h3>load.car_charge_load_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.car_charge_load_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Entity/item for EV charger power consumption (optional)</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>sensor.wallbox_power</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Separates controllable EV charging from base household load for more accurate optimization. This load is <strong>subtracted</strong> from the main load sensor value. Leave empty if not needed: <code>car_charge_load_sensor:</code></td>
-                </tr>
-            </table>
-
-            <h3>load.additional_load_1_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.additional_load_1_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Entity/item for additional controllable load (e.g., heat pump, dishwasher)</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>sensor.heatpump_power</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Separates additional controllable devices from base household load. This load is <strong>subtracted</strong> from the main load sensor value. Leave empty if not needed: <code>additional_load_1_sensor:</code></td>
-                </tr>
-            </table>
-
-            <h3>load.additional_load_1_runtime</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.additional_load_1_runtime</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Expected runtime of additional load</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Minutes</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>0</code> (not used)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>120</code> (2 hours)</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Helps optimization engine plan when to run the additional load</td>
-                </tr>
-            </table>
-
-            <h3>load.additional_load_1_consumption</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>load.additional_load_1_consumption</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Energy consumption of additional load for ONE hour</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watt-hours (Wh)</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>0</code> (not used)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>2000</code> (2 kWh per hour)</td>
-                </tr>
-            </table>
-        </div>
-
-        <!-- EOS Server Configuration -->
-        <div class="content-section" id="eos">
-            <h2><i class="fas fa-server"></i> EOS Server Configuration</h2>
+        <!-- Optimizer Configuration -->
+        <div class="content-section" id="optimizer">
+            <h2><i class="fas fa-server"></i> Optimizer Configuration</h2>
             <p>Configure the connection to your external optimization backend (Akkudoktor EOS or EVopt).</p>
 
             <h3>eos.source</h3>
@@ -588,7 +383,1171 @@
             </div>
         </div>
 
-        <!-- Price Configuration -->
+        
+<div class="content-section" id="evcc">
+            <h2><i class="fas fa-car"></i> EVCC Configuration</h2>
+            
+            <div class="alert alert-info">
+                <strong><i class="fas fa-lightbulb"></i> Optional Section:</strong> Define EVCC URL here to use EVCC as:
+                <ul style="margin-top: 10px; margin-bottom: 0;">
+                    <li><strong>Data source for PV forecasts</strong> — Retrieve solar generation forecasts from your EVCC system</li>
+                    <li><strong>Inverter control gateway</strong> — Manage battery charging through EVCC's external battery control interface</li>
+                    <li><strong>Car charging dependent control</strong> — Coordinate EV charging with optimization decisions</li>
+                </ul>
+                <p style="margin-top: 10px; margin-bottom: 0;"><strong>If not using EVCC:</strong> Simply skip this section and leave the URL empty. Other configuration sections do not depend on EVCC.</p>
+            </div>
+
+            <h3>evcc.url</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>evcc.url</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>URL for the EVCC instance</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>http://192.168.1.100:7070</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        Leave empty if not used: <code>url:</code> or <code>url: ""</code><br><br>
+                        <strong>Important:</strong> When using <code>evcc</code> as the <code>pv_forecast_source</code>, this EVCC configuration must be properly configured. EOS Connect will retrieve PV forecasts directly from the EVCC API instead of using individual PV installation configurations. In this case, the <code>pv_forecast</code> section requires at least one entry with valid <code>lat</code> and <code>lon</code> coordinates for temperature forecasts.
+                    </td>
+                </tr>
+            </table>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> EVCC as Inverter Controller:</strong> When <code>inverter.type</code> is set to <code>evcc</code>, EOS Connect uses EVCC's external battery control feature to manage battery charging. This provides a universal interface that works with many inverter types supported by EVCC.
+            </div>
+        </div>
+
+        
+<div class="content-section" id="inverter">
+            <h2><i class="fas fa-solar-panel"></i> Inverter Configuration</h2>
+            <p>Configure inverter control for automated battery management.</p>
+
+            <h3>inverter.type</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.type</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Type of inverter for automated control</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>victron</code> - Victron MultiPlus (3-phase ESS via Modbus/TCP)<br>
+                        <code>fronius_gen24</code> - Fronius Gen24 (enhanced V2 interface, firmware-based auth)<br>
+                        <code>fronius_gen24_legacy</code> - Fronius Gen24 (legacy V1 interface)<br>
+                        <code>homeassistant</code> - Generic Home Assistant inverter control via service calls<br>
+                        <code>evcc</code> - Universal via EVCC external battery control<br>
+                        <code>default</code> - Disable control (display only)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>default</code></td>
+                </tr>
+            </table>
+
+            <h3>inverter.address</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.address</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>IP address of the inverter / device</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes (for <code>victron</code>, <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td>
+                        <code>192.168.1.12</code> (Fronius)<br>
+                        <code>192.168.1.50</code> (Victron CCGX/Cerbo GX)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        <strong>Victron:</strong> Set a static IP on your Victron device (CCGX, Cerbo GX, or Venus OS host). Modbus/TCP connection will use port 502 (standard).<br>
+                        <strong>Fronius:</strong> IP address of the inverter's local portal.
+                    </td>
+                </tr>
+            </table>
+
+            <h3>inverter.user</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.user</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Username for inverter's local portal (Fronius only)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes (for <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>customer</code></td>
+                </tr>
+            </table>
+
+            <h3>inverter.password</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.password</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Password for inverter's local portal (Fronius only)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes (for <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        <strong>Fronius Gen24 enhanced interface:</strong> Automatically detects firmware version and uses appropriate auth method. If you updated firmware to 1.38.6-1+ or newer, you may need to reset password in WebUI (http://your-inverter-ip/) under Settings → User Management.
+                    </td>
+                </tr>
+            </table>
+
+            <h3>Victron MultiPlus Configuration</h3>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Victron Support:</strong> EOS Connect supports Victron MultiPlus systems via Modbus/TCP network connection. The interface provides automated battery discharge control, charge-from-grid, and charge-from-PV modes for complete energy management.
+            </div>
+
+            <p><strong>Requirements:</strong></p>
+            <ul>
+                <li>Victron MultiPlus 3-phase system (single-phase support is experimental)</li>
+                <li>ESS (Energy Storage System) mode enabled on the Victron device</li>
+                <li>Network connectivity between EOS Connect and the Victron device's IP address</li>
+                <li>Default Modbus/TCP port: 502 (standard)</li>
+            </ul>
+
+            <p><strong>How It Works:</strong></p>
+            <ol>
+                <li><strong>Discharge Allowed Mode:</strong> Normal ESS operation - Victron's internal logic manages battery discharge and grid interaction</li>
+                <li><strong>Avoid Discharge Mode (Hold):</strong> ESS switches to External Control, setpoint writes 0W to all phases - prevents battery discharge and grid import</li>
+                <li><strong>Charge from Grid:</strong> Positive power setpoint written to MultiPlus - inverter regulates grid import to charge batteries</li>
+                <li><strong>Auto Restore:</strong> When EOS Connect disconnects, original ESS mode is automatically restored</li>
+            </ol>
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-exclamation-triangle"></i> PV Charge Rate Limiting not supported:</strong> Victron ESS mode does not allow blocking PV-to-battery charging via the Modbus/TCP interface. The <code>inverter.max_pv_charge_rate</code> value is used by the optimizer model only. When the optimizer requests <code>dc_charge=0</code> (no PV charging) for a time slot, EOS Connect logs a warning but <strong>cannot enforce</strong> this on the hardware — PV will still charge the battery if solar energy is available.
+            </div>
+
+            <h3>inverter.max_grid_charge_rate</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.max_grid_charge_rate</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Maximum grid charge rate</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>5000</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Limitation for calculating target grid charge power and for EOS inverter model. Currently not supported by EVCC external battery control, but shown and calculated (reachable per EOS Connect API)</td>
+                </tr>
+            </table>
+
+            <h3>inverter.max_pv_charge_rate</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.max_pv_charge_rate</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Maximum PV charge rate</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>5000</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        Upper cap for the optimizer model and the target PV charge power calculation.<br><br>
+                        <strong>Fronius Gen24 (<code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>):</strong> Actively enforced via the Time-of-Use (TOU) API on every control cycle. When the optimizer sets <code>dc_charge=0</code> for a slot, a <code>CHARGE_MAX:0</code> TOU entry is written to the inverter, explicitly blocking PV-to-battery charging. When <code>dc_charge&gt;0</code>, a <code>CHARGE_MAX:&lt;rate&gt;</code> entry is written instead, allowing PV charging up to this wattage.<br><br>
+                        <strong>All other inverter types (Victron, HA, EVCC, default):</strong> Value is stored internally and used by the optimizer model only — no hardware PV charge limiting is performed. For Victron ESS, blocking PV charging via Modbus is not supported; a warning is logged when <code>dc_charge=0</code> is requested.
+                    </td>
+                </tr>
+            </table>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Home Assistant Inverter Interface:</strong>
+                The <code>homeassistant</code> inverter type allows controlling any inverter/battery system that is integrated into Home Assistant via configurable service call sequences (e.g., Marstek, Sungrow, Goodwe).
+                <br><br>
+                For each EOS inverter mode, you define a list of HA service calls under <code>inverter:</code>:
+                <ul>
+                    <li><code>charge_from_grid</code> &ndash; Service calls for grid charging. Supports <code>{{ power }}</code> in <code>data_template</code> for dynamic power values from EOS.</li>
+                    <li><code>avoid_discharge</code> &ndash; Service calls to hold the battery (no discharge, PV charging allowed).</li>
+                    <li><code>discharge_allowed</code> &ndash; Service calls for normal battery discharge.</li>
+                </ul>
+                Each step specifies: <code>service</code> (e.g., <code>select.select_option</code>), <code>entity_id</code>, and <code>data</code> (static) or <code>data_template</code> (with <code>{{ power }}</code> variable).
+                See the <a href="#example-ha-inverter">Marstek example</a> below for a complete configuration.
+                For the ESPHome config to connect a Marstek M1 via RS485/Modbus, see <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this Gist</a>.
+            </div>
+        </div>
+
+        
+<!-- Due to length, I'll create a placeholder for now -->
+
+        <div class="content-section" id="data-source">
+            <h2><i class="fas fa-database"></i> Data Source</h2>
+            <p>Define the primary data connection that EOS Connect uses to read sensor values and send control commands.</p>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-key"></i> Set Once, Used Everywhere:</strong> 
+                Once you configure this section, it becomes the single connection point for <strong>all</strong> sensor references in other sections. 
+                For example:
+                <ul style="margin-top: 10px; margin-bottom: 0;">
+                    <li><code>battery.soc_sensor</code> refers to an entity or item from this source</li>
+                    <li><code>load.load_sensor</code> refers to an entity or item from this source</li>
+                    <li><code>pv_forecast.inverter_id</code> uses this source's API for PV data</li>
+                </ul>
+                <p style="margin-top: 10px; margin-bottom: 0;"><strong>You do not need to configure this in each section separately.</strong> This is your only connection configuration.</p>
+            </div>
+
+            <h3>data_source.type</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>data_source.type</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>The primary integration platform for sensor data</td>
+                </tr>
+                <tr>
+                    <th>Options</th>
+                    <td>
+                        <code>homeassistant</code> &ndash; Home Assistant (recommended for most users)<br>
+                        <code>openhab</code> &ndash; OpenHAB system
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>homeassistant</code></td>
+                </tr>
+            </table>
+
+            <h3>data_source.url</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>data_source.url</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Connection URL or IP address of your data source</td>
+                </tr>
+                <tr>
+                    <th>Examples</th>
+                    <td>
+                        <code>http://192.168.1.100:8123</code> (Home Assistant)<br>
+                        <code>http://192.168.1.100:8080</code> (OpenHAB)
+                    </td>
+                </tr>
+            </table>
+
+            <h3>data_source.access_token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>data_source.access_token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Authentication token for accessing your data source API</td>
+                </tr>
+                <tr>
+                    <th>For Home Assistant</th>
+                    <td>Create a <strong>Long-Lived Access Token</strong>: Profile → Long-Lived Access Tokens → Create Token</td>
+                </tr>
+                <tr>
+                    <th>For OpenHAB</th>
+                    <td>Find or create an API token in OpenHAB settings</td>
+                </tr>
+            </table>
+        </div>
+
+        <div class="content-section" id="battery">
+            <h2><i class="fas fa-battery-full"></i> Battery Configuration</h2>
+            <p>Configure your battery system for state-of-charge monitoring and optimization.</p>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-wand-magic-sparkles"></i> Automatic Sensor Conventions:</strong> EOS Connect <strong>auto-detects</strong> both battery and grid sensor polarity (charging/discharging and import/export). No manual overrides required.
+            </div>
+
+            <h3>battery.source</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.source</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Data source for battery SOC (State of Charge)</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>openhab</code> - OpenHAB integration<br>
+                        <code>homeassistant</code> - Home Assistant integration<br>
+                        <code>default</code> - Static data
+                    </td>
+                </tr>
+            </table>
+
+            <h3>battery.url</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.url</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>URL for OpenHAB or Home Assistant server</td>
+                </tr>
+                <tr>
+                    <th>Examples</th>
+                    <td>
+                        <code>http://192.168.1.50:8080</code> (OpenHAB)<br>
+                        <code>http://homeassistant:8123</code> (Home Assistant)
+                    </td>
+                </tr>
+            </table>
+
+            <h3>battery.soc_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.soc_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Item/entity name for the SOC sensor</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        OpenHAB: Decimal (0-1), percentage (0-100), or UoM ('0 %' - '100 %')<br>
+                        Home Assistant: Entity ID (e.g., <code>sensor.battery_soc</code>)
+                    </td>
+                </tr>
+            </table>
+
+            <h3>battery.access_token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.access_token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Access token for Home Assistant authentication</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Required for Home Assistant. Independent from load configuration token. Leave empty if not needed: <code>access_token:</code></td>
+                </tr>
+            </table>
+
+            <h3>battery.capacity_wh</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.capacity_wh</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Total capacity of the battery</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watt-hours (Wh)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>11059</code> (11.059 kWh)</td>
+                </tr>
+            </table>
+
+            <h3>battery.charge_efficiency</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.charge_efficiency</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Efficiency of charging the battery</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>Decimal between 0 and 1</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>0.88</code> (88% efficient)</td>
+                </tr>
+            </table>
+
+            <h3>battery.discharge_efficiency</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.discharge_efficiency</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Efficiency of discharging the battery</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>Decimal between 0 and 1</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>0.88</code> (88% efficient)</td>
+                </tr>
+            </table>
+
+            <h3>battery.max_charge_power_w</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.max_charge_power_w</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Maximum charging power for the battery</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>5000</code></td>
+                </tr>
+            </table>
+
+            <h3>battery.min_soc_percentage</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.min_soc_percentage</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Minimum state of charge for the battery</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Percentage (%)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>5</code></td>
+                </tr>
+            </table>
+
+            <h3>battery.max_soc_percentage</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.max_soc_percentage</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Maximum state of charge for the battery</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Percentage (%)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>100</code></td>
+                </tr>
+            </table>
+
+            <h3>battery.charging_curve_enabled</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.charging_curve_enabled</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Enable dynamic charging curve for battery protection</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>true</code> - Enable dynamic curve (SOC + temperature based)<br>
+                        <code>false</code> - Always charge at max power
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>true</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        <strong>SOC-based reduction:</strong> At SOC ≤50%, full power. Above 50%, exponentially reduced to ~5% at 95% SOC.<br><br>
+                        <strong>Temperature protection:</strong> If <code>sensor_battery_temperature</code> configured, uses a generic temperature derating curve <strong>derived from BYD HVM battery thermal specifications</strong>. This generic approach works with any battery chemistry or manufacturer:<br>
+                        <table style="margin-top: 10px; font-size: 0.9em;">
+                            <tr style="background: rgba(255,255,255,0.05);">
+                                <th style="width: 150px;">Temperature Range</th>
+                                <th style="width: 120px;">Power Limit</th>
+                                <th>Protection Reason</th>
+                            </tr>
+                            <tr>
+                                <td>Below -10°C</td>
+                                <td>0% (Locked)</td>
+                                <td>Cell damage protection - no charging allowed</td>
+                            </tr>
+                            <tr>
+                                <td>-10°C to 0°C</td>
+                                <td>7.5% → 50%</td>
+                                <td>Lithium-plating protection in extreme cold</td>
+                            </tr>
+                            <tr>
+                                <td>0°C to 5°C</td>
+                                <td>50%</td>
+                                <td>Moderate cold derating (flat)</td>
+                            </tr>
+                            <tr>
+                                <td>5°C to 12°C</td>
+                                <td>50% → 77%</td>
+                                <td>Light derating - battery warming gradually</td>
+                            </tr>
+                            <tr>
+                                <td>12°C to 40°C</td>
+                                <td>100%</td>
+                                <td>Optimal range (only SOC-based reduction applies)</td>
+                            </tr>
+                            <tr>
+                                <td>40°C to 50°C</td>
+                                <td>100% → 50%</td>
+                                <td>Thermal derating - heat protection begins</td>
+                            </tr>
+                            <tr>
+                                <td>50°C to 60°C</td>
+                                <td>50% → 0%</td>
+                                <td>Severe derating - critical heat protection</td>
+                            </tr>
+                            <tr>
+                                <td>Above 60°C</td>
+                                <td>0% (Locked)</td>
+                                <td>Overheat protection - no charging allowed</td>
+                            </tr>
+                        </table>
+                        <br><strong>Combined Effect:</strong> The final charging power is the product of both SOC and temperature multipliers.<br>
+                        <em>Example: At 10.5°C with 30% SOC, a 3 kWh battery would charge at ~71% power applying the generic curve derived from BYD specifications.</em>
+                    </td>
+                </tr>
+            </table>
+
+            <h3>battery.sensor_battery_temperature</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.sensor_battery_temperature</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Sensor/item identifier for battery temperature</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Celsius (°C)</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>Temperature range: -30°C to 70°C</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>""</code> (disabled)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>sensor.byd_battery_box_premium_hv_temperatur</code> (BYD Battery Box)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Highly recommended for battery protection. Enables automatic temperature-based charging power reduction. Values outside the -30°C to 70°C range are <strong>ignored for safety</strong>. If not configured or sensor fails, temperature protection is disabled and only SOC-based curve is used.</td>
+                </tr>
+            </table>
+
+            <h3>battery.price_euro_per_wh_accu</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.price_euro_per_wh_accu</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Static price for battery energy storage</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Euro per Wh (€/Wh)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>0</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Can be used to shift optimization results based on available energy</td>
+                </tr>
+            </table>
+
+            <h3>Battery Price Calculation Sensors</h3>
+            <p>To enable dynamic price calculation, configure these sensors in the web UI (<i class="fas fa-cog"></i> Settings → Battery):</p>
+            <table>
+                <tr>
+                    <th>Sensor</th>
+                    <th>Description</th>
+                    <th>Example</th>
+                </tr>
+                <tr>
+                    <td><code>battery_power_sensor</code></td>
+                    <td>Battery charge/discharge power (W)</td>
+                    <td><code>sensor.battery_power</code></td>
+                </tr>
+                <tr>
+                    <td><code>pv_power_sensor</code></td>
+                    <td>Total PV generation (W)</td>
+                    <td><code>sensor.total_pv_power</code></td>
+                </tr>
+                <tr>
+                    <td><code>grid_power_sensor</code></td>
+                    <td>Grid import/export (W)</td>
+                    <td><code>sensor.grid_power</code></td>
+                </tr>
+                <tr>
+                    <td><code>load_power_sensor</code></td>
+                    <td>Household consumption (W)</td>
+                    <td><code>sensor.household_load</code></td>
+                </tr>
+                <tr>
+                    <td><code>price_sensor</code></td>
+                    <td>Current electricity price</td>
+                    <td><code>sensor.electricity_price</code></td>
+                </tr>
+            </table>
+
+            <div class="alert alert-success">
+                <strong><i class="fas fa-check-circle"></i> Tip:</strong> EOS Connect automatically <em>normalizes</em> battery and grid signs so charging attribution to PV vs Grid is correct — even if your grid sensor reports import as negative.
+            </div>
+
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-exclamation-triangle"></i> Troubleshooting:</strong> If battery charging appears attributed to PV while PV≈0 at night, check application logs for:
+                <br><code>[BATTERY-PRICE] Detected conventions: battery=... grid=...</code>
+                <br>and diagnostic lines mentioning <code>PV≈0 but PV attribution occurred</code>. This indicates sensor misalignment previously — now automatically corrected.
+            </div>
+
+            <h3>battery.price_euro_per_wh_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.price_euro_per_wh_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Sensor/item that exposes battery price dynamically</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Euro per Wh (€/Wh)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>sensor.battery_price</code> (Home Assistant)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>If configured, overrides static <code>price_euro_per_wh_accu</code> value. Leave empty to use static price.</td>
+                </tr>
+            </table>
+
+            <h3 id="battery-price-calc"><i class="fas fa-calculator"></i> Dynamic Battery Price Calculation</h3>
+            <div class="alert alert-info">
+                <h4><i class="fas fa-calculator"></i> Dynamic Battery Price Calculation</h4>
+                <p>EOS Connect can automatically calculate the real cost of energy in your battery by analyzing historical charging events using a Last-In, First-Out (LIFO) inventory model.</p>
+                
+                <h5>How it Works:</h5>
+                <ol>
+                    <li><strong>Event Detection:</strong> The system scans historical data (default 96h) to identify "charging events" where battery power was above the <code>charging_threshold_w</code>.</li>
+                    <li><strong>Source Attribution:</strong> For each event, it compares battery power with PV production and grid import. If grid import is significant (above <code>grid_charge_threshold_w</code>), energy is attributed to grid charging at the market price. PV surplus energy is attributed to solar charging at zero cost by default (since PV generation has no per-kWh marginal cost). Optionally, you can assign the feed-in tariff as an opportunity cost for PV-sourced energy by enabling <code>battery_price_include_feedin</code> — in that case the configured <code>price.feed_in_price</code> is used as the PV energy cost.</li>
+                    <li><strong>Inventory Valuation (LIFO):</strong> Instead of a simple average, the system uses a <strong>Last-In, First-Out</strong> model. It looks at the most recent charging sessions that match your current battery level. This ensures the price reflects the actual "value" of the energy currently inside the battery.</li>
+                    <li><strong>Optimizer Integration:</strong> The resulting price is used by the optimizer to decide when it's profitable to discharge the battery.</li>
+                    <li><strong>Efficiency:</strong> To minimize API load, the system uses a two-step fetching strategy: it first fetches low-resolution data to find events, then high-resolution data only for specific periods when the battery was actually charging.</li>
+                </ol>
+            </div>
+
+            <h3>battery.price_calculation_enabled</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.price_calculation_enabled</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Enable dynamic battery price calculation from historical data</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>true</code> - Analyze charging history to determine real energy cost<br>
+                        <code>false</code> - Use static price or sensor value
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>false</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        Uses LIFO (Last-In, First-Out) inventory model. Analyzes charging events to determine if energy came from PV surplus (free) or grid (at market price). Represents the cost to replace the energy currently stored in the battery.
+                    </td>
+                </tr>
+            </table>
+
+            <h3>battery.price_update_interval</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.price_update_interval</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Interval between dynamic price recalculations</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Seconds</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>900</code> (15 minutes)</td>
+                </tr>
+            </table>
+
+            <h3>battery.price_history_lookback_hours</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.price_history_lookback_hours</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Number of hours to analyze for price calculation</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Hours</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>96</code></td>
+                </tr>
+            </table>
+
+            <h3>battery.battery_power_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.battery_power_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Sensor for battery power (required for dynamic price calculation)</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W) - positive values must represent charging</td>
+                </tr>
+            </table>
+
+            <h3>battery.pv_power_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.pv_power_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Sensor for total PV power (required for dynamic price calculation)</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+            </table>
+
+            <h3>battery.grid_power_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.grid_power_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Sensor for grid power (required for dynamic price calculation)</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W) - positive values represent import from grid</td>
+                </tr>
+            </table>
+
+            <h3>battery.load_power_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.load_power_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Sensor for household load power (required for dynamic price calculation)</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+            </table>
+
+            <h3>battery.price_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.price_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Sensor for current electricity price (required for dynamic price calculation)</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Euro per kWh (€/kWh) or cents per kWh (ct/kWh)</td>
+                </tr>
+            </table>
+
+            <h3>battery.charging_threshold_w</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.charging_threshold_w</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Minimum battery power to consider as "charging" during analysis</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>50.0</code></td>
+                </tr>
+            </table>
+
+            <h3>battery.grid_charge_threshold_w</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.grid_charge_threshold_w</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Minimum grid import power to attribute charging to grid vs PV surplus</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>100.0</code></td>
+                </tr>
+            </table>
+
+            <h3>battery.battery_price_include_feedin</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>battery.battery_price_include_feedin</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Include the feed-in tariff as an opportunity cost for PV-sourced energy in the battery price calculation</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>false</code> - PV-sourced energy costs €0 (default, free solar energy)<br>
+                        <code>true</code> - PV-sourced energy is valued at <code>price.feed_in_price</code> (€/kWh) as opportunity cost
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>false</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>When enabled, the battery price will be higher when the battery was primarily charged from PV, reflecting the revenue that could have been earned by exporting that energy instead. Requires <code>price.feed_in_price</code> to be set correctly.</td>
+                </tr>
+            </table>
+        </div>
+
+        
+<!-- Load Configuration -->
+        <div class="content-section" id="load">
+            <h2><i class="fas fa-plug"></i> Load Configuration</h2>
+            <p>Configure how EOS Connect reads your household power consumption data.</p>
+
+            <h3>load.source</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.source</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Data source for load power consumption</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td><code>homeassistant</code>, <code>openhab</code>, <code>default</code></td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>default</code> (uses static consumption profile)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>source: homeassistant</code></td>
+                </tr>
+            </table>
+
+            <h3>load.url</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.url</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>URL to your Home Assistant or OpenHAB instance</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td><code>http://&lt;hostname_or_ip&gt;:&lt;port&gt;</code></td>
+                </tr>
+                <tr>
+                    <th>Examples</th>
+                    <td>
+                        <code>http://homeassistant:8123</code><br>
+                        <code>http://192.168.1.100:8080</code>
+                    </td>
+                </tr>
+            </table>
+
+            <h3>load.access_token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.access_token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Long-lived access token for Home Assistant</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes for Home Assistant, optional for OpenHAB</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>In Home Assistant: Profile → Long-Lived Access Tokens → Create Token<br>Leave empty if not needed: <code>access_token:</code></td>
+                </tr>
+            </table>
+
+            <h3>load.load_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.load_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Entity/item name for total household power consumption</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W) or energy (Wh) for Home Assistant energy entities</td>
+                </tr>
+                <tr>
+                    <th>Examples</th>
+                    <td>
+                        <code>sensor.house_power</code> (Home Assistant)<br>
+                        <code>PowerMeter_Load</code> (OpenHAB)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Represents overall net household load (total house consumption). Positive (consumption) or negative (feed-in) values are converted to absolute positive internally. Home Assistant <strong>energy</strong> entities (device_class: <code>energy</code>) are supported and converted to average power per time frame. Feature contributed by <a href="https://github.com/forouher" target="_blank">Dariush Forouher</a>.</td>
+                </tr>
+            </table>
+
+            <h3>load.car_charge_load_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.car_charge_load_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Entity/item for EV charger power consumption (optional)</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>sensor.wallbox_power</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Separates controllable EV charging from base household load for more accurate optimization. This load is <strong>subtracted</strong> from the main load sensor value. Leave empty if not needed: <code>car_charge_load_sensor:</code></td>
+                </tr>
+            </table>
+
+            <h3>load.additional_load_1_sensor</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.additional_load_1_sensor</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Entity/item for additional controllable load (e.g., heat pump, dishwasher)</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watts (W)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>sensor.heatpump_power</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Separates additional controllable devices from base household load. This load is <strong>subtracted</strong> from the main load sensor value. Leave empty if not needed: <code>additional_load_1_sensor:</code></td>
+                </tr>
+            </table>
+
+            <h3>load.additional_load_1_runtime</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.additional_load_1_runtime</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Expected runtime of additional load</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Minutes</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>0</code> (not used)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>120</code> (2 hours)</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Helps optimization engine plan when to run the additional load</td>
+                </tr>
+            </table>
+
+            <h3>load.additional_load_1_consumption</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>load.additional_load_1_consumption</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Energy consumption of additional load for ONE hour</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Watt-hours (Wh)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>0</code> (not used)</td>
+                </tr>
+                <tr>
+                    <th>Example</th>
+                    <td><code>2000</code> (2 kWh per hour)</td>
+                </tr>
+            </table>
+        </div>
+
+        
+<!-- Price Configuration -->
         <div class="content-section" id="price">
             <h2><i class="fas fa-dollar-sign"></i> Electricity Price Configuration</h2>
             <p>Configure dynamic electricity pricing for cost optimization.</p>
@@ -996,647 +1955,8 @@
         </div>
 
         <!-- Continue with Battery, PV, Inverter, EVCC, MQTT, Other sections... -->
-        <!-- Due to length, I'll create a placeholder for now -->
-
-        <div class="content-section" id="battery">
-            <h2><i class="fas fa-battery-full"></i> Battery Configuration</h2>
-            <p>Configure your battery system for state-of-charge monitoring and optimization.</p>
-
-            <div class="alert alert-info">
-                <strong><i class="fas fa-wand-magic-sparkles"></i> Automatic Sensor Conventions:</strong> EOS Connect <strong>auto-detects</strong> both battery and grid sensor polarity (charging/discharging and import/export). No manual overrides required.
-            </div>
-
-            <h3>battery.source</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.source</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Data source for battery SOC (State of Charge)</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>
-                        <code>openhab</code> - OpenHAB integration<br>
-                        <code>homeassistant</code> - Home Assistant integration<br>
-                        <code>default</code> - Static data
-                    </td>
-                </tr>
-            </table>
-
-            <h3>battery.url</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.url</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>URL for OpenHAB or Home Assistant server</td>
-                </tr>
-                <tr>
-                    <th>Examples</th>
-                    <td>
-                        <code>http://192.168.1.50:8080</code> (OpenHAB)<br>
-                        <code>http://homeassistant:8123</code> (Home Assistant)
-                    </td>
-                </tr>
-            </table>
-
-            <h3>battery.soc_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.soc_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Item/entity name for the SOC sensor</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>
-                        OpenHAB: Decimal (0-1), percentage (0-100), or UoM ('0 %' - '100 %')<br>
-                        Home Assistant: Entity ID (e.g., <code>sensor.battery_soc</code>)
-                    </td>
-                </tr>
-            </table>
-
-            <h3>battery.access_token</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.access_token</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Access token for Home Assistant authentication</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Required for Home Assistant. Independent from load configuration token. Leave empty if not needed: <code>access_token:</code></td>
-                </tr>
-            </table>
-
-            <h3>battery.capacity_wh</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.capacity_wh</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Total capacity of the battery</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watt-hours (Wh)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>11059</code> (11.059 kWh)</td>
-                </tr>
-            </table>
-
-            <h3>battery.charge_efficiency</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.charge_efficiency</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Efficiency of charging the battery</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>Decimal between 0 and 1</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>0.88</code> (88% efficient)</td>
-                </tr>
-            </table>
-
-            <h3>battery.discharge_efficiency</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.discharge_efficiency</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Efficiency of discharging the battery</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>Decimal between 0 and 1</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>0.88</code> (88% efficient)</td>
-                </tr>
-            </table>
-
-            <h3>battery.max_charge_power_w</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.max_charge_power_w</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Maximum charging power for the battery</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>5000</code></td>
-                </tr>
-            </table>
-
-            <h3>battery.min_soc_percentage</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.min_soc_percentage</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Minimum state of charge for the battery</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Percentage (%)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>5</code></td>
-                </tr>
-            </table>
-
-            <h3>battery.max_soc_percentage</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.max_soc_percentage</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Maximum state of charge for the battery</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Percentage (%)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>100</code></td>
-                </tr>
-            </table>
-
-            <h3>battery.charging_curve_enabled</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.charging_curve_enabled</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Enable dynamic charging curve for battery protection</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>
-                        <code>true</code> - Enable dynamic curve (SOC + temperature based)<br>
-                        <code>false</code> - Always charge at max power
-                    </td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>true</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>
-                        <strong>SOC-based reduction:</strong> At SOC ≤50%, full power. Above 50%, exponentially reduced to ~5% at 95% SOC.<br><br>
-                        <strong>Temperature protection:</strong> If <code>sensor_battery_temperature</code> configured, uses a generic temperature derating curve <strong>derived from BYD HVM battery thermal specifications</strong>. This generic approach works with any battery chemistry or manufacturer:<br>
-                        <table style="margin-top: 10px; font-size: 0.9em;">
-                            <tr style="background: rgba(255,255,255,0.05);">
-                                <th style="width: 150px;">Temperature Range</th>
-                                <th style="width: 120px;">Power Limit</th>
-                                <th>Protection Reason</th>
-                            </tr>
-                            <tr>
-                                <td>Below -10°C</td>
-                                <td>0% (Locked)</td>
-                                <td>Cell damage protection - no charging allowed</td>
-                            </tr>
-                            <tr>
-                                <td>-10°C to 0°C</td>
-                                <td>7.5% → 50%</td>
-                                <td>Lithium-plating protection in extreme cold</td>
-                            </tr>
-                            <tr>
-                                <td>0°C to 5°C</td>
-                                <td>50%</td>
-                                <td>Moderate cold derating (flat)</td>
-                            </tr>
-                            <tr>
-                                <td>5°C to 12°C</td>
-                                <td>50% → 77%</td>
-                                <td>Light derating - battery warming gradually</td>
-                            </tr>
-                            <tr>
-                                <td>12°C to 40°C</td>
-                                <td>100%</td>
-                                <td>Optimal range (only SOC-based reduction applies)</td>
-                            </tr>
-                            <tr>
-                                <td>40°C to 50°C</td>
-                                <td>100% → 50%</td>
-                                <td>Thermal derating - heat protection begins</td>
-                            </tr>
-                            <tr>
-                                <td>50°C to 60°C</td>
-                                <td>50% → 0%</td>
-                                <td>Severe derating - critical heat protection</td>
-                            </tr>
-                            <tr>
-                                <td>Above 60°C</td>
-                                <td>0% (Locked)</td>
-                                <td>Overheat protection - no charging allowed</td>
-                            </tr>
-                        </table>
-                        <br><strong>Combined Effect:</strong> The final charging power is the product of both SOC and temperature multipliers.<br>
-                        <em>Example: At 10.5°C with 30% SOC, a 3 kWh battery would charge at ~71% power applying the generic curve derived from BYD specifications.</em>
-                    </td>
-                </tr>
-            </table>
-
-            <h3>battery.sensor_battery_temperature</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.sensor_battery_temperature</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Sensor/item identifier for battery temperature</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Celsius (°C)</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>Temperature range: -30°C to 70°C</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>""</code> (disabled)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>sensor.byd_battery_box_premium_hv_temperatur</code> (BYD Battery Box)</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Highly recommended for battery protection. Enables automatic temperature-based charging power reduction. Values outside the -30°C to 70°C range are <strong>ignored for safety</strong>. If not configured or sensor fails, temperature protection is disabled and only SOC-based curve is used.</td>
-                </tr>
-            </table>
-
-            <h3>battery.price_euro_per_wh_accu</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.price_euro_per_wh_accu</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Static price for battery energy storage</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Euro per Wh (€/Wh)</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>0</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Can be used to shift optimization results based on available energy</td>
-                </tr>
-            </table>
-
-            <h3>Battery Price Calculation Sensors</h3>
-            <p>To enable dynamic price calculation, configure these sensors in your <code>config.yaml</code>:</p>
-            <table>
-                <tr>
-                    <th>Sensor</th>
-                    <th>Description</th>
-                    <th>Example</th>
-                </tr>
-                <tr>
-                    <td><code>battery_power_sensor</code></td>
-                    <td>Battery charge/discharge power (W)</td>
-                    <td><code>sensor.battery_power</code></td>
-                </tr>
-                <tr>
-                    <td><code>pv_power_sensor</code></td>
-                    <td>Total PV generation (W)</td>
-                    <td><code>sensor.total_pv_power</code></td>
-                </tr>
-                <tr>
-                    <td><code>grid_power_sensor</code></td>
-                    <td>Grid import/export (W)</td>
-                    <td><code>sensor.grid_power</code></td>
-                </tr>
-                <tr>
-                    <td><code>load_power_sensor</code></td>
-                    <td>Household consumption (W)</td>
-                    <td><code>sensor.household_load</code></td>
-                </tr>
-                <tr>
-                    <td><code>price_sensor</code></td>
-                    <td>Current electricity price</td>
-                    <td><code>sensor.electricity_price</code></td>
-                </tr>
-            </table>
-
-            <div class="alert alert-success">
-                <strong><i class="fas fa-check-circle"></i> Tip:</strong> EOS Connect automatically <em>normalizes</em> battery and grid signs so charging attribution to PV vs Grid is correct — even if your grid sensor reports import as negative.
-            </div>
-
-            <div class="alert alert-warning">
-                <strong><i class="fas fa-exclamation-triangle"></i> Troubleshooting:</strong> If battery charging appears attributed to PV while PV≈0 at night, check application logs for:
-                <br><code>[BATTERY-PRICE] Detected conventions: battery=... grid=...</code>
-                <br>and diagnostic lines mentioning <code>PV≈0 but PV attribution occurred</code>. This indicates sensor misalignment previously — now automatically corrected.
-            </div>
-
-            <h3>battery.price_euro_per_wh_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.price_euro_per_wh_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Sensor/item that exposes battery price dynamically</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Euro per Wh (€/Wh)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>sensor.battery_price</code> (Home Assistant)</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>If configured, overrides static <code>price_euro_per_wh_accu</code> value. Leave empty to use static price.</td>
-                </tr>
-            </table>
-
-            <h3 id="battery-price-calc"><i class="fas fa-calculator"></i> Dynamic Battery Price Calculation</h3>
-            <div class="alert alert-info">
-                <h4><i class="fas fa-calculator"></i> Dynamic Battery Price Calculation</h4>
-                <p>EOS Connect can automatically calculate the real cost of energy in your battery by analyzing historical charging events using a Last-In, First-Out (LIFO) inventory model.</p>
-                
-                <h5>How it Works:</h5>
-                <ol>
-                    <li><strong>Event Detection:</strong> The system scans historical data (default 96h) to identify "charging events" where battery power was above the <code>charging_threshold_w</code>.</li>
-                    <li><strong>Source Attribution:</strong> For each event, it compares battery power with PV production and grid import. If grid import is significant (above <code>grid_charge_threshold_w</code>), energy is attributed to grid charging at the market price. PV surplus energy is attributed to solar charging at zero cost by default (since PV generation has no per-kWh marginal cost). Optionally, you can assign the feed-in tariff as an opportunity cost for PV-sourced energy by enabling <code>battery_price_include_feedin</code> — in that case the configured <code>price.feed_in_price</code> is used as the PV energy cost.</li>
-                    <li><strong>Inventory Valuation (LIFO):</strong> Instead of a simple average, the system uses a <strong>Last-In, First-Out</strong> model. It looks at the most recent charging sessions that match your current battery level. This ensures the price reflects the actual "value" of the energy currently inside the battery.</li>
-                    <li><strong>Optimizer Integration:</strong> The resulting price is used by the optimizer to decide when it's profitable to discharge the battery.</li>
-                    <li><strong>Efficiency:</strong> To minimize API load, the system uses a two-step fetching strategy: it first fetches low-resolution data to find events, then high-resolution data only for specific periods when the battery was actually charging.</li>
-                </ol>
-            </div>
-
-            <h3>battery.price_calculation_enabled</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.price_calculation_enabled</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Enable dynamic battery price calculation from historical data</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>
-                        <code>true</code> - Analyze charging history to determine real energy cost<br>
-                        <code>false</code> - Use static price or sensor value
-                    </td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>false</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>
-                        Uses LIFO (Last-In, First-Out) inventory model. Analyzes charging events to determine if energy came from PV surplus (free) or grid (at market price). Represents the cost to replace the energy currently stored in the battery.
-                    </td>
-                </tr>
-            </table>
-
-            <h3>battery.price_update_interval</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.price_update_interval</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Interval between dynamic price recalculations</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Seconds</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>900</code> (15 minutes)</td>
-                </tr>
-            </table>
-
-            <h3>battery.price_history_lookback_hours</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.price_history_lookback_hours</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Number of hours to analyze for price calculation</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Hours</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>96</code></td>
-                </tr>
-            </table>
-
-            <h3>battery.battery_power_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.battery_power_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Sensor for battery power (required for dynamic price calculation)</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W) - positive values must represent charging</td>
-                </tr>
-            </table>
-
-            <h3>battery.pv_power_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.pv_power_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Sensor for total PV power (required for dynamic price calculation)</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-            </table>
-
-            <h3>battery.grid_power_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.grid_power_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Sensor for grid power (required for dynamic price calculation)</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W) - positive values represent import from grid</td>
-                </tr>
-            </table>
-
-            <h3>battery.load_power_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.load_power_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Sensor for household load power (required for dynamic price calculation)</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-            </table>
-
-            <h3>battery.price_sensor</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.price_sensor</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Sensor for current electricity price (required for dynamic price calculation)</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Euro per kWh (€/kWh) or cents per kWh (ct/kWh)</td>
-                </tr>
-            </table>
-
-            <h3>battery.charging_threshold_w</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.charging_threshold_w</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Minimum battery power to consider as "charging" during analysis</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>50.0</code></td>
-                </tr>
-            </table>
-
-            <h3>battery.grid_charge_threshold_w</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.grid_charge_threshold_w</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Minimum grid import power to attribute charging to grid vs PV surplus</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>100.0</code></td>
-                </tr>
-            </table>
-
-            <h3>battery.battery_price_include_feedin</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>battery.battery_price_include_feedin</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Include the feed-in tariff as an opportunity cost for PV-sourced energy in the battery price calculation</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>
-                        <code>false</code> - PV-sourced energy costs €0 (default, free solar energy)<br>
-                        <code>true</code> - PV-sourced energy is valued at <code>price.feed_in_price</code> (€/kWh) as opportunity cost
-                    </td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>false</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>When enabled, the battery price will be higher when the battery was primarily charged from PV, reflecting the revenue that could have been earned by exporting that energy instead. Requires <code>price.feed_in_price</code> to be set correctly.</td>
-                </tr>
-            </table>
-        </div>
-
-        <div class="content-section" id="pv">
+        
+<div class="content-section" id="pv">
             <h2><i class="fas fa-sun"></i> PV Forecast Configuration</h2>
             <p>Configure solar generation forecasts from various providers.</p>
 
@@ -1670,6 +1990,43 @@
                 <tr>
                     <th>Default</th>
                     <td><code>akkudoktor</code></td>
+                </tr>
+            </table>
+
+            <h3 id="pv-forecast-evcc">pv_forecast_source.use_real_data_correction</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>pv_forecast_source.use_real_data_correction</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Apply the scaling factor from the EVCC forecast API to correct PV forecast values using real measured data. If disabled, no scaling is applied (scale = 1.0).</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td><code>true</code> (enabled), <code>false</code> (disabled)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>true</code></td>
+                </tr>
+                <tr>
+                    <th>When to Enable</th>
+                    <td>Enable for most users. Disabling is only recommended for debugging or if you want to ignore EVCC's real data correction and use raw forecast values.</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        <ul>
+                            <li>When enabled, EOS Connect multiplies the PV forecast values from EVCC by the <code>scale</code> factor provided by the EVCC API. This corrects the forecast using real measured data from your system.</li>
+                            <li>If the scale factor is missing or invalid, <code>1.0</code> is used (no correction).</li>
+                            <li>If the scale factor is less than <code>0.1</code>, <code>0.5</code> is used (to avoid extreme downscaling).</li>
+                            <li>If the scale factor is zero or negative, <code>1.0</code> is used (no correction).</li>
+                            <li>When disabled, the scale factor is always set to <code>1.0</code> (no correction applied).</li>
+                            <li>This option only appears when <code>pv_forecast_source.source</code> is set to <code>evcc</code>.</li>
+                        </ul>
+                    </td>
                 </tr>
             </table>
 
@@ -2101,274 +2458,8 @@
             </ol>
         </div>
 
-        <div class="content-section" id="inverter">
-            <h2><i class="fas fa-solar-panel"></i> Inverter Configuration</h2>
-            <p>Configure inverter control for automated battery management.</p>
-
-            <h3>inverter.type</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.type</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Type of inverter for automated control</td>
-                </tr>
-                <tr>
-                    <th>Valid Values</th>
-                    <td>
-                        <code>victron</code> - Victron MultiPlus (3-phase ESS via Modbus/TCP)<br>
-                        <code>fronius_gen24</code> - Fronius Gen24 (enhanced V2 interface, firmware-based auth)<br>
-                        <code>fronius_gen24_legacy</code> - Fronius Gen24 (legacy V1 interface)<br>
-                        <code>homeassistant</code> - Generic Home Assistant inverter control via service calls<br>
-                        <code>evcc</code> - Universal via EVCC external battery control<br>
-                        <code>default</code> - Disable control (display only)
-                    </td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>default</code></td>
-                </tr>
-            </table>
-
-            <h3>inverter.address</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.address</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>IP address of the inverter / device</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes (for <code>victron</code>, <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td>
-                        <code>192.168.1.12</code> (Fronius)<br>
-                        <code>192.168.1.50</code> (Victron CCGX/Cerbo GX)
-                    </td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>
-                        <strong>Victron:</strong> Set a static IP on your Victron device (CCGX, Cerbo GX, or Venus OS host). Modbus/TCP connection will use port 502 (standard).<br>
-                        <strong>Fronius:</strong> IP address of the inverter's local portal.
-                    </td>
-                </tr>
-            </table>
-
-            <h3>inverter.user</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.user</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Username for inverter's local portal (Fronius only)</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes (for <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>customer</code></td>
-                </tr>
-            </table>
-
-            <h3>inverter.password</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.password</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Password for inverter's local portal (Fronius only)</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes (for <code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>)</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>
-                        <strong>Fronius Gen24 enhanced interface:</strong> Automatically detects firmware version and uses appropriate auth method. If you updated firmware to 1.38.6-1+ or newer, you may need to reset password in WebUI (http://your-inverter-ip/) under Settings → User Management.
-                    </td>
-                </tr>
-            </table>
-
-            <h3>Victron MultiPlus Configuration</h3>
-            <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> Victron Support:</strong> EOS Connect supports Victron MultiPlus systems via Modbus/TCP network connection. The interface provides automated battery discharge control, charge-from-grid, and charge-from-PV modes for complete energy management.
-            </div>
-
-            <p><strong>Requirements:</strong></p>
-            <ul>
-                <li>Victron MultiPlus 3-phase system (single-phase support is experimental)</li>
-                <li>ESS (Energy Storage System) mode enabled on the Victron device</li>
-                <li>Network connectivity between EOS Connect and the Victron device's IP address</li>
-                <li>Default Modbus/TCP port: 502 (standard)</li>
-            </ul>
-
-            <p><strong>How It Works:</strong></p>
-            <ol>
-                <li><strong>Discharge Allowed Mode:</strong> Normal ESS operation - Victron's internal logic manages battery discharge and grid interaction</li>
-                <li><strong>Avoid Discharge Mode (Hold):</strong> ESS switches to External Control, setpoint writes 0W to all phases - prevents battery discharge and grid import</li>
-                <li><strong>Charge from Grid:</strong> Positive power setpoint written to MultiPlus - inverter regulates grid import to charge batteries</li>
-                <li><strong>Auto Restore:</strong> When EOS Connect disconnects, original ESS mode is automatically restored</li>
-            </ol>
-            <div class="alert alert-warning">
-                <strong><i class="fas fa-exclamation-triangle"></i> PV Charge Rate Limiting not supported:</strong> Victron ESS mode does not allow blocking PV-to-battery charging via the Modbus/TCP interface. The <code>inverter.max_pv_charge_rate</code> value is used by the optimizer model only. When the optimizer requests <code>dc_charge=0</code> (no PV charging) for a time slot, EOS Connect logs a warning but <strong>cannot enforce</strong> this on the hardware — PV will still charge the battery if solar energy is available.
-            </div>
-
-            <h3>inverter.max_grid_charge_rate</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.max_grid_charge_rate</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Maximum grid charge rate</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>5000</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Limitation for calculating target grid charge power and for EOS inverter model. Currently not supported by EVCC external battery control, but shown and calculated (reachable per EOS Connect API)</td>
-                </tr>
-            </table>
-
-            <h3>inverter.max_pv_charge_rate</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.max_pv_charge_rate</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Maximum PV charge rate</td>
-                </tr>
-                <tr>
-                    <th>Unit</th>
-                    <td>Watts (W)</td>
-                </tr>
-                <tr>
-                    <th>Default</th>
-                    <td><code>5000</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>
-                        Upper cap for the optimizer model and the target PV charge power calculation.<br><br>
-                        <strong>Fronius Gen24 (<code>fronius_gen24</code>, <code>fronius_gen24_legacy</code>):</strong> Actively enforced via the Time-of-Use (TOU) API on every control cycle. When the optimizer sets <code>dc_charge=0</code> for a slot, a <code>CHARGE_MAX:0</code> TOU entry is written to the inverter, explicitly blocking PV-to-battery charging. When <code>dc_charge&gt;0</code>, a <code>CHARGE_MAX:&lt;rate&gt;</code> entry is written instead, allowing PV charging up to this wattage.<br><br>
-                        <strong>All other inverter types (Victron, HA, EVCC, default):</strong> Value is stored internally and used by the optimizer model only — no hardware PV charge limiting is performed. For Victron ESS, blocking PV charging via Modbus is not supported; a warning is logged when <code>dc_charge=0</code> is requested.
-                    </td>
-                </tr>
-            </table>
-
-            <h3>inverter.url</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.url</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>URL of your Home Assistant instance</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes (for <code>homeassistant</code> type only)</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>http://192.168.1.129:8123</code></td>
-                </tr>
-            </table>
-
-            <h3>inverter.token</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>inverter.token</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>Long-lived access token from Home Assistant</td>
-                </tr>
-                <tr>
-                    <th>Required</th>
-                    <td>Yes (for <code>homeassistant</code> type only)</td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>Create one in HA under: Profile &rarr; Long-Lived Access Tokens &rarr; Create Token.</td>
-                </tr>
-            </table>
-
-            <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> Home Assistant Inverter Interface:</strong>
-                The <code>homeassistant</code> inverter type allows controlling any inverter/battery system that is integrated into Home Assistant via configurable service call sequences (e.g., Marstek, Sungrow, Goodwe).
-                <br><br>
-                For each EOS inverter mode, you define a list of HA service calls under <code>inverter:</code>:
-                <ul>
-                    <li><code>charge_from_grid</code> &ndash; Service calls for grid charging. Supports <code>{{ power }}</code> in <code>data_template</code> for dynamic power values from EOS.</li>
-                    <li><code>avoid_discharge</code> &ndash; Service calls to hold the battery (no discharge, PV charging allowed).</li>
-                    <li><code>discharge_allowed</code> &ndash; Service calls for normal battery discharge.</li>
-                </ul>
-                Each step specifies: <code>service</code> (e.g., <code>select.select_option</code>), <code>entity_id</code>, and <code>data</code> (static) or <code>data_template</code> (with <code>{{ power }}</code> variable).
-                See the <a href="#example-ha-inverter">Marstek example</a> below for a complete configuration.
-                For the ESPHome config to connect a Marstek M1 via RS485/Modbus, see <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this Gist</a>.
-            </div>
-        </div>
-
-        <div class="content-section" id="evcc">
-            <h2><i class="fas fa-car"></i> EVCC Configuration</h2>
-            <p>Configure integration with EVCC for EV charging management and PV forecast retrieval.</p>
-
-            <h3>evcc.url</h3>
-            <table>
-                <tr>
-                    <th>Parameter</th>
-                    <td><code>evcc.url</code></td>
-                </tr>
-                <tr>
-                    <th>Description</th>
-                    <td>URL for the EVCC instance</td>
-                </tr>
-                <tr>
-                    <th>Example</th>
-                    <td><code>http://192.168.1.100:7070</code></td>
-                </tr>
-                <tr>
-                    <th>Notes</th>
-                    <td>
-                        Leave empty if not used: <code>url:</code> or <code>url: ""</code><br><br>
-                        <strong>Important:</strong> When using <code>evcc</code> as the <code>pv_forecast_source</code>, this EVCC configuration must be properly configured. EOS Connect will retrieve PV forecasts directly from the EVCC API instead of using individual PV installation configurations. In this case, the <code>pv_forecast</code> section requires at least one entry with valid <code>lat</code> and <code>lon</code> coordinates for temperature forecasts.
-                    </td>
-                </tr>
-            </table>
-
-            <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> EVCC as Inverter Controller:</strong> When <code>inverter.type</code> is set to <code>evcc</code>, EOS Connect uses EVCC's external battery control feature to manage battery charging. This provides a universal interface that works with many inverter types supported by EVCC.
-            </div>
-        </div>
-
-        <div class="content-section" id="mqtt">
+        
+<div class="content-section" id="mqtt">
             <h2><i class="fas fa-network-wired"></i> MQTT Configuration</h2>
             <p>Configure MQTT broker connection and Home Assistant Auto Discovery.</p>
 
@@ -2534,66 +2625,6 @@
             </table>
         </div>
 
-        <!-- Optimization Configuration Section -->
-        <div class="content-section" id="optimization-config">
-            <h2><i class="fas fa-cog"></i> Optimization Configuration</h2>
-            <p>Important timing and configuration concepts for optimization requests and responses.</p>
-
-            <h3 id="timing-controls">Understanding refresh_time and time_frame</h3>
-            <div class="alert alert-warning">
-                <h4><i class="fas fa-clock"></i> Two Different Timing Controls</h4>
-                <p>These two parameters control different aspects of optimization:</p>
-                <ul>
-                    <li><strong>refresh_time</strong>: Sets how often EOS Connect sends a new optimization request to the optimizer server (e.g., every 3 minutes)</li>
-                    <li><strong>time_frame</strong> (in EOS section): Sets the granularity of the optimization and forecast arrays inside each request (e.g., 900 for 15-minute steps, 3600 for hourly steps)</li>
-                </ul>
-                <p>The combination of <code>refresh_time</code> and <code>time_frame</code> allows you to control both how frequently the system updates and how detailed the optimization is.</p>
-            </div>
-
-            <h3 id="time-slot-config">Time Slot Configuration & Optimizer Constraints</h3>
-            <p>The <code>time_frame</code> setting determines the granularity of optimization data:</p>
-            
-            <table>
-                <tr>
-                    <th>Time Frame</th>
-                    <th>Array Length</th>
-                    <th>Forecast Horizon</th>
-                    <th>EOS Server</th>
-                    <th>EVopt</th>
-                </tr>
-                <tr>
-                    <td><code>3600</code> (60 minutes)</td>
-                    <td>48 values</td>
-                    <td>2 days</td>
-                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
-                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
-                </tr>
-                <tr>
-                    <td><code>900</code> (15 minutes)</td>
-                    <td>192 values</td>
-                    <td>2 days (more granular)</td>
-                    <td><i class="fas fa-times" style="color: red;"></i> Not Supported</td>
-                    <td><i class="fas fa-check" style="color: green;"></i> Supported</td>
-                </tr>
-            </table>
-
-            <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> Optimizer Constraints:</strong>
-                <ul>
-                    <li><strong>EOS Server (Akkudoktor EOS):</strong> Only supports 60-minute slots (<code>time_frame: 3600</code>). If you set <code>time_frame: 900</code> with EOS Server, it will be automatically corrected to 3600 at startup with a warning.</li>
-                    <li><strong>EVopt:</strong> Supports both 60-minute (<code>3600</code>) and 15-minute (<code>900</code>) time frames for more granular optimization. Use 900 if you need more detailed control over battery charging/discharging and solar feed-in patterns.</li>
-                </ul>
-            </div>
-
-            <div class="alert alert-tip">
-                <strong><i class="fas fa-lightbulb"></i> When to Use Which Time Frame:</strong>
-                <ul>
-                    <li><strong>Use 3600s (hourly):</strong> If using EOS Server, or if you prefer simpler hourly optimization with lower computational cost</li>
-                    <li><strong>Use 900s (15-min):</strong> If using EVopt and want finer-grained optimization for precise battery and solar control</li>
-                </ul>
-            </div>
-        </div>
-
         <div class="content-section" id="other">
             <h2><i class="fas fa-cog"></i> Other Configuration Settings</h2>
             <p>General application settings and behavior.</p>
@@ -2720,7 +2751,7 @@
             </table>
 
             <div class="alert alert-info">
-                <strong><i class="fas fa-file-alt"></i> Configuration File:</strong> The <code>config.yaml</code> file must be located in the <code>src</code> directory. If it doesn't exist, EOS Connect will create one with default values on first startup and prompt you to configure it before restarting.
+                <strong><i class="fas fa-cog"></i> Web-Based Configuration:</strong> All settings are managed through the built-in web UI (<i class="fas fa-cog"></i> Settings). On first startup, a Setup Wizard guides you through essential configuration. Only bootstrap settings (<code>eos_connect_web_port</code>, <code>time_zone</code>, <code>log_level</code>) remain in <code>config.yaml</code>.
             </div>
 
             <h3>Understanding refresh_time and time_frame</h3>
@@ -2797,319 +2828,271 @@
 
         <!-- Configuration Examples Section -->
         <div class="content-section" id="examples">
-            <h2><i class="fas fa-file-code"></i> Configuration Examples</h2>
-            <p>Complete example configurations for different use cases.</p>
+            <h2><i class="fas fa-lightbulb"></i> Configuration Scenarios</h2>
+            <p>Common setup scenarios and how to configure them using the web UI. For each scenario, follow the Setup Wizard or navigate to the corresponding sections in <strong>Settings</strong>.</p>
 
-            <h3 id="example-full">Full Configuration Example</h3>
-            <p>This complete example will be automatically generated at first startup. Copy and customize for your setup:</p>
-                        <pre><code class="yaml"># Load configuration
-load:
-    source: default  # Data source for load power - openhab, homeassistant, default (using a static load profile)
-    url: http://homeassistant:8123 # URL for openhab or homeassistant (e.g. http://openhab:8080 or http://homeassistant:8123)
-    access_token: abc123 # access token for homeassistant (optional)
-    load_sensor: Load_Power # item / entity for load power data in watts (or HA energy entity in Wh)
-    car_charge_load_sensor: Wallbox_Power # item / entity for wallbox power data in watts. (If not needed, set to "")
-    additional_load_1_sensor: "additional_load_1_sensor" # item / entity for additional load power. (If not needed set to "")
-    additional_load_1_runtime: 2 # runtime for additional load 1 in minutes - default: 0 (If not needed set to "")
-    additional_load_1_consumption: 1500 # consumption for additional load 1 in Wh - default: 0 (If not needed set to "")
-
-# EOS server configuration
-eos:
-  source: eos_server  # EOS server source - eos_server, evopt, default (default uses eos_server)
-  server: 192.168.1.94  # EOS server address
-  port: 8503 # port for EOS server - default: 8503
-  timeout: 180 # timeout for EOS optimize request in seconds - default: 180
-  time_frame: 3600 # granularity of optimization steps in seconds (3600=hourly for EOS server; 900=15min for EVopt only)
-
-# Electricity price configuration
-price:
-  source: default  # data source for electricity price tibber, smartenergy_at, stromligning, fixed_24h, default (default uses akkudoktor)
-  token: tibberBearerToken # Token for electricity price (for Stromligning use supplierId/productId[/customerGroupId])
-  fixed_price_adder_ct: 2.5 # Describes the fixed cost addition in ct per kWh.
-  relative_price_multiplier: 0.05 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
-  fixed_24h_array: 10.41, 10.42, 10.42, 10.42, 10.42, 23.52, 28.17, 28.17, 28.17, 28.17, 28.17, 23.52, 23.52, 23.52, 23.52, 28.17, 28.17, 34.28, 34.28, 34.28, 34.28, 34.28, 28.17, 23.52 # 24 hours array with fixed prices over the day
-  feed_in_price: 0.0 # feed in price for the grid in €/kWh
-  negative_price_switch: false # switch for no payment if negative stock price is given
-
-# battery configuration
-battery:
-  source: default  # Data source for battery soc - openhab, homeassistant, default
-  url: http://homeassistant:8123 # URL for openhab or homeassistant (e.g. http://openhab:7070 or http://homeassistant:8123)
-  soc_sensor: battery_SOC # item / entity for battery SOC data in [0..1]
-  access_token: abc123 # access token for homeassistant (optional)
-  capacity_wh: 11059 # battery capacity in Wh
-  charge_efficiency: 0.88 # efficiency for charging the battery in [0..1]
-  discharge_efficiency: 0.88 # efficiency for discharging the battery in [0..1]
-  max_charge_power_w: 5000 # max charging power in W
-  min_soc_percentage: 5 # min battery soc in %
-  max_soc_percentage: 100 # max battery soc in %
-  price_euro_per_wh_accu: 0 # price for battery in €/Wh
-  price_euro_per_wh_sensor: "" # Home Assistant entity (e.g. sensor.battery_price) providing €/Wh
-  charging_curve_enabled: true # enable dynamic charging curve for battery (SOC-based + temperature-based if sensor configured)
-  sensor_battery_temperature: "" # sensor for battery temperature in °C (e.g., sensor.byd_battery_box_premium_hv_temperatur) - enables temperature protection
-
-# List of PV forecast source configuration
-pv_forecast_source:
-  source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default (default uses akkudoktor)
-  api_key: "" # API key for Solcast (required only when source is 'solcast')
-
-# List of PV forecast configurations. Add multiple entries as needed.
-# See Akkudoktor API (https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast) for more details.
-pv_forecast:
-  - name: myPvInstallation1  # User-defined identifier for the PV installation, have to be unique if you use more installations
-    lat: 52.5200 # Latitude for PV forecast
-    lon: 13.4050 # Longitude for PV forecast
-    azimuth: 90.0 # Azimuth for PV forecast
-    tilt: 30.0 # Tilt for PV forecast
-    power: 4600 # Power for PV forecast
-    powerInverter: 5000 # Power Inverter for PV forecast
-    inverterEfficiency: 0.9 # Inverter Efficiency for PV forecast
-    horizon: 10,20,10,15 # Horizon to calculate shading up to 360 values to describe shading situation for your PV.
-    resource_id: "" # Resource ID for Solcast (required only when source is 'solcast')
-
-# Inverter configuration
-inverter:
-  type: default  # Type of inverter - victron, fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
-  address: 192.168.1.12 # Address of the inverter (fronius_gen24, fronius_gen24_legacy, victron)
-  user: customer # Username for the inverter (fronius_gen24, fronius_gen24_legacy only)
-  password: abc123 # Password for the inverter (fronius_gen24, fronius_gen24_legacy only)
-  max_grid_charge_rate: 5000 # Max inverter grid charge rate in W - default: 5000
-  max_pv_charge_rate: 5000 # Max inverter PV charge rate in W - default: 5000
-
-# EVCC configuration
-evcc:
-  url: http://yourEVCCserver:7070  # URL to your evcc installation, if not used set to "" or leave as http://yourEVCCserver:7070
-
-# MQTT configuration
-mqtt:
-  enabled: false # Enable MQTT - default: false
-  broker: localhost # URL for MQTT server - default: mqtt://yourMQTTserver
-  port: 1883 # Port for MQTT server - default: 1883
-  user: mqtt_user # Username for MQTT server - default: mqtt
-  password: mqtt_password # Password for MQTT server - default: mqtt
-  tls: false # Use TLS for MQTT server - default: false
-  ha_mqtt_auto_discovery: true # Enable Home Assistant MQTT auto discovery - default: true
-  ha_mqtt_auto_discovery_prefix: homeassistant # Prefix for Home Assistant MQTT auto discovery - default: homeassistant
-
-# General application settings
-refresh_time: 3 # Default refresh time of EOS connect in minutes - default: 3
-time_zone: Europe/Berlin # Default time zone - default: Europe/Berlin
-eos_connect_web_port: 8081 # Default port for EOS connect server - default: 8081
-log_level: info # Log level for the application : debug, info, warning, error - default: info
-request_timeout: 10 # Request timeout for Home Assistant and OpenHAB API calls in seconds (5-120) - default: 10</code></pre>
-
-            <h3 id="example-minimal">Minimal Configuration Example</h3>
-            <p>Minimum required configuration for basic operation (copy and customize):</p>
+            <h3 id="example-full">Scenario 1: Basic Home Assistant Setup (Recommended)</h3>
+            <p>The most common configuration for users with Home Assistant and a battery system.</p>
             <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> Note:</strong> Within HA addon, unused parameters will be automatically added after saving. For standalone installations, use empty strings <code>""</code> for unused parameters.
+                <strong><i class="fas fa-info-circle"></i> Setup Flow:</strong>
+                <ol>
+                    <li><strong>Optimizer:</strong> Leave as default (EOS Server)</li>
+                    <li><strong>Data Source:</strong> Select Home Assistant, enter your HA URL and long-lived access token</li>
+                    <li><strong>Battery:</strong> Select your battery SOC entity from HA, enter capacity and efficiency specs</li>
+                    <li><strong>Load:</strong> Select your household load power entity</li>
+                    <li><strong>Electricity Prices:</strong> Choose your price provider (Tibber, fixed prices, etc.)</li>
+                    <li><strong>PV Forecasts:</strong> Enter location (lat/lon) and PV system specs (power, azimuth, tilt)</li>
+                    <li><strong>Optional - Inverter Control:</strong> If you have a Victron or Fronius inverter, configure it here</li>
+                    <li><strong>Optional - MQTT:</strong> Enable MQTT and HA auto-discovery for additional integrations</li>
+                </ol>
             </div>
-                        <pre><code class="yaml"># Load configuration
-load:
-    source: default  # Data source for load power - openhab, homeassistant, default (using a static load profile)
-    load_sensor: Load_Power # item / entity for load power data in watts (or HA energy entity in Wh)
-    car_charge_load_sensor: "" # item / entity for wallbox power data in watts. (If not needed, set to "")
-
-# EOS server configuration
-eos:
-  source: eos_server  # EOS server source - eos_server, evopt, default (default uses eos_server)
-  server: 192.168.1.94  # EOS server address
-  port: 8503 # port for EOS server - default: 8503
-  timeout: 180 # timeout for EOS optimize request in seconds - default: 180
-  time_frame: 3600 # granularity of optimization steps in seconds (3600=hourly for EOS server; 900=15min for EVopt only)
-
-# Electricity price configuration
-price:
-  source: default  # data source for electricity price tibber, smartenergy_at, stromligning, fixed_24h, default (default uses akkudoktor)
-  token: "" # Provide Tibber token or Stromligning supplierId/productId[/customerGroupId] when needed
-  fixed_price_adder_ct: 0 # Describes the fixed cost addition in ct per kWh.
-  relative_price_multiplier: 0 # Applied to (base energy price + fixed_price_adder_ct). Use a decimal (e.g., 0.05 for 5%).
-
-# battery configuration
-battery:
-  source: default  # Data source for battery soc - openhab, homeassistant, default
-  capacity_wh: 11059 # battery capacity in Wh
-  charge_efficiency: 0.88 # efficiency for charging the battery in [0..1]
-  discharge_efficiency: 0.88 # efficiency for discharging the battery in [0..1]
-  max_charge_power_w: 5000 # max charging power in W
-
-# List of PV forecast source configuration
-pv_forecast_source:
-  source: akkudoktor # data source for solar forecast providers akkudoktor, openmeteo, openmeteo_local, forecast_solar, evcc, solcast, default (default uses akkudoktor)
-
-# List of PV forecast configurations. Add multiple entries as needed.
-# See Akkudoktor API (https://api.akkudoktor.net/#/pv%20generation%20calculation/getForecast) for more details.
-pv_forecast:
-  - name: myPvInstallation1  # User-defined identifier for the PV installation, have to be unique if you use more installations
-    lat: 52.5200 # Latitude for PV forecast
-    lon: 13.4050 # Longitude for PV forecast
-    azimuth: 90.0 # Azimuth for PV forecast
-    tilt: 30.0 # Tilt for PV forecast
-
-# Inverter configuration
-inverter:
-  type: default  # Type of inverter - victron, fronius_gen24, fronius_gen24_legacy, evcc, default (default will disable inverter control - only displaying the target state) - preset: default
-
-# EVCC configuration
-evcc:
-  url: ""  # URL to your evcc installation, if not used set to ""
-
-# MQTT configuration
-mqtt:
-  enabled: false # Enable MQTT - default: false
-
-# General application settings
-refresh_time: 3 # Default refresh time of EOS connect in minutes - default: 3
-time_zone: Europe/Berlin # Default time zone - default: Europe/Berlin
-eos_connect_web_port: 8081 # Default port for EOS connect server - default: 8081
-log_level: info # Log level for the application : debug, info, warning, error - default: info
-request_timeout: 10 # Request timeout for Home Assistant and OpenHAB API calls in seconds (5-120) - default: 10</code></pre>
-
-            <h3 id="example-evcc">Example: Using EVCC for PV Forecasts</h3>
-            <p>When using EVCC as your PV forecast source, configuration is simplified as EVCC provides aggregated forecast data (copy and customize):</p>
-            <pre><code class="yaml"># PV forecast source configuration - using EVCC
-pv_forecast_source:
-  source: evcc # Use EVCC for PV forecasts
-
-pv_forecast:
-  - name: "Location for Temperature" # At least one entry needed for temperature forecasts
-    lat: 52.5200 # Required for temperature forecasts used by EOS optimization
-    lon: 13.4050 # Required for temperature forecasts used by EOS optimization
-    # Other parameters (azimuth, tilt, power, etc.) not used for PV forecasts but can be included
-
-# EVCC configuration - REQUIRED when using evcc as pv_forecast_source
-evcc:
-  url: http://192.168.1.100:7070  # URL to your EVCC installation</code></pre>
-            <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> Important:</strong>
-                <ul>
-                    <li>EVCC handles all PV installation details and provides aggregated forecasts</li>
-                    <li>The <code>pv_forecast</code> section requires at least one entry with valid <code>lat</code> and <code>lon</code> coordinates for temperature forecasts</li>
-                    <li>Temperature forecasts are essential for EOS optimization, regardless of PV forecast source - they are always retrieved from Akkudoktor</li>
-                    <li>The <code>evcc.url</code> must point to a reachable EVCC instance with API access enabled</li>
-                </ul>
+            <div class="alert alert-success">
+                <strong><i class="fas fa-check-circle"></i> Result:</strong> EOS Connect will receive your battery SOC, load, and PV forecast data from HA, calculate optimal battery charge/discharge timing, and display recommendations in the web dashboard.
             </div>
 
-            <h3 id="example-solcast">Example: Using Solcast for PV Forecasts</h3>
-            <p>When using Solcast, you need to configure rooftop sites in the Solcast dashboard first (copy and customize):</p>
-            <pre><code class="yaml"># PV forecast source configuration - using Solcast
-pv_forecast_source:
-  source: solcast # Use Solcast for PV forecasts
-  api_key: "your_solcast_api_key_here" # Your Solcast API key (required)
+            <h3 id="example-minimal">Scenario 2: Minimal Setup (Read-Only Monitoring)</h3>
+            <p>Monitor battery optimization recommendations without hardware control. Useful for testing or observation-only setups.</p>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Setup Steps:</strong>
+                <ol>
+                    <li><strong>Data Source:</strong> Home Assistant (or OpenHAB)</li>
+                    <li><strong>Battery:</strong> Configure only SOC entity and capacity</li>
+                    <li><strong>Load:</strong> Select load sensor (or use default static profile if unavailable)</li>
+                    <li><strong>Electricity Prices:</strong> Select price source</li>
+                    <li><strong>PV Forecasts:</strong> Minimal: lat/lon only for location</li>
+                    <li><strong>Leave blank:</strong> Inverter section (read-only mode)</li>
+                </ol>
+                <p style="margin-top: 10px;"><strong>Benefit:</strong> EOS Connect calculates and displays battery optimization targets. You can manually implement the recommendations or implement hardware control later.</p>
+            </div>
 
-# PV forecast configurations using Solcast resource IDs
-pv_forecast:
-  - name: "Main Roof South"
-    resource_id: "abcd-efgh-1234-5678" # Resource ID from Solcast dashboard
-    lat: 52.5200 # Required for temperature forecasts used by EOS optimization
-    lon: 13.4050 # Required for temperature forecasts used by EOS optimization
-    power: 5000 # Still needed for system scaling
-    powerInverter: 5000 # Still needed for system scaling
-    inverterEfficiency: 0.95 # Still needed for system scaling
-    # azimuth, tilt, horizon not used for PV forecasts - configured in Solcast dashboard
-  - name: "Garage East"
-    resource_id: "ijkl-mnop-9999-0000" # Different resource ID for second installation
-    lat: 52.5200 # Same location coordinates can be used for multiple installations
-    lon: 13.4050
-    power: 2500
-    powerInverter: 2500
-    inverterEfficiency: 0.92</code></pre>
-
-            <div class="alert alert-warning">
-                <h4><i class="fas fa-exclamation-triangle"></i> Solcast Rate Limiting</h4>
-                <ul>
-                    <li>Each PV installation requires a separate rooftop site configured in your Solcast account</li>
-                    <li>Physical PV parameters (tilt, azimuth) are configured in the Solcast dashboard, not in EOS Connect</li>
-                    <li><strong>Location coordinates (lat, lon) are still required</strong> for temperature forecasts that EOS uses for optimization calculations</li>
-                    <li>The <code>resource_id</code> is obtained from your Solcast rooftop site configuration</li>
-                    <li><code>power</code>, <code>powerInverter</code>, and <code>inverterEfficiency</code> are still required for proper system scaling</li>
-                    <li><strong>Free Solcast accounts are limited to 10 API calls per day</strong></li>
-                    <li><strong>EOS Connect automatically extends update intervals to 2.5 hours when using Solcast</strong> to stay within the 10 calls/day limit (9.6 calls/day actual usage)</li>
-                    <li>Multiple PV installations result in multiple API calls per update cycle - consider this when planning your configuration</li>
-                    <li>If you exceed rate limits, EOS Connect will use the previous forecast data until the next successful API call</li>
+            <h3 id="example-evcc">Scenario 3: Using EVCC for PV Forecasts & Car Charging</h3>
+            <p>Integrate EVCC as your PV forecast source and leverage it for EV charging coordination.</p>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> EVCC allows EOS Connect to:</strong>
+                <ul style="margin-top: 10px; margin-bottom: 0;">
+                    <li>Retrieve PV forecast data from EVCC instead of manual entry</li>
+                    <li>Get real-time car charging power consumption</li>
+                    <li>Coordinate battery optimization with EV charging decisions</li>
                 </ul>
-                <p><strong>Setting up Solcast:</strong></p>
+            </div>
+            <div class="alert alert-info" style="margin-top: 15px;">
+                <strong><i class="fas fa-cog"></i> Web UI Configuration:</strong>
+                <ol>
+                    <li><strong>EVCC Section:</strong> Enter your EVCC server URL (e.g., <code>http://192.168.1.100:7070</code>)</li>
+                    <li><strong>PV Forecasts — Source:</strong> Select "EVCC"</li>
+                    <li><strong>PV Forecasts — Configuration:</strong> Add one entry for your location with lat/lon (for temperature-based optimization)</li>
+                    <li><strong>Load Section:</strong> Optionally set <code>car_charge_load_sensor</code> to your wallbox power entity for better load tracking</li>
+                </ol>
+                <p style="margin-top: 10px;"><strong>Result:</strong> EOS Connect automatically fetches your PV systems and forecast data from EVCC, simplifying setup.</p>
+            </div>
+
+            <h3 id="example-solcast">Scenario 4: Using Solcast for Detailed PV Forecasts</h3>
+            <p>Integrate Solcast for high-accuracy solar irradiance forecasts from satellite data.</p>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Before starting:</strong>
                 <ol>
                     <li>Create a free account at <a href="https://solcast.com" target="_blank">solcast.com</a></li>
-                    <li>Configure a "Rooftop Site" with your PV system details (location, tilt, azimuth, capacity)</li>
-                    <li>Copy the Resource ID from your rooftop site</li>
-                    <li>Get your API key from the account settings</li>
-                    <li>Use these values in your EOS Connect configuration (including lat/lon for temperature forecasts)</li>
+                    <li>Add a "Rooftop Site" for each PV installation (define location, tilt, azimuth, capacity)</li>
+                    <li>Copy the Resource IDs from your rooftop sites</li>
+                    <li>Get your Solcast API key from account settings</li>
                 </ol>
+            </div>
+            <div class="alert alert-info" style="margin-top: 15px;">
+                <strong><i class="fas fa-cog"></i> Web UI Configuration:</strong>
+                <ol>
+                    <li><strong>PV Forecasts — Source:</strong> Select "solcast"</li>
+                    <li><strong>PV Forecasts — API Key:</strong> Paste your Solcast API key</li>
+                    <li><strong>PV Forecasts — Configurations:</strong> For each PV installation, add:
+                        <ul style="margin-top: 8px;">
+                            <li><strong>Name:</strong> "Main Roof" or "Garage East" (identify each installation)</li>
+                            <li><strong>Resource ID:</strong> From your Solcast rooftop site</li>
+                            <li><strong>Lat/Lon:</strong> Location coordinates (used for temperature-based optimization)</li>
+                            <li><strong>Power, Azimuth, Tilt:</strong> System specs (for scaling calculations)</li>
+                        </ul>
+                    </li>
+                </ol>
+                <p style="margin-top: 10px;"><strong>⚠️ Important - Solcast Rate Limiting:</strong></p>
+                <ul>
+                    <li>Free accounts: <strong>10 API calls per day</strong></li>
+                    <li>EOS Connect automatically extends refresh intervals to 2.5 hours to stay within limits</li>
+                    <li>If you exceed limits, the system uses the previous forecast until the next successful call</li>
+                </ul>
+            </div>
+
+            <h3 id="example-advanced">Scenario 5: Advanced Setup with Victron Inverter & Multiple PV Sites</h3>
+            <p>Complete integration with Victron hardware, multiple PV installations, and real-time control.</p>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Setup Steps:</strong>
+                <ol>
+                    <li><strong>Data Source:</strong> Home Assistant (with Victron integration)</li>
+                    <li><strong>Optimizer:</strong> Configure EOS Server address and port</li>
+                    <li><strong>Battery:</strong> Select Victron battery SOC from HA entities</li>
+                    <li><strong>Load:</strong> Select grid/AC load sensor</li>
+                    <li><strong>Electricity Prices:</strong> Configure your price provider</li>
+                    <li><strong>PV Forecasts:</strong> Add multiple installations:
+                        <ul>
+                            <li>Installation 1: "South Roof" (5kW)</li>
+                            <li>Installation 2: "East Roof" (3kW)</li>
+                        </ul>
+                    </li>
+                    <li><strong>Inverter Section:</strong>
+                        <ul>
+                            <li><strong>Type:</strong> "victron"</li>
+                            <li><strong>Address:</strong> Your Victron GX Device IP</li>
+                        </ul>
+                    </li>
+                    <li><strong>Battery Settings:</strong> Lower min SOC (e.g., 10%) for more aggressive optimization</li>
+                    <li><strong>Optional — Dynamic Price Calculation:</strong> Enable battery price learning to value stored energy</li>
+                </ol>
+                <p style="margin-top: 10px;"><strong>Result:</strong> EOS Connect actively controls your Victron inverter/battery system based on prices and solar forecasts for all PV installations.</p>
+            </div>
+
+            <h3 id="example-mqtt">Scenario 6: MQTT Integration & Home Assistant Auto-Discovery</h3>
+            <p>Stream EOS Connect data to MQTT and auto-discover devices in Home Assistant.</p>
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Setup Steps:</strong>
+                <ol>
+                    <li><strong>MQTT Section:</strong>
+                        <ul>
+                            <li><strong>Enable MQTT:</strong> Toggle ON</li>
+                            <li><strong>Broker:</strong> Your MQTT broker IP (e.g., 192.168.1.50)</li>
+                            <li><strong>Port:</strong> MQTT port (default 1883)</li>
+                            <li><strong>User/Password:</strong> MQTT credentials if required</li>
+                            <li><strong>TLS:</strong> Enable if your broker uses TLS</li>
+                        </ul>
+                    </li>
+                    <li><strong>Home Assistant Auto-Discovery:</strong>
+                        <ul>
+                            <li>Enable <code>ha_mqtt_auto_discovery</code></li>
+                            <li>Leave prefix as "homeassistant" (unless customized in HA)</li>
+                        </ul>
+                    </li>
+                    <li><strong>Restart:</strong> EOS Connect and HA will auto-discover the new MQTT devices</li>
+                </ol>
+                <p style="margin-top: 10px;"><strong>Result:</strong> EOS Connect publishes optimization data, battery targets, and system status to MQTT. Home Assistant automatically creates entities for:
+                    <ul style="margin-top: 8px;">
+                        <li>Battery charge/discharge targets</li>
+                        <li>Current optimization state</li>
+                        <li>System status and errors</li>
+                    </ul>
+                </p>
             </div>
         </div>
 
         <div class="content-section" id="example-ha-inverter">
-            <h3>Example: Using Home Assistant for Inverter Control (e.g., Marstek)</h3>
-            <p>When your inverter/battery system is integrated into Home Assistant, you can use the <code>homeassistant</code> inverter type to control it via HA service calls. This example shows a configuration for a Marstek battery system:</p>
-            <div class="config-example">
-<pre><code># Inverter Control Configuration (Marstek via Home Assistant)
-inverter:
-  type: homeassistant
-  url: http://192.168.1.129:8123
-  token: "your_long_lived_access_token_here"
-  max_grid_charge_rate: 2500
-  max_pv_charge_rate: 2500
-
-  # State: Force Charge (Grid)
-  charge_from_grid:
-    - service: select.select_option
-      entity_id: select.mt1_betriebsmodus
-      data: { "option": "Manuell" }
-    - service: select.select_option
-      entity_id: select.mt1_rs485_control_mode
-      data: { "option": "Aktiviert" }
-    - service: select.select_option
-      entity_id: select.mt1_erzwungene_operation
-      data: { "option": "Zwangsladen" }
-    - service: number.set_value
-      entity_id: number.mt1_ziel_leistung_manuell
-      data_template: { "value": "{{ power }}" }  # Dynamic power from EOS
-
-  # State: Avoid Discharge (Hold)
-  avoid_discharge:
-    - service: select.select_option
-      entity_id: select.mt1_betriebsmodus
-      data: { "option": "Anti-Feed-In" }
-    - service: select.select_option
-      entity_id: select.mt1_erzwungene_operation
-      data: { "option": "Stop" }
-    - service: number.set_value
-      entity_id: number.mt1_max_entladeleistung_limit
-      data: { "value": 0 }       # Block discharge
-    - service: number.set_value
-      entity_id: number.mt1_max_ladeleistung_limit
-      data: { "value": 2500 }    # Allow full PV charging
-
-  # State: Discharge Allowed (Normal)
-  discharge_allowed:
-    - service: select.select_option
-      entity_id: select.mt1_betriebsmodus
-      data: { "option": "Anti-Feed-In" }
-    - service: select.select_option
-      entity_id: select.mt1_erzwungene_operation
-      data: { "option": "Stop" }
-    - service: number.set_value
-      entity_id: number.mt1_max_entladeleistung_limit
-      data: { "value": 600 }     # Restore discharge limit
-    - service: number.set_value
-      entity_id: number.mt1_max_ladeleistung_limit
-      data: { "value": 2500 }</code></pre>
-            </div>
+            <h3>Scenario 7: Custom Inverter Control via Home Assistant</h3>
+            <p>Control any inverter or battery system through Home Assistant service calls. Useful for systems like Marstek, Sungrow, Goodwe, or custom ESPHome integrations.</p>
             <div class="alert alert-info">
-                <strong>Key points:</strong>
-                <ul>
-                    <li>Replace <code>url</code> and <code>token</code> with your Home Assistant instance URL and a long-lived access token.</li>
-                    <li>Each state defines a sequence of HA service calls executed in order.</li>
-                    <li>Use <code>data_template</code> with <code>{{ power }}</code> for dynamic values (EOS provides the charge power). Use <code>data</code> for static values.</li>
-                    <li>The entity IDs and service calls depend on your specific inverter's HA integration. Adapt them to match your setup.</li>
-                    <li>This approach works for any inverter/battery that exposes control entities in Home Assistant.</li>
-                    <li>For a complete ESPHome config to connect a Marstek M1 via RS485/Modbus (M5Stack Atom), see <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this Gist</a>.</li>
+                <strong><i class="fas fa-cog"></i> Prerequisites:</strong>
+                <ol>
+                    <li>Your inverter/battery system must be integrated into Home Assistant with exposed entities (select, number, switch, etc.)</li>
+                    <li>Know the entity IDs and service calls needed to control your specific system</li>
+                    <li>Have Home Assistant admin access to create service call automations (or use Direct REST API if supported)</li>
+                </ol>
+            </div>
+            <div class="alert alert-info" style="margin-top: 15px;">
+                <strong><i class="fas fa-cog"></i> Web UI Configuration:</strong>
+                <ol>
+                    <li><strong>Inverter Section — Type:</strong> Select "homeassistant"</li>
+                    <li><strong>Power Limits:</strong> Set max grid charge and PV charge rates in watts</li>
+                    <li><strong>Service Call Mappings:</strong> For each control state (charge_from_grid, avoid_discharge, discharge_allowed):
+                        <ul style="margin-top: 8px;">
+                            <li>Define the sequence of HA service calls</li>
+                            <li>Each call specifies: service domain, entity ID, and data</li>
+                            <li>Use <code>{{ power }}</code> template variable in <code>data_template</code> for dynamic power from EOS</li>
+                        </ul>
+                    </li>
+                </ol>
+                <p style="margin-top: 10px;"><strong>Example service call sequence for Marstek:</strong></p>
+                <ul style="margin-top: 8px;">
+                    <li><code>select.select_option</code> → entity: <code>select.mt1_betriebsmodus</code> → option: "Manuell"</li>
+                    <li><code>select.select_option</code> → entity: <code>select.mt1_erzwungene_operation</code> → option: "Zwangsladen"</li>
+                    <li><code>number.set_value</code> → entity: <code>number.mt1_ziel_leistung_manuell</code> → value: <code>{{ power }}</code></li>
                 </ul>
+                <p style="margin-top: 10px;"><strong>Result:</strong> EOS Connect sends optimized battery commands to HA, which executes your custom service call sequence on the inverter.</p>
+            </div>
+            <div class="alert alert-success">
+                <strong><i class="fas fa-lightbulb"></i> For Marstek Setup:</strong> See <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this complete ESPHome integration guide</a> for connecting a Marstek M1 via RS485/Modbus.
             </div>
         </div>
+        <!-- Auto-generated Parameter Reference -->
+        <div class="content-section" id="param-reference">
+            <h2><i class="fas fa-table"></i> Complete Parameter Reference</h2>
+            <p>Auto-generated from the configuration schema. This table is always in sync with the latest codebase.</p>
+            <div id="schema-tables-container">
+                <p style="color:#888;"><i class="fas fa-spinner fa-spin"></i> Loading parameter reference...</p>
+            </div>
+        </div>
+
             </main>
         </div>
     </div>
+
+    <!-- Schema-driven parameter reference -->
+    <script>
+    (async function() {
+        const container = document.getElementById('schema-tables-container');
+        if (!container) return;
+        try {
+            const res = await fetch('../assets/data/config_schema.json');
+            if (!res.ok) { 
+                console.error('Failed to load schema:', res.status, res.statusText);
+                container.innerHTML = '<p style="color:#888;">Parameter reference not available (HTTP ' + res.status + ').</p>'; 
+                return; 
+            }
+            const schemaData = await res.json();
+            const fields = schemaData.fields || schemaData;
+            const sectionMeta = schemaData.sections || {};
+
+            if (!fields || fields.length === 0) {
+                console.error('No fields found in schema');
+                container.innerHTML = '<p style="color:#888;">No configuration fields found in schema.</p>';
+                return;
+            }
+
+            // Group by section
+            const sections = {};
+            const sectionOrder = [];
+            fields.forEach(f => {
+                if (!sections[f.section]) { sections[f.section] = []; sectionOrder.push(f.section); }
+                sections[f.section].push(f);
+            });
+
+            let html = '';
+            sectionOrder.forEach(sec => {
+                const meta = sectionMeta[sec] || { icon: 'fa-cog', label: sec };
+                const icon = meta.icon || 'fa-cog';
+                const name = meta.label || sec;
+                html += `<h3><i class="fas ${icon}"></i> ${name}</h3>`;
+                html += '<div style="overflow-x:auto;"><table>';
+                html += '<thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Level</th><th>Description</th></tr></thead><tbody>';
+                sections[sec].forEach(f => {
+                    const labels = (f.labels || []).map(l => {
+                        if (l === 'restart_required') return '<span style="color:#ffc107;font-size:0.8em;" title="Restart required"><i class="fas fa-rotate"></i></span>';
+                        if (l === 'experimental') return '<span style="color:#17a2b8;font-size:0.8em;" title="Experimental"><i class="fas fa-flask"></i></span>';
+                        if (l === 'deprecated') return '<span style="color:#dc3545;font-size:0.8em;" title="Deprecated"><i class="fas fa-triangle-exclamation"></i></span>';
+                        return '';
+                    }).join(' ');
+                    const hotReload = f.hot_reload ? '<span style="color:#28a745;font-size:0.8em;" title="Hot-reloadable (no restart needed)"><i class="fas fa-bolt"></i></span>' : '';
+                    const def = f.type === 'password' ? '••••' : (f.default === '' ? '<em>empty</em>' : f.default);
+                    html += `<tr><td><code>${f.key}</code> ${labels} ${hotReload}</td><td>${f.type}</td><td><code>${def}</code></td><td>${f.level}</td><td>${f.description}</td></tr>`;
+                });
+                html += '</tbody></table></div>';
+            });
+
+            html += '<p style="color:#888;font-size:0.85em;margin-top:16px;"><i class="fas fa-info-circle"></i> '
+                + '<i class="fas fa-rotate" style="color:#ffc107;"></i> = Restart required &nbsp; '
+                + '<i class="fas fa-bolt" style="color:#28a745;"></i> = Hot-reloadable &nbsp; '
+                + '<i class="fas fa-flask" style="color:#17a2b8;"></i> = Experimental &nbsp; '
+                + '<i class="fas fa-triangle-exclamation" style="color:#dc3545;"></i> = Deprecated</p>';
+
+            container.innerHTML = html;
+        } catch (err) {
+            console.error('Error loading parameter reference:', err);
+            container.innerHTML = '<p style="color:#888;">Could not load parameter reference: ' + err.message + '</p>';
+        }
+    })();
+    </script>
 
     <!-- Footer -->
     <footer class="footer">

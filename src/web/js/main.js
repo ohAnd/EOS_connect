@@ -225,6 +225,10 @@ async function init() {
 
         // Handle errors in response
         if (handlingErrorInResponse(data_response)) {
+            // Even on error, check if setup wizard should be shown (fresh install)
+            if (typeof checkWizardStatus === "function") {
+                checkWizardStatus();
+            }
             return;
         }
 
@@ -235,6 +239,11 @@ async function init() {
         } else {
             chartManager.createChart(data_request, data_response, data_controls, data_priceInfo);
             document.getElementById('overlay').style.display = 'none';
+        }
+
+        // Check if setup wizard should be shown (first launch)
+        if (typeof checkWizardStatus === "function") {
+            checkWizardStatus();
         }
 
         // Update all displays
@@ -254,9 +263,27 @@ async function init() {
         if (overlay) overlay.style.display = 'flex';
         if (waitingText) waitingText.innerText = "Connection Error";
         if (errorText) errorText.innerText = error.message;
+
+        // Even on error, check if setup wizard should be shown (fresh install)
+        if (typeof checkWizardStatus === "function") {
+            checkWizardStatus();
+        }
     }
 }
 
 // Initialize and start polling
 init();
 setInterval(init, 1000);
+
+// Show the restart-required hint on the startup overlay when config changes are pending.
+(async function _checkStartupRestartHint() {
+    try {
+        const res = await fetch("api/config/restart-required");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.fields && data.fields.length > 0) {
+            const hint = document.getElementById("startup-restart-hint");
+            if (hint) hint.style.display = "block";
+        }
+    } catch { /* non-critical */ }
+})();

@@ -20,7 +20,7 @@ class InverterHA(BaseInverter):
     Inverter implementation that controls batteries via Home Assistant service calls.
 
     For each EOS state (charge_from_grid, avoid_discharge, discharge_allowed),
-    the user defines a sequence of HA service calls in config.yaml.
+    the user defines a sequence of HA service calls in the configuration.
     """
 
     supports_extended_monitoring_default = False

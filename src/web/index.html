@@ -8,7 +8,9 @@
     <title>EOS connect board</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels"></script>
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/style.css?v={{ asset_version }}">
+    <link rel="stylesheet" href="css/config.css?v={{ asset_version }}">
+    <link rel="stylesheet" href="css/wizard.css?v={{ asset_version }}">
     <link href="https://fonts.cdnfonts.com/css/seven-segment" rel="stylesheet">
 
 </head>
@@ -25,6 +27,27 @@
                 ...</p>
             <div
                 style="border: 4px solid white; border-top: 4px solid gray; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto;">
+            </div>
+
+            <!-- Restart hint — shown when config was changed but restart not yet done -->
+            <div id="startup-restart-hint" style="
+                display: none;
+                background: rgba(255, 193, 7, 0.15);
+                border: 2px solid rgba(255, 193, 7, 0.4);
+                border-radius: 8px;
+                padding: 14px 20px;
+                margin-top: 24px;
+                margin-bottom: 8px;
+                max-width: 480px;
+                margin-left: auto;
+                margin-right: auto;
+                text-align: center;
+            ">
+                <i class="fas fa-exclamation-triangle" style="color: #ffc107; margin-right: 6px;"></i>
+                <span style="color: #ffc107; font-weight: bold;">Restart required</span>
+                <p style="color: #ccc; font-size: 0.85em; margin: 6px 0 0 0;">
+                    Configuration was changed. Please restart EOS Connect for the new settings to take effect.
+                </p>
             </div>
 
             <!-- Startup Log Access Button -->
@@ -49,6 +72,29 @@
                 title="View system logs to see what's happening during startup">
                 <i class="fas fa-file-alt"></i>
                 Show Logs
+            </button>
+            <br>
+            <button id="startup-config-btn"
+                onclick="if(typeof showConfigurationMenu === 'function') { showConfigurationMenu(); }" style="
+                    background-color: rgba(74, 158, 255, 0.15);
+                    color: white;
+                    border: 2px solid rgba(74, 158, 255, 0.4);
+                    border-radius: 8px;
+                    padding: 12px 20px;
+                    font-size: 0.9em;
+                    cursor: pointer;
+                    margin-top: 12px;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 8px;
+                    transition: all 0.3s ease;
+                    backdrop-filter: blur(10px);
+                "
+                onmouseover="this.style.backgroundColor='rgba(74, 158, 255, 0.3)'; this.style.borderColor='rgba(74, 158, 255, 0.7)';"
+                onmouseout="this.style.backgroundColor='rgba(74, 158, 255, 0.15)'; this.style.borderColor='rgba(74, 158, 255, 0.4)';"
+                title="Open configuration to fix connection settings">
+                <i class="fas fa-cog"></i>
+                Change Configuration
             </button>
         </div>
         <div id="version_overlay"
@@ -342,19 +388,21 @@
     </div>
 
     <!-- Load JavaScript modules in correct order -->
-    <script src="js/constants.js"></script>
-    <script src="js/ui.js"></script>
-    <script src="js/data.js"></script>
-    <script src="js/bugreport.js"></script>
-    <script src="js/chart.js"></script>
-    <script src="js/controls.js"></script>
-    <script src="js/schedule.js"></script>
-    <script src="js/statistics.js"></script>
-    <script src="js/evcc.js"></script>
-    <script src="js/battery.js"></script>
-    <script src="js/logging.js"></script>
-    <script src="js/update_banner.js"></script>
-    <script src="js/main.js"></script>
+    <script src="js/constants.js?v={{ asset_version }}"></script>
+    <script src="js/ui.js?v={{ asset_version }}"></script>
+    <script src="js/data.js?v={{ asset_version }}"></script>
+    <script src="js/bugreport.js?v={{ asset_version }}"></script>
+    <script src="js/chart.js?v={{ asset_version }}"></script>
+    <script src="js/controls.js?v={{ asset_version }}"></script>
+    <script src="js/schedule.js?v={{ asset_version }}"></script>
+    <script src="js/statistics.js?v={{ asset_version }}"></script>
+    <script src="js/evcc.js?v={{ asset_version }}"></script>
+    <script src="js/battery.js?v={{ asset_version }}"></script>
+    <script src="js/logging.js?v={{ asset_version }}"></script>
+    <script src="js/config.js?v={{ asset_version }}"></script>
+    <script src="js/wizard.js?v={{ asset_version }}"></script>
+    <script src="js/update_banner.js?v={{ asset_version }}"></script>
+    <script src="js/main.js?v={{ asset_version }}"></script>
 
 </body>
 

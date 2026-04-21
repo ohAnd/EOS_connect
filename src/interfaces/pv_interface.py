@@ -83,25 +83,9 @@ class PvInterface:
 
         self._update_thread = None
         self._stop_event = threading.Event()
-        # Adjust update interval based on provider
-        if self.config_source.get("source") == "solcast":
-            if len(self.config) == 2:
-                # for each update 2 calls will be needed
-                self.update_interval = (
-                    6 * 60 * 60
-                )  # all 6 hours 2 calls (8 calls/day - under the 10 limit)
-            if len(self.config) == 1:
-                self.update_interval = (
-                    2.5 * 60 * 60
-                )  # 2.5 hours (9.6 calls/day - under the 10 limit)
-            logger.info("[PV-IF] Using extended update interval for Solcast: 2.5 hours")
-        elif self.config_source.get("source") == "victron":
-            self.update_interval = 15 * 60  # Standard 15 minutes for Victron
-            logger.info(
-                "[PV-IF] Using standard update interval for Victron: 15 minutes"
-            )
-        else:
-            self.update_interval = 15 * 60  # Standard 15 minutes
+        self._reload_lock = threading.Lock()
+        self.update_interval = 15 * 60
+        self.__configure_update_interval()
 
         try:
             self.__check_config()  # Validate configuration parameters
@@ -114,6 +98,88 @@ class PvInterface:
 
         logger.info("[PV-IF] Initialized")
         self.__start_update_service()  # Start the background thread for periodic updates
+
+    def __configure_update_interval(self):
+        """Set update interval based on active PV provider and installation count."""
+        source = self.config_source.get("source")
+        if source == "solcast":
+            if len(self.config) >= 2:
+                # For each update 2 calls may be needed.
+                self.update_interval = 6 * 60 * 60
+            else:
+                self.update_interval = 2.5 * 60 * 60
+            logger.info("[PV-IF] Using extended update interval for Solcast: 2.5 hours")
+        elif source == "victron":
+            self.update_interval = 15 * 60
+            logger.info("[PV-IF] Using standard update interval for Victron: 15 minutes")
+        else:
+            self.update_interval = 15 * 60
+
+    def reload_config(
+        self,
+        config_source,
+        config,
+        config_special,
+        temperature_forecast_enabled,
+        timezone,
+    ):
+        """
+        Reload PV configuration at runtime without restarting the full application.
+
+        Validates new settings before applying. On validation failure, the previous
+        configuration is restored and update service continues running.
+        """
+        with self._reload_lock:
+            old_state = {
+                "config": self.config,
+                "config_source": self.config_source,
+                "config_special": self.config_special,
+                "temperature_forecast_enabled": self.temperature_forecast_enabled,
+                "time_zone": self.time_zone,
+                "update_interval": self.update_interval,
+            }
+
+            # Pause update loop before replacing runtime config.
+            self.shutdown()
+
+            self.config = config
+            self.config_source = config_source
+            self.config_special = config_special
+            self.temperature_forecast_enabled = temperature_forecast_enabled
+            self.time_zone = timezone
+            self.pv_forcast_request_error = {
+                "error": None,
+                "timestamp": None,
+                "message": None,
+                "config_entry": None,
+                "source": None,
+            }
+
+            try:
+                self.__configure_update_interval()
+                self.__check_config()
+                self.configuration_valid = True
+                logger.info(
+                    "[PV-IF] Live config reload applied (source=%s, entries=%d)",
+                    self.config_source.get("source", "akkudoktor"),
+                    len(self.config),
+                )
+            except ValueError as exc:
+                logger.warning("[PV-IF] Live config reload rejected: %s", exc)
+                self.config = old_state["config"]
+                self.config_source = old_state["config_source"]
+                self.config_special = old_state["config_special"]
+                self.temperature_forecast_enabled = old_state[
+                    "temperature_forecast_enabled"
+                ]
+                self.time_zone = old_state["time_zone"]
+                self.update_interval = old_state["update_interval"]
+                # Revalidate old config defensively (should always pass).
+                self.__check_config()
+                self.configuration_valid = True
+                raise
+            finally:
+                self.__start_update_service()
 
     def __check_config(self):
         """
@@ -186,7 +252,7 @@ class PvInterface:
                     "[PV-IF] Victron API key missing in pv_forecast_source section"
                 )
                 logger.error(
-                    '[PV-IF] Please add: api_key: "your_victron_api_token" in config.yaml'
+                    '[PV-IF] Please set api_key in Settings → PV Forecast'
                 )
                 raise ValueError(
                     "[PV-IF] Victron API key (api_key) required - see"
@@ -202,7 +268,7 @@ class PvInterface:
                     "[PV-IF] Solcast API key missing in pv_forecast_source section"
                 )
                 logger.error(
-                    '[PV-IF] Please add: api_key: "your_solcast_api_key" in config.yaml'
+                    '[PV-IF] Please set api_key in Settings → PV Forecast'
                 )
                 raise ValueError(
                     "[PV-IF] Solcast API key required - see CONFIG_README.md"
@@ -217,7 +283,7 @@ class PvInterface:
                         entry_name,
                     )
                     logger.error(
-                        '[PV-IF] Please add: resource_id: "your_resource_id" in config.yaml'
+                        '[PV-IF] Please set resource_id in Settings → PV Forecast'
                     )
                     raise ValueError(
                         f"[PV-IF] Solcast resource_id required for '{entry_name}' - see"
@@ -1362,6 +1428,7 @@ class PvInterface:
                 "evcc",
             )
 
+
         result = self._retry_request(request_and_parse, error_handler)
         if not result:
             return self._handle_interface_error(
@@ -1379,6 +1446,11 @@ class PvInterface:
                 pv_config_entry,
                 "evcc",
             )
+
+        # --- Read use_real_data_correction from pv_forecast_source config ---
+        use_real_data_correction = True
+        if hasattr(self, "config_source") and isinstance(self.config_source, dict):
+            use_real_data_correction = self.config_source.get("use_real_data_correction", True)
 
         try:
             # Get timezone-aware current time
@@ -1421,18 +1493,31 @@ class PvInterface:
                     forecast_15min[i] = forecast_lookup.get(interval_time, 0.0)
                 pv_forecast = forecast_15min
 
-            # Apply scaling factor
-            try:
-                scale_factor = float(solar_forecast_scale)
-            except (TypeError, ValueError):
-                scale_factor = 1.0
 
-            if scale_factor <= 0:
-                logger.debug(
-                    "[PV-IF] EVCC PV forecast scale factor invalid (%s) - using 1.0",
-                    scale_factor,
-                )
+            # Apply scaling factor if enabled
+            if use_real_data_correction:
+                try:
+                    scale_factor = float(solar_forecast_scale)
+                    if scale_factor < 0.1:
+                        scale_factor = 0.5
+                        logger.debug(
+                            "[PV-IF] EVCC PV forecast scale factor too low (< 0.1 - %s) - using 0.5",
+                            scale_factor,
+                        )
+                except (TypeError, ValueError):
+                    scale_factor = 1.0
+                if scale_factor <= 0:
+                    logger.debug(
+                        "[PV-IF] EVCC PV forecast scale factor invalid (%s) - using 1.0",
+                        scale_factor,
+                    )
+                    scale_factor = 1.0
+            else:
                 scale_factor = 1.0
+                logger.debug(
+                    "[PV-IF] EVCC PV forecast: Real data correction disabled," + 
+                    " forcing scale factor to 1.0"
+                )
 
             pv_forecast = [round(val * scale_factor, 1) for val in pv_forecast]
 

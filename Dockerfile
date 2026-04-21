@@ -14,8 +14,16 @@ RUN apt-get update \
     && apt-get purge -y --auto-remove gcc python3-dev libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Create persistent data directory (SQLite DB lives here)
+RUN mkdir -p /app/data
+
 # Copy the source code
 COPY src/ .
+
+# Optional bootstrap env vars (override config.yaml values)
+ENV EOS_WEB_PORT=""
+ENV EOS_TIMEZONE=""
+ENV EOS_LOG_LEVEL=""
 
 # Expose the server port
 EXPOSE 8081

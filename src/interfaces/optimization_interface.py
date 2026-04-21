@@ -40,6 +40,15 @@ class OptimizationInterface:
         self.time_zone = timezone
         self.config = config  # Store config for accessing optimization settings
 
+        # Store hot-reloadable optimizer settings as instance attributes
+        self.timeout = config.get("timeout", 180)
+        self.dyn_override_discharge_allowed = config.get(
+            "dyn_override_discharge_allowed_pv_greater_load", False
+        )
+        self.pv_battery_charge_control_enabled = config.get(
+            "pv_battery_charge_control_enabled", False
+        )
+
         if self.eos_source == "evopt":
             self.backend = EVOptBackend(
                 self.base_url, self.time_frame_base, self.time_zone
@@ -78,11 +87,14 @@ class OptimizationInterface:
             },
         ]
 
-    def optimize(self, eos_request, timeout=180):
+    def optimize(self, eos_request, timeout=None):
         """
         Main entry point for optimization.
         Accepts EOS-format request, returns EOS-format response.
+        If timeout is not provided, uses the configured timeout value.
         """
+        if timeout is None:
+            timeout = self.timeout
         self.last_eos_request = eos_request  # Store for dynamic override logic
         eos_response, avg_runtime = self.backend.optimize(eos_request, timeout)
         return eos_response, avg_runtime
@@ -226,9 +238,7 @@ class OptimizationInterface:
             # Manual override (if active) takes precedence over dynamic override.
             # BaseControl.__set_current_overall_state() checks manual override FIRST and returns
             # early if active, ensuring manual override always wins regardless of dynamic override state.
-            dyn_override_enabled = self.config.get(
-                "dyn_override_discharge_allowed_pv_greater_load", False
-            )
+            dyn_override_enabled = self.dyn_override_discharge_allowed
             dyn_override_active = False
 
             # Initialize array with all False - will be updated for overridden slots

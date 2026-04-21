@@ -11,12 +11,23 @@ import json
 import threading
 import pytz
 import requests
-from flask import Flask, Response, render_template_string, request, send_from_directory
+from flask import (
+    Flask,
+    Response,
+    make_response,
+    render_template_string,
+    request,
+    send_from_directory,
+)
 from version import __version__
 from config import ConfigManager
 from log_handler import MemoryLogHandler
 from constants import CURRENCY_SYMBOL_MAP, CURRENCY_MINOR_UNIT_MAP
-from interfaces.base_control import BaseControl
+from interfaces.base_control import (
+    BaseControl,
+    calculate_tgt_dc_charge_power,
+    mode_uses_dc_charge_limit,
+)
 from interfaces.load_interface import LoadInterface
 from interfaces.battery_interface import BatteryInterface
 from interfaces.evcc_interface import EvccInterface
@@ -29,6 +40,7 @@ from interfaces.update_checker import UpdateChecker
 from interfaces.inverters import create_inverter
 from interfaces.inverters.null_inverter import NullInverter
 from interfaces.inverters.evcc_inverter import EvccInverter
+from config_web import ConfigWebModule
 
 # Check Python version early
 if sys.version_info < (3, 11):
@@ -88,7 +100,41 @@ time_zone = pytz.timezone(config_manager.config["time_zone"])
 LOGLEVEL = config_manager.config["log_level"].upper()
 logger.setLevel(LOGLEVEL)
 
-# Set global time frame base with validation and fallback
+# Now upgrade to timezone-aware formatter after config is loaded
+timezone_formatter = TimezoneFormatter(
+    "%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S", tz=time_zone
+)
+streamhandler.setFormatter(timezone_formatter)
+
+memory_handler = MemoryLogHandler(
+    max_records=50000,  # All log entries (mixed levels)
+    max_alerts=2000,  # Dedicated alert buffer (WARNING/ERROR/CRITICAL only)
+)
+memory_handler.setFormatter(timezone_formatter)  # Use timezone formatter for web logs
+logger.addHandler(memory_handler)
+logger.debug("[Main] Memory log handler initialized successfully")
+
+logger.info(
+    "[Main] set user defined time zone to %s and loglevel to %s",
+    config_manager.config["time_zone"],
+    LOGLEVEL,
+)
+
+# Phase 1: open the config DB and deep-update config_manager.config with any
+# values the user changed via the web UI.  All interfaces constructed below
+# will therefore receive the correct, authoritative values directly — no
+# post-init re-sync is needed.
+config_web = ConfigWebModule(config_manager)
+try:
+    config_web.start_db()
+except Exception:
+    logger.exception(
+        "[Main] Config database startup failed — continuing with config.yaml values. "
+        "Check data directory permissions and disk space."
+    )
+
+# Set global time frame base AFTER DB merge (so DB values are respected)
+# with validation and fallback
 time_frame_base = config_manager.config.get("eos", {}).get("time_frame", 3600)
 eos_source = config_manager.config.get("eos", {}).get("source", "eos_server")
 
@@ -111,25 +157,6 @@ elif time_frame_base == 900 and eos_source != "evopt":
     )
     time_frame_base = 3600
 
-# Now upgrade to timezone-aware formatter after config is loaded
-timezone_formatter = TimezoneFormatter(
-    "%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S", tz=time_zone
-)
-streamhandler.setFormatter(timezone_formatter)
-
-memory_handler = MemoryLogHandler(
-    max_records=50000,  # All log entries (mixed levels)
-    max_alerts=2000,  # Dedicated alert buffer (WARNING/ERROR/CRITICAL only)
-)
-memory_handler.setFormatter(timezone_formatter)  # Use timezone formatter for web logs
-logger.addHandler(memory_handler)
-logger.debug("[Main] Memory log handler initialized successfully")
-
-logger.info(
-    "[Main] set user defined time zone to %s and loglevel to %s",
-    config_manager.config["time_zone"],
-    LOGLEVEL,
-)
 # initialize eos interface
 eos_interface = OptimizationInterface(
     config=config_manager.config["eos"],
@@ -913,9 +940,7 @@ class OptimizationScheduler:
         mqtt_interface.update_publish_topics(
             {"optimization/state": {"value": self.get_current_state()["request_state"]}}
         )
-        optimized_response, avg_runtime = eos_interface.optimize(
-            json_optimize_input, config_manager.config["eos"]["timeout"]
-        )
+        optimized_response, avg_runtime = eos_interface.optimize(json_optimize_input)
         # Store the runtime for use in sleep calculation (defensive against None)
         try:
             if avg_runtime is None:
@@ -1264,19 +1289,17 @@ def change_control_state():
         round(battery_interface.get_max_charge_power()),
         config_manager.config["inverter"]["max_grid_charge_rate"],
     )
-    # When pv_battery_charge_control_enabled is False, ignore the optimizer's dc_charge
-    # signal and always allow full PV charging (other inverters don't enforce it anyway).
-    _pv_charge_ctrl_enabled = config_manager.config.get("eos", {}).get(
-        "pv_battery_charge_control_enabled", False
+    # When pv_battery_charge_control_enabled is False, ignore optimizer dc_charge
+    # demand, but still respect battery and inverter hard caps.
+    _pv_charge_ctrl_enabled = eos_interface.pv_battery_charge_control_enabled
+    tgt_dc_charge_power = calculate_tgt_dc_charge_power(
+        current_dc_charge_demand_w=base_control.get_current_dc_charge_demand(),
+        battery_max_charge_w=round(battery_interface.get_max_charge_power()),
+        inverter_max_pv_charge_rate_w=config_manager.config["inverter"][
+            "max_pv_charge_rate"
+        ],
+        pv_battery_charge_control_enabled=_pv_charge_ctrl_enabled,
     )
-    if _pv_charge_ctrl_enabled:
-        tgt_dc_charge_power = min(
-            base_control.get_current_dc_charge_demand(),
-            round(battery_interface.get_max_charge_power()),
-            config_manager.config["inverter"]["max_pv_charge_rate"],
-        )
-    else:
-        tgt_dc_charge_power = config_manager.config["inverter"]["max_pv_charge_rate"]
 
     # Update current battery max to actual capability (after SOC/temp derating)
     # This allows get_needed_ac_charge_power() to properly cap calculated demand
@@ -1287,6 +1310,9 @@ def change_control_state():
     # Check if the overall state of the inverter was changed recently and consume the event
     if base_control.was_overall_state_changed_recently(consume=True):
         logger.debug("[Main] Overall state changed recently")
+        if inverter_fronius_en and mode_uses_dc_charge_limit(current_overall_state):
+            inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
+
         # MODE_CHARGE_FROM_GRID
         if current_overall_state == 0:
             if inverter_fronius_en:
@@ -1301,7 +1327,6 @@ def change_control_state():
         # MODE_AVOID_DISCHARGE
         elif current_overall_state == 1:
             if inverter_fronius_en:
-                inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_avoid_discharge()
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("avoid_discharge")
@@ -1313,7 +1338,6 @@ def change_control_state():
         # MODE_DISCHARGE_ALLOWED
         elif current_overall_state == 2:
             if inverter_fronius_en:
-                inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_allow_discharge()
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("discharge_allowed")
@@ -1325,7 +1349,6 @@ def change_control_state():
         # MODE_AVOID_DISCHARGE_EVCC_FAST
         elif current_overall_state == 3:
             if inverter_fronius_en:
-                inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_avoid_discharge()
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("avoid_discharge")
@@ -1337,7 +1360,6 @@ def change_control_state():
         # MODE_DISCHARGE_ALLOWED_EVCC_PV
         elif current_overall_state == 4:
             if inverter_fronius_en:
-                inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_allow_discharge()
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("discharge_allowed")
@@ -1349,7 +1371,6 @@ def change_control_state():
         # MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV
         elif current_overall_state == 5:
             if inverter_fronius_en:
-                inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
                 inverter_interface.set_mode_allow_discharge()
             elif inverter_evcc_en:
                 evcc_interface.set_external_battery_mode("discharge_allowed")
@@ -1371,6 +1392,7 @@ def change_control_state():
             )
         elif current_overall_state < 0:
             logger.warning("[Main] Inverter mode not initialized yet")
+
         return True
 
     # Log the current state if no recent changes were made
@@ -1391,21 +1413,31 @@ mqtt_interface.on_mqtt_command = mqtt_control_callback
 # web server
 app = Flask(__name__)
 
+# Ensure JSON responses preserve dict insertion order (SECTION_META order)
+app.config['JSON_SORT_KEYS'] = False
 
-# legacy web site support
-@app.route("/index_legacy.html", methods=["GET"])
-def main_page_legacy():
-    """
-    Renders the main page of the web application.
+# Phase 2: register the Flask REST API now that app exists.
+try:
+    config_web.start_api(app)
+except Exception:
+    logger.exception("[Main] Config web API registration failed — config UI unavailable")
 
-    This function reads the content of the 'index.html' file located in the 'web' directory
-    and returns it as a rendered template string.
-    """
-    with open(base_path + "/web/index_legacy.html", "r", encoding="utf-8") as html_file:
-        return render_template_string(html_file.read())
+# Register hot-reload: live config changes are applied without restart
+from config_web.hot_reload import HotReloadAdapter  # pylint: disable=wrong-import-position
+
+hot_reload_adapter = HotReloadAdapter(
+    price_interface=price_interface,
+    battery_interface=battery_interface,
+    pv_interface=pv_interface,
+    optimization_interface=eos_interface,
+    config_provider=config_web.get_config,
+)
+config_web.register_hot_reload_callback(hot_reload_adapter.on_config_changed)
+
+ASSET_CACHE_MAX_AGE_SECONDS = 31536000
 
 
-# new web site support
+# web site support
 
 
 @app.route("/", methods=["GET"])
@@ -1417,7 +1449,14 @@ def main_page():
     and returns it as a rendered template string.
     """
     with open(base_path + "/web/index.html", "r", encoding="utf-8") as html_file:
-        return render_template_string(html_file.read())
+        rendered_html = render_template_string(
+            html_file.read(), asset_version=__version__
+        )
+    response = make_response(rendered_html)
+    response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.route("/js/<filename>")
@@ -1442,7 +1481,10 @@ def serve_js_files(filename):
 
         # logger.debug("[Web] Serving JavaScript file: %s", filename)
         return send_from_directory(
-            js_directory, filename, mimetype="application/javascript"
+            js_directory,
+            filename,
+            mimetype="application/javascript",
+            max_age=ASSET_CACHE_MAX_AGE_SECONDS,
         )
 
     except (OSError, IOError, ValueError) as e:
@@ -1471,7 +1513,12 @@ def serve_css_files(filename):
             return "Not Found", 404
 
         # logger.debug("[Web] Serving CSS file: %s", filename)
-        return send_from_directory(web_directory, filename, mimetype="text/css")
+        return send_from_directory(
+            web_directory,
+            filename,
+            mimetype="text/css",
+            max_age=ASSET_CACHE_MAX_AGE_SECONDS,
+        )
 
     except (OSError, IOError, ValueError) as e:
         logger.error("[Web] Error serving CSS file %s: %s", filename, e)
@@ -1559,12 +1606,8 @@ def get_controls():
             "inverter_mode_num": current_inverter_mode_num,
             "override_active": base_control.get_override_active_and_endtime()[0],
             "override_end_time": base_control.get_override_active_and_endtime()[1],
-            "dyn_override_discharge_allowed_enabled": config_manager.config.get(
-                "eos", {}
-            ).get("dyn_override_discharge_allowed_pv_greater_load", False),
-            "pv_battery_charge_control_enabled": config_manager.config.get(
-                "eos", {}
-            ).get("pv_battery_charge_control_enabled", False),
+            "dyn_override_discharge_allowed_enabled": eos_interface.dyn_override_discharge_allowed,
+            "pv_battery_charge_control_enabled": eos_interface.pv_battery_charge_control_enabled,
             "dyn_override_discharge_allowed_active": eos_interface.get_last_control_data()[
                 0
             ].get(
@@ -2067,6 +2110,7 @@ if __name__ == "__main__":
         evcc_interface.shutdown()
         battery_interface.shutdown()
         update_checker.shutdown()
+        config_web.stop()
         logger.info("[Main] Server stopped gracefully")
     finally:
         logging.shutdown()  # This will call close() on all handlers

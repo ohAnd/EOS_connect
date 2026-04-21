@@ -668,6 +668,37 @@ def test_get_max_charge_power_dyn_temperature_sensor_configured(default_config):
         assert bi.max_charge_power_dyn > 0
 
 
+def test_charging_curve_disabled_triggers_callback_on_change(default_config):
+    """Disabled charging curve should still trigger max-change callback once."""
+    test_config = default_config.copy()
+    test_config["charging_curve_enabled"] = False
+    callback = MagicMock()
+
+    with patch.object(BatteryInterface, "start_update_service", return_value=None):
+        bi = BatteryInterface(test_config, on_bat_max_changed=callback)
+        bi.last_max_charge_power_dyn = 0
+        bi._BatteryInterface__get_max_charge_power_dyn()
+
+    assert bi.max_charge_power_dyn == test_config["max_charge_power_w"]
+    callback.assert_called_once()
+
+
+def test_charging_curve_disabled_updates_base_control_on_change(default_config):
+    """Disabled charging curve should update base_control with fixed max power."""
+    test_config = default_config.copy()
+    test_config["charging_curve_enabled"] = False
+    base_control_mock = MagicMock()
+
+    with patch.object(BatteryInterface, "start_update_service", return_value=None):
+        bi = BatteryInterface(test_config, base_control=base_control_mock)
+        bi.last_max_charge_power_dyn = 0
+        bi._BatteryInterface__get_max_charge_power_dyn()
+
+    base_control_mock.set_current_bat_charge_max.assert_called_once_with(
+        test_config["max_charge_power_w"]
+    )
+
+
 def test_calculate_temp_multiplier_monotonic_cold_region(fast_battery_interface):
     """Test that temp multiplier increases monotonically in cold region (-20 to 0°C)."""
     multipliers = []
