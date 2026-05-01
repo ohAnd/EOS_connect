@@ -705,11 +705,11 @@ class MqttInterface:
         :param topics: Dictionary of topics and their new values
         """
         if not self.enable_mqtt:
-            if not self.mqtt_config_enabled:
-                logger.debug(
-                    "[MQTT] MQTT is disabled in configuration, skipping publish."
-                )
-            elif self.mqtt_connection_failed:
+            # if not self.mqtt_config_enabled:
+                # logger.debug(
+                #     "[MQTT] MQTT is disabled in configuration, skipping publish."
+                # )
+            if self.mqtt_connection_failed:
                 logger.warning(
                     "[MQTT] MQTT connection to broker %s:%d failed during initialization,"
                     + " skipping publish. Check broker availability and credentials.",
