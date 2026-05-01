@@ -40,7 +40,6 @@ import logging
 import threading
 import requests
 
-
 logger = logging.getLogger("__main__")
 logger.info("[PRICE-IF] loading module ")
 
@@ -174,6 +173,9 @@ class PriceInterface:
             None  # "smart_forecast", "simple_repetition", or None (all real)
         )
         self.forecast_source = None  # e.g., "energyforecast.de" for smart forecasts
+
+        # Auxiliary stock prices from Akkudoktor for feedin decision when using fixed_24h source
+        self.stock_prices_for_feedin_check = []
 
         self.__check_config()  # Validate configuration parameters
         logger.info(
@@ -435,6 +437,50 @@ class PriceInterface:
                 source,
             )
 
+    def refresh_stock_prices_for_feedin_check(self, tgt_duration=48, start_time=None):
+        """
+        Fetch and store auxiliary Akkudoktor stock prices for fixed_24h negative price detection.
+
+        This public method is used by hot reload to refresh stock prices when the configuration
+        changes, ensuring that the negative_price_switch logic works correctly with fixed_24h.
+
+        Args:
+            tgt_duration (int): Number of hours to fetch (default: 48).
+            start_time (datetime, optional): Start time for fetching (default: now at midnight).
+
+        Returns:
+            bool: True if stock prices were successfully fetched, False otherwise.
+        """
+        if start_time is None:
+            start_time = datetime.now(self.time_zone).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+        stock_prices = self.__fetch_akkudoktor_prices(tgt_duration, start_time)
+        if stock_prices:
+            # Store the auxiliary stock prices from current_prices_direct (set by fetch)
+            self.stock_prices_for_feedin_check = self.current_prices_direct.copy()
+            logger.debug(
+                "[PRICE-IF] Stock prices updated for feedin check (%d entries)",
+                len(stock_prices),
+            )
+            return True
+        else:
+            self.stock_prices_for_feedin_check = []
+            return False
+
+    def recalculate_feedin_prices(self):
+        """
+        Recalculate and return the current feed-in prices.
+        
+        This public method triggers a recalculation of feed-in prices based on the current
+        market prices and configuration (negative_price_switch, feed_in_tariff_price, etc).
+        Used by hot reload and other components that need to refresh feed-in prices.
+
+        Returns:
+            list: The recalculated feed-in prices (EUR/Wh).
+        """
+        return self.__create_feedin_prices()
+
     def __create_feedin_prices(self):
         """
         Creates feed-in prices based on the current prices.
@@ -446,9 +492,16 @@ class PriceInterface:
             list: A list of feed-in prices (EUR/Wh).
         """
         if self.negative_price_switch:
+            # For fixed_24h source, use auxiliary stock prices for negative detection.
+            # For other sources, use current_prices_direct.
+            prices_for_check = (
+                self.stock_prices_for_feedin_check
+                if self.stock_prices_for_feedin_check
+                else self.current_prices_direct
+            )
             self.current_feedin = [
                 0 if price < 0 else round(self.feed_in_tariff_price / 1000, 9)
-                for price in self.current_prices_direct
+                for price in prices_for_check
             ]
             logger.debug(
                 "[PRICE-IF] Negative price switch is enabled."
@@ -493,6 +546,26 @@ class PriceInterface:
             prices = self.__retrieve_prices_from_fixed24h_array(
                 tgt_duration, start_time
             )
+            # If negative_price_switch is enabled, also fetch Akkudoktor stock prices
+            # to determine which slots should have zero feed-in
+            if self.negative_price_switch:
+                stock_prices = self.__fetch_akkudoktor_prices(tgt_duration, start_time)
+                if stock_prices:
+                    # Store stock prices for feedin decision (use current_prices_direct
+                    # from fetch)
+                    self.stock_prices_for_feedin_check = (
+                        self.current_prices_direct.copy()
+                    )
+                    logger.debug(
+                        "[PRICE-IF] Fetched Akkudoktor stock prices for negative price detection"
+                        + " with fixed_24h source"
+                    )
+                else:
+                    logger.warning(
+                        "[PRICE-IF] Could not fetch Akkudoktor stock prices for negative price"
+                        + " detection. Feed-in prices will not reflect negative stock prices."
+                    )
+                    self.stock_prices_for_feedin_check = []
         elif self.src == "default":
             prices = self.__retrieve_prices_from_akkudoktor(tgt_duration, start_time)
         else:
@@ -588,6 +661,22 @@ class PriceInterface:
                 self.src,
             )
             return []
+        return self.__fetch_akkudoktor_prices(tgt_duration, start_time)
+
+    def __fetch_akkudoktor_prices(self, tgt_duration, start_time=None):
+        """
+        Core Akkudoktor API fetch logic (without source validation).
+        
+        This is used both for primary price retrieval (when src="default") and for
+        auxiliary stock price fetching (when src="fixed_24h" with negative_price_switch).
+
+        Args:
+            tgt_duration (int): The target duration in hours or 15-min slots.
+            start_time (datetime, optional): The start time for fetching prices.
+
+        Returns:
+            list: A list of electricity prices (€/Wh) for the specified duration.
+        """
         logger.debug("[PRICE-IF] Fetching prices from akkudoktor ...")
         if start_time is None:
             start_time = datetime.now(self.time_zone).replace(
@@ -1427,7 +1516,7 @@ class PriceInterface:
         if not self._should_call_energyforecast():
             if self._energyforecast_cache:
                 logger.debug(
-                    "[PRICE-IF] Using cached energyforecast prediction " "(%d prices)",
+                    "[PRICE-IF] Using cached energyforecast prediction (%d prices)",
                     len(self._energyforecast_cache),
                 )
                 return self._energyforecast_cache

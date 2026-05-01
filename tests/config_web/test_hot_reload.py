@@ -102,13 +102,13 @@ class TestHotReloadPrice:
         """Changing feed_in_price should update attr and recalculate feed-in."""
         adapter.on_config_changed("price.feed_in_price", 0.0, 0.08)
         assert price_interface.feed_in_tariff_price == 0.08
-        price_interface._PriceInterface__create_feedin_prices.assert_called_once()
+        price_interface.recalculate_feedin_prices.assert_called_once()
 
     def test_negative_price_switch(self, adapter, price_interface):
         """Changing negative_price_switch should update attr and recalculate feed-in."""
         adapter.on_config_changed("price.negative_price_switch", False, True)
         assert price_interface.negative_price_switch is True
-        price_interface._PriceInterface__create_feedin_prices.assert_called_once()
+        price_interface.recalculate_feedin_prices.assert_called_once()
 
     def test_non_feedin_field_no_recalc(self, adapter, price_interface):
         """Changing a non-feedin price field should NOT recalculate feed-in."""

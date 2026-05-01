@@ -23,6 +23,7 @@ Supported fields (Priority 1 — Optimizer):
 
 import logging
 import threading
+from datetime import datetime
 
 logger = logging.getLogger("__main__")
 
@@ -181,8 +182,26 @@ class HotReloadAdapter:
         if self._price is None:
             return
         try:
-            # Access the private method via name mangling
-            feedin = self._price._PriceInterface__create_feedin_prices()
+            # If using fixed_24h with negative_price_switch, refresh auxiliary stock prices
+            if (self._price.src == "fixed_24h" and self._price.negative_price_switch):
+                # Fetch Akkudoktor stock prices for negative price detection
+                start_time = datetime.now(self._price.time_zone).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                success = self._price.refresh_stock_prices_for_feedin_check(48, start_time)
+                if success:
+                    logger.debug(
+                        "[HotReload] Refreshed Akkudoktor stock prices for fixed_24h negative"+
+                        " price detection"
+                    )
+                else:
+                    logger.warning(
+                        "[HotReload] Could not refresh Akkudoktor stock prices for fixed_24h"+
+                        " source"
+                    )
+
+            # Now recalculate feedin prices with potentially updated stock prices
+            feedin = self._price.recalculate_feedin_prices()
             if feedin is not None:
                 logger.info(
                     "[HotReload] Recalculated feed-in prices (%d entries)",
