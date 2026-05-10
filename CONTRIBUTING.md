@@ -48,6 +48,40 @@ Guidelines
 - Document new config keys / API / MQTT topics
 - Prefer clarity over cleverness
 
+## Key Architectural Patterns
+
+### Interface Creation & Startup Error Handling
+
+When adding new interfaces or modifying interface initialization:
+
+- **Use `InterfaceFactory`** (`src/interface_factory.py`) for centralized creation with integrated error handling
+  - Reduces boilerplate error catching in the main app
+  - Automatically registers errors with `StartupValidator`
+  - Categorizes critical vs non-critical interfaces
+
+- **Use `StartupValidator`** (`src/startup_validator.py`) to register startup errors
+  - Errors appear in the web UI's startup panel within 1-2 seconds
+  - Include metadata markers: `| Config: #section | ACTION REQUIRED`
+  - Enables users to quickly fix configuration issues
+
+**Example:**
+```python
+# In eos_connect.py
+from interface_factory import InterfaceFactory
+from startup_validator import StartupValidator
+
+validator = StartupValidator()
+factory = InterfaceFactory(validator)
+
+battery_interface = factory.create_battery_interface(
+    config=config['battery'],
+    time_zone=time_zone,
+    critical=True,  # Halt startup if fails
+)
+```
+
+For detailed architecture and design patterns, see the [Developer Guide → Interface Creation & Startup Error Handling](docs/developer/index.html#architecture).
+
 ## Code Ownership
 
 Some components have designated owners who maintain and review changes to those areas. This is documented in the [CODEOWNERS](/.github/CODEOWNERS) file.

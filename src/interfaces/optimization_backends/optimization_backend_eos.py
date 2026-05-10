@@ -239,13 +239,14 @@ class EOSBackend:
             return response.json(), avg_runtime
         except requests.exceptions.Timeout:
             logger.error(
-                "[OPT-EOS] OPTIMIZE Request timed out after %s seconds", timeout
+                "[OPT-EOS] OPTIMIZE Request timed out after %s seconds | Config: #eos | ACTION REQUIRED",
+                timeout,
             )
             return {"error": "Request timed out - trying again with next run"}, None
         except requests.exceptions.ConnectionError as e:
             logger.error(
                 "[OPT-EOS] OPTIMIZE Connection error - EOS server not reachable at %s "
-                "will try again with next cycle - error: %s",
+                "will try again with next cycle - error: %s | Config: #eos | ACTION REQUIRED",
                 request_url,
                 str(e),
             )
@@ -407,21 +408,21 @@ class EOSBackend:
         except requests.exceptions.ConnectTimeout:
             logger.error(
                 "[OPT-EOS] Failed to get EOS version  - use preset version: '%s' - Server not "
-                + "reachable: Connection to %s timed out",
+                + "reachable: Connection to %s timed out | Config: #eos | ACTION REQUIRED",
                 self.eos_version,
                 self.base_url,
             )
             return self.eos_version
         except requests.exceptions.ConnectionError as e:
             logger.error(
-                "[OPT-EOS] Failed to get EOS version - use preset version: '%s' - Connection error: %s",
+                "[OPT-EOS] Failed to get EOS version - use preset version: '%s' - Connection error: %s | Config: #eos | ACTION REQUIRED",
                 self.eos_version,
                 e,
             )
             return self.eos_version
         except requests.exceptions.RequestException as e:
             logger.error(
-                "[OPT-EOS] Failed to get EOS version - use preset version: '%s' - Error: %s ",
+                "[OPT-EOS] Failed to get EOS version - use preset version: '%s' - Error: %s | Config: #eos | ACTION REQUIRED",
                 self.eos_version,
                 e,
             )

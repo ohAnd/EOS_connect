@@ -34,6 +34,208 @@ window.addEventListener('resize', () => {
     }
 });
 
+function parseAlertMeta(rawMessage) {
+    const message = String(rawMessage || '');
+    const configMatch = message.match(/\|\s*Config:\s*([^|]+)/i);
+    const hasActionRequired = /\|\s*ACTION REQUIRED/i.test(message);
+    const cleaned = message
+        .replace(/\|\s*Config:\s*[^|]+/gi, '')
+        .replace(/\|\s*ACTION REQUIRED/gi, '')
+        .trim();
+
+    return {
+        text: cleaned,
+        configLink: configMatch ? configMatch[1].trim() : null,
+        actionRequired: hasActionRequired,
+    };
+}
+
+function dedupeAlerts(alerts) {
+    const grouped = new Map();
+
+    for (const alert of alerts) {
+        const meta = parseAlertMeta(alert.message);
+        const key = `${alert.level}|${meta.text}`;
+
+        if (!grouped.has(key)) {
+            grouped.set(key, {
+                ...alert,
+                message: meta.text,
+                configLink: meta.configLink,
+                actionRequired: meta.actionRequired,
+                occurrences: 1,
+                firstTimestamp: alert.timestamp,
+                lastTimestamp: alert.timestamp,
+            });
+            continue;
+        }
+
+        const current = grouped.get(key);
+        current.occurrences += 1;
+        current.actionRequired = current.actionRequired || meta.actionRequired;
+        if (!current.configLink && meta.configLink) {
+            current.configLink = meta.configLink;
+        }
+
+        if (new Date(alert.timestamp) < new Date(current.firstTimestamp)) {
+            current.firstTimestamp = alert.timestamp;
+        }
+        if (new Date(alert.timestamp) > new Date(current.lastTimestamp)) {
+            current.lastTimestamp = alert.timestamp;
+        }
+    }
+
+    return Array.from(grouped.values()).sort((a, b) => {
+        const aRequired = a.actionRequired ? 1 : 0;
+        const bRequired = b.actionRequired ? 1 : 0;
+        if (aRequired !== bRequired) return bRequired - aRequired;
+        return new Date(b.lastTimestamp) - new Date(a.lastTimestamp);
+    });
+}
+
+function renderAlertSection(title, iconClass, titleColor, cardColor, borderColor, alerts) {
+    if (!alerts.length) return '';
+
+    const maxVisible = 6;
+    const visibleAlerts = alerts.slice(0, maxVisible);
+    let html = '';
+
+    html += '<div style="margin-bottom: 10px;">';
+    html += `<span style="color: ${titleColor}; font-weight: 700; font-size: 0.9em;">`;
+    html += `<i class="fas ${iconClass}" style="margin-right: 6px;"></i>${escapeHtml(title)} (${alerts.length})`;
+    html += '</span>';
+    html += '</div>';
+
+    for (const alert of visibleAlerts) {
+        const message = escapeHtml(String(alert.message || '').substring(0, 220));
+        const lastTime = new Date(alert.lastTimestamp || alert.timestamp).toLocaleTimeString();
+        const repeatInfo = alert.occurrences > 1
+            ? `<div style="color:#bdbdbd; font-size:0.75em; margin-top:4px;"><i class="fas fa-repeat" style="margin-right:5px;"></i>${alert.occurrences} occurrences</div>`
+            : '';
+        const actionBadge = alert.actionRequired
+            ? '<span style="display:inline-block; background: rgba(255, 193, 7, 0.18); color:#ffd54f; border:1px solid rgba(255, 193, 7, 0.4); border-radius:6px; padding:2px 7px; font-size:0.72em; margin-top:6px;">ACTION REQUIRED</span>'
+            : '';
+
+        const linkTarget = alert.configLink
+            ? `#${String(alert.configLink).replace(/^#/, '')}`
+            : '#configOverlay';
+        const actionLink = alert.actionRequired || alert.configLink
+            ? `<div style="margin-top:8px;"><a href="${escapeHtml(linkTarget)}" onclick="if(typeof showConfigurationMenu === 'function'){ showConfigurationMenu(); } return true;" style="color:#4a9eff; text-decoration:none; font-size:0.82em;"><i class="fas fa-sliders-h" style="margin-right:5px;"></i>Open Configuration</a></div>`
+            : '';
+
+        html += `<div style="background:${cardColor}; border-left:3px solid ${borderColor}; padding:10px 12px; margin-bottom:8px; border-radius:4px;">`;
+        html += `<div style="color:${titleColor}; font-weight:600;">${message}</div>`;
+        html += `<div style="color:#9e9e9e; font-size:0.75em; margin-top:4px;"><i class="fas fa-clock" style="margin-right:5px;"></i>Last seen ${escapeHtml(lastTime)}</div>`;
+        html += repeatInfo;
+        html += actionBadge;
+        html += actionLink;
+        html += '</div>';
+    }
+
+    if (alerts.length > maxVisible) {
+        html += `<div style="color:#bdbdbd; font-size:0.78em; margin-bottom:10px;"><i class="fas fa-list" style="margin-right:5px;"></i>${alerts.length - maxVisible} more messages hidden to keep startup view readable</div>`;
+    }
+
+    return html;
+}
+
+// Display startup errors in the errors panel
+async function displayStartupErrors(data_response) {
+    try {
+        const response = await fetch('/logs/alerts?startup_only=1');
+        if (!response.ok) throw new Error('Failed to fetch alerts');
+
+        const alertsData = await response.json();
+        const allAlerts = alertsData.alerts || [];
+
+        const panel = document.getElementById('startup-errors-panel');
+        const list = document.getElementById('startup-errors-list');
+
+        if (!panel || !list) {
+            console.warn('[displayStartupErrors] Panel or list not found');
+            return false;
+        }
+
+        if (allAlerts.length === 0) {
+            panel.style.display = 'none';
+            return false;
+        }
+
+        const deduped = dedupeAlerts(allAlerts);
+        const critical = deduped.filter(a => a.level === 'CRITICAL');
+        const errors = deduped.filter(a => a.level === 'ERROR');
+        const warnings = deduped.filter(a => a.level === 'WARNING');
+        const actionCount = deduped.filter(a => a.actionRequired).length;
+        const lastUpdated = new Date(alertsData.timestamp || Date.now()).toLocaleTimeString();
+
+        let html = '';
+        html += '<div style="margin-bottom:10px; color:#cfcfcf; font-size:0.82em;">';
+        html += `<i class="fas fa-info-circle" style="margin-right:6px;"></i>${allAlerts.length} raw events, ${deduped.length} unique issues`;
+        html += ` &middot; updated ${escapeHtml(lastUpdated)}`;
+        if (actionCount > 0) {
+            html += ` &middot; <span style="color:#ffd54f;"><i class="fas fa-bell" style="margin-right:4px;"></i>${actionCount} require action</span>`;
+        }
+        html += '</div>';
+
+        html += renderAlertSection(
+            'Critical',
+            'fa-fire',
+            '#ff6b6b',
+            'rgba(255, 23, 68, 0.2)',
+            '#ff1744',
+            critical
+        );
+
+        if (critical.length && (errors.length || warnings.length)) {
+            html += '<div style="margin: 8px 0; border-top: 1px solid rgba(255, 255, 255, 0.1);"></div>';
+        }
+
+        html += renderAlertSection(
+            'Errors',
+            'fa-exclamation-circle',
+            '#ff8a80',
+            'rgba(211, 47, 47, 0.17)',
+            '#d32f2f',
+            errors
+        );
+
+        if (warnings.length && (critical.length || errors.length)) {
+            html += '<div style="margin: 8px 0; border-top: 1px solid rgba(255, 255, 255, 0.1);"></div>';
+        }
+
+        html += renderAlertSection(
+            'Warnings',
+            'fa-exclamation-triangle',
+            '#ffd54f',
+            'rgba(255, 193, 7, 0.12)',
+            '#ffc107',
+            warnings
+        );
+
+        list.innerHTML = html;
+        panel.style.display = 'block';
+        return true;
+
+    } catch (err) {
+        console.error('[displayStartupErrors] Caught error:', err);
+        const panel = document.getElementById('startup-errors-panel');
+        if (panel) panel.style.display = 'none';
+        return false;
+    }
+}
+
+// Helper function to escape HTML in error messages
+function escapeHtml(text) {
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    };
+    return String(text).replace(/[&<>"']/g, m => map[m]);
+}
+
 // Use handlingErrorInResponse from data.js
 function handlingErrorInResponse(data_response) {
     if (dataManager.hasErrorInResponse(data_response)) {
@@ -55,6 +257,10 @@ function handlingErrorInResponse(data_response) {
 async function showCurrentData() {
     //console.log("------- showCurrentControls -------");
     data_controls = await dataManager.fetchCurrentControls(currentTestScenario);
+    
+    // Display startup errors from /logs/alerts endpoint (live updates)
+    await displayStartupErrors(data_controls);
+    
     showCarChargingData(data_controls);
 
     // Use controlsManager to update controls (check if it exists first)

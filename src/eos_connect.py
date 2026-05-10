@@ -22,6 +22,8 @@ from flask import (
 from version import __version__
 from config import ConfigManager
 from log_handler import MemoryLogHandler
+from startup_validator import StartupValidator
+from interface_factory import InterfaceFactory
 from constants import CURRENCY_SYMBOL_MAP, CURRENCY_MINOR_UNIT_MAP
 from interfaces.base_control import (
     BaseControl,
@@ -31,7 +33,6 @@ from interfaces.base_control import (
 from interfaces.load_interface import LoadInterface
 from interfaces.battery_interface import BatteryInterface
 from interfaces.evcc_interface import EvccInterface
-from interfaces.optimization_interface import OptimizationInterface
 from interfaces.price_interface import PriceInterface
 from interfaces.mqtt_interface import MqttInterface
 from interfaces.pv_interface import PvInterface
@@ -120,6 +121,9 @@ logger.info(
     LOGLEVEL,
 )
 
+# Timestamp marker for startup-scoped alert filtering in the web UI.
+STARTUP_ALERTS_SINCE = datetime.now(time_zone).isoformat()
+
 # Phase 1: open the config DB and deep-update config_manager.config with any
 # values the user changed via the web UI.  All interfaces constructed below
 # will therefore receive the correct, authoritative values directly — no
@@ -132,6 +136,12 @@ except Exception:
         "[Main] Config database startup failed — continuing with config.yaml values. "
         "Check data directory permissions and disk space."
     )
+
+# Initialize startup validator to collect errors during initialization
+startup_validator = StartupValidator()
+
+# Initialize interface factory for centralized creation and error handling
+interface_factory = InterfaceFactory(startup_validator)
 
 # Set global time frame base AFTER DB merge (so DB values are respected)
 # with validation and fallback
@@ -157,29 +167,81 @@ elif time_frame_base == 900 and eos_source != "evopt":
     )
     time_frame_base = 3600
 
-# initialize eos interface
-eos_interface = OptimizationInterface(
+# PHASE 2: Initialize core interfaces (critical - stop on failure)
+eos_interface = interface_factory.create_optimization_interface(
     config=config_manager.config["eos"],
     time_frame_base=time_frame_base,
     timezone=time_zone,
+    critical=True,
 )
 
-# initialize base control
 base_control = BaseControl(config_manager.config, time_zone, time_frame_base)
-# initialize the inverter interface
-inverter_interface = None
 
-# Call factory via config dict
-inverter_interface = create_inverter(config_manager.config["inverter"])
-if inverter_interface is not None:
-    inverter_interface.initialize()
-else:
-    logger.error(
-        "[Main] Failed to initialize inverter interface - check inverter configuration"
-    )
+# PHASE 3: Initialize other interfaces using factory
+inverter_interface = interface_factory.create_inverter_interface(
+    config_manager.config["inverter"], critical=True
+)
 
+load_interface = interface_factory.create_load_interface(
+    config_manager.config.get("load", {}),
+    time_frame_base,
+    time_zone,
+    request_timeout=config_manager.config.get("request_timeout", 10),
+    critical=True,
+)
 
-# callback function for evcc interface
+battery_config = dict(config_manager.config["battery"])
+battery_config["feed_in_price"] = config_manager.config.get("price", {}).get(
+    "feed_in_price", 0.0
+)
+
+battery_interface = interface_factory.create_battery_interface(
+    battery_config,
+    load_interface,
+    time_zone,
+    base_control,
+    request_timeout=config_manager.config.get("request_timeout", 10),
+    critical=True,
+)
+
+# Non-critical interfaces (startup continues if these fail)
+mqtt_interface = interface_factory.create_mqtt_interface(
+    config_manager.config["mqtt"], critical=False
+) or MqttInterface(config_mqtt=config_manager.config["mqtt"], on_mqtt_command=None)
+
+evcc_interface = interface_factory.create_evcc_interface(
+    config_manager.config.get("evcc", {}).get("url", ""),
+    ext_bat_mode=config_manager.config["inverter"]["type"] == "evcc",
+    critical=False,
+) or EvccInterface(
+    url="",
+    ext_bat_mode=config_manager.config["inverter"]["type"] == "evcc",
+    update_interval=10,
+    on_charging_state_change=None,
+)
+
+price_interface = interface_factory.create_price_interface(
+    config_manager.config["price"], time_frame_base, time_zone, critical=False
+) or PriceInterface(config_manager.config["price"], time_frame_base, time_zone)
+
+pv_interface = interface_factory.create_pv_interface(
+    config_manager.config["pv_forecast_source"],
+    config_manager.config["pv_forecast"],
+    time_frame_base,
+    config_manager.config.get("evcc", {}),
+    eos_source,
+    config_manager.config.get("time_zone", "UTC"),
+    critical=False,
+) or PvInterface(
+    config_manager.config["pv_forecast_source"],
+    config_manager.config["pv_forecast"],
+    time_frame_base,
+    config_manager.config.get("evcc", {}),
+    eos_source == "eos_server",
+    config_manager.config.get("time_zone", "UTC"),
+)
+
+# Callback functions for event handling
 def charging_state_callback(new_state):
     """
     Callback function that gets triggered when the charging state changes.
@@ -191,7 +253,6 @@ def charging_state_callback(new_state):
     change_control_state()
 
 
-# callback function for battery interface
 def battery_state_callback():
     """
     Callback function that gets triggered when the battery state changes.
@@ -204,7 +265,6 @@ def battery_state_callback():
     change_control_state()
 
 
-# callback function for mqtt interface
 def mqtt_control_callback(mqtt_cmd):
     """
     Handles MQTT control commands by parsing the command dictionary and updating the system's state.
@@ -308,55 +368,6 @@ def mqtt_control_callback(mqtt_cmd):
         logger.info("[MAIN] MQTT Event - battery soc limit command: %s", mqtt_cmd)
 
 
-mqtt_interface = MqttInterface(
-    config_mqtt=config_manager.config["mqtt"], on_mqtt_command=None
-)
-
-evcc_interface = EvccInterface(
-    url=config_manager.config.get("evcc", {}).get("url", ""),
-    ext_bat_mode=config_manager.config["inverter"]["type"] == "evcc",
-    update_interval=10,
-    on_charging_state_change=None,
-)
-
-# intialize the load interface
-load_interface = LoadInterface(
-    config_manager.config.get("load", {}),
-    time_frame_base,
-    time_zone,
-    request_timeout=config_manager.config.get("request_timeout", 10),
-)
-
-battery_config = dict(config_manager.config["battery"])
-battery_config["feed_in_price"] = config_manager.config.get("price", {}).get(
-    "feed_in_price", 0.0
-)
-battery_interface = BatteryInterface(
-    battery_config,
-    on_bat_max_changed=None,
-    load_interface=load_interface,
-    timezone=time_zone,
-    base_control=base_control,
-    request_timeout=config_manager.config.get("request_timeout", 10),
-)
-
-price_interface = PriceInterface(
-    config_manager.config["price"], time_frame_base, time_zone
-)
-
-pv_interface = PvInterface(
-    config_manager.config["pv_forecast_source"],
-    config_manager.config["pv_forecast"],
-    time_frame_base,
-    config_manager.config.get("evcc", {}),
-    (
-        True
-        if config_manager.config["eos"].get("source", "eos_server") == "eos_server"
-        else False
-    ),
-    config_manager.config.get("time_zone", "UTC"),
-)
-
 # wait for the interfaces to initialize - depend on entries for pv_forecast
 init_time = 3 + 1 * len(config_manager.config["pv_forecast"])
 logger.info("[Main] Waiting %s seconds for interfaces to initialize", init_time)
@@ -364,7 +375,18 @@ time.sleep(init_time)
 
 # Perform initial battery price calculation if enabled (blocking, synchronous)
 # This ensures the first optimization run has the correct battery price
-battery_interface.perform_initial_price_calculation()
+try:
+    battery_interface.perform_initial_price_calculation()
+except Exception as e:
+    startup_validator.add_error(
+        "configuration",
+        "battery_price_calculation",
+        "warning",
+        "Battery price calculation failed",
+        f"Initial battery price calculation error: {str(e)}. System continues with default prices.",
+        action_required=False,
+    )
+    logger.warning("[Main] Battery price calculation failed: %s", str(e))
 
 
 # Callback for update status changes (publishes to MQTT)
@@ -1450,7 +1472,7 @@ def main_page():
     """
     with open(base_path + "/web/index.html", "r", encoding="utf-8") as html_file:
         rendered_html = render_template_string(
-            html_file.read(), asset_version=__version__
+            html_file.read(), asset_version=f"{__version__}-{int(time.time())}"
         )
     response = make_response(rendered_html)
     response.headers["Cache-Control"] = "no-cache, must-revalidate"
@@ -1480,12 +1502,16 @@ def serve_js_files(filename):
             return "Not Found", 404
 
         # logger.debug("[Web] Serving JavaScript file: %s", filename)
-        return send_from_directory(
+        response = send_from_directory(
             js_directory,
             filename,
             mimetype="application/javascript",
             max_age=ASSET_CACHE_MAX_AGE_SECONDS,
         )
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
     except (OSError, IOError, ValueError) as e:
         logger.error("[Web] Error serving JavaScript file %s: %s", filename, e)
@@ -1513,12 +1539,16 @@ def serve_css_files(filename):
             return "Not Found", 404
 
         # logger.debug("[Web] Serving CSS file: %s", filename)
-        return send_from_directory(
+        response = send_from_directory(
             web_directory,
             filename,
             mimetype="text/css",
             max_age=ASSET_CACHE_MAX_AGE_SECONDS,
         )
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
     except (OSError, IOError, ValueError) as e:
         logger.error("[Web] Error serving CSS file %s: %s", filename, e)
@@ -1579,6 +1609,7 @@ def get_optimize_response_test():
 def get_controls():
     """
     Returns the current demands for AC and DC charging as a JSON response.
+    Includes startup errors to help users troubleshoot issues.
     """
     current_ac_charge_demand = base_control.get_current_ac_charge_demand()
     current_dc_charge_demand = base_control.get_current_dc_charge_demand()
@@ -1897,9 +1928,25 @@ def get_logs():
 def get_alerts():
     """
     Retrieve warning and error logs for alert system.
+
+    Query parameters:
+    - startup_only: if true/1/yes, only return alerts since current process start
+    - since: optional ISO timestamp override for custom filtering
+    - limit: optional maximum number of returned alerts
     """
     try:
-        alerts = memory_handler.get_alerts()
+        startup_only_arg = request.args.get("startup_only", "false").strip().lower()
+        startup_only = startup_only_arg in {"1", "true", "yes", "on"}
+
+        # Allow explicit override via query param, otherwise use startup marker if requested.
+        since = request.args.get("since")
+        if startup_only and not since:
+            since = STARTUP_ALERTS_SINCE
+
+        limit_arg = request.args.get("limit")
+        limit = int(limit_arg) if limit_arg else None
+
+        alerts = memory_handler.get_alerts(since=since, limit=limit)
 
         # Group alerts by level for easier processing
         grouped_alerts = {
@@ -1914,6 +1961,12 @@ def get_alerts():
             "alert_counts": {
                 level: len(items) for level, items in grouped_alerts.items()
             },
+            "filters_applied": {
+                "startup_only": startup_only,
+                "since": since,
+                "limit": limit,
+            },
+            "startup_since": STARTUP_ALERTS_SINCE,
             "timestamp": datetime.now(time_zone).isoformat(),
         }
 

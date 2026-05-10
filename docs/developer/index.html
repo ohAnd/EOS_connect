@@ -207,6 +207,151 @@
    ├─ On PUT: validate → store in SQLite → rebuild merged config
    ├─ Hot-reloadable fields → apply instantly via HotReloadAdapter
    └─ Restart-required fields → flag in UI, apply on next restart</code></pre>
+
+            <h3>Interface Creation & Startup Error Handling</h3>
+            <p>Two new modules work together to centralize interface creation and provide startup visibility:</p>
+
+            <h4>InterfaceFactory (src/interface_factory.py)</h4>
+            <p><strong>Factory pattern for centralized interface creation with integrated startup validation.</strong></p>
+            <p>Responsibilities:</p>
+            <ul>
+                <li>Instantiate all interface types (Load, Battery, Price, PV, MQTT, EVCC, Inverter, Optimization)</li>
+                <li>Catch errors during instantiation</li>
+                <li>Register errors with <code>StartupValidator</code> for visibility in startup panel</li>
+                <li>Support critical vs non-critical interfaces (critical failures halt startup, non-critical fall back to defaults)</li>
+                <li>Track created interfaces for lifecycle management</li>
+            </ul>
+            <p><strong>Usage in eos_connect.py:</strong></p>
+            <pre><code>from interface_factory import InterfaceFactory
+from startup_validator import StartupValidator
+
+# Initialize validator and factory at startup
+validator = StartupValidator()
+factory = InterfaceFactory(validator)
+
+# Create interfaces with error handling
+battery_interface = factory.create_battery_interface(
+    config=config['battery'],
+    time_zone=time_zone,
+    critical=True,  # Failure halts startup
+)
+
+load_interface = factory.create_load_interface(
+    config=config['load'],
+    time_frame_base=config['refresh_time'],
+    time_zone=time_zone,
+    critical=False,  # Failure doesn't halt, uses default
+)</code></pre>
+            <p><strong>Benefits:</strong></p>
+            <ul>
+                <li>Reduces boilerplate in main app (no try/except for each interface)</li>
+                <li>Consistent error categorization across all interface types</li>
+                <li>Centralized startup error collection for web UI visibility</li>
+                <li>Easy to extend with new interface types</li>
+            </ul>
+
+            <h4>StartupValidator (src/startup_validator.py)</h4>
+            <p><strong>Lightweight facade for startup error registration to the logging system.</strong></p>
+            <p>Responsibilities:</p>
+            <ul>
+                <li>Register startup errors with structured metadata</li>
+                <li>Write ERROR/WARNING logs captured by <code>MemoryLogHandler</code></li>
+                <li>Embed metadata markers in log messages for frontend parsing (e.g., <code>| Config: #section | ACTION REQUIRED</code>)</li>
+                <li>Act as single source of truth for startup errors accessible via <code>/logs/alerts</code> endpoint</li>
+            </ul>
+            <p><strong>Method signature:</strong></p>
+            <pre><code>validator.add_error(
+    category="connectivity",        # initialization, configuration, connectivity
+    component="battery_interface",  # Component name for identification
+    severity="error",              # error or warning
+    title="Battery unavailable",   # User-friendly title
+    message="Connection timeout",  # Detailed message
+    action_required=True,          # Flag for startup panel badge
+    config_link="#battery",        # Link to config section
+)</code></pre>
+            <p><strong>Frontend Integration:</strong></p>
+            <p>The web UI's startup panel fetches errors via:</p>
+            <pre><code>GET /logs/alerts?startup_only=1&limit=20</code></pre>
+            <p>Errors with metadata markers are parsed and rendered with:</p>
+            <ul>
+                <li>Timestamp and occurrence count</li>
+                <li>ACTION REQUIRED badge (yellow) if flagged</li>
+                <li>"Open Configuration" link pointing to the config section</li>
+            </ul>
+
+            <h4>Startup Error Flow</h4>
+            <pre><code>Startup:
+  InterfaceFactory.create_*_interface()
+    │
+    ├─ Try to create interface
+    │   │
+    │   ├─ Success → return interface, user sees nothing
+    │   │
+    │   └─ Failure → catch exception
+    │       │
+    │       └─ validator.add_error(...)
+    │           │
+    │           └─ MemoryLogHandler captures ERROR/WARNING log
+    │               │
+    │               ├─ Metadata extracted by frontend parseAlertMeta()
+    │               │   (Config link, ACTION REQUIRED flag)
+    │               │
+    │               └─ Stored in log buffer, visible via /logs/alerts
+
+Runtime (user views dashboard):
+  Fetch /logs/alerts?startup_only=1
+    │
+    └─ Frontend renderAlertSection()
+       ├─ Deduplicates errors by title
+       ├─ Sorts by severity (ACTION REQUIRED first)
+       ├─ Shows: timestamp, count, config link button
+       └─ User clicks → showConfigurationMenu(section)</code></pre>
+
+            <h4>Extending with New Interface Types</h4>
+            <p>To add a new interface creation method to <code>InterfaceFactory</code>:</p>
+            <ol>
+                <li>Add method to <code>InterfaceFactory</code> following the pattern of existing methods</li>
+                <li>Specify error category, component name, config link, and whether critical</li>
+                <li>Call from <code>eos_connect.py</code> during startup</li>
+                <li>If instantiation fails, <code>StartupValidator.add_error()</code> is called automatically</li>
+                <li>Errors appear in startup panel within 1-2 seconds</li>
+            </ol>
+            <p><strong>Example:</strong></p>
+            <pre><code>def create_my_new_interface(
+    self,
+    config: Dict[str, Any],
+    critical: bool = True,
+):
+    return self._create_interface(
+        component_name="my_new_interface",
+        category="connectivity",
+        critical=critical,
+        title="My New Interface unavailable",
+        error_message="Failed to initialize",
+        config_link="#my_section",
+        creator_func=lambda: self._import_and_create(
+            "interfaces.my_new_interface",
+            "MyNewInterface",
+            config,
+            request_timeout=self.validator.request_timeout,
+        ),
+    )</code></pre>
+
+            <h3>Startup Error Metadata in Logs</h3>
+            <p>Error messages can embed metadata for frontend parsing:</p>
+            <pre><code>Log message format:
+"[component] Title: Message | Config: #section | ACTION REQUIRED"
+
+Examples:
+"[eos_backend] EOS Connection failed: Connection timeout | Config: #eos | ACTION REQUIRED"
+"[battery_interface] Battery SOC error: Authentication failed | Config: #battery | ACTION REQUIRED"
+"[load_interface] Load data unavailable: Request timeout | Config: #load"</code></pre>
+            <p>The frontend's <code>parseAlertMeta()</code> function extracts:</p>
+            <ul>
+                <li><strong>Config link:</strong> Matches <code>Config: (#\w+)</code></li>
+                <li><strong>Action required flag:</strong> Presence of "ACTION REQUIRED"</li>
+                <li><strong>Component:</strong> Text in square brackets at start</li>
+            </ul>
         </div>
 
         <!-- Contributing -->
@@ -599,6 +744,8 @@ Runtime (user saves via web UI):
 │   ├── constants.py           # Constants and enums
 │   ├── log_handler.py         # Logging setup
 │   ├── version.py             # Version information
+│   ├── interface_factory.py   # Factory for centralized interface creation
+│   ├── startup_validator.py   # Startup error registration facade
 │   ├── config_web/            # Web-based config system
 │   │   ├── __init__.py        # ConfigWebModule facade
 │   │   ├── schema.py          # SPOT — all field definitions

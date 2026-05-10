@@ -344,21 +344,21 @@ Fields grouped by predicted code complexity and user impact. Each group shares i
 
 These fields are simple instance attributes that can be set at runtime:
 
-| Group           | Fields                                                                                        | Interface                           | Status                                                                      |
-| --------------- | --------------------------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------- |
-| EOS tuning      | `eos.timeout`, `eos.dyn_override_discharge_allowed_pv_greater_load`, `eos.pv_battery_charge_control_enabled` | OptimizationInterface | ✅ **IMPLEMENTED** |
-| System timing   | `refresh_time`                                                                                | OptimizationScheduler               | Next to implement                                      |
-| System timing   | `eos.time_frame` (900 or 3600)                                                                | All interfaces                      | Requires cache invalidation (see Priority 1.5)        |
-| Inverter limits | `inverter.max_grid_charge_rate`, `inverter.max_pv_charge_rate`                                | BaseInverter subclass               | Could implement next                                   |
-| System          | `request_timeout`                                                                             | All interfaces                      | Lower priority                                        |
+| Group           | Fields                                                                                                       | Interface             | Status                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------ | --------------------- | ---------------------------------------------- |
+| EOS tuning      | `eos.timeout`, `eos.dyn_override_discharge_allowed_pv_greater_load`, `eos.pv_battery_charge_control_enabled` | OptimizationInterface | ✅ **IMPLEMENTED**                             |
+| System timing   | `refresh_time`                                                                                               | OptimizationScheduler | Next to implement                              |
+| System timing   | `eos.time_frame` (900 or 3600)                                                                               | All interfaces        | Requires cache invalidation (see Priority 1.5) |
+| Inverter limits | `inverter.max_grid_charge_rate`, `inverter.max_pv_charge_rate`                                               | BaseInverter subclass | Could implement next                           |
+| System          | `request_timeout`                                                                                            | All interfaces        | Lower priority                                 |
 
 **Priority 1.5 — Attribute swap + cache clear (medium effort, high user value)**
 
 Simple attribute updates but require recalculation or cache invalidation:
 
-| Group              | Fields                                    | Interface                    | Change Required                                  |
-| ------------------ | ----------------------------------------- | ---------------------------- | ------------------------------------------------ |
-| EOS time slot      | `eos.time_frame`                          | OptimizationInterface + all data providers | Update timeframe on all interfaces + clear forecast caches |
+| Group         | Fields           | Interface                                  | Change Required                                            |
+| ------------- | ---------------- | ------------------------------------------ | ---------------------------------------------------------- |
+| EOS time slot | `eos.time_frame` | OptimizationInterface + all data providers | Update timeframe on all interfaces + clear forecast caches |
 
 **Priority 2 — Requires recalculation or reconnect (medium effort)**
 
@@ -407,6 +407,161 @@ These affect the application infrastructure itself:
 3. If side-effects needed (recalculation), add trigger set like `_FEEDIN_TRIGGERS`
 4. Add tests in `tests/config_web/test_hot_reload.py`
 5. Run `python scripts/export_config_schema.py`
+
+### Interface Creation & Startup Error Handling
+
+Two new modules work together to provide centralized interface creation with integrated startup validation and user-visible error handling.
+
+#### InterfaceFactory (src/interface_factory.py)
+
+**Purpose**: Centralized factory for interface instantiation with integrated startup validation.
+
+**Responsibilities:**
+
+- Instantiate all interface types (Load, Battery, Price, PV, MQTT, EVCC, Inverter, Optimization)
+- Catch errors during instantiation
+- Register errors with `StartupValidator` for visibility in web UI startup panel
+- Distinguish critical interfaces (halt startup on failure) from non-critical (use fallbacks)
+- Track created interfaces for lifecycle management
+
+**Usage in eos_connect.py:**
+
+```python
+from interface_factory import InterfaceFactory
+from startup_validator import StartupValidator
+
+# Initialize at startup
+validator = StartupValidator()
+factory = InterfaceFactory(validator)
+
+# Create interfaces with automatic error handling
+battery_interface = factory.create_battery_interface(
+    config=config['battery'],
+    time_zone=time_zone,
+    critical=True,  # Startup halts on failure
+)
+
+load_interface = factory.create_load_interface(
+    config=config['load'],
+    time_frame_base=config['refresh_time'],
+    time_zone=time_zone,
+    critical=False,  # Uses default on failure
+)
+```
+
+**Benefits:**
+
+- Eliminates boilerplate try/except blocks in main app
+- Consistent error categorization across all interface types
+- Centralized startup error collection for web UI visibility
+- Easy to extend with new interface types
+
+#### StartupValidator (src/startup_validator.py)
+
+**Purpose**: Lightweight facade for registering startup errors directly to the logging system.
+
+**Responsibilities:**
+
+- Register startup errors with structured metadata
+- Write ERROR/WARNING logs captured by `MemoryLogHandler`
+- Embed metadata markers in log messages for frontend parsing
+- Act as single source of truth for startup errors via `/logs/alerts` endpoint
+
+**Method signature:**
+
+```python
+validator.add_error(
+    category="connectivity",        # initialization, configuration, connectivity
+    component="battery_interface",  # Component name
+    severity="error",              # error or warning
+    title="Battery unavailable",   # Short, user-friendly title
+    message="Connection timeout",  # Detailed message
+    action_required=True,          # Flag for ACTION REQUIRED badge
+    config_link="#battery",        # Link to config section (e.g., #eos, #battery)
+)
+```
+
+**Frontend Integration:**
+
+- Errors are fetched via: `GET /logs/alerts?startup_only=1&limit=20`
+- Errors with metadata markers are parsed by `main.js` → `parseAlertMeta()`
+- Startup panel renders with:
+  - Component name (extracted from `[component]` prefix)
+  - Timestamp and occurrence count
+  - ACTION REQUIRED badge (yellow) if flagged
+  - "Open Configuration" link pointing to config section
+
+#### Startup Error Flow
+
+```
+Startup:
+  InterfaceFactory.create_*_interface()
+    ├─ Try to create interface
+    │   ├─ Success → return interface (silent)
+    │   └─ Failure → catch exception
+    │       └─ validator.add_error(...)
+    │           └─ MemoryLogHandler captures ERROR/WARNING log
+    │               ├─ Metadata extracted: Config link, ACTION REQUIRED flag
+    │               └─ Stored in log buffer, visible via /logs/alerts
+
+Runtime (user views dashboard):
+  fetch /logs/alerts?startup_only=1
+    └─ Frontend renderAlertSection()
+       ├─ Deduplicates by title, counts occurrences
+       ├─ Sorts by severity (ACTION REQUIRED first)
+       ├─ Shows: timestamp, occurrence count, config link button
+       └─ User clicks → showConfigurationMenu(section)
+```
+
+#### Log Message Format
+
+Error messages should include metadata markers for frontend parsing:
+
+```
+[component] Title: Message | Config: #section | ACTION REQUIRED
+
+Examples:
+[eos_backend] EOS Connection failed: Connection timeout | Config: #eos | ACTION REQUIRED
+[battery_interface] Battery SOC error: Authentication failed | Config: #battery | ACTION REQUIRED
+[load_interface] Load data unavailable: Request timeout | Config: #load
+```
+
+**Frontend parsing:**
+
+- Matches `Config: (#\w+)` for config section link
+- Checks for "ACTION REQUIRED" string to show badge
+- Extracts component name from `[component]` prefix
+
+#### Extending with New Interface Types
+
+To add a new interface creation method:
+
+1. Add method to `InterfaceFactory` following the pattern of existing methods
+2. Specify error category (connectivity, initialization, configuration), component name, config link
+3. Mark as critical or non-critical
+4. Call from `eos_connect.py` during startup
+5. On instantiation failure, `StartupValidator.add_error()` is called automatically
+6. Errors appear in startup panel within 1-2 seconds
+
+**Example:**
+
+```python
+def create_my_new_interface(self, config: Dict[str, Any], critical: bool = True):
+    return self._create_interface(
+        component_name="my_new_interface",
+        category="connectivity",
+        critical=critical,
+        title="My New Interface unavailable",
+        error_message="Failed to initialize",
+        config_link="#my_section",
+        creator_func=lambda: self._import_and_create(
+            "interfaces.my_new_interface",
+            "MyNewInterface",
+            config,
+            request_timeout=10,
+        ),
+    )
+```
 
 ### HA Addon Integration
 
