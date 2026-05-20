@@ -230,7 +230,10 @@ class PriceInterface:
             )  # Get 48 hours of price data
             logger.info("[PRICE-IF] Initial price update completed")
         except RuntimeError as e:
-            logger.error("[PRICE-IF] Error during initial price update: %s", e)
+            logger.error(
+                "[price_interface] Price fetch failed: %s | Config: #price | ACTION REQUIRED",
+                e
+            )
 
         while not self._stop_event.is_set():
             try:
@@ -248,7 +251,10 @@ class PriceInterface:
                 logger.debug("[PRICE-IF] Periodic price update completed")
 
             except Exception as e:
-                logger.error("[PRICE-IF] Error during periodic price update: %s", e)
+                logger.error(
+                    "[price_interface] Price fetch failed: %s | Config: #price | ACTION REQUIRED",
+                    e
+                )
                 # Continue the loop even if update fails
 
         # Restart the service if it wasn't intentionally stopped
@@ -831,21 +837,28 @@ class PriceInterface:
         data = response.json()
         if "errors" in data and data["errors"] is not None:
             logger.error(
-                "[PRICE-IF] Error fetching prices - tibber API response: %s",
+                "[price_interface] Tibber API error: %s | Config: #price | ACTION REQUIRED",
                 data["errors"][0]["message"],
             )
             return []
 
-        today_prices = json.dumps(
-            data["data"]["viewer"]["homes"][0]["currentSubscription"]["priceInfo"][
-                "today"
-            ]
-        )
-        tomorrow_prices = json.dumps(
-            data["data"]["viewer"]["homes"][0]["currentSubscription"]["priceInfo"][
-                "tomorrow"
-            ]
-        )
+        try:
+            today_prices = json.dumps(
+                data["data"]["viewer"]["homes"][0]["currentSubscription"]["priceInfo"][
+                    "today"
+                ]
+            )
+            tomorrow_prices = json.dumps(
+                data["data"]["viewer"]["homes"][0]["currentSubscription"]["priceInfo"][
+                    "tomorrow"
+                ]
+            )
+        except (KeyError, IndexError, TypeError) as e:
+            logger.error(
+                "[price_interface] Tibber price data invalid (missing priceInfo): %s | Config: #price | ACTION REQUIRED",
+                e
+            )
+            return []
         try:
             self.price_currency = (
                 (

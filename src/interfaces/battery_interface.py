@@ -704,7 +704,10 @@ class BatteryInterface:
                 self.__update_price_euro_per_wh()
 
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:
-                logger.error("[BATTERY-IF] Error while updating state: %s", e)
+                logger.error(
+                    "[battery_interface] Battery state update failed: %s | Config: #battery | ACTION REQUIRED",
+                    e
+                )
                 # Break the sleep interval into smaller chunks to allow immediate shutdown
             sleep_interval = self.update_interval
             while sleep_interval > 0:
