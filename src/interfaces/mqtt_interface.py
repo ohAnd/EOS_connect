@@ -100,8 +100,8 @@ class MqttInterface:
                     "{% elif v == 1 %}Avoid Discharge"
                     "{% elif v == 2 %}Discharge Allowed"
                     "{% elif v == 3 %}Avoid Discharge EVCC FAST"
-                    "{% elif v == 4 %}Avoid Discharge EVCC PV"
-                    "{% elif v == 5 %}Avoid Discharge EVCC MIN+PV"
+                    "{% elif v == 4 %}Discharge Allowed EVCC PV"
+                    "{% elif v == 5 %}Discharge Allowed EVCC MIN+PV"
                     "{% elif v == 6 %}Charge from Grid EVCC FAST"
                     "{% else %}Unknown{% endif %}"
                 ),
@@ -113,8 +113,8 @@ class MqttInterface:
                     "'Avoid Discharge': 1, "
                     "'Discharge Allowed': 2, "
                     "'Avoid Discharge EVCC FAST': -2, "
-                    "'Avoid Discharge EVCC PV': -2, "
-                    "'Avoid Discharge EVCC MIN+PV': -2, "
+                    "'Discharge Allowed EVCC PV': 4, "
+                    "'Discharge Allowed EVCC MIN+PV': 5, "
                     "'Charge from Grid EVCC FAST': -2"
                     "} %}"
                     "{% if value is not none and (value|int(0)|string) == (value|string) %}{{ value|int(0) }}{% elif value in labels %}{{ labels[value] }}{% else %}-2{% endif %}"
@@ -126,8 +126,8 @@ class MqttInterface:
                     "Avoid Discharge",
                     "Discharge Allowed",
                     "Avoid Discharge EVCC FAST",
-                    "Avoid Discharge EVCC PV",
-                    "Avoid Discharge EVCC MIN+PV",
+                    "Discharge Allowed EVCC PV",
+                    "Discharge Allowed EVCC MIN+PV",
                     "Charge from Grid EVCC FAST",
                 ],
             },
