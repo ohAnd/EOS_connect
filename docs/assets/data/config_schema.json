@@ -429,20 +429,6 @@
       "display_group": "Fixed Prices"
     },
     {
-      "key": "price.feed_in_price",
-      "type": "float",
-      "default": 0.0,
-      "section": "price",
-      "level": "getting_started",
-      "description": "Feed-in price for the grid in €/kWh",
-      "labels": [],
-      "help_url": "configuration.html#price",
-      "validation": {},
-      "depends_on": null,
-      "hot_reload": true,
-      "display_group": "Price Adjustments"
-    },
-    {
       "key": "price.negative_price_switch",
       "type": "bool",
       "default": false,
@@ -525,6 +511,101 @@
       },
       "hot_reload": false,
       "display_group": "Energy Price Forecast"
+    },
+    {
+      "key": "price.feed_in_source",
+      "type": "select",
+      "default": "fixed",
+      "section": "price",
+      "level": "standard",
+      "description": "Source for feed-in (export) prices",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {
+        "choices": [
+          "fixed",
+          "elpris_dk",
+          "epex_spot"
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Feed-In Pricing"
+    },
+    {
+      "key": "price.feed_in_price",
+      "type": "float",
+      "default": 0.0,
+      "section": "price",
+      "level": "getting_started",
+      "description": "Fixed feed-in price for the grid in ct/kWh",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {},
+      "depends_on": {
+        "price.feed_in_source": [
+          "fixed"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Pricing"
+    },
+    {
+      "key": "price.feed_in_zone",
+      "type": "select",
+      "default": "DK1",
+      "section": "price",
+      "level": "standard",
+      "description": "Stromzone for Elpris (DK1 or DK2)",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {
+        "choices": [
+          "DK1",
+          "DK2"
+        ]
+      },
+      "depends_on": {
+        "price.feed_in_source": [
+          "elpris_dk"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Feed-In Pricing"
+    },
+    {
+      "key": "price.feed_in_static_adder",
+      "type": "float",
+      "default": 0.0,
+      "section": "price",
+      "level": "standard",
+      "description": "Static adjustment to feed-in price in ct/kWh (e.g., +3.5 for transport costs)",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {
+        "min": -10.0,
+        "max": 10.0
+      },
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Feed-In Pricing"
+    },
+    {
+      "key": "price.feed_in_multiplier",
+      "type": "float",
+      "default": 1.0,
+      "section": "price",
+      "level": "expert",
+      "description": "Relative multiplier for feed-in price (1.0 = no change, 1.05 = +5%)",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {
+        "min": 0.5,
+        "max": 1.5
+      },
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Feed-In Pricing"
     },
     {
       "key": "battery.source",

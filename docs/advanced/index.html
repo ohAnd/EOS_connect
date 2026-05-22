@@ -50,6 +50,7 @@
                     <a href="#stored-energy" class="toc-link toc-sub">→ stored_energy</a>
                     <a href="#charging-sessions" class="toc-link toc-sub">→ charging_sessions</a>
                     <a href="#opt-request-response" class="toc-link toc-sub">→ Optimization Request/Response</a>
+                    <a href="#feedin-pricing-details" class="toc-link toc-sub">→ Feed-In Pricing Details</a>
                     <a href="#system-mode-ref" class="toc-link toc-sub">→ System Modes</a>
                     <a href="#logging-api" class="toc-link toc-sub">→ Logging API</a>
                     <a href="#mqtt" class="toc-link">MQTT Integration</a>
@@ -757,6 +758,61 @@
                     </tr>
                 </tbody>
             </table>
+
+            <h6 id="feedin-pricing-details">Feed-In Pricing Calculation Details</h6>
+            <p>The <code>einspeiseverguetung_euro_pro_wh</code> array is calculated from your feed-in price configuration and updated every 15 minutes:</p>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th>Source</th>
+                        <th>Formula</th>
+                        <th>Update Frequency</th>
+                        <th>Example Calculation</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Fixed</strong></td>
+                        <td><code>(price_ct_kwh + static_adder_ct) × multiplier ÷ 100000 = €/Wh</code></td>
+                        <td>Manual</td>
+                        <td><code>(8 + 2) × 1.0 ÷ 100000 = 0.0001 €/Wh</code></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Elpris DK</strong></td>
+                        <td><code>(DKK/kWh × 100 ÷ 7.46 + static_adder_ct) × multiplier ÷ 100000 = €/Wh</code></td>
+                        <td>Daily ~13:00 UTC</td>
+                        <td><code>(3.0 × 100 ÷ 7.46 + 2) × 0.95 ÷ 100000 = 0.000372 €/Wh</code></td>
+                    </tr>
+                    <tr>
+                        <td><strong>EPEX-Spot</strong></td>
+                        <td><code>(api_price_ct + static_adder_ct) × multiplier ÷ 100000 = €/Wh</code></td>
+                        <td>Every 15 min</td>
+                        <td><code>(32.5 - 1.0) × 1.0 ÷ 100000 = 0.000315 €/Wh</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <p><strong>Configuration Parameters:</strong></p>
+            <ul>
+                <li><code>feed_in_source</code>: Select pricing source (fixed, elpris_dk, epex_spot)</li>
+                <li><code>feed_in_price</code> or API rate: Base feed-in price in ct/kWh</li>
+                <li><code>feed_in_static_adder</code> (hot-reloadable): Additional fixed cost/benefit in ct/kWh (e.g., +2.5 for transport)</li>
+                <li><code>feed_in_multiplier</code> (hot-reloadable): Percentage factor (0.5-1.5) for discount/premium strategy</li>
+                <li><code>feed_in_zone</code>: Zone selection for Elpris DK (DK1/DK2)</li>
+            </ul>
+
+            <p><strong>Hot-Reload Note:</strong> Changes to <code>feed_in_static_adder</code> and <code>feed_in_multiplier</code> take effect immediately in the next optimization cycle without restarting EOS Connect.</p>
+
+            <h6>Background Update Process</h6>
+            <p><strong>Feed-in pricing updates run continuously in the background:</strong></p>
+            <ul>
+                <li><strong>EPEX-Spot:</strong> Updated every 15 minutes, automatically aligned to market update times</li>
+                <li><strong>Elpris DK:</strong> Updated once daily at 13:00 UTC (next day's prices)</li>
+                <li><strong>Fixed:</strong> Manual - requires configuration change</li>
+                <li><strong>Failure Handling:</strong> Up to 24 consecutive failures before falling back to last successful prices</li>
+                <li><strong>Logging:</strong> Update status logged to file for troubleshooting</li>
+            </ul>
 
             <h6>Battery (pv_akku) Fields</h6>
             <table>

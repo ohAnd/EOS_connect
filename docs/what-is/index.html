@@ -282,9 +282,18 @@
             <ul>
                 <li><strong>Fixed Adder:</strong> Add fixed costs (grid fees, taxes) in ct/kWh</li>
                 <li><strong>Relative Multiplier:</strong> Apply percentage markup (e.g., 5%)</li>
-                <li><strong>Feed-in Price:</strong> Set your solar export compensation rate</li>
-                <li><strong>Negative Price Switch:</strong> Optional: don't pay when prices go negative</li>
             </ul>
+
+            <h4>Dynamic Feed-In Pricing</h4>
+            <p><strong>New:</strong> Optimize battery discharge timing based on dynamic export prices, not just purchase prices:</p>
+            <ul>
+                <li><strong>Fixed Feed-In:</strong> Configure a static export rate (simplest option)</li>
+                <li><strong>Elpris DK:</strong> Real-time Danish spot prices for exports (DK1/DK2 zones)</li>
+                <li><strong>EPEX-Spot:</strong> European spot market prices via Akkudoktor API (updated every 15 minutes)</li>
+                <li><strong>Adjustments:</strong> Apply static adder (transport costs) and multiplier (discount/premium strategy)</li>
+            </ul>
+
+            <p>Example: Instead of discharging to save €0.25/kWh purchase cost, EOS Connect now <strong>also considers you earn €0.40/kWh by exporting</strong> — leading to smarter discharge timing that increases your revenue.</p>
 
             <h4>Battery Price Calculation (LIFO)</h4>
             <p>EOS Connect can analyze your charging history to determine the <strong>real cost</strong> of energy stored in your battery:</p>

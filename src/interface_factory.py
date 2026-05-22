@@ -159,6 +159,45 @@ class InterfaceFactory:
             ),
         )
 
+    def create_feed_in_price_interface(
+        self,
+        config: Dict[str, Any],
+        time_frame_base: int,
+        time_zone: pytz.timezone,
+        critical: bool = False,
+    ):
+        """
+        Create FeedInPriceInterface with error handling.
+        
+        Args:
+            config: Feed-in price configuration dictionary
+            time_frame_base: Base time frame in seconds
+            time_zone: Timezone for timestamps
+            critical: Whether interface is critical (non-critical by default)
+            
+        Returns:
+            FeedInPriceInterface instance or None if non-critical and failed
+            
+        Raises:
+            Exception if critical interface fails
+        """
+        return self._create_interface(
+            component_name="feed_in_price_interface",
+            category="connectivity",
+            critical=critical,
+            title="Feed-in price source unreachable",
+            error_message="Failed to retrieve feed-in price data",
+            additional_message=" Fallback prices will be used.",
+            config_link="#price",
+            creator_func=lambda: self._import_and_create(
+                "interfaces.feed_in_price_interface",
+                "FeedInPriceInterface",
+                config,
+                time_frame_base,
+                time_zone,
+            ),
+        )
+
     def create_pv_interface(
         self,
         pv_forecast_source: Dict[str, Any],

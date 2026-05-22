@@ -1,0 +1,455 @@
+# -*- coding: utf-8 -*-
+"""
+This module provides the `FeedInPriceInterface` class for retrieving and processing electricity
+feed-in (export) price data from various sources.
+
+Supported sources:
+    - Elpris (Dänemark): Spot-Preise für stromexport (in DKK/kWh, converted to ct/kWh)
+    - EPEX-Spot (EU/AT): Netto-Börsenpreise via Akkudoktor (in ct/kWh)
+    - Fixed: Statischer Einspeisepreis (in ct/kWh)
+
+Features:
+    - Fetches and updates feed-in prices from external APIs
+    - All prices use ct/kWh (cent per kilowatt-hour) for consistent user experience
+    - Applies static adder and multiplier adjustments
+    - Provides dynamic price array to optimizer (instead of constant value)
+    - Background thread for periodic price updates with retry and fallback logic
+    - Supports both hourly (48h) and 15-minute intervals (96h/192 slots)
+    - Handles negative prices and fallback scenarios
+
+Usage:
+    config = {
+        "source": "elpris_dk",
+        "zone": "DK1",
+        "static_adder_ct_kwh": 3.5,  # 3.5 ct/kWh (standard unit)
+        "multiplier": 1.0,
+    }
+    feed_in_interface = FeedInPriceInterface(config, time_frame_base=3600, timezone="Europe/Berlin")
+    feed_in_interface.update_prices(tgt_duration=48, start_time=datetime.now())
+    current_feedin = feed_in_interface.get_current_feedin_prices()
+"""
+
+from datetime import datetime, timedelta
+import json
+import logging
+import threading
+import requests
+
+logger = logging.getLogger("__main__")
+logger.info("[FEEDIN-IF] loading module")
+
+ELPRIS_API_BASE = "https://www.elprisenligenu.dk/api/v1/prices"
+AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
+
+
+class FeedInPriceInterface:
+    """
+    The FeedInPriceInterface class manages electricity feed-in (export) price data retrieval
+    and processing from various sources.
+
+    All prices are consistently represented in ct/kWh (cent per kilowatt-hour) for user clarity.
+
+    Attributes:
+        source (str): Source of the feed-in price data ('elpris_dk', 'epex_spot', 'fixed')
+        zone (str): Price zone for Elpris (DK1 or DK2)
+        static_adder_ct_kwh (float): Static adjustment in ct/kWh (e.g., 3.5 for transport costs)
+        multiplier (float): Relative multiplier (1.0 = no change, 1.05 = +5%)
+        time_frame_base (int): Time frame in seconds (3600 = hourly, 900 = 15-min slots)
+        time_zone (str): Timezone for date operations
+        current_feedin_prices (list): Current feed-in prices in EUR/Wh
+        default_prices (list): Default fallback prices
+        last_successful_prices (list): Last successfully fetched prices for fallback
+        consecutive_failures (int): Counter for consecutive API failures
+    """
+
+    def __init__(self, config, time_frame_base, timezone="UTC"):
+        """
+        Initialize the FeedInPriceInterface.
+
+        Args:
+            config (dict): Configuration dictionary with keys:
+                - source: 'elpris_dk', 'epex_spot', or 'fixed'
+                - zone: 'DK1' or 'DK2' (for elpris_dk only)
+                - static_adder_ct_kwh: Static adjustment in ct/kWh (standard unit)
+                - multiplier: Relative multiplier (default 1.0)
+                - fixed_price_ct_kwh: Fixed price in ct/kWh (for 'fixed' source)
+            time_frame_base (int): 3600 for hourly, 900 for 15-minute slots
+            timezone (str): Timezone identifier
+        """
+        self.source = config.get("source", "fixed")
+        self.zone = config.get("zone", "DK1")
+        
+        # Primary: ct/kWh format (standard, user-facing unit)
+        # Fallback: Support legacy øre format for backward compatibility
+        if "static_adder_ct_kwh" in config:
+            self.static_adder_ct_kwh = config.get("static_adder_ct_kwh", 0.0)
+        else:
+            # Legacy: øre format (øre / 100 = ct/kWh)
+            self.static_adder_ct_kwh = config.get("static_adder_oere", 0.0) / 100.0
+        
+        self.multiplier = config.get("multiplier", 1.0)
+        
+        # Fixed price in ct/kWh
+        fixed_price_ct_kwh = config.get("fixed_price_ct_kwh", 0.0)
+        # Also try legacy key
+        if fixed_price_ct_kwh == 0.0 and "fixed_price" in config:
+            fixed_price_ct_kwh = config.get("fixed_price", 0.0)
+        # If value is suspiciously small (e.g., EUR instead of ct), convert it
+        if fixed_price_ct_kwh < 0.1 and fixed_price_ct_kwh > 0:
+            # Looks like EUR/kWh, convert to ct/kWh
+            fixed_price_ct_kwh = fixed_price_ct_kwh * 100
+        self.fixed_price_ct_kwh = fixed_price_ct_kwh
+
+        self.time_frame_base = time_frame_base
+        self.time_zone = timezone
+        self.current_feedin_prices = []
+        
+        # Default fallback prices (0.5 ct/kWh = 0.000005 EUR/Wh)
+        self.default_prices = [0.000005] * 48
+
+        # Retry mechanism
+        self.last_successful_prices = []
+        self.consecutive_failures = 0
+        self.max_failures = 24  # Max consecutive failures before using default
+
+        # Background thread attributes
+        self._update_thread = None
+        self._stop_event = threading.Event()
+        self.update_interval = 900  # 15 minutes in seconds
+
+        self._validate_config()
+        logger.info(
+            "[FEEDIN-IF] Initialized with source: %s, zone: %s, adder: %.2f ct/kWh, multiplier: %.2f",
+            self.source,
+            self.zone,
+            self.static_adder_ct_kwh,
+            self.multiplier,
+        )
+
+        # Start background update service
+        self._start_update_service()
+
+    def _validate_config(self):
+        """Validate configuration parameters."""
+        valid_sources = ["fixed", "elpris_dk", "epex_spot"]
+        if self.source not in valid_sources:
+            logger.error(
+                "[FEEDIN-IF] Invalid source: %s. Defaulting to 'fixed'.", self.source
+            )
+            self.source = "fixed"
+
+        if self.source == "elpris_dk" and self.zone not in ["DK1", "DK2"]:
+            logger.error(
+                "[FEEDIN-IF] Invalid zone for Elpris: %s. Defaulting to DK1.",
+                self.zone,
+            )
+            self.zone = "DK1"
+
+    def _start_update_service(self):
+        """Start background thread for periodic price updates."""
+        if self._update_thread is None or not self._update_thread.is_alive():
+            self._stop_event.clear()
+            self._update_thread = threading.Thread(
+                target=self._update_prices_loop, daemon=True
+            )
+            self._update_thread.start()
+            logger.debug("[FEEDIN-IF] Background update service started")
+
+    def stop(self):
+        """Stop the background update service."""
+        self._stop_event.set()
+        if self._update_thread and self._update_thread.is_alive():
+            self._update_thread.join(timeout=5)
+            logger.debug("[FEEDIN-IF] Background update service stopped")
+
+    def _update_prices_loop(self):
+        """
+        Background loop that periodically updates feed-in prices.
+        Runs every 15 minutes (900 seconds).
+        """
+        try:
+            # Initial update on startup
+            start_time = datetime.now(self.time_zone).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            tgt_duration = 192 if self.time_frame_base == 900 else 48
+            self.update_prices(tgt_duration, start_time)
+
+            while not self._stop_event.is_set():
+                # Wait for update interval or stop signal
+                if self._stop_event.wait(timeout=self.update_interval):
+                    break
+
+                # Periodic update
+                start_time = datetime.now(self.time_zone).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                tgt_duration = 192 if self.time_frame_base == 900 else 48
+                self.update_prices(tgt_duration, start_time)
+                logger.debug("[FEEDIN-IF] Periodic feed-in price update completed")
+
+        except Exception as e:
+            logger.error(
+                "[FEEDIN-IF] Price fetch failed: %s | Config: #price | ACTION REQUIRED",
+                e,
+            )
+
+        # Restart if not intentionally stopped
+        if not self._stop_event.is_set():
+            logger.warning(
+                "[FEEDIN-IF] Background thread stopped unexpectedly, restarting..."
+            )
+            self._start_update_service()
+
+    def update_prices(self, tgt_duration, start_time=None):
+        """
+        Update current feed-in prices based on source and configuration.
+
+        Args:
+            tgt_duration (int): Number of hours (48) or 15-min slots (192)
+            start_time (datetime, optional): Start time (default: now at midnight)
+        """
+        if start_time is None:
+            start_time = datetime.now(self.time_zone).replace(
+                minute=0, second=0, microsecond=0
+            )
+
+        prices = self._retrieve_prices(tgt_duration, start_time)
+
+        if not prices:
+            self.consecutive_failures += 1
+
+            if self.consecutive_failures <= self.max_failures and self.last_successful_prices:
+                logger.warning(
+                    "[FEEDIN-IF] No prices retrieved (failure %d/%d). Using last successful prices.",
+                    self.consecutive_failures,
+                    self.max_failures,
+                )
+                prices = self.last_successful_prices[:tgt_duration]
+            else:
+                logger.error(
+                    "[FEEDIN-IF] Failed to retrieve prices after %d attempts. Using default prices.",
+                    self.max_failures,
+                )
+                prices = self.default_prices
+                if tgt_duration == 192:  # 15-min slots
+                    prices = [p for p in prices for _ in range(4)]
+        else:
+            self.consecutive_failures = 0
+            self.last_successful_prices = prices.copy()
+
+        self.current_feedin_prices = prices
+        logger.debug(
+            "[FEEDIN-IF] Prices updated for %d slots starting from %s",
+            tgt_duration,
+            start_time.strftime("%Y-%m-%d %H:%M"),
+        )
+
+    def get_current_feedin_prices(self):
+        """
+        Get current feed-in prices.
+
+        Returns:
+            list: Feed-in prices in EUR/Wh
+        """
+        return self.current_feedin_prices
+
+    def _retrieve_prices(self, tgt_duration, start_time):
+        """
+        Retrieve prices based on configured source.
+
+        Args:
+            tgt_duration (int): Target duration
+            start_time (datetime): Start time for retrieval
+
+        Returns:
+            list: Prices in EUR/Wh or empty list on error
+        """
+        if self.source == "elpris_dk":
+            return self._fetch_elpris_prices(tgt_duration, start_time)
+        elif self.source == "epex_spot":
+            return self._fetch_epex_spot_prices(tgt_duration, start_time)
+        elif self.source == "fixed":
+            return self._fetch_fixed_price(tgt_duration, start_time)
+        else:
+            logger.error(
+                "[FEEDIN-IF] Unknown source: %s. Defaulting to fixed price.", self.source
+            )
+            return self._fetch_fixed_price(tgt_duration, start_time)
+
+    def _fetch_elpris_prices(self, tgt_duration, start_time):
+        """
+        Fetch feed-in prices from Elpris API (Dänemark).
+
+        API: https://www.elprisenligenu.dk/elpris-api
+        Returns prices in DKK/kWh, converts to ct/kWh (0.134 DKK/EUR)
+
+        Args:
+            tgt_duration (int): 48 (hourly) or 192 (15-min slots)
+            start_time (datetime): Start time
+
+        Returns:
+            list: Prices in EUR/Wh or empty list on error
+        """
+        try:
+            # API format: YYYY/MM-DD_ZONE.json
+            date_str = start_time.strftime("%Y/%m-%d")
+            url = f"{ELPRIS_API_BASE}/{date_str}_{self.zone}.json"
+
+            logger.debug("[FEEDIN-IF] Fetching Elpris prices from: %s", url)
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            prices_dkk = data.get("prices", [])
+
+            if not prices_dkk:
+                logger.warning("[FEEDIN-IF] Elpris API returned empty price list")
+                return []
+
+            # Elpris returns 24 hourly prices in DKK/kWh
+            # DKK/EUR rate ≈ 7.46, so 1 DKK/kWh = 100/7.46 ≈ 13.41 ct/kWh
+            dkk_per_eur = 7.46
+            prices_eur_wh = []
+
+            for price_entry in prices_dkk:
+                price_dkk_kwh = price_entry.get("price", 0.0)
+
+                # DKK/kWh → ct/kWh
+                price_ct_kwh = price_dkk_kwh * 100 / dkk_per_eur
+
+                # Add static adder and apply multiplier
+                price_with_adder = price_ct_kwh + self.static_adder_ct_kwh
+                price_adjusted = price_with_adder * self.multiplier
+
+                # ct/kWh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
+                price_eur_wh = round(price_adjusted / 100000, 9)
+                prices_eur_wh.append(price_eur_wh)
+
+            logger.debug(
+                "[FEEDIN-IF] Fetched %d Elpris prices from %s",
+                len(prices_eur_wh),
+                self.zone,
+            )
+
+            # Extend to 48 or 96 hours if only 24h available
+            prices_eur_wh = self._extend_prices_to_duration(prices_eur_wh, tgt_duration)
+
+            return prices_eur_wh
+
+        except requests.RequestException as e:
+            logger.error("[FEEDIN-IF] Elpris API request failed: %s", e)
+            return []
+        except (KeyError, ValueError) as e:
+            logger.error("[FEEDIN-IF] Elpris API response parsing failed: %s", e)
+            return []
+
+    def _fetch_epex_spot_prices(self, tgt_duration, start_time):
+        """
+        Fetch feed-in prices from EPEX-Spot via Akkudoktor API.
+
+        Uses Akkudoktor's netto prices (without taxes/fees) as base.
+        Applies static_adder and multiplier.
+
+        Args:
+            tgt_duration (int): 48 (hourly) or 192 (15-min slots)
+            start_time (datetime): Start time
+
+        Returns:
+            list: Prices in EUR/Wh or empty list on error
+        """
+        try:
+            start_date = start_time.strftime("%Y-%m-%d")
+            end_date = (start_time + timedelta(days=1)).strftime("%Y-%m-%d")
+            url = f"{AKKUDOKTOR_API_PRICES}?start={start_date}&end={end_date}"
+
+            logger.debug("[FEEDIN-IF] Fetching EPEX prices from: %s", url)
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            prices_list = data.get("values", [])
+
+            if not prices_list:
+                logger.warning("[FEEDIN-IF] Akkudoktor API returned empty price list")
+                return []
+
+            prices_eur_wh = []
+            for price_entry in prices_list:
+                # API returns prices in ct/kWh (eurocentPerKWh)
+                price_ct_kwh = price_entry.get("marketpriceEurocentPerKWh", 0.0)
+
+                # Add static adder (already in ct/kWh) and apply multiplier
+                price_with_adder = price_ct_kwh + self.static_adder_ct_kwh
+                price_adjusted = price_with_adder * self.multiplier
+
+                # Convert ct/kWh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
+                price_eur_wh = round(price_adjusted / 100000, 9)
+                prices_eur_wh.append(price_eur_wh)
+
+            logger.debug(
+                "[FEEDIN-IF] Fetched %d EPEX prices from Akkudoktor",
+                len(prices_eur_wh),
+            )
+
+            # Extend to 48 or 96 hours if needed
+            prices_eur_wh = self._extend_prices_to_duration(prices_eur_wh, tgt_duration)
+
+            return prices_eur_wh
+
+        except requests.RequestException as e:
+            logger.error("[FEEDIN-IF] Akkudoktor API request failed: %s", e)
+            return []
+        except (KeyError, ValueError) as e:
+            logger.error("[FEEDIN-IF] Akkudoktor API response parsing failed: %s", e)
+            return []
+
+    def _fetch_fixed_price(self, tgt_duration, start_time):
+        """
+        Use fixed feed-in price for all time slots.
+
+        Args:
+            tgt_duration (int): Target duration
+            start_time (datetime): Start time (not used)
+
+        Returns:
+            list: Fixed prices in EUR/Wh
+        """
+        # fixed_price_ct_kwh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
+        price_eur_wh = round(self.fixed_price_ct_kwh / 100000, 9)
+        prices = [price_eur_wh] * tgt_duration
+        logger.debug(
+            "[FEEDIN-IF] Using fixed feed-in price: %.2f ct/kWh = %.9f EUR/Wh",
+            self.fixed_price_ct_kwh,
+            price_eur_wh,
+        )
+        return prices
+
+    def _extend_prices_to_duration(self, prices, tgt_duration):
+        """
+        Extend price list to target duration by cycling.
+
+        If prices is 24h and target is 48h, duplicate them.
+        If time_frame_base is 900 (15-min), expand each hour to 4 slots.
+
+        Args:
+            prices (list): Input prices
+            tgt_duration (int): Target duration in slots
+
+        Returns:
+            list: Extended price list
+        """
+        if not prices:
+            return []
+
+        # For 15-min resolution: expand hourly prices to 4 slots each
+        if self.time_frame_base == 900:
+            prices = [p for p in prices for _ in range(4)]
+            tgt_duration = tgt_duration * 4 if tgt_duration < 100 else tgt_duration
+
+        # If still short, cycle through available prices
+        while len(prices) < tgt_duration:
+            remaining = tgt_duration - len(prices)
+            prices.extend(prices[:remaining])
+
+        return prices[:tgt_duration]

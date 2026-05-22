@@ -53,6 +53,8 @@
                     <a href="#battery-price-calc" class="toc-link toc-sub">&rarr; Dynamic Price Calculation</a>
                     <a href="#load" class="toc-link">Load</a>
                     <a href="#price" class="toc-link">Electricity Prices</a>
+                    <a href="#price" class="toc-link toc-sub">→ Grid Purchase Prices</a>
+                    <a href="#price" class="toc-link toc-sub">→ Dynamic Feed-In Pricing</a>
                     <a href="#energyforecast" class="toc-link toc-sub">→ Smart Price Prediction</a>
                     <a href="#pv" class="toc-link">PV Forecasts</a>
                     <a href="#mqtt" class="toc-link">MQTT</a>
@@ -1708,21 +1710,193 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>Compensation you receive for feeding energy back to the grid</td>
+                    <td>Fixed compensation for feeding energy back to the grid (used when feed_in_source is "fixed")</td>
                 </tr>
                 <tr>
                     <th>Unit</th>
-                    <td>Euro per kWh (€/kWh)</td>
+                    <td>Cents per kWh (ct/kWh)</td>
                 </tr>
                 <tr>
                     <th>Example</th>
-                    <td><code>0.08</code> (8 cents per kWh)</td>
+                    <td><code>8</code> (8 cents per kWh)</td>
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Must use the same tax/fee basis as your purchase prices. Typical range: 0.05 - 0.12 €/kWh</td>
+                    <td>Only used when <code>feed_in_source: fixed</code>. Must use the same tax/fee basis as your purchase prices. Typical range: 5-12 ct/kWh</td>
                 </tr>
             </table>
+
+            <h3>price.feed_in_source</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.feed_in_source</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Source for dynamic feed-in (export) prices</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>fixed</code> - Use fixed price from <code>feed_in_price</code><br>
+                        <code>elpris_dk</code> - Elpris DK spot prices (Denmark only)<br>
+                        <code>epex_spot</code> - EPEX-Spot prices via Akkudoktor API
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>fixed</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Changes require application restart. Dynamic sources significantly improve battery discharge timing during high-price periods.</td>
+                </tr>
+            </table>
+
+            <h3>price.feed_in_zone</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.feed_in_zone</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Price zone for Elpris DK (Denmark)</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>DK1</code> - Western Denmark (Jylland, Fyn)<br>
+                        <code>DK2</code> - Eastern Denmark (Sjælland, Bornholm)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>DK1</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Only used when <code>feed_in_source: elpris_dk</code></td>
+                </tr>
+            </table>
+
+            <h3>price.feed_in_static_adder</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.feed_in_static_adder</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Fixed adjustment to feed-in price (e.g., transport costs, taxes)</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Cents per kWh (ct/kWh)</td>
+                </tr>
+                <tr>
+                    <th>Valid Range</th>
+                    <td>-10 to +10 ct/kWh</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>0</code></td>
+                </tr>
+                <tr>
+                    <th>Examples</th>
+                    <td>
+                        <code>3.5</code> - Add 3.5 ct/kWh for transport costs<br>
+                        <code>-1.0</code> - Subtract 1 ct/kWh discount
+                    </td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td><strong>Hot-reloadable:</strong> Changes take effect immediately without restart. Applied BEFORE multiplier.</td>
+                </tr>
+            </table>
+
+            <h3>price.feed_in_multiplier</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.feed_in_multiplier</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Percentage multiplier for feed-in prices (e.g., discount strategy)</td>
+                </tr>
+                <tr>
+                    <th>Valid Range</th>
+                    <td>0.5 to 1.5 (0.5 = 50%, 1.0 = no change, 1.5 = 150%)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>1.0</code></td>
+                </tr>
+                <tr>
+                    <th>Examples</th>
+                    <td>
+                        <code>0.95</code> - Use 95% of market price (conservative)<br>
+                        <code>1.05</code> - Use 105% of market price (aggressive)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td><strong>Hot-reloadable:</strong> Changes take effect immediately. Expert level setting. Applied AFTER static adder.</td>
+                </tr>
+            </table>
+
+            <h4>Dynamic Feed-In Pricing Comparison</h4>
+            <table style="font-size: 0.9em;">
+                <tr>
+                    <th>Source</th>
+                    <th>Availability</th>
+                    <th>Update Frequency</th>
+                    <th>Typical Range</th>
+                    <th>Best For</th>
+                </tr>
+                <tr>
+                    <td><code>fixed</code></td>
+                    <td>Worldwide</td>
+                    <td>Manual</td>
+                    <td>5-12 ct/kWh</td>
+                    <td>Simple tariffs, flat rates</td>
+                </tr>
+                <tr>
+                    <td><code>elpris_dk</code></td>
+                    <td>Denmark only</td>
+                    <td>Daily 13:00 UTC</td>
+                    <td>1-80 ct/kWh</td>
+                    <td>Danish households, volatile pricing</td>
+                </tr>
+                <tr>
+                    <td><code>epex_spot</code></td>
+                    <td>Europe (DE, AT, FR, etc.)</td>
+                    <td>Every 15 minutes</td>
+                    <td>-50 to +80 ct/kWh</td>
+                    <td>Professional traders, maximum optimization</td>
+                </tr>
+            </table>
+
+            <h4>Configuration Examples</h4>
+            <pre><code># Example 1: Fixed German tariff
+price:
+  feed_in_source: fixed
+  feed_in_price: 8  # 8 ct/kWh
+
+# Example 2: Danish dynamic pricing with adjustment
+price:
+  feed_in_source: elpris_dk
+  feed_in_zone: DK1
+  feed_in_static_adder: 2.5  # +2.5 ct/kWh for transport
+  feed_in_multiplier: 0.95    # Conservative: 95% of spot
+
+# Example 3: EPEX-Spot with cost adjustment
+price:
+  feed_in_source: epex_spot
+  feed_in_static_adder: -1.0  # -1 ct/kWh fee
+  feed_in_multiplier: 1.0     # Full spot price</code></pre>
 
             <h3>price.negative_price_switch</h3>
             <table>
@@ -1732,13 +1906,13 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>How to handle negative electricity market prices</td>
+                    <td>How to handle negative electricity market prices for grid purchases (not feed-in)</td>
                 </tr>
                 <tr>
                     <th>Valid Values</th>
                     <td>
-                        <code>true</code> - Limit feed-in price to €0 when market price is negative<br>
-                        <code>false</code> - Always use the configured feed_in_price
+                        <code>true</code> - Don't pay anything when market price goes negative (set buy price to €0)<br>
+                        <code>false</code> - Always use the configured market price (including negative values)
                     </td>
                 </tr>
                 <tr>
@@ -1747,7 +1921,7 @@
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Use <code>true</code> if your feed-in tariff pays €0 during negative market prices</td>
+                    <td>This setting only applies to grid <strong>purchase</strong> prices. Use <code>true</code> only with <code>source: default</code> (Akkudoktor) if you don't want to receive payments during negative price periods.</td>
                 </tr>
             </table>
 

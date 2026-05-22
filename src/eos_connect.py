@@ -34,6 +34,7 @@ from interfaces.load_interface import LoadInterface
 from interfaces.battery_interface import BatteryInterface
 from interfaces.evcc_interface import EvccInterface
 from interfaces.price_interface import PriceInterface
+from interfaces.feed_in_price_interface import FeedInPriceInterface
 from interfaces.mqtt_interface import MqttInterface
 from interfaces.pv_interface import PvInterface
 from interfaces.port_interface import PortInterface
@@ -223,6 +224,19 @@ evcc_interface = interface_factory.create_evcc_interface(
 price_interface = interface_factory.create_price_interface(
     config_manager.config["price"], time_frame_base, time_zone, critical=False
 ) or PriceInterface(config_manager.config["price"], time_frame_base, time_zone)
+
+# Feed-in price interface (for dynamic export pricing)
+feed_in_config = {
+    "source": config_manager.config.get("price", {}).get("feed_in_source", "fixed"),
+    "zone": config_manager.config.get("price", {}).get("feed_in_zone", "DK1"),
+    "static_adder_ct_kwh": config_manager.config.get("price", {}).get("feed_in_static_adder", 0.0),  # ct/kWh (standard unit)
+    "multiplier": config_manager.config.get("price", {}).get("feed_in_multiplier", 1.0),
+    "fixed_price_ct_kwh": config_manager.config.get("price", {}).get("feed_in_price", 0.0),  # ct/kWh
+}
+
+feed_in_price_interface = interface_factory.create_feed_in_price_interface(
+    feed_in_config, time_frame_base, time_zone, critical=False
+) or FeedInPriceInterface(feed_in_config, time_frame_base, time_zone)
 
 pv_interface = interface_factory.create_pv_interface(
     config_manager.config["pv_forecast_source"],
@@ -513,7 +527,8 @@ def create_optimize_request():
 
         pv_prognose_wh = pv_interface.get_current_pv_forecast()
         strompreis_euro_pro_wh = price_interface.get_current_prices()
-        einspeiseverguetung_euro_pro_wh = price_interface.get_current_feedin_prices()
+        # Use dynamic feed-in prices from FeedInPriceInterface instead of constant PriceInterface value
+        einspeiseverguetung_euro_pro_wh = feed_in_price_interface.get_current_feedin_prices()
         gesamtlast = load_interface.get_load_profile(EOS_TGT_DURATION)
 
         if config_manager.config.get("eos", {}).get("source", "eos_server") == "evopt":

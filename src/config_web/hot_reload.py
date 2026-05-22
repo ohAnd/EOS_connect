@@ -36,6 +36,12 @@ _PRICE_FIELD_MAP = {
     "price.negative_price_switch": ("negative_price_switch", bool),
 }
 
+# Map of feed-in price config keys to (interface_attr_name, coerce_fn)
+_FEEDIN_PRICE_FIELD_MAP = {
+    "price.feed_in_static_adder": ("static_adder_ct_kwh", float),  # ct/kWh (standard unit)
+    "price.feed_in_multiplier": ("multiplier", float),
+}
+
 _BATTERY_SOC_FIELDS = {
     "battery.min_soc_percentage",
     "battery.max_soc_percentage",
@@ -85,6 +91,7 @@ class HotReloadAdapter:
         battery_interface=None,
         pv_interface=None,
         optimization_interface=None,
+        feed_in_price_interface=None,
         config_provider=None,
         pv_reload_debounce_seconds=0.3,
     ):
@@ -92,6 +99,7 @@ class HotReloadAdapter:
         self._battery = battery_interface
         self._pv = pv_interface
         self._optimizer = optimization_interface
+        self._feed_in_price = feed_in_price_interface
         self._config_provider = config_provider
         self._pv_reload_debounce_seconds = pv_reload_debounce_seconds
         self._pv_reload_timer = None
@@ -118,6 +126,8 @@ class HotReloadAdapter:
 
         if key in _PRICE_FIELD_MAP:
             self._apply_price(key, new_value)
+        elif key in _FEEDIN_PRICE_FIELD_MAP:
+            self._apply_feed_in_price(key, new_value)
         elif key in _BATTERY_SOC_FIELDS:
             self._apply_battery_soc(key, new_value)
         elif key in _BATTERY_PRICE_FIELD_MAP:
@@ -157,6 +167,38 @@ class HotReloadAdapter:
         # Recalculate feed-in prices when feed_in_price or negative_price_switch change
         if key in _FEEDIN_TRIGGERS:
             self._recalculate_feedin()
+
+    def _apply_feed_in_price(self, key, new_value):
+        """Apply a feed-in price related config change."""
+        if self._feed_in_price is None:
+            logger.debug("[HotReload] No feed-in price interface — skipping %s", key)
+            return
+
+        attr, coerce = _FEEDIN_PRICE_FIELD_MAP[key]
+        try:
+            coerced = coerce(new_value)
+        except (TypeError, ValueError) as exc:
+            logger.warning("[HotReload] Cannot coerce %s=%r: %s", key, new_value, exc)
+            return
+
+        old_val = getattr(self._feed_in_price, attr, "?")
+        setattr(self._feed_in_price, attr, coerced)
+        self._applied_keys.append(key)
+        logger.info(
+            "[HotReload] Updated feed_in_price.%s = %s (was %s)",
+            attr, coerced, old_val,
+        )
+
+        # Trigger price update to recalculate arrays with new parameters
+        try:
+            start_time = datetime.now(self._feed_in_price.time_zone).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+            self._feed_in_price.update_prices(tgt_duration, start_time)
+            logger.debug("[HotReload] Recalculated feed-in prices after %s change", key)
+        except Exception as e:
+            logger.warning("[HotReload] Failed to recalculate feed-in prices: %s", e)
 
     def _apply_battery_feedin_price(self, feedin_price):
         """Apply live feed-in price updates to the battery price handler."""

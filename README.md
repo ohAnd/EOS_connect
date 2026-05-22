@@ -25,6 +25,7 @@ EOS Connect fetches real-time and forecast data, processes it via your chosen op
 - **Integration with Smart Home Platforms:** Home Assistant (MQTT auto discovery), OpenHAB, EVCC, and MQTT for seamless data exchange and automation.
 - **Dynamic Web Dashboard:** Live monitoring, manual control, and visualization of your energy system.
 - **Cost Optimization:** Aligns energy usage with dynamic electricity prices (Tibber, smartenergy.at, Stromligning.dk) with hourly or quarterly distribution.
+- **Dynamic Feed-In Pricing:** Optimize battery discharge when feed-in prices are high (Elpris DK, EPEX-Spot EU). Configure region-specific transport costs for accurate export optimization. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#price)
 - **Smart Price Prediction:** Energyforecast.de integration automatically learns your grid fees and taxes to provide accurate price predictions when your primary source lacks tomorrow's prices. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#energyforecast)
 - **Dynamic PV Override:** Automatically allows discharge when solar production exceeds load, preventing unwanted grid input during cloud shadows. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#dyn-override)
 - **Flexible Configuration:** Easy to set up and extend for a wide range of energy systems and user needs.

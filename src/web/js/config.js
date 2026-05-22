@@ -16,6 +16,25 @@ let SECTION_ORDER = [];  // Track explicit section order from API
 
 const LEVEL_ORDER = { getting_started: 0, standard: 1, expert: 2 };
 
+// ── Subsection mapping (display_group → subsection_group) ──────
+// Groups related display_groups under logical subsections.
+// Allows automatic rendering of subsection headers.
+// Extensible: add new mappings for other sections (e.g., Battery subsections).
+const DISPLAY_GROUP_TO_SUBSECTION = {
+    // Price section
+    "Provider": "Grid Price",
+    "Price Adjustments": "Grid Price",
+    "Fixed Prices": "Grid Price",
+    "Energy Price Forecast": "Grid Price",
+    "Feed-In Pricing": "Feed-In Pricing",
+    
+    // Battery section (example for future use)
+    // "Battery Configuration": "Battery Status",
+    // "Battery Price": "Battery Price Management",
+    // "Battery Price Sensors": "Battery Price Management",
+    // "Battery Price Thresholds": "Battery Price Management",
+};
+
 
 class ConfigurationManager {
     /**
@@ -388,10 +407,31 @@ class ConfigurationManager {
             ${meta.label}
         </div>`;
 
+        let lastSubsection = null;
         for (const [groupName, groupFields] of groups) {
+            // Get subsection for this display_group
+            const subsection = DISPLAY_GROUP_TO_SUBSECTION[groupName] || null;
+
+            // Render subsection header when it changes
+            if (subsection && subsection !== lastSubsection) {
+                const subsectionIcons = {
+                    "Grid Price": "fa-project-diagram",
+                    "Feed-In Pricing": "fa-exchange-alt",
+                    "Battery Status": "fa-battery-three-quarters",
+                    "Battery Price Management": "fa-coins",
+                };
+                const iconClass = subsectionIcons[subsection] || "fa-cogs";
+                html += `<div class="config-subsection-header">
+                    <i class="fas ${iconClass}" style="color:#4a9eff; margin-right: 8px;"></i>
+                    <span>${subsection.toUpperCase()}</span>
+                </div>`;
+                lastSubsection = subsection;
+            }
+
             if (groupName) {
                 const allHidden = groupFields.every(f => this._isDependencyHidden(f));
-                html += `<div class="config-group${allHidden ? ' hidden' : ''}" data-group="${groupName}">
+                const subsection = DISPLAY_GROUP_TO_SUBSECTION[groupName] || "";
+                html += `<div class="config-group${allHidden ? ' hidden' : ''}" data-group="${groupName}" data-subsection="${subsection}">
                     <div class="config-group-title">${groupName}</div>
                     ${groupFields.map(f => this._renderField(f)).join("")}
                 </div>`;

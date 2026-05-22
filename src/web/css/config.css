@@ -77,6 +77,22 @@
     margin-bottom: 20px;
 }
 
+/* --- Subsection header (e.g., GRID PRICE) --- */
+.config-subsection-header {
+    display: flex;
+    align-items: center;
+    font-size: 0.75em;
+    font-weight: 700;
+    color: #4a9eff;
+    margin-top: 24px;
+    margin-bottom: 16px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    opacity: 0.8;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(74, 158, 255, 0.2);
+}
+
 /* --- Display groups --- */
 .config-group {
     background-color: rgba(0, 0, 0, 0.25);
@@ -499,6 +515,19 @@
         padding: 4px 0;
     }
 
+    .config-field {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .config-field-label {
+        flex: none;
+    }
+
+    .config-field-input {
+        width: 100%;
+    }
+
     .config-nav.collapsed {
         display: none;
     }
@@ -530,6 +559,31 @@
     .config-search:focus {
         width: 100%;
     }
+}
+
+/* --- Section-specific styling (Subsection-based coloring) --- */
+
+/* Default: Grid-like subsections (blue) */
+.config-group[data-subsection="Grid Price"],
+.config-group[data-subsection="Battery Status"],
+.config-group[data-subsection="PV Management"] {
+    border-left: 3px solid rgba(74, 158, 255, 0.4);
+    background-color: rgba(0, 0, 0, 0.25);
+}
+
+/* Feed-In / Export subsections (green) */
+.config-group[data-subsection="Feed-In Pricing"],
+.config-group[data-subsection="Feed-Out Management"] {
+    border-left: 3px solid rgba(76, 175, 80, 0.5);
+    background-color: rgba(76, 175, 80, 0.06);
+    margin-top: 28px;
+    padding-top: 16px;
+    border-top: 2px solid rgba(76, 175, 80, 0.3);
+}
+
+.config-group[data-subsection="Feed-In Pricing"] .config-group-title,
+.config-group[data-subsection="Feed-Out Management"] .config-group-title {
+    color: #4caf80;
 }
 
 /* Hide mobile back button on desktop */

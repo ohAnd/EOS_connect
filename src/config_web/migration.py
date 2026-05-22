@@ -59,6 +59,17 @@ def migrate_yaml_to_store(config_dict: dict, store: ConfigStore, schema: ConfigS
     ds_batch = _create_data_source_batch(config_dict)
     batch.update(ds_batch)
 
+    # Ensure feed-in pricing fields are set (backward compat: default to fixed mode)
+    if "price.feed_in_source" not in batch:
+        batch["price.feed_in_source"] = "fixed"
+        logger.debug("[Migration] Added default feed_in_source=fixed for backward compatibility")
+    if "price.feed_in_zone" not in batch:
+        batch["price.feed_in_zone"] = "DK1"
+    if "price.feed_in_static_adder" not in batch:
+        batch["price.feed_in_static_adder"] = 0.0
+    if "price.feed_in_multiplier" not in batch:
+        batch["price.feed_in_multiplier"] = 1.0
+
     # Detect whether this is a real user config or just ConfigManager defaults.
     # A real config has at least one source field set to a non-default value.
     is_real_config = _has_user_configured_values(config_dict)
@@ -154,6 +165,17 @@ def migrate_ha_options_to_store(
     # Create unified data_source from load/battery sections
     ds_batch = _create_data_source_batch(options)
     batch.update(ds_batch)
+
+    # Ensure feed-in pricing fields are set (backward compat: default to fixed mode)
+    if "price.feed_in_source" not in batch:
+        batch["price.feed_in_source"] = "fixed"
+        logger.debug("[Migration] Added default feed_in_source=fixed for backward compatibility")
+    if "price.feed_in_zone" not in batch:
+        batch["price.feed_in_zone"] = "DK1"
+    if "price.feed_in_static_adder" not in batch:
+        batch["price.feed_in_static_adder"] = 0.0
+    if "price.feed_in_multiplier" not in batch:
+        batch["price.feed_in_multiplier"] = 1.0
 
     batch["_migrated_from_ha_options"] = True
     batch["_wizard_completed"] = True
