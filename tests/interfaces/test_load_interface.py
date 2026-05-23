@@ -69,6 +69,61 @@ def test_request_with_retries_logs_and_retries(config_fixture):
         assert len(error_calls) == 1
 
 
+def test_request_with_retries_ssl_verify_false(config_fixture):
+    """
+    Verify that __request_with_retries passes verify=False to requests.get
+    when ssl_ignore is set to True in the config.
+    """
+    config_fixture["ssl_ignore"] = True
+    li = LoadInterface(config_fixture, 3600)
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+
+    with patch(
+        "src.interfaces.load_interface.requests.get",
+        return_value=mock_response,
+    ) as mock_get, patch(
+        "src.interfaces.load_interface.time.sleep"
+    ), patch(
+        "src.interfaces.load_interface.logger"
+    ):
+        getattr(li, "_LoadInterface__request_with_retries")(
+            "get", "http://dummy"
+        )
+        _, kwargs = mock_get.call_args
+        assert kwargs.get("verify") is False, (
+            "Expected verify=False when ssl_ignore=True"
+        )
+
+
+def test_request_with_retries_ssl_verify_default(config_fixture):
+    """
+    Verify that __request_with_retries passes verify=True (default)
+    when ssl_ignore is not set or False in the config.
+    """
+    li = LoadInterface(config_fixture, 3600)  # ssl_ignore not set
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+
+    with patch(
+        "src.interfaces.load_interface.requests.get",
+        return_value=mock_response,
+    ) as mock_get, patch(
+        "src.interfaces.load_interface.time.sleep"
+    ), patch(
+        "src.interfaces.load_interface.logger"
+    ):
+        getattr(li, "_LoadInterface__request_with_retries")(
+            "get", "http://dummy"
+        )
+        _, kwargs = mock_get.call_args
+        assert kwargs.get("verify", True) is True, (
+            "Expected verify=True when ssl_ignore is not set"
+        )
+
+
 def test_fetch_historical_energy_data_from_openhab_success(config_fixture):
     """
     Test that LoadInterface.__fetch_historical_energy_data_from_openhab successfully
