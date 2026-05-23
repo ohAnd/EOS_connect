@@ -191,6 +191,18 @@ _ALL_FIELDS: list[FieldDef] = [
         depends_on={"data_source.type": ["homeassistant"]},
         display_group="Connection",
     ),
+    FieldDef(
+        key="data_source.ssl_ignore",
+        field_type="bool",
+        default=False,
+        section="data_source",
+        level="expert",
+        description="Disable SSL certificate verification (use with private/self-signed CA)",
+        labels=["restart_required"],
+        help_url="configuration.html#data-source",
+        depends_on={"data_source.type": ["homeassistant", "openhab"]},
+        display_group="Connection",
+    ),
 
     # ===== LOAD =====
     FieldDef(
