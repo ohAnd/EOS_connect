@@ -94,6 +94,9 @@ If the add-on crashes with a Segmentation Fault on startup, your VM might be usi
 
 This allows the add-on to correctly see and use your physical CPU's instructions.
 
+**Note on SSL Certificate Verification:**
+By default, EOS Connect validates SSL certificates when connecting to Home Assistant or OpenHAB. If you use a setup with **self-signed or private CA certificates**, you can disable verification in Settings → Data Source → **SSL Ignore** (expert level, requires restart). Only enable this in **trusted private networks** where you fully control the network path. Currently, EOS Connect does not support supplying custom root CA certificates — this feature is planned for future releases. For production setups, we recommend obtaining a valid certificate through Let's Encrypt (free) or your organization's certificate authority.
+
 ---
 
 **Other Installation Options:**

@@ -703,6 +703,71 @@
                     <td>Find or create an API token in OpenHAB settings</td>
                 </tr>
             </table>
+
+            <h3>data_source.ssl_ignore</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>data_source.ssl_ignore</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Disable SSL/TLS certificate verification for HTTPS connections</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>true</code> &ndash; Disable SSL verification (not recommended for production)<br>
+                        <code>false</code> &ndash; Enable SSL verification (default, secure)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>false</code></td>
+                </tr>
+                <tr>
+                    <th>Requires Restart</th>
+                    <td>Yes</td>
+                </tr>
+                <tr>
+                    <th>Expert Level</th>
+                    <td>Yes — only visible in advanced configuration</td>
+                </tr>
+            </table>
+
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-shield-exclamation"></i> Security Warning:</strong>
+                Disabling SSL certificate verification removes protection against man-in-the-middle (MITM) attacks. 
+                <strong>Only use this in the following scenarios:</strong>
+                <ul style="margin-top: 10px; margin-bottom: 0;">
+                    <li>Your Home Assistant or OpenHAB uses a <strong>self-signed certificate</strong></li>
+                    <li>Your Home Assistant or OpenHAB uses a <strong>private CA certificate</strong></li>
+                    <li>The connection is within a <strong>trusted, isolated private network</strong></li>
+                    <li>You understand and accept the security trade-offs</li>
+                </ul>
+                <p style="margin-top: 10px; margin-bottom: 0;"><strong>If using HTTPS with a valid public certificate,</strong> keep this disabled.</p>
+            </div>
+
+            <h4>Troubleshooting Connection Errors</h4>
+            <p>If you see SSL certificate errors like:</p>
+            <code style="display: block; padding: 10px; background-color: rgb(54, 54, 54); border-radius: 5px; margin: 10px 0; overflow-x: auto;">
+                SSLError: Certificate verify failed<br>
+                SSLError: [SSL: SELF_SIGNED_CERT_REJECT] self signed certificate
+            </code>
+            <p><strong>Step 1 (Recommended):</strong> Install a valid certificate using Let's Encrypt (free) via your reverse proxy or DNS.</p>
+            <p><strong>Step 2:</strong> If Step 1 isn't feasible, enable this option in Settings → Data Source, then restart EOS Connect.</p>
+
+            <h4>Example Configuration</h4>
+            <pre style="background-color: rgb(54, 54, 54); padding: 12px; border-radius: 5px; overflow-x: auto;"><code>data_source:
+  type: homeassistant
+  url: https://homeassistant.local:8123  # Self-signed certificate
+  access_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  ssl_ignore: true  # ⚠️ Only because of self-signed cert in private network
+</code></pre>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-lightbulb"></i> Possible Future Enhancement:</strong> Support for custom root CA certificates is currently not planned for a future release. Feel free to draft a PR to allow secure HTTPS connections with private CAs without disabling certificate verification.
+            </div>
         </div>
 
         <div class="content-section" id="battery">
