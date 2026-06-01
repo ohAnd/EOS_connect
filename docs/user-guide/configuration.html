@@ -222,12 +222,13 @@
                 <tr><th>Valid Values</th>
                     <td>
                         <code>charge_before_export</code> — charge battery before exporting surplus PV (default)<br>
-                        <code>maximize_self_consumption</code> — prefer charging from PV, minimize grid import when PV is available<br>
+                        <code>maximize_self_consumption</code> — prefer charging from PV, penalise grid export and reward battery charging to lower the effective charge break-even price<br>
                         <code>attenuate_grid_peaks</code> — charge when PV production is high to smooth grid peaks<br>
                         <code>none</code> — no charging preference; pure cost optimization
                     </td>
                 </tr>
                 <tr><th>Default</th><td><code>charge_before_export</code></td></tr>
+                <tr><th>Hot-reloadable</th><td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately and trigger a new optimization run. No restart required.</td></tr>
             </table>
 
             <h4>eos.local_evopt_discharging_strategy</h4>
@@ -243,6 +244,7 @@
                     </td>
                 </tr>
                 <tr><th>Default</th><td><code>discharge_before_import</code></td></tr>
+                <tr><th>Hot-reloadable</th><td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately and trigger a new optimization run. No restart required.</td></tr>
             </table>
 
             <h4>eos.local_evopt_emergency_reserve_pct</h4>
@@ -259,6 +261,7 @@
                 <tr><th>Default</th><td><code>0</code> (disabled)</td></tr>
                 <tr><th>Requires</th><td><code>local_evopt_discharging_strategy = emergency_reserve</code></td></tr>
                 <tr><th>Example</th><td>Set to <code>20</code> to keep at least 20% battery charge in reserve</td></tr>
+                <tr><th>Hot-reloadable</th><td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately and trigger a new optimization run. No restart required.</td></tr>
             </table>
 
             <h4>eos.local_evopt_max_grid_import_w</h4>
@@ -411,6 +414,10 @@
                             <li><strong>Visual feedback:</strong> Green indicators on dashboard when active</li>
                         </ul>
                     </td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately <em>and</em> trigger a new optimization run so the effect is visible at once. No restart required.</td>
                 </tr>
             </table>
 

@@ -60,8 +60,8 @@
             <main class="main-content">
         <div class="hero" id="overview">
             <h1>EOS Connect</h1>
-            <p>Open-source integration and control platform for intelligent energy optimization</p>
-            <p style="font-size: 1rem; color: #aaa; margin-top: 1rem;">Bridges your energy system with external optimization engines (EOS/EVopt)</p>
+            <p>Open-source energy management platform with a built-in optimizer and optional external backends</p>
+            <p style="font-size: 1rem; color: #aaa; margin-top: 1rem;">Connects your energy hardware, runs optimization, and controls your devices automatically</p>
         </div>
 
         <!-- 4 Main Navigation Blocks -->
@@ -119,18 +119,19 @@
         <div class="content-section" id="role">
             <h2><i class="fas fa-search"></i> What Does EOS Connect Do?</h2>
             <div class="alert alert-info">
-                <strong><i class="fas fa-lightbulb"></i> Important:</strong> EOS Connect is an <strong>integration and control platform</strong> that bridges your energy system with external optimization engines. It collects data from your devices (battery, inverter, sensors), sends it to an optimization backend (EOS or EVopt), receives the optimization results, and controls your devices accordingly.
+                <strong><i class="fas fa-lightbulb"></i> What EOS Connect does:</strong> Collects data from your devices, runs optimization (built-in by default — no external server needed), and controls your hardware automatically based on the results.
             </div>
-            <p><strong>The actual optimization calculations are performed by:</strong></p>
+            <p><strong>Optimization backends:</strong></p>
             <ul>
-                <li><strong>Akkudoktor EOS</strong> - Full-featured optimization engine (default) - <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
-                <li><strong>EVopt</strong> - Lightweight, very fast alternative - <a href="https://github.com/thecem/hassio-evopt" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
+                <li><strong>Local EVopt</strong> (default, built-in) — MILP optimizer, no external server needed. <a href="what-is/index.html#local-evopt">Learn more →</a></li>
+                <li><strong>Akkudoktor EOS</strong> — Full-featured external engine — <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
+                <li><strong>EVopt</strong> — Lightweight external alternative — <a href="https://github.com/thecem/hassio-evopt" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
             </ul>
             <p><strong>EOS Connect handles:</strong></p>
             <ul>
                 <li><i class="fas fa-check"></i> Data collection from your devices (battery SOC, PV production, load, etc.)</li>
                 <li><i class="fas fa-check"></i> Forecast integration (PV forecasts, electricity prices, weather)</li>
-                <li><i class="fas fa-check"></i> Communication with optimization backend</li>
+                <li><i class="fas fa-check"></i> Running optimization (in-process or via external backend)</li>
                 <li><i class="fas fa-check"></i> Executing optimization results (controlling inverter, battery, EV charger)</li>
                 <li><i class="fas fa-check"></i> Web dashboard for monitoring and manual control</li>
                 <li><i class="fas fa-check"></i> API and MQTT interfaces for integration</li>
@@ -182,10 +183,11 @@
             <h2><i class="fas fa-star"></i> Key Features</h2>
             
             <h3>Automated Energy Optimization</h3>
-            <p>EOS Connect uses real-time and forecast data to maximize self-consumption and minimize grid costs. It supports two optimization backends:</p>
+            <p>EOS Connect uses real-time and forecast data to maximize self-consumption and minimize grid costs. It ships with a built-in optimizer and also supports external backends:</p>
             <ul>
-                <li><strong>Akkudoktor EOS</strong> - Full-featured optimization engine (default)</li>
-                <li><strong>EVopt</strong> - Lightweight, very fast alternative</li>
+                <li><strong>Local EVopt</strong> (default, built-in) — MILP optimizer, no external server required</li>
+                <li><strong>Akkudoktor EOS</strong> — Full-featured external optimization engine</li>
+                <li><strong>EVopt</strong> — Lightweight, very fast external alternative</li>
             </ul>
 
             <h3>Dynamic Battery Management</h3>

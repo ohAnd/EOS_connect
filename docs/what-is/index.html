@@ -61,20 +61,20 @@
         <!-- Header -->
         <div class="hero">
             <h1>What is EOS Connect?</h1>
-            <p>Integration and control platform that connects your energy hardware with optimization engines</p>
+            <p>Open-source energy management platform with a built-in optimizer — and optional external backends</p>
         </div>
 
         <!-- Introduction -->
         <div class="content-section" id="introduction">
             <h2><i class="fas fa-book"></i> Introduction</h2>
-            <p><strong>EOS Connect</strong> is an open-source <strong>integration and control platform</strong> for intelligent energy management. It acts as the orchestration layer between your energy system (solar panels, battery storage, inverters, EV chargers) and optimization engines.</p>
-            
-            <div class="alert alert-warning">
-                <strong><i class="fas fa-exclamation-triangle"></i> Important Understanding:</strong> EOS Connect's primary role is integration and control. For optimization it can use either its built-in engine or an external server:
+            <p><strong>EOS Connect</strong> is an open-source platform for intelligent energy management. It orchestrates your entire energy system — solar panels, battery storage, inverters, EV chargers — using a <strong>built-in MILP optimizer</strong> that works out of the box, with the option to connect to external optimization servers for advanced use cases.</p>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> How it works:</strong>
                 <ul style="margin-top: 0.5rem;">
                     <li><i class="fas fa-check"></i> Collects data from your devices (battery SOC, PV production, load consumption)</li>
                     <li><i class="fas fa-check"></i> Retrieves forecasts (PV generation, electricity prices, weather)</li>
-                    <li><i class="fas fa-check"></i> Runs optimization (built-in, or sends data to an external engine)</li>
+                    <li><i class="fas fa-check"></i> Runs the optimization — built-in by default, or delegates to an external engine</li>
                     <li><i class="fas fa-check"></i> Controls your devices based on the results (inverter, battery, EV charger)</li>
                     <li><i class="fas fa-check"></i> Provides monitoring and manual control via web dashboard and APIs</li>
                 </ul>
@@ -446,26 +446,36 @@
         <div class="content-section">
             <h3><i class="fas fa-brain"></i> Optimization Backends</h3>
 
-            <h4>Akkudoktor EOS (Default)</h4>
+            <h4>Local EVopt — Built-in (Default)</h4>
+            <ul>
+                <li><strong>Built-in:</strong> Runs in-process — no external server to install or maintain</li>
+                <li><strong>MILP solver:</strong> Uses PuLP/CBC to find the globally cost-optimal dispatch plan</li>
+                <li><strong>Configurable strategies:</strong> Charging (charge before export, maximise self-consumption, attenuate grid peaks) and discharging (discharge before import, emergency reserve)</li>
+                <li><strong>Hot-reloadable:</strong> Strategy changes take effect immediately and trigger a new optimization run</li>
+                <li><strong>15-minute resolution:</strong> Supports both 3600&thinsp;s (hourly) and 900&thinsp;s (15-minute) time frames</li>
+                <li><strong>Based on:</strong> <a href="https://github.com/evcc-io/optimizer" target="_blank"><i class="fab fa-github"></i> evcc-io/optimizer</a> (MIT license)</li>
+            </ul>
+
+            <h4>Akkudoktor EOS Server</h4>
             <ul>
                 <li><strong>Full-featured:</strong> Complex optimization algorithms</li>
-                <li><strong>Comprehensive:</strong> Considers all system parameters</li>
+                <li><strong>Comprehensive:</strong> Considers all system parameters including temperature forecasts</li>
                 <li><strong>Flexible:</strong> Highly configurable</li>
-                <li><strong>Server:</strong> Runs on port 8503</li>
+                <li><strong>Server:</strong> Runs on port 8503 (external process)</li>
                 <li><strong>GitHub:</strong> <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">Akkudoktor-EOS/EOS</a></li>
             </ul>
 
-            <h4>EVopt (Lightweight)</h4>
+            <h4>EVopt (Lightweight External)</h4>
             <ul>
                 <li><strong>Fast:</strong> Very quick optimization calculations</li>
                 <li><strong>Lightweight:</strong> Lower resource requirements</li>
                 <li><strong>Simple:</strong> Easier to set up and maintain</li>
-                <li><strong>Server:</strong> Runs on port 7050</li>
+                <li><strong>Server:</strong> Runs on port 7050 (external process)</li>
                 <li><strong>Source:</strong> Available via EVCC discussions</li>
             </ul>
 
             <div class="alert alert-info">
-                <strong><i class="fas fa-lightbulb"></i> Choose Your Backend:</strong> Configure via <code>eos.source</code> in the web UI (<i class="fas fa-cog"></i> Settings → EOS). Options: <code>eos_server</code> or <code>evopt</code>
+                <strong><i class="fas fa-lightbulb"></i> Choose Your Backend:</strong> Configure via <code>eos.source</code> in the web UI (<i class="fas fa-cog"></i> Settings &rarr; EOS). Options: <code>local_evopt</code> (default, built-in), <code>eos_server</code>, or <code>evopt</code>.
             </div>
         </div>
 
@@ -476,6 +486,7 @@
             <h4>Time Frame (Optimization Granularity)</h4>
             <p><strong>Backend-Specific Capabilities:</strong></p>
             <ul>
+                <li><strong>Local EVopt (built-in):</strong> Supports both <code>3600</code> (hourly) and <code>900</code> (15-minute). Runs in-process — no external calls during optimization.</li>
                 <li><strong>EOS Server:</strong> Only supports <code>3600</code> seconds (hourly). 15-minute intervals are not available with this backend.</li>
                 <li><strong>EVopt:</strong> Supports both <code>3600</code> (hourly) and <code>900</code> (15-minute). Use 900 for more precise, dynamic optimization.</li>
             </ul>
@@ -486,7 +497,7 @@
             <ul>
                 <li><strong>Default:</strong> 3 minutes</li>
                 <li><strong>Recommended Range:</strong> 1-5 minutes</li>
-                <li><strong>Considerations:</strong> More frequent updates = more API calls to EOS server</li>
+                <li><strong>Considerations:</strong> More frequent updates = more solver runs (built-in) or API calls (external backends)</li>
             </ul>
 
             <div class="alert alert-warning">

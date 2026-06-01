@@ -17,7 +17,7 @@ Supported fields (Priority 2 — Battery SOC):
 
 Supported fields (Priority 1 — Optimizer):
 - ``eos.timeout``
-- ``eos.dyn_override_discharge_allowed_pv_greater_load``  (also triggers immediate run)
+- ``eos.dyn_override_discharge_allowed_pv_greater_load``  (also triggers immediate run via ``_OPTIMIZER_RUN_TRIGGERS``)
 - ``eos.pv_battery_charge_control_enabled``
 
 Supported fields (Local EVopt strategies):
