@@ -17,7 +17,7 @@ Supported fields (Priority 2 — Battery SOC):
 
 Supported fields (Priority 1 — Optimizer):
 - ``eos.timeout``
-- ``eos.dyn_override_discharge_allowed_pv_greater_load``
+- ``eos.dyn_override_discharge_allowed_pv_greater_load``  (also triggers immediate run)
 - ``eos.pv_battery_charge_control_enabled``
 
 Supported fields (Local EVopt strategies):
@@ -70,6 +70,11 @@ _LOCAL_EVOPT_FIELD_MAP = {
     "eos.local_evopt_charging_strategy": ("charging_strategy", str),
     "eos.local_evopt_discharging_strategy": ("discharging_strategy", str),
     "eos.local_evopt_emergency_reserve_pct": ("emergency_reserve_pct", int),
+}
+
+# Optimizer keys whose change immediately invalidates the current result
+_OPTIMIZER_RUN_TRIGGERS = {
+    "eos.dyn_override_discharge_allowed_pv_greater_load",
 }
 
 # Feed-in related fields that require recalculating feed-in prices
@@ -294,6 +299,9 @@ class HotReloadAdapter:
             "[HotReload] Updated optimizer.%s = %s (was %s)",
             attr, coerced, old_val,
         )
+
+        if key in _OPTIMIZER_RUN_TRIGGERS:
+            self._fire_run_trigger(key)
 
     def _apply_local_evopt(self, key, new_value):
         """Apply a local_evopt strategy config change to the running backend."""

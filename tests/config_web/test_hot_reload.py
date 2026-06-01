@@ -295,6 +295,29 @@ class TestHotReloadOptimizer:
         adapter.on_config_changed("eos.dyn_override_discharge_allowed_pv_greater_load", False, True)
         assert adapter.last_applied == []
 
+    def test_dyn_override_fires_run_trigger(self, optimization_interface):
+        """Changing dyn_override flag should also trigger an immediate run."""
+        trigger = MagicMock()
+        adapter = HotReloadAdapter(
+            optimization_interface=optimization_interface,
+            on_run_trigger=trigger,
+        )
+        adapter.on_config_changed(
+            "eos.dyn_override_discharge_allowed_pv_greater_load", False, True
+        )
+        assert optimization_interface.dyn_override_discharge_allowed is True
+        trigger.assert_called_once()
+
+    def test_timeout_does_not_fire_run_trigger(self, optimization_interface):
+        """Changing eos.timeout should NOT trigger an immediate run."""
+        trigger = MagicMock()
+        adapter = HotReloadAdapter(
+            optimization_interface=optimization_interface,
+            on_run_trigger=trigger,
+        )
+        adapter.on_config_changed("eos.timeout", 180, 240)
+        trigger.assert_not_called()
+
 
 @pytest.fixture
 def local_evopt_backend():
