@@ -896,6 +896,11 @@ class SetupWizard {
                 if (!match) {
                     return false;
                 }
+            } else {
+                // Single string value — dependency not met if current value doesn't match
+                if (String(allowed) !== String(current) && allowed !== current) {
+                    return false;
+                }
             }
         }
         return true;

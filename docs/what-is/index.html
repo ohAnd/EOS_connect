@@ -67,28 +67,28 @@
         <!-- Introduction -->
         <div class="content-section" id="introduction">
             <h2><i class="fas fa-book"></i> Introduction</h2>
-            <p><strong>EOS Connect</strong> is an open-source <strong>integration and control platform</strong> for intelligent energy management. It acts as the orchestration layer between your energy system (solar panels, battery storage, inverters, EV chargers) and external optimization backends.</p>
+            <p><strong>EOS Connect</strong> is an open-source <strong>integration and control platform</strong> for intelligent energy management. It acts as the orchestration layer between your energy system (solar panels, battery storage, inverters, EV chargers) and optimization engines.</p>
             
             <div class="alert alert-warning">
-                <strong><i class="fas fa-exclamation-triangle"></i> Important Understanding:</strong> EOS Connect <strong>does not perform optimization calculations itself</strong>. Instead, it:
+                <strong><i class="fas fa-exclamation-triangle"></i> Important Understanding:</strong> EOS Connect's primary role is integration and control. For optimization it can use either its built-in engine or an external server:
                 <ul style="margin-top: 0.5rem;">
                     <li><i class="fas fa-check"></i> Collects data from your devices (battery SOC, PV production, load consumption)</li>
                     <li><i class="fas fa-check"></i> Retrieves forecasts (PV generation, electricity prices, weather)</li>
-                    <li><i class="fas fa-check"></i> Sends all data to an external optimization engine (EOS or EVopt)</li>
-                    <li><i class="fas fa-check"></i> Receives optimization results back</li>
-                    <li><i class="fas fa-check"></i> Controls your devices based on those results (inverter, battery, EV charger)</li>
+                    <li><i class="fas fa-check"></i> Runs optimization (built-in, or sends data to an external engine)</li>
+                    <li><i class="fas fa-check"></i> Controls your devices based on the results (inverter, battery, EV charger)</li>
                     <li><i class="fas fa-check"></i> Provides monitoring and manual control via web dashboard and APIs</li>
                 </ul>
             </div>
 
-            <p><strong>The actual optimization calculations are performed by:</strong></p>
+            <p><strong>Optimization backends available:</strong></p>
             <ul>
-                <li><strong>Akkudoktor EOS</strong> (default) - Full-featured optimization engine - <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
-                <li><strong>EVopt</strong> - Lightweight, very fast alternative - <a href="https://github.com/thecem/hassio-evopt" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
+                <li><strong>Local EVopt</strong> (default) — Built-in MILP optimizer, no external server needed. Based on the <a href="https://github.com/evcc-io/optimizer" target="_blank"><i class="fab fa-github"></i> evcc-io/optimizer</a> engine (MIT license). Supports configurable charging/discharging strategies and emergency battery reserve.</li>
+                <li><strong>Akkudoktor EOS</strong> — Full-featured external optimization engine - <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
+                <li><strong>EVopt</strong> — Lightweight external alternative - <a href="https://github.com/thecem/hassio-evopt" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
             </ul>
 
             <div class="alert alert-info">
-                <strong><i class="fas fa-lightbulb"></i> Think of it this way:</strong> EOS Connect is like a smart home hub that translates between your devices and a powerful optimization brain running separately.
+                <strong><i class="fas fa-lightbulb"></i> Getting started:</strong> With the built-in <code>local_evopt</code> backend (default), you can start optimizing immediately — no external server to install or maintain.
             </div>
         </div>
 

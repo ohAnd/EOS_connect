@@ -20,6 +20,7 @@ import logging
 from datetime import datetime, timedelta
 from .optimization_backends.optimization_backend_eos import EOSBackend
 from .optimization_backends.optimization_backend_evopt import EVOptBackend
+from .optimization_backends.optimization_backend_local_evopt import LocalEVOptBackend
 
 logger = logging.getLogger("__main__")
 
@@ -49,7 +50,28 @@ class OptimizationInterface:
             "pv_battery_charge_control_enabled", False
         )
 
-        if self.eos_source == "evopt":
+        if self.eos_source == "local_evopt":
+            # Parse local_evopt-specific settings; 0 means "not set" for int fields
+            _num_threads = config.get("local_evopt_num_threads") or None
+            _time_limit = config.get("local_evopt_time_limit") or None
+            _max_imp = config.get("local_evopt_max_grid_import_w") or None
+            _max_exp = config.get("local_evopt_max_grid_export_w") or None
+            self.backend = LocalEVOptBackend(
+                time_frame_base=self.time_frame_base,
+                time_zone=self.time_zone,
+                num_threads=_num_threads,
+                time_limit=_time_limit,
+                charging_strategy=config.get("local_evopt_charging_strategy", "charge_before_export"),
+                discharging_strategy=config.get("local_evopt_discharging_strategy", "discharge_before_import"),
+                emergency_reserve_pct=config.get("local_evopt_emergency_reserve_pct", 0),
+                max_grid_import_w=_max_imp,
+                max_grid_export_w=_max_exp,
+            )
+            self.backend_type = "local_evopt"
+            logger.info(
+                "[OPTIMIZATION] Using Local EVopt backend (built-in MILP, no external server)"
+            )
+        elif self.eos_source == "evopt":
             self.backend = EVOptBackend(
                 self.base_url, self.time_frame_base, self.time_zone
             )

@@ -11,11 +11,13 @@
 ---
 
 ## Overview
-EOS Connect is an open-source tool for intelligent energy management and optimization. It acts as the orchestration layer between your energy hardware (inverters, batteries, PV forecasts) and external optimization engines. EOS Connect is an integration and control platform—not an optimizer. Optimization calculations are performed by external servers:
-- [Akkudoktor EOS](https://github.com/Akkudoktor-EOS/EOS)
-- [EVopt](https://github.com/thecem/hassio-evopt)
+EOS Connect is an open-source tool for intelligent energy management and optimization. It acts as the orchestration layer between your energy hardware (inverters, batteries, PV forecasts) and optimization engines.
 
-EOS Connect fetches real-time and forecast data, processes it via your chosen optimizer, and controls devices to optimize your energy usage and costs.
+EOS Connect ships with a **built-in MILP optimizer** (`local_evopt`) — no external server needed. You can also connect it to external servers for advanced use cases:
+- **Built-in (default):** [local_evopt](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#local-evopt) — based on [evcc-io/optimizer](https://github.com/evcc-io/optimizer) (MIT license)
+- **External:** [Akkudoktor EOS](https://github.com/Akkudoktor-EOS/EOS) or [EVopt](https://github.com/thecem/hassio-evopt)
+
+EOS Connect fetches real-time and forecast data, runs or delegates optimization, and controls devices to maximize self-consumption and minimize energy costs.
 
 ---
 
@@ -39,7 +41,7 @@ EOS Connect periodically collects:
 - PV solar forecasts for the next 48 hours
 - Upcoming energy prices
 
-It sends this data to the optimizer (EOS or EVopt), which returns a prediction and recommended control strategy. EOS Connect then applies these controls to your devices (inverter, battery, EVCC, etc.). All scheduling and timing is managed by EOS Connect.
+It sends this data to the optimizer (built-in local_evopt by default, or an external EOS/EVopt server), which returns a prediction and recommended control strategy. EOS Connect then applies these controls to your devices (inverter, battery, EVCC, etc.). All scheduling and timing is managed by EOS Connect.
 
 <div align="center">
   <img src="docs\assets\images\eos_connect_flow.png" alt="EOS Connect process flow" width="450"/>
@@ -62,13 +64,14 @@ Supported data sources and integrations:
    - Home Assistant (latest version recommended)
    - EOS or EVopt server (can be installed as part of the setup; see below)
 
-2. **Option A: Install EOS Connect Add-on:**
+2. **Install EOS Connect Add-on:**
    - Add the [ohAnd/ha_addons](https://github.com/ohAnd/ha_addons) repository to your Home Assistant add-on store.
    - Install the **EOS Connect** add-on from the store.
-  
-3. **Option B: Install EOS Connect Add-on:**
-   - If you want to use EOS as your optimization backend, add the [Duetting/ha_eos_addon](https://github.com/Duetting/ha_eos_addon) or [thecem/ha_eos_addon](https://github.com/thecem/ha_eos_addon) repository to your Home Assistant add-on store and install the EOS add-on, or ensure your EOS server is running and reachable.
-   - If you prefer the lightweight EVopt backend, install [thecem/hassio-evopt](https://github.com/thecem/hassio-evopt) and make sure it is running.
+   - The built-in optimizer (`local_evopt`) works out of the box — no additional add-ons required.
+
+3. **(Optional) External optimization backend:**
+   - To use Akkudoktor EOS as backend, add the [Duetting/ha_eos_addon](https://github.com/Duetting/ha_eos_addon) or [thecem/ha_eos_addon](https://github.com/thecem/ha_eos_addon) repository and install the EOS add-on.
+   - To use EVopt, install [thecem/hassio-evopt](https://github.com/thecem/hassio-evopt) and make sure it is running.
 
 4. **Configure:**
     - On first start, a **Setup Wizard** guides you through initial configuration via the web UI.
@@ -107,7 +110,7 @@ EOS Connect uses a **web-based configuration system**. All settings are managed 
 
 ### First Start (Setup Wizard)
 On first launch, a **Setup Wizard** guides you through the essential configuration steps in optimal order:
-1. **Optimizer** — Select your optimization backend (EOS Server or EVopt)
+1. **Optimizer** — Select your optimization backend (built-in Local EVopt, EOS Server, or external EVopt)
 2. **EVCC** (Optional) — Configure if you want to use EVCC for PV forecasts, inverter control gateway, or car charging dependent control. Can be skipped if not using EVCC.
 3. **Inverter** — Select your inverter type for battery control (display-only if not using hardware control). Can use EVCC as controller if configured in step 2.
 4. **Data Source** — Connect to Home Assistant, OpenHAB, or use default sensors

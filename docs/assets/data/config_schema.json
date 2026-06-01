@@ -214,23 +214,24 @@
     {
       "key": "eos.source",
       "type": "select",
-      "default": "eos_server",
+      "default": "local_evopt",
       "section": "eos",
       "level": "getting_started",
-      "description": "Optimization backend — EOS Server or EVopt",
+      "description": "Optimization backend — Local (built-in), EOS Server, or EVopt (external)",
       "labels": [
         "restart_required"
       ],
       "help_url": "configuration.html#eos",
       "validation": {
         "choices": [
+          "local_evopt",
           "eos_server",
           "evopt"
         ]
       },
       "depends_on": null,
       "hot_reload": false,
-      "display_group": "Server"
+      "display_group": "Backend"
     },
     {
       "key": "eos.server",
@@ -244,9 +245,14 @@
       ],
       "help_url": "configuration.html#eos",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "eos.source": [
+          "eos_server",
+          "evopt"
+        ]
+      },
       "hot_reload": false,
-      "display_group": "Server"
+      "display_group": "External Server"
     },
     {
       "key": "eos.port",
@@ -263,9 +269,14 @@
         "min": 1,
         "max": 65535
       },
-      "depends_on": null,
+      "depends_on": {
+        "eos.source": [
+          "eos_server",
+          "evopt"
+        ]
+      },
       "hot_reload": false,
-      "display_group": "Server"
+      "display_group": "External Server"
     },
     {
       "key": "eos.time_frame",
@@ -334,6 +345,155 @@
       "depends_on": null,
       "hot_reload": true,
       "display_group": "Advanced"
+    },
+    {
+      "key": "eos.local_evopt_charging_strategy",
+      "type": "select",
+      "default": "charge_before_export",
+      "section": "eos",
+      "level": "standard",
+      "description": "Charging strategy for the built-in optimizer",
+      "labels": [],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "choices": [
+          "charge_before_export",
+          "discharge_before_import",
+          "maximize_self_consumption",
+          "attenuate_grid_peaks",
+          "none"
+        ]
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": true,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_discharging_strategy",
+      "type": "select",
+      "default": "discharge_before_import",
+      "section": "eos",
+      "level": "standard",
+      "description": "Discharging strategy for the built-in optimizer",
+      "labels": [],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "choices": [
+          "discharge_before_import",
+          "emergency_reserve",
+          "none"
+        ]
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": true,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_emergency_reserve_pct",
+      "type": "int",
+      "default": 0,
+      "section": "eos",
+      "level": "standard",
+      "description": "Minimum battery SOC to maintain at end-of-horizon (% of capacity, 0 = disabled)",
+      "labels": [],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 0,
+        "max": 80
+      },
+      "depends_on": {
+        "eos.local_evopt_discharging_strategy": "emergency_reserve"
+      },
+      "hot_reload": true,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_max_grid_import_w",
+      "type": "int",
+      "default": 0,
+      "section": "eos",
+      "level": "expert",
+      "description": "Maximum grid import power in Watts (0 = no limit). Use for grid connection limits.",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 0,
+        "max": 100000
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": false,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_max_grid_export_w",
+      "type": "int",
+      "default": 0,
+      "section": "eos",
+      "level": "expert",
+      "description": "Maximum grid export power in Watts (0 = no limit). Use for grid feed-in limits.",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 0,
+        "max": 100000
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": false,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_num_threads",
+      "type": "int",
+      "default": 0,
+      "section": "eos",
+      "level": "expert",
+      "description": "CBC solver thread count for built-in optimizer (0 = auto)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 0,
+        "max": 32
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": false,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_time_limit",
+      "type": "int",
+      "default": 0,
+      "section": "eos",
+      "level": "expert",
+      "description": "CBC solver time limit in seconds for built-in optimizer (0 = no limit)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 0,
+        "max": 600
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": false,
+      "display_group": "Local Optimizer"
     },
     {
       "key": "price.source",

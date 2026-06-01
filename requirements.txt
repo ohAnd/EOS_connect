@@ -12,3 +12,4 @@ packaging>=23.2
 open-meteo-solar-forecast>=0.1.22
 psutil>=7.0.0
 pymodbus>=3.0.0
+pulp>=2.7.0

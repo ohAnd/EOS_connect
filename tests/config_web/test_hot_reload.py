@@ -295,3 +295,118 @@ class TestHotReloadOptimizer:
         adapter.on_config_changed("eos.dyn_override_discharge_allowed_pv_greater_load", False, True)
         assert adapter.last_applied == []
 
+
+@pytest.fixture
+def local_evopt_backend():
+    """Mock LocalEVOptBackend with hot-reloadable strategy attributes."""
+    mock = MagicMock()
+    mock.charging_strategy = "charge_before_export"
+    mock.discharging_strategy = "discharge_before_import"
+    mock.emergency_reserve_pct = 0
+    return mock
+
+
+@pytest.fixture
+def optimization_interface_local(local_evopt_backend):
+    """Mock OptimizationInterface configured with local_evopt backend."""
+    mock = MagicMock()
+    mock.timeout = 180
+    mock.backend_type = "local_evopt"
+    mock.backend = local_evopt_backend
+    return mock
+
+
+class TestHotReloadLocalEVopt:
+    """Tests for local_evopt strategy hot-reload."""
+
+    def test_charging_strategy_change(self, optimization_interface_local, local_evopt_backend):
+        """Changing charging strategy should update backend attr."""
+        adapter = HotReloadAdapter(optimization_interface=optimization_interface_local)
+        adapter.on_config_changed(
+            "eos.local_evopt_charging_strategy", "charge_before_export", "maximize_self_consumption"
+        )
+        assert local_evopt_backend.charging_strategy == "maximize_self_consumption"
+        assert "eos.local_evopt_charging_strategy" in adapter.last_applied
+
+    def test_discharging_strategy_change(self, optimization_interface_local, local_evopt_backend):
+        """Changing discharging strategy should update backend attr."""
+        adapter = HotReloadAdapter(optimization_interface=optimization_interface_local)
+        adapter.on_config_changed(
+            "eos.local_evopt_discharging_strategy", "discharge_before_import", "emergency_reserve"
+        )
+        assert local_evopt_backend.discharging_strategy == "emergency_reserve"
+        assert "eos.local_evopt_discharging_strategy" in adapter.last_applied
+
+    def test_emergency_reserve_pct_change(self, optimization_interface_local, local_evopt_backend):
+        """Changing emergency_reserve_pct should update backend attr and clamp to 0-80."""
+        adapter = HotReloadAdapter(optimization_interface=optimization_interface_local)
+        adapter.on_config_changed("eos.local_evopt_emergency_reserve_pct", 0, 20)
+        assert local_evopt_backend.emergency_reserve_pct == 20
+
+        # Clamp above 80
+        adapter.on_config_changed("eos.local_evopt_emergency_reserve_pct", 20, 99)
+        assert local_evopt_backend.emergency_reserve_pct == 80
+
+        # Clamp below 0
+        adapter.on_config_changed("eos.local_evopt_emergency_reserve_pct", 80, -5)
+        assert local_evopt_backend.emergency_reserve_pct == 0
+
+    def test_run_trigger_called_on_strategy_change(
+        self, optimization_interface_local, local_evopt_backend
+    ):
+        """on_run_trigger must be called after a local_evopt strategy hot-reload."""
+        trigger = MagicMock()
+        adapter = HotReloadAdapter(
+            optimization_interface=optimization_interface_local,
+            on_run_trigger=trigger,
+        )
+        adapter.on_config_changed(
+            "eos.local_evopt_charging_strategy", "charge_before_export", "none"
+        )
+        trigger.assert_called_once()
+
+    def test_run_trigger_not_called_for_unrelated_key(self, optimization_interface_local):
+        """on_run_trigger must not fire for keys unrelated to local_evopt strategies."""
+        trigger = MagicMock()
+        adapter = HotReloadAdapter(
+            optimization_interface=optimization_interface_local,
+            on_run_trigger=trigger,
+        )
+        adapter.on_config_changed("eos.timeout", 180, 240)
+        trigger.assert_not_called()
+
+    def test_run_trigger_exception_does_not_propagate(
+        self, optimization_interface_local, local_evopt_backend
+    ):
+        """A crash in on_run_trigger must not abort the hot-reload."""
+        def bad_trigger():
+            raise RuntimeError("scheduler exploded")
+
+        adapter = HotReloadAdapter(
+            optimization_interface=optimization_interface_local,
+            on_run_trigger=bad_trigger,
+        )
+        # Should not raise
+        adapter.on_config_changed(
+            "eos.local_evopt_charging_strategy", "charge_before_export", "none"
+        )
+        assert local_evopt_backend.charging_strategy == "none"
+
+    def test_wrong_backend_type_skipped(self):
+        """Keys should be ignored when backend_type is not local_evopt."""
+        mock_opt = MagicMock()
+        mock_opt.backend_type = "eos_server"
+        adapter = HotReloadAdapter(optimization_interface=mock_opt)
+        adapter.on_config_changed(
+            "eos.local_evopt_charging_strategy", "charge_before_export", "none"
+        )
+        assert adapter.last_applied == []
+
+    def test_no_optimizer_no_crash(self):
+        """local_evopt keys with no optimizer interface should be silently ignored."""
+        adapter = HotReloadAdapter(optimization_interface=None)
+        adapter.on_config_changed(
+            "eos.local_evopt_charging_strategy", "charge_before_export", "none"
+        )
+        assert adapter.last_applied == []
+
