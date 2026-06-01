@@ -8,12 +8,16 @@ instance directly, avoiding a full restart.
 Supported fields (Priority 1 — Price):
 - ``price.fixed_price_adder_ct``
 - ``price.relative_price_multiplier``
-- ``price.feed_in_price``
+- ``price.feed_in_price``  (also triggers immediate run via ``_PRICE_RUN_TRIGGERS``)
 - ``price.negative_price_switch``
 
 Supported fields (Priority 2 — Battery SOC):
 - ``battery.min_soc_percentage``
 - ``battery.max_soc_percentage``
+
+Supported fields (Feed-in price):
+- ``price.feed_in_static_adder``  (also triggers immediate run via ``_PRICE_RUN_TRIGGERS``)
+- ``price.feed_in_multiplier``
 
 Supported fields (Priority 1 — Optimizer):
 - ``eos.timeout``
@@ -75,6 +79,12 @@ _LOCAL_EVOPT_FIELD_MAP = {
 # Optimizer keys whose change immediately invalidates the current result
 _OPTIMIZER_RUN_TRIGGERS = {
     "eos.dyn_override_discharge_allowed_pv_greater_load",
+}
+
+# Price keys whose change immediately invalidates the current optimization result
+_PRICE_RUN_TRIGGERS = {
+    "price.feed_in_price",
+    "price.feed_in_static_adder",
 }
 
 # Feed-in related fields that require recalculating feed-in prices
@@ -188,10 +198,17 @@ class HotReloadAdapter:
         # Keep BatteryPriceHandler opportunity cost in sync with live feed-in changes.
         if key == "price.feed_in_price":
             self._apply_battery_feedin_price(coerced)
+            # Also sync FeedInPriceInterface.fixed_price_ct_kwh — this is what the
+            # optimizer actually reads; price_interface.feed_in_tariff_price is legacy.
+            self._sync_feed_in_fixed_price(coerced)
 
         # Recalculate feed-in prices when feed_in_price or negative_price_switch change
         if key in _FEEDIN_TRIGGERS:
             self._recalculate_feedin()
+
+        # Feed-in price change invalidates the current optimization result
+        if key in _PRICE_RUN_TRIGGERS:
+            self._fire_run_trigger(key)
 
     def _apply_feed_in_price(self, key, new_value):
         """Apply a feed-in price related config change."""
@@ -224,6 +241,33 @@ class HotReloadAdapter:
             logger.debug("[HotReload] Recalculated feed-in prices after %s change", key)
         except Exception as e:
             logger.warning("[HotReload] Failed to recalculate feed-in prices: %s", e)
+
+        # Feed-in static adder change invalidates the current optimization result
+        if key in _PRICE_RUN_TRIGGERS:
+            self._fire_run_trigger(key)
+
+    def _sync_feed_in_fixed_price(self, price_ct_kwh):
+        """Sync FeedInPriceInterface.fixed_price_ct_kwh and refresh its price array.
+
+        The optimizer reads from FeedInPriceInterface, not PriceInterface, so we must
+        keep fixed_price_ct_kwh in sync whenever price.feed_in_price is hot-reloaded.
+        """
+        if self._feed_in_price is None:
+            return
+        try:
+            old = getattr(self._feed_in_price, "fixed_price_ct_kwh", "?")
+            self._feed_in_price.fixed_price_ct_kwh = price_ct_kwh
+            start_time = datetime.now(self._feed_in_price.time_zone).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+            self._feed_in_price.update_prices(tgt_duration, start_time)
+            logger.info(
+                "[HotReload] Synced FeedInPriceInterface.fixed_price_ct_kwh = %s (was %s)",
+                price_ct_kwh, old,
+            )
+        except Exception as e:
+            logger.warning("[HotReload] Failed to sync FeedInPriceInterface fixed price: %s", e)
 
     def _apply_battery_feedin_price(self, feedin_price):
         """Apply live feed-in price updates to the battery price handler."""

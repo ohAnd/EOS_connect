@@ -408,6 +408,8 @@ class FeedInPriceInterface:
         """
         Use fixed feed-in price for all time slots.
 
+        Applies static_adder_ct_kwh and multiplier for consistency with dynamic sources.
+
         Args:
             tgt_duration (int): Target duration
             start_time (datetime): Start time (not used)
@@ -415,12 +417,18 @@ class FeedInPriceInterface:
         Returns:
             list: Fixed prices in EUR/Wh
         """
-        # fixed_price_ct_kwh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
-        price_eur_wh = round(self.fixed_price_ct_kwh / 100000, 9)
+        # Apply static adder and multiplier (consistent with dynamic sources)
+        price_ct_kwh = (self.fixed_price_ct_kwh + self.static_adder_ct_kwh) * self.multiplier
+        # ct/kWh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
+        price_eur_wh = round(price_ct_kwh / 100000, 9)
         prices = [price_eur_wh] * tgt_duration
         logger.debug(
-            "[FEEDIN-IF] Using fixed feed-in price: %.2f ct/kWh = %.9f EUR/Wh",
+            "[FEEDIN-IF] Using fixed feed-in price: %.2f ct/kWh (base=%.2f, adder=%.2f,"
+            " mult=%.2f) = %.9f EUR/Wh",
+            price_ct_kwh,
             self.fixed_price_ct_kwh,
+            self.static_adder_ct_kwh,
+            self.multiplier,
             price_eur_wh,
         )
         return prices

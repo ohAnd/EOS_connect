@@ -1515,6 +1515,7 @@ hot_reload_adapter = HotReloadAdapter(
     battery_interface=battery_interface,
     pv_interface=pv_interface,
     optimization_interface=eos_interface,
+    feed_in_price_interface=feed_in_price_interface,
     config_provider=config_web.get_config,
 )
 # Wire the run trigger so hot-reload changes that affect optimizer behaviour

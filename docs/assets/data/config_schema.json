@@ -746,7 +746,12 @@
         "min": -10.0,
         "max": 10.0
       },
-      "depends_on": null,
+      "depends_on": {
+        "price.feed_in_source": [
+          "elpris_dk",
+          "epex_spot"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Feed-In Pricing"
     },
@@ -763,7 +768,12 @@
         "min": 0.5,
         "max": 1.5
       },
-      "depends_on": null,
+      "depends_on": {
+        "price.feed_in_source": [
+          "elpris_dk",
+          "epex_spot"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Feed-In Pricing"
     },

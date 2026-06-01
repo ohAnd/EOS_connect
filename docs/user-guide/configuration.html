@@ -1854,6 +1854,10 @@
                     <th>Notes</th>
                     <td>Only used when <code>feed_in_source: fixed</code>. Must use the same tax/fee basis as your purchase prices. Typical range: 5-12 ct/kWh</td>
                 </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately <em>and</em> trigger a new optimization run. No restart required.</td>
+                </tr>
             </table>
 
             <h3>price.feed_in_source</h3>
@@ -1942,7 +1946,8 @@
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td><strong>Hot-reloadable:</strong> Changes take effect immediately without restart. Applied BEFORE multiplier.</td>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Hot-reloadable:</strong> Changes take effect immediately <em>and</em> trigger a new optimization run. Applied BEFORE multiplier.<br>
+                    <strong>Only shown</strong> when <code>feed_in_source</code> is <code>elpris_dk</code> or <code>epex_spot</code> — not needed for <code>fixed</code> (just set the price directly).</td>
                 </tr>
             </table>
 
@@ -1973,7 +1978,8 @@
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td><strong>Hot-reloadable:</strong> Changes take effect immediately. Expert level setting. Applied AFTER static adder.</td>
+                    <td><strong>Hot-reloadable:</strong> Changes take effect immediately. Expert level setting. Applied AFTER static adder.<br>
+                    <strong>Only shown</strong> when <code>feed_in_source</code> is <code>elpris_dk</code> or <code>epex_spot</code> — not needed for <code>fixed</code>.</td>
                 </tr>
             </table>
 
