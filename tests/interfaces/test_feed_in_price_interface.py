@@ -2,11 +2,11 @@
 Unit tests for FeedInPriceInterface.
 """
 
-import pytest
 from datetime import datetime
+from unittest.mock import patch, MagicMock
+import pytest
 import pytz
 import requests
-from unittest.mock import patch, MagicMock
 
 from src.interfaces.feed_in_price_interface import FeedInPriceInterface
 

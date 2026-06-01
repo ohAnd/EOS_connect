@@ -4,8 +4,8 @@ Unit tests for the HotReloadAdapter.
 
 from unittest.mock import MagicMock
 import time
-import pytest
 from zoneinfo import ZoneInfo
+import pytest
 
 from src.config_web.hot_reload import HotReloadAdapter
 
@@ -526,4 +526,3 @@ class TestHotReloadLocalEVopt:
             "eos.local_evopt_charging_strategy", "charge_before_export", "none"
         )
         assert adapter.last_applied == []
-

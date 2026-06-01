@@ -21,7 +21,8 @@ Supported fields (Feed-in price):
 
 Supported fields (Priority 1 — Optimizer):
 - ``eos.timeout``
-- ``eos.dyn_override_discharge_allowed_pv_greater_load``  (also triggers immediate run via ``_OPTIMIZER_RUN_TRIGGERS``)
+- ``eos.dyn_override_discharge_allowed_pv_greater_load``
+  (also triggers immediate run via ``_OPTIMIZER_RUN_TRIGGERS``)
 - ``eos.pv_battery_charge_control_enabled``
 
 Supported fields (Local EVopt strategies):
@@ -239,7 +240,7 @@ class HotReloadAdapter:
             tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
             self._feed_in_price.update_prices(tgt_duration, start_time)
             logger.debug("[HotReload] Recalculated feed-in prices after %s change", key)
-        except Exception as e:
+        except (AttributeError, TypeError, ValueError, OSError, RuntimeError) as e:
             logger.warning("[HotReload] Failed to recalculate feed-in prices: %s", e)
 
         # Feed-in static adder change invalidates the current optimization result
@@ -266,7 +267,7 @@ class HotReloadAdapter:
                 "[HotReload] Synced FeedInPriceInterface.fixed_price_ct_kwh = %s (was %s)",
                 price_ct_kwh, old,
             )
-        except Exception as e:
+        except (AttributeError, TypeError, ValueError, OSError, RuntimeError) as e:
             logger.warning("[HotReload] Failed to sync FeedInPriceInterface fixed price: %s", e)
 
     def _apply_battery_feedin_price(self, feedin_price):
