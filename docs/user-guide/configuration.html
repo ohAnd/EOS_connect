@@ -274,8 +274,8 @@
                         contracted grid connection limit or demand-charge tariffs.
                     </td>
                 </tr>
-                <tr><th>Valid Values</th><td>Integer 0–100000 (W). Set to <code>0</code> to disable.</td></tr>
-                <tr><th>Default</th><td><code>0</code> (no limit)</td></tr>
+                <tr><th>Valid Values</th><td>Integer 0–100000 (W). Set to <code>0</code> to disable this constraint (optimizer uses battery charge max and inverter limits only).</td></tr>
+                <tr><th>Default</th><td><code>0</code> (no additional limit)</td></tr>
                 <tr><th>Level</th><td>Expert</td></tr>
             </table>
 
@@ -288,8 +288,8 @@
                         or inverter limits how much energy you can feed in.
                     </td>
                 </tr>
-                <tr><th>Valid Values</th><td>Integer 0–100000 (W). Set to <code>0</code> to disable.</td></tr>
-                <tr><th>Default</th><td><code>0</code> (no limit)</td></tr>
+                <tr><th>Valid Values</th><td>Integer 0–100000 (W). Set to <code>0</code> to disable this constraint (optimizer uses battery discharge max only).</td></tr>
+                <tr><th>Default</th><td><code>0</code> (no additional limit)</td></tr>
                 <tr><th>Level</th><td>Expert</td></tr>
             </table>
 
