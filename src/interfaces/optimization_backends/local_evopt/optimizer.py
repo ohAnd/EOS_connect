@@ -33,7 +33,7 @@ Modifications made for EOS_connect integration:
 
 from dataclasses import dataclass, field
 from tempfile import TemporaryDirectory
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pulp
@@ -44,17 +44,20 @@ class OptimizerSettings:
     """Solver settings (replaces pydantic-based settings from upstream)."""
     num_threads: Optional[int] = None
     time_limit: Optional[float] = None
-    gapRel: Optional[float] = 0.01   # 1% optimality gap — negligible for energy, significantly faster
+    # 1% optimality gap — negligible for energy, significantly faster
+    gapRel: Optional[float] = 0.01
 
 
 @dataclass
 class OptimizationStrategy:
+    """Optimization strategy settings for charging and discharging behavior."""
     charging_strategy: str = "none"
     discharging_strategy: str = "none"
 
 
 @dataclass
 class GridConfig:
+    """Grid connection configuration including import/export limits and pricing."""
     p_max_imp: Optional[float] = None
     p_max_exp: Optional[float] = None
     prc_p_exc_imp: Optional[float] = None
@@ -62,6 +65,7 @@ class GridConfig:
 
 @dataclass
 class BatteryConfig:
+    """Battery configuration including capacity, power limits, and optimization constraints."""
     s_min: float = 0.0
     s_max: float = 0.0
     s_initial: float = 0.0
@@ -85,6 +89,7 @@ class BatteryConfig:
 
 @dataclass
 class TimeSeriesData:
+    """Time series input data for optimization including load, production, and prices."""
     dt: List[int]          # Time step length [s]
     gt: List[float]        # Required total energy [Wh]
     ft: List[float]        # Forecasted production [Wh]
@@ -135,7 +140,7 @@ class Optimizer:
         # the optimization problem
         self.problem = None
         # dictionary of optimizer variables
-        self.variables = {}
+        self.variables: Dict[str, Any] = {}
 
         # Compute scaling for strategy control parameters
         self.min_import_price = np.min(self.time_series.p_N) if self.time_series.p_N else 0.0
@@ -172,7 +177,11 @@ class Optimizer:
         self.variables['c'] = {}
         for i, bat in enumerate(self.batteries):
             self.variables['c'][i] = [
-                pulp.LpVariable(f"c_{i}_{t}", lowBound=0, upBound=bat.c_max * self.time_series.dt[t] / 3600.)
+                pulp.LpVariable(
+                    f"c_{i}_{t}",
+                    lowBound=0,
+                    upBound=bat.c_max * self.time_series.dt[t] / 3600.
+                )
                 for t in self.time_steps
             ]
 
@@ -180,7 +189,11 @@ class Optimizer:
         self.variables['d'] = {}
         for i, bat in enumerate(self.batteries):
             self.variables['d'][i] = [
-                pulp.LpVariable(f"d_{i}_{t}", lowBound=0, upBound=bat.d_max * self.time_series.dt[t] / 3600.)
+                pulp.LpVariable(
+                    f"d_{i}_{t}",
+                    lowBound=0,
+                    upBound=bat.d_max * self.time_series.dt[t] / 3600.
+                )
                 for t in self.time_steps
             ]
 
@@ -359,7 +372,11 @@ class Optimizer:
             if self.grid.p_max_imp is not None and not self.is_grid_demand_rate_active:
                 objective += -self.prc_e_grid_imp_pen * self.variables['e_imp_lim_exc'][t]
             if self.grid.p_max_exp is not None:
-                objective += -self.prc_e_grid_exp_pen * (1.0 - t * 1e-5) * self.variables['e_exp_lim_exc'][t]
+                objective += (
+                    -self.prc_e_grid_exp_pen
+                    * (1.0 - t * 1e-5)
+                    * self.variables['e_exp_lim_exc'][t]
+                )
 
         # -----------------------------------------------------------------------
         # Emergency reserve penalty (EOS_connect extension)
@@ -381,14 +398,22 @@ class Optimizer:
         if self.strategy.charging_strategy == 'charge_before_export':
             for i, bat in enumerate(self.batteries):
                 for t in self.time_steps:
-                    objective += -self.variables['e'][t] * self.min_import_price * 2e-5 * (self.T - t)
+                    objective += (
+                        -self.variables['e'][t]
+                        * self.min_import_price
+                        * 2e-5
+                        * (self.T - t)
+                    )
 
         # attenuate_grid_peaks: charge at high solar production times
         if self.strategy.charging_strategy == 'attenuate_grid_peaks':
             for i, bat in enumerate(self.batteries):
                 for t in self.time_steps:
                     objective += (
-                        self.variables['c'][i][t] * self.time_series.ft[t] * self.min_import_price * 1e-6
+                        self.variables['c'][i][t]
+                        * self.time_series.ft[t]
+                        * self.min_import_price
+                        * 1e-6
                     )
 
         # maximize_self_consumption (EOS_connect):
@@ -418,13 +443,30 @@ class Optimizer:
         if self.strategy.discharging_strategy == 'discharge_before_import':
             for i, bat in enumerate(self.batteries):
                 for t in self.time_steps:
-                    objective += -self.variables['n'][t] * self.min_import_price * 5e-6 * (self.T - t)
+                    objective += (
+                        -self.variables['n'][t]
+                        * self.min_import_price
+                        * 5e-6
+                        * (self.T - t)
+                    )
 
         # charging and discharging priorities
         for i, bat in enumerate(self.batteries):
             for t in self.time_steps:
-                objective += self.variables['c'][i][t] * self.min_import_price * 5e-5 * (self.T - t) * bat.c_priority
-                objective += self.variables['d'][i][t] * self.min_import_price * 5e-5 * (self.T - t) * bat.c_priority
+                objective += (
+                    self.variables['c'][i][t]
+                    * self.min_import_price
+                    * 5e-5
+                    * (self.T - t)
+                    * bat.c_priority
+                )
+                objective += (
+                    self.variables['d'][i][t]
+                    * self.min_import_price
+                    * 5e-5
+                    * (self.T - t)
+                    * bat.c_priority
+                )
 
         self.problem += objective
 
@@ -471,30 +513,51 @@ class Optimizer:
         if self.grid.p_max_imp is not None:
             if self.is_grid_demand_rate_active:
                 for t in self.time_steps:
-                    self.problem += self.variables['n'][t] <= self.grid.p_max_imp * self.time_series.dt[t] / 3600
                     self.problem += (
-                        self.grid.p_max_imp * self.time_series.dt[t] / 3600 - self.variables['n'][t]
+                        self.variables['n'][t]
+                        <= self.grid.p_max_imp * self.time_series.dt[t] / 3600
+                    )
+                    self.problem += (
+                        self.grid.p_max_imp * self.time_series.dt[t] / 3600
+                        - self.variables['n'][t]
                         <= self.M * self.variables['z_imp_lim'][t]
                     )
-                    self.problem += self.variables['e_imp_lim_exc'][t] <= self.M * (1 - self.variables['z_imp_lim'][t])
+                    self.problem += (
+                        self.variables['e_imp_lim_exc'][t]
+                        <= self.M * (1 - self.variables['z_imp_lim'][t])
+                    )
             else:
                 for t in self.time_steps:
-                    self.problem += self.variables['n'][t] <= self.grid.p_max_imp * self.time_series.dt[t] / 3600
                     self.problem += (
-                        self.grid.p_max_imp * self.time_series.dt[t] / 3600 - self.variables['n'][t]
+                        self.variables['n'][t]
+                        <= self.grid.p_max_imp * self.time_series.dt[t] / 3600
+                    )
+                    self.problem += (
+                        self.grid.p_max_imp * self.time_series.dt[t] / 3600
+                        - self.variables['n'][t]
                         <= self.M * self.variables['z_imp_lim'][t]
                     )
-                    self.problem += self.variables['e_imp_lim_exc'][t] <= self.M * (1 - self.variables['z_imp_lim'][t])
+                    self.problem += (
+                        self.variables['e_imp_lim_exc'][t]
+                        <= self.M * (1 - self.variables['z_imp_lim'][t])
+                    )
 
         # Limit regular grid export power
         if self.grid.p_max_exp is not None:
             for t in self.time_steps:
-                self.problem += self.variables['e'][t] <= self.grid.p_max_exp * self.time_series.dt[t] / 3600
                 self.problem += (
-                    self.grid.p_max_exp * self.time_series.dt[t] / 3600 - self.variables['e'][t]
+                    self.variables['e'][t]
+                    <= self.grid.p_max_exp * self.time_series.dt[t] / 3600
+                )
+                self.problem += (
+                    self.grid.p_max_exp * self.time_series.dt[t] / 3600
+                    - self.variables['e'][t]
                     <= self.M * self.variables['z_exp_lim'][t]
                 )
-                self.problem += self.variables['e_exp_lim_exc'][t] <= self.M * (1 - self.variables['z_exp_lim'][t])
+                self.problem += (
+                    self.variables['e_exp_lim_exc'][t]
+                    <= self.M * (1 - self.variables['z_exp_lim'][t])
+                )
 
         # Demand rate: track maximum import power
         if self.is_grid_demand_rate_active:
@@ -509,8 +572,14 @@ class Optimizer:
         for i, bat in enumerate(self.batteries):
             # SOC limit penalties (handle out-of-range initial SOC)
             for t in range(0, self.T):
-                self.problem += self.variables['s_max_pen'][i][t] >= self.variables['s'][i][t] - bat.s_max
-                self.problem += self.variables['s_min_pen'][i][t] >= bat.s_min - self.variables['s'][i][t]
+                self.problem += (
+                    self.variables['s_max_pen'][i][t]
+                    >= self.variables['s'][i][t] - bat.s_max
+                )
+                self.problem += (
+                    self.variables['s_min_pen'][i][t]
+                    >= bat.s_min - self.variables['s'][i][t]
+                )
 
             # Battery dynamics
             if len(self.time_steps) > 0:
@@ -557,17 +626,29 @@ class Optimizer:
                     elif bat.c_min > 0:
                         self.problem += (
                             self.variables['c'][i][t]
-                            >= bat.c_min * self.time_series.dt[t] / 3600. * self.variables['z_c'][i][t]
+                            >= bat.c_min
+                            * self.time_series.dt[t]
+                            / 3600.
+                            * self.variables['z_c'][i][t]
                         )
-                        self.problem += self.variables['c'][i][t] <= self.M * self.variables['z_c'][i][t]
+                        self.problem += (
+                            self.variables['c'][i][t]
+                            <= self.M * self.variables['z_c'][i][t]
+                        )
 
             elif bat.c_min > 0:
                 for t in self.time_steps:
                     self.problem += (
                         self.variables['c'][i][t]
-                        >= bat.c_min * self.time_series.dt[t] / 3600. * self.variables['z_c'][i][t]
+                        >= bat.c_min
+                        * self.time_series.dt[t]
+                        / 3600.
+                        * self.variables['z_c'][i][t]
                     )
-                    self.problem += self.variables['c'][i][t] <= self.M * self.variables['z_c'][i][t]
+                    self.problem += (
+                        self.variables['c'][i][t]
+                        <= self.M * self.variables['z_c'][i][t]
+                    )
 
             # Control battery charging from grid — per-slot tight M
             if not bat.charge_from_grid:
@@ -579,7 +660,10 @@ class Optimizer:
             if not bat.discharge_to_grid:
                 for t in self.time_steps:
                     _d_max_t = bat.d_max * self.time_series.dt[t] / 3600.0
-                    self.problem += self.variables['d'][i][t] <= _d_max_t * (1 - self.variables['y'][t])
+                    self.problem += (
+                        self.variables['d'][i][t]
+                        <= _d_max_t * (1 - self.variables['y'][t])
+                    )
 
             # Lock charging against discharging — per-slot tight M
             # Using c_max/d_max * dt per slot tightens the LP relaxation when z_cd
@@ -587,8 +671,14 @@ class Optimizer:
             for t in self.time_steps:
                 _c_max_t = bat.c_max * self.time_series.dt[t] / 3600.0
                 _d_max_t = bat.d_max * self.time_series.dt[t] / 3600.0
-                self.problem += self.variables['d'][i][t] <= _d_max_t * self.variables['z_cd'][i][t]
-                self.problem += self.variables['c'][i][t] <= _c_max_t * (1 - self.variables['z_cd'][i][t])
+                self.problem += (
+                    self.variables['d'][i][t]
+                    <= _d_max_t * self.variables['z_cd'][i][t]
+                )
+                self.problem += (
+                    self.variables['c'][i][t]
+                    <= _c_max_t * (1 - self.variables['z_cd'][i][t])
+                )
 
             # Emergency reserve constraint (EOS_connect extension)
             # Enforce s[i][T-1] >= s_reserve as a soft (penalized) constraint.
@@ -696,7 +786,10 @@ class Optimizer:
                     + (pulp.value(self.variables['e_imp_lim_exc'][t]) or 0.0)
                 ) * self.time_series.p_N[t]
             else:
-                clean_objective -= (pulp.value(self.variables['n'][t]) or 0.0) * self.time_series.p_N[t]
+                clean_objective -= (
+                    (pulp.value(self.variables['n'][t]) or 0.0)
+                    * self.time_series.p_N[t]
+                )
         for t in self.time_steps:
             clean_objective += (pulp.value(self.variables['e'][t]) or 0.0) * self.time_series.p_E[t]
         for i, bat in enumerate(self.batteries):
