@@ -132,7 +132,7 @@ STARTUP_ALERTS_SINCE = datetime.now(time_zone).isoformat()
 config_web = ConfigWebModule(config_manager)
 try:
     config_web.start_db()
-except Exception:
+except (OSError, RuntimeError):
     logger.exception(
         "[Main] Config database startup failed — continuing with config.yaml values. "
         "Check data directory permissions and disk space."
@@ -164,7 +164,8 @@ if time_frame_base not in (900, 3600):
     time_frame_base = 3600
 elif time_frame_base == 900 and eos_source not in ("evopt", "local_evopt"):
     logger.warning(
-        "[Config] 15-min time_frame only supported with EVopt or Local EVopt source; defaulting to 3600"
+        "[Config] 15-min time_frame only supported with EVopt or Local EVopt "
+        "source; defaulting to 3600"
     )
     time_frame_base = 3600
 
@@ -229,9 +230,13 @@ price_interface = interface_factory.create_price_interface(
 feed_in_config = {
     "source": config_manager.config.get("price", {}).get("feed_in_source", "fixed"),
     "zone": config_manager.config.get("price", {}).get("feed_in_zone", "DK1"),
-    "static_adder_ct_kwh": config_manager.config.get("price", {}).get("feed_in_static_adder", 0.0),  # ct/kWh (standard unit)
+    "static_adder_ct_kwh": config_manager.config.get("price", {}).get(
+        "feed_in_static_adder", 0.0
+    ),  # ct/kWh (standard unit)
     "multiplier": config_manager.config.get("price", {}).get("feed_in_multiplier", 1.0),
-    "fixed_price_ct_kwh": config_manager.config.get("price", {}).get("feed_in_price", 0.0),  # ct/kWh
+    "fixed_price_ct_kwh": config_manager.config.get("price", {}).get(
+        "feed_in_price", 0.0
+    ),  # ct/kWh
 }
 
 feed_in_price_interface = interface_factory.create_feed_in_price_interface(
@@ -409,7 +414,7 @@ if config_manager.config["pv_forecast"]:
 # This ensures the first optimization run has the correct battery price
 try:
     battery_interface.perform_initial_price_calculation()
-except Exception as e:
+except (OSError, RuntimeError, ValueError, TypeError) as e:
     startup_validator.add_error(
         "configuration",
         "battery_price_calculation",
@@ -545,7 +550,8 @@ def create_optimize_request():
 
         pv_prognose_wh = pv_interface.get_current_pv_forecast()
         strompreis_euro_pro_wh = price_interface.get_current_prices()
-        # Use dynamic feed-in prices from FeedInPriceInterface instead of constant PriceInterface value
+        # Use dynamic feed-in prices from FeedInPriceInterface instead of
+        # constant PriceInterface value
         einspeiseverguetung_euro_pro_wh = feed_in_price_interface.get_current_feedin_prices()
         slots_per_hour = 3600 // time_frame_base
         gesamtlast = load_interface.get_load_profile(EOS_TGT_DURATION * slots_per_hour)
@@ -1313,12 +1319,13 @@ def change_control_state():
     """
     inverter_fronius_en = False
     inverter_evcc_en = False
+    inverter_display_only_mode = False
     # Check if we have an active inverter (Fronius) or if EVCC/display-only mode is enabled
     if inverter_interface is not None:
         if isinstance(inverter_interface, EvccInverter):
             inverter_evcc_en = True
         elif isinstance(inverter_interface, NullInverter):
-            inverter_evcc_en = True
+            inverter_display_only_mode = True
         else:
             # Real inverter (Fronius, Victron, etc.)
             inverter_fronius_en = True
@@ -1476,7 +1483,10 @@ def change_control_state():
                 tgt_ac_charge_power,
             )
         elif current_overall_state < 0:
-            logger.warning("[Main] Inverter mode not initialized yet")
+            # Only warn if we have an active inverter that needs initialization
+            # Display-only mode (NullInverter) doesn't require initialization
+            if not inverter_display_only_mode:
+                logger.warning("[Main] Inverter mode not initialized yet")
 
         return True
 
@@ -1504,7 +1514,7 @@ app.config['JSON_SORT_KEYS'] = False
 # Phase 2: register the Flask REST API now that app exists.
 try:
     config_web.start_api(app)
-except Exception:
+except (ValueError, RuntimeError):
     logger.exception("[Main] Config web API registration failed — config UI unavailable")
 
 # Register hot-reload: live config changes are applied without restart
@@ -1711,7 +1721,9 @@ def get_controls():
             ].get(
                 "dyn_override_active", False
             ),
-            "dyn_override_discharge_allowed_array": optimization_scheduler.get_last_dyn_override_array(),
+            "dyn_override_discharge_allowed_array": (
+                optimization_scheduler.get_last_dyn_override_array()
+            ),
         },
         "evcc": {
             "charging_state": base_control.get_current_evcc_charging_state(),
