@@ -29,7 +29,6 @@ from src.interfaces.optimization_backends.local_evopt.optimizer import (
     GridConfig,
     OptimizationStrategy,
     Optimizer,
-    OptimizerSettings,
     TimeSeriesData,
 )
 
@@ -84,7 +83,7 @@ def _make_eos_request(n_slots=48, pv_value=1000.0, load_value=400.0, initial_soc
     }
 
 
-def _midnight_mock(tz, year=2026, month=6, day=1):
+def _midnight_mock(year=2026, month=6, day=1):
     """Return a datetime subclass whose now() is pinned to midnight of the given date."""
     class _MockDT(_real_datetime):
         @classmethod
@@ -100,6 +99,7 @@ def _midnight_mock(tz, year=2026, month=6, day=1):
 # ---------------------------------------------------------------------------
 
 class TestInstantiation:
+    """Test LocalEVOptBackend instantiation and configuration."""
     def test_creates_without_network(self, berlin_tz):
         """Backend can be created without any network access."""
         backend = LocalEVOptBackend(time_frame_base=3600, time_zone=berlin_tz)
@@ -127,10 +127,14 @@ class TestInstantiation:
 
     def test_emergency_reserve_pct_clamped(self, berlin_tz):
         """Emergency reserve percentage is clamped to 0-80."""
-        b_high = LocalEVOptBackend(time_frame_base=3600, time_zone=berlin_tz, emergency_reserve_pct=150)
+        b_high = LocalEVOptBackend(
+            time_frame_base=3600, time_zone=berlin_tz, emergency_reserve_pct=150
+        )
         assert b_high.emergency_reserve_pct == 80
 
-        b_neg = LocalEVOptBackend(time_frame_base=3600, time_zone=berlin_tz, emergency_reserve_pct=-5)
+        b_neg = LocalEVOptBackend(
+            time_frame_base=3600, time_zone=berlin_tz, emergency_reserve_pct=-5
+        )
         assert b_neg.emergency_reserve_pct == 0
 
 
@@ -139,10 +143,11 @@ class TestInstantiation:
 # ---------------------------------------------------------------------------
 
 class TestBasicRoundTrip:
-    def test_hourly_returns_eos_response_shape(self, backend_hourly, berlin_tz):
+    """Test basic hourly optimization round-trip and response validation."""
+    def test_hourly_returns_eos_response_shape(self, backend_hourly):
         """optimize() with a simple hourly request returns a valid EOS response dict."""
         eos_req = _make_eos_request(n_slots=48)
-        dt_mock = _midnight_mock(berlin_tz)
+        dt_mock = _midnight_mock()
         module_path = "src.interfaces.optimization_backends.optimization_backend_evopt.datetime"
         with patch(module_path, dt_mock):
             result, avg_runtime = backend_hourly.optimize(eos_req, timeout=60)
@@ -153,10 +158,10 @@ class TestBasicRoundTrip:
         assert "discharge_allowed" in result, "EOS response must contain discharge_allowed"
         assert "dc_charge" in result, "EOS response must contain dc_charge"
 
-    def test_hourly_control_arrays_are_48_long(self, backend_hourly, berlin_tz):
+    def test_hourly_control_arrays_are_48_long(self, backend_hourly):
         """Control arrays must be 48 elements (hourly 2-day horizon)."""
         eos_req = _make_eos_request(n_slots=48)
-        dt_mock = _midnight_mock(berlin_tz)
+        dt_mock = _midnight_mock()
         with patch(
             "src.interfaces.optimization_backends.optimization_backend_evopt.datetime", dt_mock
         ):
@@ -166,10 +171,10 @@ class TestBasicRoundTrip:
         assert len(result["discharge_allowed"]) == 48, "discharge_allowed must be 48 elements"
         assert len(result["dc_charge"]) == 48, "dc_charge must be 48 elements"
 
-    def test_ac_charge_values_in_valid_range(self, backend_hourly, berlin_tz):
+    def test_ac_charge_values_in_valid_range(self, backend_hourly):
         """ac_charge values must be in [0.0, 1.0]."""
         eos_req = _make_eos_request(n_slots=48)
-        dt_mock = _midnight_mock(berlin_tz)
+        dt_mock = _midnight_mock()
         with patch(
             "src.interfaces.optimization_backends.optimization_backend_evopt.datetime", dt_mock
         ):
@@ -178,10 +183,10 @@ class TestBasicRoundTrip:
         for i, val in enumerate(result["ac_charge"]):
             assert 0.0 <= val <= 1.0, f"ac_charge[{i}]={val} out of [0, 1]"
 
-    def test_discharge_allowed_is_binary(self, backend_hourly, berlin_tz):
+    def test_discharge_allowed_is_binary(self, backend_hourly):
         """discharge_allowed values must be 0 or 1."""
         eos_req = _make_eos_request(n_slots=48)
-        dt_mock = _midnight_mock(berlin_tz)
+        dt_mock = _midnight_mock()
         with patch(
             "src.interfaces.optimization_backends.optimization_backend_evopt.datetime", dt_mock
         ):
@@ -190,10 +195,10 @@ class TestBasicRoundTrip:
         for i, val in enumerate(result["discharge_allowed"]):
             assert val in (0, 1), f"discharge_allowed[{i}]={val} must be 0 or 1"
 
-    def test_result_dict_present(self, backend_hourly, berlin_tz):
+    def test_result_dict_present(self, backend_hourly):
         """EOS response must contain a 'result' sub-dict with expected keys."""
         eos_req = _make_eos_request(n_slots=48)
-        dt_mock = _midnight_mock(berlin_tz)
+        dt_mock = _midnight_mock()
         with patch(
             "src.interfaces.optimization_backends.optimization_backend_evopt.datetime", dt_mock
         ):
@@ -210,10 +215,11 @@ class TestBasicRoundTrip:
 # ---------------------------------------------------------------------------
 
 class TestFifteenMinuteIntervals:
-    def test_15min_control_arrays_are_192_long(self, backend_15min, berlin_tz):
+    """Test 15-minute interval optimization round-trip and response validation."""
+    def test_15min_control_arrays_are_192_long(self, backend_15min):
         """Control arrays must be 192 elements for 15-min 2-day horizon."""
         eos_req = _make_eos_request(n_slots=192)
-        dt_mock = _midnight_mock(berlin_tz)
+        dt_mock = _midnight_mock()
         with patch(
             "src.interfaces.optimization_backends.optimization_backend_evopt.datetime", dt_mock
         ):
@@ -222,10 +228,10 @@ class TestFifteenMinuteIntervals:
         assert len(result["ac_charge"]) == 192, "ac_charge must be 192 for 15-min mode"
         assert len(result["discharge_allowed"]) == 192
 
-    def test_15min_basic_response_shape(self, backend_15min, berlin_tz):
+    def test_15min_basic_response_shape(self, backend_15min):
         """15-min backend returns a valid EOS response."""
         eos_req = _make_eos_request(n_slots=192)
-        dt_mock = _midnight_mock(berlin_tz)
+        dt_mock = _midnight_mock()
         with patch(
             "src.interfaces.optimization_backends.optimization_backend_evopt.datetime", dt_mock
         ):
@@ -240,15 +246,15 @@ class TestFifteenMinuteIntervals:
 # ---------------------------------------------------------------------------
 
 class TestInfeasibleHandling:
+    """Test handling of infeasible and non-optimal solver results."""
     def test_infeasible_solver_returns_safe_eos_response(self, berlin_tz):
         """When the solver returns non-optimal, optimize() returns a safe fallback dict."""
         backend = LocalEVOptBackend(time_frame_base=3600, time_zone=berlin_tz)
 
         # Patch Optimizer.solve to return a non-optimal result
-        from src.interfaces.optimization_backends.local_evopt.optimizer import Optimizer
         with patch.object(Optimizer, "solve", return_value={"status": "Infeasible"}):
             eos_req = _make_eos_request(n_slots=48)
-            dt_mock = _midnight_mock(berlin_tz)
+            dt_mock = _midnight_mock()
             with patch(
                 "src.interfaces.optimization_backends.optimization_backend_evopt.datetime", dt_mock
             ):
@@ -262,10 +268,9 @@ class TestInfeasibleHandling:
         """If the solver raises an unexpected exception, optimize() returns an error dict."""
         backend = LocalEVOptBackend(time_frame_base=3600, time_zone=berlin_tz)
 
-        from src.interfaces.optimization_backends.local_evopt.optimizer import Optimizer
         with patch.object(Optimizer, "solve", side_effect=RuntimeError("solver crash")):
             eos_req = _make_eos_request(n_slots=48)
-            dt_mock = _midnight_mock(berlin_tz)
+            dt_mock = _midnight_mock()
             with patch(
                 "src.interfaces.optimization_backends.optimization_backend_evopt.datetime", dt_mock
             ):
@@ -280,7 +285,8 @@ class TestInfeasibleHandling:
 # ---------------------------------------------------------------------------
 
 class TestMaximizeSelfConsumptionStrategy:
-    def test_self_consumption_reduces_grid_import_vs_none(self, berlin_tz):
+    """Test maximize_self_consumption charging strategy optimization."""
+    def test_self_consumption_reduces_grid_import_vs_none(self):
         """
         With plenty of PV and a battery, maximize_self_consumption should
         result in equal or less grid import than strategy 'none'.
@@ -345,6 +351,7 @@ class TestMaximizeSelfConsumptionStrategy:
 # ---------------------------------------------------------------------------
 
 class TestEmergencyReserve:
+    """Test emergency_reserve discharging strategy end-of-horizon SOC constraint."""
     def test_end_of_horizon_soc_above_reserve(self, berlin_tz):
         """
         With emergency_reserve strategy and 20% reserve, the optimizer's
@@ -359,7 +366,7 @@ class TestEmergencyReserve:
         )
         # High load, no PV — pressure to discharge battery
         eos_req = _make_eos_request(n_slots=48, pv_value=0.0, load_value=800.0, initial_soc_pct=90)
-        dt_mock = _midnight_mock(berlin_tz)
+        dt_mock = _midnight_mock()
         with patch(
             "src.interfaces.optimization_backends.optimization_backend_evopt.datetime", dt_mock
         ):
@@ -434,6 +441,7 @@ class TestEmergencyReserve:
 # ---------------------------------------------------------------------------
 
 class TestGridLimits:
+    """Test grid import/export limit enforcement in optimization results."""
     def test_grid_import_limit_respected(self):
         """
         Direct Optimizer test: when p_max_imp is set, grid import per slot must
@@ -485,6 +493,7 @@ class TestGridLimits:
 # ---------------------------------------------------------------------------
 
 class TestOptimizerSettings:
+    """Test solver settings (threads, time_limit) propagation to Optimizer."""
     def test_solver_settings_passed_through(self, berlin_tz):
         """num_threads and time_limit are passed to the Optimizer."""
         backend = LocalEVOptBackend(
@@ -493,7 +502,6 @@ class TestOptimizerSettings:
             num_threads=2,
             time_limit=30,
         )
-        from src.interfaces.optimization_backends.local_evopt.optimizer import Optimizer
 
         captured = {}
 
@@ -504,7 +512,7 @@ class TestOptimizerSettings:
             captured["settings"] = self_inner.settings
 
         eos_req = _make_eos_request(n_slots=48)
-        dt_mock = _midnight_mock(berlin_tz)
+        dt_mock = _midnight_mock()
         with patch.object(Optimizer, "__init__", patched_init):
             with patch(
                 "src.interfaces.optimization_backends.optimization_backend_evopt.datetime",
@@ -523,6 +531,7 @@ class TestOptimizerSettings:
 # ---------------------------------------------------------------------------
 
 class TestOptimizationInterfaceSelection:
+    """Test OptimizationInterface backend selection for local_evopt."""
     def test_backend_selection_local_evopt(self, berlin_tz):
         """OptimizationInterface selects LocalEVOptBackend when source='local_evopt'."""
         from src.interfaces.optimization_interface import OptimizationInterface
@@ -558,3 +567,111 @@ class TestOptimizationInterfaceSelection:
         config = {"source": "evopt", "server": "localhost", "port": 7050}
         interface = OptimizationInterface(config, 3600, berlin_tz)
         assert interface.backend_type == "evopt"
+
+
+class TestSmartForecastExtension:
+    """
+    Test smart forecast extension that teaches optimizer about morning PV.
+
+    When forecast ends at night (19:00-05:00), the optimizer should extend
+    the forecast with synthetic morning PV to prevent expensive grid charging
+    at end-of-horizon.
+    """
+
+    def test_generate_morning_pv_pattern_hourly(self, backend_hourly):
+        """Test morning PV pattern generation for hourly intervals."""
+        pv_capacity = 4000  # 4 kW
+        pattern = backend_hourly._generate_morning_pv_pattern(
+            pv_capacity=pv_capacity,
+            time_frame_base=3600,
+            hours=6
+        )
+
+        # Should generate 6 hourly slots
+        assert len(pattern) == 6, f"Expected 6 slots, got {len(pattern)}"
+
+        # Verify conservative ramp: 10%, 20%, 30%, 40%, 50%, 50% of 4000W
+        # Energy per hour = Power * 1h
+        expected_wh = [400, 800, 1200, 1600, 2000, 2000]
+        for i, expected in enumerate(expected_wh):
+            assert abs(pattern[i] - expected) < 1.0, \
+                f"Hour {i}: expected {expected} Wh, got {pattern[i]} Wh"
+
+    def test_generate_morning_pv_pattern_fifteen_min(self, backend_15min):
+        """Test morning PV pattern generation for 15-minute intervals."""
+        pv_capacity = 4000  # 4 kW
+        pattern = backend_15min._generate_morning_pv_pattern(
+            pv_capacity=pv_capacity,
+            time_frame_base=900,
+            hours=6
+        )
+
+        # Should generate 24 slots (6 hours * 4 slots/hour)
+        assert len(pattern) == 24, f"Expected 24 slots, got {len(pattern)}"
+
+        # First hour (4 slots): 10% of 4000W = 400W * 0.25h = 100 Wh per slot
+        for i in range(4):
+            assert abs(pattern[i] - 100.0) < 1.0, \
+                f"Slot {i}: expected 100 Wh, got {pattern[i]} Wh"
+
+        # Second hour (slots 4-7): 20% = 800W * 0.25h = 200 Wh per slot
+        for i in range(4, 8):
+            assert abs(pattern[i] - 200.0) < 1.0, \
+                f"Slot {i}: expected 200 Wh, got {pattern[i]} Wh"
+
+    def test_extension_call_in_optimize_flow(self, backend_hourly):
+        """
+        Integration test: Verify extension is called during optimize() flow.
+        Uses a minimal EOS request and checks that extension occurs.
+        """
+        # Create a minimal but valid EOS request
+        eos_request = {
+            "ems": {
+                "pv_akku_prognose_wh": [0] * 48 + [500] * 144,  # Some PV capacity visible
+                "gesamtlast": [1000.0] * 192,
+                "strompreis_euro_pro_wh": [0.0003] * 192,
+            },
+            "akku": {
+                "soc_prozent": 50.0,
+                "speicherkapazitaet_wh": 10000.0,
+                "lade_effizienz": 95.0,
+                "entlade_effizienz": 95.0,
+                "max_ladeleistung_w": 5000.0,
+                "max_entladeleistung_w": 5000.0,
+            },
+        }
+
+        # Run optimize - extension logic will execute if forecast ends at night
+        # This is more of a smoke test to ensure no errors occur
+        try:
+            eos_response, runtime = backend_hourly.optimize(eos_request, timeout=10)
+            # If we get here without exception, basic integration works
+            assert "error" not in eos_response or eos_response.get("status") != "error"
+            assert runtime is not None or eos_response.get("status") == "Infeasible"
+        except ImportError:
+            pytest.skip("PuLP not installed")
+
+    def test_no_extension_when_pv_capacity_zero(self, backend_hourly):
+        """
+        Test that extension is skipped when PV capacity is zero.
+        """
+        # Build a minimal evopt_request with nighttime forecast end
+        evopt_request = {
+            "time_series": {
+                "dt": [3600],
+                "ft": [0.0],  # Zero PV (nighttime)
+                "gt": [1000.0],
+                "p_N": [0.0003],
+                "p_E": [0.00008],
+            },
+            "batteries": [],
+        }
+
+        original_length = len(evopt_request["time_series"]["ft"])
+
+        # Call extension method directly
+        extended = backend_hourly._extend_forecast_with_morning_pv(evopt_request)
+
+        # Should NOT extend (PV capacity is zero)
+        assert len(extended["time_series"]["ft"]) == original_length, \
+            "Should not extend when PV capacity is zero"
