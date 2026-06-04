@@ -20,7 +20,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.3.34</span>
+                <span class="version-badge">v0.3.35</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -61,50 +61,45 @@
         <!-- Header -->
         <div class="hero">
             <h1>What is EOS Connect?</h1>
-            <p>Open-source energy management platform with a built-in optimizer — and optional external backends</p>
+            <p>A comprehensive energy management platform — from data collection to intelligent control</p>
         </div>
 
         <!-- Introduction -->
         <div class="content-section" id="introduction">
-            <h2><i class="fas fa-book"></i> Introduction</h2>
-            <p><strong>EOS Connect</strong> is an open-source platform for intelligent energy management. It orchestrates your entire energy system — solar panels, battery storage, inverters, EV chargers — using a <strong>built-in MILP optimizer</strong> that works out of the box, with the option to connect to external optimization servers for advanced use cases.</p>
+            <h2><i class="fas fa-book"></i> The Evolution: From Gateway to Full Solution</h2>
+            <p><strong>EOS Connect</strong> has evolved. Originally designed as a "data gateway" to bridge hardware with external optimizers, it is now a <strong>complete energy management system (EMS)</strong>. While it retains its open architecture and support for external backends, its core strength now lies in its <strong>fully integrated MILP optimizer</strong> (local_evopt) which provides a high-performance, self-contained solution for energy optimization.</p>
 
             <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> How it works:</strong>
+                <strong><i class="fas fa-microchip"></i> Why a full solution?</strong>
                 <ul style="margin-top: 0.5rem;">
-                    <li><i class="fas fa-check"></i> Collects data from your devices (battery SOC, PV production, load consumption)</li>
-                    <li><i class="fas fa-check"></i> Retrieves forecasts (PV generation, electricity prices, weather)</li>
-                    <li><i class="fas fa-check"></i> Runs the optimization — built-in by default, or delegates to an external engine</li>
-                    <li><i class="fas fa-check"></i> Controls your devices based on the results (inverter, battery, EV charger)</li>
-                    <li><i class="fas fa-check"></i> Provides monitoring and manual control via web dashboard and APIs</li>
+                    <li><i class="fas fa-check"></i> <strong>Zero Dependency:</strong> No need for external servers, containers, or network connectivity beyond your local environment.</li>
+                    <li><i class="fas fa-check"></i> <strong>Performance:</strong> Tighter integration between data fetching and optimization means faster cycles and more reactive control.</li>
+                    <li><i class="fas fa-check"></i> <strong>Ease of Use:</strong> One setup, one configuration, one interface. The Setup Wizard handles everything from hardware connection to optimization tuning.</li>
+                    <li><i class="fas fa-check"></i> <strong>Privacy:</strong> All your energy data and optimization logic stays local on your system.</li>
                 </ul>
             </div>
 
-            <p><strong>Optimization backends available:</strong></p>
+            <p><strong>Optimization options:</strong></p>
             <ul>
-                <li><strong>Local EVopt</strong> (default) — Built-in MILP optimizer, no external server needed. Based on the <a href="https://github.com/evcc-io/optimizer" target="_blank"><i class="fab fa-github"></i> evcc-io/optimizer</a> engine (MIT license). Supports configurable charging/discharging strategies and emergency battery reserve.</li>
+                <li><strong>Local EVopt</strong> (Recommended Default) — Built-in Linear Programming (MILP) optimizer. Based on the proven <a href="https://github.com/evcc-io/optimizer" target="_blank"><i class="fab fa-github"></i> evcc-io/optimizer</a> engine. Optimized specifically for the EOS Connect ecosystem.</li>
                 <li><strong>Akkudoktor EOS</strong> — Full-featured external optimization engine - <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
                 <li><strong>EVopt</strong> — Lightweight external alternative - <a href="https://github.com/thecem/hassio-evopt" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
             </ul>
-
-            <div class="alert alert-info">
-                <strong><i class="fas fa-lightbulb"></i> Getting started:</strong> With the built-in <code>local_evopt</code> backend (default), you can start optimizing immediately — no external server to install or maintain.
-            </div>
         </div>
 
         <!-- How It Works -->
         <div class="content-section" id="how-it-works">
             <h2><i class="fas fa-cog"></i> How It Works</h2>
             
-            <h3>System Architecture</h3>
-            <p>EOS Connect operates in a continuous optimization cycle:</p>
+            <h3>The Intelligent Control Cycle</h3>
+            <p>EOS Connect acts as the central brain of your energy installation, operating in a continuous loop:</p>
             
             <ol>
-                <li><strong>Data Collection:</strong> Gathers current system state (battery SOC, PV production, load consumption)</li>
-                <li><strong>Forecast Integration:</strong> Retrieves PV forecasts, electricity price forecasts, and weather data</li>
-                <li><strong>Optimization Request:</strong> Sends all data to EOS/EVopt server for calculation</li>
-                <li><strong>Control Execution:</strong> Receives optimization results and controls devices (battery charging, EV charging modes)</li>
-                <li><strong>Monitoring & Publishing:</strong> Provides real-time data via web dashboard, MQTT, and REST API</li>
+                <li><strong>Data Collection:</strong> Real-time monitoring of battery SOC, PV production, and household load.</li>
+                <li><strong>Forecast Integration:</strong> Aggregating PV generation forecasts and dynamic electricity prices for the next 24-48 hours.</li>
+                <li><strong>Integrated Optimization:</strong> Processing all variables locally (or delegating to a chosen server) to calculate the most cost-effective power strategy for every moment.</li>
+                <li><strong>Device Control:</strong> Executing the strategy by sending precise power commands to your inverters, batteries, and wallboxes.</li>
+                <li><strong>Monitoring:</strong> Visualizing the process and results in real-time through the web dashboard and MQTT.</li>
             </ol>
 
             <div style="text-align: center; margin: 2rem 0;">
