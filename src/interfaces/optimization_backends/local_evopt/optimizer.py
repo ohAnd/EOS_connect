@@ -24,10 +24,16 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ---
-Modifications made for EOS_connect integration:
+Modifications made for EOS_connect integration (adapted from main branch, ~2025-06):
 - Removed Flask/flask-restx/pydantic dependencies; OptimizerSettings is now a plain dataclass
 - Added 'maximize_self_consumption' charging strategy
 - Added 'emergency_reserve' discharging strategy (end-of-horizon SOC floor)
+- Added 'emergency_reserve' fields (s_reserve) to BatteryConfig and corresponding
+  penalty variable/constraint in the MILP model
+- Added gapRel to OptimizerSettings and PULP_CBC_CMD invocation (1% optimality gap)
+- Per-slot tight Big-M bounds in energy-balance and battery constraints replace the
+  upstream global M=1e6, tightening the LP relaxation and reducing B&B tree size
+- or 0.0 guard on pulp.value() calls in solve() to handle None results
 - Module is invoked in-process; no HTTP server needed
 """
 
@@ -147,16 +153,17 @@ class Optimizer:
         self.max_import_price = np.max(self.time_series.p_N) if self.time_series.p_N else 0.0
 
         # scaling for penalty parameters. Make sure goal_penalty is always positive
-        self.prc_e_goal_pen = np.min([self.max_import_price, 0.1e-3]) * 10e1
-        self.prc_p_goal_pen = (
-            np.min([self.max_import_price, 0.1e-3]) * np.max(self.time_series.dt) / 3600 * 10e1
-        )
-        self.prc_soc_exc_pen = np.min([self.max_import_price, 0.1e-3]) * 10e2
+        # Use np.max() to floor penalty_base at 0.1e-3 — ensures penalties are
+        # non-zero even when prices are zero (matches upstream evcc-io/optimizer).
+        penalty_base = np.max([self.max_import_price, 0.1e-3])
+        self.prc_e_goal_pen = penalty_base * 10e1
+        self.prc_p_goal_pen = penalty_base * np.max(self.time_series.dt) / 3600 * 10e1
+        self.prc_soc_exc_pen = penalty_base * 10e2
 
         # penalty for exceeding grid import limit
-        self.prc_e_grid_imp_pen = np.min([self.max_import_price, 0.1e-3]) * 10e1
+        self.prc_e_grid_imp_pen = penalty_base * 10e1
         # penalty for exceeding the grid export limit
-        self.prc_e_grid_exp_pen = np.min([self.max_import_price, 0.1e-3]) * 10e1
+        self.prc_e_grid_exp_pen = penalty_base * 10e1
 
         # demand rate flag
         self.is_grid_demand_rate_active = False
