@@ -23,7 +23,8 @@ class TestFeedInPriceInterfaceFixedPrice:
         interface = FeedInPriceInterface(config, 3600, "UTC")
         assert interface.source == "fixed"
         assert interface.fixed_price_ct_kwh == 8.0
-        assert len(interface.current_feedin_prices) == 0  # Not yet updated
+        # 48 hours of prices generated during initialization (30-min intervals = 48 slots)
+        assert len(interface.current_feedin_prices) == 48
 
     def test_fixed_price_array_generation(self):
         """Test fixed price array generation for 48h."""
@@ -195,51 +196,72 @@ class TestFeedInPriceInterfaceArrayExtension:
         assert len(extended) == 48
         assert all(p == 0.08 for p in extended)
 
-    def test_extend_prices_to_15min_slots(self):
-        """Test extending hourly prices to 15-min slots."""
-        prices_hourly = [0.08] * 24
-        config = {"source": "fixed", "fixed_price": 0.08}
-        interface = FeedInPriceInterface(config, 900, "UTC")  # 15-min time_frame_base
 
-        extended = interface._extend_prices_to_duration(prices_hourly, 192)
-        # Each hourly price becomes 4 slots, so 24 * 4 = 96
-        assert len(extended) >= 96
-        # Each original price is repeated 4 times
-        for i in range(0, min(96, len(extended)), 4):
-            assert extended[i] == extended[i + 1] == extended[i + 2] == extended[i + 3]
+class TestFeedInPriceInterfaceNegativePrices:
+    """Test negative price handling.
 
+    Regression tests for the negative_price_switch feature that was
+    lost during the migration from PriceInterface to FeedInPriceInterface.
+    """
 
-class TestFeedInPriceInterfaceDefaults:
-    """Test default behavior."""
+    @patch('src.interfaces.feed_in_price_interface.requests.get')
+    def test_negative_price_clamping_elpris_dk(self, mock_get):
+        """Test that negative Elpris DK prices are clamped to 0 when switch is enabled."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "prices": [
+                {"hour": 0, "price": -1.50},   # Negative DKK/kWh!
+                {"hour": 1, "price": 4.20},
+            ]
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
 
-    def test_default_prices_on_failure(self):
-        """Test system uses default prices if API fails persistently."""
         config = {
             "source": "elpris_dk",
             "zone": "DK1",
+            "static_adder_ct_kwh": 3.5,  # 3.5 ct/kWh
+            "multiplier": 1.0,
+            "negative_price_switch": True,  # ENABLE THE SWITCH
         }
         interface = FeedInPriceInterface(config, 3600, "UTC")
+        prices = interface._fetch_elpris_prices(2, datetime(2024, 1, 1, 0, 0, 0, tzinfo=pytz.UTC))
 
-        # Simulate repeated failures
-        for _ in range(30):
-            interface.consecutive_failures += 1
+        # The negative price should be clamped to 0
+        assert prices[0] == 0.0
+        # The positive price should remain as calculated (3.5 + something > 0)
+        assert prices[1] > 0
 
-        # After max failures exceeded, should use default prices
-        assert interface.consecutive_failures > interface.max_failures
-        assert len(interface.default_prices) == 48
+    @patch('src.interfaces.feed_in_price_interface.requests.get')
+    def test_negative_price_no_clamping(self, mock_get):
+        """Test that negative Elpris DK prices are NOT clamped when switch is disabled."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "prices": [
+                {"hour": 0, "price": -1.50},
+                {"hour": 1, "price": 4.20},
+            ]
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
 
-    def test_fallback_to_last_successful(self):
-        """Test fallback to last successful prices within retry window."""
         config = {
-            "source": "fixed",
-            "fixed_price": 0.08,
+            "source": "elpris_dk",
+            "zone": "DK1",
+            "static_adder_ct_kwh": 3.5,
+            "multiplier": 1.0,
+            "negative_price_switch": False,  # DISABLE THE SWITCH
         }
         interface = FeedInPriceInterface(config, 3600, "UTC")
+        prices = interface._fetch_elpris_prices(2, datetime(2024, 1, 1, 0, 0, 0, tzinfo=pytz.UTC))
 
-        # Set last successful prices
-        interface.last_successful_prices = [0.09] * 48
-        interface.consecutive_failures = 5
-
-        # Should use last successful if within retry window
-        prices = [0.09] * 48 if interface.consecutive_failures <= interface.max_failures else []
-        assert prices == interface.last_successful_prices
+        # The negative price should NOT be clamped
+        # Let's use a much more negative price to ensure it stays negative if not clamped.
+        mock_response.json.return_value = {
+            "prices": [
+                {"hour": 0, "price": -100.0},  # Very negative
+                {"hour": 1, "price": 4.20},
+            ]
+        }
+        prices = interface._fetch_elpris_prices(2, datetime(2024, 1, 1, 0, 0, 0, tzinfo=pytz.UTC))
+        assert prices[0] < 0

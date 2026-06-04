@@ -34,6 +34,7 @@ import json
 import logging
 import threading
 import requests
+import pytz
 
 logger = logging.getLogger("__main__")
 logger.info("[FEEDIN-IF] loading module")
@@ -55,7 +56,7 @@ class FeedInPriceInterface:
         static_adder_ct_kwh (float): Static adjustment in ct/kWh (e.g., 3.5 for transport costs)
         multiplier (float): Relative multiplier (1.0 = no change, 1.05 = +5%)
         time_frame_base (int): Time frame in seconds (3600 = hourly, 900 = 15-min slots)
-        time_zone (str): Timezone for date operations
+        time_zone (pytz.timezone): Timezone for date operations
         current_feedin_prices (list): Current feed-in prices in EUR/Wh
         default_prices (list): Default fallback prices
         last_successful_prices (list): Last successfully fetched prices for fallback
@@ -73,8 +74,9 @@ class FeedInPriceInterface:
                 - static_adder_ct_kwh: Static adjustment in ct/kWh (standard unit)
                 - multiplier: Relative multiplier (default 1.0)
                 - fixed_price_ct_kwh: Fixed price in ct/kWh (for 'fixed' source)
+                - negative_price_switch: Boolean to clamp negative prices to 0 (default: False)
             time_frame_base (int): 3600 for hourly, 900 for 15-minute slots
-            timezone (str): Timezone identifier
+            timezone (str): Timezone identifier (e.g., 'UTC', 'Europe/Berlin')
         """
         self.source = config.get("source", "fixed")
         self.zone = config.get("zone", "DK1")
@@ -100,8 +102,11 @@ class FeedInPriceInterface:
             fixed_price_ct_kwh = fixed_price_ct_kwh * 100
         self.fixed_price_ct_kwh = fixed_price_ct_kwh
 
+        # Negative price switching: if True, clamps negative market prices to 0
+        self.negative_price_switch = config.get("negative_price_switch", False)
+
         self.time_frame_base = time_frame_base
-        self.time_zone = timezone
+        self.time_zone = pytz.timezone(timezone)
         self.current_feedin_prices = []
         
         # Default fallback prices (0.5 ct/kWh = 0.000005 EUR/Wh)
@@ -324,6 +329,11 @@ class FeedInPriceInterface:
 
                 # ct/kWh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
                 price_eur_wh = round(price_adjusted / 100000, 9)
+                
+                # Clamp to 0 if negative_price_switch is enabled and price is negative
+                if self.negative_price_switch and price_eur_wh < 0:
+                    price_eur_wh = 0.0
+                
                 prices_eur_wh.append(price_eur_wh)
 
             logger.debug(
@@ -385,6 +395,9 @@ class FeedInPriceInterface:
 
                 # Convert ct/kWh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
                 price_eur_wh = round(price_adjusted / 100000, 9)
+                # Clamp to 0 if negative_price_switch is enabled and price is negative
+                if self.negative_price_switch and price_eur_wh < 0:
+                    price_eur_wh = 0.0
                 prices_eur_wh.append(price_eur_wh)
 
             logger.debug(
@@ -448,8 +461,8 @@ class FeedInPriceInterface:
             tgt_duration = tgt_duration * 4 if tgt_duration < 100 else tgt_duration
 
         # If still short, cycle through available prices
-        while len(prices) < tgt_duration:
-            remaining = tgt_duration - len(prices)
-            prices.extend(prices[:remaining])
+        if len(prices) < tgt_duration:
+            remaining_slots = tgt_duration - len(prices)
+            prices.extend(prices[:remaining_slots])
 
-        return prices[:tgt_duration]
+        return prices
