@@ -18,10 +18,10 @@ Usage:
     pytest tests/interfaces/optimization_backends/test_optimization_backend_evopt.py -v
 """
 
-import pytest
-import pytz
 from datetime import datetime as _real_datetime
 from unittest.mock import patch
+import pytest
+import pytz
 
 from src.interfaces.optimization_backends.optimization_backend_evopt import EVOptBackend
 
@@ -157,13 +157,10 @@ class TestNormalizeConsistentLengths:
     for both hourly and 15-minute modes.
     """
 
-    def test_normal_day_hourly_all_arrays_same_length(self, berlin_timezone):
+    def test_normal_day_hourly_all_arrays_same_length(self):
         """
         Normal day, hourly mode: all ``time_series`` arrays must have the same
         length *n* (48 when called at midnight with 48-element inputs).
-
-        Args:
-            berlin_timezone: Europe/Berlin timezone fixture.
         """
         req = _make_eos_request()
         evopt, _ = _transform(req, time_frame_base=3600)
@@ -173,14 +170,11 @@ class TestNormalizeConsistentLengths:
             len(set(lengths.values())) == 1
         ), f"Inconsistent time_series lengths on normal day: {lengths}"
 
-    def test_spring_forward_day_hourly_all_arrays_same_length(self, berlin_timezone):
+    def test_spring_forward_day_hourly_all_arrays_same_length(self):
         """
         Spring-forward day (March 29, 2026), hourly mode: sources deliver
         47-element arrays (one wall-clock hour missing); all ``time_series``
         arrays must still share a single consistent length.
-
-        Args:
-            berlin_timezone: Europe/Berlin timezone fixture.
         """
         req = _make_eos_request(
             pv=[10.0] * 47,
@@ -195,14 +189,11 @@ class TestNormalizeConsistentLengths:
             len(set(lengths.values())) == 1
         ), f"Inconsistent time_series lengths on spring-forward day: {lengths}"
 
-    def test_fall_back_day_hourly_all_arrays_same_length(self, berlin_timezone):
+    def test_fall_back_day_hourly_all_arrays_same_length(self):
         """
         Fall-back day (October 25, 2026), hourly mode: sources deliver
         49-element arrays (one extra wall-clock hour); all ``time_series``
         arrays must share a single consistent length.
-
-        Args:
-            berlin_timezone: Europe/Berlin timezone fixture.
         """
         req = _make_eos_request(
             pv=[10.0] * 49,
@@ -217,13 +208,10 @@ class TestNormalizeConsistentLengths:
             len(set(lengths.values())) == 1
         ), f"Inconsistent time_series lengths on fall-back day: {lengths}"
 
-    def test_normal_day_15min_all_arrays_same_length_192(self, berlin_timezone):
+    def test_normal_day_15min_all_arrays_same_length_192(self):
         """
         Normal day, 15-minute mode: ``n`` is fixed at 192; all ``time_series``
         arrays must have exactly 192 elements even when inputs have 48 elements.
-
-        Args:
-            berlin_timezone: Europe/Berlin timezone fixture.
         """
         req = _make_eos_request()  # 48-element arrays
         evopt, _ = _transform(req, time_frame_base=900)
@@ -238,13 +226,10 @@ class TestNormalizePaddingBehavior:
     in edge and DST scenarios.
     """
 
-    def test_empty_pv_series_padded_with_zeros(self, berlin_timezone):
+    def test_empty_pv_series_padded_with_zeros(self):
         """
         An empty PV array must be padded to *n* zeros so ``time_series['ft']``
         has the same length as the other arrays and every element is 0.0.
-
-        Args:
-            berlin_timezone: Europe/Berlin timezone fixture.
         """
         req = _make_eos_request(pv=[])
         evopt, _ = _transform(req, time_frame_base=3600)
@@ -255,13 +240,10 @@ class TestNormalizePaddingBehavior:
             v == 0.0 for v in ts["ft"]
         ), "Padded PV values must be 0.0 when source array was empty"
 
-    def test_short_load_series_padded_with_last_value(self, berlin_timezone):
+    def test_short_load_series_padded_with_last_value(self):
         """
         A load array shorter than *n* must be padded with the last element,
         not with zeros.  Use a distinctive sentinel value to verify this.
-
-        Args:
-            berlin_timezone: Europe/Berlin timezone fixture.
         """
         sentinel = 999.0
         short_load = [400.0] * 30 + [sentinel]  # 31 elements
@@ -275,14 +257,11 @@ class TestNormalizePaddingBehavior:
             ts["gt"][i] == sentinel for i in range(31, n)
         ), "Padding must repeat the last element of the short load array"
 
-    def test_short_15min_array_padded_to_192(self, berlin_timezone):
+    def test_short_15min_array_padded_to_192(self):
         """
         In 15-min mode *n* is fixed at 192.  An input array with only 47
         elements (as could occur on a spring-forward day) must be padded to
         exactly 192 using the last value.
-
-        Args:
-            berlin_timezone: Europe/Berlin timezone fixture.
         """
         last_val = 777.0
         short_arr = [100.0] * 46 + [last_val]  # 47 elements
@@ -301,13 +280,10 @@ class TestNormalizePaddingBehavior:
             ts["gt"][191] == last_val
         ), "Load padding in 15-min mode must use the last input value"
 
-    def test_long_arrays_truncated_to_n(self, berlin_timezone):
+    def test_long_arrays_truncated_to_n(self):
         """
         An array longer than *n* must be truncated: only the first *n*
         elements are kept and no extra elements appear.
-
-        Args:
-            berlin_timezone: Europe/Berlin timezone fixture.
         """
         sentinel_long = 1234.0
         long_load = [400.0] * 48 + [sentinel_long]  # 49 elements
@@ -320,13 +296,10 @@ class TestNormalizePaddingBehavior:
             sentinel_long not in ts["gt"]
         ), "The extra element beyond n must be discarded"
 
-    def test_all_empty_series_produce_consistent_lengths(self, berlin_timezone):
+    def test_all_empty_series_produce_consistent_lengths(self):
         """
         When all four input series are empty, ``n`` falls to 1 (the default
         guard).  All ``time_series`` arrays must still have the same length.
-
-        Args:
-            berlin_timezone: Europe/Berlin timezone fixture.
         """
         req = _make_eos_request(pv=[], price=[], feed=[], load=[])
         evopt, _ = _transform(req, time_frame_base=3600)

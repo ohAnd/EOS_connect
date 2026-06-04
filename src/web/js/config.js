@@ -928,6 +928,11 @@ class ConfigurationManager {
                 if (!match) {
                     return true;
                 }
+            } else {
+                // Single string value — hide if current value doesn't match
+                if (allowed !== currentVal && String(allowed) !== String(currentVal)) {
+                    return true;
+                }
             }
         }
         return false;

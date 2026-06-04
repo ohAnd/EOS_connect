@@ -20,7 +20,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.3.34</span>
+                <span class="version-badge">v0.3.35</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -121,7 +121,11 @@
         <!-- Optimizer Configuration -->
         <div class="content-section" id="optimizer">
             <h2><i class="fas fa-server"></i> Optimizer Configuration</h2>
-            <p>Configure the connection to your external optimization backend (Akkudoktor EOS or EVopt).</p>
+            <p>
+                Choose your optimization backend. EOS Connect ships with a <strong>built-in optimizer</strong>
+                (<code>local_evopt</code>) that requires no external server, plus connectors to the Akkudoktor
+                EOS server and the external EVopt server.
+            </p>
 
             <h3>eos.source</h3>
             <table>
@@ -135,17 +139,21 @@
                 </tr>
                 <tr>
                     <th>Valid Values</th>
-                    <td><code>eos_server</code>, <code>evopt</code></td>
+                    <td><code>local_evopt</code>, <code>eos_server</code>, <code>evopt</code></td>
                 </tr>
                 <tr>
                     <th>Default</th>
-                    <td><code>eos_server</code></td>
+                    <td><code>local_evopt</code></td>
                 </tr>
                 <tr>
                     <th>Notes</th>
                     <td>
-                        <strong>eos_server</strong>: Full-featured Akkudoktor EOS (<a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">GitHub</a>)<br>
-                        <strong>evopt</strong>: Lightweight, faster alternative (<a href="https://github.com/thecem/hassio-evopt" target="_blank">GitHub</a>)
+                        <strong>local_evopt</strong>: Built-in MILP optimizer — no external server needed.
+                        Based on the <a href="https://github.com/evcc-io/optimizer" target="_blank">evcc-io/optimizer</a>
+                        engine (MIT license). Supports configurable charging/discharging strategies,
+                        emergency battery reserve, and optional grid import/export limits.<br><br>
+                        <strong>eos_server</strong>: Full-featured Akkudoktor EOS (<a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">GitHub</a>) — requires external server<br>
+                        <strong>evopt</strong>: External EVopt server (<a href="https://github.com/thecem/hassio-evopt" target="_blank">GitHub</a>) — requires external server
                     </td>
                 </tr>
             </table>
@@ -162,7 +170,7 @@
                 </tr>
                 <tr>
                     <th>Required</th>
-                    <td>Yes</td>
+                    <td>Only when <code>eos.source</code> is <code>eos_server</code> or <code>evopt</code></td>
                 </tr>
                 <tr>
                     <th>Examples</th>
@@ -193,8 +201,126 @@
                 </tr>
                 <tr>
                     <th>Required</th>
-                    <td>Yes</td>
+                    <td>Only when <code>eos.source</code> is <code>eos_server</code> or <code>evopt</code></td>
                 </tr>
+            </table>
+
+            <!-- ============================================================
+                 LOCAL EVOPT — BUILT-IN OPTIMIZER SETTINGS
+                 ============================================================ -->
+            <h3 id="local-evopt" style="margin-top: 2rem;">Built-in Optimizer Settings (<code>local_evopt</code>)</h3>
+            <p>
+                These settings are only active when <code>eos.source = local_evopt</code>.
+                They control the strategy, battery reserve, and optional grid limits used
+                by the built-in MILP solver.
+            </p>
+
+            <h4>eos.local_evopt_charging_strategy</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_charging_strategy</code></td></tr>
+                <tr><th>Description</th><td>How the optimizer prefers to charge the battery</td></tr>
+                <tr><th>Valid Values</th>
+                    <td>
+                        <code>charge_before_export</code> — charge battery before exporting surplus PV (default)<br>
+                        <code>maximize_self_consumption</code> — prefer charging from PV, penalise grid export and reward battery charging to lower the effective charge break-even price<br>
+                        <code>attenuate_grid_peaks</code> — charge when PV production is high to smooth grid peaks<br>
+                        <code>none</code> — no charging preference; pure cost optimization
+                    </td>
+                </tr>
+                <tr><th>Default</th><td><code>charge_before_export</code></td></tr>
+                <tr><th>Hot-reloadable</th><td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately and trigger a new optimization run. No restart required.</td></tr>
+            </table>
+
+            <h4>eos.local_evopt_discharging_strategy</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_discharging_strategy</code></td></tr>
+                <tr><th>Description</th><td>How the optimizer prefers to discharge the battery</td></tr>
+                <tr><th>Valid Values</th>
+                    <td>
+                        <code>discharge_before_import</code> — prefer using battery before importing from grid (default)<br>
+                        <code>emergency_reserve</code> — keep a minimum SOC at end of optimization horizon
+                        (configure the percentage with <code>local_evopt_emergency_reserve_pct</code>)<br>
+                        <code>none</code> — no discharging preference; pure cost optimization
+                    </td>
+                </tr>
+                <tr><th>Default</th><td><code>discharge_before_import</code></td></tr>
+                <tr><th>Hot-reloadable</th><td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately and trigger a new optimization run. No restart required.</td></tr>
+            </table>
+
+            <h4>eos.local_evopt_emergency_reserve_pct</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_emergency_reserve_pct</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Minimum battery state-of-charge to maintain at the end of the optimization horizon
+                        when <code>discharging_strategy = emergency_reserve</code>.
+                        The optimizer will strongly prefer to keep the battery above this level.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–80 (%)</td></tr>
+                <tr><th>Default</th><td><code>0</code> (disabled)</td></tr>
+                <tr><th>Requires</th><td><code>local_evopt_discharging_strategy = emergency_reserve</code></td></tr>
+                <tr><th>Example</th><td>Set to <code>20</code> to keep at least 20% battery charge in reserve</td></tr>
+                <tr><th>Hot-reloadable</th><td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately and trigger a new optimization run. No restart required.</td></tr>
+            </table>
+
+            <h4>eos.local_evopt_max_grid_import_w</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_max_grid_import_w</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Hard upper limit on grid import power in Watts. The optimizer will not schedule
+                        grid imports exceeding this value per time slot. Useful for households with a
+                        contracted grid connection limit or demand-charge tariffs.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–100000 (W). Set to <code>0</code> to disable this constraint (optimizer uses battery charge max and inverter limits only).</td></tr>
+                <tr><th>Default</th><td><code>0</code> (no additional limit)</td></tr>
+                <tr><th>Level</th><td>Expert</td></tr>
+            </table>
+
+            <h4>eos.local_evopt_max_grid_export_w</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_max_grid_export_w</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Hard upper limit on grid export power in Watts. Useful when your grid contract
+                        or inverter limits how much energy you can feed in.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–100000 (W). Set to <code>0</code> to disable this constraint (optimizer uses battery discharge max only).</td></tr>
+                <tr><th>Default</th><td><code>0</code> (no additional limit)</td></tr>
+                <tr><th>Level</th><td>Expert</td></tr>
+            </table>
+
+            <h4>eos.local_evopt_num_threads</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_num_threads</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Number of threads for the CBC solver. <code>0</code> lets the solver decide
+                        automatically. On low-powered devices (e.g. Raspberry Pi), limiting to
+                        <code>1</code> or <code>2</code> can improve stability.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–32. Set to <code>0</code> for auto.</td></tr>
+                <tr><th>Default</th><td><code>0</code> (auto)</td></tr>
+                <tr><th>Level</th><td>Expert</td></tr>
+            </table>
+
+            <h4>eos.local_evopt_time_limit</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_time_limit</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Maximum solver time in seconds. <code>0</code> uses 80% of the EOS timeout
+                        as the limit. Set explicitly if you want to cap solve time independently
+                        of the overall timeout.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–600 (seconds). Set to <code>0</code> for auto.</td></tr>
+                <tr><th>Default</th><td><code>0</code> (auto)</td></tr>
+                <tr><th>Level</th><td>Expert</td></tr>
             </table>
 
             <h3>eos.time_frame</h3>
@@ -288,6 +414,10 @@
                             <li><strong>Visual feedback:</strong> Green indicators on dashboard when active</li>
                         </ul>
                     </td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately <em>and</em> trigger a new optimization run so the effect is visible at once. No restart required.</td>
                 </tr>
             </table>
 
@@ -1724,6 +1854,10 @@
                     <th>Notes</th>
                     <td>Only used when <code>feed_in_source: fixed</code>. Must use the same tax/fee basis as your purchase prices. Typical range: 5-12 ct/kWh</td>
                 </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately <em>and</em> trigger a new optimization run. No restart required.</td>
+                </tr>
             </table>
 
             <h3>price.feed_in_source</h3>
@@ -1812,7 +1946,8 @@
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td><strong>Hot-reloadable:</strong> Changes take effect immediately without restart. Applied BEFORE multiplier.</td>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Hot-reloadable:</strong> Changes take effect immediately <em>and</em> trigger a new optimization run. Applied BEFORE multiplier.<br>
+                    <strong>Only shown</strong> when <code>feed_in_source</code> is <code>elpris_dk</code> or <code>epex_spot</code> — not needed for <code>fixed</code> (just set the price directly).</td>
                 </tr>
             </table>
 
@@ -1843,7 +1978,8 @@
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td><strong>Hot-reloadable:</strong> Changes take effect immediately. Expert level setting. Applied AFTER static adder.</td>
+                    <td><strong>Hot-reloadable:</strong> Changes take effect immediately. Expert level setting. Applied AFTER static adder.<br>
+                    <strong>Only shown</strong> when <code>feed_in_source</code> is <code>elpris_dk</code> or <code>epex_spot</code> — not needed for <code>fixed</code>.</td>
                 </tr>
             </table>
 

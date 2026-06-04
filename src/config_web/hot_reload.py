@@ -8,17 +8,27 @@ instance directly, avoiding a full restart.
 Supported fields (Priority 1 — Price):
 - ``price.fixed_price_adder_ct``
 - ``price.relative_price_multiplier``
-- ``price.feed_in_price``
+- ``price.feed_in_price``  (also triggers immediate run via ``_PRICE_RUN_TRIGGERS``)
 - ``price.negative_price_switch``
 
 Supported fields (Priority 2 — Battery SOC):
 - ``battery.min_soc_percentage``
 - ``battery.max_soc_percentage``
 
+Supported fields (Feed-in price):
+- ``price.feed_in_static_adder``  (also triggers immediate run via ``_PRICE_RUN_TRIGGERS``)
+- ``price.feed_in_multiplier``
+
 Supported fields (Priority 1 — Optimizer):
 - ``eos.timeout``
 - ``eos.dyn_override_discharge_allowed_pv_greater_load``
+  (also triggers immediate run via ``_OPTIMIZER_RUN_TRIGGERS``)
 - ``eos.pv_battery_charge_control_enabled``
+
+Supported fields (Local EVopt strategies):
+- ``eos.local_evopt_charging_strategy``
+- ``eos.local_evopt_discharging_strategy``
+- ``eos.local_evopt_emergency_reserve_pct``
 """
 
 import logging
@@ -60,6 +70,24 @@ _OPTIMIZER_FIELD_MAP = {
     "eos.pv_battery_charge_control_enabled": ("pv_battery_charge_control_enabled", bool),
 }
 
+# Map of local_evopt strategy keys to (backend_attr_name, coerce_fn)
+_LOCAL_EVOPT_FIELD_MAP = {
+    "eos.local_evopt_charging_strategy": ("charging_strategy", str),
+    "eos.local_evopt_discharging_strategy": ("discharging_strategy", str),
+    "eos.local_evopt_emergency_reserve_pct": ("emergency_reserve_pct", int),
+}
+
+# Optimizer keys whose change immediately invalidates the current result
+_OPTIMIZER_RUN_TRIGGERS = {
+    "eos.dyn_override_discharge_allowed_pv_greater_load",
+}
+
+# Price keys whose change immediately invalidates the current optimization result
+_PRICE_RUN_TRIGGERS = {
+    "price.feed_in_price",
+    "price.feed_in_static_adder",
+}
+
 # Feed-in related fields that require recalculating feed-in prices
 _FEEDIN_TRIGGERS = {
     "price.feed_in_price",
@@ -82,6 +110,10 @@ class HotReloadAdapter:
         pv_interface: Running PvInterface instance (or None).
         optimization_interface: Running OptimizationInterface instance (or None).
         config_provider: Callable that returns the current merged config dict (or None).
+        on_run_trigger: Optional callable() invoked after a hot-reload that makes the
+            current optimization result stale (e.g. strategy change).  Typically wired
+            to ``OptimizationScheduler.request_immediate_run``.  Can also be set later
+            via ``adapter.on_run_trigger = scheduler.request_immediate_run``.
         pv_reload_debounce_seconds: Debounce delay for PV reloads (default 0.3s).
     """
 
@@ -93,6 +125,7 @@ class HotReloadAdapter:
         optimization_interface=None,
         feed_in_price_interface=None,
         config_provider=None,
+        on_run_trigger=None,
         pv_reload_debounce_seconds=0.3,
     ):
         self._price = price_interface
@@ -101,6 +134,7 @@ class HotReloadAdapter:
         self._optimizer = optimization_interface
         self._feed_in_price = feed_in_price_interface
         self._config_provider = config_provider
+        self.on_run_trigger = on_run_trigger
         self._pv_reload_debounce_seconds = pv_reload_debounce_seconds
         self._pv_reload_timer = None
         self._pv_reload_lock = threading.Lock()
@@ -134,6 +168,8 @@ class HotReloadAdapter:
             self._apply_battery_price(key, new_value)
         elif key in _OPTIMIZER_FIELD_MAP:
             self._apply_optimizer(key, new_value)
+        elif key in _LOCAL_EVOPT_FIELD_MAP:
+            self._apply_local_evopt(key, new_value)
         elif key.startswith(_PV_KEY_PREFIXES):
             self._schedule_pv_reload(key)
         else:
@@ -163,10 +199,17 @@ class HotReloadAdapter:
         # Keep BatteryPriceHandler opportunity cost in sync with live feed-in changes.
         if key == "price.feed_in_price":
             self._apply_battery_feedin_price(coerced)
+            # Also sync FeedInPriceInterface.fixed_price_ct_kwh — this is what the
+            # optimizer actually reads; price_interface.feed_in_tariff_price is legacy.
+            self._sync_feed_in_fixed_price(coerced)
 
         # Recalculate feed-in prices when feed_in_price or negative_price_switch change
         if key in _FEEDIN_TRIGGERS:
             self._recalculate_feedin()
+
+        # Feed-in price change invalidates the current optimization result
+        if key in _PRICE_RUN_TRIGGERS:
+            self._fire_run_trigger(key)
 
     def _apply_feed_in_price(self, key, new_value):
         """Apply a feed-in price related config change."""
@@ -197,8 +240,35 @@ class HotReloadAdapter:
             tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
             self._feed_in_price.update_prices(tgt_duration, start_time)
             logger.debug("[HotReload] Recalculated feed-in prices after %s change", key)
-        except Exception as e:
+        except (AttributeError, TypeError, ValueError, OSError, RuntimeError) as e:
             logger.warning("[HotReload] Failed to recalculate feed-in prices: %s", e)
+
+        # Feed-in static adder change invalidates the current optimization result
+        if key in _PRICE_RUN_TRIGGERS:
+            self._fire_run_trigger(key)
+
+    def _sync_feed_in_fixed_price(self, price_ct_kwh):
+        """Sync FeedInPriceInterface.fixed_price_ct_kwh and refresh its price array.
+
+        The optimizer reads from FeedInPriceInterface, not PriceInterface, so we must
+        keep fixed_price_ct_kwh in sync whenever price.feed_in_price is hot-reloaded.
+        """
+        if self._feed_in_price is None:
+            return
+        try:
+            old = getattr(self._feed_in_price, "fixed_price_ct_kwh", "?")
+            self._feed_in_price.fixed_price_ct_kwh = price_ct_kwh
+            start_time = datetime.now(self._feed_in_price.time_zone).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+            self._feed_in_price.update_prices(tgt_duration, start_time)
+            logger.info(
+                "[HotReload] Synced FeedInPriceInterface.fixed_price_ct_kwh = %s (was %s)",
+                price_ct_kwh, old,
+            )
+        except (AttributeError, TypeError, ValueError, OSError, RuntimeError) as e:
+            logger.warning("[HotReload] Failed to sync FeedInPriceInterface fixed price: %s", e)
 
     def _apply_battery_feedin_price(self, feedin_price):
         """Apply live feed-in price updates to the battery price handler."""
@@ -274,6 +344,58 @@ class HotReloadAdapter:
             "[HotReload] Updated optimizer.%s = %s (was %s)",
             attr, coerced, old_val,
         )
+
+        if key in _OPTIMIZER_RUN_TRIGGERS:
+            self._fire_run_trigger(key)
+
+    def _apply_local_evopt(self, key, new_value):
+        """Apply a local_evopt strategy config change to the running backend."""
+        if self._optimizer is None:
+            logger.debug("[HotReload] No optimizer interface — skipping %s", key)
+            return
+
+        backend = getattr(self._optimizer, "backend", None)
+        backend_type = getattr(self._optimizer, "backend_type", None)
+        if backend is None or backend_type != "local_evopt":
+            logger.debug(
+                "[HotReload] Optimizer backend is not local_evopt (%s) — skipping %s",
+                backend_type, key,
+            )
+            return
+
+        attr, coerce = _LOCAL_EVOPT_FIELD_MAP[key]
+        try:
+            coerced = coerce(new_value)
+        except (TypeError, ValueError) as exc:
+            logger.warning("[HotReload] Cannot coerce %s=%r: %s", key, new_value, exc)
+            return
+
+        # Clamp emergency_reserve_pct to valid range
+        if attr == "emergency_reserve_pct":
+            coerced = max(0, min(80, coerced))
+
+        old_val = getattr(backend, attr, "?")
+        setattr(backend, attr, coerced)
+        self._applied_keys.append(key)
+        logger.info(
+            "[HotReload] Updated local_evopt.%s = %s (was %s)",
+            attr, coerced, old_val,
+        )
+        # Strategy changes immediately invalidate the current optimization result —
+        # trigger a new run so the user sees the effect without waiting for the
+        # next scheduled slot.
+        self._fire_run_trigger(key)
+
+    def _fire_run_trigger(self, reason_key):
+        """Call the registered run trigger callback, if any."""
+        if self.on_run_trigger is not None:
+            try:
+                self.on_run_trigger()
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning(
+                    "[HotReload] on_run_trigger raised an exception after %s: %s",
+                    reason_key, exc,
+                )
 
     def _apply_battery_soc(self, key, new_value):
         """Apply a battery SOC config change."""

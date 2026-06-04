@@ -2,11 +2,11 @@
 Unit tests for FeedInPriceInterface.
 """
 
-import pytest
 from datetime import datetime
+from unittest.mock import patch, MagicMock
+import pytest
 import pytz
 import requests
-from unittest.mock import patch, MagicMock
 
 from src.interfaces.feed_in_price_interface import FeedInPriceInterface
 
@@ -50,6 +50,32 @@ class TestFeedInPriceInterfaceFixedPrice:
         # 192 slots = 48h (each slot is 15min)
         assert len(interface.current_feedin_prices) == 192
         assert all(p == pytest.approx(0.0001, abs=1e-8) for p in interface.current_feedin_prices)
+
+    def test_fixed_price_with_static_adder(self):
+        """Static adder must be applied to fixed source (same as dynamic sources)."""
+        config = {
+            "source": "fixed",
+            "fixed_price_ct_kwh": 8.0,   # 8 ct/kWh base
+            "static_adder_ct_kwh": 2.0,  # +2 ct/kWh
+        }
+        interface = FeedInPriceInterface(config, 3600, "UTC")
+        interface.update_prices(48, datetime(2024, 1, 1, 0, 0, 0, tzinfo=pytz.UTC))
+
+        # 8 + 2 = 10 ct/kWh = 0.0001 EUR/Wh
+        assert all(p == pytest.approx(0.0001, abs=1e-8) for p in interface.current_feedin_prices)
+
+    def test_fixed_price_with_multiplier(self):
+        """Multiplier must be applied to fixed source."""
+        config = {
+            "source": "fixed",
+            "fixed_price_ct_kwh": 10.0,
+            "multiplier": 0.9,
+        }
+        interface = FeedInPriceInterface(config, 3600, "UTC")
+        interface.update_prices(48, datetime(2024, 1, 1, 0, 0, 0, tzinfo=pytz.UTC))
+
+        # 10 * 0.9 = 9 ct/kWh = 0.00009 EUR/Wh
+        assert all(p == pytest.approx(0.00009, abs=1e-8) for p in interface.current_feedin_prices)
 
 
 class TestFeedInPriceInterfaceEprisDK:
