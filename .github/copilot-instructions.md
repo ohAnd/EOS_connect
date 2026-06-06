@@ -828,6 +828,7 @@ All commits follow **Conventional Commits** format for clear, scannable history.
 ### Examples
 
 **Feature:**
+
 ```
 feat: implement two-tier PV config validation
 
@@ -837,6 +838,7 @@ feat: implement two-tier PV config validation
 ```
 
 **Bug Fix:**
+
 ```
 fix: prevent startup crash on incomplete config - enable web UI access
 
@@ -848,6 +850,7 @@ Fixes: #259
 ```
 
 **Documentation:**
+
 ```
 docs: update configuration guide with new PV source options
 ```

@@ -80,6 +80,12 @@ class PvInterface:
         }
         self.temp_forecast_array = self.__get_default_temperature_forecast()
 
+        # Cache mechanism for fallback on API failures (similar to PriceInterface)
+        # When Akkudoktor is unavailable, reuse last successful forecast
+        self.last_successful_pv_forecast = []
+        self.consecutive_failures = 0
+        self.max_failures = 24  # Max consecutive failures before using defaults
+
         self._update_thread = None
         self._stop_event = threading.Event()
         self._reload_lock = threading.Lock()
@@ -166,6 +172,9 @@ class PvInterface:
                 "config_entry": None,
                 "source": None,
             }
+            # Reset cache when configuration changes (source switch, etc.)
+            self.last_successful_pv_forecast = []
+            self.consecutive_failures = 0
 
             try:
                 self.__configure_update_interval()
@@ -521,15 +530,25 @@ class PvInterface:
             if not self.pv_forcast_request_error["error"]:
                 logger.debug("[PV-IF] PV forecast updated successfully")
                 self.pv_forcast_array = pv_forcast_array
+            elif pv_forcast_array:  # Fallback forecast available from cache
+                # If there was an error but cache provided a forecast, use it
+                logger.warning(
+                    "[PV-IF] Using cached PV forecast due to API error: %s",
+                    self.pv_forcast_request_error["message"],
+                )
+                self.pv_forcast_array = pv_forcast_array
             elif self.pv_forcast_array == []:
-                # If there was an error and no forecast was fetched, use default values
+                # If there was an error and no forecast was cached, use default values
                 logger.warning(
                     "[PV-IF] Using default PV forecast due to previous error: %s",
                     self.pv_forcast_request_error["message"],
                 )
-                self.pv_forcast_array = self.__get_default_pv_forcast(
-                    self.config[0]["power"]
-                )
+                if self.config and len(self.config) > 0:
+                    self.pv_forcast_array = self.__get_default_pv_forcast(
+                        self.config[0]["power"]
+                    )
+                else:
+                    self.pv_forcast_array = self.__get_default_pv_forcast(1000)
             else:
                 # If there was an error but we have a previous forecast, log it
                 logger.warning(
@@ -881,6 +900,7 @@ class PvInterface:
         requesting pv forecast freach config entry and summarize the values
         
         Returns an empty forecast array if configuration is incomplete or invalid.
+        On success, caches the result for fallback on future API failures.
         """
         # Guard: If configuration is incomplete, return empty array
         # This allows the system to continue running while user fixes config via web UI
@@ -909,6 +929,16 @@ class PvInterface:
         # round all values to 1 decimal place
         forecast_values = [round(value, 1) for value in forecast_values]
         logger.debug("[PV-IF] Summarized PV forecast values: %s", forecast_values)
+
+        # Cache successful forecast for fallback on future failures
+        if forecast_values:
+            self.last_successful_pv_forecast = forecast_values.copy()
+            self.consecutive_failures = 0  # Reset failure counter on success
+            logger.debug(
+                "[PV-IF] PV forecast cached (%d values) for fallback on future API failures",
+                len(forecast_values),
+            )
+
         return forecast_values
 
     def __get_pv_forecast_akkudoktor_api(
@@ -2157,6 +2187,8 @@ class PvInterface:
     ):
         """
         Centralized error handling for all API errors.
+        Uses last successful forecast as fallback if available.
+        Similar to PriceInterface.last_successful_prices mechanism.
         """
         logger.error("[PV-IF] %s", message)
         self.pv_forcast_request_error.update(
@@ -2168,6 +2200,27 @@ class PvInterface:
                 "source": source,
             }
         )
+        self.consecutive_failures += 1
+
+        # Fallback strategy: Use last successful forecast if available
+        # and within failure threshold
+        if (
+            self.consecutive_failures <= self.max_failures
+            and len(self.last_successful_pv_forecast) > 0
+        ):
+            logger.warning(
+                "[PV-IF] No forecast retrieved (failure %d/%d). Using last successful forecast.",
+                self.consecutive_failures,
+                self.max_failures,
+            )
+            return self.last_successful_pv_forecast
+
+        # If max failures exceeded or no cache available, return empty array
+        # (let caller handle default generation)
+        if len(self.last_successful_pv_forecast) == 0:
+            logger.warning(
+                "[PV-IF] No forecast available and no cache - returning empty array"
+            )
         return []
 
     def _convert_hourly_to_15min(self, hourly_values):
