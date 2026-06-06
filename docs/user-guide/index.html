@@ -804,6 +804,11 @@ docker-compose up -d</code></pre>
                         <td>VM using generic CPU type (kvm64)</td>
                         <td>Change VM Settings → Hardware → Processor → Type from <code>kvm64</code> to <code>host</code>, then restart VM. This allows correct CPU instruction detection.</td>
                     </tr>
+                    <tr>
+                        <td>local_evopt fails: CBC file not found (Proxmox)</td>
+                        <td>Container using system Python instead of venv</td>
+                        <td>Force full rebuild: <code>docker rmi ghcr.io/ohand/ha-addon-eos_connect_develop_amd64:VERSION && restart addon</code>. Or verify Docker CMD is using <code>/opt/venv/bin/python</code>. Check <a href="../advanced/index.html">Advanced</a> for local_evopt details.</td>
+                    </tr>
                 </tbody>
             </table>
 

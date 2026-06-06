@@ -99,6 +99,14 @@ If the add-on crashes with a Segmentation Fault on startup, your VM might be usi
 
 This allows the add-on to correctly see and use your physical CPU's instructions.
 
+**Note for Proxmox / local_evopt Users:**
+If local_evopt fails with "CBC file not found" in Proxmox, force a full container rebuild:
+```bash
+docker rmi ghcr.io/ohand/ha-addon-eos_connect_develop_amd64:VERSION
+# Then restart the addon from Home Assistant UI to pull and rebuild
+```
+Cached images may use system Python instead of the venv.
+
 ---
 
 **Other Installation Options:**
