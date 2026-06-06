@@ -798,3 +798,65 @@ EOS Connect now uses a built-in web UI for all configuration.
 | CHANGELOG / release notes | Add migration note                             | Low                      |
 
 > **Important**: Apply identical changes to both `eos_connect/` and `eos_connect_develop/` directories. The only differences between them should be `name`, `version`, `slug`, and `image` fields in `config.yaml`.
+
+---
+
+## Commit Message Guidelines
+
+All commits follow **Conventional Commits** format for clear, scannable history.
+
+### Format
+
+```
+<type>: <description>
+
+[optional body with details]
+
+[optional footer with issue references]
+```
+
+### Types
+
+- **feat**: New feature (e.g., `feat: add battery forecast smoothing`)
+- **fix**: Bug fix (e.g., `fix: prevent startup crash on incomplete config`)
+- **docs**: Documentation changes (README, GitHub Pages, CONFIG_README)
+- **test**: Test additions or fixes (no production code change)
+- **refactor**: Code restructuring without feature/fix change
+- **perf**: Performance improvement
+- **chore**: Build, tooling, dependencies
+
+### Examples
+
+**Feature:**
+```
+feat: implement two-tier PV config validation
+
+- Lenient startup mode to prevent app crash on incomplete config
+- Strict hot-reload mode to validate all changes
+- Add configuration_state tracking for web UI visibility
+```
+
+**Bug Fix:**
+```
+fix: prevent startup crash on incomplete config - enable web UI access
+
+- Implement two-tier validation (lenient startup, strict hot-reload)
+- Remove sys.exit(1) calls on validation errors
+- Graceful degradation: start in DEGRADED mode instead of crashing
+
+Fixes: #259
+```
+
+**Documentation:**
+```
+docs: update configuration guide with new PV source options
+```
+
+### Best Practices
+
+- Keep subject line ≤ 50 characters
+- Use imperative mood ("add", "fix", not "added", "fixed")
+- Include issue reference in footer: `Fixes: #123` or `Resolves: #123`
+- Use body to explain _why_, not _what_ (code shows what)
+- Link related issues: `Related: #456, #789`
+- If multiple fixes/features, break into separate commits for clarity
