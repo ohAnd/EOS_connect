@@ -28,7 +28,6 @@ import logging
 import time
 import asyncio
 import math
-import sys
 from collections import defaultdict
 import aiohttp
 import pytz
@@ -81,22 +80,39 @@ class PvInterface:
         }
         self.temp_forecast_array = self.__get_default_temperature_forecast()
 
+        # Cache mechanism for fallback on API failures (similar to PriceInterface)
+        # When Akkudoktor is unavailable, reuse last successful forecast
+        self.last_successful_pv_forecast = []
+        self.consecutive_failures = 0
+        self.max_failures = 24  # Max consecutive failures before using defaults
+
         self._update_thread = None
         self._stop_event = threading.Event()
         self._reload_lock = threading.Lock()
         self.update_interval = 15 * 60
+        self.configuration_state = "unknown"  # 'valid', 'incomplete', or 'invalid'
+        self.configuration_valid = False  # Will be set to True only if config is fully valid
         self.__configure_update_interval()
 
+        # Startup validation: Use lenient mode to allow graceful degradation
+        # Users can fix incomplete config via web UI without addon crash
         try:
-            self.__check_config()  # Validate configuration parameters
+            self.__check_config(strict=False)  # Lenient startup validation
+            self.configuration_state = "valid"
             self.configuration_valid = True
-            logger.info("[PV-IF] Configuration validation successful")
+            logger.info("[PV-IF] Configuration validation successful at startup")
         except ValueError as e:
-            logger.error("[PV-IF] PV Interface configuration error: %s", str(e))
-            logger.error("[PV-IF] We have to exit now ...")
-            sys.exit(1)  # Exit if configuration is invalid
+            logger.warning("[PV-IF] PV Interface configuration incomplete: %s", str(e))
+            logger.warning(
+                "[PV-IF] Starting in DEGRADED mode - PV data unavailable until config is fixed"
+            )
+            logger.warning(
+                "[PV-IF] Use Settings → PV Forecast to complete the configuration"
+            )
+            self.configuration_state = "incomplete"
+            self.configuration_valid = False
 
-        logger.info("[PV-IF] Initialized")
+        logger.info("[PV-IF] Initialized (config_state=%s)", self.configuration_state)
         self.__start_update_service()  # Start the background thread for periodic updates
 
     def __configure_update_interval(self):
@@ -137,6 +153,8 @@ class PvInterface:
                 "temperature_forecast_enabled": self.temperature_forecast_enabled,
                 "time_zone": self.time_zone,
                 "update_interval": self.update_interval,
+                "configuration_valid": self.configuration_valid,
+                "configuration_state": self.configuration_state,
             }
 
             # Pause update loop before replacing runtime config.
@@ -154,11 +172,15 @@ class PvInterface:
                 "config_entry": None,
                 "source": None,
             }
+            # Reset cache when configuration changes (source switch, etc.)
+            self.last_successful_pv_forecast = []
+            self.consecutive_failures = 0
 
             try:
                 self.__configure_update_interval()
-                self.__check_config()
+                self.__check_config()  # Uses strict=True by default for hot-reload
                 self.configuration_valid = True
+                self.configuration_state = "valid"
                 logger.info(
                     "[PV-IF] Live config reload applied (source=%s, entries=%d)",
                     self.config_source.get("source", "akkudoktor"),
@@ -174,19 +196,24 @@ class PvInterface:
                 ]
                 self.time_zone = old_state["time_zone"]
                 self.update_interval = old_state["update_interval"]
+                self.configuration_valid = old_state["configuration_valid"]
+                self.configuration_state = old_state["configuration_state"]
                 # Revalidate old config defensively (should always pass).
                 self.__check_config()
-                self.configuration_valid = True
                 raise
             finally:
                 self.__start_update_service()
 
-    def __check_config(self):
+    def __check_config(self, strict=True):
         """
         Checks the configuration for required parameters.
         Separates validation into two paths:
         1. PV forecast parameters (source-specific)
         2. Temperature forecast parameters (minimal: lat/lon only)
+
+        Args:
+            strict: If True (default), enforce strict validation for hot-reload.
+                   If False, allow graceful degradation at startup.
 
         Raises:
             ValueError: If any required parameter is missing from the configuration.
@@ -211,52 +238,55 @@ class PvInterface:
         logger.debug("[PV-IF] Initialize - pv entries found: %s", len(self.config))
 
         # VALIDATION PATH 1: Source-specific PV requirements
-        self.__validate_pv_source_requirements()
+        self.__validate_pv_source_requirements(strict=strict)
 
         # VALIDATION PATH 2: Common PV parameters based on source
-        self.__validate_pv_common_parameters()
+        self.__validate_pv_common_parameters(strict=strict)
 
         # VALIDATION PATH 3: Temperature-specific requirements (minimal)
         self.__validate_temperature_requirements()
 
-    def __validate_pv_source_requirements(self):
+    def __validate_pv_source_requirements(self, strict=True):
         """
         Validates source-specific PV forecast requirements.
         Each source (Victron, Solcast, etc.) has different needs.
+
+        Args:
+            strict: If True, log errors; if False, log warnings (for startup degradation).
         """
         source = self.config_source.get("source", "akkudoktor")
 
         # Victron-specific validation
         if source == "victron":
             if not self.config or len(self.config) == 0:
-                logger.error("[PV-IF] No PV forecast entries found in configuration")
+                log_func = logger.error if strict else logger.warning
+                log_func("[PV-IF] No PV forecast entries found in configuration")
                 raise ValueError(
                     "[PV-IF] At least one PV forecast entry required for Victron"
                 )
 
             first_entry_resource_id = str(self.config[0].get("resource_id", "")).strip()
             if not first_entry_resource_id:
-                logger.error(
+                log_func = logger.error if strict else logger.warning
+                log_func(
                     "[PV-IF] Victron VRM ID missing in first pv_forecast entry's resource_id"
                 )
-                logger.error(
-                    '[PV-IF] Please add: resource_id: "your_victron_vrm_id"'
-                    " in first pv_forecast entry"
+                log_func(
+                    '[PV-IF] Please add resource_id to first pv_forecast entry '
+                    '(e.g., resource_id: "your_victron_vrm_id")'
                 )
+                log_func("[PV-IF] Use Settings → PV Forecast to fix this")
                 raise ValueError(
-                    "[PV-IF] Victron VRM ID (resource_id in first pv_forecast entry) required"
+                    "[PV-IF] Victron VRM ID (resource_id in first pv_forecast entry) "
+                    "required - Use Settings → PV Forecast to fix"
                 )
 
             if not self.config_source.get("api_key", "").strip():
-                logger.error(
-                    "[PV-IF] Victron API key missing in pv_forecast_source section"
-                )
-                logger.error(
-                    '[PV-IF] Please set api_key in Settings → PV Forecast'
-                )
+                log_func = logger.error if strict else logger.warning
+                log_func("[PV-IF] Victron API key missing in pv_forecast_source section")
+                log_func("[PV-IF] Please set api_key in Settings → PV Forecast")
                 raise ValueError(
-                    "[PV-IF] Victron API key (api_key) required - see"
-                    + " CONFIG_README.md for setup instructions"
+                    "[PV-IF] Victron API key (api_key) required - Use Settings → PV Forecast to fix"
                 )
 
             logger.debug("[PV-IF] Victron source-specific requirements validated")
@@ -264,39 +294,37 @@ class PvInterface:
         # Solcast-specific validation
         elif source == "solcast":
             if not self.config_source.get("api_key", "").strip():
-                logger.error(
-                    "[PV-IF] Solcast API key missing in pv_forecast_source section"
-                )
-                logger.error(
-                    '[PV-IF] Please set api_key in Settings → PV Forecast'
-                )
+                log_func = logger.error if strict else logger.warning
+                log_func("[PV-IF] Solcast API key missing in pv_forecast_source section")
+                log_func("[PV-IF] Please set api_key in Settings → PV Forecast")
                 raise ValueError(
-                    "[PV-IF] Solcast API key required - see CONFIG_README.md"
-                    + " for setup instructions"
+                    "[PV-IF] Solcast API key required - Use Settings → PV Forecast to fix"
                 )
 
             for config_entry in self.config:
                 entry_name = config_entry.get("name", "unnamed")
                 if not config_entry.get("resource_id", "").strip():
-                    logger.error(
+                    log_func = logger.error if strict else logger.warning
+                    log_func(
                         "[PV-IF] Resource ID missing for '%s' - required for Solcast",
                         entry_name,
                     )
-                    logger.error(
-                        '[PV-IF] Please set resource_id in Settings → PV Forecast'
-                    )
+                    log_func("[PV-IF] Please set resource_id in Settings → PV Forecast")
                     raise ValueError(
-                        f"[PV-IF] Solcast resource_id required for '{entry_name}' - see"
-                        + " CONFIG_README.md for setup instructions"
+                        f"[PV-IF] Solcast resource_id required for '{entry_name}' - "
+                        "Use Settings → PV Forecast to fix"
                     )
 
             logger.debug("[PV-IF] Solcast source-specific requirements validated")
 
-    def __validate_pv_common_parameters(self):
+    def __validate_pv_common_parameters(self, strict=True):
         """
         Validates common PV parameters required based on source.
         Skips parameters not needed by the specific source.
         Sets sensible defaults where applicable.
+
+        Args:
+            strict: If True, enforce strict validation; if False, use graceful defaults.
         """
         source = self.config_source.get("source", "akkudoktor")
 
@@ -502,15 +530,25 @@ class PvInterface:
             if not self.pv_forcast_request_error["error"]:
                 logger.debug("[PV-IF] PV forecast updated successfully")
                 self.pv_forcast_array = pv_forcast_array
+            elif pv_forcast_array:  # Fallback forecast available from cache
+                # If there was an error but cache provided a forecast, use it
+                logger.warning(
+                    "[PV-IF] Using cached PV forecast due to API error: %s",
+                    self.pv_forcast_request_error["message"],
+                )
+                self.pv_forcast_array = pv_forcast_array
             elif self.pv_forcast_array == []:
-                # If there was an error and no forecast was fetched, use default values
+                # If there was an error and no forecast was cached, use default values
                 logger.warning(
                     "[PV-IF] Using default PV forecast due to previous error: %s",
                     self.pv_forcast_request_error["message"],
                 )
-                self.pv_forcast_array = self.__get_default_pv_forcast(
-                    self.config[0]["power"]
-                )
+                if self.config and len(self.config) > 0:
+                    self.pv_forcast_array = self.__get_default_pv_forcast(
+                        self.config[0]["power"]
+                    )
+                else:
+                    self.pv_forcast_array = self.__get_default_pv_forcast(1000)
             else:
                 # If there was an error but we have a previous forecast, log it
                 logger.warning(
@@ -860,7 +898,19 @@ class PvInterface:
     def get_summarized_pv_forecast(self):
         """
         requesting pv forecast freach config entry and summarize the values
+        
+        Returns an empty forecast array if configuration is incomplete or invalid.
+        On success, caches the result for fallback on future API failures.
         """
+        # Guard: If configuration is incomplete, return empty array
+        # This allows the system to continue running while user fixes config via web UI
+        if not self.configuration_valid:
+            logger.debug(
+                "[PV-IF] Skipping PV forecast retrieval - configuration state: %s",
+                self.configuration_state,
+            )
+            return self.__get_default_pv_forcast(0)  # Return zeros for all time slots
+
         forecast_values = []
         if self.config_special and self.config_source.get("source") == "evcc":
             logger.debug("[PV-IF] fetching forecast for evcc config")
@@ -879,6 +929,16 @@ class PvInterface:
         # round all values to 1 decimal place
         forecast_values = [round(value, 1) for value in forecast_values]
         logger.debug("[PV-IF] Summarized PV forecast values: %s", forecast_values)
+
+        # Cache successful forecast for fallback on future failures
+        if forecast_values:
+            self.last_successful_pv_forecast = forecast_values.copy()
+            self.consecutive_failures = 0  # Reset failure counter on success
+            logger.debug(
+                "[PV-IF] PV forecast cached (%d values) for fallback on future API failures",
+                len(forecast_values),
+            )
+
         return forecast_values
 
     def __get_pv_forecast_akkudoktor_api(
@@ -1501,7 +1561,8 @@ class PvInterface:
                     if scale_factor < 0.1:
                         scale_factor = 0.5
                         logger.debug(
-                            "[PV-IF] EVCC PV forecast scale factor too low (< 0.1 - %s) - using 0.5",
+                            "[PV-IF] EVCC PV forecast scale factor too low "
+                            "(< 0.1 - %s) - using 0.5",
                             scale_factor,
                         )
                 except (TypeError, ValueError):
@@ -2126,6 +2187,8 @@ class PvInterface:
     ):
         """
         Centralized error handling for all API errors.
+        Uses last successful forecast as fallback if available.
+        Similar to PriceInterface.last_successful_prices mechanism.
         """
         logger.error("[PV-IF] %s", message)
         self.pv_forcast_request_error.update(
@@ -2137,6 +2200,27 @@ class PvInterface:
                 "source": source,
             }
         )
+        self.consecutive_failures += 1
+
+        # Fallback strategy: Use last successful forecast if available
+        # and within failure threshold
+        if (
+            self.consecutive_failures <= self.max_failures
+            and len(self.last_successful_pv_forecast) > 0
+        ):
+            logger.warning(
+                "[PV-IF] No forecast retrieved (failure %d/%d). Using last successful forecast.",
+                self.consecutive_failures,
+                self.max_failures,
+            )
+            return self.last_successful_pv_forecast
+
+        # If max failures exceeded or no cache available, return empty array
+        # (let caller handle default generation)
+        if len(self.last_successful_pv_forecast) == 0:
+            logger.warning(
+                "[PV-IF] No forecast available and no cache - returning empty array"
+            )
         return []
 
     def _convert_hourly_to_15min(self, hourly_values):

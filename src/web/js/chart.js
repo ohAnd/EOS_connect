@@ -34,7 +34,8 @@ class ChartManager {
 
         const time_frame_base = data_controls["used_time_frame_base"];
 
-        const evopt_in_charge = data_controls["used_optimization_source"] === "evopt";
+        // Check if EVopt-based optimizer is active (both remote "evopt" and local "local_evopt")
+        const evopt_in_charge = ["evopt", "local_evopt"].includes(data_controls["used_optimization_source"]);
 
         // Create labels in user's local timezone - showing only hours with :00
         this.chartInstance.data.labels = Array.from(

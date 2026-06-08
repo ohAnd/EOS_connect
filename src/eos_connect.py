@@ -132,7 +132,7 @@ STARTUP_ALERTS_SINCE = datetime.now(time_zone).isoformat()
 config_web = ConfigWebModule(config_manager)
 try:
     config_web.start_db()
-except Exception:
+except (OSError, RuntimeError):
     logger.exception(
         "[Main] Config database startup failed — continuing with config.yaml values. "
         "Check data directory permissions and disk space."
@@ -162,9 +162,10 @@ if time_frame_base not in (900, 3600):
         "[Config] Invalid time_frame (%s); defaulting to 3600", time_frame_base
     )
     time_frame_base = 3600
-elif time_frame_base == 900 and eos_source != "evopt":
+elif time_frame_base == 900 and eos_source not in ("evopt", "local_evopt"):
     logger.warning(
-        "[Config] 15-min time_frame only supported with EVopt source; defaulting to 3600"
+        "[Config] 15-min time_frame only supported with EVopt or Local EVopt "
+        "source; defaulting to 3600"
     )
     time_frame_base = 3600
 
@@ -229,9 +230,13 @@ price_interface = interface_factory.create_price_interface(
 feed_in_config = {
     "source": config_manager.config.get("price", {}).get("feed_in_source", "fixed"),
     "zone": config_manager.config.get("price", {}).get("feed_in_zone", "DK1"),
-    "static_adder_ct_kwh": config_manager.config.get("price", {}).get("feed_in_static_adder", 0.0),  # ct/kWh (standard unit)
+    "static_adder_ct_kwh": config_manager.config.get("price", {}).get(
+        "feed_in_static_adder", 0.0
+    ),  # ct/kWh (standard unit)
     "multiplier": config_manager.config.get("price", {}).get("feed_in_multiplier", 1.0),
-    "fixed_price_ct_kwh": config_manager.config.get("price", {}).get("feed_in_price", 0.0),  # ct/kWh
+    "fixed_price_ct_kwh": config_manager.config.get("price", {}).get(
+        "feed_in_price", 0.0
+    ),  # ct/kWh
 }
 
 feed_in_price_interface = interface_factory.create_feed_in_price_interface(
@@ -387,11 +392,29 @@ init_time = 3 + 1 * len(config_manager.config["pv_forecast"])
 logger.info("[Main] Waiting %s seconds for interfaces to initialize", init_time)
 time.sleep(init_time)
 
+# After the base wait, poll until PV forecast data is actually populated.
+# The background thread fetches all PV sources SEQUENTIALLY, so with multiple
+# entries the total fetch time can exceed init_time (e.g. 4 sources × slow API
+# = 8 s while init_time = 7 s).  We give up to 30 extra seconds before giving
+# up and logging a warning so the first optimization run is not penalised.
+if config_manager.config["pv_forecast"]:
+    _pv_poll_deadline = time.time() + 30
+    while not pv_interface.get_current_pv_forecast() and time.time() < _pv_poll_deadline:
+        time.sleep(1)
+    if pv_interface.get_current_pv_forecast():
+        logger.info("[Main] PV forecast ready after startup wait")
+    else:
+        logger.warning(
+            "[Main] PV forecast not available after %d s startup wait; "
+            "first optimization run will proceed without PV data",
+            init_time + 30,
+        )
+
 # Perform initial battery price calculation if enabled (blocking, synchronous)
 # This ensures the first optimization run has the correct battery price
 try:
     battery_interface.perform_initial_price_calculation()
-except Exception as e:
+except (OSError, RuntimeError, ValueError, TypeError) as e:
     startup_validator.add_error(
         "configuration",
         "battery_price_calculation",
@@ -527,11 +550,14 @@ def create_optimize_request():
 
         pv_prognose_wh = pv_interface.get_current_pv_forecast()
         strompreis_euro_pro_wh = price_interface.get_current_prices()
-        # Use dynamic feed-in prices from FeedInPriceInterface instead of constant PriceInterface value
+        # Use dynamic feed-in prices from FeedInPriceInterface instead of
+        # constant PriceInterface value
         einspeiseverguetung_euro_pro_wh = feed_in_price_interface.get_current_feedin_prices()
-        gesamtlast = load_interface.get_load_profile(EOS_TGT_DURATION)
+        slots_per_hour = 3600 // time_frame_base
+        gesamtlast = load_interface.get_load_profile(EOS_TGT_DURATION * slots_per_hour)
 
-        if config_manager.config.get("eos", {}).get("source", "eos_server") == "evopt":
+        eos_source_for_scale = config_manager.config.get("eos", {}).get("source", "eos_server")
+        if eos_source_for_scale in ("evopt", "local_evopt"):
             now = datetime.now(time_zone)
             seconds_since_midnight = now.hour * 3600 + now.minute * 60 + now.second
             scale_factor = (
@@ -579,23 +605,34 @@ def create_optimize_request():
         # Use dynamic max charge power if charging curve is enabled, otherwise use fixed value
         # This ensures EVopt receives realistic charging limits based on current SOC
         current_dynamic_max = battery_interface.get_max_charge_power()
-        max_charge_power = (
-            current_dynamic_max
-            if config_manager.config["battery"].get("charging_curve_enabled", True)
-            else config_manager.config["battery"]["max_charge_power_w"]
-        )
+        config_fixed_max = config_manager.config["battery"]["max_charge_power_w"]
+        is_dynamic = config_manager.config["battery"].get("charging_curve_enabled", True)
+
+        if is_dynamic and current_dynamic_max > 0:
+            max_charge_power = current_dynamic_max
+            source_label = "dynamic"
+        elif is_dynamic and current_dynamic_max == 0:
+            # Battery data not yet available (first run or fetch failed); fall back to
+            # configured value so the optimizer gets a meaningful charge limit instead of 0.
+            max_charge_power = config_fixed_max
+            source_label = "dynamic_fallback_to_fixed"
+            logger.warning(
+                "[CHARGE_DEMAND] Dynamic max_charge_power is 0 (battery data not yet "
+                "fetched); using configured fixed value %s W for this optimization run.",
+                config_fixed_max,
+            )
+        else:
+            max_charge_power = config_fixed_max
+            source_label = "fixed"
 
         # Debug logging for charge demand tracking
-        is_dynamic = config_manager.config["battery"].get(
-            "charging_curve_enabled", True
-        )
         logger.info(
             "[CHARGE_DEMAND] Optimizer request preparation: max_charge_power=%s W "
             "(source=%s, dynamic_max=%s, config_fixed=%s, charging_curve_enabled=%s)",
             max_charge_power,
-            "dynamic" if is_dynamic else "fixed",
+            source_label,
             current_dynamic_max,
-            config_manager.config["battery"]["max_charge_power_w"],
+            config_fixed_max,
             is_dynamic,
         )
 
@@ -820,6 +857,7 @@ class OptimizationScheduler:
         }
         self._update_thread_optimization_loop = None
         self._stop_event = threading.Event()
+        self._immediate_run_event = threading.Event()
         self._last_avg_runtime = 120  # Initialize with a default value
         self._last_dyn_override_array = []  # Initialize override array for chart
         self.__start_update_service_optimization_loop()
@@ -871,6 +909,18 @@ class OptimizationScheduler:
         Sets the current state of the optimization scheduler.
         """
         self.current_state["next_run"] = next_run_time
+
+    def request_immediate_run(self):
+        """
+        Request that the optimization loop skips its current sleep and runs immediately.
+
+        Safe to call from any thread (e.g. a hot-reload callback).  If the loop is
+        currently sleeping it will wake within 1 second; if it is already running
+        the event is consumed at the start of the next sleep, causing that sleep to
+        be skipped as well.
+        """
+        logger.info("[OPTIMIZATION] Immediate run requested via request_immediate_run()")
+        self._immediate_run_event.set()
 
     def __start_update_service_optimization_loop(self):
         """
@@ -929,9 +979,13 @@ class OptimizationScheduler:
                 actual_sleep_interval = self.update_interval  # Fallback on error
 
             # Use the calculated sleep interval instead of fixed interval
+            self._immediate_run_event.clear()
             while actual_sleep_interval > 0:
                 if self._stop_event.is_set():
                     return  # Exit immediately if stop event is set
+                if self._immediate_run_event.is_set():
+                    logger.info("[OPTIMIZATION] Immediate run requested — skipping remaining sleep")
+                    break  # Skip the rest of the wait and run now
                 time.sleep(min(1, actual_sleep_interval))  # Sleep in 1-second chunks
                 actual_sleep_interval -= 1
 
@@ -1265,12 +1319,13 @@ def change_control_state():
     """
     inverter_fronius_en = False
     inverter_evcc_en = False
+    inverter_display_only_mode = False
     # Check if we have an active inverter (Fronius) or if EVCC/display-only mode is enabled
     if inverter_interface is not None:
         if isinstance(inverter_interface, EvccInverter):
             inverter_evcc_en = True
         elif isinstance(inverter_interface, NullInverter):
-            inverter_evcc_en = True
+            inverter_display_only_mode = True
         else:
             # Real inverter (Fronius, Victron, etc.)
             inverter_fronius_en = True
@@ -1428,7 +1483,10 @@ def change_control_state():
                 tgt_ac_charge_power,
             )
         elif current_overall_state < 0:
-            logger.warning("[Main] Inverter mode not initialized yet")
+            # Only warn if we have an active inverter that needs initialization
+            # Display-only mode (NullInverter) doesn't require initialization
+            if not inverter_display_only_mode:
+                logger.warning("[Main] Inverter mode not initialized yet")
 
         return True
 
@@ -1456,7 +1514,7 @@ app.config['JSON_SORT_KEYS'] = False
 # Phase 2: register the Flask REST API now that app exists.
 try:
     config_web.start_api(app)
-except Exception:
+except (ValueError, RuntimeError):
     logger.exception("[Main] Config web API registration failed — config UI unavailable")
 
 # Register hot-reload: live config changes are applied without restart
@@ -1467,8 +1525,12 @@ hot_reload_adapter = HotReloadAdapter(
     battery_interface=battery_interface,
     pv_interface=pv_interface,
     optimization_interface=eos_interface,
+    feed_in_price_interface=feed_in_price_interface,
     config_provider=config_web.get_config,
 )
+# Wire the run trigger so hot-reload changes that affect optimizer behaviour
+# (e.g. local_evopt strategies) immediately kick off a new optimization run.
+hot_reload_adapter.on_run_trigger = optimization_scheduler.request_immediate_run
 config_web.register_hot_reload_callback(hot_reload_adapter.on_config_changed)
 
 ASSET_CACHE_MAX_AGE_SECONDS = 31536000
@@ -1659,7 +1721,9 @@ def get_controls():
             ].get(
                 "dyn_override_active", False
             ),
-            "dyn_override_discharge_allowed_array": optimization_scheduler.get_last_dyn_override_array(),
+            "dyn_override_discharge_allowed_array": (
+                optimization_scheduler.get_last_dyn_override_array()
+            ),
         },
         "evcc": {
             "charging_state": base_control.get_current_evcc_charging_state(),
