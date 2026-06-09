@@ -319,6 +319,8 @@ class ConfigurationManager {
                 contentEl.innerHTML = this._renderPvForecastSection();
             } else {
                 contentEl.innerHTML = this._renderSection(section);
+                // Initialize dynamic descriptions for this section
+                this._initializeDynamicDescriptions(section);
             }
         }
 
@@ -877,6 +879,9 @@ class ConfigurationManager {
         // Re-evaluate dependent field visibility
         this._updateDependencies(key);
 
+        // Update dynamic descriptions for fields that depend on this key
+        this._updateDynamicDescriptions(key);
+
         // Mark the input as changed
         const input = document.querySelector(`input[data-key="${key}"], select[data-key="${key}"]`);
         if (input && input.classList) {
@@ -959,6 +964,78 @@ class ConfigurationManager {
             }
         }
         this._updateGroupVisibility();
+    }
+
+    /**
+     * Update dynamic descriptions for fields that depend on the changed key.
+     * @param {string} changedKey - The key of the field that changed
+     */
+    _updateDynamicDescriptions(changedKey) {
+        if (!this.schema) {
+            return;
+        }
+        for (const f of this.schema) {
+            if (f.description_map) {
+                // Check if any of the description_map dependencies reference the changed key
+                for (const depKey of Object.keys(f.description_map)) {
+                    if (depKey === changedKey) {
+                        const resolvedDesc = this._resolveDescription(f);
+                        const helpEl = document.getElementById(`cfg-help-${this._cssKey(f.key)}`);
+                        if (helpEl) {
+                            // Preserve the "Learn more" link
+                            const learnMoreMatch = helpEl.innerHTML.match(/<a[^>]*>.*?<\/a>/);
+                            const learnMoreLink = learnMoreMatch ? learnMoreMatch[0] : "";
+                            helpEl.innerHTML = this._escapeHtml(resolvedDesc) + (learnMoreLink ? " " + learnMoreLink : "");
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Initialize dynamic descriptions for all fields in a section on first render.
+     * @param {string} section - Section key
+     */
+    _initializeDynamicDescriptions(section) {
+        if (!this.schema) {
+            return;
+        }
+        const fields = this._fieldsForSection(section);
+        for (const f of fields) {
+            if (f.description_map) {
+                const resolvedDesc = this._resolveDescription(f);
+                const helpEl = document.getElementById(`cfg-help-${this._cssKey(f.key)}`);
+                if (helpEl) {
+                    // Preserve the "Learn more" link
+                    const learnMoreMatch = helpEl.innerHTML.match(/<a[^>]*>.*?<\/a>/);
+                    const learnMoreLink = learnMoreMatch ? learnMoreMatch[0] : "";
+                    helpEl.innerHTML = this._escapeHtml(resolvedDesc) + (learnMoreLink ? " " + learnMoreLink : "");
+                }
+            }
+        }
+    }
+
+    /**
+     * Resolve the description for a field based on current form values.
+     * If the field has a description_map, use it; otherwise return the static description.
+     * @param {Object} f - Field definition
+     * @returns {string} The resolved description
+     */
+    _resolveDescription(f) {
+        if (!f.description_map) {
+            return f.description;
+        }
+        // description_map is: {"parent_key": {"parent_value": "dynamic_desc"}}
+        for (const [parentKey, valueMap] of Object.entries(f.description_map)) {
+            const parentValue = this.values[parentKey] ?? this._getSchemaDefault(parentKey);
+            if (parentValue in valueMap) {
+                return valueMap[parentValue];
+            }
+        }
+        // Fall back to static description
+        return f.description;
     }
 
     /**

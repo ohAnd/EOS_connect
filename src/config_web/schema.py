@@ -50,10 +50,11 @@ class FieldDef:
     section: str  # top-level group: data_source, load, eos, price, battery, ...
     level: str  # getting_started, standard, expert
     description: str  # short inline help text
-    labels: list = field(default_factory=list)  # experimental, deprecated, restart_required, conditional
+    labels: list = field(default_factory=list)  # experimental, deprecated, restart
     help_url: str = ""  # link to GitHub Pages docs anchor
-    validation: dict = field(default_factory=dict)  # min, max, pattern, choices, required
+    validation: dict = field(default_factory=dict)  # min, max, pattern, choices
     depends_on: Optional[dict] = None  # conditional visibility rules
+    description_map: Optional[dict] = None  # dynamic descriptions with parent refs
     hot_reload: bool = False
     display_group: str = ""  # sub-grouping for UI layout
 
@@ -95,6 +96,30 @@ class ConfigSchema:
         """Return all registered fields."""
         return list(self._fields.values())
 
+    def get_resolved_description(self, field_key: str, current_config: dict) -> str:
+        """
+        Get the description for a field, resolving dynamic descriptions if applicable.
+        
+        Args:
+            field_key: The field key (e.g., "price.feed_in_negative_price_switch")
+            current_config: Current config dict (flattened with dot-notation keys)
+        
+        Returns:
+            The static description, or resolved dynamic description based on config values.
+        """
+        field_def = self.get(field_key)
+        if not field_def or not field_def.description_map:
+            return field_def.description if field_def else ""
+
+        # description_map: {"parent_key": {"parent_value": "desc"}}
+        for parent_key, value_map in field_def.description_map.items():
+            parent_value = current_config.get(parent_key)
+            if parent_value in value_map:
+                return value_map[parent_value]
+
+        # Fall back to static description
+        return field_def.description
+
     def sections(self) -> list[str]:
         """Return ordered list of unique section names."""
         seen = []
@@ -107,7 +132,7 @@ class ConfigSchema:
         """Export the full schema as a JSON-serializable list of dicts."""
         result = []
         for f in self._fields.values():
-            result.append({
+            field_obj = {
                 "key": f.key,
                 "type": f.field_type,
                 "default": f.default,
@@ -120,7 +145,11 @@ class ConfigSchema:
                 "depends_on": f.depends_on,
                 "hot_reload": f.hot_reload,
                 "display_group": f.display_group,
-            })
+            }
+            # Include description_map for fields that have dynamic descriptions
+            if f.description_map:
+                field_obj["description_map"] = f.description_map
+            result.append(field_obj)
         return result
 
     @staticmethod
@@ -416,7 +445,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default=0,
         section="eos",
         level="standard",
-        description="Minimum battery SOC to maintain at end-of-horizon (% of capacity, 0 = disabled)",
+        description="Minimum battery SOC to maintain at end-of-horizon "
+        "(% of capacity, 0 = disabled)",
         help_url="configuration.html#eos",
         validation={"min": 0, "max": 80},
         depends_on={"eos.local_evopt_discharging_strategy": "emergency_reserve"},
@@ -429,7 +459,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default=0,
         section="eos",
         level="expert",
-        description="Maximum grid import power in Watts (0 = no additional constraint, uses battery/inverter limits). Use for grid connection limits.",
+        description="Maximum grid import power (0 = no limit, uses inverter limit). "
+        "Use for grid connection limits.",
         help_url="configuration.html#eos",
         validation={"min": 0, "max": 100000},
         depends_on={"eos.source": "local_evopt"},
@@ -442,7 +473,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default=0,
         section="eos",
         level="expert",
-        description="Maximum grid export power in Watts (0 = no additional constraint, uses battery discharge max). Use for grid feed-in limits.",
+        description="Maximum grid export power (0 = no limit, uses discharge max). "
+        "Use for grid feed-in limits.",
         help_url="configuration.html#eos",
         validation={"min": 0, "max": 100000},
         depends_on={"eos.source": "local_evopt"},
@@ -497,7 +529,7 @@ _ALL_FIELDS: list[FieldDef] = [
         default="tibberBearerToken",
         section="price",
         level="getting_started",
-        description="API token for price provider (Tibber bearer token, Stromligning supplierId/productId)",
+        description="API token for price provider (bearer token / supplier ID)",
         labels=["restart_required"],
         help_url="configuration.html#price",
         depends_on={"price.source": ["tibber", "stromligning"]},
@@ -532,24 +564,12 @@ _ALL_FIELDS: list[FieldDef] = [
                 "23.52,23.52,23.52,23.52,28.17,28.17,34.28,34.28,34.28,34.28,34.28,28,23",
         section="price",
         level="standard",
-        description="24 comma-separated prices in ct/kWh for each hour (used with fixed_24h source)",
+        description="24 comma-separated prices in ct/kWh per hour (fixed_24h source)",
         labels=["restart_required"],
         help_url="configuration.html#price",
         depends_on={"price.source": ["fixed_24h"]},
         display_group="Fixed Prices",
     ),
-    FieldDef(
-        key="price.negative_price_switch",
-        field_type="bool",
-        default=False,
-        section="price",
-        level="standard",
-        description="No payment when stock price is negative",
-        help_url="configuration.html#price",
-        hot_reload=True,
-        display_group="Price Adjustments",
-    ),
-
     # ===== ENERGY PRICE FORECAST (Grid Price Subsection) =====
     FieldDef(
         key="price.energyforecast_enabled",
@@ -649,6 +669,25 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#price",
         validation={"min": 0.5, "max": 1.5},
         depends_on={"price.feed_in_source": ["elpris_dk", "epex_spot"]},
+        hot_reload=True,
+        display_group="Feed-In Pricing",
+    ),
+    FieldDef(
+        key="price.feed_in_negative_price_switch",
+        field_type="bool",
+        default=False,
+        section="price",
+        level="standard",
+        description="Clamp negative market prices to feed-in price of 0",
+        help_url="configuration.html#price",
+        description_map={
+            "price.feed_in_source": {
+                "fixed": "Clamp to 0 when market price (Akkudoktor reference) goes negative",
+                "elpris_dk": "Clamp to 0 when market price (Elpris DK) goes negative",
+                "epex_spot": "Clamp to 0 when market price (EPEX Spot) goes negative",
+            }
+        },
+        depends_on={"price.feed_in_source": ["fixed", "elpris_dk", "epex_spot"]},
         hot_reload=True,
         display_group="Feed-In Pricing",
     ),
@@ -1136,7 +1175,7 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="inverter",
         level="getting_started",
-        description="Home Assistant URL for inverter control (e.g. http://homeassistant.local:8123)",
+        description="Home Assistant URL for inverter (e.g. http://ha.local:8123)",
         labels=["restart_required", "deprecated"],
         help_url="configuration.html#inverter",
         depends_on={"inverter.type": ["homeassistant"]},
