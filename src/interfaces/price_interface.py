@@ -66,12 +66,11 @@ class PriceInterface:
                    (e.g., 'tibber', 'stromligning', 'smartenergy_at', 'fixed_24h', 'default').
         access_token (str): Access token for authenticating with the price source.
         fixed_24h_array (list): Optional fixed 24-hour price array (ct/kWh).
-        feed_in_tariff_price (float): Feed-in tariff price in ct/kWh.
-        negative_price_switch (bool): If True, sets feed-in prices to 0 for negative prices.
+        feed_in_tariff_price (float): Feed-in tariff price in ct/kWh
+                    (legacy, use FeedInPriceInterface).
         time_zone (str): Timezone for date and time operations.
         current_prices (list): Current prices including taxes (EUR/Wh).
         current_prices_direct (list): Current prices without tax (EUR/Wh).
-        current_feedin (list): Current feed-in prices (EUR/Wh).
         default_prices (list): Default price list if external data is unavailable (EUR/Wh).
 
     Methods:
@@ -131,7 +130,6 @@ class PriceInterface:
         elif not isinstance(self.fixed_24h_array, list):
             self.fixed_24h_array = False
         self.feed_in_tariff_price = config.get("feed_in_price", 0.0)
-        self.negative_price_switch = config.get("negative_price_switch", False)
 
         # Energyforecast.de smart price prediction configuration
         self.energyforecast_enabled = config.get("energyforecast_enabled", False)
@@ -144,7 +142,6 @@ class PriceInterface:
         self.time_zone = timezone
         self.current_prices = []
         self.current_prices_direct = []  # without tax
-        self.current_feedin = []
         self.default_prices = [0.0001] * 48  # if external data are not available
         self.price_currency = self.__determine_price_currency()
 
@@ -174,16 +171,11 @@ class PriceInterface:
         )
         self.forecast_source = None  # e.g., "energyforecast.de" for smart forecasts
 
-        # Auxiliary stock prices from Akkudoktor for feedin decision when using fixed_24h source
-        self.stock_prices_for_feedin_check = []
-
         self.__check_config()  # Validate configuration parameters
         logger.info(
-            "[PRICE-IF] Initialized with"
-            + " source: %s, feed_in_tariff_price: %s, negative_price_switch: %s",
+            "[PRICE-IF] Initialized with source: %s, feed_in_tariff_price: %s",
             self.src,
             self.feed_in_tariff_price,
-            self.negative_price_switch,
         )
 
         # Start the background update service
@@ -250,7 +242,8 @@ class PriceInterface:
                 )  # Get 48 hours of price data
                 logger.debug("[PRICE-IF] Periodic price update completed")
 
-            except Exception as e:
+            except (requests.RequestException, KeyError, ValueError, AttributeError,
+                    TypeError, OSError, RuntimeError) as e:
                 logger.error(
                     "[price_interface] Price fetch failed: %s | Config: #price | ACTION REQUIRED",
                     e
@@ -347,8 +340,7 @@ class PriceInterface:
 
     def update_prices(self, tgt_duration, start_time=None):
         """
-        Updates the current prices and feed-in prices based on the target duration
-        and start time provided.
+        Updates the current prices based on the target duration and start time provided.
 
         Args:
             tgt_duration (int): The target duration (hours or 15-min slots) for which prices
@@ -358,7 +350,6 @@ class PriceInterface:
         Updates:
             self.current_prices: Updates with the retrieved prices for the given duration
                                  and start time.
-            self.current_feedin: Updates with the generated feed-in prices.
 
         Logs:
             Logs a debug message indicating that prices have been updated.
@@ -368,7 +359,6 @@ class PriceInterface:
                 minute=0, second=0, microsecond=0
             )
         self.current_prices = self.__retrieve_prices(tgt_duration, start_time)
-        self.current_feedin = self.__create_feedin_prices()
         logger.debug(
             "[PRICE-IF] Prices updated for %d hours starting from %s",
             tgt_duration,
@@ -384,18 +374,6 @@ class PriceInterface:
         """
         # logger.debug("[PRICE-IF] Returning current prices: %s", self.current_prices)
         return self.current_prices
-
-    def get_current_feedin_prices(self):
-        """
-        Returns the current feed-in prices.
-
-        Returns:
-            list: A list of current feed-in prices (EUR/Wh) for the configured time frame.
-        """
-        # logger.debug(
-        #     "[PRICE-IF] Returning current feed-in prices: %s", self.current_feedin
-        # )
-        return self.current_feedin
 
     def get_price_currency(self):
         """
@@ -443,87 +421,6 @@ class PriceInterface:
                 source,
             )
 
-    def refresh_stock_prices_for_feedin_check(self, tgt_duration=48, start_time=None):
-        """
-        Fetch and store auxiliary Akkudoktor stock prices for fixed_24h negative price detection.
-
-        This public method is used by hot reload to refresh stock prices when the configuration
-        changes, ensuring that the negative_price_switch logic works correctly with fixed_24h.
-
-        Args:
-            tgt_duration (int): Number of hours to fetch (default: 48).
-            start_time (datetime, optional): Start time for fetching (default: now at midnight).
-
-        Returns:
-            bool: True if stock prices were successfully fetched, False otherwise.
-        """
-        if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-        stock_prices = self.__fetch_akkudoktor_prices(tgt_duration, start_time)
-        if stock_prices:
-            # Store the auxiliary stock prices from current_prices_direct (set by fetch)
-            self.stock_prices_for_feedin_check = self.current_prices_direct.copy()
-            logger.debug(
-                "[PRICE-IF] Stock prices updated for feedin check (%d entries)",
-                len(stock_prices),
-            )
-            return True
-        else:
-            self.stock_prices_for_feedin_check = []
-            return False
-
-    def recalculate_feedin_prices(self):
-        """
-        Recalculate and return the current feed-in prices.
-        
-        This public method triggers a recalculation of feed-in prices based on the current
-        market prices and configuration (negative_price_switch, feed_in_tariff_price, etc).
-        Used by hot reload and other components that need to refresh feed-in prices.
-
-        Returns:
-            list: The recalculated feed-in prices (EUR/Wh).
-        """
-        return self.__create_feedin_prices()
-
-    def __create_feedin_prices(self):
-        """
-        Creates feed-in prices based on the current prices.
-
-        If negative_price_switch is enabled, feed-in prices are set to 0 for negative prices.
-        Otherwise, the feed-in tariff price is used for all prices.
-
-        Returns:
-            list: A list of feed-in prices (EUR/Wh).
-        """
-        if self.negative_price_switch:
-            # For fixed_24h source, use auxiliary stock prices for negative detection.
-            # For other sources, use current_prices_direct.
-            prices_for_check = (
-                self.stock_prices_for_feedin_check
-                if self.stock_prices_for_feedin_check
-                else self.current_prices_direct
-            )
-            self.current_feedin = [
-                0 if price < 0 else round(self.feed_in_tariff_price / 1000, 9)
-                for price in prices_for_check
-            ]
-            logger.debug(
-                "[PRICE-IF] Negative price switch is enabled."
-                + " Feed-in prices set to 0 for negative prices."
-            )
-        else:
-            self.current_feedin = [
-                round(self.feed_in_tariff_price / 1000, 9)
-                for _ in self.current_prices_direct
-            ]
-            logger.debug(
-                "[PRICE-IF] Feed-in prices created based on current"
-                + " prices and feed-in tariff price."
-            )
-        return self.current_feedin
-
     def __retrieve_prices(self, tgt_duration, start_time=None):
         """
         Retrieve prices based on the target duration and optional start time.
@@ -552,26 +449,6 @@ class PriceInterface:
             prices = self.__retrieve_prices_from_fixed24h_array(
                 tgt_duration, start_time
             )
-            # If negative_price_switch is enabled, also fetch Akkudoktor stock prices
-            # to determine which slots should have zero feed-in
-            if self.negative_price_switch:
-                stock_prices = self.__fetch_akkudoktor_prices(tgt_duration, start_time)
-                if stock_prices:
-                    # Store stock prices for feedin decision (use current_prices_direct
-                    # from fetch)
-                    self.stock_prices_for_feedin_check = (
-                        self.current_prices_direct.copy()
-                    )
-                    logger.debug(
-                        "[PRICE-IF] Fetched Akkudoktor stock prices for negative price detection"
-                        + " with fixed_24h source"
-                    )
-                else:
-                    logger.warning(
-                        "[PRICE-IF] Could not fetch Akkudoktor stock prices for negative price"
-                        + " detection. Feed-in prices will not reflect negative stock prices."
-                    )
-                    self.stock_prices_for_feedin_check = []
         elif self.src == "default":
             prices = self.__retrieve_prices_from_akkudoktor(tgt_duration, start_time)
         else:
@@ -855,7 +732,8 @@ class PriceInterface:
             )
         except (KeyError, IndexError, TypeError) as e:
             logger.error(
-                "[price_interface] Tibber price data invalid (missing priceInfo): %s | Config: #price | ACTION REQUIRED",
+                "[price_interface] Tibber price data invalid (missing priceInfo): %s "
+                "| Config: #price | ACTION REQUIRED",
                 e
             )
             return []
@@ -1666,7 +1544,7 @@ class PriceInterface:
         # Using simple least squares: y = a*x + b
         try:
             factor, offset = self._linear_regression(epex_samples, primary_samples)
-        except Exception as e:
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError) as e:
             logger.warning("[PRICE-IF] Linear regression failed: %s", e)
             return []
 
@@ -1797,7 +1675,9 @@ class PriceInterface:
 
         return slope, intercept
 
-    def __retrieve_prices_from_fixed24h_array(self, tgt_duration, start_time=None):
+    def __retrieve_prices_from_fixed24h_array(
+        self, tgt_duration, start_time=None  # pylint: disable=unused-argument
+    ):
         """
         Returns a fixed 24-hour array of prices.
 

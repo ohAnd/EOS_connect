@@ -43,13 +43,13 @@ _PRICE_FIELD_MAP = {
     "price.fixed_price_adder_ct": ("fixed_price_adder_ct", float),
     "price.relative_price_multiplier": ("relative_price_multiplier", float),
     "price.feed_in_price": ("feed_in_tariff_price", float),
-    "price.negative_price_switch": ("negative_price_switch", bool),
 }
 
 # Map of feed-in price config keys to (interface_attr_name, coerce_fn)
 _FEEDIN_PRICE_FIELD_MAP = {
     "price.feed_in_static_adder": ("static_adder_ct_kwh", float),  # ct/kWh (standard unit)
     "price.feed_in_multiplier": ("multiplier", float),
+    "price.feed_in_negative_price_switch": ("negative_price_switch", bool),
 }
 
 _BATTERY_SOC_FIELDS = {
@@ -91,7 +91,7 @@ _PRICE_RUN_TRIGGERS = {
 # Feed-in related fields that require recalculating feed-in prices
 _FEEDIN_TRIGGERS = {
     "price.feed_in_price",
-    "price.negative_price_switch",
+    "price.feed_in_negative_price_switch",
 }
 
 _PV_KEY_PREFIXES = (
@@ -146,7 +146,7 @@ class HotReloadAdapter:
         """List of keys applied in the most recent callback invocation."""
         return list(self._applied_keys)
 
-    def on_config_changed(self, key, old_value, new_value):
+    def on_config_changed(self, key, _old_value, new_value):
         """
         Callback for ConfigStore changes. Applies the change if the key
         is hot-reloadable, otherwise ignores it.
@@ -202,6 +202,10 @@ class HotReloadAdapter:
             # Also sync FeedInPriceInterface.fixed_price_ct_kwh — this is what the
             # optimizer actually reads; price_interface.feed_in_tariff_price is legacy.
             self._sync_feed_in_fixed_price(coerced)
+
+        # Sync negative_price_switch to FeedInPriceInterface
+        if key == "price.feed_in_negative_price_switch":
+            self._sync_feed_in_negative_price_switch(coerced)
 
         # Recalculate feed-in prices when feed_in_price or negative_price_switch change
         if key in _FEEDIN_TRIGGERS:
@@ -269,6 +273,31 @@ class HotReloadAdapter:
             )
         except (AttributeError, TypeError, ValueError, OSError, RuntimeError) as e:
             logger.warning("[HotReload] Failed to sync FeedInPriceInterface fixed price: %s", e)
+
+    def _sync_feed_in_negative_price_switch(self, negative_price_switch):
+        """Sync negative_price_switch to FeedInPriceInterface and refresh prices.
+
+        When the user toggles negative_price_switch via the web UI, we must update
+        the FeedInPriceInterface and recalculate prices so the clamping logic takes effect.
+        """
+        if self._feed_in_price is None:
+            return
+        try:
+            old = getattr(self._feed_in_price, "negative_price_switch", "?")
+            self._feed_in_price.negative_price_switch = negative_price_switch
+            start_time = datetime.now(self._feed_in_price.time_zone).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+            self._feed_in_price.update_prices(tgt_duration, start_time)
+            logger.info(
+                "[HotReload] Synced FeedInPriceInterface.negative_price_switch = %s (was %s)",
+                negative_price_switch, old,
+            )
+        except (AttributeError, TypeError, ValueError, OSError, RuntimeError) as e:
+            logger.warning(
+                "[HotReload] Failed to sync FeedInPriceInterface negative_price_switch: %s",
+                e)
 
     def _apply_battery_feedin_price(self, feedin_price):
         """Apply live feed-in price updates to the battery price handler."""

@@ -30,10 +30,10 @@ Usage:
 """
 
 from datetime import datetime, timedelta
-import json
 import logging
 import threading
 import requests
+import pytz
 
 logger = logging.getLogger("__main__")
 logger.info("[FEEDIN-IF] loading module")
@@ -55,7 +55,7 @@ class FeedInPriceInterface:
         static_adder_ct_kwh (float): Static adjustment in ct/kWh (e.g., 3.5 for transport costs)
         multiplier (float): Relative multiplier (1.0 = no change, 1.05 = +5%)
         time_frame_base (int): Time frame in seconds (3600 = hourly, 900 = 15-min slots)
-        time_zone (str): Timezone for date operations
+        time_zone (pytz.timezone): Timezone for date operations
         current_feedin_prices (list): Current feed-in prices in EUR/Wh
         default_prices (list): Default fallback prices
         last_successful_prices (list): Last successfully fetched prices for fallback
@@ -73,12 +73,13 @@ class FeedInPriceInterface:
                 - static_adder_ct_kwh: Static adjustment in ct/kWh (standard unit)
                 - multiplier: Relative multiplier (default 1.0)
                 - fixed_price_ct_kwh: Fixed price in ct/kWh (for 'fixed' source)
+                - negative_price_switch: Boolean to clamp negative prices to 0 (default: False)
             time_frame_base (int): 3600 for hourly, 900 for 15-minute slots
-            timezone (str): Timezone identifier
+            timezone (str): Timezone identifier (e.g., 'UTC', 'Europe/Berlin')
         """
         self.source = config.get("source", "fixed")
         self.zone = config.get("zone", "DK1")
-        
+
         # Primary: ct/kWh format (standard, user-facing unit)
         # Fallback: Support legacy øre format for backward compatibility
         if "static_adder_ct_kwh" in config:
@@ -86,9 +87,9 @@ class FeedInPriceInterface:
         else:
             # Legacy: øre format (øre / 100 = ct/kWh)
             self.static_adder_ct_kwh = config.get("static_adder_oere", 0.0) / 100.0
-        
+
         self.multiplier = config.get("multiplier", 1.0)
-        
+
         # Fixed price in ct/kWh
         fixed_price_ct_kwh = config.get("fixed_price_ct_kwh", 0.0)
         # Also try legacy key
@@ -100,10 +101,18 @@ class FeedInPriceInterface:
             fixed_price_ct_kwh = fixed_price_ct_kwh * 100
         self.fixed_price_ct_kwh = fixed_price_ct_kwh
 
+        # Negative price switching: if True, clamps negative market prices to 0
+        self.negative_price_switch = config.get("negative_price_switch", False)
+
         self.time_frame_base = time_frame_base
-        self.time_zone = timezone
+        # Handle both string and pytz.timezone objects
+        if isinstance(timezone, str):
+            self.time_zone = pytz.timezone(timezone)
+        else:
+            # Already a pytz timezone object
+            self.time_zone = timezone
         self.current_feedin_prices = []
-        
+
         # Default fallback prices (0.5 ct/kWh = 0.000005 EUR/Wh)
         self.default_prices = [0.000005] * 48
 
@@ -119,7 +128,8 @@ class FeedInPriceInterface:
 
         self._validate_config()
         logger.info(
-            "[FEEDIN-IF] Initialized with source: %s, zone: %s, adder: %.2f ct/kWh, multiplier: %.2f",
+            "[FEEDIN-IF] Initialized with source: %s, zone: %s, adder: %.2f ct/kWh, "
+            "multiplier: %.2f",
             self.source,
             self.zone,
             self.static_adder_ct_kwh,
@@ -188,7 +198,8 @@ class FeedInPriceInterface:
                 self.update_prices(tgt_duration, start_time)
                 logger.debug("[FEEDIN-IF] Periodic feed-in price update completed")
 
-        except Exception as e:
+        except (requests.RequestException, KeyError, ValueError, AttributeError,
+                TypeError, OSError, RuntimeError) as e:
             logger.error(
                 "[FEEDIN-IF] Price fetch failed: %s | Config: #price | ACTION REQUIRED",
                 e,
@@ -219,16 +230,19 @@ class FeedInPriceInterface:
         if not prices:
             self.consecutive_failures += 1
 
-            if self.consecutive_failures <= self.max_failures and self.last_successful_prices:
+            if (self.consecutive_failures <= self.max_failures and
+                    self.last_successful_prices):
                 logger.warning(
-                    "[FEEDIN-IF] No prices retrieved (failure %d/%d). Using last successful prices.",
+                    "[FEEDIN-IF] No prices retrieved (failure %d/%d). "
+                    "Using last successful prices.",
                     self.consecutive_failures,
                     self.max_failures,
                 )
                 prices = self.last_successful_prices[:tgt_duration]
             else:
                 logger.error(
-                    "[FEEDIN-IF] Failed to retrieve prices after %d attempts. Using default prices.",
+                    "[FEEDIN-IF] Failed to retrieve prices after %d attempts. "
+                    "Using default prices.",
                     self.max_failures,
                 )
                 prices = self.default_prices
@@ -324,6 +338,11 @@ class FeedInPriceInterface:
 
                 # ct/kWh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
                 price_eur_wh = round(price_adjusted / 100000, 9)
+
+                # Clamp to 0 if negative_price_switch enabled and price negative
+                if self.negative_price_switch and price_eur_wh < 0:
+                    price_eur_wh = 0.0
+
                 prices_eur_wh.append(price_eur_wh)
 
             logger.debug(
@@ -385,6 +404,9 @@ class FeedInPriceInterface:
 
                 # Convert ct/kWh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
                 price_eur_wh = round(price_adjusted / 100000, 9)
+                # Clamp to 0 if negative_price_switch enabled and price negative
+                if self.negative_price_switch and price_eur_wh < 0:
+                    price_eur_wh = 0.0
                 prices_eur_wh.append(price_eur_wh)
 
             logger.debug(
@@ -409,10 +431,12 @@ class FeedInPriceInterface:
         Use fixed feed-in price for all time slots.
 
         Applies static_adder_ct_kwh and multiplier for consistency with dynamic sources.
+        If negative_price_switch enabled, applies clamping based on market prices from
+        Akkudoktor.
 
         Args:
             tgt_duration (int): Target duration
-            start_time (datetime): Start time (not used)
+            start_time (datetime): Start time (not used for fixed prices)
 
         Returns:
             list: Fixed prices in EUR/Wh
@@ -422,16 +446,96 @@ class FeedInPriceInterface:
         # ct/kWh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
         price_eur_wh = round(price_ct_kwh / 100000, 9)
         prices = [price_eur_wh] * tgt_duration
+
         logger.debug(
-            "[FEEDIN-IF] Using fixed feed-in price: %.2f ct/kWh (base=%.2f, adder=%.2f,"
-            " mult=%.2f) = %.9f EUR/Wh",
+            "[FEEDIN-IF] Using fixed feed-in price: %.2f ct/kWh "
+            "(base=%.2f, adder=%.2f, mult=%.2f) = %.9f EUR/Wh",
             price_ct_kwh,
             self.fixed_price_ct_kwh,
             self.static_adder_ct_kwh,
             self.multiplier,
             price_eur_wh,
         )
+
+        # If negative_price_switch enabled, clamp to 0 where market prices are negative
+        if self.negative_price_switch:
+            market_prices = self._fetch_market_prices_for_reference(tgt_duration, start_time)
+            if market_prices:
+                # Clamp feed-in to 0 where market price < 0
+                prices = [
+                    0.0 if market_prices[i] < 0 else prices[i]
+                    for i in range(min(len(prices), len(market_prices)))
+                ]
+                logger.debug(
+                    "[FEEDIN-IF] Applied negative_price_switch to fixed prices "
+                    "(clamped %d slots to 0 based on market prices)",
+                    sum(1 for p in market_prices if p < 0),
+                )
+            else:
+                logger.warning(
+                    "[FEEDIN-IF] negative_price_switch enabled but failed to fetch "
+                    "market prices"
+                )
+
         return prices
+
+    def _fetch_market_prices_for_reference(self, tgt_duration, start_time):
+        """
+        Fetch Akkudoktor market prices as reference for negative price detection
+        (fixed source only).
+
+        Used to determine when to clamp fixed feed-in prices to 0 when market prices
+        are negative.
+
+        Args:
+            tgt_duration (int): Target duration
+            start_time (datetime): Start time
+
+        Returns:
+            list: Prices in EUR/Wh or empty list on error
+        """
+        try:
+            start_date = start_time.strftime("%Y-%m-%d")
+            end_date = (start_time + timedelta(days=1)).strftime("%Y-%m-%d")
+            url = f"{AKKUDOKTOR_API_PRICES}?start={start_date}&end={end_date}"
+
+            logger.debug("[FEEDIN-IF] Fetching Akkudoktor market prices for reference: %s", url)
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            prices_list = data.get("values", [])
+
+            if not prices_list:
+                logger.warning(
+                    "[FEEDIN-IF] Akkudoktor returned empty market price list for "
+                    "reference"
+                )
+                return []
+
+            prices_eur_wh = []
+            for price_entry in prices_list:
+                # API returns prices in ct/kWh (without tax)
+                price_ct_kwh = price_entry.get("marketpriceEurocentPerKWh", 0.0)
+                # Convert ct/kWh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
+                price_eur_wh = round(price_ct_kwh / 100000, 9)
+                prices_eur_wh.append(price_eur_wh)
+
+            logger.debug(
+                "[FEEDIN-IF] Fetched %d Akkudoktor market prices for reference",
+                len(prices_eur_wh),
+            )
+
+            # Extend to target duration if needed
+            prices_eur_wh = self._extend_prices_to_duration(prices_eur_wh, tgt_duration)
+            return prices_eur_wh
+
+        except requests.RequestException as e:
+            logger.error("[FEEDIN-IF] Failed to fetch Akkudoktor market prices: %s", e)
+            return []
+        except (KeyError, ValueError) as e:
+            logger.error("[FEEDIN-IF] Failed to parse Akkudoktor response: %s", e)
+            return []
 
     def _extend_prices_to_duration(self, prices, tgt_duration):
         """
@@ -456,8 +560,8 @@ class FeedInPriceInterface:
             tgt_duration = tgt_duration * 4 if tgt_duration < 100 else tgt_duration
 
         # If still short, cycle through available prices
-        while len(prices) < tgt_duration:
-            remaining = tgt_duration - len(prices)
-            prices.extend(prices[:remaining])
+        if len(prices) < tgt_duration:
+            remaining_slots = tgt_duration - len(prices)
+            prices.extend(prices[:remaining_slots])
 
-        return prices[:tgt_duration]
+        return prices

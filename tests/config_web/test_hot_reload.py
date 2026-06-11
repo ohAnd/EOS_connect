@@ -1,6 +1,7 @@
 """
 Unit tests for the HotReloadAdapter.
 """
+# pylint: disable=redefined-outer-name
 
 from unittest.mock import MagicMock
 import time
@@ -17,11 +18,16 @@ def price_interface():
     mock.fixed_price_adder_ct = 0.0
     mock.relative_price_multiplier = 0.0
     mock.feed_in_tariff_price = 0.0
+    mock.recalculate_feedin_prices = MagicMock(return_value=[0.05, 0.05, 0.05])
+    return mock
+
+
+@pytest.fixture
+def feed_in_price_interface():
+    """Mock FeedInPriceInterface with negative_price_switch."""
+    mock = MagicMock()
     mock.negative_price_switch = False
-    mock.current_prices_direct = [0.1, 0.2, 0.3]
-    mock.current_feedin = [0.0, 0.0, 0.0]
-    # Make __create_feedin_prices accessible via name mangling
-    mock._PriceInterface__create_feedin_prices = MagicMock(return_value=[0.05, 0.05, 0.05])
+    mock.get_current_feedin_prices = MagicMock(return_value=[0.05, 0.05, 0.05])
     return mock
 
 
@@ -77,11 +83,12 @@ def merged_config_provider():
 
 
 @pytest.fixture
-def adapter(price_interface, battery_interface):
+def adapter(price_interface, battery_interface, feed_in_price_interface):
     """HotReloadAdapter wired to mocked interfaces."""
     return HotReloadAdapter(
         price_interface=price_interface,
         battery_interface=battery_interface,
+        feed_in_price_interface=feed_in_price_interface,
     )
 
 
@@ -127,11 +134,10 @@ class TestHotReloadPrice:
         adapter.on_config_changed("price.fixed_price_adder_ct", 0.0, 1.0)
         trigger.assert_not_called()
 
-    def test_negative_price_switch(self, adapter, price_interface):
-        """Changing negative_price_switch should update attr and recalculate feed-in."""
-        adapter.on_config_changed("price.negative_price_switch", False, True)
-        assert price_interface.negative_price_switch is True
-        price_interface.recalculate_feedin_prices.assert_called_once()
+    def test_negative_price_switch(self, adapter, feed_in_price_interface):
+        """Changing feed_in_negative_price_switch should update attr and recalculate feed-in."""
+        adapter.on_config_changed("price.feed_in_negative_price_switch", False, True)
+        assert feed_in_price_interface.negative_price_switch is True
 
     def test_non_feedin_field_no_recalc(self, adapter, price_interface):
         """Changing a non-feedin price field should NOT recalculate feed-in."""
@@ -208,7 +214,7 @@ class TestHotReloadGeneral:
         adapter.on_config_changed("battery.min_soc_percentage", 5, 10)
         assert adapter.last_applied == []
 
-    def test_last_applied_resets(self, adapter, price_interface):
+    def test_last_applied_resets(self, adapter, price_interface):  # pylint: disable=unused-argument
         """last_applied should reset on each callback invocation."""
         adapter.on_config_changed("price.fixed_price_adder_ct", 0.0, 1.0)
         assert len(adapter.last_applied) == 1
@@ -469,7 +475,7 @@ class TestHotReloadLocalEVopt:
         assert local_evopt_backend.emergency_reserve_pct == 0
 
     def test_run_trigger_called_on_strategy_change(
-        self, optimization_interface_local, local_evopt_backend
+        self, optimization_interface_local, local_evopt_backend  # pylint: disable=unused-argument
     ):
         """on_run_trigger must be called after a local_evopt strategy hot-reload."""
         trigger = MagicMock()
