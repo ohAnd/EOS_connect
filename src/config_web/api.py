@@ -12,6 +12,8 @@ import logging
 import re
 from flask import Blueprint, jsonify, request as flask_request, Response
 
+from .migration import _flatten_config
+
 logger = logging.getLogger("__main__")
 
 config_bp = Blueprint("config", __name__, url_prefix="/api/config")
@@ -37,10 +39,39 @@ def init_api(store, schema, module):
 
 @config_bp.route("/schema", methods=["GET"])
 def get_schema():
-    """Return the full config schema as JSON, including section metadata."""
+    """Return the full config schema as JSON, including section metadata and descriptions."""
+    # Get current config to resolve dynamic descriptions
+    current_config = _module.get_config()
+    # Flatten config to dot-notation for description resolution
+    flat_config = _flatten_config(current_config)
+
     sections_dict = _schema.section_meta()
+
+    # Build fields with resolved descriptions and description_map for frontend
+    fields = []
+    for f in _schema.all_fields():
+        resolved_desc = _schema.get_resolved_description(f.key, flat_config)
+        field_obj = {
+            "key": f.key,
+            "type": f.field_type,
+            "default": f.default,
+            "section": f.section,
+            "level": f.level,
+            "description": resolved_desc,
+            "labels": f.labels,
+            "help_url": f.help_url,
+            "validation": f.validation,
+            "depends_on": f.depends_on,
+            "hot_reload": f.hot_reload,
+            "display_group": f.display_group,
+        }
+        # Include description_map for fields that have dynamic descriptions
+        if f.description_map:
+            field_obj["description_map"] = f.description_map
+        fields.append(field_obj)
+
     data = {
-        "fields": _schema.to_json(),
+        "fields": fields,
         "sections": sections_dict,
         "section_order": list(sections_dict.keys()),  # Explicit order as array
     }
@@ -99,7 +130,7 @@ def update_config():
     
     Returns:
     - If validation errors: status 422 with "errors"
-    - If unmet dependencies (fields required by other fields): status 200 with "unmet_dependencies" + no save
+    - If unmet dependencies: status 200 with "unmet_dependencies" + no save
     - If success: status 200 with "updated", "restart_required", "hot_reloaded"
     """
     data = flask_request.get_json(silent=True)
@@ -283,18 +314,18 @@ def _resolve_schema_key(key: str):
 def _check_dependencies(data: dict) -> list[dict]:
     """
     Check cross-field dependencies. Returns list of unmet dependency objects.
-    
+
     Examples:
     - If pv_forecast_source.source="evcc", then evcc.url must be populated
     - If mqtt.enabled=True, then mqtt.broker must be populated
-    
-    Each dependency object has: {"field": "...", "reason": "...", "requires": "..."}
+
+    Each dependency object has: {"field": "...", "reason": "...", "requires": "..."
     """
     dependencies = []
-    
+
     # Get current config for fields not in the update
     current_config = _module.get_config()
-    
+
     # Helper: get effective value (from update data or current config)
     def get_value(key):
         if key in data:
@@ -308,7 +339,7 @@ def _check_dependencies(data: dict) -> list[dict]:
             else:
                 return None
         return val
-    
+
     # PV Source: if "evcc" selected, EVCC URL must be configured
     pv_source = get_value("pv_forecast_source.source")
     if pv_source == "evcc":
@@ -320,7 +351,7 @@ def _check_dependencies(data: dict) -> list[dict]:
                 "requires": "evcc.url",
                 "blocking": True,
             })
-    
+
     # Inverter: if "evcc" selected, EVCC URL must be configured
     inverter_type = get_value("inverter.type")
     if inverter_type == "evcc":
@@ -332,7 +363,7 @@ def _check_dependencies(data: dict) -> list[dict]:
                 "requires": "evcc.url",
                 "blocking": True,
             })
-    
+
     # MQTT: if enabled, broker must be set
     mqtt_enabled = get_value("mqtt.enabled")
     if mqtt_enabled:
@@ -344,7 +375,7 @@ def _check_dependencies(data: dict) -> list[dict]:
                 "requires": "mqtt.broker",
                 "blocking": True,
             })
-    
+
     return dependencies
 
 

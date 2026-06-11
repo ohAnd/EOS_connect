@@ -237,6 +237,9 @@ feed_in_config = {
     "fixed_price_ct_kwh": config_manager.config.get("price", {}).get(
         "feed_in_price", 0.0
     ),  # ct/kWh
+    "negative_price_switch": config_manager.config.get("price", {}).get(
+        "feed_in_negative_price_switch", False
+    ),  # Clamp negative prices to 0 if enabled
 }
 
 feed_in_price_interface = interface_factory.create_feed_in_price_interface(

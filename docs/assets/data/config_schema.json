@@ -589,20 +589,6 @@
       "display_group": "Fixed Prices"
     },
     {
-      "key": "price.negative_price_switch",
-      "type": "bool",
-      "default": false,
-      "section": "price",
-      "level": "standard",
-      "description": "No payment when stock price is negative",
-      "labels": [],
-      "help_url": "configuration.html#price",
-      "validation": {},
-      "depends_on": null,
-      "hot_reload": true,
-      "display_group": "Price Adjustments"
-    },
-    {
       "key": "price.energyforecast_enabled",
       "type": "bool",
       "default": false,
@@ -776,6 +762,33 @@
       },
       "hot_reload": true,
       "display_group": "Feed-In Pricing"
+    },
+    {
+      "key": "price.feed_in_negative_price_switch",
+      "type": "bool",
+      "default": false,
+      "section": "price",
+      "level": "standard",
+      "description": "Clamp negative market prices to feed-in price of 0",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {},
+      "depends_on": {
+        "price.feed_in_source": [
+          "fixed",
+          "elpris_dk",
+          "epex_spot"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Pricing",
+      "description_map": {
+        "price.feed_in_source": {
+          "fixed": "Clamp to 0 when market price (Akkudoktor reference) goes negative",
+          "elpris_dk": "Clamp to 0 when market price (Elpris DK) goes negative",
+          "epex_spot": "Clamp to 0 when market price (EPEX Spot) goes negative"
+        }
+      }
     },
     {
       "key": "battery.source",

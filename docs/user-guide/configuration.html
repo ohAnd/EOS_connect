@@ -2034,21 +2034,21 @@ price:
   feed_in_static_adder: -1.0  # -1 ct/kWh fee
   feed_in_multiplier: 1.0     # Full spot price</code></pre>
 
-            <h3>price.negative_price_switch</h3>
+            <h3>price.feed_in_negative_price_switch</h3>
             <table>
                 <tr>
                     <th>Parameter</th>
-                    <td><code>price.negative_price_switch</code></td>
+                    <td><code>price.feed_in_negative_price_switch</code></td>
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>How to handle negative electricity market prices for grid purchases (not feed-in)</td>
+                    <td>How to handle negative electricity market prices for feed-in (battery export). When enabled, prevents exporting at a loss when market prices go negative.</td>
                 </tr>
                 <tr>
                     <th>Valid Values</th>
                     <td>
-                        <code>true</code> - Don't pay anything when market price goes negative (set buy price to €0)<br>
-                        <code>false</code> - Always use the configured market price (including negative values)
+                        <code>true</code> - Set feed-in price to €0 when market price goes negative (don't export)<br>
+                        <code>false</code> - Always use the configured feed-in price (including during negative price periods)
                     </td>
                 </tr>
                 <tr>
@@ -2057,7 +2057,11 @@ price:
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>This setting only applies to grid <strong>purchase</strong> prices. Use <code>true</code> only with <code>source: default</code> (Akkudoktor) if you don't want to receive payments during negative price periods.</td>
+                    <td>The market price reference varies based on the selected feed-in source:<br>
+                    • <strong>fixed:</strong> Uses Akkudoktor market prices as reference<br>
+                    • <strong>elpris_dk:</strong> Uses Elpris DK spot prices<br>
+                    • <strong>epex_spot:</strong> Uses EPEX Spot prices<br>
+                    Enable when you want to avoid exporting battery power during periods when the market pays to consume.</td>
                 </tr>
             </table>
 
@@ -2180,8 +2184,9 @@ price:
             <pre><code>price:
   source: tibber
   token: "YOUR_TIBBER_TOKEN"
+  feed_in_source: fixed
   feed_in_price: 0.08
-  negative_price_switch: true
+  feed_in_negative_price_switch: true
   
   # Smart price prediction with energyforecast.de
   energyforecast_enabled: true
