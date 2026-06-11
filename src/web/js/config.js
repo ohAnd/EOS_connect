@@ -485,6 +485,9 @@ class ConfigurationManager {
             case "password":
                 inputHtml = this._renderPassword(f, val);
                 break;
+            case "json":
+                inputHtml = this._renderJSONTextarea(f, val);
+                break;
             default:
                 inputHtml = this._renderTextInput(f, val);
         }
@@ -645,6 +648,42 @@ class ConfigurationManager {
                     title="Show / hide">
                 <i class="fas fa-eye"></i>
             </button>
+        </div>`;
+    }
+
+    /**
+     * Render a JSON textarea field with syntax validation.
+     * @param {Object} f - Field definition
+     * @param {*} val - Current value (array or object, displayed as JSON string)
+     * @returns {string} Textarea HTML with validation feedback
+     */
+    _renderJSONTextarea(f, val) {
+        // Convert value to JSON string for display
+        let jsonString = "";
+        if (val === null || val === undefined) {
+            jsonString = "[]";  // Default empty array
+        } else if (typeof val === "string") {
+            jsonString = val;  // Already a string (from API or store)
+        } else {
+            try {
+                jsonString = JSON.stringify(val, null, 2);  // Pretty-print
+            } catch (e) {
+                jsonString = JSON.stringify(val);  // Fallback
+            }
+        }
+
+        const changedCls = this._isChanged(f.key) ? " changed" : "";
+        return `<div class="config-json-wrap">
+            <textarea class="config-textarea${changedCls}"
+                   id="cfg-json-${this._cssKey(f.key)}"
+                   data-key="${f.key}"
+                   rows="10"
+                   onblur="configurationManager._validateJSONField('${f.key}')"
+                   oninput="configurationManager._onFieldChange('${f.key}', this.value)">${this._escapeHtml(jsonString)}</textarea>
+            <div class="config-json-error" id="cfg-json-err-${this._cssKey(f.key)}"></div>
+            <div class="config-json-hint">Enter a valid JSON array of objects. Example:
+                <code>[{"service":"select.select_option","entity_id":"select.mode","data":{"option":"Charge"}}]</code>
+            </div>
         </div>`;
     }
 
@@ -901,6 +940,44 @@ class ConfigurationManager {
             } else {
                 toggleLabel.classList.remove("changed");
             }
+        }
+    }
+
+    /**
+     * Validate JSON field syntax and show/clear error message.
+     * Called on blur or during save.
+     * @param {string} key - Field key
+     * @returns {boolean} True if valid JSON, false otherwise
+     */
+    _validateJSONField(key) {
+        const textarea = document.getElementById(`cfg-json-${this._cssKey(key)}`);
+        const errorEl = document.getElementById(`cfg-json-err-${this._cssKey(key)}`);
+        
+        if (!textarea || !errorEl) {
+            return true;
+        }
+
+        const jsonString = textarea.value.trim();
+        
+        // Empty string is not valid for JSON arrays/objects
+        if (jsonString === "") {
+            errorEl.textContent = "JSON field cannot be empty. Use [] for an empty array.";
+            errorEl.style.display = "block";
+            textarea.classList.add("error");
+            return false;
+        }
+
+        try {
+            JSON.parse(jsonString);
+            errorEl.textContent = "";
+            errorEl.style.display = "none";
+            textarea.classList.remove("error");
+            return true;
+        } catch (e) {
+            errorEl.textContent = `Invalid JSON: ${e.message}`;
+            errorEl.style.display = "block";
+            textarea.classList.add("error");
+            return false;
         }
     }
 

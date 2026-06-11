@@ -1,5 +1,14 @@
 # GitHub Copilot Instructions for EOS Connect
 
+⚠️ **CRITICAL WORKFLOW REQUIREMENTS:**
+
+- **Code changes ALWAYS require documentation updates** — no exceptions
+- **"prepare for commit" triggers mandatory documentation checklist** — see Commit Preparation section
+- **NEVER auto-commit** — always present changes to user for review and approval
+- **GitHub Pages is primary documentation** — README.md is entry point only
+
+---
+
 ## Project Guidelines
 
 ### Icon Usage
@@ -26,19 +35,19 @@
 - GitHub Pages documentation is in `/docs` folder
 - Structure: 4 main sections (what-is, user-guide, advanced, developer)
 - Use HTML for documentation pages (better styling control than Markdown)
-- Keep README.md and CONFIG_README.md concise with links to full docs
+- **README.md**: Concise quick-start with links to full GitHub Pages docs (primary entry point)
+- **GitHub Pages** (`/docs`): Complete, detailed documentation for all features
 
 #### Documentation Update Workflow
 
 **When preparing to commit (NEVER stage changed files and commit automatically - always review changes first and ask for confirmation):**
 
-1. **Update README.md** - Minimal info only, focus on quick start + links to GitHub Pages
-2. **Update src/CONFIG_README.md** - Essential configuration overview + links to full docs
-3. **Update GitHub Pages** (`/docs` folder) - Complete, detailed documentation
+1. **Update README.md** - Concise quick-start only (1-3 sentences per feature), links to full docs
+2. **Update GitHub Pages** (`/docs` folder) - Complete, detailed documentation
    - Always write from **user perspective** (except developer section)
    - Main focus: **"Easy entry for new and existing users"**
    - Keep all pages current with latest features and changes
-   - Use clear, practical examples
+   - Use clear, practical examples with code blocks and screenshots
 
 #### Documentation Perspective
 
@@ -75,9 +84,8 @@ When making ANY code changes:
    - Bug fixes → Update troubleshooting in user-guide if user-facing
 
 2. **Update All Affected Pages**: Changes must be synchronized across:
-   - `/docs` GitHub Pages (primary documentation)
-   - `README.md` (if quick start or core features affected)
-   - `src/CONFIG_README.md` (if configuration parameters changed) - NOTE: This file is being deprecated, integrate changes into README.md instead
+   - `/docs` GitHub Pages (primary documentation, contains all details)
+   - `README.md` (if quick start or core features affected, keep concise)
 
 3. **Maintain Accuracy**: Documentation must match actual code behavior
    - Verify API endpoint responses match code
@@ -91,12 +99,51 @@ When making ANY code changes:
 
 ### Commit Preparation
 
-- **NEVER commit automatically** - only prepare changes for user review
-- When asked to "prepare to commit", ensure documentation is up-to-date:
-  1. Update README.md (minimal, with links)
-  2. Update src/CONFIG_README.md (essential info, with links)
-  3. Update GitHub Pages documentation (complete details)
-- Present a summary of changes for user to review before committing
+⚠️ **CRITICAL: Triggered by keywords:** "prepare for commit", "ready to commit", "commit prep", "ready to merge", "prepare to commit"
+
+**MANDATORY CHECKLIST - ALWAYS EXECUTE IN THIS ORDER:**
+
+1. ✅ **Verify code changes are complete and tested**
+   - All tests pass
+   - No breaking changes
+   - All new functionality implemented
+
+2. ✅ **Update README.md** (ALWAYS REQUIRED)
+   - Add 1-3 sentence mention of the feature/fix
+   - Include link to full documentation on GitHub Pages
+   - Keep concise - no lengthy explanations
+   - Check: Does it follow existing README style?
+
+3. ✅ **Update GitHub Pages documentation** (ALWAYS REQUIRED unless bugfix with no user-facing changes)
+   - Identify all affected doc sections (user-guide, advanced, what-is, etc.)
+   - Update with complete details, examples, best practices
+   - Write from **user perspective** - explain "why" and "how", not just "what"
+   - Verify accuracy: all config names, types, defaults match code
+   - Add code examples with syntax highlighting where applicable
+
+4. ✅ **Run schema export** (if config changes)
+   - Execute: `python scripts/export_config_schema.py`
+   - Verify: `docs/assets/data/config_schema.json` updated
+
+5. ✅ **Generate summary and present to user**
+   - List all files modified
+   - List all tests passing
+   - Link to GitHub Pages sections updated
+   - **WAIT FOR USER APPROVAL** before any commits
+
+6. ✅ **NEVER stage or commit automatically**
+   - Only prepare and present changes for review
+   - User must explicitly approve before committing
+
+7. ✅ **Include Conventional Commit message in response**
+   - Format: `<type>: <description>` with optional body and footer
+   - Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `chore`
+   - Example for features: Include `Fixes: #issueNumber` in footer
+   - Body should explain "why", not just "what" (code shows what)
+   - Make it ready to copy-paste for the user to commit
+   - This is the message the user will use when they approve and commit
+
+**If ANY of these steps are skipped, the preparation is INCOMPLETE.**
 
 ### Testing Phase Documentation
 
@@ -819,7 +866,7 @@ All commits follow **Conventional Commits** format for clear, scannable history.
 
 - **feat**: New feature (e.g., `feat: add battery forecast smoothing`)
 - **fix**: Bug fix (e.g., `fix: prevent startup crash on incomplete config`)
-- **docs**: Documentation changes (README, GitHub Pages, CONFIG_README)
+- **docs**: Documentation changes (README.md or GitHub Pages /docs folder)
 - **test**: Test additions or fixes (no production code change)
 - **refactor**: Code restructuring without feature/fix change
 - **perf**: Performance improvement

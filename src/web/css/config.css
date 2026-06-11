@@ -500,6 +500,74 @@
     width: 220px;
 }
 
+/* --- JSON textarea field --- */
+.config-json-wrap {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.config-textarea {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 0.85em;
+    font-family: 'Courier New', monospace;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background-color: rgba(30, 30, 30, 0.9);
+    color: #e0e0e0;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    box-sizing: border-box;
+    resize: vertical;
+    line-height: 1.4;
+}
+
+.config-textarea:focus {
+    outline: none;
+    border-color: #4a9eff;
+    box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.2);
+}
+
+.config-textarea.changed {
+    border-color: #ffc107 !important;
+    box-shadow: 0 0 0 2px rgba(255, 193, 7, 0.35) !important;
+}
+
+.config-textarea.error {
+    border-color: #dc3545;
+    box-shadow: 0 0 0 2px rgba(220, 53, 69, 0.2);
+}
+
+.config-json-error {
+    display: none;
+    font-size: 0.8em;
+    color: #dc3545;
+    padding: 4px 8px;
+    background-color: rgba(220, 53, 69, 0.1);
+    border-radius: 4px;
+    border-left: 3px solid #dc3545;
+}
+
+.config-json-hint {
+    font-size: 0.75em;
+    color: #888;
+    padding: 6px 8px;
+    background-color: rgba(100, 100, 100, 0.15);
+    border-radius: 4px;
+    line-height: 1.4;
+}
+
+.config-json-hint code {
+    background-color: rgba(0, 0, 0, 0.3);
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: #4a9eff;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+    word-break: break-all;
+}
+
 /* --- Responsive: mobile stacked --- */
 @media (max-width: 768px) {
     .config-layout {

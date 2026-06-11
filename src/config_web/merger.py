@@ -76,6 +76,9 @@ def build_merged_config(
     # Resolve data_source -> load/battery connection fields
     _apply_data_source_inheritance(result, all_settings)
 
+    # Inject data_source credentials to inverter when type is homeassistant
+    _apply_inverter_data_source_injection(result, all_settings)
+
     return result
 
 
@@ -120,7 +123,8 @@ def _build_pv_forecast(
     Rebuild the pv_forecast list from store values.
 
     Two storage formats are supported:
-    1. Web UI format (preferred): indexed keys like ``pv_forecast.0.name``, ``pv_forecast.1.lat``, etc.
+    1. Web UI format (preferred): indexed keys like ``pv_forecast.0.name``,
+       ``pv_forecast.1.lat``, etc.
     2. Migration format (fallback): entire list under key ``"pv_forecast"``
 
     Missing fields in entries are filled with schema defaults.
@@ -191,3 +195,26 @@ def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -
             sec["url"] = ds_url
             sec["access_token"] = ds_token
         # If section has its own source set, keep it (Expert override)
+
+
+def _apply_inverter_data_source_injection(result: dict, all_settings: dict[str, Any]) -> None:
+    """
+    Inject data_source URL and token to inverter when type is homeassistant.
+
+    When inverter.type is "homeassistant", inject the data_source.url and
+    data_source.access_token as inverter.url and inverter.token respectively.
+    This ensures the inverter uses the same HA credentials as the load/battery interfaces.
+    """
+    if "inverter" not in result:
+        return
+
+    inverter = result["inverter"]
+    if inverter.get("type") != "homeassistant":
+        return
+
+    ds_url = all_settings.get("data_source.url", "")
+    ds_token = all_settings.get("data_source.access_token", "")
+
+    # Inject credentials from data_source
+    inverter["url"] = ds_url
+    inverter["token"] = ds_token

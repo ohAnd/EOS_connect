@@ -737,19 +737,135 @@
                 </tr>
             </table>
 
+            <h3>Home Assistant Service Call Sequences</h3>
+            <p>When using <code>inverter.type: homeassistant</code>, define the HA service calls to execute for each battery control mode. Each field accepts a JSON array of service call objects.</p>
+
+            <h3>inverter.charge_from_grid</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.charge_from_grid</code></td>
+                </tr>
+                <tr>
+                    <th>Type</th>
+                    <td>JSON Array</td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Service calls to execute when charging from grid</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>[]</code></td>
+                </tr>
+                <tr>
+                    <th>Availability</th>
+                    <td>Only visible/required when <code>inverter.type = "homeassistant"</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        Use <code>{{ power }}</code> template variable in <code>data_template</code> to receive the optimal wattage from EOS Connect.<br><br>
+                        Example:
+                        <pre style="background-color: rgba(0,0,0,0.1); padding: 8px; margin-top: 8px; border-radius: 4px;"><code>[
+  {"service":"number.set_value","entity_id":"number.charge_power","data_template":{"value":"{{ power }}"}},
+  {"service":"select.select_option","entity_id":"select.mode","data":{"option":"Charge"}}
+]</code></pre>
+                    </td>
+                </tr>
+            </table>
+
+            <h3>inverter.avoid_discharge</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.avoid_discharge</code></td>
+                </tr>
+                <tr>
+                    <th>Type</th>
+                    <td>JSON Array</td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Service calls to execute when preventing battery discharge (hold mode)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>[]</code></td>
+                </tr>
+                <tr>
+                    <th>Availability</th>
+                    <td>Only visible/required when <code>inverter.type = "homeassistant"</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        Use this mode when battery should not discharge but PV charging is allowed. Typically sets the inverter to "hold" or "standby" mode.<br><br>
+                        Example for Sungrow:
+                        <pre style="background-color: rgba(0,0,0,0.1); padding: 8px; margin-top: 8px; border-radius: 4px;"><code>[
+  {"service":"select.select_option","entity_id":"select.sungrow_mode","data":{"option":"Backup"}}
+]</code></pre>
+                    </td>
+                </tr>
+            </table>
+
+            <h3>inverter.discharge_allowed</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.discharge_allowed</code></td>
+                </tr>
+                <tr>
+                    <th>Type</th>
+                    <td>JSON Array</td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Service calls to execute for normal battery discharge mode</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>[]</code></td>
+                </tr>
+                <tr>
+                    <th>Availability</th>
+                    <td>Only visible/required when <code>inverter.type = "homeassistant"</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        Use this mode when battery is allowed to discharge normally (providing power to the home and grid).<br><br>
+                        Example:
+                        <pre style="background-color: rgba(0,0,0,0.1); padding: 8px; margin-top: 8px; border-radius: 4px;"><code>[
+  {"service":"select.select_option","entity_id":"select.mode","data":{"option":"Self Use"}}
+]</code></pre>
+                    </td>
+                </tr>
+            </table>
+
             <div class="alert alert-info">
                 <strong><i class="fas fa-info-circle"></i> Home Assistant Inverter Interface:</strong>
-                The <code>homeassistant</code> inverter type allows controlling any inverter/battery system that is integrated into Home Assistant via configurable service call sequences (e.g., Marstek, Sungrow, Goodwe).
-                <br><br>
-                For each EOS inverter mode, you define a list of HA service calls under <code>inverter:</code>:
+                <p>The <code>homeassistant</code> inverter type allows controlling any inverter/battery system that is integrated into Home Assistant via configurable service call sequences (e.g., Marstek, Sungrow, Goodwe, custom ESPHome integrations).</p>
+                
+                <p><strong>Credentials:</strong> The inverter automatically uses your <strong>data_source credentials</strong> (URL and token) — no separate HA authentication needed. This ensures all HA integrations (sensors, inverter control) use the same connection.</p>
+                
+                <p><strong>Service Call Sequences:</strong> For each battery control mode, define a JSON array of Home Assistant service calls:</p>
                 <ul>
-                    <li><code>charge_from_grid</code> &ndash; Service calls for grid charging. Supports <code>{{ power }}</code> in <code>data_template</code> for dynamic power values from EOS.</li>
-                    <li><code>avoid_discharge</code> &ndash; Service calls to hold the battery (no discharge, PV charging allowed).</li>
+                    <li><code>charge_from_grid</code> &ndash; Service calls to charge from grid. Supports <code>{{ power }}</code> template variable in <code>data_template</code> for dynamic wattage.</li>
+                    <li><code>avoid_discharge</code> &ndash; Service calls to hold battery (no discharge, PV charging allowed).</li>
                     <li><code>discharge_allowed</code> &ndash; Service calls for normal battery discharge.</li>
                 </ul>
-                Each step specifies: <code>service</code> (e.g., <code>select.select_option</code>), <code>entity_id</code>, and <code>data</code> (static) or <code>data_template</code> (with <code>{{ power }}</code> variable).
-                See the <a href="#example-ha-inverter">Marstek example</a> below for a complete configuration.
-                For the ESPHome config to connect a Marstek M1 via RS485/Modbus, see <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this Gist</a>.
+
+                <p><strong>Service Call Format:</strong> Each call in a sequence must specify:</p>
+                <ul>
+                    <li><code>service</code> – The HA service domain and action (e.g., <code>select.select_option</code>, <code>number.set_value</code>)</li>
+                    <li><code>entity_id</code> – The target entity (e.g., <code>select.mt1_betriebsmodus</code>)</li>
+                    <li><code>data</code> or <code>data_template</code> – Parameters for the service call</li>
+                </ul>
+
+                <p><strong style="color: #ffc107;"><i class="fas fa-exclamation-circle"></i> Note:</strong> These fields are JSON arrays. Use valid JSON syntax (square brackets, quotes on strings). The web UI provides a JSON editor with syntax validation.</p>
+
+                <p>See the <a href="#example-ha-inverter">Marstek example</a> below for a complete working configuration.</p>
             </div>
         </div>
 
@@ -3308,23 +3424,37 @@ price:
             <div class="alert alert-info" style="margin-top: 15px;">
                 <strong><i class="fas fa-cog"></i> Web UI Configuration:</strong>
                 <ol>
+                    <li><strong>Data Source Section:</strong> Set <code>type: homeassistant</code>, <code>url</code>, and <code>access_token</code>. These credentials are automatically used by the inverter.</li>
                     <li><strong>Inverter Section — Type:</strong> Select "homeassistant"</li>
                     <li><strong>Power Limits:</strong> Set max grid charge and PV charge rates in watts</li>
-                    <li><strong>Service Call Mappings:</strong> For each control state (charge_from_grid, avoid_discharge, discharge_allowed):
+                    <li><strong>Service Call Sequences:</strong> For each control state (charge_from_grid, avoid_discharge, discharge_allowed):
                         <ul style="margin-top: 8px;">
-                            <li>Define the sequence of HA service calls</li>
+                            <li>Enter a valid JSON array of HA service call objects</li>
                             <li>Each call specifies: service domain, entity ID, and data</li>
                             <li>Use <code>{{ power }}</code> template variable in <code>data_template</code> for dynamic power from EOS</li>
+                            <li>The web UI provides a JSON editor with real-time syntax validation</li>
                         </ul>
                     </li>
                 </ol>
-                <p style="margin-top: 10px;"><strong>Example service call sequence for Marstek:</strong></p>
-                <ul style="margin-top: 8px;">
-                    <li><code>select.select_option</code> → entity: <code>select.mt1_betriebsmodus</code> → option: "Manuell"</li>
-                    <li><code>select.select_option</code> → entity: <code>select.mt1_erzwungene_operation</code> → option: "Zwangsladen"</li>
-                    <li><code>number.set_value</code> → entity: <code>number.mt1_ziel_leistung_manuell</code> → value: <code>{{ power }}</code></li>
-                </ul>
-                <p style="margin-top: 10px;"><strong>Result:</strong> EOS Connect sends optimized battery commands to HA, which executes your custom service call sequence on the inverter.</p>
+                <p style="margin-top: 15px;"><strong>Example JSON for Marstek (charge_from_grid mode):</strong></p>
+                <pre style="background-color: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; overflow-x: auto;"><code>[
+  {
+    "service": "select.select_option",
+    "entity_id": "select.mt1_betriebsmodus",
+    "data": {"option": "Manuell"}
+  },
+  {
+    "service": "select.select_option",
+    "entity_id": "select.mt1_erzwungene_operation",
+    "data": {"option": "Zwangsladen"}
+  },
+  {
+    "service": "number.set_value",
+    "entity_id": "number.mt1_ziel_leistung_manuell",
+    "data_template": {"value": "{{ power }}"}
+  }
+]</code></pre>
+                <p style="margin-top: 15px;"><strong>Result:</strong> EOS Connect sends optimized battery commands to Home Assistant, which executes your custom service call sequence on the inverter every control cycle.</p>
             </div>
             <div class="alert alert-success">
                 <strong><i class="fas fa-lightbulb"></i> For Marstek Setup:</strong> See <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this complete ESPHome integration guide</a> for connecting a Marstek M1 via RS485/Modbus.

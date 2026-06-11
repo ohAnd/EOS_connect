@@ -187,3 +187,48 @@ class TestMergedConfigBuilder:
         migrate_yaml_to_store(config, store, schema)
         merged = build_merged_config(config, store, schema)
         assert "data_source" not in merged
+
+    def test_inverter_ha_gets_data_source_credentials(self, store, schema):
+        """When inverter.type='homeassistant', inject data_source.url and token."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        # Set inverter type to homeassistant and set data_source
+        store.set("inverter.type", "homeassistant")
+        store.set("data_source.type", "homeassistant")
+        store.set("data_source.url", "http://ha.local:8123")
+        store.set("data_source.access_token", "test_token_123")
+
+        merged = build_merged_config(config, store, schema)
+        
+        # Verify inverter has injected url and token
+        assert merged["inverter"]["url"] == "http://ha.local:8123"
+        assert merged["inverter"]["token"] == "test_token_123"
+
+    def test_inverter_non_ha_no_injection(self, store, schema):
+        """When inverter.type!='homeassistant', don't inject credentials."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        # Set inverter type to something else
+        store.set("inverter.type", "fronius_gen24")
+        store.set("data_source.type", "homeassistant")
+        store.set("data_source.url", "http://ha.local:8123")
+        store.set("data_source.access_token", "test_token_123")
+
+        merged = build_merged_config(config, store, schema)
+        
+        # Inverter should NOT have injected url/token
+        assert merged["inverter"].get("url") != "http://ha.local:8123"
+        assert merged["inverter"].get("token") != "test_token_123"
+
+    def test_inverter_ha_with_empty_data_source(self, store, schema):
+        """When inverter.type='homeassistant' but data_source is empty, inject empty values."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        store.set("inverter.type", "homeassistant")
+        store.set("data_source.type", "homeassistant")
+        # Explicitly clear data_source.url and token by setting to empty strings
+        store.set("data_source.url", "")
+        store.set("data_source.access_token", "")

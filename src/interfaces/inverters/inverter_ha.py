@@ -6,6 +6,7 @@ via Home Assistant service calls. Any hardware that is controllable through HA e
 can be used as an EOS Connect inverter.
 """
 
+import json
 import logging
 import requests
 
@@ -21,14 +22,29 @@ class InverterHA(BaseInverter):
 
     For each EOS state (charge_from_grid, avoid_discharge, discharge_allowed),
     the user defines a sequence of HA service calls in the configuration.
+
+    Note: URL and token are injected from the data_source configuration via the merged
+    config in the web UI. The inverter.type must be "homeassistant" and data_source.type
+    must also be "homeassistant" for the inverter to function.
+
+    Configuration structure:
+    {
+        "url": "http://homeassistant.local:8123",  # From data_source (injected by merger)
+        "token": "...",                             # From data_source (injected by merger)
+        "charge_from_grid": [...],                  # Array of service call objects
+        "avoid_discharge": [...],                   # Array of service call objects
+        "discharge_allowed": [...],                 # Array of service call objects
+        "max_grid_charge_rate": 5000,               # In Watts
+        "max_pv_charge_rate": 5000,                 # In Watts
+    }
     """
 
     supports_extended_monitoring_default = False
 
     def __init__(self, config: dict):
-        # HA uses url instead of address — set address for BaseInverter
-        if "address" not in config:
-            config["address"] = config.get("url", "")
+        # HA uses url instead of address — always set address to url for HA inverters
+        # This overrides the schema default (192.168.1.12) with the actual HA URL
+        config["address"] = config.get("url", "")
 
         # Set defaults before super().__init__ reads them
         config.setdefault("max_grid_charge_rate", 5000)
@@ -62,13 +78,38 @@ class InverterHA(BaseInverter):
 
         # Load state configurations and tracking
         self.mode_sequences = {
-            "force_charge": config.get("charge_from_grid", []),
-            "avoid_discharge": config.get("avoid_discharge", []),
-            "allow_discharge": config.get("discharge_allowed", []),
+            "force_charge": self._parse_json_field(config.get("charge_from_grid", [])),
+            "avoid_discharge": self._parse_json_field(config.get("avoid_discharge", [])),
+            "allow_discharge": self._parse_json_field(config.get("discharge_allowed", [])),
         }
         self.current_mode = None
 
         logger.info("[InverterHA] Initialized with URL: %s", self.url)
+
+    def _parse_json_field(self, value):
+        """Parse JSON string to list, or return list as-is if already a list.
+
+        Args:
+            value: Either a JSON string or a list of service call dicts.
+
+        Returns:
+            List of service call dicts, or empty list if parsing fails.
+        """
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    return parsed
+                logger.warning(
+                    "[InverterHA] JSON field parsed but is not a list: %s", value
+                )
+                return []
+            except json.JSONDecodeError as e:
+                logger.error("[InverterHA] Failed to parse JSON field: %s", e)
+                return []
+        return []
 
     def _call_service(self, service_call_config: dict, variables: dict = None) -> bool:
         """

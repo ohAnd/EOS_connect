@@ -1506,51 +1506,13 @@
           "default"
         ]
       },
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Hardware"
-    },
-    {
-      "key": "inverter.url",
-      "type": "str",
-      "default": "",
-      "section": "inverter",
-      "level": "getting_started",
-      "description": "Home Assistant URL for inverter control (e.g. http://homeassistant.local:8123)",
-      "labels": [
-        "restart_required",
-        "deprecated"
-      ],
-      "help_url": "configuration.html#inverter",
-      "validation": {},
-      "depends_on": {
-        "inverter.type": [
-          "homeassistant"
-        ]
-      },
-      "hot_reload": false,
-      "display_group": "Home Assistant"
-    },
-    {
-      "key": "inverter.token",
-      "type": "password",
-      "default": "",
-      "section": "inverter",
-      "level": "getting_started",
-      "description": "Long-lived access token for Home Assistant inverter control",
-      "labels": [
-        "restart_required",
-        "deprecated"
-      ],
-      "help_url": "configuration.html#inverter",
-      "validation": {},
-      "depends_on": {
-        "inverter.type": [
-          "homeassistant"
-        ]
-      },
-      "hot_reload": false,
-      "display_group": "Home Assistant"
     },
     {
       "key": "inverter.address",
@@ -1653,6 +1615,66 @@
       "depends_on": null,
       "hot_reload": false,
       "display_group": "Power Limits"
+    },
+    {
+      "key": "inverter.charge_from_grid",
+      "type": "json",
+      "default": [],
+      "section": "inverter",
+      "level": "standard",
+      "description": "Array of Home Assistant service calls for force-charge mode",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#inverter",
+      "validation": {},
+      "depends_on": {
+        "inverter.type": [
+          "homeassistant"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Home Assistant Service Calls"
+    },
+    {
+      "key": "inverter.avoid_discharge",
+      "type": "json",
+      "default": [],
+      "section": "inverter",
+      "level": "standard",
+      "description": "Array of Home Assistant service calls for avoid-discharge mode",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#inverter",
+      "validation": {},
+      "depends_on": {
+        "inverter.type": [
+          "homeassistant"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Home Assistant Service Calls"
+    },
+    {
+      "key": "inverter.discharge_allowed",
+      "type": "json",
+      "default": [],
+      "section": "inverter",
+      "level": "standard",
+      "description": "Array of Home Assistant service calls for discharge-allowed mode",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#inverter",
+      "validation": {},
+      "depends_on": {
+        "inverter.type": [
+          "homeassistant"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Home Assistant Service Calls"
     },
     {
       "key": "evcc.url",
