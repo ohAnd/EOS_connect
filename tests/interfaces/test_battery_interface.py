@@ -668,6 +668,119 @@ def test_get_max_charge_power_dyn_temperature_sensor_configured(default_config):
         assert bi.max_charge_power_dyn > 0
 
 
+def test_ssl_ignore_config_read(default_config):
+    """Test that ssl_ignore is read from config and stored."""
+    test_config = default_config.copy()
+    test_config["ssl_ignore"] = True
+    with patch.object(BatteryInterface, "start_update_service", return_value=None):
+        bi = BatteryInterface(test_config)
+        assert bi.ssl_ignore is True
+
+    test_config["ssl_ignore"] = False
+    with patch.object(BatteryInterface, "start_update_service", return_value=None):
+        bi = BatteryInterface(test_config)
+        assert bi.ssl_ignore is False
+
+
+def test_ssl_ignore_default_false(default_config):
+    """Test that ssl_ignore defaults to False when not specified."""
+    test_config = default_config.copy()
+    # Don't set ssl_ignore
+    with patch.object(BatteryInterface, "start_update_service", return_value=None):
+        bi = BatteryInterface(test_config)
+        assert bi.ssl_ignore is False
+
+
+def test_openhab_request_with_ssl_ignore_false(default_config):
+    """Test OpenHAB request passes verify=True when ssl_ignore=False."""
+    test_config = default_config.copy()
+    test_config["source"] = "openhab"
+    test_config["url"] = "http://fake"
+    test_config["soc_sensor"] = "BatterySOC"
+    test_config["ssl_ignore"] = False
+    
+    bi = BatteryInterface(test_config)
+    with patch("src.interfaces.battery_interface.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"state": "80"}
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+        bi._BatteryInterface__fetch_soc_data_unified()
+        
+        # Verify verify=True was passed
+        mock_get.assert_called_once()
+        call_kwargs = mock_get.call_args[1]
+        assert call_kwargs.get("verify") is True
+
+
+def test_openhab_request_with_ssl_ignore_true(default_config):
+    """Test OpenHAB request passes verify=False when ssl_ignore=True."""
+    test_config = default_config.copy()
+    test_config["source"] = "openhab"
+    test_config["url"] = "http://fake"
+    test_config["soc_sensor"] = "BatterySOC"
+    test_config["ssl_ignore"] = True
+    
+    bi = BatteryInterface(test_config)
+    with patch("src.interfaces.battery_interface.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"state": "80"}
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+        bi._BatteryInterface__fetch_soc_data_unified()
+        
+        # Verify verify=False was passed
+        mock_get.assert_called_once()
+        call_kwargs = mock_get.call_args[1]
+        assert call_kwargs.get("verify") is False
+
+
+def test_homeassistant_request_with_ssl_ignore_false(default_config):
+    """Test HA request passes verify=True when ssl_ignore=False."""
+    test_config = default_config.copy()
+    test_config["source"] = "homeassistant"
+    test_config["url"] = "http://fake"
+    test_config["soc_sensor"] = "sensor.battery_soc"
+    test_config["access_token"] = "token"
+    test_config["ssl_ignore"] = False
+    
+    bi = BatteryInterface(test_config)
+    with patch("src.interfaces.battery_interface.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"state": "55"}
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+        bi._BatteryInterface__fetch_soc_data_unified()
+        
+        # Verify verify=True was passed
+        mock_get.assert_called_once()
+        call_kwargs = mock_get.call_args[1]
+        assert call_kwargs.get("verify") is True
+
+
+def test_homeassistant_request_with_ssl_ignore_true(default_config):
+    """Test HA request passes verify=False when ssl_ignore=True."""
+    test_config = default_config.copy()
+    test_config["source"] = "homeassistant"
+    test_config["url"] = "http://fake"
+    test_config["soc_sensor"] = "sensor.battery_soc"
+    test_config["access_token"] = "token"
+    test_config["ssl_ignore"] = True
+    
+    bi = BatteryInterface(test_config)
+    with patch("src.interfaces.battery_interface.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"state": "55"}
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+        bi._BatteryInterface__fetch_soc_data_unified()
+        
+        # Verify verify=False was passed
+        mock_get.assert_called_once()
+        call_kwargs = mock_get.call_args[1]
+        assert call_kwargs.get("verify") is False
+
+
 def test_charging_curve_disabled_triggers_callback_on_change(default_config):
     """Disabled charging curve should still trigger max-change callback once."""
     test_config = default_config.copy()

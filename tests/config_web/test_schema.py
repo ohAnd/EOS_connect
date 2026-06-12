@@ -82,11 +82,12 @@ class TestConfigSchema:
     def test_data_source_section_exists(self):
         """The unified data_source section should exist."""
         ds_fields = self.schema.get_section("data_source")
-        assert len(ds_fields) == 3  # type, url, access_token
+        assert len(ds_fields) == 4  # type, url, access_token, ssl_ignore
         keys = [f.key for f in ds_fields]
         assert "data_source.type" in keys
         assert "data_source.url" in keys
         assert "data_source.access_token" in keys
+        assert "data_source.ssl_ignore" in keys
 
     def test_deprecated_fields_have_label(self):
         """Load/battery connection override fields should be marked deprecated."""

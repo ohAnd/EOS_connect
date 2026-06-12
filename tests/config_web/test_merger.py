@@ -232,3 +232,65 @@ class TestMergedConfigBuilder:
         # Explicitly clear data_source.url and token by setting to empty strings
         store.set("data_source.url", "")
         store.set("data_source.access_token", "")
+
+        merged = build_merged_config(config, store, schema)
+        
+        # Verify injected empty values
+        assert merged["inverter"]["url"] == ""
+        assert merged["inverter"]["token"] == ""
+
+    def test_ssl_ignore_propagates_to_load(self, store, schema):
+        """ssl_ignore from data_source should propagate to load section."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        # Set ssl_ignore in data_source
+        store.set("data_source.ssl_ignore", True)
+        merged = build_merged_config(config, store, schema)
+        
+        # load section should have ssl_ignore=True
+        assert merged["load"]["ssl_ignore"] is True
+
+    def test_ssl_ignore_propagates_to_battery(self, store, schema):
+        """ssl_ignore from data_source should propagate to battery section."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        # Set ssl_ignore in data_source
+        store.set("data_source.ssl_ignore", True)
+        merged = build_merged_config(config, store, schema)
+        
+        # battery section should have ssl_ignore=True
+        assert merged["battery"]["ssl_ignore"] is True
+
+    def test_ssl_ignore_propagates_to_inverter_ha(self, store, schema):
+        """ssl_ignore from data_source should propagate to inverter when type='homeassistant'."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        # Set inverter type to homeassistant
+        store.set("inverter.type", "homeassistant")
+        store.set("data_source.type", "homeassistant")
+        store.set("data_source.url", "http://ha.local:8123")
+        store.set("data_source.access_token", "test_token")
+        store.set("data_source.ssl_ignore", True)
+        
+        merged = build_merged_config(config, store, schema)
+        
+        # inverter should have ssl_ignore=True
+        assert merged["inverter"]["ssl_ignore"] is True
+
+    def test_ssl_ignore_false_by_default(self, store, schema):
+        """ssl_ignore should default to False when not set."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        # Don't set ssl_ignore — should default to False
+        merged = build_merged_config(config, store, schema)
+        
+        # All sections should have ssl_ignore=False
+        assert merged["load"]["ssl_ignore"] is False
+        assert merged["battery"]["ssl_ignore"] is False
+        # inverter might not have ssl_ignore if type is not homeassistant
+        if merged["inverter"].get("type") == "homeassistant":
+            assert merged["inverter"]["ssl_ignore"] is False
