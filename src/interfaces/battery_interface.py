@@ -107,6 +107,12 @@ class BatteryInterface:
                 "HTTP 403 errors. Re-enter the token in Settings → Data Source "
                 "without extra spaces or line breaks."
             )
+        self.ssl_ignore = bool(config.get("ssl_ignore", False))
+        if self.ssl_ignore:
+            logger.warning(
+                "[BATTERY-IF] ssl_ignore=True: SSL certificate verification is disabled. "
+                "Only use this with a trusted private network."
+            )
         self.max_charge_power_fix = config.get("max_charge_power_w", 1000)
         self.battery_data = config
         self.max_charge_power_dyn = 0
@@ -222,7 +228,7 @@ class BatteryInterface:
 
         if source == "openhab":
             url = self.url + "/rest/items/" + sensor
-            response = requests.get(url, timeout=self.request_timeout)
+            response = requests.get(url, timeout=self.request_timeout, verify=not self.ssl_ignore)
             response.raise_for_status()
             data = response.json()
             return str(data.get("state", "")).strip()
@@ -232,7 +238,7 @@ class BatteryInterface:
                 "Authorization": f"Bearer {self.access_token}",
                 "Content-Type": "application/json",
             }
-            response = requests.get(url, headers=headers, timeout=self.request_timeout)
+            response = requests.get(url, headers=headers, timeout=self.request_timeout, verify=not self.ssl_ignore)
             response.raise_for_status()
             data = response.json()
             return str(data.get("state", "")).strip()

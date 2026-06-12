@@ -13,7 +13,6 @@ import random
 import requests
 import pytz
 
-
 logger = logging.getLogger("__main__")
 logger.info("[LOAD-IF] loading module ")
 
@@ -51,6 +50,14 @@ class LoadInterface:
                 "[LOAD-IF] access_token contains internal whitespace. This will cause "
                 "HTTP 403 errors. Re-enter the token in Settings → Data Source "
                 "without extra spaces or line breaks."
+            )
+
+        # SSL verification
+        self.ssl_ignore = bool(config.get("ssl_ignore", False))
+        if self.ssl_ignore:
+            logger.warning(
+                "[LOAD-IF] ssl_ignore=True: SSL certificate verification is disabled. "
+                "Only use this with a trusted private network."
             )
 
         # retry config
@@ -176,11 +183,20 @@ class LoadInterface:
             try:
                 if method.lower() == "get":
                     response = requests.get(
-                        url, params=params, headers=headers, timeout=timeout
+                        url,
+                        params=params,
+                        headers=headers,
+                        timeout=timeout,
+                        verify=not self.ssl_ignore,
                     )
                 else:
                     response = requests.request(
-                        method, url, params=params, headers=headers, timeout=timeout
+                        method,
+                        url,
+                        params=params,
+                        headers=headers,
+                        timeout=timeout,
+                        verify=not self.ssl_ignore,
                     )
                 response.raise_for_status()
                 return response

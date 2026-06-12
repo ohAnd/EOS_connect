@@ -181,6 +181,7 @@ def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -
     ds_type = all_settings.get("data_source.type", "default")
     ds_url = all_settings.get("data_source.url", "")
     ds_token = all_settings.get("data_source.access_token", "")
+    ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
 
     for section in _DATA_SOURCE_SECTIONS:
         if section not in result:
@@ -194,6 +195,8 @@ def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -
             sec["source"] = ds_type
             sec["url"] = ds_url
             sec["access_token"] = ds_token
+        # Inject ssl_ignore regardless of source override
+        sec["ssl_ignore"] = ds_ssl_ignore
         # If section has its own source set, keep it (Expert override)
 
 
@@ -214,7 +217,9 @@ def _apply_inverter_data_source_injection(result: dict, all_settings: dict[str, 
 
     ds_url = all_settings.get("data_source.url", "")
     ds_token = all_settings.get("data_source.access_token", "")
+    ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
 
     # Inject credentials from data_source
     inverter["url"] = ds_url
     inverter["token"] = ds_token
+    inverter["ssl_ignore"] = ds_ssl_ignore

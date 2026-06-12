@@ -66,6 +66,27 @@
       "display_group": "Connection"
     },
     {
+      "key": "data_source.ssl_ignore",
+      "type": "bool",
+      "default": false,
+      "section": "data_source",
+      "level": "expert",
+      "description": "Disable SSL certificate verification (use with private/self-signed CA)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#data-source",
+      "validation": {},
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Connection"
+    },
+    {
       "key": "load.source",
       "type": "select",
       "default": "default",
@@ -417,7 +438,7 @@
       "default": 0,
       "section": "eos",
       "level": "expert",
-      "description": "Maximum grid import power in Watts (0 = no additional constraint, uses battery/inverter limits). Use for grid connection limits.",
+      "description": "Maximum grid import power (0 = no limit, uses inverter limit). Use for grid connection limits.",
       "labels": [
         "restart_required"
       ],
@@ -438,7 +459,7 @@
       "default": 0,
       "section": "eos",
       "level": "expert",
-      "description": "Maximum grid export power in Watts (0 = no additional constraint, uses battery discharge max). Use for grid feed-in limits.",
+      "description": "Maximum grid export power (0 = no limit, uses discharge max). Use for grid feed-in limits.",
       "labels": [
         "restart_required"
       ],
@@ -525,7 +546,7 @@
       "default": "tibberBearerToken",
       "section": "price",
       "level": "getting_started",
-      "description": "API token for price provider (Tibber bearer token, Stromligning supplierId/productId)",
+      "description": "API token for price provider (bearer token / supplier ID)",
       "labels": [
         "restart_required"
       ],
@@ -574,7 +595,7 @@
       "default": "10.1,10.1,10.1,10.1,10.1,23,28.23,28.23,28.23,28.23,28.23,23.52,23.52,23.52,23.52,28.17,28.17,34.28,34.28,34.28,34.28,34.28,28,23",
       "section": "price",
       "level": "standard",
-      "description": "24 comma-separated prices in ct/kWh for each hour (used with fixed_24h source)",
+      "description": "24 comma-separated prices in ct/kWh per hour (fixed_24h source)",
       "labels": [
         "restart_required"
       ],

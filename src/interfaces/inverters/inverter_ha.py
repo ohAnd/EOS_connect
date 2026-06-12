@@ -71,6 +71,12 @@ class InverterHA(BaseInverter):
                 "authentication failures. Use plain string style for long "
                 "tokens — place the token directly after 'token: ' on the same line."
             )
+        self.ssl_ignore = bool(config.get("ssl_ignore", False))
+        if self.ssl_ignore:
+            logger.warning(
+                "[InverterHA] ssl_ignore=True: SSL certificate verification is disabled. "
+                "Only use this with a trusted private network."
+            )
 
         # Validate configuration
         if not self.url or not self.token:
@@ -173,7 +179,7 @@ class InverterHA(BaseInverter):
                 "Content-Type": "application/json",
             }
             response = requests.post(
-                endpoint, headers=headers, json=payload, timeout=10
+                endpoint, headers=headers, json=payload, timeout=10, verify=not self.ssl_ignore
             )
             response.raise_for_status()
             logger.debug("[InverterHA] Service call successful")
