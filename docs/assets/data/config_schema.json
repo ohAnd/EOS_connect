@@ -1427,6 +1427,27 @@
       "display_group": "Provider"
     },
     {
+      "key": "pv_forecast_source.resource_id",
+      "type": "str",
+      "default": "",
+      "section": "pv_forecast_source",
+      "level": "standard",
+      "description": "Resource ID / Installation ID (Solcast: comma-separated list; Victron: single VRM ID)",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {
+        "max_length": 1000
+      },
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "solcast",
+          "victron"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
       "key": "pv_forecast_source.use_real_data_correction",
       "type": "bool",
       "default": true,
@@ -1555,7 +1576,14 @@
       "labels": [],
       "help_url": "configuration.html#pv-forecast",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1572,7 +1600,14 @@
         "min": -90,
         "max": 90
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1589,7 +1624,14 @@
         "min": -180,
         "max": 180
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1606,7 +1648,14 @@
         "min": -180,
         "max": 180
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1623,7 +1672,14 @@
         "min": 0,
         "max": 90
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1639,7 +1695,14 @@
       "validation": {
         "min": 1
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1655,7 +1718,14 @@
       "validation": {
         "min": 1
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1672,7 +1742,14 @@
         "min": 0.1,
         "max": 1.0
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1686,23 +1763,12 @@
       "labels": [],
       "help_url": "configuration.html#pv-forecast",
       "validation": {},
-      "depends_on": null,
-      "hot_reload": true,
-      "display_group": "Installation"
-    },
-    {
-      "key": "pv_forecast.resource_id",
-      "type": "str",
-      "default": "",
-      "section": "pv_forecast",
-      "level": "standard",
-      "description": "Resource ID for Solcast API (only needed for Solcast provider)",
-      "labels": [],
-      "help_url": "configuration.html#pv-forecast",
-      "validation": {},
       "depends_on": {
         "pv_forecast_source.source": [
-          "solcast"
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
         ]
       },
       "hot_reload": true,

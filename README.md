@@ -5,7 +5,7 @@
   </tr>
 </table>
 
-**For full documentation, guides, and configuration details, visit:**  
+**For full documentation, guides, and configuration details, visit:**
 [https://ohAnd.github.io/EOS_connect/](https://ohAnd.github.io/EOS_connect/)
 
 ---
@@ -130,11 +130,13 @@ On first launch, a **Setup Wizard** guides you through the essential configurati
 5. **Battery** — Set capacity and SOC limits
 6. **Load** — Connect your load sensor
 7. **Price** — Choose your electricity pricing provider
-8. **PV Installations** — Configure your solar forecast provider and PV systems
+8. **PV Installations** — Configure your solar forecast provider and PV systems (location-based sources only)
 
 After the wizard completes, restart EOS Connect to apply the settings.
 
-**Note:** EVCC configuration must come before Inverter so you can select EVCC as your inverter controller type. If EVCC URL is not configured, the option will be greyed out in both the Inverter and PV Source selection fields.
+**Note:**
+- EVCC configuration must come before Inverter so you can select EVCC as your inverter controller type. If EVCC URL is not configured, the option will be greyed out in both the Inverter and PV Source selection fields.
+- PV Installations configuration is only required for location-based forecast sources (Akkudoktor, OpenMeteo, Forecast.Solar). Other sources (Default, Solcast, Victron, EVCC, Timeseries) configure their data elsewhere and do not need PV Installations defined.
 
 ### Bootstrap Config (`config.yaml`)
 Only 3 infrastructure settings live in `config.yaml` — everything else is stored in the database and managed via the web UI:

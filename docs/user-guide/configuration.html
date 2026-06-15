@@ -515,10 +515,10 @@
             </div>
         </div>
 
-        
+
 <div class="content-section" id="evcc">
             <h2><i class="fas fa-car"></i> EVCC Configuration</h2>
-            
+
             <div class="alert alert-info">
                 <strong><i class="fas fa-lightbulb"></i> Optional Section:</strong> Define EVCC URL here to use EVCC as:
                 <ul style="margin-top: 10px; margin-bottom: 0;">
@@ -557,7 +557,7 @@
             </div>
         </div>
 
-        
+
 <div class="content-section" id="inverter">
             <h2><i class="fas fa-solar-panel"></i> Inverter Configuration</h2>
             <p>Configure inverter control for automated battery management.</p>
@@ -846,9 +846,9 @@
             <div class="alert alert-info">
                 <strong><i class="fas fa-info-circle"></i> Home Assistant Inverter Interface:</strong>
                 <p>The <code>homeassistant</code> inverter type allows controlling any inverter/battery system that is integrated into Home Assistant via configurable service call sequences (e.g., Marstek, Sungrow, Goodwe, custom ESPHome integrations).</p>
-                
+
                 <p><strong>Credentials:</strong> The inverter automatically uses your <strong>data_source credentials</strong> (URL and token) — no separate HA authentication needed. This ensures all HA integrations (sensors, inverter control) use the same connection.</p>
-                
+
                 <p><strong>Service Call Sequences:</strong> For each battery control mode, define a JSON array of Home Assistant service calls:</p>
                 <ul>
                     <li><code>charge_from_grid</code> &ndash; Service calls to charge from grid. Supports <code>{{ power }}</code> template variable in <code>data_template</code> for dynamic wattage.</li>
@@ -869,7 +869,7 @@
             </div>
         </div>
 
-        
+
 <!-- Due to length, I'll create a placeholder for now -->
 
         <div class="content-section" id="data-source">
@@ -877,8 +877,8 @@
             <p>Define the primary data connection that EOS Connect uses to read sensor values and send control commands.</p>
 
             <div class="alert alert-info">
-                <strong><i class="fas fa-key"></i> Set Once, Used Everywhere:</strong> 
-                Once you configure this section, it becomes the single connection point for <strong>all</strong> sensor references in other sections. 
+                <strong><i class="fas fa-key"></i> Set Once, Used Everywhere:</strong>
+                Once you configure this section, it becomes the single connection point for <strong>all</strong> sensor references in other sections.
                 For example:
                 <ul style="margin-top: 10px; margin-bottom: 0;">
                     <li><code>battery.soc_sensor</code> refers to an entity or item from this source</li>
@@ -983,7 +983,7 @@
 
             <div class="alert alert-warning">
                 <strong><i class="fas fa-shield-exclamation"></i> Security Warning:</strong>
-                Disabling SSL certificate verification removes protection against man-in-the-middle (MITM) attacks. 
+                Disabling SSL certificate verification removes protection against man-in-the-middle (MITM) attacks.
                 <strong>Only use this in the following scenarios:</strong>
                 <ul style="margin-top: 10px; margin-bottom: 0;">
                     <li>Your Home Assistant or OpenHAB uses a <strong>self-signed certificate</strong></li>
@@ -1426,7 +1426,7 @@
             <div class="alert alert-info">
                 <h4><i class="fas fa-calculator"></i> Dynamic Battery Price Calculation</h4>
                 <p>EOS Connect can automatically calculate the real cost of energy in your battery by analyzing historical charging events using a Last-In, First-Out (LIFO) inventory model.</p>
-                
+
                 <h5>How it Works:</h5>
                 <ol>
                     <li><strong>Event Detection:</strong> The system scans historical data (default 96h) to identify "charging events" where battery power was above the <code>charging_threshold_w</code>.</li>
@@ -1654,7 +1654,7 @@
             </table>
         </div>
 
-        
+
 <!-- Load Configuration -->
         <div class="content-section" id="load">
             <h2><i class="fas fa-plug"></i> Load Configuration</h2>
@@ -1859,12 +1859,12 @@
             </table>
         </div>
 
-        
+
 <!-- Price Configuration -->
         <div class="content-section" id="price">
             <h2><i class="fas fa-dollar-sign"></i> Electricity Price Configuration</h2>
             <p>Configure dynamic electricity pricing for cost optimization.</p>
-            
+
             <div class="alert alert-warning">
                 <strong><i class="fas fa-exclamation-triangle"></i> Important:</strong> All price values must use the same base - either all prices include taxes and fees, or all prices exclude taxes and fees. Mixing different bases will lead to incorrect optimization results.
             </div>
@@ -2481,7 +2481,7 @@ price:
   feed_in_source: fixed
   feed_in_price: 0.08
   feed_in_negative_price_switch: true
-  
+
   # Smart price prediction with energyforecast.de
   energyforecast_enabled: true
   energyforecast_token: "YOUR_ENERGYFORECAST_TOKEN"
@@ -2564,7 +2564,7 @@ price:
         </div>
 
         <!-- Continue with Battery, PV, Inverter, EVCC, MQTT, Other sections... -->
-        
+
 <div class="content-section" id="pv">
             <h2><i class="fas fa-sun"></i> PV Forecast Configuration</h2>
             <p>Configure solar generation forecasts from various providers.</p>
@@ -2594,7 +2594,7 @@ price:
                         <code>solcast</code> - Solcast<br>
                         <code>victron</code> - Victron VRM API<br>
                         <code>timeseries</code> - HTTP endpoint returning timeseries data (Home Assistant, custom API, etc.)<br>
-                        <code>default</code> - Uses akkudoktor
+                        <code>default</code> - Built-in default forecast with fixed values (no external configuration needed)
                     </td>
                 </tr>
                 <tr>
@@ -2602,6 +2602,21 @@ price:
                     <td><code>akkudoktor</code></td>
                 </tr>
             </table>
+
+            <div class="alert alert-info" style="margin-top: 1rem;">
+                <strong><i class="fas fa-info-circle"></i> PV Installations Configuration:</strong> Only location-based forecast sources require PV Installations configuration:
+                <ul>
+                    <li><strong>Required for:</strong> <code>akkudoktor</code>, <code>openmeteo</code>, <code>openmeteo_local</code>, <code>forecast_solar</code> — these need latitude, longitude, and panel specifications</li>
+                    <li><strong>Not required for:</strong> <code>default</code>, <code>solcast</code>, <code>victron</code>, <code>evcc</code>, <code>timeseries</code> — these configure their data elsewhere:
+                        <ul>
+                            <li><code>default</code>: Uses built-in fixed forecast values (no external data source)</li>
+                            <li><code>solcast</code>, <code>victron</code>: Configure resource IDs in the PV Source section</li>
+                            <li><code>evcc</code>: Retrieves data from your configured EVCC instance</li>
+                            <li><code>timeseries</code>: Uses direct data from an HTTP endpoint or Home Assistant</li>
+                        </ul>
+                    </li>
+                </ul>
+            </div>
 
             <div class="alert alert-info" style="margin-top: 1rem;">
                 <strong><i class="fas fa-info-circle"></i> Unified Timeseries Source:</strong> The <code>timeseries</code> source enables fetching PV forecasts from any HTTP endpoint that returns timeseries data. This includes Home Assistant, custom HTTP APIs, and other integration points. See <a href="#timeseries-guide">Timeseries Data Source Guide</a> below for detailed configuration and examples.
@@ -3180,7 +3195,7 @@ price:
             </ol>
         </div>
 
-        
+
 <div class="content-section" id="mqtt">
             <h2><i class="fas fa-network-wired"></i> MQTT Configuration</h2>
             <p>Configure MQTT broker connection and Home Assistant Auto Discovery.</p>
@@ -3506,7 +3521,7 @@ price:
 
             <h3 id="time-slot-config">Time Slot Configuration & Optimizer Constraints</h3>
             <p>The <code>time_frame</code> setting determines the granularity of optimization data:</p>
-            
+
             <table>
                 <tr>
                     <th>Time Frame</th>
@@ -4008,10 +4023,10 @@ Content-Type: application/json
         if (!container) return;
         try {
             const res = await fetch('../assets/data/config_schema.json');
-            if (!res.ok) { 
+            if (!res.ok) {
                 console.error('Failed to load schema:', res.status, res.statusText);
-                container.innerHTML = '<p style="color:#888;">Parameter reference not available (HTTP ' + res.status + ').</p>'; 
-                return; 
+                container.innerHTML = '<p style="color:#888;">Parameter reference not available (HTTP ' + res.status + ').</p>';
+                return;
             }
             const schemaData = await res.json();
             const fields = schemaData.fields || schemaData;

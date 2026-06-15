@@ -26,7 +26,7 @@ const DISPLAY_GROUP_TO_SUBSECTION = {
     "Price Adjustments": "Price Adjustments",
     "Energy Price Forecast": "Energy Price Forecast",
     "Feed-In Pricing": "Feed-In Pricing",
-    
+
     // Battery section (example for future use)
     // "Battery Configuration": "Battery Status",
     // "Battery Price": "Battery Price Management",
@@ -567,15 +567,15 @@ class ConfigurationManager {
      */
     _renderSelect(f, val) {
         const choices = (f.validation && f.validation.choices) || [];
-        
+
         const opts = choices.map(c => {
             const selected = String(c) === String(val) ? "selected" : "";
-            
+
             // Conditional disabling for specific fields
             let disabled = "";
             let title = "";
             let displayLabel = c;  // Label to show in dropdown
-            
+
             // Disable "evcc" option in pv_forecast_source.source if evcc.url is not configured
             if (f.key === "pv_forecast_source.source" && String(c) === "evcc") {
                 const evccUrl = this.values["evcc.url"] || "http://yourEVCCserver:7070";
@@ -587,7 +587,7 @@ class ConfigurationManager {
                     displayLabel = `${c} (not available)`;
                 }
             }
-            
+
             // Disable "evcc" option in inverter.type if evcc.url is not configured
             if (f.key === "inverter.type" && String(c) === "evcc") {
                 const evccUrl = this.values["evcc.url"] || "http://yourEVCCserver:7070";
@@ -599,7 +599,7 @@ class ConfigurationManager {
                     displayLabel = `${c} (not available)`;
                 }
             }
-            
+
             return `<option value="${this._escapeAttr(String(c))}" ${selected} ${disabled} ${title} style="${disabled ? 'color: #888; font-style: italic;' : ''}">${displayLabel}</option>`;
         }).join("");
         const changedCls = this._isChanged(f.key) ? " changed" : "";
@@ -693,6 +693,46 @@ class ConfigurationManager {
      * @returns {string} PV section HTML
      */
     _renderPvForecastSection() {
+        // Check if PV Forecast section should be hidden based on source
+        const pvSource = this.values["pv_forecast_source.source"] ?? this._getSchemaDefault("pv_forecast_source.source");
+        const locationBasedSources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"];
+
+        if (!locationBasedSources.includes(pvSource)) {
+            // For non-location-based sources (solcast, victron, evcc, timeseries),
+            // the pv_forecast section is not needed
+            let html = `<div class="config-restart-banner" id="cfg-restart-banner">
+                <i class="fas fa-info-circle"></i>
+                <span id="cfg-restart-msg">PV Installations not needed for <strong>${pvSource}</strong> source</span>
+            </div>`;
+            html += `<div class="config-section-title">
+                <i class="fa-solid fa-solar-panel" style="color:#4a9eff;"></i>
+                PV Installations
+            </div>
+            <div class="config-section-desc">`;
+
+            // Source-specific descriptions
+            if (pvSource === "solcast" || pvSource === "victron") {
+                html += `This section is only used for location-based PV sources (Akkudoktor, OpenMeteo, Forecast.Solar).
+                Your current source (<strong>${pvSource}</strong>) uses resource IDs configured in the PV Source section instead.`;
+            } else if (pvSource === "evcc") {
+                html += `This section is only used for location-based PV sources (Akkudoktor, OpenMeteo, Forecast.Solar).
+                Your current source (<strong>EVCC</strong>) retrieves PV data from your configured EVCC instance.
+                Configure the EVCC connection URL in the <strong>EVCC</strong> configuration section.`;
+            } else if (pvSource === "timeseries") {
+                html += `This section is only used for location-based PV sources (Akkudoktor, OpenMeteo, Forecast.Solar).
+                Your current source (<strong>Timeseries</strong>) uses direct time series data configured in the PV Source section.`;
+            } else if (pvSource === "default") {
+                html += `This section is only used for location-based PV sources (Akkudoktor, OpenMeteo, Forecast.Solar).
+                Your current source (<strong>Default</strong>) uses built-in default forecast values and requires no configuration.`;
+            } else {
+                html += `This section is only used for location-based PV sources (Akkudoktor, OpenMeteo, Forecast.Solar).
+                Your current source (<strong>${pvSource}</strong>) is configured elsewhere.`;
+            }
+
+            html += `</div>`;
+            return html;
+        }
+
         const meta = CONFIG_SECTIONS.pv_forecast;
         const pvFields = this.schema.filter(f => f.section === "pv_forecast");
         const maxLvl = LEVEL_ORDER[this.level] ?? 2;
@@ -792,7 +832,7 @@ class ConfigurationManager {
         const installations = this._getPvInstallations();
         const newIdx = installations.length;
         const pvFields = this.schema.filter(f => f.section === "pv_forecast");
-        
+
         // Get the last installation to use as template (if exists)
         const lastInstallation = installations.length > 0 ? installations[installations.length - 1] : null;
 
@@ -951,13 +991,13 @@ class ConfigurationManager {
     _validateJSONField(key) {
         const textarea = document.getElementById(`cfg-json-${this._cssKey(key)}`);
         const errorEl = document.getElementById(`cfg-json-err-${this._cssKey(key)}`);
-        
+
         if (!textarea || !errorEl) {
             return true;
         }
 
         const jsonString = textarea.value.trim();
-        
+
         // Empty string is not valid for JSON arrays/objects
         if (jsonString === "") {
             errorEl.textContent = "JSON field cannot be empty. Use [] for an empty array.";
@@ -1039,6 +1079,25 @@ class ConfigurationManager {
                 }
             }
         }
+
+        // If pv_forecast_source.source changed, re-render pv_forecast section if it's currently displayed
+        if (changedKey === "pv_forecast_source.source") {
+            const contentEl = document.getElementById("cfg-content");
+            if (contentEl) {
+                // Check if we're currently viewing the pv_forecast section
+                const sectionMenuItems = document.querySelectorAll(".config-section-menu li");
+                for (const item of sectionMenuItems) {
+                    if (item.textContent.includes("PV") || item.textContent.includes("Forecast")) {
+                        if (item.classList.contains("active")) {
+                            // Re-render the pv_forecast section
+                            contentEl.innerHTML = this._renderPvForecastSection();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         this._updateGroupVisibility();
     }
 
@@ -1219,7 +1278,7 @@ class ConfigurationManager {
 
             if (!res.ok) {
                 const errData = await res.json().catch(() => ({}));
-                
+
                 // Handle validation errors with detailed messages
                 if (errData.errors && errData.errors.length > 0) {
                     this._showValidationErrors(errData.errors);
@@ -1230,7 +1289,7 @@ class ConfigurationManager {
                     );
                     return;
                 }
-                
+
                 this._showToast(errData.error || `Save failed (${res.status})`, "error");
                 return;
             }
@@ -1453,10 +1512,10 @@ class ConfigurationManager {
      */
     _scrollToFirstError(errors) {
         if (errors.length === 0) return;
-        
+
         const firstError = errors[0];
         const errEl = document.getElementById(`cfg-err-${this._cssKey(firstError.key)}`);
-        
+
         if (errEl) {
             // Scroll the error element into view with offset for header
             errEl.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1477,11 +1536,11 @@ class ConfigurationManager {
         if (existingBanner) {
             existingBanner.remove();
         }
-        
+
         // Create new banner
         const contentDiv = document.getElementById("full_screen_overlay_content");
         if (!contentDiv) return;
-        
+
         const banner = document.createElement("div");
         banner.id = "cfg-error-persistent-banner";
         banner.style.cssText = `
@@ -1499,10 +1558,10 @@ class ConfigurationManager {
             top: 0;
         `;
         banner.innerHTML = message;
-        
+
         // Insert at the top of content
         contentDiv.insertBefore(banner, contentDiv.firstChild);
-        
+
         // Auto-dismiss after 10 seconds if user doesn't interact
         setTimeout(() => {
             if (banner && banner.parentElement) {
@@ -1585,7 +1644,7 @@ class ConfigurationManager {
     _showUnmetDependencies(dependencies) {
         const banner = document.getElementById("cfg-unmet-deps-banner");
         const content = document.getElementById("cfg-unmet-deps-content");
-        
+
         if (banner && content) {
             let html = `
                 <div style="color: #ffc107; font-weight: bold; margin-bottom: 12px;">
@@ -1600,7 +1659,7 @@ class ConfigurationManager {
                 </li>`;
             }
             html += `</ul>`;
-            
+
             content.innerHTML = html;
             banner.classList.add("visible");
             this._showToast("Cannot save: required dependencies not configured", "error");

@@ -39,6 +39,9 @@ SECTION_META = {
     "system":             {"icon": "fa-gears",           "label": "System"},
 }
 
+# Location-based PV forecast sources that require pv_forecast array configuration
+LOCATION_BASED_PV_SOURCES = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]
+
 
 @dataclass
 class FieldDef:
@@ -99,11 +102,11 @@ class ConfigSchema:
     def get_resolved_description(self, field_key: str, current_config: dict) -> str:
         """
         Get the description for a field, resolving dynamic descriptions if applicable.
-        
+
         Args:
             field_key: The field key (e.g., "price.feed_in_negative_price_switch")
             current_config: Current config dict (flattened with dot-notation keys)
-        
+
         Returns:
             The static description, or resolved dynamic description based on config values.
         """
@@ -627,7 +630,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default=False,
         section="price",
         level="standard",
-        description="Use centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
+        description="Use centrally configured Home Assistant instance (from Data Source) "
+        "instead of manually specifying URL and token",
         help_url="configuration.html#price-sources",
         depends_on={"price.source": ["timeseries"]},
         hot_reload=True,
@@ -639,7 +643,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default="sensor.grid_prices",
         section="price",
         level="getting_started",
-        description="Home Assistant sensor entity containing price timeseries data (e.g., sensor.grid_prices)",
+        description="Home Assistant sensor entity containing price timeseries data "
+        "(e.g., sensor.grid_prices)",
         help_url="configuration.html#price-sources",
         depends_on={
             "price.source": ["timeseries"],
@@ -1113,6 +1118,20 @@ _ALL_FIELDS: list[FieldDef] = [
         depends_on={"pv_forecast_source.source": ["solcast", "victron"]},
         display_group="Provider",
     ),
+    FieldDef(
+        key="pv_forecast_source.resource_id",
+        field_type="str",
+        default="",
+        section="pv_forecast_source",
+        level="standard",
+        description="Resource ID / Installation ID (Solcast: comma-separated list; "
+        "Victron: single VRM ID)",
+        hot_reload=True,
+        help_url="configuration.html#pv-forecast",
+        depends_on={"pv_forecast_source.source": ["solcast", "victron"]},
+        display_group="Provider",
+        validation={"max_length": 1000},
+    ),
 
     # Use real data correction for EVCC PV forecast (source-level)
     FieldDef(
@@ -1121,8 +1140,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default=True,
         section="pv_forecast_source",
         level="standard",
-        description="Apply the scaling factor from EVCC forecast API to correct PV forecast values"+
-        " using real measured data. If disabled, no scaling is applied (scale = 1.0).",
+        description="Apply scaling factor from EVCC forecast API to correct PV forecast values "
+        "using real measured data. If disabled, no scaling applied (scale = 1.0).",
         help_url="configuration.html#pv-forecast-evcc",
         depends_on={"pv_forecast_source.source": ["evcc"]},
         display_group="Provider",
@@ -1135,7 +1154,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default=False,
         section="pv_forecast_source",
         level="standard",
-        description="Use centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
+        description="Use centrally configured Home Assistant instance (from Data Source) "
+        "instead of manually specifying URL and token",
         help_url="configuration.html#pv-forecast-sources",
         depends_on={"pv_forecast_source.source": ["timeseries"]},
         hot_reload=True,
@@ -1147,7 +1167,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default="sensor.pv_forecast",
         section="pv_forecast_source",
         level="getting_started",
-        description="Home Assistant sensor entity containing PV forecast timeseries data (e.g., sensor.pv_forecast)",
+        description="Home Assistant sensor entity containing PV forecast timeseries data "
+        "(e.g., sensor.pv_forecast)",
         help_url="configuration.html#pv-forecast-sources",
         depends_on={
             "pv_forecast_source.source": ["timeseries"],
@@ -1216,6 +1237,8 @@ _ALL_FIELDS: list[FieldDef] = [
     # ===== PV FORECAST (array of installations) ====="
     # Note: pv_forecast is a list — handled specially by merger/migration.
     # The schema defines the template for ONE pv_forecast entry.
+    # This section is only shown for location-based sources
+    # (not for solcast, victron, evcc, timeseries).
     FieldDef(
         key="pv_forecast.name",
         field_type="str",
@@ -1225,6 +1248,9 @@ _ALL_FIELDS: list[FieldDef] = [
         description="User-defined name for this PV installation (must be unique)",
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -1237,6 +1263,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": -90, "max": 90},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -1249,6 +1278,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": -180, "max": 180},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -1261,6 +1293,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": -180, "max": 180},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -1273,6 +1308,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": 0, "max": 90},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -1285,6 +1323,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": 1},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -1297,6 +1338,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": 1},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -1309,6 +1353,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": 0.1, "max": 1.0},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -1320,18 +1367,9 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Comma-separated horizon values for shading calculation",
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
-        display_group="Installation",
-    ),
-    FieldDef(
-        key="pv_forecast.resource_id",
-        field_type="str",
-        default="",
-        section="pv_forecast",
-        level="standard",
-        description="Resource ID for Solcast API (only needed for Solcast provider)",
-        hot_reload=True,
-        help_url="configuration.html#pv-forecast",
-        depends_on={"pv_forecast_source.source": ["solcast"]},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
 

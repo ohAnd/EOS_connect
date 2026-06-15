@@ -127,7 +127,7 @@ def update_config():
     Partial update — accepts a flat dict of dot-notation keys + values.
 
     Example body: ``{"price.feed_in_price": 0.08, "battery.min_soc_percentage": 10}``
-    
+
     Returns:
     - If validation errors: status 422 with "errors"
     - If unmet dependencies: status 200 with "unmet_dependencies" + no save
@@ -369,15 +369,35 @@ def _check_dependencies(data: dict) -> list[dict]:
                 "blocking": True,
             })
 
-    # MQTT: if enabled, broker must be set
-    mqtt_enabled = get_value("mqtt.enabled")
-    if mqtt_enabled:
-        mqtt_broker = get_value("mqtt.broker")
-        if not mqtt_broker or mqtt_broker.strip() == "":
+    # PV Source: validation for Solcast and Victron
+    pv_source = get_value("pv_forecast_source.source")
+    if pv_source in ["solcast", "victron"]:
+        resource_id = get_value("pv_forecast_source.resource_id")
+        if not resource_id or (isinstance(resource_id, str) and resource_id.strip() == ""):
             dependencies.append({
-                "field": "mqtt.enabled",
-                "reason": "MQTT enabled but broker address not configured",
-                "requires": "mqtt.broker",
+                "field": "pv_forecast_source.resource_id",
+                "reason": (
+                    f"{pv_source.capitalize()} selected as PV source but "
+                    "Resource ID/Installation ID is not configured"
+                ),
+                "requires": "pv_forecast_source.resource_id",
+                "blocking": True,
+            })
+
+    # PV Source: validation for location-based sources (must have at least 1 installation)
+    location_based_sources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]
+    if pv_source in location_based_sources:
+        # Get PV installations from current config
+        pv_forecast_data = (
+            data.get("pv_forecast")
+            if "pv_forecast" in data
+            else current_config.get("pv_forecast", [])
+        )
+        if not pv_forecast_data or len(pv_forecast_data) == 0:
+            dependencies.append({
+                "field": "pv_forecast",
+                "reason": "Location-based PV source selected but no PV installations configured",
+                "requires": "pv_forecast.0.lat",  # Indicate at least one entry needed
                 "blocking": True,
             })
 
@@ -396,7 +416,8 @@ def _check_timeseries_preflight(data: dict) -> list[dict]:
     def get_value(key):
         if key in data:
             return data[key]
-        # For data_source keys, check the store directly since data_source is excluded from merged config
+        # For data_source keys, check store directly
+        # (data_source is excluded from merged config)
         if key.startswith("data_source."):
             store_val = _store.get(key)
             if store_val is not None:
@@ -420,9 +441,13 @@ def _check_timeseries_preflight(data: dict) -> list[dict]:
             data_source_url = get_value("data_source.url")
             data_source_token = get_value("data_source.access_token")
 
-            if ha_sensor_name and data_source_url and data_source_token:
+            if (
+                ha_sensor_name and data_source_url and data_source_token
+            ):
                 # Try to fetch the sensor from Home Assistant
-                ha_url = f"{data_source_url.rstrip('/')}/api/states/{ha_sensor_name}"
+                ha_url = (
+                    f"{data_source_url.rstrip('/')}/api/states/{ha_sensor_name}"
+                )
                 try:
                     import requests
                     response = requests.get(
@@ -433,24 +458,37 @@ def _check_timeseries_preflight(data: dict) -> list[dict]:
                     if response.status_code == 404:
                         errors.append({
                             "key": "price.ha_sensor_name",
-                            "error": f"Sensor '{ha_sensor_name}' not found in Home Assistant"
+                            "error": (
+                                f"Sensor '{ha_sensor_name}' not found in "
+                                "Home Assistant"
+                            )
                         })
                     elif response.status_code != 200:
                         errors.append({
                             "key": "price.ha_sensor_name",
-                            "error": f"Home Assistant error {response.status_code}: {response.reason}"
+                            "error": (
+                                f"Home Assistant error {response.status_code}: "
+                                f"{response.reason}"
+                            )
                         })
                 except requests.exceptions.HTTPError as e:
                     if hasattr(e, 'response') and e.response is not None:
                         if e.response.status_code == 404:
                             errors.append({
                                 "key": "price.ha_sensor_name",
-                                "error": f"Sensor '{ha_sensor_name}' not found in Home Assistant"
+                                "error": (
+                                    f"Sensor '{ha_sensor_name}' not found in "
+                                    "Home Assistant"
+                                )
                             })
                         else:
                             errors.append({
                                 "key": "price.ha_sensor_name",
-                                "error": f"Home Assistant error {e.response.status_code}: {e.response.reason}"
+                                "error": (
+                                    f"Home Assistant error "
+                                    f"{e.response.status_code}: "
+                                    f"{e.response.reason}"
+                                )
                             })
                 except Exception as e:
                     errors.append({

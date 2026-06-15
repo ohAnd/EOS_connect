@@ -250,6 +250,7 @@ class PvInterface:
         """
         Validates source-specific PV forecast requirements.
         Each source (Victron, Solcast, etc.) has different needs.
+        Resource IDs now read from pv_forecast_source.resource_id instead of array entries.
 
         Args:
             strict: If True, log errors; if False, log warnings (for startup degradation).
@@ -258,35 +259,28 @@ class PvInterface:
 
         # Victron-specific validation
         if source == "victron":
-            if not self.config or len(self.config) == 0:
-                log_func = logger.error if strict else logger.warning
-                log_func("[PV-IF] No PV forecast entries found in configuration")
-                raise ValueError(
-                    "[PV-IF] At least one PV forecast entry required for Victron"
-                )
-
-            first_entry_resource_id = str(self.config[0].get("resource_id", "")).strip()
-            if not first_entry_resource_id:
+            resource_id = str(self.config_source.get("resource_id", "")).strip()
+            if not resource_id:
                 log_func = logger.error if strict else logger.warning
                 log_func(
-                    "[PV-IF] Victron VRM ID missing in first pv_forecast entry's resource_id"
+                    "[PV-IF] Victron VRM ID missing in pv_forecast_source.resource_id"
                 )
                 log_func(
-                    '[PV-IF] Please add resource_id to first pv_forecast entry '
+                    '[PV-IF] Please add resource_id to pv_forecast_source section '
                     '(e.g., resource_id: "your_victron_vrm_id")'
                 )
-                log_func("[PV-IF] Use Settings → PV Forecast to fix this")
+                log_func("[PV-IF] Use Settings → PV Source to fix this")
                 raise ValueError(
-                    "[PV-IF] Victron VRM ID (resource_id in first pv_forecast entry) "
-                    "required - Use Settings → PV Forecast to fix"
+                    "[PV-IF] Victron VRM ID (resource_id in pv_forecast_source) "
+                    "required - Use Settings → PV Source to fix"
                 )
 
             if not self.config_source.get("api_key", "").strip():
                 log_func = logger.error if strict else logger.warning
                 log_func("[PV-IF] Victron API key missing in pv_forecast_source section")
-                log_func("[PV-IF] Please set api_key in Settings → PV Forecast")
+                log_func("[PV-IF] Please set api_key in Settings → PV Source")
                 raise ValueError(
-                    "[PV-IF] Victron API key (api_key) required - Use Settings → PV Forecast to fix"
+                    "[PV-IF] Victron API key (api_key) required - Use Settings → PV Source to fix"
                 )
 
             logger.debug("[PV-IF] Victron source-specific requirements validated")
@@ -296,26 +290,54 @@ class PvInterface:
             if not self.config_source.get("api_key", "").strip():
                 log_func = logger.error if strict else logger.warning
                 log_func("[PV-IF] Solcast API key missing in pv_forecast_source section")
-                log_func("[PV-IF] Please set api_key in Settings → PV Forecast")
+                log_func("[PV-IF] Please set api_key in Settings → PV Source")
                 raise ValueError(
-                    "[PV-IF] Solcast API key required - Use Settings → PV Forecast to fix"
+                    "[PV-IF] Solcast API key required - Use Settings → PV Source to fix"
                 )
 
-            for config_entry in self.config:
-                entry_name = config_entry.get("name", "unnamed")
-                if not config_entry.get("resource_id", "").strip():
-                    log_func = logger.error if strict else logger.warning
-                    log_func(
-                        "[PV-IF] Resource ID missing for '%s' - required for Solcast",
-                        entry_name,
-                    )
-                    log_func("[PV-IF] Please set resource_id in Settings → PV Forecast")
-                    raise ValueError(
-                        f"[PV-IF] Solcast resource_id required for '{entry_name}' - "
-                        "Use Settings → PV Forecast to fix"
-                    )
+            resource_ids = str(self.config_source.get("resource_id", "")).strip()
+            if not resource_ids:
+                log_func = logger.error if strict else logger.warning
+                log_func(
+                    "[PV-IF] Resource IDs missing for Solcast - " +
+                    "required in pv_forecast_source.resource_id"
+                )
+                log_func(
+                    "[PV-IF] Please set resource_id in Settings → PV Source" +
+                    " (comma-separated for multiple)"
+                )
+                raise ValueError(
+                    "[PV-IF] Solcast resource_id required - Use Settings → PV Source to fix"
+                )
 
             logger.debug("[PV-IF] Solcast source-specific requirements validated")
+
+        elif source == "timeseries":
+            # Timeseries validation is handled separately - can use data_url or ha_sensor_name
+            logger.debug("[PV-IF] Timeseries source-specific requirements validated")
+
+        elif source == "evcc":
+            # EVCC-specific validation handled separately
+            logger.debug("[PV-IF] EVCC source-specific requirements validated")
+
+        elif source == "default":
+            # Default source uses fixed default values - no external configuration needed
+            logger.debug("[PV-IF] Default source-specific requirements validated")
+
+        elif source in ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]:
+            # Location-based sources - require at least one pv_forecast entry
+            if not self.config or len(self.config) == 0:
+                log_func = logger.error if strict else logger.warning
+                log_func("[PV-IF] No PV forecast entries found for location-based source")
+                log_func(
+                    "[PV-IF] Please add at least one entry to PV "+
+                    "Installations in Settings → PV Source"
+                )
+                raise ValueError(
+                    f"[PV-IF] At least one PV forecast entry required for {source} source"
+                )
+
+            logger.debug("[PV-IF] Location-based source-specific requirements validated")
 
     def __validate_pv_common_parameters(self, strict=True):
         """
@@ -898,7 +920,7 @@ class PvInterface:
     def get_summarized_pv_forecast(self):
         """
         requesting pv forecast freach config entry and summarize the values
-        
+
         Returns an empty forecast array if configuration is incomplete or invalid.
         On success, caches the result for fallback on future API failures.
         """
@@ -1576,7 +1598,7 @@ class PvInterface:
             else:
                 scale_factor = 1.0
                 logger.debug(
-                    "[PV-IF] EVCC PV forecast: Real data correction disabled," + 
+                    "[PV-IF] EVCC PV forecast: Real data correction disabled," +
                     " forcing scale factor to 1.0"
                 )
 
@@ -1603,15 +1625,21 @@ class PvInterface:
         """
         Fetches PV forecast from Solcast API using resource ID endpoint.
 
+        For Solcast, the resource_id is stored in pv_forecast_source.resource_id
+        (can be comma-separated).
+        Each config entry in pv_forecast can represent a single installation if needed.
+
         Args:
-            pv_config_entry (dict): Configuration entry containing resource_id
+            pv_config_entry (dict): Configuration entry for this PV installation
+            (contains name, lat, lon, etc.)
             tgt_duration (int): Target duration in hours (default 48)
 
         Returns:
             list: PV forecast values in Wh for each hour
         """
         api_key = self.config_source.get("api_key")
-        resource_id = pv_config_entry.get("resource_id")
+        # Get resource_ids from config_source (can be comma-separated)
+        resource_ids = str(self.config_source.get("resource_id", "")).strip()
 
         if not api_key:
             return self._handle_interface_error(
@@ -1621,16 +1649,20 @@ class PvInterface:
                 "solcast",
             )
 
-        if not resource_id:
+        if not resource_ids:
             return self._handle_interface_error(
                 "config_error",
-                "Resource ID missing from PV configuration for Solcast",
+                "Resource ID(s) missing from pv_forecast_source for Solcast",
                 pv_config_entry,
                 "solcast",
             )
 
+        # For now, use the first resource_id from the comma-separated list
+        # If there are multiple IDs, they would need separate API calls and aggregation
+        first_resource_id = resource_ids.split(",")[0].strip()
+
         # Solcast API endpoint for resource-based forecasts (free tier compatible)
-        url = f"https://api.solcast.com.au/rooftop_sites/{resource_id}/forecasts"
+        url = f"https://api.solcast.com.au/rooftop_sites/{first_resource_id}/forecasts"
 
         # Parameters for the API request
         params = {
@@ -1645,7 +1677,7 @@ class PvInterface:
 
         logger.debug(
             "[PV-IF] Fetching PV forecast from Solcast API for resource: %s (hours: %d)",
-            resource_id,
+            first_resource_id,
             params["hours"],
         )
 
@@ -1671,7 +1703,8 @@ class PvInterface:
                 "rate_limit": "Solcast API rate limit exceeded",
                 "auth_error": "Solcast API authentication failed (403) - check "
                 + "API key and resource ID access.",
-                "not_found": f"Solcast resource ID '{resource_id}' not found - check resource ID",
+                "not_found": f"Solcast resource ID '{first_resource_id}' not found"+
+                " - check resource ID",
                 "bad_request": "Solcast API bad request - check parameters",
             }
             msg = error_map.get(str(exception), f"Solcast API error: {exception}")
@@ -1780,11 +1813,14 @@ class PvInterface:
             # Clear any previous errors on success
             self.pv_forcast_request_error["error"] = None
 
+            # Get inverter efficiency for logging
+            inverter_efficiency = pv_config_entry.get("inverterEfficiency", 1.0)
+
             logger.debug(
                 "[PV-IF] Solcast PV forecast for resource '%s' (inverterEfficiency: %s) "
                 + "received %d forecast points,"
                 + " first 12h (Wh): %s",
-                resource_id,
+                first_resource_id,
                 inverter_efficiency,
                 len(forecasts),
                 pv_forecast[:12],  # Log first 12 hours to avoid spam
@@ -1808,7 +1844,7 @@ class PvInterface:
         Fetches PV forecast from Victron VRM API.
 
         The Victron VRM API provides hourly solar yield forecasts in Wh.
-        This method requires resource_id (VRM installation ID from first pv_forecast entry)
+        This method requires resource_id (VRM installation ID from pv_forecast_source.resource_id)
         and api_key (authentication token) configured in pv_forecast_source section.
 
         Args:
@@ -1818,14 +1854,14 @@ class PvInterface:
         Returns:
             list: PV forecast values in Wh for each time period (hourly or 15-min)
         """
-        # Get VRM ID from first PV forecast entry's resource_id and API key from config
-        vrm_id = str(self.config[0].get("resource_id", "")).strip()
+        # Get VRM ID from pv_forecast_source.resource_id and API key from config
+        vrm_id = str(self.config_source.get("resource_id", "")).strip()
         api_key = str(self.config_source.get("api_key", "")).strip()
 
         if not vrm_id:
             return self._handle_interface_error(
                 "config_error",
-                "Victron VRM ID (resource_id in first pv_forecast entry) missing",
+                "Victron VRM ID (resource_id in pv_forecast_source) missing",
                 pv_config_entry,
                 "victron",
             )
