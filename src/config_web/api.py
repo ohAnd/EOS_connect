@@ -151,6 +151,11 @@ def update_config():
             "message": "Cannot save: required dependencies not configured"
         }), 200
 
+    # Check for timeseries configuration changes and run pre-flight validation if needed
+    preflight_errors = _check_timeseries_preflight(data)
+    if preflight_errors:
+        return jsonify({"errors": preflight_errors}), 422
+
     changed_keys = []
     restart_required = []
     hot_reloaded = []
@@ -377,6 +382,84 @@ def _check_dependencies(data: dict) -> list[dict]:
             })
 
     return dependencies
+
+
+def _check_timeseries_preflight(data: dict) -> list[dict]:
+    """
+    Check if we're modifying a timeseries config and validate the sensor exists.
+    Returns list of error dicts if validation fails.
+    """
+    errors = []
+    current_config = _module.get_config()
+
+    # Helper: get effective value (from update data or current config)
+    def get_value(key):
+        if key in data:
+            return data[key]
+        # For data_source keys, check the store directly since data_source is excluded from merged config
+        if key.startswith("data_source."):
+            store_val = _store.get(key)
+            if store_val is not None:
+                return store_val
+        parts = key.split(".")
+        val = current_config
+        for part in parts:
+            if isinstance(val, dict):
+                val = val.get(part)
+            else:
+                return None
+        return val
+
+    # Check if we're modifying price timeseries config
+    price_source = get_value("price.source")
+    if price_source == "timeseries":
+        use_ha_central = get_value("price.use_ha_central_data_source")
+        if use_ha_central:
+            # Central HA mode: sensor name + data_source config
+            ha_sensor_name = get_value("price.ha_sensor_name")
+            data_source_url = get_value("data_source.url")
+            data_source_token = get_value("data_source.access_token")
+
+            if ha_sensor_name and data_source_url and data_source_token:
+                # Try to fetch the sensor from Home Assistant
+                ha_url = f"{data_source_url.rstrip('/')}/api/states/{ha_sensor_name}"
+                try:
+                    import requests
+                    response = requests.get(
+                        ha_url,
+                        headers={"Authorization": f"Bearer {data_source_token}"},
+                        timeout=5
+                    )
+                    if response.status_code == 404:
+                        errors.append({
+                            "key": "price.ha_sensor_name",
+                            "error": f"Sensor '{ha_sensor_name}' not found in Home Assistant"
+                        })
+                    elif response.status_code != 200:
+                        errors.append({
+                            "key": "price.ha_sensor_name",
+                            "error": f"Home Assistant error {response.status_code}: {response.reason}"
+                        })
+                except requests.exceptions.HTTPError as e:
+                    if hasattr(e, 'response') and e.response is not None:
+                        if e.response.status_code == 404:
+                            errors.append({
+                                "key": "price.ha_sensor_name",
+                                "error": f"Sensor '{ha_sensor_name}' not found in Home Assistant"
+                            })
+                        else:
+                            errors.append({
+                                "key": "price.ha_sensor_name",
+                                "error": f"Home Assistant error {e.response.status_code}: {e.response.reason}"
+                            })
+                except Exception as e:
+                    errors.append({
+                        "key": "price.ha_sensor_name",
+                        "error": f"Failed to connect to Home Assistant: {str(e)}"
+                    })
+
+    return errors
+
 
 
 def _validate_updates(data: dict) -> list[dict]:

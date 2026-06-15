@@ -1886,6 +1886,7 @@
                         <code>smartenergy_at</code> - Austrian provider<br>
                         <code>stromligning</code> - Danish provider<br>
                         <code>fixed_24h</code> - Custom 24-hour array<br>
+                        <code>timeseries</code> - HTTP endpoint returning timeseries data (Home Assistant, custom API, etc.)<br>
                         <code>default</code> - Akkudoktor API
                     </td>
                 </tr>
@@ -1894,6 +1895,10 @@
                     <td><code>default</code></td>
                 </tr>
             </table>
+
+            <div class="alert alert-info" style="margin-top: 1rem;">
+                <strong><i class="fas fa-info-circle"></i> Unified Timeseries Source:</strong> The <code>timeseries</code> source enables fetching electricity prices from any HTTP endpoint that returns timeseries data. This includes Home Assistant, custom HTTP APIs, and other integration points. See <a href="#timeseries-guide">Timeseries Data Source Guide</a> below for detailed configuration and examples.
+            </div>
 
             <h3>price.token</h3>
             <table>
@@ -2093,6 +2098,114 @@
                 <tr>
                     <th>Notes</th>
                     <td>Only used when <code>feed_in_source: elpris_dk</code></td>
+                </tr>
+            </table>
+
+            <h3>price.data_url</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.data_url</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Full HTTP endpoint URL for fetching price timeseries data</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes, when <code>source: timeseries</code></td>
+                </tr>
+                <tr>
+                    <th>Format</th>
+                    <td>Must start with <code>http://</code> or <code>https://</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Home Assistant)</th>
+                    <td><code>http://homeassistant.local:8123/api/states/sensor.grid_prices</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Custom API)</th>
+                    <td><code>https://api.example.com/v1/prices</code></td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately without restart</td>
+                </tr>
+            </table>
+
+            <h3>price.data_path</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.data_path</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>JSON path to the timeseries array in the API response (using dot notation)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes, when <code>source: timeseries</code></td>
+                </tr>
+                <tr>
+                    <th>Format</th>
+                    <td>Dot notation: <code>object.nested.array</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Home Assistant)</th>
+                    <td><code>attributes.data</code> — accesses <code>response["attributes"]["data"]</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Nested Array)</th>
+                    <td><code>forecast[0].prices</code> — accesses <code>response["forecast"][0]["prices"]</code></td>
+                </tr>
+                <tr>
+                    <th>Data Format Expected</th>
+                    <td>JSON array: <code>[{start, end, value}, ...]</code><br>
+                        <strong>start:</strong> ISO8601 timestamp (e.g., "2024-06-12T14:00:00Z")<br>
+                        <strong>end:</strong> ISO8601 timestamp (e.g., "2024-06-12T15:00:00Z")<br>
+                        <strong>value:</strong> Price in EUR/Wh (e.g., 0.25)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately without restart</td>
+                </tr>
+            </table>
+
+            <h3>price.data_token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.data_token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Optional Bearer token for API authentication (sent in Authorization header)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>No — only if the API requires authentication</td>
+                </tr>
+                <tr>
+                    <th>Format</th>
+                    <td>Bearer token string (ASCII only)</td>
+                </tr>
+                <tr>
+                    <th>Example (Home Assistant)</th>
+                    <td><code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</code></td>
+                </tr>
+                <tr>
+                    <th>HTTP Behavior</th>
+                    <td>If provided, sends header: <code>Authorization: Bearer &lt;token&gt;</code></td>
+                </tr>
+                <tr>
+                    <th>Security Note</th>
+                    <td>Token must contain only ASCII characters (Latin-1 compatible) for HTTP header transmission</td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately without restart</td>
                 </tr>
             </table>
 
@@ -2480,6 +2593,7 @@ price:
                         <code>evcc</code> - EVCC integration<br>
                         <code>solcast</code> - Solcast<br>
                         <code>victron</code> - Victron VRM API<br>
+                        <code>timeseries</code> - HTTP endpoint returning timeseries data (Home Assistant, custom API, etc.)<br>
                         <code>default</code> - Uses akkudoktor
                     </td>
                 </tr>
@@ -2488,6 +2602,10 @@ price:
                     <td><code>akkudoktor</code></td>
                 </tr>
             </table>
+
+            <div class="alert alert-info" style="margin-top: 1rem;">
+                <strong><i class="fas fa-info-circle"></i> Unified Timeseries Source:</strong> The <code>timeseries</code> source enables fetching PV forecasts from any HTTP endpoint that returns timeseries data. This includes Home Assistant, custom HTTP APIs, and other integration points. See <a href="#timeseries-guide">Timeseries Data Source Guide</a> below for detailed configuration and examples.
+            </div>
 
             <h3 id="pv-forecast-evcc">pv_forecast_source.use_real_data_correction</h3>
             <table>
@@ -2546,6 +2664,114 @@ price:
                         <strong>Solcast:</strong> Obtain from <a href="https://solcast.com/" target="_blank">solcast.com</a>. Free accounts limited to 10 calls/day.<br>
                         <strong>Victron:</strong> Generate in VRM portal (Preferences → API tokens). Requires "Dynamic ESS" configured in VRM portal.
                     </td>
+                </tr>
+            </table>
+
+            <h3>pv_forecast_source.data_url</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>pv_forecast_source.data_url</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Full HTTP endpoint URL for fetching PV forecast timeseries data</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes, when <code>source: timeseries</code></td>
+                </tr>
+                <tr>
+                    <th>Format</th>
+                    <td>Must start with <code>http://</code> or <code>https://</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Home Assistant)</th>
+                    <td><code>http://homeassistant.local:8123/api/states/sensor.pv_forecast</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Custom API)</th>
+                    <td><code>https://api.example.com/v1/pv/forecast</code></td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately without restart</td>
+                </tr>
+            </table>
+
+            <h3>pv_forecast_source.data_path</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>pv_forecast_source.data_path</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>JSON path to the timeseries array in the API response (using dot notation)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes, when <code>source: timeseries</code></td>
+                </tr>
+                <tr>
+                    <th>Format</th>
+                    <td>Dot notation: <code>object.nested.array</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Home Assistant)</th>
+                    <td><code>attributes.data</code> — accesses <code>response["attributes"]["data"]</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Nested Array)</th>
+                    <td><code>forecast[0].values</code> — accesses <code>response["forecast"][0]["values"]</code></td>
+                </tr>
+                <tr>
+                    <th>Data Format Expected</th>
+                    <td>JSON array: <code>[{start, end, value}, ...]</code><br>
+                        <strong>start:</strong> ISO8601 timestamp (e.g., "2024-06-12T14:00:00Z")<br>
+                        <strong>end:</strong> ISO8601 timestamp (e.g., "2024-06-12T15:00:00Z")<br>
+                        <strong>value:</strong> Power in Wh (e.g., 3600000 for 1 kWh)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately without restart</td>
+                </tr>
+            </table>
+
+            <h3>pv_forecast_source.data_token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>pv_forecast_source.data_token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Optional Bearer token for API authentication (sent in Authorization header)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>No — only if the API requires authentication</td>
+                </tr>
+                <tr>
+                    <th>Format</th>
+                    <td>Bearer token string (ASCII only)</td>
+                </tr>
+                <tr>
+                    <th>Example (Home Assistant)</th>
+                    <td><code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</code></td>
+                </tr>
+                <tr>
+                    <th>HTTP Behavior</th>
+                    <td>If provided, sends header: <code>Authorization: Bearer &lt;token&gt;</code></td>
+                </tr>
+                <tr>
+                    <th>Security Note</th>
+                    <td>Token must contain only ASCII characters (Latin-1 compatible) for HTTP header transmission</td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately without restart</td>
                 </tr>
             </table>
 
@@ -3320,6 +3546,243 @@ price:
                     <li><strong>Use 900s (15-min):</strong> If using EVopt and want finer-grained optimization for precise battery and solar control</li>
                 </ul>
             </div>
+        </div>
+
+        <!-- Timeseries Data Source Guide -->
+        <div class="content-section" id="timeseries-guide">
+            <h2><i class="fas fa-stream"></i> Unified Timeseries Data Source Guide</h2>
+            <p>EOS Connect supports a flexible <strong>timeseries</strong> source for both <strong>electricity prices</strong> and <strong>PV forecasts</strong>. This unified approach allows you to fetch data from Home Assistant, custom HTTP APIs, or any endpoint that returns timeseries data in a standard format.</p>
+
+            <h3>Timeseries Data Format</h3>
+            <p>The timeseries source expects JSON data in this standard format:</p>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">{
+  "data": [
+    {
+      "start": "2024-06-12T14:00:00Z",
+      "end": "2024-06-12T15:00:00Z",
+      "value": 0.25
+    },
+    {
+      "start": "2024-06-12T15:00:00Z",
+      "end": "2024-06-12T16:00:00Z",
+      "value": 0.28
+    }
+  ]
+}</pre>
+            </div>
+
+            <table>
+                <tr>
+                    <th>Field</th>
+                    <th>Description</th>
+                    <th>Format</th>
+                </tr>
+                <tr>
+                    <td><strong>start</strong></td>
+                    <td>Start timestamp of the timeslot</td>
+                    <td>ISO8601 (e.g., "2024-06-12T14:00:00Z" or Unix timestamp)</td>
+                </tr>
+                <tr>
+                    <td><strong>end</strong></td>
+                    <td>End timestamp of the timeslot</td>
+                    <td>ISO8601 or Unix timestamp</td>
+                </tr>
+                <tr>
+                    <td><strong>value</strong></td>
+                    <td><strong>For Prices:</strong> Price in EUR/Wh (e.g., 0.25 for 25 ct/kWh)<br>
+                        <strong>For PV:</strong> Generated power in Wh for the timeslot</td>
+                    <td>Number (float)</td>
+                </tr>
+            </table>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Time Resolution:</strong> EOS Connect auto-detects whether the timeseries is 15-minute (900s) or hourly (3600s) based on the timestamp differences. It automatically converts 15-minute data to hourly by averaging 4 consecutive values.
+            </div>
+
+            <h3>Home Assistant Integration</h3>
+            <p>Home Assistant entity attributes can be accessed using the dot notation in <strong>data_path</strong>.</p>
+
+            <h4>Price Example (Home Assistant)</h4>
+            <table>
+                <tr>
+                    <th>Configuration</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td><code>price.source</code></td>
+                    <td><code>timeseries</code></td>
+                </tr>
+                <tr>
+                    <td><code>price.data_url</code></td>
+                    <td><code>http://homeassistant.local:8123/api/states/sensor.grid_prices</code></td>
+                </tr>
+                <tr>
+                    <td><code>price.data_path</code></td>
+                    <td><code>attributes.data</code></td>
+                </tr>
+                <tr>
+                    <td><code>price.data_token</code></td>
+                    <td>Your HA Long-Lived Access Token (optional if local)</td>
+                </tr>
+            </table>
+
+            <p><strong>HA Entity Response Example:</strong></p>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">{
+  "entity_id": "sensor.grid_prices",
+  "attributes": {
+    "data": [
+      {"start": "2024-06-12T14:00:00Z", "end": "2024-06-12T15:00:00Z", "value": 0.25},
+      {"start": "2024-06-12T15:00:00Z", "end": "2024-06-12T16:00:00Z", "value": 0.28}
+    ]
+  }
+}</pre>
+            </div>
+
+            <h4>PV Forecast Example (Home Assistant)</h4>
+            <table>
+                <tr>
+                    <th>Configuration</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td><code>pv_forecast_source.source</code></td>
+                    <td><code>timeseries</code></td>
+                </tr>
+                <tr>
+                    <td><code>pv_forecast_source.data_url</code></td>
+                    <td><code>http://homeassistant.local:8123/api/states/sensor.solar_forecast</code></td>
+                </tr>
+                <tr>
+                    <td><code>pv_forecast_source.data_path</code></td>
+                    <td><code>attributes.forecast</code></td>
+                </tr>
+                <tr>
+                    <td><code>pv_forecast_source.data_token</code></td>
+                    <td>Your HA Long-Lived Access Token (optional if local)</td>
+                </tr>
+            </table>
+
+            <h3>Custom HTTP API Integration</h3>
+            <p>Connect to custom HTTP endpoints that return timeseries data. Supports authentication via Bearer tokens.</p>
+
+            <h4>Example: Custom REST API</h4>
+            <table>
+                <tr>
+                    <th>Configuration</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td><code>price.source</code></td>
+                    <td><code>timeseries</code></td>
+                </tr>
+                <tr>
+                    <td><code>price.data_url</code></td>
+                    <td><code>https://api.example.com/v1/prices/current</code></td>
+                </tr>
+                <tr>
+                    <td><code>price.data_path</code></td>
+                    <td><code>prices</code> (or nested path like <code>result.data</code>)</td>
+                </tr>
+                <tr>
+                    <td><code>price.data_token</code></td>
+                    <td>Your API token (if required)</td>
+                </tr>
+            </table>
+
+            <p><strong>API Response Example:</strong></p>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">{
+  "prices": [
+    {"start": "2024-06-12T14:00:00Z", "end": "2024-06-12T15:00:00Z", "value": 0.25},
+    {"start": "2024-06-12T15:00:00Z", "end": "2024-06-12T16:00:00Z", "value": 0.28}
+  ]
+}</pre>
+            </div>
+
+            <h3>Testing Your Timeseries Configuration</h3>
+            <p>Use the built-in connectivity test to validate your timeseries configuration before enabling it.</p>
+
+            <p><strong>HTTP Request:</strong></p>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">POST /api/config/test-timeseries
+Content-Type: application/json
+
+{
+  "source": "price",
+  "data_url": "http://homeassistant.local:8123/api/states/sensor.grid_prices",
+  "data_path": "attributes.data",
+  "data_token": "eyJhbGciOiJIUzI1NiI..."
+}</pre>
+            </div>
+
+            <p><strong>Response (Success):</strong></p>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #28a745;">{
+  "success": true,
+  "message": "Successfully fetched 24 price values",
+  "sample_count": 24,
+  "first_entry": {
+    "start": "2024-06-12T14:00:00Z",
+    "end": "2024-06-12T15:00:00Z",
+    "value": 0.25
+  },
+  "last_entry": {
+    "start": "2024-06-13T14:00:00Z",
+    "end": "2024-06-13T15:00:00Z",
+    "value": 0.22
+  }
+}</pre>
+            </div>
+
+            <h3>Error Handling & Retries</h3>
+            <p>EOS Connect automatically handles transient API failures:</p>
+            <ul>
+                <li><strong>Automatic Retries:</strong> Up to 3 attempts with exponential backoff (0.5s → 2s → 4s)</li>
+                <li><strong>Cache Fallback:</strong> If API fails, uses the last successfully fetched data</li>
+                <li><strong>Graceful Degradation:</strong> Continues running with cached data if available</li>
+                <li><strong>Error Logging:</strong> Issues are logged with timestamps for troubleshooting</li>
+            </ul>
+
+            <h3>Hot-Reload Support</h3>
+            <p>All timeseries configuration fields support hot-reload — changes take effect immediately without restarting the application:</p>
+            <ul>
+                <li><code>price.data_url</code>, <code>price.data_path</code>, <code>price.data_token</code></li>
+                <li><code>pv_forecast_source.data_url</code>, <code>pv_forecast_source.data_path</code>, <code>pv_forecast_source.data_token</code></li>
+            </ul>
+            <p>Changes are applied within 1-2 seconds on the next update cycle.</p>
+
+            <h3>JSON Path Reference</h3>
+            <p>Examples of how to specify <code>data_path</code> for different response structures:</p>
+
+            <table>
+                <tr>
+                    <th>Response Structure</th>
+                    <th>data_path</th>
+                    <th>Notes</th>
+                </tr>
+                <tr>
+                    <td><code>{"data": [...]}</code></td>
+                    <td><code>data</code></td>
+                    <td>Top-level array</td>
+                </tr>
+                <tr>
+                    <td><code>{"attributes": {"data": [...]}}</code></td>
+                    <td><code>attributes.data</code></td>
+                    <td>Nested object (Home Assistant pattern)</td>
+                </tr>
+                <tr>
+                    <td><code>{"result": {"prices": [...]}}</code></td>
+                    <td><code>result.prices</code></td>
+                    <td>Multiple levels of nesting</td>
+                </tr>
+                <tr>
+                    <td><code>{"forecast": [{"data": [...]}]}</code></td>
+                    <td><code>forecast[0].data</code></td>
+                    <td>Array with indexed access</td>
+                </tr>
+            </table>
         </div>
 
         <!-- Configuration Examples Section -->

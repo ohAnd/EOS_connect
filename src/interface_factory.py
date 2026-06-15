@@ -1,8 +1,10 @@
 """
-Interface Factory - Centralized creation and initialization of interfaces with integrated startup validation.
+Interface Factory - Centralized creation and initialization of interfaces with integrated
+startup validation.
 
-This factory pattern centralizes interface instantiation and error handling, reducing code duplication
-in the main application and providing a consistent approach to startup error collection.
+This factory pattern centralizes interface instantiation and error handling,
+reducing code duplication in the main application and providing a consistent
+approach to startup error collection.
 """
 
 import logging
@@ -204,6 +206,7 @@ class InterfaceFactory:
         pv_forecast: list,
         time_frame_base: int,
         evcc_config: Dict[str, Any],
+        data_source_config: Dict[str, Any],
         eos_source: str,
         time_zone_str: str,
         critical: bool = False,
@@ -216,6 +219,7 @@ class InterfaceFactory:
             pv_forecast: List of PV forecast configurations
             time_frame_base: Base time frame in seconds
             evcc_config: EVCC configuration
+            data_source_config: Data source configuration (for HA integration)
             eos_source: EOS source type
             time_zone_str: Timezone string
             critical: Whether interface is critical (non-critical by default)
@@ -226,6 +230,12 @@ class InterfaceFactory:
         Raises:
             Exception if critical interface fails
         """
+        # Build config_special dict with both EVCC and data_source configs
+        config_special = {
+            "url": evcc_config.get("url", ""),  # EVCC URL (backward compatible)
+            "data_source": data_source_config,   # HA connection info
+        }
+
         return self._create_interface(
             component_name="pv_interface",
             category="connectivity",
@@ -240,7 +250,7 @@ class InterfaceFactory:
                 pv_forecast_source,
                 pv_forecast,
                 time_frame_base,
-                evcc_config,
+                config_special,
                 eos_source == "eos_server",
                 time_zone_str,
             ),
@@ -420,29 +430,29 @@ class InterfaceFactory:
         """
         try:
             interface = creator_func()
-            
+
             # For inverter interface, also initialize it if not None
             if component_name == "inverter_interface" and interface is not None:
                 try:
                     interface.initialize()
                 except Exception as e:
                     raise Exception(f"Inverter initialization failed: {str(e)}")
-            
+
             self.created_interfaces[component_name] = interface
             logger.info("[Factory] Successfully created %s", component_name)
             return interface
-            
+
         except Exception as e:
             error_detail = str(e)
             full_message = f"{error_message}: {error_detail}{additional_message}"
-            
+
             logger.exception(
                 "[Factory] Failed to create %s (critical=%s): %s",
                 component_name,
                 critical,
                 full_message,
             )
-            
+
             # Register error with validator
             self.validator.add_error(
                 category=category,
@@ -453,11 +463,11 @@ class InterfaceFactory:
                 action_required=critical,
                 config_link=config_link,
             )
-            
+
             # Handle critical vs non-critical failures
             if critical:
                 raise  # Re-raise to stop startup
-            
+
             # For non-critical, return None but allow continued startup
             logger.warning(
                 "[Factory] %s failed but is non-critical, continuing startup",
@@ -483,7 +493,7 @@ class InterfaceFactory:
             ImportError or any exception from class instantiation
         """
         import importlib
-        
+
         module = importlib.import_module(module_name)
         cls = getattr(module, class_name)
         return cls(*args, **kwargs)

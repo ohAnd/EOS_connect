@@ -523,9 +523,7 @@
       "section": "price",
       "level": "getting_started",
       "description": "Data source for electricity prices",
-      "labels": [
-        "restart_required"
-      ],
+      "labels": [],
       "help_url": "configuration.html#price",
       "validation": {
         "choices": [
@@ -533,11 +531,12 @@
           "smartenergy_at",
           "stromligning",
           "fixed_24h",
+          "timeseries",
           "default"
         ]
       },
       "depends_on": null,
-      "hot_reload": false,
+      "hot_reload": true,
       "display_group": "Provider"
     },
     {
@@ -607,7 +606,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Fixed Prices"
+      "display_group": "Provider"
     },
     {
       "key": "price.energyforecast_enabled",
@@ -678,6 +677,107 @@
       },
       "hot_reload": false,
       "display_group": "Energy Price Forecast"
+    },
+    {
+      "key": "price.use_ha_central_data_source",
+      "type": "bool",
+      "default": false,
+      "section": "price",
+      "level": "standard",
+      "description": "Use centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
+      "labels": [],
+      "help_url": "configuration.html#price-sources",
+      "validation": {},
+      "depends_on": {
+        "price.source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "price.ha_sensor_name",
+      "type": "str",
+      "default": "sensor.grid_prices",
+      "section": "price",
+      "level": "getting_started",
+      "description": "Home Assistant sensor entity containing price timeseries data (e.g., sensor.grid_prices)",
+      "labels": [],
+      "help_url": "configuration.html#price-sources",
+      "validation": {},
+      "depends_on": {
+        "price.source": [
+          "timeseries"
+        ],
+        "price.use_ha_central_data_source": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "price.data_path",
+      "type": "str",
+      "default": "attributes.data",
+      "section": "price",
+      "level": "standard",
+      "description": "JSON path to timeseries array in response. For HA sensors: 'attributes.data'. For custom HTTP servers: 'data', 'prices', 'values', etc. (default: 'attributes.data')",
+      "labels": [],
+      "help_url": "configuration.html#price-sources",
+      "validation": {},
+      "depends_on": {
+        "price.source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "price.data_url",
+      "type": "str",
+      "default": "http://homeassistant.local:8123/api/states/sensor.grid_prices",
+      "section": "price",
+      "level": "getting_started",
+      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: endpoint URL returning JSON timeseries. Must return JSON array with {start, end, value} format (values in EUR/Wh).",
+      "labels": [],
+      "help_url": "configuration.html#price-sources",
+      "validation": {
+        "pattern": "^https?://.+"
+      },
+      "depends_on": {
+        "price.source": [
+          "timeseries"
+        ],
+        "price.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "price.data_token",
+      "type": "password",
+      "default": "",
+      "section": "price",
+      "level": "standard",
+      "description": "Optional bearer token for API authentication (used as Authorization: Bearer [token]). Leave empty for unauthenticated endpoints.",
+      "labels": [],
+      "help_url": "configuration.html#price-sources",
+      "validation": {},
+      "depends_on": {
+        "price.source": [
+          "timeseries"
+        ],
+        "price.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
     },
     {
       "key": "price.feed_in_source",
@@ -1299,6 +1399,7 @@
           "evcc",
           "solcast",
           "victron",
+          "timeseries",
           "default"
         ]
       },
@@ -1341,6 +1442,107 @@
         ]
       },
       "hot_reload": false,
+      "display_group": "Provider"
+    },
+    {
+      "key": "pv_forecast_source.use_ha_central_data_source",
+      "type": "bool",
+      "default": false,
+      "section": "pv_forecast_source",
+      "level": "standard",
+      "description": "Use centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast-sources",
+      "validation": {},
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "pv_forecast_source.ha_sensor_name",
+      "type": "str",
+      "default": "sensor.pv_forecast",
+      "section": "pv_forecast_source",
+      "level": "getting_started",
+      "description": "Home Assistant sensor entity containing PV forecast timeseries data (e.g., sensor.pv_forecast)",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast-sources",
+      "validation": {},
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "timeseries"
+        ],
+        "pv_forecast_source.use_ha_central_data_source": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "pv_forecast_source.data_path",
+      "type": "str",
+      "default": "attributes.data",
+      "section": "pv_forecast_source",
+      "level": "standard",
+      "description": "JSON path to timeseries array in response. For HA sensors: 'attributes.data'. For custom HTTP servers: 'data', 'forecast', 'values', etc. (default: 'attributes.data')",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast-sources",
+      "validation": {},
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "pv_forecast_source.data_url",
+      "type": "str",
+      "default": "http://homeassistant.local:8123/api/states/sensor.pv_forecast",
+      "section": "pv_forecast_source",
+      "level": "getting_started",
+      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: endpoint URL returning JSON timeseries. Must return JSON array with {start, end, value} format.",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast-sources",
+      "validation": {
+        "pattern": "^https?://.+"
+      },
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "timeseries"
+        ],
+        "pv_forecast_source.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "pv_forecast_source.data_token",
+      "type": "password",
+      "default": "",
+      "section": "pv_forecast_source",
+      "level": "standard",
+      "description": "Optional bearer token for API authentication (used as Authorization: Bearer [token]). Leave empty for unauthenticated endpoints.",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast-sources",
+      "validation": {},
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "timeseries"
+        ],
+        "pv_forecast_source.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
       "display_group": "Provider"
     },
     {

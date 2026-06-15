@@ -38,6 +38,7 @@ from collections import defaultdict
 import json
 import logging
 import threading
+import time
 import requests
 
 logger = logging.getLogger("__main__")
@@ -137,6 +138,11 @@ class PriceInterface:
         self.energyforecast_market_zone = config.get(
             "energyforecast_market_zone", "DE-LU"
         )
+
+        # Timeseries data source configuration (HA or HTTP endpoint)
+        self.data_url = config.get("data_url", "").strip()
+        self.data_path = config.get("data_path", "attributes.data").strip()
+        self.data_token = config.get("data_token", "").strip()
 
         self.time_frame_base = time_frame_base
         self.time_zone = timezone
@@ -426,7 +432,7 @@ class PriceInterface:
         Retrieve prices based on the target duration and optional start time.
 
         Fetches prices from the configured source. Supported sources: 'tibber', 'smartenergy_at',
-        'stromligning', 'fixed_24h', 'default'.
+        'stromligning', 'fixed_24h', 'timeseries', 'default'.
 
         Args:
             tgt_duration (int): The target duration (hours or 15-min slots) for which prices
@@ -449,6 +455,8 @@ class PriceInterface:
             prices = self.__retrieve_prices_from_fixed24h_array(
                 tgt_duration, start_time
             )
+        elif self.src == "timeseries":
+            prices = self.__retrieve_prices_from_url(tgt_duration, start_time)
         elif self.src == "default":
             prices = self.__retrieve_prices_from_akkudoktor(tgt_duration, start_time)
         else:
@@ -764,7 +772,7 @@ class PriceInterface:
         today_cutoff_idx = 0  # Track where today's real data ends
 
         # Load today's prices and find where real data ends (end of calendar day)
-        for i, price in enumerate(today_prices_json):
+        for price in today_prices_json:
             prices.append(round(price["total"] / 1000, 9))
             prices_direct.append(round(price["energy"] / 1000, 9))
             prices_with_timestamps.append(
@@ -1563,7 +1571,7 @@ class PriceInterface:
             )
 
         # Validate learned parameters
-        if not (ENERGYFORECAST_MIN_FACTOR <= factor <= ENERGYFORECAST_MAX_FACTOR):
+        if not ENERGYFORECAST_MIN_FACTOR <= factor <= ENERGYFORECAST_MAX_FACTOR:
             logger.warning(
                 "[PRICE-IF] Learned factor %.3f outside valid range [%.1f, %.1f], "
                 "using price repetition",
@@ -1675,6 +1683,36 @@ class PriceInterface:
 
         return slope, intercept
 
+    def _retry_request(self, request_func, error_handler, max_retries=3, delay=1):
+        """
+        Centralized retry logic for API requests with exponential backoff.
+
+        Args:
+            request_func (callable): Function that performs the request and returns the result.
+            error_handler (callable): Function to call on final failure.
+            max_retries (int): Number of retries before error handler is called.
+            delay (int): Initial delay in seconds between retries.
+
+        Returns:
+            The result of request_func, or error_handler on failure.
+        """
+        for attempt in range(max_retries):
+            try:
+                return request_func()
+            except requests.exceptions.Timeout as e:
+                if attempt == max_retries - 1:
+                    return error_handler("timeout", e)
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    return error_handler("request_failed", e)
+            except (ValueError, TypeError) as e:
+                if attempt == max_retries - 1:
+                    return error_handler("invalid_json", e)
+            except (KeyError, AttributeError) as e:
+                if attempt == max_retries - 1:
+                    return error_handler("parsing_error", e)
+            time.sleep(delay)
+
     def __retrieve_prices_from_fixed24h_array(
         self, tgt_duration, start_time=None  # pylint: disable=unused-argument
     ):
@@ -1711,3 +1749,302 @@ class PriceInterface:
             extended_prices = extended_prices_15min
         self.current_prices_direct = extended_prices.copy()
         return extended_prices
+
+    def __retrieve_prices_from_url(self, tgt_duration, start_time=None):
+        """
+        Retrieve grid prices from timeseries data source (Home Assistant or HTTP).
+
+        Unified approach for both HA sensors and custom HTTP servers using
+        standardized timeseries format: [{start, end, value}, ...] with values
+        in EUR/Wh.
+
+        Config fields used:
+        - data_url: Full HTTP endpoint URL (HA or HTTP custom endpoint)
+        - data_path: JSON path to timeseries array (e.g., 'attributes.data')
+        - data_token: Optional bearer token for authentication
+        
+        Args:
+            tgt_duration (int): Target duration in hours (48) or 15-min slots (192)
+            start_time (datetime, optional): Optional start time
+        
+        Returns:
+            list: Grid prices in EUR/Wh for each time period
+        """
+        if not self.data_url:
+            logger.error(
+                "[PRICE-IF] Data URL (data_url) not configured for timeseries"
+            )
+            return []
+
+        # Prepare request headers with optional bearer token
+        headers = {"Content-Type": "application/json"}
+        if self.data_token:
+            headers["Authorization"] = f"Bearer {self.data_token}"
+
+        logger.debug(
+            "[PRICE-IF] Fetching prices from timeseries source: %s (path: %s)",
+            self.data_url,
+            self.data_path,
+        )
+
+        def request_and_parse():
+            """Fetch data and extract timeseries using data_path."""
+            response = requests.get(self.data_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            response_data = response.json()
+
+            # Extract timeseries using data_path
+            timeseries = self.__extract_json_path(response_data, self.data_path)
+
+            if not isinstance(timeseries, list):
+                msg = f"Data at path '{self.data_path}' is not array"
+                raise ValueError(msg)
+
+            return timeseries
+
+        def error_handler(error_type, exception):
+            logger.error(f"[PRICE-IF] URL data source error: {exception}")
+            return None
+
+        timeseries = self._retry_request(request_and_parse, error_handler)
+        if not timeseries:
+            logger.error("[PRICE-IF] No valid timeseries data from source")
+            return []
+
+        # Parse and validate timeseries
+        try:
+            prices = self.__parse_price_timeseries(timeseries, tgt_duration)
+            if not prices:
+                logger.error("[PRICE-IF] Failed to parse price timeseries data")
+                return []
+
+            # Clear any previous errors on success
+            self.consecutive_failures = 0
+            self.last_successful_prices = prices.copy()
+            self.last_successful_prices_direct = prices.copy()
+
+            logger.debug(
+                "[PRICE-IF] Timeseries prices received: %d values, "
+                "first 12h (EUR/Wh): %.9f, %.9f, ...",
+                len(prices),
+                prices[0],
+                prices[1] if len(prices) > 1 else 0,
+            )
+
+            return prices
+
+        except (ValueError, TypeError) as e:
+            logger.error(f"[PRICE-IF] Error parsing price timeseries: {e}")
+            return []
+
+    def __parse_price_timeseries(self, timeseries, tgt_duration):
+        """
+        Parse and validate price timeseries format.
+
+        Standardized format: [{start, end, value}, ...]
+        - start/end: ISO8601 string or Unix timestamp (seconds)
+        - value: numeric in EUR/Wh
+        - Supports hourly (48 values) or 15-minute (192 values) resolution
+
+        Returns:
+            list: Normalized hourly price values in EUR/Wh, or empty on error
+        """
+        if not timeseries or not isinstance(timeseries, list):
+            logger.error("[PRICE-IF] Price timeseries is not a list")
+            return []
+
+        if len(timeseries) == 0:
+            logger.error("[PRICE-IF] Price timeseries is empty")
+            return []
+
+        # Validate first entry structure
+        first = timeseries[0]
+        required_keys = ["start", "end", "value"]
+        if not isinstance(first, dict) or not all(k in first for k in required_keys):
+            logger.error(
+                "[PRICE-IF] Invalid price timeseries format: missing start, end, or value"
+            )
+            return []
+
+        # Detect time resolution from timestamp delta
+        resolution_seconds = self.__detect_price_timeseries_resolution(timeseries)
+        if resolution_seconds is None:
+            logger.error("[PRICE-IF] Could not detect price timeseries resolution")
+            return []
+
+        # Validate resolution matches time frame base
+        if resolution_seconds == 900 and self.time_frame_base == 3600:
+            # Source provides 15-min, system wants hourly - OK, convert
+            logger.debug(
+                "[PRICE-IF] Converting source 15-min to system hourly resolution"
+            )
+            timeseries = self.__convert_15min_to_hourly_price_timeseries(timeseries)
+        elif resolution_seconds == 3600 and self.time_frame_base == 900:
+            # Source provides hourly, system wants 15-min - ERROR
+            # User must choose: either use 3600s time frame or find 15-min source
+            logger.error(
+                "[PRICE-IF] Resolution mismatch: data source provides hourly (3600s) "
+                "but system configured for 15-min (900s) slots. "
+                "Set time_frame_base to 3600 or switch to a data source "
+                "with 15-minute resolution."
+            )
+            return []
+        elif resolution_seconds not in (900, 3600):
+            logger.error(
+                "[PRICE-IF] Unsupported resolution: %d seconds (expected 900 or 3600)",
+                resolution_seconds,
+            )
+            return []
+
+        # Extract and validate values
+        try:
+            values = []
+            for item in timeseries:
+                value = float(item.get("value", 0))
+                # EUR/Wh range: -0.5 to 1.0
+                if value < -0.5 or value > 1.0:
+                    logger.warning(
+                        "[PRICE-IF] Price value %.9f outside range, clamping", value
+                    )
+                    value = max(-0.5, min(1.0, value))
+                values.append(value)
+        except (ValueError, TypeError):
+            logger.error("[PRICE-IF] Failed to extract numeric prices")
+            return []
+
+        # Validate completeness
+        expected_count = 48 if self.time_frame_base == 3600 else 192
+        if len(values) < expected_count:
+            logger.warning(
+                "[PRICE-IF] Incomplete timeseries: got %d, expected %d",
+                len(values),
+                expected_count,
+            )
+            # Pad with last value
+            if values:
+                padding_needed = expected_count - len(values)
+                last_value = values[-1]
+                values.extend([last_value] * padding_needed)
+                logger.info("[PRICE-IF] Padded with %d values", padding_needed)
+
+        # Round to 9 decimals (EUR precision)
+        values = [round(v, 9) for v in values]
+
+        return values
+
+    def __detect_price_timeseries_resolution(self, timeseries):
+        """
+        Detect time resolution (900s for 15-min, 3600s for hourly).
+
+        Returns:
+            int: Seconds per interval (900 or 3600), or None if cannot detect
+        """
+        if len(timeseries) < 2:
+            return None
+
+        try:
+            # Parse first two timestamps
+            from datetime import datetime as dt_class
+            import pytz
+
+            def parse_ts(ts_str):
+                """Parse timestamp from ISO8601 or Unix seconds."""
+                if isinstance(ts_str, (int, float)):
+                    return dt_class.fromtimestamp(ts_str, tz=pytz.UTC)
+                if isinstance(ts_str, str):
+                    try:
+                        return dt_class.fromisoformat(ts_str.replace('Z', '+00:00'))
+                    except ValueError:
+                        return dt_class.fromisoformat(ts_str)
+                return None
+
+            start1 = parse_ts(timeseries[0].get("start"))
+            start2 = parse_ts(timeseries[1].get("start"))
+
+            if start1 is None or start2 is None:
+                return None
+
+            delta = int((start2 - start1).total_seconds())
+
+            if delta == 900:
+                logger.debug("[PRICE-IF] Detected 15-minute price resolution")
+                return 900
+            elif delta == 3600:
+                logger.debug("[PRICE-IF] Detected hourly price resolution")
+                return 3600
+            else:
+                logger.warning(
+                    "[PRICE-IF] Unexpected resolution delta: %d seconds", delta
+                )
+                return None
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def __convert_15min_to_hourly_price_timeseries(self, timeseries):
+        """
+        Convert 15-minute to hourly by averaging 4 consecutive values.
+
+        Returns:
+            list: Averaged hourly timeseries
+        """
+        if len(timeseries) < 4:
+            logger.warning("[PRICE-IF] Not enough 15-min data to average hourly")
+            return timeseries
+
+        hourly = []
+        for i in range(0, len(timeseries), 4):
+            group = timeseries[i : i + 4]
+            try:
+                avg_value = (
+                    sum(float(item.get("value", 0)) for item in group) / len(group)
+                )
+                hourly_item = {
+                    "start": group[0].get("start"),
+                    "end": group[-1].get("end"),
+                    "value": avg_value,
+                }
+                hourly.append(hourly_item)
+            except (ValueError, TypeError):
+                pass
+
+        logger.debug(
+            "[PRICE-IF] Converted %d 15-min prices to %d hourly prices",
+            len(timeseries),
+            len(hourly),
+        )
+        return hourly
+
+    def __extract_json_path(self, obj, path):
+        """
+        Extract nested value from JSON object using dot notation.
+
+        Examples:
+        - 'attributes.data' -> obj['attributes']['data']
+        - 'data' -> obj['data']
+        - 'prices[0].data' -> obj['prices'][0]['data']
+
+        Args:
+            obj: JSON object (dict or list)
+            path: Dot-notation path string
+
+        Returns:
+            Extracted value or None if path not found
+        """
+        try:
+            parts = path.split(".")
+            current = obj
+            for part in parts:
+                if "[" in part:
+                    # Handle array index notation (e.g., "prices[0]")
+                    key, index_str = part.split("[")
+                    index = int(index_str.rstrip("]"))
+                    if key:
+                        current = current[key][index]
+                    else:
+                        current = current[index]
+                else:
+                    current = current[part]
+            return current
+        except (KeyError, IndexError, TypeError, ValueError):
+            logger.warning("[PRICE-IF] Could not extract path '%s' from JSON response", path)
+            return None

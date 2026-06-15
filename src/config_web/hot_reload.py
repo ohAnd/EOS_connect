@@ -11,6 +11,18 @@ Supported fields (Priority 1 — Price):
 - ``price.feed_in_price``  (also triggers immediate run via ``_PRICE_RUN_TRIGGERS``)
 - ``price.negative_price_switch``
 
+Supported fields (Price data source reload — immediate data fetch):
+- ``price.source``  (triggers immediate fetch if switching TO timeseries; defers if switching FROM timeseries)
+- ``price.data_url``  (triggers immediate fetch when source=timeseries)
+- ``price.data_path``  (triggers immediate fetch when source=timeseries)
+- ``price.data_token``  (triggers immediate fetch when source=timeseries)
+- ``price.use_ha_central_data_source``  (triggers immediate fetch when source=timeseries)
+- ``price.ha_sensor_name``  (triggers immediate fetch when source=timeseries)
+
+Safety note: When switching FROM timeseries to another source, config is updated but 
+fetch is deferred. This prevents errors from fetching with incomplete config for the 
+new source. The next scheduled update cycle will use the correct source and config.
+
 Supported fields (Priority 2 — Battery SOC):
 - ``battery.min_soc_percentage``
 - ``battery.max_soc_percentage``
@@ -29,6 +41,14 @@ Supported fields (Local EVopt strategies):
 - ``eos.local_evopt_charging_strategy``
 - ``eos.local_evopt_discharging_strategy``
 - ``eos.local_evopt_emergency_reserve_pct``
+
+PV Forecast Hot-Reload Behavior:
+- **Per-installation sources** (akkudoktor, openmeteo, solcast, victron, etc.): Reload on config change
+- **Summarized sources** (timeseries, evcc): Skip reload, defer to background loop
+
+Rationale: Timeseries and EVCC provide single summarized PV values, not per-installation data.
+Reloading would cause redundant API fetches (one per installation). Background update loop
+handles these sources more efficiently.
 """
 
 import logging
@@ -43,6 +63,16 @@ _PRICE_FIELD_MAP = {
     "price.fixed_price_adder_ct": ("fixed_price_adder_ct", float),
     "price.relative_price_multiplier": ("relative_price_multiplier", float),
     "price.feed_in_price": ("feed_in_tariff_price", float),
+}
+
+# Price data source fields that require reload (timeseries URL/path/token)
+_PRICE_DATA_FIELDS = {
+    "price.source",
+    "price.data_url",
+    "price.data_path",
+    "price.data_token",
+    "price.use_ha_central_data_source",
+    "price.ha_sensor_name",
 }
 
 # Map of feed-in price config keys to (interface_attr_name, coerce_fn)
@@ -160,6 +190,8 @@ class HotReloadAdapter:
 
         if key in _PRICE_FIELD_MAP:
             self._apply_price(key, new_value)
+        elif key in _PRICE_DATA_FIELDS:
+            self._schedule_price_reload(key)
         elif key in _FEEDIN_PRICE_FIELD_MAP:
             self._apply_feed_in_price(key, new_value)
         elif key in _BATTERY_SOC_FIELDS:
@@ -171,7 +203,7 @@ class HotReloadAdapter:
         elif key in _LOCAL_EVOPT_FIELD_MAP:
             self._apply_local_evopt(key, new_value)
         elif key.startswith(_PV_KEY_PREFIXES):
-            self._schedule_pv_reload(key)
+            self._schedule_pv_reload(key, new_value)
         else:
             return  # Not a hot-reloadable key — skip silently
 
@@ -486,11 +518,39 @@ class HotReloadAdapter:
             old_val,
         )
 
-    def _schedule_pv_reload(self, key):
-        """Debounce PV reload to avoid one reload per updated PV field."""
+    def _schedule_pv_reload(self, key, new_value=None):
+        """Schedule PV reload when config changes.
+        
+        Args:
+            key: Config key (e.g., "pv_forecast_source.source")
+            new_value: New value being set (used for pv_forecast_source.source to avoid stale reads)
+        
+        Behavior:
+        - Summarized sources (timeseries/evcc): Trigger IMMEDIATE reload to show user changes quickly
+          * User sees PV data from new source immediately (no 15min+ wait)
+          * The PV interface now efficiently fetches summarized sources once (not per-installation)
+        - Per-installation sources (akkudoktor, openmeteo, etc.): Debounced reload
+          * Coalesces multiple PV field changes into single reload
+        """
         if self._pv is None or self._config_provider is None:
             logger.debug("[HotReload] No PV interface/config provider — skipping %s", key)
             return
+
+        # For summarized source changes: trigger immediate reload so user sees changes quickly
+        if key == "pv_forecast_source.source":
+            # Use new_value parameter directly to avoid stale reads from config_provider
+            # (callbacks fire before rebuild_config in API handler)
+            new_source = (new_value or "").strip() if new_value else ""
+            if new_source in ("timeseries", "evcc"):
+                logger.debug(
+                    "[HotReload] PV source changed to '%s' (summarized source) — "
+                    "triggering immediate reload for instant user visibility",
+                    new_source,
+                )
+                self._pending_pv_keys.clear()
+                self._pending_pv_keys.add(key)
+                self._apply_pv_reload(force_source=new_source)  # Pass new source to avoid stale config
+                return
 
         # Support explicit synchronous mode for deterministic tests.
         if self._pv_reload_debounce_seconds <= 0:
@@ -498,6 +558,7 @@ class HotReloadAdapter:
             self._apply_pv_reload()
             return
 
+        # Debounce per-installation source changes to coalesce multiple updates
         with self._pv_reload_lock:
             self._pending_pv_keys.add(key)
             if self._pv_reload_timer and self._pv_reload_timer.is_alive():
@@ -509,8 +570,94 @@ class HotReloadAdapter:
             self._pv_reload_timer.daemon = True
             self._pv_reload_timer.start()
 
-    def _apply_pv_reload(self):
-        """Reconfigure the live PV interface from the current merged config."""
+    def _schedule_price_reload(self, key):
+        """Schedule price reload when timeseries data source config changes.
+        
+        Triggers immediate fetch when:
+        - Switching TO timeseries source (any previous source) → fetch with timeseries config
+        - Updating timeseries DATA fields while source=timeseries → fetch with new data
+        
+        Does NOT fetch when:
+        - Switching FROM timeseries TO another source → config updated but fetch deferred
+          (avoids fetching with incomplete config for the new source)
+        """
+        if self._price is None or self._config_provider is None:
+            logger.debug(
+                "[HotReload] No price interface/config provider — skipping %s", key
+            )
+            return
+
+        try:
+            config = self._config_provider()
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "[HotReload] Cannot read merged config for price reload: %s", exc
+            )
+            return
+
+        if not isinstance(config, dict):
+            logger.warning("[HotReload] Merged config is invalid for price reload")
+            return
+
+        # Update price interface with new data source config
+        try:
+            price_config = config.get("price", {})
+            new_source = price_config.get("source", "").strip()
+
+            self._price.config_source = price_config
+            self._price.data_url = price_config.get("data_url", "").strip()
+            self._price.data_path = price_config.get("data_path", "attributes.data").strip()
+            self._price.data_token = price_config.get("data_token", "").strip()
+            self._applied_keys.append(key)
+            # Determine if we should trigger immediate fetch
+            # Fetch if new source is timeseries (either switching TO it or already using
+            # it with data update)
+            # Skip fetch if switching FROM timeseries to another source
+            should_fetch = new_source == "timeseries"
+
+            if should_fetch:
+                logger.info(
+                    "[HotReload] Updated price config (%s: %s...)",
+                    key,
+                    str(self._price.data_url)[:50],
+                )
+                # Trigger immediate price fetch with new timeseries config
+                try:
+                    start_time = datetime.now(self._price.time_zone).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    )
+                    tgt_duration = 192 if self._price.time_frame_base == 900 else 48
+                    self._price.update_prices(tgt_duration, start_time)
+                    logger.info(
+                        "[HotReload] Immediately fetched prices after %s config change", key
+                    )
+                except (AttributeError, TypeError, ValueError, OSError, RuntimeError) as e:
+                    logger.warning(
+                        "[HotReload] Failed to fetch prices after %s config change: %s", key, e
+                    )
+            else:
+                # Source change detected but NOT to timeseries — config updated but fetch deferred
+                if key == "price.source":
+                    logger.debug(
+                        "[HotReload] Price source changed to '%s' — config updated, "
+                        "fetch deferred to next update cycle", new_source
+                    )
+                else:
+                    logger.debug(
+                        "[HotReload] Updated price config (%s), "
+                        "source is '%s' — fetch deferred", key, new_source
+                    )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("[HotReload] Price data source reload failed: %s", exc)
+
+    def _apply_pv_reload(self, force_source=None):
+        """Reconfigure the live PV interface from the current merged config.
+        
+        Args:
+            force_source: If provided, override config_source.source with this value.
+                Used when source changes to avoid stale config reads (callbacks fire
+                before rebuild_config in API handler).
+        """
         if self._pv is None or self._config_provider is None:
             return
 
@@ -528,9 +675,20 @@ class HotReloadAdapter:
             logger.warning("[HotReload] Merged config is invalid for PV reload")
             return
 
+        # If source changed to summarized type, use the new source directly to avoid
+        # stale config (callbacks fire before rebuild_config in API handler)
+        config_source = config.get("pv_forecast_source", {})
+        if force_source:
+            config_source = dict(config_source)  # Copy to avoid mutating original
+            config_source["source"] = force_source
+            logger.debug(
+                "[HotReload] Using forced source '%s' (callback fired before rebuild_config)",
+                force_source,
+            )
+
         try:
             self._pv.reload_config(
-                config_source=config.get("pv_forecast_source", {}),
+                config_source=config_source,
                 config=config.get("pv_forecast", []),
                 config_special=config.get("evcc", {}),
                 temperature_forecast_enabled=(

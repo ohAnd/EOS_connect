@@ -200,7 +200,7 @@ class TestMergedConfigBuilder:
         store.set("data_source.access_token", "test_token_123")
 
         merged = build_merged_config(config, store, schema)
-        
+
         # Verify inverter has injected url and token
         assert merged["inverter"]["url"] == "http://ha.local:8123"
         assert merged["inverter"]["token"] == "test_token_123"
@@ -217,7 +217,7 @@ class TestMergedConfigBuilder:
         store.set("data_source.access_token", "test_token_123")
 
         merged = build_merged_config(config, store, schema)
-        
+
         # Inverter should NOT have injected url/token
         assert merged["inverter"].get("url") != "http://ha.local:8123"
         assert merged["inverter"].get("token") != "test_token_123"
@@ -234,7 +234,7 @@ class TestMergedConfigBuilder:
         store.set("data_source.access_token", "")
 
         merged = build_merged_config(config, store, schema)
-        
+
         # Verify injected empty values
         assert merged["inverter"]["url"] == ""
         assert merged["inverter"]["token"] == ""
@@ -247,7 +247,7 @@ class TestMergedConfigBuilder:
         # Set ssl_ignore in data_source
         store.set("data_source.ssl_ignore", True)
         merged = build_merged_config(config, store, schema)
-        
+
         # load section should have ssl_ignore=True
         assert merged["load"]["ssl_ignore"] is True
 
@@ -259,7 +259,7 @@ class TestMergedConfigBuilder:
         # Set ssl_ignore in data_source
         store.set("data_source.ssl_ignore", True)
         merged = build_merged_config(config, store, schema)
-        
+
         # battery section should have ssl_ignore=True
         assert merged["battery"]["ssl_ignore"] is True
 
@@ -274,9 +274,9 @@ class TestMergedConfigBuilder:
         store.set("data_source.url", "http://ha.local:8123")
         store.set("data_source.access_token", "test_token")
         store.set("data_source.ssl_ignore", True)
-        
+
         merged = build_merged_config(config, store, schema)
-        
+
         # inverter should have ssl_ignore=True
         assert merged["inverter"]["ssl_ignore"] is True
 
@@ -287,10 +287,66 @@ class TestMergedConfigBuilder:
 
         # Don't set ssl_ignore — should default to False
         merged = build_merged_config(config, store, schema)
-        
+
         # All sections should have ssl_ignore=False
         assert merged["load"]["ssl_ignore"] is False
         assert merged["battery"]["ssl_ignore"] is False
         # inverter might not have ssl_ignore if type is not homeassistant
         if merged["inverter"].get("type") == "homeassistant":
             assert merged["inverter"]["ssl_ignore"] is False
+
+    def test_central_ha_price_timeseries(self, store, schema):
+        """When price.use_ha_central_data_source is true, construct URL from central HA."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        # Enable central HA for price
+        store.set("price.source", "timeseries")
+        store.set("price.use_ha_central_data_source", True)
+        store.set("price.ha_sensor_name", "sensor.electricity_prices")
+        store.set("data_source.url", "http://homeassistant.local:8123")
+        store.set("data_source.access_token", "ha_token_123")
+
+        merged = build_merged_config(config, store, schema)
+
+        # Verify URL and token are constructed from central HA
+        assert merged["price"]["data_url"] == "http://homeassistant.local:8123/api/states/sensor.electricity_prices"
+        assert merged["price"]["data_token"] == "ha_token_123"
+
+    def test_central_ha_pv_timeseries(self, store, schema):
+        """When pv_forecast_source.use_ha_central_data_source is true,
+        construct URL from central HA."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        # Enable central HA for PV
+        store.set("pv_forecast_source.source", "timeseries")
+        store.set("pv_forecast_source.use_ha_central_data_source", True)
+        store.set("pv_forecast_source.ha_sensor_name", "sensor.pv_forecast_data")
+        store.set("data_source.url", "http://homeassistant.local:8123")
+        store.set("data_source.access_token", "ha_token_456")
+
+        merged = build_merged_config(config, store, schema)
+
+        # Verify URL and token are constructed from central HA
+        assert merged["pv_forecast_source"]["data_url"] == "http://homeassistant.local:8123/api/states/sensor.pv_forecast_data"
+        assert merged["pv_forecast_source"]["data_token"] == "ha_token_456"
+
+    def test_manual_url_used_when_central_ha_disabled(self, store, schema):
+        """When use_ha_central_data_source is false, use manual URL and token."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        # Set manual URL and token
+        store.set("price.source", "timeseries")
+        store.set("price.use_ha_central_data_source", False)
+        store.set("price.data_url", "https://custom-api.example.com/prices")
+        store.set("price.data_token", "custom_token_xyz")
+        store.set("data_source.url", "http://homeassistant.local:8123")
+        store.set("data_source.access_token", "ha_token_should_not_be_used")
+
+        merged = build_merged_config(config, store, schema)
+
+        # Verify manual URL and token are used, not central HA ones
+        assert merged["price"]["data_url"] == "https://custom-api.example.com/prices"
+        assert merged["price"]["data_token"] == "custom_token_xyz"

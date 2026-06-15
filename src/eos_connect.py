@@ -251,6 +251,7 @@ pv_interface = interface_factory.create_pv_interface(
     config_manager.config["pv_forecast"],
     time_frame_base,
     config_manager.config.get("evcc", {}),
+    config_manager.config.get("data_source", {}),
     eos_source,
     config_manager.config.get("time_zone", "UTC"),
     critical=False,
@@ -258,7 +259,10 @@ pv_interface = interface_factory.create_pv_interface(
     config_manager.config["pv_forecast_source"],
     config_manager.config["pv_forecast"],
     time_frame_base,
-    config_manager.config.get("evcc", {}),
+    {
+        "url": config_manager.config.get("evcc", {}).get("url", ""),
+        "data_source": config_manager.config.get("data_source", {}),
+    },
     eos_source == "eos_server",
     config_manager.config.get("time_zone", "UTC"),
 )

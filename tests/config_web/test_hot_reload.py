@@ -144,6 +144,168 @@ class TestHotReloadPrice:
         adapter.on_config_changed("price.fixed_price_adder_ct", 0.0, 1.0)
         price_interface._PriceInterface__create_feedin_prices.assert_not_called()
 
+    def test_price_data_source_reload_triggers_immediate_fetch(self, price_interface):
+        """Changing timeseries DATA fields while source=timeseries triggers immediate fetch."""
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "source": "timeseries",  # Already timeseries
+                "data_url": "http://new-api.com/forecast",
+                "data_path": "forecast.data",
+                "data_token": "new_token",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=config_provider,
+        )
+
+        # Changing data_url while source is already timeseries → FETCH
+        adapter.on_config_changed("price.data_url", "old_url", "new_url")
+
+        # Verify config was updated
+        assert "price.data_url" in adapter.last_applied
+
+        # Verify immediate price fetch was triggered
+        price_interface.update_prices.assert_called_once()
+        call_args = price_interface.update_prices.call_args
+        assert call_args[0][0] == 48  # tgt_duration for 3600 second time frame
+
+    def test_price_source_change_skips_immediate_fetch(self, price_interface):
+        """Changing price.source FROM timeseries TO another source should NOT fetch.
+        
+        When switching FROM timeseries to another source, the config is updated but
+        fetch is deferred to avoid fetching with incomplete config for the new source.
+        """
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "source": "tibber",  # New source is tibber, not timeseries
+                "tibber_token": "token123",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=config_provider,
+        )
+
+        # Changing source from timeseries to tibber → NO FETCH
+        adapter.on_config_changed("price.source", "timeseries", "tibber")
+
+        # Verify config was updated
+        assert "price.source" in adapter.last_applied
+
+        # Verify NO immediate fetch was triggered (deferred to next cycle)
+        price_interface.update_prices.assert_not_called()
+
+    def test_price_source_change_to_timeseries_triggers_immediate_fetch(self, price_interface):
+        """Changing price.source TO timeseries FROM any other source SHOULD fetch.
+        
+        When switching TO timeseries, we want to immediately load the timeseries data
+        instead of waiting for the next scheduled update cycle.
+        """
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "source": "timeseries",  # New source is timeseries
+                "data_url": "http://ha:8123/api/states/sensor.prices",
+                "data_path": "attributes.data",
+                "data_token": "token123",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=config_provider,
+        )
+
+        # Changing source from tibber to timeseries → FETCH
+        adapter.on_config_changed("price.source", "tibber", "timeseries")
+
+        # Verify config was updated
+        assert "price.source" in adapter.last_applied
+
+        # Verify immediate fetch WAS triggered (switching TO timeseries)
+        price_interface.update_prices.assert_called_once()
+        call_args = price_interface.update_prices.call_args
+        assert call_args[0][0] == 48  # tgt_duration for 3600 second time frame
+
+    def test_price_data_fields_reload_updates_config(self, price_interface):
+        """Changing price.data_url should update interface config and fetch prices."""
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 900  # 15-minute slots
+        price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "source": "timeseries",  # Must be timeseries for fetch to trigger
+                "data_url": "http://ha:8123/api/states/sensor.new_prices",
+                "data_path": "attributes.new_path",
+                "data_token": "new_token",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=config_provider,
+        )
+
+        adapter.on_config_changed("price.data_url", "old_url", "new_url")
+
+        # Verify config was updated
+        assert price_interface.data_url == "http://ha:8123/api/states/sensor.new_prices"
+        assert price_interface.data_path == "attributes.new_path"
+        assert price_interface.data_token == "new_token"
+        assert "price.data_url" in adapter.last_applied
+
+        # Verify immediate price fetch with 192 slots (15-minute resolution)
+        price_interface.update_prices.assert_called_once()
+        call_args = price_interface.update_prices.call_args
+        assert call_args[0][0] == 192  # tgt_duration for 900 second time frame
+
+    def test_price_data_field_change_when_source_not_timeseries_skips_fetch(self, price_interface):
+        """Changing timeseries data fields when source != timeseries should NOT fetch.
+        
+        This prevents errors when other price sources (tibber, fixed, etc.) don't use
+        those fields.
+        """
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "source": "tibber",  # NOT timeseries
+                "data_url": "old_url",  # These are being changed but won't be used
+                "data_path": "old_path",
+                "data_token": "old_token",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=config_provider,
+        )
+
+        adapter.on_config_changed("price.data_url", "old_url", "new_url")
+
+        # Verify config was updated
+        assert "price.data_url" in adapter.last_applied
+
+        # Verify NO fetch was triggered (source is not timeseries)
+        price_interface.update_prices.assert_not_called()
+
     def test_invalid_value_coercion(self, adapter, price_interface):
         """Non-numeric value for a float field should be handled gracefully."""
         adapter.on_config_changed("price.feed_in_price", 0.0, "invalid")
@@ -308,8 +470,8 @@ class TestHotReloadFeedInPrice:
 class TestHotReloadPv:
     """Tests for PV source/entry hot-reload behavior."""
 
-    def test_pv_source_reload_applies_live(self, pv_interface, merged_config_provider):
-        """Changing PV source key should reload PvInterface from merged config."""
+    def test_pv_source_change_to_per_installation_source_reloads(self, pv_interface, merged_config_provider):
+        """Changing PV source TO a per-installation source should reload PvInterface."""
         adapter = HotReloadAdapter(
             pv_interface=pv_interface,
             config_provider=merged_config_provider,
@@ -325,6 +487,64 @@ class TestHotReloadPv:
             temperature_forecast_enabled=True,
             timezone="Europe/Berlin",
         )
+        assert "pv_forecast_source.source" in adapter.last_applied
+
+    def test_pv_source_change_to_timeseries_triggers_immediate_reload(self, pv_interface):
+        """Changing PV source TO timeseries triggers IMMEDIATE reload for user visibility.
+        
+        Timeseries is a summarized data source. Now that PvInterface handles timeseries
+        efficiently (single fetch, not per-installation), we trigger immediate reload
+        so user sees PV data from new source immediately instead of waiting 15+ minutes.
+        """
+        # Mock config provider to return timeseries as the new source
+        config_provider = MagicMock(return_value={
+            "pv_forecast_source": {"source": "timeseries"},
+            "pv_forecast": [],
+            "evcc": {},
+            "eos": {"source": "eos_server"},
+            "time_zone": "Europe/Berlin",
+        })
+
+        adapter = HotReloadAdapter(
+            pv_interface=pv_interface,
+            config_provider=config_provider,
+            pv_reload_debounce_seconds=0,
+        )
+
+        # Switch to timeseries (summarized source)
+        adapter.on_config_changed("pv_forecast_source.source", "akkudoktor", "timeseries")
+
+        # IMMEDIATE reload should be triggered for timeseries (user gets instant feedback)
+        pv_interface.reload_config.assert_called_once()
+        assert "pv_forecast_source.source" in adapter.last_applied
+
+    def test_pv_source_change_to_evcc_triggers_immediate_reload(self, pv_interface):
+        """Changing PV source TO evcc triggers IMMEDIATE reload for user visibility.
+        
+        EVCC is a summarized data source. User should see new PV data immediately
+        instead of waiting 15+ minutes for background loop. PvInterface now handles
+        summarized sources efficiently.
+        """
+        # Mock config provider to return evcc as the new source
+        config_provider = MagicMock(return_value={
+            "pv_forecast_source": {"source": "evcc"},
+            "pv_forecast": [],
+            "evcc": {"url": "http://evcc:7070"},
+            "eos": {"source": "eos_server"},
+            "time_zone": "Europe/Berlin",
+        })
+
+        adapter = HotReloadAdapter(
+            pv_interface=pv_interface,
+            config_provider=config_provider,
+            pv_reload_debounce_seconds=0,
+        )
+
+        # Switch to evcc (summarized source)
+        adapter.on_config_changed("pv_forecast_source.source", "akkudoktor", "evcc")
+
+        # IMMEDIATE reload should be triggered for evcc (user gets instant feedback)
+        pv_interface.reload_config.assert_called_once()
         assert "pv_forecast_source.source" in adapter.last_applied
 
     def test_pv_changes_are_debounced_to_single_reload(

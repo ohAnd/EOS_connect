@@ -528,10 +528,10 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="getting_started",
         description="Data source for electricity prices",
-        labels=["restart_required"],
+        hot_reload=True,
         help_url="configuration.html#price",
         validation={"choices": [
-            "tibber", "smartenergy_at", "stromligning", "fixed_24h", "default"
+            "tibber", "smartenergy_at", "stromligning", "fixed_24h", "timeseries", "default"
         ]},
         display_group="Provider",
     ),
@@ -580,7 +580,7 @@ _ALL_FIELDS: list[FieldDef] = [
         labels=["restart_required"],
         help_url="configuration.html#price",
         depends_on={"price.source": ["fixed_24h"]},
-        display_group="Fixed Prices",
+        display_group="Provider",
     ),
     # ===== ENERGY PRICE FORECAST (Grid Price Subsection) =====
     FieldDef(
@@ -620,7 +620,92 @@ _ALL_FIELDS: list[FieldDef] = [
         display_group="Energy Price Forecast",
     ),
 
-    # ===== DYNAMIC FEED-IN PRICING =====
+    # ===== UNIFIED HTTP/HA DATA SOURCE (PRICES) =====
+    FieldDef(
+        key="price.use_ha_central_data_source",
+        field_type="bool",
+        default=False,
+        section="price",
+        level="standard",
+        description="Use centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
+        help_url="configuration.html#price-sources",
+        depends_on={"price.source": ["timeseries"]},
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="price.ha_sensor_name",
+        field_type="str",
+        default="sensor.grid_prices",
+        section="price",
+        level="getting_started",
+        description="Home Assistant sensor entity containing price timeseries data (e.g., sensor.grid_prices)",
+        help_url="configuration.html#price-sources",
+        depends_on={
+            "price.source": ["timeseries"],
+            "price.use_ha_central_data_source": [True],
+        },
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="price.data_path",
+        field_type="str",
+        default="attributes.data",
+        section="price",
+        level="standard",
+        description=(
+            "JSON path to timeseries array in response. For HA sensors: "
+            "'attributes.data'. For custom HTTP servers: 'data', 'prices', 'values', "
+            "etc. (default: 'attributes.data')"
+        ),
+        help_url="configuration.html#price-sources",
+        depends_on={"price.source": ["timeseries"]},
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="price.data_url",
+        field_type="str",
+        default="http://homeassistant.local:8123/api/states/sensor.grid_prices",
+        section="price",
+        level="getting_started",
+        description=(
+            "Data source URL. For Home Assistant: "
+            "http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. "
+            "For HTTP servers: endpoint URL returning JSON timeseries. "
+            "Must return JSON array with {start, end, value} format (values in EUR/Wh)."
+        ),
+        help_url="configuration.html#price-sources",
+        depends_on={
+            "price.source": ["timeseries"],
+            "price.use_ha_central_data_source": [False],
+        },
+        validation={"pattern": r"^https?://.+"},
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="price.data_token",
+        field_type="password",
+        default="",
+        section="price",
+        level="standard",
+        description=(
+            "Optional bearer token for API authentication "
+            "(used as Authorization: Bearer [token]). "
+            "Leave empty for unauthenticated endpoints."
+        ),
+        help_url="configuration.html#price-sources",
+        depends_on={
+            "price.source": ["timeseries"],
+            "price.use_ha_central_data_source": [False],
+        },
+        hot_reload=True,
+        display_group="Provider",
+    ),
+
+    # ===== DYNAMIC FEED-IN PRICING ====="
     FieldDef(
         key="price.feed_in_source",
         field_type="select",
@@ -1012,7 +1097,7 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#pv-forecast",
         validation={"choices": [
             "akkudoktor", "openmeteo", "openmeteo_local",
-            "forecast_solar", "evcc", "solcast", "victron", "default"
+            "forecast_solar", "evcc", "solcast", "victron", "timeseries", "default"
         ]},
         display_group="Provider",
     ),
@@ -1043,7 +1128,92 @@ _ALL_FIELDS: list[FieldDef] = [
         display_group="Provider",
     ),
 
-    # ===== PV FORECAST (array of installations) =====
+    # ===== UNIFIED HTTP/HA DATA SOURCE (PV) =====
+    FieldDef(
+        key="pv_forecast_source.use_ha_central_data_source",
+        field_type="bool",
+        default=False,
+        section="pv_forecast_source",
+        level="standard",
+        description="Use centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
+        help_url="configuration.html#pv-forecast-sources",
+        depends_on={"pv_forecast_source.source": ["timeseries"]},
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="pv_forecast_source.ha_sensor_name",
+        field_type="str",
+        default="sensor.pv_forecast",
+        section="pv_forecast_source",
+        level="getting_started",
+        description="Home Assistant sensor entity containing PV forecast timeseries data (e.g., sensor.pv_forecast)",
+        help_url="configuration.html#pv-forecast-sources",
+        depends_on={
+            "pv_forecast_source.source": ["timeseries"],
+            "pv_forecast_source.use_ha_central_data_source": [True],
+        },
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="pv_forecast_source.data_path",
+        field_type="str",
+        default="attributes.data",
+        section="pv_forecast_source",
+        level="standard",
+        description=(
+            "JSON path to timeseries array in response. For HA sensors: "
+            "'attributes.data'. For custom HTTP servers: 'data', 'forecast', 'values', "
+            "etc. (default: 'attributes.data')"
+        ),
+        help_url="configuration.html#pv-forecast-sources",
+        depends_on={"pv_forecast_source.source": ["timeseries"]},
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="pv_forecast_source.data_url",
+        field_type="str",
+        default="http://homeassistant.local:8123/api/states/sensor.pv_forecast",
+        section="pv_forecast_source",
+        level="getting_started",
+        description=(
+            "Data source URL. For Home Assistant: "
+            "http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. "
+            "For HTTP servers: endpoint URL returning JSON timeseries. "
+            "Must return JSON array with {start, end, value} format."
+        ),
+        help_url="configuration.html#pv-forecast-sources",
+        depends_on={
+            "pv_forecast_source.source": ["timeseries"],
+            "pv_forecast_source.use_ha_central_data_source": [False],
+        },
+        validation={"pattern": r"^https?://.+"},
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="pv_forecast_source.data_token",
+        field_type="password",
+        default="",
+        section="pv_forecast_source",
+        level="standard",
+        description=(
+            "Optional bearer token for API authentication "
+            "(used as Authorization: Bearer [token]). "
+            "Leave empty for unauthenticated endpoints."
+        ),
+        help_url="configuration.html#pv-forecast-sources",
+        depends_on={
+            "pv_forecast_source.source": ["timeseries"],
+            "pv_forecast_source.use_ha_central_data_source": [False],
+        },
+        hot_reload=True,
+        display_group="Provider",
+    ),
+
+    # ===== PV FORECAST (array of installations) ====="
     # Note: pv_forecast is a list — handled specially by merger/migration.
     # The schema defines the template for ONE pv_forecast entry.
     FieldDef(

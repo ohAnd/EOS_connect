@@ -21,11 +21,10 @@ const LEVEL_ORDER = { getting_started: 0, standard: 1, expert: 2 };
 // Allows automatic rendering of subsection headers.
 // Extensible: add new mappings for other sections (e.g., Battery subsections).
 const DISPLAY_GROUP_TO_SUBSECTION = {
-    // Price section
-    "Provider": "Grid Price",
-    "Price Adjustments": "Grid Price",
-    "Fixed Prices": "Grid Price",
-    "Energy Price Forecast": "Grid Price",
+    // Price section - all provider-specific fields grouped together
+    "Provider": "Provider",
+    "Price Adjustments": "Price Adjustments",
+    "Energy Price Forecast": "Energy Price Forecast",
     "Feed-In Pricing": "Feed-In Pricing",
     
     // Battery section (example for future use)
@@ -1220,6 +1219,18 @@ class ConfigurationManager {
 
             if (!res.ok) {
                 const errData = await res.json().catch(() => ({}));
+                
+                // Handle validation errors with detailed messages
+                if (errData.errors && errData.errors.length > 0) {
+                    this._showValidationErrors(errData.errors);
+                    // Auto-scroll to first error field and show banner
+                    this._scrollToFirstError(errData.errors);
+                    this._showPersistentErrorBanner(
+                        `Configuration Error: ${errData.errors.length} issue(s) found. Scroll up to see details.`
+                    );
+                    return;
+                }
+                
                 this._showToast(errData.error || `Save failed (${res.status})`, "error");
                 return;
             }
@@ -1435,6 +1446,70 @@ class ConfigurationManager {
         }
 
         this._showToast(`Validation failed: ${errors.length} error(s).`, "error");
+    }
+
+    /**
+     * Scroll to the first error field and highlight it.
+     */
+    _scrollToFirstError(errors) {
+        if (errors.length === 0) return;
+        
+        const firstError = errors[0];
+        const errEl = document.getElementById(`cfg-err-${this._cssKey(firstError.key)}`);
+        
+        if (errEl) {
+            // Scroll the error element into view with offset for header
+            errEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        } else {
+            // Fallback: scroll to top if error element not found
+            document.querySelector("#full_screen_overlay_content") ||
+                document.querySelector(".config-section") ||
+                window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+    }
+
+    /**
+     * Show a persistent error banner at the top of the config panel.
+     */
+    _showPersistentErrorBanner(message) {
+        // Remove existing banner if present
+        const existingBanner = document.getElementById("cfg-error-persistent-banner");
+        if (existingBanner) {
+            existingBanner.remove();
+        }
+        
+        // Create new banner
+        const contentDiv = document.getElementById("full_screen_overlay_content");
+        if (!contentDiv) return;
+        
+        const banner = document.createElement("div");
+        banner.id = "cfg-error-persistent-banner";
+        banner.style.cssText = `
+            display: flex;
+            align-items: center;
+            background-color: #d32f2f;
+            color: white;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            font-weight: 500;
+            z-index: 1000;
+            position: sticky;
+            top: 0;
+        `;
+        banner.innerHTML = message;
+        
+        // Insert at the top of content
+        contentDiv.insertBefore(banner, contentDiv.firstChild);
+        
+        // Auto-dismiss after 10 seconds if user doesn't interact
+        setTimeout(() => {
+            if (banner && banner.parentElement) {
+                banner.style.transition = "opacity 0.3s ease";
+                banner.style.opacity = "0.7";
+            }
+        }, 10000);
     }
 
     // ── Restart banner ──────────────────────────────────────────
