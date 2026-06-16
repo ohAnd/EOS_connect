@@ -536,7 +536,7 @@ _ALL_FIELDS: list[FieldDef] = [
         validation={"choices": [
             "tibber", "smartenergy_at", "stromligning", "fixed_24h", "timeseries", "evcc", "default"
         ]},
-        display_group="Provider",
+        display_group="Grid Price Provider",
     ),
     FieldDef(
         key="price.token",
@@ -548,7 +548,7 @@ _ALL_FIELDS: list[FieldDef] = [
         labels=["restart_required"],
         help_url="configuration.html#price",
         depends_on={"price.source": ["tibber", "stromligning"]},
-        display_group="Provider",
+        display_group="Grid Price Provider",
     ),
     FieldDef(
         key="price.fixed_price_adder_ct",
@@ -559,7 +559,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Fixed cost addition in ct per kWh",
         help_url="configuration.html#price",
         hot_reload=True,
-        display_group="Price Adjustments",
+        display_group="Grid Price - Adjustments",
     ),
     FieldDef(
         key="price.relative_price_multiplier",
@@ -570,7 +570,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Relative cost multiplier applied to (base + fixed adder). E.g. 0.05 = 5%",
         help_url="configuration.html#price",
         hot_reload=True,
-        display_group="Price Adjustments",
+        display_group="Grid Price - Adjustments",
     ),
     FieldDef(
         key="price.fixed_24h_array",
@@ -583,7 +583,7 @@ _ALL_FIELDS: list[FieldDef] = [
         labels=["restart_required"],
         help_url="configuration.html#price",
         depends_on={"price.source": ["fixed_24h"]},
-        display_group="Provider",
+        display_group="Grid Price Provider",
     ),
     # ===== ENERGY PRICE FORECAST (Grid Price Subsection) =====
     FieldDef(
@@ -595,7 +595,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Enable smart price prediction via energyforecast.de",
         labels=["experimental", "restart_required"],
         help_url="configuration.html#energyforecast",
-        display_group="Energy Price Forecast",
+        display_group="Grid Price - Forecast (Advanced)",
     ),
     FieldDef(
         key="price.energyforecast_token",
@@ -607,7 +607,7 @@ _ALL_FIELDS: list[FieldDef] = [
         labels=["experimental", "restart_required"],
         help_url="configuration.html#energyforecast",
         depends_on={"price.energyforecast_enabled": [True]},
-        display_group="Energy Price Forecast",
+        display_group="Grid Price - Forecast (Advanced)",
     ),
     FieldDef(
         key="price.energyforecast_market_zone",
@@ -620,7 +620,7 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#energyforecast",
         validation={"choices": ["DE-LU", "AT", "FR", "NL", "BE", "PL", "DK1", "DK2"]},
         depends_on={"price.energyforecast_enabled": [True]},
-        display_group="Energy Price Forecast",
+        display_group="Grid Price - Forecast (Advanced)",
     ),
 
     # ===== UNIFIED HTTP/HA DATA SOURCE (PRICES) =====
@@ -635,7 +635,7 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#price-sources",
         depends_on={"price.source": ["timeseries"]},
         hot_reload=True,
-        display_group="Provider",
+        display_group="Grid Price Provider",
     ),
     FieldDef(
         key="price.ha_sensor_name",
@@ -651,7 +651,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "price.use_ha_central_data_source": [True],
         },
         hot_reload=True,
-        display_group="Provider",
+        display_group="Grid Price Provider",
     ),
     FieldDef(
         key="price.data_path",
@@ -667,7 +667,7 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#price-sources",
         depends_on={"price.source": ["timeseries"]},
         hot_reload=True,
-        display_group="Provider",
+        display_group="Grid Price Provider",
     ),
     FieldDef(
         key="price.data_url",
@@ -688,7 +688,7 @@ _ALL_FIELDS: list[FieldDef] = [
         },
         validation={"pattern": r"^https?://.+"},
         hot_reload=True,
-        display_group="Provider",
+        display_group="Grid Price Provider",
     ),
     FieldDef(
         key="price.data_token",
@@ -707,7 +707,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "price.use_ha_central_data_source": [False],
         },
         hot_reload=True,
-        display_group="Provider",
+        display_group="Grid Price Provider",
     ),
 
     # ===== DYNAMIC FEED-IN PRICING ====="
@@ -721,7 +721,7 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#price",
         validation={"choices": ["fixed", "elpris_dk", "epex_spot", "evcc"]},
         hot_reload=True,
-        display_group="Feed-In Pricing",
+        display_group="Feed-In Price",
     ),
     FieldDef(
         key="price.feed_in_price",
@@ -733,7 +733,7 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#price",
         depends_on={"price.feed_in_source": ["fixed"]},
         hot_reload=True,
-        display_group="Feed-In Pricing",
+        display_group="Feed-In Price",
     ),
     FieldDef(
         key="price.feed_in_zone",
@@ -746,7 +746,7 @@ _ALL_FIELDS: list[FieldDef] = [
         validation={"choices": ["DK1", "DK2"]},
         depends_on={"price.feed_in_source": ["elpris_dk"]},
         hot_reload=True,
-        display_group="Feed-In Pricing",
+        display_group="Feed-In Price",
     ),
     FieldDef(
         key="price.feed_in_static_adder",
@@ -759,7 +759,7 @@ _ALL_FIELDS: list[FieldDef] = [
         validation={"min": -10.0, "max": 10.0},
         depends_on={"price.feed_in_source": ["elpris_dk", "epex_spot"]},
         hot_reload=True,
-        display_group="Feed-In Pricing",
+        display_group="Feed-In Price",
     ),
     FieldDef(
         key="price.feed_in_multiplier",
@@ -772,7 +772,7 @@ _ALL_FIELDS: list[FieldDef] = [
         validation={"min": 0.5, "max": 1.5},
         depends_on={"price.feed_in_source": ["elpris_dk", "epex_spot"]},
         hot_reload=True,
-        display_group="Feed-In Pricing",
+        display_group="Feed-In Price",
     ),
     FieldDef(
         key="price.feed_in_negative_price_switch",
@@ -791,7 +791,7 @@ _ALL_FIELDS: list[FieldDef] = [
         },
         depends_on={"price.feed_in_source": ["fixed", "elpris_dk", "epex_spot"]},
         hot_reload=True,
-        display_group="Feed-In Pricing",
+        display_group="Feed-In Price",
     ),
 
     # ===== BATTERY =====

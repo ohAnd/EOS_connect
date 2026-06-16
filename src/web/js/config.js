@@ -21,11 +21,11 @@ const LEVEL_ORDER = { getting_started: 0, standard: 1, expert: 2 };
 // Allows automatic rendering of subsection headers.
 // Extensible: add new mappings for other sections (e.g., Battery subsections).
 const DISPLAY_GROUP_TO_SUBSECTION = {
-    // Price section - all provider-specific fields grouped together
-    "Provider": "Provider",
-    "Price Adjustments": "Price Adjustments",
-    "Energy Price Forecast": "Energy Price Forecast",
-    "Feed-In Pricing": "Feed-In Pricing",
+    // Price section - map directly to display_group names (no subsection layer)
+    "Grid Price Provider": "Grid Price Provider",
+    "Grid Price - Adjustments": "Grid Price - Adjustments",
+    "Grid Price - Forecast (Advanced)": "Grid Price - Forecast (Advanced)",
+    "Feed-In Price": "Feed-In Price",
 
     // Battery section (example for future use)
     // "Battery Configuration": "Battery Status",
@@ -412,22 +412,6 @@ class ConfigurationManager {
         for (const [groupName, groupFields] of groups) {
             // Get subsection for this display_group
             const subsection = DISPLAY_GROUP_TO_SUBSECTION[groupName] || null;
-
-            // Render subsection header when it changes
-            if (subsection && subsection !== lastSubsection) {
-                const subsectionIcons = {
-                    "Grid Price": "fa-project-diagram",
-                    "Feed-In Pricing": "fa-exchange-alt",
-                    "Battery Status": "fa-battery-three-quarters",
-                    "Battery Price Management": "fa-coins",
-                };
-                const iconClass = subsectionIcons[subsection] || "fa-cogs";
-                html += `<div class="config-subsection-header">
-                    <i class="fas ${iconClass}" style="color:#4a9eff; margin-right: 8px;"></i>
-                    <span>${subsection.toUpperCase()}</span>
-                </div>`;
-                lastSubsection = subsection;
-            }
 
             if (groupName) {
                 const allHidden = groupFields.every(f => this._isDependencyHidden(f));

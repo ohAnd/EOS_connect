@@ -538,7 +538,7 @@
       },
       "depends_on": null,
       "hot_reload": true,
-      "display_group": "Provider"
+      "display_group": "Grid Price Provider"
     },
     {
       "key": "price.token",
@@ -559,7 +559,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Provider"
+      "display_group": "Grid Price Provider"
     },
     {
       "key": "price.fixed_price_adder_ct",
@@ -573,7 +573,7 @@
       "validation": {},
       "depends_on": null,
       "hot_reload": true,
-      "display_group": "Price Adjustments"
+      "display_group": "Grid Price - Adjustments"
     },
     {
       "key": "price.relative_price_multiplier",
@@ -587,7 +587,7 @@
       "validation": {},
       "depends_on": null,
       "hot_reload": true,
-      "display_group": "Price Adjustments"
+      "display_group": "Grid Price - Adjustments"
     },
     {
       "key": "price.fixed_24h_array",
@@ -607,7 +607,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Provider"
+      "display_group": "Grid Price Provider"
     },
     {
       "key": "price.energyforecast_enabled",
@@ -624,7 +624,7 @@
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
-      "display_group": "Energy Price Forecast"
+      "display_group": "Grid Price - Forecast (Advanced)"
     },
     {
       "key": "price.energyforecast_token",
@@ -645,7 +645,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Energy Price Forecast"
+      "display_group": "Grid Price - Forecast (Advanced)"
     },
     {
       "key": "price.energyforecast_market_zone",
@@ -677,7 +677,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Energy Price Forecast"
+      "display_group": "Grid Price - Forecast (Advanced)"
     },
     {
       "key": "price.use_ha_central_data_source",
@@ -695,7 +695,7 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Provider"
+      "display_group": "Grid Price Provider"
     },
     {
       "key": "price.ha_sensor_name",
@@ -716,7 +716,7 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Provider"
+      "display_group": "Grid Price Provider"
     },
     {
       "key": "price.data_path",
@@ -734,7 +734,7 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Provider"
+      "display_group": "Grid Price Provider"
     },
     {
       "key": "price.data_url",
@@ -757,7 +757,7 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Provider"
+      "display_group": "Grid Price Provider"
     },
     {
       "key": "price.data_token",
@@ -778,7 +778,7 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Provider"
+      "display_group": "Grid Price Provider"
     },
     {
       "key": "price.feed_in_source",
@@ -799,7 +799,7 @@
       },
       "depends_on": null,
       "hot_reload": true,
-      "display_group": "Feed-In Pricing"
+      "display_group": "Feed-In Price"
     },
     {
       "key": "price.feed_in_price",
@@ -817,7 +817,7 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Feed-In Pricing"
+      "display_group": "Feed-In Price"
     },
     {
       "key": "price.feed_in_zone",
@@ -840,7 +840,7 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Feed-In Pricing"
+      "display_group": "Feed-In Price"
     },
     {
       "key": "price.feed_in_static_adder",
@@ -862,7 +862,7 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Feed-In Pricing"
+      "display_group": "Feed-In Price"
     },
     {
       "key": "price.feed_in_multiplier",
@@ -884,7 +884,7 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Feed-In Pricing"
+      "display_group": "Feed-In Price"
     },
     {
       "key": "price.feed_in_negative_price_switch",
@@ -904,7 +904,7 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Feed-In Pricing",
+      "display_group": "Feed-In Price",
       "description_map": {
         "price.feed_in_source": {
           "fixed": "Clamp to 0 when market price (Akkudoktor reference) goes negative",

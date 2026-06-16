@@ -640,7 +640,7 @@
 }
 
 /* Feed-In / Export subsections (green) */
-.config-group[data-subsection="Feed-In Pricing"],
+.config-group[data-subsection="Feed-In Price"],
 .config-group[data-subsection="Feed-Out Management"] {
     border-left: 3px solid rgba(76, 175, 80, 0.5);
     background-color: rgba(76, 175, 80, 0.06);
@@ -649,7 +649,7 @@
     border-top: 2px solid rgba(76, 175, 80, 0.3);
 }
 
-.config-group[data-subsection="Feed-In Pricing"] .config-group-title,
+.config-group[data-subsection="Feed-In Price"] .config-group-title,
 .config-group[data-subsection="Feed-Out Management"] .config-group-title {
     color: #4caf80;
 }
