@@ -617,7 +617,6 @@
       "level": "standard",
       "description": "Enable smart price prediction via energyforecast.de",
       "labels": [
-        "experimental",
         "restart_required"
       ],
       "help_url": "configuration.html#energyforecast",
@@ -634,7 +633,6 @@
       "level": "standard",
       "description": "API token from energyforecast.de",
       "labels": [
-        "experimental",
         "restart_required"
       ],
       "help_url": "configuration.html#energyforecast",
@@ -655,7 +653,6 @@
       "level": "standard",
       "description": "Market zone for energy price forecast",
       "labels": [
-        "experimental",
         "restart_required"
       ],
       "help_url": "configuration.html#energyforecast",
