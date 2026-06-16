@@ -6,12 +6,12 @@ feed-in (export) price data from various sources.
 Supported sources:
     - Elpris (Dänemark): Spot-Preise für stromexport (in DKK/kWh, converted to ct/kWh)
     - EPEX-Spot (EU/AT): Netto-Börsenpreise via Akkudoktor (in ct/kWh)
+    - EVCC: Real-time feed-in tariffs from EVCC charger (in EUR/kWh)
     - Fixed: Statischer Einspeisepreis (in ct/kWh)
 
 Features:
     - Fetches and updates feed-in prices from external APIs
     - All prices use ct/kWh (cent per kilowatt-hour) for consistent user experience
-    - Applies static adder and multiplier adjustments
     - Provides dynamic price array to optimizer (instead of constant value)
     - Background thread for periodic price updates with retry and fallback logic
     - Supports both hourly (48h) and 15-minute intervals (96h/192 slots)
@@ -62,13 +62,13 @@ class FeedInPriceInterface:
         consecutive_failures (int): Counter for consecutive API failures
     """
 
-    def __init__(self, config, time_frame_base, timezone="UTC"):
+    def __init__(self, config, time_frame_base, timezone="UTC", evcc_interface=None):
         """
         Initialize the FeedInPriceInterface.
 
         Args:
             config (dict): Configuration dictionary with keys:
-                - source: 'elpris_dk', 'epex_spot', or 'fixed'
+                - source: 'elpris_dk', 'epex_spot', 'fixed', or 'evcc'
                 - zone: 'DK1' or 'DK2' (for elpris_dk only)
                 - static_adder_ct_kwh: Static adjustment in ct/kWh (standard unit)
                 - multiplier: Relative multiplier (default 1.0)
@@ -76,9 +76,11 @@ class FeedInPriceInterface:
                 - negative_price_switch: Boolean to clamp negative prices to 0 (default: False)
             time_frame_base (int): 3600 for hourly, 900 for 15-minute slots
             timezone (str): Timezone identifier (e.g., 'UTC', 'Europe/Berlin')
+            evcc_interface: Optional EVCC interface instance for feed-in price retrieval
         """
         self.source = config.get("source", "fixed")
         self.zone = config.get("zone", "DK1")
+        self.evcc_interface = evcc_interface
 
         # Primary: ct/kWh format (standard, user-facing unit)
         # Fallback: Support legacy øre format for backward compatibility
@@ -141,7 +143,7 @@ class FeedInPriceInterface:
 
     def _validate_config(self):
         """Validate configuration parameters."""
-        valid_sources = ["fixed", "elpris_dk", "epex_spot"]
+        valid_sources = ["fixed", "elpris_dk", "epex_spot", "evcc"]
         if self.source not in valid_sources:
             logger.error(
                 "[FEEDIN-IF] Invalid source: %s. Defaulting to 'fixed'.", self.source
@@ -283,6 +285,8 @@ class FeedInPriceInterface:
             return self._fetch_elpris_prices(tgt_duration, start_time)
         elif self.source == "epex_spot":
             return self._fetch_epex_spot_prices(tgt_duration, start_time)
+        elif self.source == "evcc":
+            return self._fetch_evcc_prices(tgt_duration, start_time)
         elif self.source == "fixed":
             return self._fetch_fixed_price(tgt_duration, start_time)
         else:
@@ -424,6 +428,115 @@ class FeedInPriceInterface:
             return []
         except (KeyError, ValueError) as e:
             logger.error("[FEEDIN-IF] Akkudoktor API response parsing failed: %s", e)
+            return []
+
+    def _fetch_evcc_prices(self, tgt_duration, start_time):
+        """
+        Fetch feed-in prices from EVCC /api/tariff/feedin endpoint.
+
+        EVCC provides real-time feed-in tariffs via REST API.
+        Prices are used as-is (no static adder/multiplier applied, unlike grid prices).
+
+        Args:
+            tgt_duration (int): 48 (hourly) or 192 (15-min slots)
+            start_time (datetime): Start time
+
+        Returns:
+            list: Prices in EUR/Wh or empty list on error
+        """
+        # Optional dependency: EVCC not required
+        if not self.evcc_interface or not self.evcc_interface.url:
+            logger.warning(
+                "[FEEDIN-IF] EVCC interface not available or URL not configured. "
+                "Cannot fetch feed-in prices from EVCC."
+            )
+            return []
+
+        try:
+            evcc_url = self.evcc_interface.url.rstrip("/")
+
+            # Fetch feed-in tariff (export prices)
+            feed_in_url = f"{evcc_url}/api/tariff/feedin"
+            headers = {"Content-Type": "application/json"}
+
+            try:
+                response = requests.get(feed_in_url, headers=headers, timeout=10)
+                response.raise_for_status()
+            except requests.exceptions.RequestException as req_err:
+                logger.error(f"[FEEDIN-IF] Failed to fetch EVCC feed-in tariff: {req_err}")
+                return []
+
+            feed_in_data = response.json()
+
+            # Parse EVCC response format
+            # Expected format: {"rates": [{"start": "...", "end": "...", "value": 0.125}, ...]}
+            if not isinstance(feed_in_data, dict):
+                logger.error(f"[FEEDIN-IF] Invalid EVCC response format: {type(feed_in_data)}")
+                return []
+
+            rates = feed_in_data.get("rates", [])
+            if not isinstance(rates, list) or not rates:
+                logger.error("[FEEDIN-IF] No rates found in EVCC feed-in response")
+                return []
+
+            # Log concise summary
+            if rates:
+                first_rate = rates[0].get("start", "unknown")
+                last_rate = rates[-1].get("start", "unknown")
+                prices_in_kwh = [float(r.get("value", 0)) for r in rates if "value" in r]
+                if prices_in_kwh:
+                    avg_price = sum(prices_in_kwh) / len(prices_in_kwh)
+                    min_price = min(prices_in_kwh)
+                    max_price = max(prices_in_kwh)
+                    logger.debug(
+                        "[FEEDIN-IF] EVCC feed-in tariff: %d rates from %s to %s, "
+                        "avg=%.4f EUR/kWh, range=[%.4f, %.4f]",
+                        len(rates),
+                        first_rate,
+                        last_rate,
+                        avg_price,
+                        min_price,
+                        max_price,
+                    )
+
+            # Convert EVCC rates to hourly format
+            # EVCC provides rates with start, end, and value (EUR/kWh)
+            prices_eur_wh = []
+            for rate in rates:
+                if not isinstance(rate, dict) or "value" not in rate:
+                    logger.warning(f"[FEEDIN-IF] Skipping invalid EVCC rate entry: {rate}")
+                    continue
+
+                try:
+                    price_eur_kwh = float(rate["value"])
+                    # Convert EUR/kWh to EUR/Wh (divide by 1000)
+                    price_eur_wh = price_eur_kwh / 1000.0
+                    # EVCC feed-in prices are used as-is (no adder/multiplier)
+                    prices_eur_wh.append(price_eur_wh)
+
+                except (ValueError, KeyError, TypeError) as e:
+                    logger.warning(f"[FEEDIN-IF] Error parsing EVCC rate entry: {e}")
+                    continue
+
+            if not prices_eur_wh:
+                logger.error("[FEEDIN-IF] No valid rates converted from EVCC response")
+                return []
+
+            logger.debug(
+                "[FEEDIN-IF] Fetched %d EVCC feed-in prices",
+                len(prices_eur_wh),
+            )
+
+            # Extend to 48 or 192 hours if needed
+            prices_eur_wh = self._extend_prices_to_duration(prices_eur_wh, tgt_duration)
+
+            return prices_eur_wh
+
+        except requests.RequestException as e:
+            logger.error("[FEEDIN-IF] EVCC feed-in API request failed: %s", e)
+            return []
+        except (KeyError, ValueError) as e:
+            logger.error("[FEEDIN-IF] EVCC feed-in API response parsing failed: %s", e)
             return []
 
     def _fetch_fixed_price(self, tgt_duration, start_time):

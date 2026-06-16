@@ -28,7 +28,11 @@ Supported fields (Priority 2 — Battery SOC):
 - ``battery.min_soc_percentage``
 - ``battery.max_soc_percentage``
 
-Supported fields (Feed-in price):
+Supported fields (Feed-in price source):
+- ``price.feed_in_source``  (immediate reload when switching sources)
+- ``price.feed_in_zone``  (immediate reload when zone changes for Elpris)
+
+Supported fields (Feed-in price adjustments):
 - ``price.feed_in_static_adder``  (also triggers immediate run via ``_PRICE_RUN_TRIGGERS``)
 - ``price.feed_in_multiplier``
 
@@ -82,6 +86,12 @@ _FEEDIN_PRICE_FIELD_MAP = {
     "price.feed_in_static_adder": ("static_adder_ct_kwh", float),  # ct/kWh (standard unit)
     "price.feed_in_multiplier": ("multiplier", float),
     "price.feed_in_negative_price_switch": ("negative_price_switch", bool),
+}
+
+# Feed-in data source fields that require reload (source/zone changes)
+_FEEDIN_DATA_FIELDS = {
+    "price.feed_in_source",
+    "price.feed_in_zone",
 }
 
 _BATTERY_SOC_FIELDS = {
@@ -198,6 +208,10 @@ class HotReloadAdapter:
             self._schedule_price_reload(key, force_source)
         elif key in _FEEDIN_PRICE_FIELD_MAP:
             self._apply_feed_in_price(key, new_value)
+        elif key in _FEEDIN_DATA_FIELDS:
+            # If feed-in source changed, pass the new source to avoid stale config
+            force_source = new_value if key == "price.feed_in_source" else None
+            self._schedule_feedin_reload(key, force_source)
         elif key in _BATTERY_SOC_FIELDS:
             self._apply_battery_soc(key, new_value)
         elif key in _BATTERY_PRICE_FIELD_MAP:
@@ -672,6 +686,84 @@ class HotReloadAdapter:
                     )
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("[HotReload] Price data source reload failed: %s", exc)
+
+    def _schedule_feedin_reload(self, key, force_source=None):
+        """Schedule feed-in reload when feed-in source/zone config changes.
+        
+        Args:
+            key: Config key that changed (e.g., 'price.feed_in_source', 'price.feed_in_zone')
+            force_source: If provided, use this source instead of reading from merged config.
+                         Used when price.feed_in_source changes to avoid stale config reads
+                         (callbacks fire before rebuild_config in API handler).
+        
+        Always triggers immediate fetch when source or zone changes, updating the
+        running FeedInPriceInterface with new configuration and fetching prices
+        from the new source.
+        """
+        if self._feed_in_price is None or self._config_provider is None:
+            logger.debug(
+                "[HotReload] No feed-in price interface/config provider — skipping %s", key
+            )
+            return
+
+        try:
+            config = self._config_provider()
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "[HotReload] Cannot read merged config for feed-in reload: %s", exc
+            )
+            return
+
+        if not isinstance(config, dict):
+            logger.warning("[HotReload] Merged config is invalid for feed-in reload")
+            return
+
+        try:
+            feedin_config = config.get("price", {})
+            # Use forced source if provided (callback fired before rebuild_config)
+            new_source = force_source if force_source else feedin_config.get("feed_in_source", "fixed").strip()
+            new_zone = feedin_config.get("feed_in_zone", "DK1").strip()
+            
+            if force_source:
+                logger.debug(
+                    "[HotReload] Using forced feed-in source '%s' (callback fired"
+                    " before rebuild_config)",
+                    force_source,
+                )
+
+            # Update feed-in interface with new configuration
+            old_source = self._feed_in_price.source
+            old_zone = self._feed_in_price.zone
+            self._feed_in_price.source = new_source
+            self._feed_in_price.zone = new_zone
+            self._applied_keys.append(key)
+
+            logger.info(
+                "[HotReload] Updated feed-in config: source=%s (was %s), zone=%s (was %s)",
+                new_source,
+                old_source,
+                new_zone,
+                old_zone,
+            )
+
+            # Trigger immediate feed-in price fetch with new source/zone
+            try:
+                start_time = datetime.now(self._feed_in_price.time_zone).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+                self._feed_in_price.update_prices(tgt_duration, start_time)
+                logger.info(
+                    "[HotReload] Immediately fetched feed-in prices after %s config change"
+                    " (source=%s, zone=%s)", key, new_source, new_zone
+                )
+            except (AttributeError, TypeError, ValueError, OSError, RuntimeError) as e:
+                logger.warning(
+                    "[HotReload] Failed to fetch feed-in prices after %s config change: %s",
+                    key, e
+                )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("[HotReload] Feed-in source reload failed: %s", exc)
 
     def _apply_pv_reload(self, force_source=None):
         """Reconfigure the live PV interface from the current merged config.

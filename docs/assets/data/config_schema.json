@@ -793,11 +793,12 @@
         "choices": [
           "fixed",
           "elpris_dk",
-          "epex_spot"
+          "epex_spot",
+          "evcc"
         ]
       },
       "depends_on": null,
-      "hot_reload": false,
+      "hot_reload": true,
       "display_group": "Feed-In Pricing"
     },
     {
@@ -838,7 +839,7 @@
           "elpris_dk"
         ]
       },
-      "hot_reload": false,
+      "hot_reload": true,
       "display_group": "Feed-In Pricing"
     },
     {

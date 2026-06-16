@@ -719,8 +719,8 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Source for feed-in (export) prices",
         help_url="configuration.html#price",
-        validation={"choices": ["fixed", "elpris_dk", "epex_spot"]},
-        hot_reload=False,  # Requires restart to switch source
+        validation={"choices": ["fixed", "elpris_dk", "epex_spot", "evcc"]},
+        hot_reload=True,
         display_group="Feed-In Pricing",
     ),
     FieldDef(
@@ -745,7 +745,7 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#price",
         validation={"choices": ["DK1", "DK2"]},
         depends_on={"price.feed_in_source": ["elpris_dk"]},
-        hot_reload=False,
+        hot_reload=True,
         display_group="Feed-In Pricing",
     ),
     FieldDef(

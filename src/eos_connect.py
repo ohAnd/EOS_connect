@@ -244,8 +244,8 @@ feed_in_config = {
 }
 
 feed_in_price_interface = interface_factory.create_feed_in_price_interface(
-    feed_in_config, time_frame_base, time_zone, critical=False
-) or FeedInPriceInterface(feed_in_config, time_frame_base, time_zone)
+    feed_in_config, time_frame_base, time_zone, evcc_interface, critical=False
+) or FeedInPriceInterface(feed_in_config, time_frame_base, time_zone, evcc_interface)
 
 pv_interface = interface_factory.create_pv_interface(
     config_manager.config["pv_forecast_source"],

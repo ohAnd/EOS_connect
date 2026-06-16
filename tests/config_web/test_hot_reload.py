@@ -639,6 +639,111 @@ class TestHotReloadOptimizer:
         trigger.assert_not_called()
 
 
+class TestHotReloadFeedInSource:
+    """Tests for feed-in source and zone hot-reload."""
+
+    def test_feed_in_source_change(self, feed_in_price_interface):
+        """Changing price.feed_in_source should update source and call update_prices."""
+        feed_in_price_interface.source = "fixed"
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "feed_in_source": "elpris_dk",
+                "feed_in_zone": "DK1",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+        adapter.on_config_changed("price.feed_in_source", "fixed", "elpris_dk")
+
+        assert feed_in_price_interface.source == "elpris_dk"
+        assert "price.feed_in_source" in adapter.last_applied
+        feed_in_price_interface.update_prices.assert_called_once()
+
+    def test_feed_in_zone_change(self, feed_in_price_interface):
+        """Changing price.feed_in_zone should update zone and call update_prices."""
+        feed_in_price_interface.source = "elpris_dk"
+        feed_in_price_interface.zone = "DK1"
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "feed_in_source": "elpris_dk",
+                "feed_in_zone": "DK2",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+        adapter.on_config_changed("price.feed_in_zone", "DK1", "DK2")
+
+        assert feed_in_price_interface.zone == "DK2"
+        assert "price.feed_in_zone" in adapter.last_applied
+        feed_in_price_interface.update_prices.assert_called_once()
+
+    def test_feed_in_source_to_evcc(self, feed_in_price_interface):
+        """Switching to EVCC source should work without requiring restart."""
+        feed_in_price_interface.source = "fixed"
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "feed_in_source": "evcc",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+        adapter.on_config_changed("price.feed_in_source", "fixed", "evcc")
+
+        assert feed_in_price_interface.source == "evcc"
+        assert "price.feed_in_source" in adapter.last_applied
+        feed_in_price_interface.update_prices.assert_called_once()
+
+    def test_no_feed_in_interface_no_crash(self):
+        """Feed-in source changes with no feed-in interface should not crash."""
+        adapter = HotReloadAdapter(feed_in_price_interface=None)
+        adapter.on_config_changed("price.feed_in_source", "fixed", "elpris_dk")
+        assert adapter.last_applied == []
+
+    def test_feed_in_source_change_with_forced_source(self, feed_in_price_interface):
+        """Forced source should override config_provider value."""
+        feed_in_price_interface.source = "fixed"
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "feed_in_source": "epex_spot",  # This will be overridden
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+        # Pass "evcc" as new_value, which should be used via force_source
+        adapter.on_config_changed("price.feed_in_source", "fixed", "evcc")
+
+        assert feed_in_price_interface.source == "evcc"
+        assert "price.feed_in_source" in adapter.last_applied
+
+
 @pytest.fixture
 def local_evopt_backend():
     """Mock LocalEVOptBackend with hot-reloadable strategy attributes."""

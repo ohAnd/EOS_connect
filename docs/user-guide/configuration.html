@@ -2062,7 +2062,8 @@
                     <td>
                         <code>fixed</code> - Use fixed price from <code>feed_in_price</code><br>
                         <code>elpris_dk</code> - Elpris DK spot prices (Denmark only)<br>
-                        <code>epex_spot</code> - EPEX-Spot prices via Akkudoktor API
+                        <code>epex_spot</code> - EPEX-Spot prices via Akkudoktor API<br>
+                        <code>evcc</code> - EVCC published feed-in tariff (requires EVCC configured)
                     </td>
                 </tr>
                 <tr>
@@ -2070,8 +2071,12 @@
                     <td><code>fixed</code></td>
                 </tr>
                 <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — switch sources immediately without restart. New prices are fetched instantly with the new source.</td>
+                </tr>
+                <tr>
                     <th>Notes</th>
-                    <td>Changes require application restart. Dynamic sources significantly improve battery discharge timing during high-price periods.</td>
+                    <td>Dynamic sources significantly improve battery discharge timing during high-price periods. Changing sources via the web UI triggers immediate price update with new source (no restart needed).</td>
                 </tr>
             </table>
 
@@ -2095,6 +2100,10 @@
                 <tr>
                     <th>Default</th>
                     <td><code>DK1</code></td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — zone changes take effect immediately without restart</td>
                 </tr>
                 <tr>
                     <th>Notes</th>
@@ -2308,6 +2317,13 @@
                     <td>-50 to +80 ct/kWh</td>
                     <td>Professional traders, maximum optimization</td>
                 </tr>
+                <tr>
+                    <td><code>evcc</code></td>
+                    <td>EVCC charger installations</td>
+                    <td>Real-time from EVCC API</td>
+                    <td>Depends on tariff</td>
+                    <td>Users with EVCC charger, real-time feed-in tariffs</td>
+                </tr>
             </table>
 
             <h4>Configuration Examples</h4>
@@ -2327,7 +2343,13 @@ price:
 price:
   feed_in_source: epex_spot
   feed_in_static_adder: -1.0  # -1 ct/kWh fee
-  feed_in_multiplier: 1.0     # Full spot price</code></pre>
+  feed_in_multiplier: 1.0     # Full spot price
+
+# Example 4: EVCC real-time feed-in tariff
+price:
+  feed_in_source: evcc  # Requires EVCC URL configured
+  # EVCC feed-in prices are used as-is (no adjustments)
+  # The EVCC charger provides real-time tariff data</code></pre>
 
             <h3>price.feed_in_negative_price_switch</h3>
             <table>
@@ -2356,6 +2378,7 @@ price:
                     • <strong>fixed:</strong> Uses Akkudoktor market prices as reference<br>
                     • <strong>elpris_dk:</strong> Uses Elpris DK spot prices<br>
                     • <strong>epex_spot:</strong> Uses EPEX Spot prices<br>
+                    • <strong>evcc:</strong> Not applicable (EVCC feed-in prices are used as-is, no negative price handling)<br>
                     Enable when you want to avoid exporting battery power during periods when the market pays to consume.</td>
                 </tr>
             </table>

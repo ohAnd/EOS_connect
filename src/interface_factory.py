@@ -169,6 +169,7 @@ class InterfaceFactory:
         config: Dict[str, Any],
         time_frame_base: int,
         time_zone: pytz.timezone,
+        evcc_interface=None,
         critical: bool = False,
     ):
         """
@@ -178,6 +179,7 @@ class InterfaceFactory:
             config: Feed-in price configuration dictionary
             time_frame_base: Base time frame in seconds
             time_zone: Timezone for timestamps
+            evcc_interface: Optional EVCC interface instance for feed-in price retrieval
             critical: Whether interface is critical (non-critical by default)
             
         Returns:
@@ -200,6 +202,7 @@ class InterfaceFactory:
                 config,
                 time_frame_base,
                 time_zone,
+                evcc_interface=evcc_interface,
             ),
         )
 
