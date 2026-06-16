@@ -532,6 +532,7 @@
           "stromligning",
           "fixed_24h",
           "timeseries",
+          "evcc",
           "default"
         ]
       },
@@ -1453,7 +1454,7 @@
       "default": true,
       "section": "pv_forecast_source",
       "level": "standard",
-      "description": "Apply the scaling factor from EVCC forecast API to correct PV forecast values using real measured data. If disabled, no scaling is applied (scale = 1.0).",
+      "description": "Apply scaling factor from EVCC forecast API to correct PV forecast values using real measured data. If disabled, no scaling applied (scale = 1.0).",
       "labels": [],
       "help_url": "configuration.html#pv-forecast-evcc",
       "validation": {},

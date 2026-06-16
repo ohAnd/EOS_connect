@@ -211,6 +211,7 @@ mqtt_interface = interface_factory.create_mqtt_interface(
     config_manager.config["mqtt"], critical=False
 ) or MqttInterface(config_mqtt=config_manager.config["mqtt"], on_mqtt_command=None)
 
+# EVCC interface must be created BEFORE price interface (for EVCC price source support)
 evcc_interface = interface_factory.create_evcc_interface(
     config_manager.config.get("evcc", {}).get("url", ""),
     ext_bat_mode=config_manager.config["inverter"]["type"] == "evcc",
@@ -223,8 +224,8 @@ evcc_interface = interface_factory.create_evcc_interface(
 )
 
 price_interface = interface_factory.create_price_interface(
-    config_manager.config["price"], time_frame_base, time_zone, critical=False
-) or PriceInterface(config_manager.config["price"], time_frame_base, time_zone)
+    config_manager.config["price"], time_frame_base, time_zone, evcc_interface, critical=False
+) or PriceInterface(config_manager.config["price"], time_frame_base, time_zone, evcc_interface)
 
 # Feed-in price interface (for dynamic export pricing)
 feed_in_config = {

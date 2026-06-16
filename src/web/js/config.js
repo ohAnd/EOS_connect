@@ -600,6 +600,18 @@ class ConfigurationManager {
                 }
             }
 
+            // Disable "evcc" option in price.source if evcc.url is not configured
+            if (f.key === "price.source" && String(c) === "evcc") {
+                const evccUrl = this.values["evcc.url"] || "http://yourEVCCserver:7070";
+                // Check if URL is at default or empty
+                const isDefault = evccUrl.trim() === "" || evccUrl === "http://yourEVCCserver:7070";
+                if (isDefault) {
+                    disabled = "disabled";
+                    title = "title='Configure EVCC URL first'";
+                    displayLabel = `${c} (not available)`;
+                }
+            }
+
             return `<option value="${this._escapeAttr(String(c))}" ${selected} ${disabled} ${title} style="${disabled ? 'color: #888; font-style: italic;' : ''}">${displayLabel}</option>`;
         }).join("");
         const changedCls = this._isChanged(f.key) ? " changed" : "";

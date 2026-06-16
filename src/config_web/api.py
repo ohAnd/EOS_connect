@@ -369,6 +369,18 @@ def _check_dependencies(data: dict) -> list[dict]:
                 "blocking": True,
             })
 
+    # Price Source: if "evcc" selected, EVCC URL must be configured
+    price_source = get_value("price.source")
+    if price_source == "evcc":
+        evcc_url = get_value("evcc.url")
+        if not evcc_url or evcc_url.strip() == "" or evcc_url == "http://yourEVCCserver:7070":
+            dependencies.append({
+                "field": "price.source",
+                "reason": "EVCC selected as price source but EVCC URL is not configured",
+                "requires": "evcc.url",
+                "blocking": True,
+            })
+
     # PV Source: validation for Solcast and Victron
     pv_source = get_value("pv_forecast_source.source")
     if pv_source in ["solcast", "victron"]:

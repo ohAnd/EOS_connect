@@ -360,6 +360,17 @@ class SetupWizard {
                 }
             }
             
+            // Disable "evcc" option in price.source if evcc.url is not configured
+            if (f.key === "price.source" && String(c) === "evcc") {
+                const evccUrl = this.values["evcc.url"] || "http://yourEVCCserver:7070";
+                const isDefault = evccUrl.trim() === "" || evccUrl === "http://yourEVCCserver:7070";
+                if (isDefault) {
+                    disabled = "disabled";
+                    title = "title='Configure EVCC URL first'";
+                    displayLabel = `${c} (not available)`;
+                }
+            }
+            
             opts += `<option value="${this._escapeAttr(String(c))}"${sel} ${disabled} ${title} style="${disabled ? 'color: #888; font-style: italic;' : ''}">${this._escapeHtml(displayLabel)}</option>`;
         }
         return `<select id="wiz-${cssKey}" data-key="${this._escapeAttr(f.key)}">${opts}</select>`;

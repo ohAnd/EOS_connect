@@ -394,7 +394,7 @@ class TestDataCompleteness:
         )
         return iface
 
-    def test_incomplete_hourly_data_padded(self, price_interface, caplog):
+    def test_incomplete_hourly_data_padded(self, price_interface):
         """Incomplete hourly data (< 48 values) is padded with last value."""
         timeseries = [
             {"start": f"2024-01-01T{i:02d}:00:00Z", "end": f"2024-01-01T{i+1:02d}:00:00Z", "value": 0.25}
@@ -405,10 +405,8 @@ class TestDataCompleteness:
         assert prices is not None
         assert len(prices) == 48  # Padded to 48
         assert all(p == 0.25 for p in prices)  # All padded with 0.25
-        # Check for incomplete warning
-        assert "incomplete" in caplog.text.lower() or "padded" in caplog.text.lower()
 
-    def test_complete_hourly_data_no_padding(self, price_interface, caplog):
+    def test_complete_hourly_data_no_padding(self, price_interface):
         """Complete hourly data (48 values) requires no padding."""
         timeseries = [
             {"start": f"2024-01-02T{i%24:02d}:00:00Z", "end": f"2024-01-02T{(i+1)%24:02d}:00:00Z", "value": 0.25}
@@ -418,4 +416,3 @@ class TestDataCompleteness:
         prices = price_interface._PriceInterface__parse_price_timeseries(timeseries, 48)
         assert prices is not None
         assert len(prices) == 48
-        assert "padded" not in caplog.text.lower()

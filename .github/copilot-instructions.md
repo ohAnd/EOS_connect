@@ -103,45 +103,53 @@ When making ANY code changes:
 
 **MANDATORY CHECKLIST - ALWAYS EXECUTE IN THIS ORDER:**
 
-1. ✅ **Verify code changes are complete and tested**
+**IMPORTANT:** "Prepare for commit" means review **ALL changes since last commit** (not just recent ones). Use `git diff` and `git status` to see complete scope. The commit message should reflect the entire change set, not just the most recent fix.
+
+1. ✅ **Review ALL changes since last commit** (PRIMARY STEP)
+   - Run: `git status` (see all modified files)
+   - Run: `git diff --stat` (see change scope)
+   - Verify: changes are logically related (if not, break into multiple commits)
+   - **The most recent change should not dominate the commit message if earlier changes are more significant**
+
+2. ✅ **Verify code changes are complete and tested**
    - All tests pass
    - No breaking changes
    - All new functionality implemented
 
-2. ✅ **Update README.md** (ALWAYS REQUIRED)
+3. ✅ **Update README.md** (ALWAYS REQUIRED)
    - Add 1-3 sentence mention of the feature/fix
    - Include link to full documentation on GitHub Pages
    - Keep concise - no lengthy explanations
    - Check: Does it follow existing README style?
 
-3. ✅ **Update GitHub Pages documentation** (ALWAYS REQUIRED unless bugfix with no user-facing changes)
+4. ✅ **Update GitHub Pages documentation** (ALWAYS REQUIRED unless bugfix with no user-facing changes)
    - Identify all affected doc sections (user-guide, advanced, what-is, etc.)
    - Update with complete details, examples, best practices
    - Write from **user perspective** - explain "why" and "how", not just "what"
    - Verify accuracy: all config names, types, defaults match code
    - Add code examples with syntax highlighting where applicable
 
-4. ✅ **Run schema export** (if config changes)
+5. ✅ **Run schema export** (if config changes)
    - Execute: `python scripts/export_config_schema.py`
    - Verify: `docs/assets/data/config_schema.json` updated
 
-5. ✅ **Generate summary and present to user**
-   - List all files modified
+6. ✅ **Generate summary and present to user**
+   - List all files modified (from `git status`)
    - List all tests passing
    - Link to GitHub Pages sections updated
    - **WAIT FOR USER APPROVAL** before any commits
 
-6. ✅ **NEVER stage or commit automatically**
+7. ✅ **NEVER stage or commit automatically**
    - Only prepare and present changes for review
    - User must explicitly approve before committing
 
-7. ✅ **Include Conventional Commit message in response**
-   - Format: `<type>: <description>` with optional body and footer
-   - Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `chore`
-   - Example for features: Include `Fixes: #issueNumber` in footer
-   - Body should explain "why", not just "what" (code shows what)
-   - Make it ready to copy-paste for the user to commit
-   - This is the message the user will use when they approve and commit
+8. ✅ **Include Conventional Commit message in response**
+   - **Keep it SHORT**: 50 char max for subject line
+   - Format: `<type>: <brief description>`
+   - Body (optional): Why this change, not what (code shows what)
+   - Footer (optional): `Fixes: #123` for issue references
+   - Make it ready to copy-paste
+   - **Rule: If you're writing multiple paragraphs, the message is too long. Simplify.**
 
 **If ANY of these steps are skipped, the preparation is INCOMPLETE.**
 

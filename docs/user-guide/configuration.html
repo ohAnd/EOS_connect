@@ -1885,6 +1885,7 @@
                         <code>tibber</code> - Tibber API<br>
                         <code>smartenergy_at</code> - Austrian provider<br>
                         <code>stromligning</code> - Danish provider<br>
+                        <code>evcc</code> - EVCC integration<br>
                         <code>fixed_24h</code> - Custom 24-hour array<br>
                         <code>timeseries</code> - HTTP endpoint returning timeseries data (Home Assistant, custom API, etc.)<br>
                         <code>default</code> - Akkudoktor API
@@ -3562,6 +3563,169 @@ price:
                 </ul>
             </div>
         </div>
+
+        <!-- EVCC Price Source Guide -->
+        <div class="content-section" id="evcc-price-guide">
+            <h2><i class="fas fa-plug"></i> EVCC as Price Source (price.source: evcc)</h2>
+            <p>Use EVCC (Electric Vehicle Charging Controller) as your price source when you have an EVCC instance managing your electricity pricing or tariff data.</p>
+
+            <h3>When to Use EVCC Price Source</h3>
+            <ul>
+                <li><strong>EVCC Integration:</strong> You already have EVCC configured with tariff/pricing data</li>
+                <li><strong>Unified Control:</strong> Want to use the same EVCC instance for both EV charging and battery optimization</li>
+                <li><strong>Automatic Tariff Sync:</strong> Tariff rates automatically synchronize between EVCC and EOS Connect</li>
+                <li><strong>Multiple Tariffs:</strong> Need access to both grid consumption prices and feed-in tariffs from EVCC</li>
+            </ul>
+
+            <h3>Configuration Steps</h3>
+
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-exclamation-triangle"></i> Prerequisite:</strong> EVCC interface must be configured first (see <a href="#evcc">EVCC Configuration</a>). The price source will use the same <code>evcc.url</code>.
+            </div>
+
+            <ol>
+                <li><strong>Configure EVCC Interface:</strong>
+                    <ul>
+                        <li>Set <code>evcc.enabled: true</code></li>
+                        <li>Set <code>evcc.url</code> to your EVCC instance (e.g., <code>http://evcc.local:7070</code>)</li>
+                    </ul>
+                </li>
+                <li><strong>Enable EVCC Price Source:</strong>
+                    <ul>
+                        <li>Set <code>price.source: evcc</code></li>
+                        <li><code>price.token</code> should remain empty (EVCC API doesn't require authentication)</li>
+                    </ul>
+                </li>
+                <li><strong>Optional - Add Feed-In Tariff (EVCC 0.132+):</strong>
+                    <ul>
+                        <li>If your EVCC instance publishes <code>/api/tariff/feedin</code> data, it will be used automatically for feed-in pricing</li>
+                        <li>Set <code>price.feed_in_source: evcc</code> to use EVCC's published feed-in tariff</li>
+                    </ul>
+                </li>
+            </ol>
+
+            <h3>EVCC Price Data Format</h3>
+            <p>EVCC provides electricity prices via the grid tariff API endpoint with 15-minute resolution:</p>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">GET http://evcc.local:7070/api/tariff/grid
+
+Response:
+{
+  "rates": [
+    {
+      "start": "2026-06-15T00:00:00+02:00",
+      "end": "2026-06-15T00:15:00+02:00",
+      "value": 0.3236
+    },
+    {
+      "start": "2026-06-15T00:15:00+02:00",
+      "end": "2026-06-15T00:30:00+02:00",
+      "value": 0.3113
+    }
+  ]
+}</pre>
+            </div>
+
+            <table>
+                <tr>
+                    <th>Field</th>
+                    <th>Description</th>
+                    <th>Format</th>
+                </tr>
+                <tr>
+                    <td><strong>start</strong></td>
+                    <td>Start timestamp of the price period</td>
+                    <td>ISO8601 with timezone (e.g., +02:00)</td>
+                </tr>
+                <tr>
+                    <td><strong>end</strong></td>
+                    <td>End timestamp of the price period</td>
+                    <td>ISO8601 with timezone</td>
+                </tr>
+                <tr>
+                    <td><strong>value</strong></td>
+                    <td>Electricity price for that period</td>
+                    <td>EUR/kWh (automatically converted to EUR/Wh internally)</td>
+                </tr>
+            </table>
+
+            <h3>Price Unit Conversion</h3>
+            <p><strong>Important:</strong> EVCC provides prices in EUR/kWh. EOS Connect automatically converts these to EUR/Wh for internal calculations:</p>
+            <ul>
+                <li><strong>EVCC price:</strong> 0.120 EUR/kWh</li>
+                <li><strong>Converted:</strong> 0.000120 EUR/Wh (÷ 1000)</li>
+                <li><strong>Display:</strong> Always shown in EUR/kWh in the web UI</li>
+            </ul>
+
+            <h3>Automatic Updates</h3>
+            <p>EVCC prices are fetched:</p>
+            <ul>
+                <li><strong>On startup:</strong> Initial price load</li>
+                <li><strong>Every refresh cycle:</strong> Default 10 minutes (configurable via <code>refresh_time</code>)</li>
+                <li><strong>On configuration change:</strong> When <code>price.source</code> is changed to/from <code>evcc</code>, prices are fetched immediately (hot-reload)</li>
+                <li><strong>On EVCC URL change:</strong> Automatic reconnection with new URL</li>
+            </ul>
+
+            <h3>Troubleshooting EVCC Price Source</h3>
+            <table>
+                <tr>
+                    <th>Issue</th>
+                    <th>Solution</th>
+                </tr>
+                <tr>
+                    <td>No prices showing</td>
+                    <td>
+                        <ul>
+                            <li>Verify <code>evcc.enabled: true</code> and <code>evcc.url</code> is correct</li>
+                            <li>Check <code>price.source: evcc</code></li>
+                            <li>Verify EVCC is running and accessible at <code>http://evcc.url:7070/api/tariff/grid</code></li>
+                            <li>Check application logs for connection errors</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td>EVCC connection timeout</td>
+                    <td>
+                        <ul>
+                            <li>Verify network connectivity to EVCC server</li>
+                            <li>Check firewall rules allowing port 7070</li>
+                            <li>Verify EVCC service is running: <code>systemctl status evcc</code></li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td>Wrong prices after EVCC update</td>
+                    <td>
+                        <ul>
+                            <li>Trigger a manual config save to reload prices (hot-reload)</li>
+                            <li>Check EVCC tariff configuration is correct</li>
+                            <li>Verify price format matches expected EUR/kWh</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td>Price source won't switch</td>
+                    <td>
+                        <ul>
+                            <li>Verify EVCC interface is not disabled or in error state</li>
+                            <li>Check web UI Settings → Price Configuration for any errors</li>
+                            <li>If using hot-reload, wait 5-10 seconds for connection to establish</li>
+                        </ul>
+                    </td>
+                </tr>
+            </table>
+
+            <h3>Example Configuration (config.yaml)</h3>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">evcc:
+  enabled: true
+  url: "http://evcc.local:7070"
+
+price:
+  source: evcc
+  token:                    # Leave empty for EVCC
+  feed_in_source: evcc      # Optional: if EVCC publishes /api/tariff/feedin</pre>
+            </div>
 
         <!-- Timeseries Data Source Guide -->
         <div class="content-section" id="timeseries-guide">

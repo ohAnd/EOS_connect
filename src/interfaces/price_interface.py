@@ -102,6 +102,7 @@ class PriceInterface:
         config,
         time_frame_base,
         timezone="UTC",
+        evcc_interface=None,
     ):
         self.src = config["source"]
         raw_token = config.get("token", "")
@@ -143,6 +144,9 @@ class PriceInterface:
         self.data_url = config.get("data_url", "").strip()
         self.data_path = config.get("data_path", "attributes.data").strip()
         self.data_token = config.get("data_token", "").strip()
+
+        # EVCC interface for EVCC price source
+        self.evcc_interface = evcc_interface
 
         self.time_frame_base = time_frame_base
         self.time_zone = timezone
@@ -457,6 +461,8 @@ class PriceInterface:
             )
         elif self.src == "timeseries":
             prices = self.__retrieve_prices_from_url(tgt_duration, start_time)
+        elif self.src == "evcc":
+            prices = self.__retrieve_prices_from_evcc(tgt_duration, start_time)
         elif self.src == "default":
             prices = self.__retrieve_prices_from_akkudoktor(tgt_duration, start_time)
         else:
@@ -1837,7 +1843,240 @@ class PriceInterface:
             logger.error(f"[PRICE-IF] Error parsing price timeseries: {e}")
             return []
 
-    def __parse_price_timeseries(self, timeseries, tgt_duration):
+    def __retrieve_prices_from_evcc(self, tgt_duration, start_time=None):
+        """
+        Retrieve prices from EVCC /api/tariff/grid endpoint.
+
+        EVCC provides grid consumption prices via REST API with 15-minute intervals.
+        Converts EVCC rate format to standard EUR/Wh timeseries format.
+
+        Args:
+            tgt_duration (int): Target duration in hours (24 or 48)
+            start_time (datetime, optional): Start time for price retrieval
+
+        Returns:
+            list: Prices in EUR/Wh format, or empty list on failure
+        """
+        if not self.evcc_interface or not self.evcc_interface.url:
+            logger.warning(
+                "[PRICE-IF] EVCC interface not available or URL not configured. "
+                "Cannot fetch prices from EVCC."
+            )
+            return []
+
+        try:
+            evcc_url = self.evcc_interface.url.rstrip("/")
+
+            # Fetch grid tariff (consumption prices)
+            grid_url = f"{evcc_url}/api/tariff/grid"
+            headers = {"Content-Type": "application/json"}
+
+            try:
+                response = requests.get(grid_url, headers=headers, timeout=10)
+                response.raise_for_status()
+            except requests.exceptions.RequestException as req_err:
+                logger.error(f"[PRICE-IF] Failed to fetch EVCC grid tariff: {req_err}")
+                return []
+
+            grid_data = response.json()
+
+            # Parse EVCC response format
+            # Expected format: {"rates": [{"start": "...", "end": "...", "value": 0.125}, ...]}
+            if not isinstance(grid_data, dict):
+                logger.error(f"[PRICE-IF] Invalid EVCC response format: {type(grid_data)}")
+                return []
+
+            rates = grid_data.get("rates", [])
+            if not isinstance(rates, list) or not rates:
+                logger.error("[PRICE-IF] No rates found in EVCC response")
+                return []
+            
+            # Log concise summary instead of full response
+            if rates:
+                first_rate = rates[0].get("start", "unknown")
+                last_rate = rates[-1].get("start", "unknown")
+                prices_in_kwh = [float(r.get("value", 0)) for r in rates if "value" in r]
+                if prices_in_kwh:
+                    avg_price = sum(prices_in_kwh) / len(prices_in_kwh)
+                    min_price = min(prices_in_kwh)
+                    max_price = max(prices_in_kwh)
+                    logger.debug(
+                        "[PRICE-IF] EVCC grid tariff: %d rates from %s to %s, "
+                        "avg=%.4f EUR/kWh, range=[%.4f, %.4f]",
+                        len(rates),
+                        first_rate,
+                        last_rate,
+                        avg_price,
+                        min_price,
+                        max_price,
+                    )
+
+            # EVCC provides rates with start, end, and value (EUR/kWh)
+            # Convert to timeseries format: [{start, end, value}, ...] with value in EUR/Wh
+            timeseries = []
+            for rate in rates:
+                if not isinstance(rate, dict) or "start" not in rate or "value" not in rate:
+                    logger.warning(f"[PRICE-IF] Skipping invalid EVCC rate entry: {rate}")
+                    continue
+
+                try:
+                    start_str = rate["start"]
+                    end_str = rate.get("end", "")  # May be provided by EVCC
+                    price_eur_kwh = float(rate["value"])
+
+                    # Convert EUR/kWh to EUR/Wh (divide by 1000)
+                    price_eur_wh = price_eur_kwh / 1000.0
+
+                    timeseries.append({
+                        "start": start_str,
+                        "end": end_str if end_str else None,
+                        "value": price_eur_wh
+                    })
+
+                except (ValueError, KeyError, TypeError) as e:
+                    logger.warning(f"[PRICE-IF] Error parsing EVCC rate entry: {e}")
+                    continue
+
+            if not timeseries:
+                logger.error("[PRICE-IF] No valid rates converted from EVCC response")
+                return []
+
+            # Detect time resolution from first few entries to determine expected count
+            resolution_seconds = self.__detect_price_timeseries_resolution(timeseries)
+            if resolution_seconds is None:
+                logger.warning("[PRICE-IF] Could not detect timeseries resolution")
+                return []
+            
+            # Calculate expected timeseries length based on resolution
+            if resolution_seconds == 900:  # 15-min resolution
+                expected_timeseries_count = 192  # 192 * 15min = 2880min = 48h
+            elif resolution_seconds == 3600:  # Hourly resolution
+                expected_timeseries_count = 48  # 48 * 1h = 48h
+            else:
+                expected_timeseries_count = 48  # Fallback
+            
+            actual_timeseries_count = len(timeseries)
+            is_incomplete = actual_timeseries_count < expected_timeseries_count
+            
+            # Parse the converted timeseries using standard parser
+            # Pass resolution_seconds to avoid duplicate detection
+            prices = self.__parse_price_timeseries(timeseries, tgt_duration, resolution_seconds)
+
+            if prices and is_incomplete:
+                # Data was incomplete, try fallback chain
+                # Calculate how many real slots we got, accounting for resolution conversion
+                # Resolution conversion (15-min → hourly) happens inside __parse_price_timeseries()
+                if resolution_seconds == 900 and self.time_frame_base == 3600:
+                    # 15-min data was converted to hourly (divided by 4)
+                    num_real_slots = actual_timeseries_count // 4
+                else:
+                    # No conversion, use actual timeseries count
+                    num_real_slots = actual_timeseries_count
+                
+                expected_slots = 48 if self.time_frame_base == 3600 else 192
+                num_missing_slots = expected_slots - num_real_slots
+                
+                # For energyforecast, pass the actual number of prices needed
+                # (not converted to hours) - function returns that many prices
+                num_forecast_prices_needed = num_missing_slots
+                
+                logger.info(
+                    "[PRICE-IF] EVCC returned incomplete data: got %d real price slots, "
+                    "need %d total (%d prices missing). Attempting fallback chain...",
+                    num_real_slots,
+                    expected_slots,
+                    num_forecast_prices_needed,
+                )
+                
+                # Extract the real (unpadded) values
+                real_prices = prices[:num_real_slots] if num_real_slots > 0 else []
+                
+                if real_prices and num_missing_slots > 0:
+                    # Fallback 1: Try energyforecast.de smart price prediction
+                    forecast_prices = self._fetch_adaptive_energyforecast_fallback(
+                        known_prices=real_prices,
+                        num_missing_hours=num_forecast_prices_needed,
+                    )
+                    
+                    if forecast_prices and len(forecast_prices) == num_forecast_prices_needed:
+                        logger.info(
+                            "[PRICE-IF] EVCC incomplete, using energyforecast.de smart "
+                            "prediction to fill %d missing price slots",
+                            num_forecast_prices_needed,
+                        )
+                        # For 15-min mode, energyforecast returns hourly prices that need expansion
+                        if self.time_frame_base == 900:
+                            # forecast_prices is in 15-min resolution (96 slots for 24h)
+                            # Already in correct format
+                            prices = real_prices + forecast_prices
+                        else:
+                            # hourly mode, use forecast directly
+                            prices = real_prices + forecast_prices
+                        
+                        self._set_forecast_metadata(
+                            start_index=num_real_slots,
+                            forecast_type="smart_forecast",
+                            source="energyforecast.de",
+                        )
+                    # Fallback 2: Try yesterday's prices from history
+                    elif (
+                        len(self.last_successful_prices) > 0
+                        and len(self.last_successful_prices) == expected_slots
+                    ):
+                        logger.info(
+                            "[PRICE-IF] EVCC incomplete, using yesterday's prices to fill "
+                            "%d missing price slots",
+                            num_missing_slots,
+                        )
+                        yesterday_fill = self.last_successful_prices[num_real_slots:]
+                        prices = real_prices + yesterday_fill
+                        self._set_forecast_metadata(
+                            start_index=num_real_slots,
+                            forecast_type="fallback_history",
+                            source="yesterday_prices",
+                        )
+                    # Fallback 3: Repeat today's prices for tomorrow (same as Tibber)
+                    else:
+                        logger.info(
+                            "[PRICE-IF] EVCC incomplete, no fallback available. "
+                            "Repeating today's prices for tomorrow."
+                        )
+                        # Repeat today's real prices to fill tomorrow
+                        prices = real_prices + real_prices
+                        self._set_forecast_metadata(
+                            start_index=num_real_slots,
+                            forecast_type="simple_repetition",
+                            source=None,
+                        )
+            elif prices and not is_incomplete:
+                # Data is complete (real data only)
+                self._set_forecast_metadata(
+                    start_index=None,
+                    forecast_type="all_real",
+                    source=None,
+                )
+            
+            if prices:
+                self.consecutive_failures = 0
+                self.last_successful_prices = prices.copy()
+                self.last_successful_prices_direct = prices.copy()
+                logger.info(
+                    "[PRICE-IF] EVCC prices finalized: %d values, "
+                    "first 4 rates (EUR/Wh): %.9f, %.9f, %.9f, %.9f",
+                    len(prices),
+                    prices[0] if len(prices) > 0 else 0,
+                    prices[1] if len(prices) > 1 else 0,
+                    prices[2] if len(prices) > 2 else 0,
+                    prices[3] if len(prices) > 3 else 0,
+                )
+
+            return prices
+
+        except Exception as e:
+            logger.error(f"[PRICE-IF] Unexpected error fetching EVCC prices: {e}")
+            return []
+
+    def __parse_price_timeseries(self, timeseries, tgt_duration, resolution_seconds=None):
         """
         Parse and validate price timeseries format.
 
@@ -1845,6 +2084,11 @@ class PriceInterface:
         - start/end: ISO8601 string or Unix timestamp (seconds)
         - value: numeric in EUR/Wh
         - Supports hourly (48 values) or 15-minute (192 values) resolution
+
+        Args:
+            timeseries: List of price entries with start, end, value
+            tgt_duration: Target duration in hours
+            resolution_seconds: Pre-detected resolution (900 or 3600), or None to auto-detect
 
         Returns:
             list: Normalized hourly price values in EUR/Wh, or empty on error
@@ -1866,11 +2110,12 @@ class PriceInterface:
             )
             return []
 
-        # Detect time resolution from timestamp delta
-        resolution_seconds = self.__detect_price_timeseries_resolution(timeseries)
+        # Detect time resolution from timestamp delta (unless already provided)
         if resolution_seconds is None:
-            logger.error("[PRICE-IF] Could not detect price timeseries resolution")
-            return []
+            resolution_seconds = self.__detect_price_timeseries_resolution(timeseries)
+            if resolution_seconds is None:
+                logger.error("[PRICE-IF] Could not detect price timeseries resolution")
+                return []
 
         # Validate resolution matches time frame base
         if resolution_seconds == 900 and self.time_frame_base == 3600:
@@ -1915,7 +2160,7 @@ class PriceInterface:
         # Validate completeness
         expected_count = 48 if self.time_frame_base == 3600 else 192
         if len(values) < expected_count:
-            logger.warning(
+            logger.debug(
                 "[PRICE-IF] Incomplete timeseries: got %d, expected %d",
                 len(values),
                 expected_count,
@@ -1925,7 +2170,6 @@ class PriceInterface:
                 padding_needed = expected_count - len(values)
                 last_value = values[-1]
                 values.extend([last_value] * padding_needed)
-                logger.info("[PRICE-IF] Padded with %d values", padding_needed)
 
         # Round to 9 decimals (EUR precision)
         values = [round(v, 9) for v in values]

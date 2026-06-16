@@ -534,7 +534,7 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#price",
         validation={"choices": [
-            "tibber", "smartenergy_at", "stromligning", "fixed_24h", "timeseries", "default"
+            "tibber", "smartenergy_at", "stromligning", "fixed_24h", "timeseries", "evcc", "default"
         ]},
         display_group="Provider",
     ),

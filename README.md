@@ -28,7 +28,7 @@ EOS Connect fetches real-time and forecast data (solar, prices), runs the integr
 - **Battery and Inverter Management:** Precise charge/discharge control, grid/PV modes, and manufacturer-validated dynamic charging curves.
 - **Integration with Smart Home Platforms:** Home Assistant (MQTT auto discovery, native inverter control via service calls), OpenHAB, EVCC, and REST APIs.
 - **Dynamic Web Dashboard:** Live monitoring, manual overrides, and visualization of the optimization process.
-- **Cost Optimization:** Automatic alignment with dynamic electricity prices (Tibber, smartenergy.at, timeseries, etc.) with configurable resolution. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#price-sources)
+- **Cost Optimization:** Automatic alignment with dynamic electricity prices (Tibber, smartenergy.at, EVCC, timeseries, etc.) with configurable resolution. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#price)
 - **Dynamic Feed-In Pricing:** Optimize battery discharge for maximum profit when export prices are favorable. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#price)
 - **Smart Price Prediction:** Learned grid fees and taxes for accurate planning even when future prices aren't yet available. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#energyforecast)
 - **Dynamic PV Override:** Intelligent discharge prevention during high solar production or intermittent clouds. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#dyn-override)
