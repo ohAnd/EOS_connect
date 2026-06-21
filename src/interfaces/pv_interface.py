@@ -107,7 +107,7 @@ class PvInterface:
                 "[PV-IF] Starting in DEGRADED mode - PV data unavailable until config is fixed"
             )
             logger.warning(
-                "[PV-IF] Use Settings → PV Forecast to complete the configuration"
+                "[PV-IF] Use Settings > PV Forecast to complete the configuration"
             )
             self.configuration_state = "incomplete"
             self.configuration_valid = False
@@ -232,8 +232,11 @@ class PvInterface:
             )
 
         if not len(self.config) > 0:
-            logger.error("[PV-IF] Initialize - No pv entries found")
-            return
+            logger.debug("[PV-IF] Initialize - No pv entries found (not yet configured)")
+            raise ValueError(
+                "[PV-IF] pv_forecast not yet configured - please configure"
+                + " via Settings > PV Forecast"
+            )
 
         logger.debug("[PV-IF] Initialize - pv entries found: %s", len(self.config))
 

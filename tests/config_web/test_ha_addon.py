@@ -82,14 +82,21 @@ class TestHaAddonDetection:
         assert cm.is_ha_addon is True
 
     def test_first_run_no_config_yaml(self, monkeypatch, tmp_path):
-        """ConfigManager should NOT sys.exit when config.yaml is missing."""
+        """ConfigManager should NOT sys.exit when config.yaml is missing.
+        
+        On fresh install, config dict contains only bootstrap keys (3 total).
+        All other settings are managed via SQLite and web UI.
+        """
         monkeypatch.delenv("HASSIO", raising=False)
         monkeypatch.delenv("HASSIO_TOKEN", raising=False)
         # This should NOT raise SystemExit
         cm = self._make_cm_no_yaml(tmp_path)
         assert cm.config is not None
-        # Defaults should be populated
-        assert "load" in cm.config
+        # Fresh install: only 3 bootstrap keys
+        assert "eos_connect_web_port" in cm.config
+        assert "time_zone" in cm.config
+        assert "log_level" in cm.config
+        # All other settings (load, battery, etc.) are in SQLite, not config dict
 
 
 # -----------------------------------------------------------------------

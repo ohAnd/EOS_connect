@@ -168,8 +168,8 @@ class TestStartupValidationGracefulDegradation:
     def test_startup_with_empty_config_does_not_crash(self, empty_config):
         """
         Startup with empty PV config should NOT crash.
-        Empty config is structurally valid (no entries yet), so state='valid'.
-        User can add entries via web UI later.
+        Empty config means PV not yet configured - graceful degradation with state='incomplete'.
+        User can add entries via web UI later (Settings > PV Forecast).
         """
         config_source, config = empty_config
 
@@ -177,9 +177,9 @@ class TestStartupValidationGracefulDegradation:
             config_source, config, time_frame_base, {}, timezone="UTC"
         )
 
-        # Empty config is valid (no entries, but structure is correct)
-        assert pv.configuration_state == "valid"
-        assert pv.configuration_valid is True
+        # Empty config -> incomplete state (not yet configured)
+        assert pv.configuration_state == "incomplete"
+        assert pv.configuration_valid is False
 
     def test_startup_with_dict_instead_of_list_degrades_gracefully(self):
         """

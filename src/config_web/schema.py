@@ -166,6 +166,9 @@ class ConfigSchema:
 
         Returns a dict like: {"load": {"source": "default", ...}, "battery": {...}, ...}
         Top-level keys (no dot) become top-level dict entries.
+        
+        Special handling: pv_forecast is a list and is built separately by the merger,
+        so we exclude it from the flat defaults dict.
         """
         result = {}
         for f in self._fields.values():
@@ -174,9 +177,18 @@ class ConfigSchema:
                 result[parts[0]] = f.default
             else:
                 section, subkey = parts
+                # Skip pv_forecast fields — they're built separately as a
+                # list by _build_pv_forecast()
+                if section == "pv_forecast":
+                    continue
                 if section not in result:
                     result[section] = {}
                 result[section][subkey] = f.default
+
+        # Ensure pv_forecast is initialized as an empty list (not a dict)
+        if "pv_forecast" not in result:
+            result["pv_forecast"] = []
+
         return result
 
 
