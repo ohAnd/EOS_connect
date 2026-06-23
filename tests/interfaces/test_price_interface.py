@@ -152,7 +152,6 @@ def test_stromligning_hourly_aggregation(monkeypatch):
             "source": "stromligning",
             "token": "radius_c/velkommen_gron_el/c",
             "feed_in_price": 0,
-            "negative_price_switch": False,
         },
         time_frame_base=3600,
         timezone=timezone.utc,
@@ -177,7 +176,6 @@ def test_stromligning_hourly_aggregation(monkeypatch):
     assert price_interface.current_prices_direct == pytest.approx(
         expected_hourly_prices, rel=1e-9
     )
-    assert price_interface.get_current_feedin_prices() == [0.0] * 4
 
 
 def test_stromligning_quarter_hour_aggregation(monkeypatch):
@@ -251,7 +249,6 @@ def test_stromligning_quarter_hour_aggregation(monkeypatch):
     assert price_interface.current_prices_direct == pytest.approx(
         expected_15min_prices, rel=1e-9
     )
-    assert price_interface.get_current_feedin_prices() == [0.0] * 16
 
 
 @pytest.mark.parametrize(

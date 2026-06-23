@@ -82,11 +82,12 @@ class TestConfigSchema:
     def test_data_source_section_exists(self):
         """The unified data_source section should exist."""
         ds_fields = self.schema.get_section("data_source")
-        assert len(ds_fields) == 3  # type, url, access_token
+        assert len(ds_fields) == 4  # type, url, access_token, ssl_ignore
         keys = [f.key for f in ds_fields]
         assert "data_source.type" in keys
         assert "data_source.url" in keys
         assert "data_source.access_token" in keys
+        assert "data_source.ssl_ignore" in keys
 
     def test_deprecated_fields_have_label(self):
         """Load/battery connection override fields should be marked deprecated."""
@@ -104,3 +105,57 @@ class TestConfigSchema:
         assert self.schema.get("pv_forecast.tilt").hot_reload is True
         # Restart-required fields should NOT be hot_reload
         assert self.schema.get("mqtt.broker").hot_reload is False
+
+    def test_inverter_type_has_data_source_dependency(self):
+        """inverter.type should have depends_on for data_source.type."""
+        field = self.schema.get("inverter.type")
+        assert field is not None
+        assert field.depends_on is not None
+        assert "data_source.type" in field.depends_on
+        assert field.depends_on["data_source.type"] == ["homeassistant"]
+
+    def test_inverter_url_token_removed(self):
+        """Old inverter.url and inverter.token fields should not exist."""
+        assert self.schema.get("inverter.url") is None, "inverter.url should be removed"
+        assert self.schema.get("inverter.token") is None, "inverter.token should be removed"
+
+    def test_inverter_mode_sequence_fields_exist(self):
+        """New inverter.*.mode-sequence JSON fields should exist."""
+        charge_from_grid = self.schema.get("inverter.charge_from_grid")
+        avoid_discharge = self.schema.get("inverter.avoid_discharge")
+        discharge_allowed = self.schema.get("inverter.discharge_allowed")
+
+        assert charge_from_grid is not None
+        assert avoid_discharge is not None
+        assert discharge_allowed is not None
+
+        # All should be json type
+        assert charge_from_grid.field_type == "json"
+        assert avoid_discharge.field_type == "json"
+        assert discharge_allowed.field_type == "json"
+
+        # All should default to empty array
+        assert charge_from_grid.default == []
+        assert avoid_discharge.default == []
+        assert discharge_allowed.default == []
+
+    def test_inverter_mode_sequence_fields_have_dependencies(self):
+        """Mode-sequence fields should depend on inverter.type='homeassistant'."""
+        charge_from_grid = self.schema.get("inverter.charge_from_grid")
+        avoid_discharge = self.schema.get("inverter.avoid_discharge")
+        discharge_allowed = self.schema.get("inverter.discharge_allowed")
+
+        for field in [charge_from_grid, avoid_discharge, discharge_allowed]:
+            assert field.depends_on is not None
+            assert "inverter.type" in field.depends_on
+            assert field.depends_on["inverter.type"] == ["homeassistant"]
+
+    def test_inverter_mode_sequence_fields_restart_required(self):
+        """Mode-sequence fields should require restart."""
+        charge_from_grid = self.schema.get("inverter.charge_from_grid")
+        avoid_discharge = self.schema.get("inverter.avoid_discharge")
+        discharge_allowed = self.schema.get("inverter.discharge_allowed")
+
+        for field in [charge_from_grid, avoid_discharge, discharge_allowed]:
+            assert "restart_required" in field.labels
+

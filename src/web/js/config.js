@@ -16,6 +16,24 @@ let SECTION_ORDER = [];  // Track explicit section order from API
 
 const LEVEL_ORDER = { getting_started: 0, standard: 1, expert: 2 };
 
+// ── Subsection mapping (display_group → subsection_group) ──────
+// Groups related display_groups under logical subsections.
+// Allows automatic rendering of subsection headers.
+// Extensible: add new mappings for other sections (e.g., Battery subsections).
+const DISPLAY_GROUP_TO_SUBSECTION = {
+    // Price section - map directly to display_group names (no subsection layer)
+    "Grid Price Provider": "Grid Price Provider",
+    "Grid Price - Adjustments": "Grid Price - Adjustments",
+    "Grid Price - Forecast (Advanced)": "Grid Price - Forecast (Advanced)",
+    "Feed-In Price": "Feed-In Price",
+
+    // Battery section (example for future use)
+    // "Battery Configuration": "Battery Status",
+    // "Battery Price": "Battery Price Management",
+    // "Battery Price Sensors": "Battery Price Management",
+    // "Battery Price Thresholds": "Battery Price Management",
+};
+
 
 class ConfigurationManager {
     /**
@@ -300,6 +318,8 @@ class ConfigurationManager {
                 contentEl.innerHTML = this._renderPvForecastSection();
             } else {
                 contentEl.innerHTML = this._renderSection(section);
+                // Initialize dynamic descriptions for this section
+                this._initializeDynamicDescriptions(section);
             }
         }
 
@@ -388,10 +408,15 @@ class ConfigurationManager {
             ${meta.label}
         </div>`;
 
+        let lastSubsection = null;
         for (const [groupName, groupFields] of groups) {
+            // Get subsection for this display_group
+            const subsection = DISPLAY_GROUP_TO_SUBSECTION[groupName] || null;
+
             if (groupName) {
                 const allHidden = groupFields.every(f => this._isDependencyHidden(f));
-                html += `<div class="config-group${allHidden ? ' hidden' : ''}" data-group="${groupName}">
+                const subsection = DISPLAY_GROUP_TO_SUBSECTION[groupName] || "";
+                html += `<div class="config-group${allHidden ? ' hidden' : ''}" data-group="${groupName}" data-subsection="${subsection}">
                     <div class="config-group-title">${groupName}</div>
                     ${groupFields.map(f => this._renderField(f)).join("")}
                 </div>`;
@@ -442,6 +467,9 @@ class ConfigurationManager {
                 break;
             case "password":
                 inputHtml = this._renderPassword(f, val);
+                break;
+            case "json":
+                inputHtml = this._renderJSONTextarea(f, val);
                 break;
             default:
                 inputHtml = this._renderTextInput(f, val);
@@ -523,15 +551,15 @@ class ConfigurationManager {
      */
     _renderSelect(f, val) {
         const choices = (f.validation && f.validation.choices) || [];
-        
+
         const opts = choices.map(c => {
             const selected = String(c) === String(val) ? "selected" : "";
-            
+
             // Conditional disabling for specific fields
             let disabled = "";
             let title = "";
             let displayLabel = c;  // Label to show in dropdown
-            
+
             // Disable "evcc" option in pv_forecast_source.source if evcc.url is not configured
             if (f.key === "pv_forecast_source.source" && String(c) === "evcc") {
                 const evccUrl = this.values["evcc.url"] || "http://yourEVCCserver:7070";
@@ -543,7 +571,7 @@ class ConfigurationManager {
                     displayLabel = `${c} (not available)`;
                 }
             }
-            
+
             // Disable "evcc" option in inverter.type if evcc.url is not configured
             if (f.key === "inverter.type" && String(c) === "evcc") {
                 const evccUrl = this.values["evcc.url"] || "http://yourEVCCserver:7070";
@@ -555,7 +583,19 @@ class ConfigurationManager {
                     displayLabel = `${c} (not available)`;
                 }
             }
-            
+
+            // Disable "evcc" option in price.source if evcc.url is not configured
+            if (f.key === "price.source" && String(c) === "evcc") {
+                const evccUrl = this.values["evcc.url"] || "http://yourEVCCserver:7070";
+                // Check if URL is at default or empty
+                const isDefault = evccUrl.trim() === "" || evccUrl === "http://yourEVCCserver:7070";
+                if (isDefault) {
+                    disabled = "disabled";
+                    title = "title='Configure EVCC URL first'";
+                    displayLabel = `${c} (not available)`;
+                }
+            }
+
             return `<option value="${this._escapeAttr(String(c))}" ${selected} ${disabled} ${title} style="${disabled ? 'color: #888; font-style: italic;' : ''}">${displayLabel}</option>`;
         }).join("");
         const changedCls = this._isChanged(f.key) ? " changed" : "";
@@ -606,6 +646,42 @@ class ConfigurationManager {
         </div>`;
     }
 
+    /**
+     * Render a JSON textarea field with syntax validation.
+     * @param {Object} f - Field definition
+     * @param {*} val - Current value (array or object, displayed as JSON string)
+     * @returns {string} Textarea HTML with validation feedback
+     */
+    _renderJSONTextarea(f, val) {
+        // Convert value to JSON string for display
+        let jsonString = "";
+        if (val === null || val === undefined) {
+            jsonString = "[]";  // Default empty array
+        } else if (typeof val === "string") {
+            jsonString = val;  // Already a string (from API or store)
+        } else {
+            try {
+                jsonString = JSON.stringify(val, null, 2);  // Pretty-print
+            } catch (e) {
+                jsonString = JSON.stringify(val);  // Fallback
+            }
+        }
+
+        const changedCls = this._isChanged(f.key) ? " changed" : "";
+        return `<div class="config-json-wrap">
+            <textarea class="config-textarea${changedCls}"
+                   id="cfg-json-${this._cssKey(f.key)}"
+                   data-key="${f.key}"
+                   rows="10"
+                   onblur="configurationManager._validateJSONField('${f.key}')"
+                   oninput="configurationManager._onFieldChange('${f.key}', this.value)">${this._escapeHtml(jsonString)}</textarea>
+            <div class="config-json-error" id="cfg-json-err-${this._cssKey(f.key)}"></div>
+            <div class="config-json-hint">Enter a valid JSON array of objects. Example:
+                <code>[{"service":"select.select_option","entity_id":"select.mode","data":{"option":"Charge"}}]</code>
+            </div>
+        </div>`;
+    }
+
     // ── PV Forecast (array) section ─────────────────────────────
 
     /**
@@ -613,6 +689,46 @@ class ConfigurationManager {
      * @returns {string} PV section HTML
      */
     _renderPvForecastSection() {
+        // Check if PV Forecast section should be hidden based on source
+        const pvSource = this.values["pv_forecast_source.source"] ?? this._getSchemaDefault("pv_forecast_source.source");
+        const locationBasedSources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"];
+
+        if (!locationBasedSources.includes(pvSource)) {
+            // For non-location-based sources (solcast, victron, evcc, timeseries),
+            // the pv_forecast section is not needed
+            let html = `<div class="config-restart-banner" id="cfg-restart-banner">
+                <i class="fas fa-info-circle"></i>
+                <span id="cfg-restart-msg">PV Installations not needed for <strong>${pvSource}</strong> source</span>
+            </div>`;
+            html += `<div class="config-section-title">
+                <i class="fa-solid fa-solar-panel" style="color:#4a9eff;"></i>
+                PV Installations
+            </div>
+            <div class="config-section-desc">`;
+
+            // Source-specific descriptions
+            if (pvSource === "solcast" || pvSource === "victron") {
+                html += `This section is only used for location-based PV sources (Akkudoktor, OpenMeteo, Forecast.Solar).
+                Your current source (<strong>${pvSource}</strong>) uses resource IDs configured in the PV Source section instead.`;
+            } else if (pvSource === "evcc") {
+                html += `This section is only used for location-based PV sources (Akkudoktor, OpenMeteo, Forecast.Solar).
+                Your current source (<strong>EVCC</strong>) retrieves PV data from your configured EVCC instance.
+                Configure the EVCC connection URL in the <strong>EVCC</strong> configuration section.`;
+            } else if (pvSource === "timeseries") {
+                html += `This section is only used for location-based PV sources (Akkudoktor, OpenMeteo, Forecast.Solar).
+                Your current source (<strong>Timeseries</strong>) uses direct time series data configured in the PV Source section.`;
+            } else if (pvSource === "default") {
+                html += `This section is only used for location-based PV sources (Akkudoktor, OpenMeteo, Forecast.Solar).
+                Your current source (<strong>Default</strong>) uses built-in default forecast values and requires no configuration.`;
+            } else {
+                html += `This section is only used for location-based PV sources (Akkudoktor, OpenMeteo, Forecast.Solar).
+                Your current source (<strong>${pvSource}</strong>) is configured elsewhere.`;
+            }
+
+            html += `</div>`;
+            return html;
+        }
+
         const meta = CONFIG_SECTIONS.pv_forecast;
         const pvFields = this.schema.filter(f => f.section === "pv_forecast");
         const maxLvl = LEVEL_ORDER[this.level] ?? 2;
@@ -712,7 +828,7 @@ class ConfigurationManager {
         const installations = this._getPvInstallations();
         const newIdx = installations.length;
         const pvFields = this.schema.filter(f => f.section === "pv_forecast");
-        
+
         // Get the last installation to use as template (if exists)
         const lastInstallation = installations.length > 0 ? installations[installations.length - 1] : null;
 
@@ -837,6 +953,9 @@ class ConfigurationManager {
         // Re-evaluate dependent field visibility
         this._updateDependencies(key);
 
+        // Update dynamic descriptions for fields that depend on this key
+        this._updateDynamicDescriptions(key);
+
         // Mark the input as changed
         const input = document.querySelector(`input[data-key="${key}"], select[data-key="${key}"]`);
         if (input && input.classList) {
@@ -856,6 +975,44 @@ class ConfigurationManager {
             } else {
                 toggleLabel.classList.remove("changed");
             }
+        }
+    }
+
+    /**
+     * Validate JSON field syntax and show/clear error message.
+     * Called on blur or during save.
+     * @param {string} key - Field key
+     * @returns {boolean} True if valid JSON, false otherwise
+     */
+    _validateJSONField(key) {
+        const textarea = document.getElementById(`cfg-json-${this._cssKey(key)}`);
+        const errorEl = document.getElementById(`cfg-json-err-${this._cssKey(key)}`);
+
+        if (!textarea || !errorEl) {
+            return true;
+        }
+
+        const jsonString = textarea.value.trim();
+
+        // Empty string is not valid for JSON arrays/objects
+        if (jsonString === "") {
+            errorEl.textContent = "JSON field cannot be empty. Use [] for an empty array.";
+            errorEl.style.display = "block";
+            textarea.classList.add("error");
+            return false;
+        }
+
+        try {
+            JSON.parse(jsonString);
+            errorEl.textContent = "";
+            errorEl.style.display = "none";
+            textarea.classList.remove("error");
+            return true;
+        } catch (e) {
+            errorEl.textContent = `Invalid JSON: ${e.message}`;
+            errorEl.style.display = "block";
+            textarea.classList.add("error");
+            return false;
         }
     }
 
@@ -888,6 +1045,11 @@ class ConfigurationManager {
                 if (!match) {
                     return true;
                 }
+            } else {
+                // Single string value — hide if current value doesn't match
+                if (allowed !== currentVal && String(allowed) !== String(currentVal)) {
+                    return true;
+                }
             }
         }
         return false;
@@ -913,7 +1075,98 @@ class ConfigurationManager {
                 }
             }
         }
+
+        // If pv_forecast_source.source changed, re-render pv_forecast section if it's currently displayed
+        if (changedKey === "pv_forecast_source.source") {
+            const contentEl = document.getElementById("cfg-content");
+            if (contentEl) {
+                // Check if we're currently viewing the pv_forecast section
+                const sectionMenuItems = document.querySelectorAll(".config-section-menu li");
+                for (const item of sectionMenuItems) {
+                    if (item.textContent.includes("PV") || item.textContent.includes("Forecast")) {
+                        if (item.classList.contains("active")) {
+                            // Re-render the pv_forecast section
+                            contentEl.innerHTML = this._renderPvForecastSection();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         this._updateGroupVisibility();
+    }
+
+    /**
+     * Update dynamic descriptions for fields that depend on the changed key.
+     * @param {string} changedKey - The key of the field that changed
+     */
+    _updateDynamicDescriptions(changedKey) {
+        if (!this.schema) {
+            return;
+        }
+        for (const f of this.schema) {
+            if (f.description_map) {
+                // Check if any of the description_map dependencies reference the changed key
+                for (const depKey of Object.keys(f.description_map)) {
+                    if (depKey === changedKey) {
+                        const resolvedDesc = this._resolveDescription(f);
+                        const helpEl = document.getElementById(`cfg-help-${this._cssKey(f.key)}`);
+                        if (helpEl) {
+                            // Preserve the "Learn more" link
+                            const learnMoreMatch = helpEl.innerHTML.match(/<a[^>]*>.*?<\/a>/);
+                            const learnMoreLink = learnMoreMatch ? learnMoreMatch[0] : "";
+                            helpEl.innerHTML = this._escapeHtml(resolvedDesc) + (learnMoreLink ? " " + learnMoreLink : "");
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Initialize dynamic descriptions for all fields in a section on first render.
+     * @param {string} section - Section key
+     */
+    _initializeDynamicDescriptions(section) {
+        if (!this.schema) {
+            return;
+        }
+        const fields = this._fieldsForSection(section);
+        for (const f of fields) {
+            if (f.description_map) {
+                const resolvedDesc = this._resolveDescription(f);
+                const helpEl = document.getElementById(`cfg-help-${this._cssKey(f.key)}`);
+                if (helpEl) {
+                    // Preserve the "Learn more" link
+                    const learnMoreMatch = helpEl.innerHTML.match(/<a[^>]*>.*?<\/a>/);
+                    const learnMoreLink = learnMoreMatch ? learnMoreMatch[0] : "";
+                    helpEl.innerHTML = this._escapeHtml(resolvedDesc) + (learnMoreLink ? " " + learnMoreLink : "");
+                }
+            }
+        }
+    }
+
+    /**
+     * Resolve the description for a field based on current form values.
+     * If the field has a description_map, use it; otherwise return the static description.
+     * @param {Object} f - Field definition
+     * @returns {string} The resolved description
+     */
+    _resolveDescription(f) {
+        if (!f.description_map) {
+            return f.description;
+        }
+        // description_map is: {"parent_key": {"parent_value": "dynamic_desc"}}
+        for (const [parentKey, valueMap] of Object.entries(f.description_map)) {
+            const parentValue = this.values[parentKey] ?? this._getSchemaDefault(parentKey);
+            if (parentValue in valueMap) {
+                return valueMap[parentValue];
+            }
+        }
+        // Fall back to static description
+        return f.description;
     }
 
     /**
@@ -1021,6 +1274,18 @@ class ConfigurationManager {
 
             if (!res.ok) {
                 const errData = await res.json().catch(() => ({}));
+
+                // Handle validation errors with detailed messages
+                if (errData.errors && errData.errors.length > 0) {
+                    this._showValidationErrors(errData.errors);
+                    // Auto-scroll to first error field and show banner
+                    this._scrollToFirstError(errData.errors);
+                    this._showPersistentErrorBanner(
+                        `Configuration Error: ${errData.errors.length} issue(s) found. Scroll up to see details.`
+                    );
+                    return;
+                }
+
                 this._showToast(errData.error || `Save failed (${res.status})`, "error");
                 return;
             }
@@ -1238,6 +1503,70 @@ class ConfigurationManager {
         this._showToast(`Validation failed: ${errors.length} error(s).`, "error");
     }
 
+    /**
+     * Scroll to the first error field and highlight it.
+     */
+    _scrollToFirstError(errors) {
+        if (errors.length === 0) return;
+
+        const firstError = errors[0];
+        const errEl = document.getElementById(`cfg-err-${this._cssKey(firstError.key)}`);
+
+        if (errEl) {
+            // Scroll the error element into view with offset for header
+            errEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        } else {
+            // Fallback: scroll to top if error element not found
+            document.querySelector("#full_screen_overlay_content") ||
+                document.querySelector(".config-section") ||
+                window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+    }
+
+    /**
+     * Show a persistent error banner at the top of the config panel.
+     */
+    _showPersistentErrorBanner(message) {
+        // Remove existing banner if present
+        const existingBanner = document.getElementById("cfg-error-persistent-banner");
+        if (existingBanner) {
+            existingBanner.remove();
+        }
+
+        // Create new banner
+        const contentDiv = document.getElementById("full_screen_overlay_content");
+        if (!contentDiv) return;
+
+        const banner = document.createElement("div");
+        banner.id = "cfg-error-persistent-banner";
+        banner.style.cssText = `
+            display: flex;
+            align-items: center;
+            background-color: #d32f2f;
+            color: white;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            font-weight: 500;
+            z-index: 1000;
+            position: sticky;
+            top: 0;
+        `;
+        banner.innerHTML = message;
+
+        // Insert at the top of content
+        contentDiv.insertBefore(banner, contentDiv.firstChild);
+
+        // Auto-dismiss after 10 seconds if user doesn't interact
+        setTimeout(() => {
+            if (banner && banner.parentElement) {
+                banner.style.transition = "opacity 0.3s ease";
+                banner.style.opacity = "0.7";
+            }
+        }, 10000);
+    }
+
     // ── Restart banner ──────────────────────────────────────────
 
     /**
@@ -1311,7 +1640,7 @@ class ConfigurationManager {
     _showUnmetDependencies(dependencies) {
         const banner = document.getElementById("cfg-unmet-deps-banner");
         const content = document.getElementById("cfg-unmet-deps-content");
-        
+
         if (banner && content) {
             let html = `
                 <div style="color: #ffc107; font-weight: bold; margin-bottom: 12px;">
@@ -1326,7 +1655,7 @@ class ConfigurationManager {
                 </li>`;
             }
             html += `</ul>`;
-            
+
             content.innerHTML = html;
             banner.classList.add("visible");
             this._showToast("Cannot save: required dependencies not configured", "error");

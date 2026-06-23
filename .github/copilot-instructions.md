@@ -1,5 +1,14 @@
 # GitHub Copilot Instructions for EOS Connect
 
+⚠️ **CRITICAL WORKFLOW REQUIREMENTS:**
+
+- **Code changes ALWAYS require documentation updates** — no exceptions
+- **"prepare for commit" triggers mandatory documentation checklist** — see Commit Preparation section
+- **NEVER auto-commit** — always present changes to user for review and approval
+- **GitHub Pages is primary documentation** — README.md is entry point only
+
+---
+
 ## Project Guidelines
 
 ### Icon Usage
@@ -26,19 +35,19 @@
 - GitHub Pages documentation is in `/docs` folder
 - Structure: 4 main sections (what-is, user-guide, advanced, developer)
 - Use HTML for documentation pages (better styling control than Markdown)
-- Keep README.md and CONFIG_README.md concise with links to full docs
+- **README.md**: Concise quick-start with links to full GitHub Pages docs (primary entry point)
+- **GitHub Pages** (`/docs`): Complete, detailed documentation for all features
 
 #### Documentation Update Workflow
 
 **When preparing to commit (NEVER stage changed files and commit automatically - always review changes first and ask for confirmation):**
 
-1. **Update README.md** - Minimal info only, focus on quick start + links to GitHub Pages
-2. **Update src/CONFIG_README.md** - Essential configuration overview + links to full docs
-3. **Update GitHub Pages** (`/docs` folder) - Complete, detailed documentation
+1. **Update README.md** - Concise quick-start only (1-3 sentences per feature), links to full docs
+2. **Update GitHub Pages** (`/docs` folder) - Complete, detailed documentation
    - Always write from **user perspective** (except developer section)
    - Main focus: **"Easy entry for new and existing users"**
    - Keep all pages current with latest features and changes
-   - Use clear, practical examples
+   - Use clear, practical examples with code blocks and screenshots
 
 #### Documentation Perspective
 
@@ -75,9 +84,8 @@ When making ANY code changes:
    - Bug fixes → Update troubleshooting in user-guide if user-facing
 
 2. **Update All Affected Pages**: Changes must be synchronized across:
-   - `/docs` GitHub Pages (primary documentation)
-   - `README.md` (if quick start or core features affected)
-   - `src/CONFIG_README.md` (if configuration parameters changed) - NOTE: This file is being deprecated, integrate changes into README.md instead
+   - `/docs` GitHub Pages (primary documentation, contains all details)
+   - `README.md` (if quick start or core features affected, keep concise)
 
 3. **Maintain Accuracy**: Documentation must match actual code behavior
    - Verify API endpoint responses match code
@@ -91,12 +99,59 @@ When making ANY code changes:
 
 ### Commit Preparation
 
-- **NEVER commit automatically** - only prepare changes for user review
-- When asked to "prepare to commit", ensure documentation is up-to-date:
-  1. Update README.md (minimal, with links)
-  2. Update src/CONFIG_README.md (essential info, with links)
-  3. Update GitHub Pages documentation (complete details)
-- Present a summary of changes for user to review before committing
+⚠️ **CRITICAL: Triggered by keywords:** "prepare for commit", "ready to commit", "commit prep", "ready to merge", "prepare to commit"
+
+**MANDATORY CHECKLIST - ALWAYS EXECUTE IN THIS ORDER:**
+
+**IMPORTANT:** "Prepare for commit" means review **ALL changes since last commit** (not just recent ones). Use `git diff` and `git status` to see complete scope. The commit message should reflect the entire change set, not just the most recent fix.
+
+1. ✅ **Review ALL changes since last commit** (PRIMARY STEP)
+   - Run: `git status` (see all modified files)
+   - Run: `git diff --stat` (see change scope)
+   - Verify: changes are logically related (if not, break into multiple commits)
+   - **The most recent change should not dominate the commit message if earlier changes are more significant**
+
+2. ✅ **Verify code changes are complete and tested**
+   - All tests pass
+   - No breaking changes
+   - All new functionality implemented
+
+3. ✅ **Update README.md** (ALWAYS REQUIRED)
+   - Add 1-3 sentence mention of the feature/fix
+   - Include link to full documentation on GitHub Pages
+   - Keep concise - no lengthy explanations
+   - Check: Does it follow existing README style?
+
+4. ✅ **Update GitHub Pages documentation** (ALWAYS REQUIRED unless bugfix with no user-facing changes)
+   - Identify all affected doc sections (user-guide, advanced, what-is, etc.)
+   - Update with complete details, examples, best practices
+   - Write from **user perspective** - explain "why" and "how", not just "what"
+   - Verify accuracy: all config names, types, defaults match code
+   - Add code examples with syntax highlighting where applicable
+
+5. ✅ **Run schema export** (if config changes)
+   - Execute: `python scripts/export_config_schema.py`
+   - Verify: `docs/assets/data/config_schema.json` updated
+
+6. ✅ **Generate summary and present to user**
+   - List all files modified (from `git status`)
+   - List all tests passing
+   - Link to GitHub Pages sections updated
+   - **WAIT FOR USER APPROVAL** before any commits
+
+7. ✅ **NEVER stage or commit automatically**
+   - Only prepare and present changes for review
+   - User must explicitly approve before committing
+
+8. ✅ **Include Conventional Commit message in response**
+   - **Keep it SHORT**: 50 char max for subject line
+   - Format: `<type>: <brief description>`
+   - Body (optional): Why this change, not what (code shows what)
+   - Footer (optional): `Fixes: #123` for issue references
+   - Make it ready to copy-paste
+   - **Rule: If you're writing multiple paragraphs, the message is too long. Simplify.**
+
+**If ANY of these steps are skipped, the preparation is INCOMPLETE.**
 
 ### Testing Phase Documentation
 
@@ -344,21 +399,21 @@ Fields grouped by predicted code complexity and user impact. Each group shares i
 
 These fields are simple instance attributes that can be set at runtime:
 
-| Group           | Fields                                                                                        | Interface                           | Status                                                                      |
-| --------------- | --------------------------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------- |
-| EOS tuning      | `eos.timeout`, `eos.dyn_override_discharge_allowed_pv_greater_load`, `eos.pv_battery_charge_control_enabled` | OptimizationInterface | ✅ **IMPLEMENTED** |
-| System timing   | `refresh_time`                                                                                | OptimizationScheduler               | Next to implement                                      |
-| System timing   | `eos.time_frame` (900 or 3600)                                                                | All interfaces                      | Requires cache invalidation (see Priority 1.5)        |
-| Inverter limits | `inverter.max_grid_charge_rate`, `inverter.max_pv_charge_rate`                                | BaseInverter subclass               | Could implement next                                   |
-| System          | `request_timeout`                                                                             | All interfaces                      | Lower priority                                        |
+| Group           | Fields                                                                                                       | Interface             | Status                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------ | --------------------- | ---------------------------------------------- |
+| EOS tuning      | `eos.timeout`, `eos.dyn_override_discharge_allowed_pv_greater_load`, `eos.pv_battery_charge_control_enabled` | OptimizationInterface | ✅ **IMPLEMENTED**                             |
+| System timing   | `refresh_time`                                                                                               | OptimizationScheduler | Next to implement                              |
+| System timing   | `eos.time_frame` (900 or 3600)                                                                               | All interfaces        | Requires cache invalidation (see Priority 1.5) |
+| Inverter limits | `inverter.max_grid_charge_rate`, `inverter.max_pv_charge_rate`                                               | BaseInverter subclass | Could implement next                           |
+| System          | `request_timeout`                                                                                            | All interfaces        | Lower priority                                 |
 
 **Priority 1.5 — Attribute swap + cache clear (medium effort, high user value)**
 
 Simple attribute updates but require recalculation or cache invalidation:
 
-| Group              | Fields                                    | Interface                    | Change Required                                  |
-| ------------------ | ----------------------------------------- | ---------------------------- | ------------------------------------------------ |
-| EOS time slot      | `eos.time_frame`                          | OptimizationInterface + all data providers | Update timeframe on all interfaces + clear forecast caches |
+| Group         | Fields           | Interface                                  | Change Required                                            |
+| ------------- | ---------------- | ------------------------------------------ | ---------------------------------------------------------- |
+| EOS time slot | `eos.time_frame` | OptimizationInterface + all data providers | Update timeframe on all interfaces + clear forecast caches |
 
 **Priority 2 — Requires recalculation or reconnect (medium effort)**
 
@@ -407,6 +462,161 @@ These affect the application infrastructure itself:
 3. If side-effects needed (recalculation), add trigger set like `_FEEDIN_TRIGGERS`
 4. Add tests in `tests/config_web/test_hot_reload.py`
 5. Run `python scripts/export_config_schema.py`
+
+### Interface Creation & Startup Error Handling
+
+Two new modules work together to provide centralized interface creation with integrated startup validation and user-visible error handling.
+
+#### InterfaceFactory (src/interface_factory.py)
+
+**Purpose**: Centralized factory for interface instantiation with integrated startup validation.
+
+**Responsibilities:**
+
+- Instantiate all interface types (Load, Battery, Price, PV, MQTT, EVCC, Inverter, Optimization)
+- Catch errors during instantiation
+- Register errors with `StartupValidator` for visibility in web UI startup panel
+- Distinguish critical interfaces (halt startup on failure) from non-critical (use fallbacks)
+- Track created interfaces for lifecycle management
+
+**Usage in eos_connect.py:**
+
+```python
+from interface_factory import InterfaceFactory
+from startup_validator import StartupValidator
+
+# Initialize at startup
+validator = StartupValidator()
+factory = InterfaceFactory(validator)
+
+# Create interfaces with automatic error handling
+battery_interface = factory.create_battery_interface(
+    config=config['battery'],
+    time_zone=time_zone,
+    critical=True,  # Startup halts on failure
+)
+
+load_interface = factory.create_load_interface(
+    config=config['load'],
+    time_frame_base=config['refresh_time'],
+    time_zone=time_zone,
+    critical=False,  # Uses default on failure
+)
+```
+
+**Benefits:**
+
+- Eliminates boilerplate try/except blocks in main app
+- Consistent error categorization across all interface types
+- Centralized startup error collection for web UI visibility
+- Easy to extend with new interface types
+
+#### StartupValidator (src/startup_validator.py)
+
+**Purpose**: Lightweight facade for registering startup errors directly to the logging system.
+
+**Responsibilities:**
+
+- Register startup errors with structured metadata
+- Write ERROR/WARNING logs captured by `MemoryLogHandler`
+- Embed metadata markers in log messages for frontend parsing
+- Act as single source of truth for startup errors via `/logs/alerts` endpoint
+
+**Method signature:**
+
+```python
+validator.add_error(
+    category="connectivity",        # initialization, configuration, connectivity
+    component="battery_interface",  # Component name
+    severity="error",              # error or warning
+    title="Battery unavailable",   # Short, user-friendly title
+    message="Connection timeout",  # Detailed message
+    action_required=True,          # Flag for ACTION REQUIRED badge
+    config_link="#battery",        # Link to config section (e.g., #eos, #battery)
+)
+```
+
+**Frontend Integration:**
+
+- Errors are fetched via: `GET /logs/alerts?startup_only=1&limit=20`
+- Errors with metadata markers are parsed by `main.js` → `parseAlertMeta()`
+- Startup panel renders with:
+  - Component name (extracted from `[component]` prefix)
+  - Timestamp and occurrence count
+  - ACTION REQUIRED badge (yellow) if flagged
+  - "Open Configuration" link pointing to config section
+
+#### Startup Error Flow
+
+```
+Startup:
+  InterfaceFactory.create_*_interface()
+    ├─ Try to create interface
+    │   ├─ Success → return interface (silent)
+    │   └─ Failure → catch exception
+    │       └─ validator.add_error(...)
+    │           └─ MemoryLogHandler captures ERROR/WARNING log
+    │               ├─ Metadata extracted: Config link, ACTION REQUIRED flag
+    │               └─ Stored in log buffer, visible via /logs/alerts
+
+Runtime (user views dashboard):
+  fetch /logs/alerts?startup_only=1
+    └─ Frontend renderAlertSection()
+       ├─ Deduplicates by title, counts occurrences
+       ├─ Sorts by severity (ACTION REQUIRED first)
+       ├─ Shows: timestamp, occurrence count, config link button
+       └─ User clicks → showConfigurationMenu(section)
+```
+
+#### Log Message Format
+
+Error messages should include metadata markers for frontend parsing:
+
+```
+[component] Title: Message | Config: #section | ACTION REQUIRED
+
+Examples:
+[eos_backend] EOS Connection failed: Connection timeout | Config: #eos | ACTION REQUIRED
+[battery_interface] Battery SOC error: Authentication failed | Config: #battery | ACTION REQUIRED
+[load_interface] Load data unavailable: Request timeout | Config: #load
+```
+
+**Frontend parsing:**
+
+- Matches `Config: (#\w+)` for config section link
+- Checks for "ACTION REQUIRED" string to show badge
+- Extracts component name from `[component]` prefix
+
+#### Extending with New Interface Types
+
+To add a new interface creation method:
+
+1. Add method to `InterfaceFactory` following the pattern of existing methods
+2. Specify error category (connectivity, initialization, configuration), component name, config link
+3. Mark as critical or non-critical
+4. Call from `eos_connect.py` during startup
+5. On instantiation failure, `StartupValidator.add_error()` is called automatically
+6. Errors appear in startup panel within 1-2 seconds
+
+**Example:**
+
+```python
+def create_my_new_interface(self, config: Dict[str, Any], critical: bool = True):
+    return self._create_interface(
+        component_name="my_new_interface",
+        category="connectivity",
+        critical=critical,
+        title="My New Interface unavailable",
+        error_message="Failed to initialize",
+        config_link="#my_section",
+        creator_func=lambda: self._import_and_create(
+            "interfaces.my_new_interface",
+            "MyNewInterface",
+            config,
+            request_timeout=10,
+        ),
+    )
+```
 
 ### HA Addon Integration
 
@@ -643,3 +853,68 @@ EOS Connect now uses a built-in web UI for all configuration.
 | CHANGELOG / release notes | Add migration note                             | Low                      |
 
 > **Important**: Apply identical changes to both `eos_connect/` and `eos_connect_develop/` directories. The only differences between them should be `name`, `version`, `slug`, and `image` fields in `config.yaml`.
+
+---
+
+## Commit Message Guidelines
+
+All commits follow **Conventional Commits** format for clear, scannable history.
+
+### Format
+
+```
+<type>: <description>
+
+[optional body with details]
+
+[optional footer with issue references]
+```
+
+### Types
+
+- **feat**: New feature (e.g., `feat: add battery forecast smoothing`)
+- **fix**: Bug fix (e.g., `fix: prevent startup crash on incomplete config`)
+- **docs**: Documentation changes (README.md or GitHub Pages /docs folder)
+- **test**: Test additions or fixes (no production code change)
+- **refactor**: Code restructuring without feature/fix change
+- **perf**: Performance improvement
+- **chore**: Build, tooling, dependencies
+
+### Examples
+
+**Feature:**
+
+```
+feat: implement two-tier PV config validation
+
+- Lenient startup mode to prevent app crash on incomplete config
+- Strict hot-reload mode to validate all changes
+- Add configuration_state tracking for web UI visibility
+```
+
+**Bug Fix:**
+
+```
+fix: prevent startup crash on incomplete config - enable web UI access
+
+- Implement two-tier validation (lenient startup, strict hot-reload)
+- Remove sys.exit(1) calls on validation errors
+- Graceful degradation: start in DEGRADED mode instead of crashing
+
+Fixes: #259
+```
+
+**Documentation:**
+
+```
+docs: update configuration guide with new PV source options
+```
+
+### Best Practices
+
+- Keep subject line ≤ 50 characters
+- Use imperative mood ("add", "fix", not "added", "fixed")
+- Include issue reference in footer: `Fixes: #123` or `Resolves: #123`
+- Use body to explain _why_, not _what_ (code shows what)
+- Link related issues: `Related: #456, #789`
+- If multiple fixes/features, break into separate commits for clarity

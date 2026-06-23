@@ -76,6 +76,12 @@ def build_merged_config(
     # Resolve data_source -> load/battery connection fields
     _apply_data_source_inheritance(result, all_settings)
 
+    # Inject data_source credentials to inverter when type is homeassistant
+    _apply_inverter_data_source_injection(result, all_settings)
+
+    # Apply central HA data source for price and PV sources
+    _apply_central_ha_data_source(result, all_settings)
+
     return result
 
 
@@ -120,7 +126,8 @@ def _build_pv_forecast(
     Rebuild the pv_forecast list from store values.
 
     Two storage formats are supported:
-    1. Web UI format (preferred): indexed keys like ``pv_forecast.0.name``, ``pv_forecast.1.lat``, etc.
+    1. Web UI format (preferred): indexed keys like ``pv_forecast.0.name``,
+       ``pv_forecast.1.lat``, etc.
     2. Migration format (fallback): entire list under key ``"pv_forecast"``
 
     Missing fields in entries are filled with schema defaults.
@@ -177,6 +184,7 @@ def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -
     ds_type = all_settings.get("data_source.type", "default")
     ds_url = all_settings.get("data_source.url", "")
     ds_token = all_settings.get("data_source.access_token", "")
+    ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
 
     for section in _DATA_SOURCE_SECTIONS:
         if section not in result:
@@ -190,4 +198,65 @@ def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -
             sec["source"] = ds_type
             sec["url"] = ds_url
             sec["access_token"] = ds_token
+        # Inject ssl_ignore regardless of source override
+        sec["ssl_ignore"] = ds_ssl_ignore
         # If section has its own source set, keep it (Expert override)
+
+
+def _apply_inverter_data_source_injection(result: dict, all_settings: dict[str, Any]) -> None:
+    """
+    Inject data_source URL and token to inverter when type is homeassistant.
+
+    When inverter.type is "homeassistant", inject the data_source.url and
+    data_source.access_token as inverter.url and inverter.token respectively.
+    This ensures the inverter uses the same HA credentials as the load/battery interfaces.
+    """
+    if "inverter" not in result:
+        return
+
+    inverter = result["inverter"]
+    if inverter.get("type") != "homeassistant":
+        return
+
+    ds_url = all_settings.get("data_source.url", "")
+    ds_token = all_settings.get("data_source.access_token", "")
+    ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
+
+    # Inject credentials from data_source
+    inverter["url"] = ds_url
+    inverter["token"] = ds_token
+    inverter["ssl_ignore"] = ds_ssl_ignore
+
+
+def _apply_central_ha_data_source(result: dict, all_settings: dict[str, Any]) -> None:
+    """
+    Apply central Home Assistant data source to price and pv_forecast_source.
+
+    When price.use_ha_central_data_source or pv_forecast_source.use_ha_central_data_source
+    is true, construct the data_url and data_token from the centrally configured
+    data_source (url and access_token), avoiding repetition for end users.
+
+    Args:
+        result: The merged config dict to modify in-place.
+        all_settings: All settings from the store.
+    """
+    ds_url = all_settings.get("data_source.url", "")
+    ds_token = all_settings.get("data_source.access_token", "")
+
+    # Apply to price section
+    if "price" in result:
+        price = result["price"]
+        if price.get("use_ha_central_data_source"):
+            sensor_name = price.get("ha_sensor_name", "sensor.grid_prices")
+            # Construct HA API URL from sensor entity
+            price["data_url"] = f"{ds_url}/api/states/{sensor_name}"
+            price["data_token"] = ds_token
+
+    # Apply to pv_forecast_source section
+    if "pv_forecast_source" in result:
+        pv_source = result["pv_forecast_source"]
+        if pv_source.get("use_ha_central_data_source"):
+            sensor_name = pv_source.get("ha_sensor_name", "sensor.pv_forecast")
+            # Construct HA API URL from sensor entity
+            pv_source["data_url"] = f"{ds_url}/api/states/{sensor_name}"
+            pv_source["data_token"] = ds_token

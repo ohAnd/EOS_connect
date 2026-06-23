@@ -627,7 +627,13 @@ function showLogsMenu() {
  * Show info menu using modern full-screen overlay
  */
 function showInfoMenu(version, backend, granularity) {
-    backend = backend == "evopt" ? "EVOpt @ EVCC" : "EOS@akkudoktor";
+    if (backend == "local_evopt") {
+        backend = "Local EVOpt (built-in)";
+    } else if (backend == "evopt") {
+        backend = "EVOpt @ EVCC";
+    } else {
+        backend = "EOS@akkudoktor";
+    }
     granularity = granularity == "900" ? "15 min intervals" : "60 min intervals";
     
     // Build combined version/update status section

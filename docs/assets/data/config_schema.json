@@ -66,6 +66,27 @@
       "display_group": "Connection"
     },
     {
+      "key": "data_source.ssl_ignore",
+      "type": "bool",
+      "default": false,
+      "section": "data_source",
+      "level": "expert",
+      "description": "Disable SSL certificate verification (use with private/self-signed CA)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#data-source",
+      "validation": {},
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Connection"
+    },
+    {
       "key": "load.source",
       "type": "select",
       "default": "default",
@@ -214,23 +235,24 @@
     {
       "key": "eos.source",
       "type": "select",
-      "default": "eos_server",
+      "default": "local_evopt",
       "section": "eos",
       "level": "getting_started",
-      "description": "Optimization backend — EOS Server or EVopt",
+      "description": "Optimization backend — Local (built-in), EOS Server, or EVopt (external)",
       "labels": [
         "restart_required"
       ],
       "help_url": "configuration.html#eos",
       "validation": {
         "choices": [
+          "local_evopt",
           "eos_server",
           "evopt"
         ]
       },
       "depends_on": null,
       "hot_reload": false,
-      "display_group": "Server"
+      "display_group": "Backend"
     },
     {
       "key": "eos.server",
@@ -244,9 +266,14 @@
       ],
       "help_url": "configuration.html#eos",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "eos.source": [
+          "eos_server",
+          "evopt"
+        ]
+      },
       "hot_reload": false,
-      "display_group": "Server"
+      "display_group": "External Server"
     },
     {
       "key": "eos.port",
@@ -263,9 +290,14 @@
         "min": 1,
         "max": 65535
       },
-      "depends_on": null,
+      "depends_on": {
+        "eos.source": [
+          "eos_server",
+          "evopt"
+        ]
+      },
       "hot_reload": false,
-      "display_group": "Server"
+      "display_group": "External Server"
     },
     {
       "key": "eos.time_frame",
@@ -336,15 +368,162 @@
       "display_group": "Advanced"
     },
     {
+      "key": "eos.local_evopt_charging_strategy",
+      "type": "select",
+      "default": "charge_before_export",
+      "section": "eos",
+      "level": "standard",
+      "description": "Charging strategy for the built-in optimizer",
+      "labels": [],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "choices": [
+          "charge_before_export",
+          "discharge_before_import",
+          "maximize_self_consumption",
+          "attenuate_grid_peaks",
+          "none"
+        ]
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": true,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_discharging_strategy",
+      "type": "select",
+      "default": "discharge_before_import",
+      "section": "eos",
+      "level": "standard",
+      "description": "Discharging strategy for the built-in optimizer",
+      "labels": [],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "choices": [
+          "discharge_before_import",
+          "emergency_reserve",
+          "none"
+        ]
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": true,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_emergency_reserve_pct",
+      "type": "int",
+      "default": 0,
+      "section": "eos",
+      "level": "standard",
+      "description": "Minimum battery SOC to maintain at end-of-horizon (% of capacity, 0 = disabled)",
+      "labels": [],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 0,
+        "max": 80
+      },
+      "depends_on": {
+        "eos.local_evopt_discharging_strategy": "emergency_reserve"
+      },
+      "hot_reload": true,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_max_grid_import_w",
+      "type": "int",
+      "default": 0,
+      "section": "eos",
+      "level": "expert",
+      "description": "Maximum grid import power (0 = no limit, uses inverter limit). Use for grid connection limits.",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 0,
+        "max": 100000
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": false,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_max_grid_export_w",
+      "type": "int",
+      "default": 0,
+      "section": "eos",
+      "level": "expert",
+      "description": "Maximum grid export power (0 = no limit, uses discharge max). Use for grid feed-in limits.",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 0,
+        "max": 100000
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": false,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_num_threads",
+      "type": "int",
+      "default": 0,
+      "section": "eos",
+      "level": "expert",
+      "description": "CBC solver thread count for built-in optimizer (0 = auto)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 0,
+        "max": 32
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": false,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_time_limit",
+      "type": "int",
+      "default": 0,
+      "section": "eos",
+      "level": "expert",
+      "description": "CBC solver time limit in seconds for built-in optimizer (0 = no limit)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 0,
+        "max": 600
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": false,
+      "display_group": "Local Optimizer"
+    },
+    {
       "key": "price.source",
       "type": "select",
       "default": "default",
       "section": "price",
       "level": "getting_started",
       "description": "Data source for electricity prices",
-      "labels": [
-        "restart_required"
-      ],
+      "labels": [],
       "help_url": "configuration.html#price",
       "validation": {
         "choices": [
@@ -352,12 +531,14 @@
           "smartenergy_at",
           "stromligning",
           "fixed_24h",
+          "timeseries",
+          "evcc",
           "default"
         ]
       },
       "depends_on": null,
-      "hot_reload": false,
-      "display_group": "Provider"
+      "hot_reload": true,
+      "display_group": "Grid Price Provider"
     },
     {
       "key": "price.token",
@@ -365,7 +546,7 @@
       "default": "tibberBearerToken",
       "section": "price",
       "level": "getting_started",
-      "description": "API token for price provider (Tibber bearer token, Stromligning supplierId/productId)",
+      "description": "API token for price provider (bearer token / supplier ID)",
       "labels": [
         "restart_required"
       ],
@@ -378,7 +559,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Provider"
+      "display_group": "Grid Price Provider"
     },
     {
       "key": "price.fixed_price_adder_ct",
@@ -392,7 +573,7 @@
       "validation": {},
       "depends_on": null,
       "hot_reload": true,
-      "display_group": "Price Adjustments"
+      "display_group": "Grid Price - Adjustments"
     },
     {
       "key": "price.relative_price_multiplier",
@@ -406,7 +587,7 @@
       "validation": {},
       "depends_on": null,
       "hot_reload": true,
-      "display_group": "Price Adjustments"
+      "display_group": "Grid Price - Adjustments"
     },
     {
       "key": "price.fixed_24h_array",
@@ -414,7 +595,7 @@
       "default": "10.1,10.1,10.1,10.1,10.1,23,28.23,28.23,28.23,28.23,28.23,23.52,23.52,23.52,23.52,28.17,28.17,34.28,34.28,34.28,34.28,34.28,28,23",
       "section": "price",
       "level": "standard",
-      "description": "24 comma-separated prices in ct/kWh for each hour (used with fixed_24h source)",
+      "description": "24 comma-separated prices in ct/kWh per hour (fixed_24h source)",
       "labels": [
         "restart_required"
       ],
@@ -426,35 +607,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Fixed Prices"
-    },
-    {
-      "key": "price.feed_in_price",
-      "type": "float",
-      "default": 0.0,
-      "section": "price",
-      "level": "getting_started",
-      "description": "Feed-in price for the grid in €/kWh",
-      "labels": [],
-      "help_url": "configuration.html#price",
-      "validation": {},
-      "depends_on": null,
-      "hot_reload": true,
-      "display_group": "Price Adjustments"
-    },
-    {
-      "key": "price.negative_price_switch",
-      "type": "bool",
-      "default": false,
-      "section": "price",
-      "level": "standard",
-      "description": "No payment when stock price is negative",
-      "labels": [],
-      "help_url": "configuration.html#price",
-      "validation": {},
-      "depends_on": null,
-      "hot_reload": true,
-      "display_group": "Price Adjustments"
+      "display_group": "Grid Price Provider"
     },
     {
       "key": "price.energyforecast_enabled",
@@ -464,14 +617,13 @@
       "level": "standard",
       "description": "Enable smart price prediction via energyforecast.de",
       "labels": [
-        "experimental",
         "restart_required"
       ],
       "help_url": "configuration.html#energyforecast",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
-      "display_group": "Energy Price Forecast"
+      "display_group": "Grid Price - Forecast (Advanced)"
     },
     {
       "key": "price.energyforecast_token",
@@ -481,7 +633,6 @@
       "level": "standard",
       "description": "API token from energyforecast.de",
       "labels": [
-        "experimental",
         "restart_required"
       ],
       "help_url": "configuration.html#energyforecast",
@@ -492,7 +643,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Energy Price Forecast"
+      "display_group": "Grid Price - Forecast (Advanced)"
     },
     {
       "key": "price.energyforecast_market_zone",
@@ -502,7 +653,6 @@
       "level": "standard",
       "description": "Market zone for energy price forecast",
       "labels": [
-        "experimental",
         "restart_required"
       ],
       "help_url": "configuration.html#energyforecast",
@@ -524,7 +674,241 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Energy Price Forecast"
+      "display_group": "Grid Price - Forecast (Advanced)"
+    },
+    {
+      "key": "price.use_ha_central_data_source",
+      "type": "bool",
+      "default": false,
+      "section": "price",
+      "level": "standard",
+      "description": "Use centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
+      "labels": [],
+      "help_url": "configuration.html#price-sources",
+      "validation": {},
+      "depends_on": {
+        "price.source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Grid Price Provider"
+    },
+    {
+      "key": "price.ha_sensor_name",
+      "type": "str",
+      "default": "sensor.grid_prices",
+      "section": "price",
+      "level": "getting_started",
+      "description": "Home Assistant sensor entity containing price timeseries data (e.g., sensor.grid_prices)",
+      "labels": [],
+      "help_url": "configuration.html#price-sources",
+      "validation": {},
+      "depends_on": {
+        "price.source": [
+          "timeseries"
+        ],
+        "price.use_ha_central_data_source": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Grid Price Provider"
+    },
+    {
+      "key": "price.data_path",
+      "type": "str",
+      "default": "attributes.data",
+      "section": "price",
+      "level": "standard",
+      "description": "JSON path to timeseries array in response. For HA sensors: 'attributes.data'. For custom HTTP servers: 'data', 'prices', 'values', etc. (default: 'attributes.data')",
+      "labels": [],
+      "help_url": "configuration.html#price-sources",
+      "validation": {},
+      "depends_on": {
+        "price.source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Grid Price Provider"
+    },
+    {
+      "key": "price.data_url",
+      "type": "str",
+      "default": "http://homeassistant.local:8123/api/states/sensor.grid_prices",
+      "section": "price",
+      "level": "getting_started",
+      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: endpoint URL returning JSON timeseries. Must return JSON array with {start, end, value} format (values in EUR/Wh).",
+      "labels": [],
+      "help_url": "configuration.html#price-sources",
+      "validation": {
+        "pattern": "^https?://.+"
+      },
+      "depends_on": {
+        "price.source": [
+          "timeseries"
+        ],
+        "price.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Grid Price Provider"
+    },
+    {
+      "key": "price.data_token",
+      "type": "password",
+      "default": "",
+      "section": "price",
+      "level": "standard",
+      "description": "Optional bearer token for API authentication (used as Authorization: Bearer [token]). Leave empty for unauthenticated endpoints.",
+      "labels": [],
+      "help_url": "configuration.html#price-sources",
+      "validation": {},
+      "depends_on": {
+        "price.source": [
+          "timeseries"
+        ],
+        "price.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Grid Price Provider"
+    },
+    {
+      "key": "price.feed_in_source",
+      "type": "select",
+      "default": "fixed",
+      "section": "price",
+      "level": "standard",
+      "description": "Source for feed-in (export) prices",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {
+        "choices": [
+          "fixed",
+          "elpris_dk",
+          "epex_spot",
+          "evcc"
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Feed-In Price"
+    },
+    {
+      "key": "price.feed_in_price",
+      "type": "float",
+      "default": 0.0,
+      "section": "price",
+      "level": "getting_started",
+      "description": "Fixed feed-in price for the grid in ct/kWh",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {},
+      "depends_on": {
+        "price.feed_in_source": [
+          "fixed"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Price"
+    },
+    {
+      "key": "price.feed_in_zone",
+      "type": "select",
+      "default": "DK1",
+      "section": "price",
+      "level": "standard",
+      "description": "Stromzone for Elpris (DK1 or DK2)",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {
+        "choices": [
+          "DK1",
+          "DK2"
+        ]
+      },
+      "depends_on": {
+        "price.feed_in_source": [
+          "elpris_dk"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Price"
+    },
+    {
+      "key": "price.feed_in_static_adder",
+      "type": "float",
+      "default": 0.0,
+      "section": "price",
+      "level": "standard",
+      "description": "Static adjustment to feed-in price in ct/kWh (e.g., +3.5 for transport costs)",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {
+        "min": -10.0,
+        "max": 10.0
+      },
+      "depends_on": {
+        "price.feed_in_source": [
+          "elpris_dk",
+          "epex_spot"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Price"
+    },
+    {
+      "key": "price.feed_in_multiplier",
+      "type": "float",
+      "default": 1.0,
+      "section": "price",
+      "level": "expert",
+      "description": "Relative multiplier for feed-in price (1.0 = no change, 1.05 = +5%)",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {
+        "min": 0.5,
+        "max": 1.5
+      },
+      "depends_on": {
+        "price.feed_in_source": [
+          "elpris_dk",
+          "epex_spot"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Price"
+    },
+    {
+      "key": "price.feed_in_negative_price_switch",
+      "type": "bool",
+      "default": false,
+      "section": "price",
+      "level": "standard",
+      "description": "Clamp negative market prices to feed-in price of 0",
+      "labels": [],
+      "help_url": "configuration.html#price",
+      "validation": {},
+      "depends_on": {
+        "price.feed_in_source": [
+          "fixed",
+          "elpris_dk",
+          "epex_spot"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Price",
+      "description_map": {
+        "price.feed_in_source": {
+          "fixed": "Clamp to 0 when market price (Akkudoktor reference) goes negative",
+          "elpris_dk": "Clamp to 0 when market price (Elpris DK) goes negative",
+          "epex_spot": "Clamp to 0 when market price (EPEX Spot) goes negative"
+        }
+      }
     },
     {
       "key": "battery.source",
@@ -1014,6 +1398,7 @@
           "evcc",
           "solcast",
           "victron",
+          "timeseries",
           "default"
         ]
       },
@@ -1041,12 +1426,33 @@
       "display_group": "Provider"
     },
     {
+      "key": "pv_forecast_source.resource_id",
+      "type": "str",
+      "default": "",
+      "section": "pv_forecast_source",
+      "level": "standard",
+      "description": "Resource ID / Installation ID (Solcast: comma-separated list; Victron: single VRM ID)",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast",
+      "validation": {
+        "max_length": 1000
+      },
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "solcast",
+          "victron"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
       "key": "pv_forecast_source.use_real_data_correction",
       "type": "bool",
       "default": true,
       "section": "pv_forecast_source",
       "level": "standard",
-      "description": "Apply the scaling factor from EVCC forecast API to correct PV forecast values using real measured data. If disabled, no scaling is applied (scale = 1.0).",
+      "description": "Apply scaling factor from EVCC forecast API to correct PV forecast values using real measured data. If disabled, no scaling applied (scale = 1.0).",
       "labels": [],
       "help_url": "configuration.html#pv-forecast-evcc",
       "validation": {},
@@ -1059,6 +1465,107 @@
       "display_group": "Provider"
     },
     {
+      "key": "pv_forecast_source.use_ha_central_data_source",
+      "type": "bool",
+      "default": false,
+      "section": "pv_forecast_source",
+      "level": "standard",
+      "description": "Use centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast-sources",
+      "validation": {},
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "pv_forecast_source.ha_sensor_name",
+      "type": "str",
+      "default": "sensor.pv_forecast",
+      "section": "pv_forecast_source",
+      "level": "getting_started",
+      "description": "Home Assistant sensor entity containing PV forecast timeseries data (e.g., sensor.pv_forecast)",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast-sources",
+      "validation": {},
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "timeseries"
+        ],
+        "pv_forecast_source.use_ha_central_data_source": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "pv_forecast_source.data_path",
+      "type": "str",
+      "default": "attributes.data",
+      "section": "pv_forecast_source",
+      "level": "standard",
+      "description": "JSON path to timeseries array in response. For HA sensors: 'attributes.data'. For custom HTTP servers: 'data', 'forecast', 'values', etc. (default: 'attributes.data')",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast-sources",
+      "validation": {},
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "pv_forecast_source.data_url",
+      "type": "str",
+      "default": "http://homeassistant.local:8123/api/states/sensor.pv_forecast",
+      "section": "pv_forecast_source",
+      "level": "getting_started",
+      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: endpoint URL returning JSON timeseries. Must return JSON array with {start, end, value} format.",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast-sources",
+      "validation": {
+        "pattern": "^https?://.+"
+      },
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "timeseries"
+        ],
+        "pv_forecast_source.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "pv_forecast_source.data_token",
+      "type": "password",
+      "default": "",
+      "section": "pv_forecast_source",
+      "level": "standard",
+      "description": "Optional bearer token for API authentication (used as Authorization: Bearer [token]). Leave empty for unauthenticated endpoints.",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast-sources",
+      "validation": {},
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "timeseries"
+        ],
+        "pv_forecast_source.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
       "key": "pv_forecast.name",
       "type": "str",
       "default": "myPvInstallation1",
@@ -1068,7 +1575,14 @@
       "labels": [],
       "help_url": "configuration.html#pv-forecast",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1085,7 +1599,14 @@
         "min": -90,
         "max": 90
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1102,7 +1623,14 @@
         "min": -180,
         "max": 180
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1119,7 +1647,14 @@
         "min": -180,
         "max": 180
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1136,7 +1671,14 @@
         "min": 0,
         "max": 90
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1152,7 +1694,14 @@
       "validation": {
         "min": 1
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1168,7 +1717,14 @@
       "validation": {
         "min": 1
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1185,7 +1741,14 @@
         "min": 0.1,
         "max": 1.0
       },
-      "depends_on": null,
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
+        ]
+      },
       "hot_reload": true,
       "display_group": "Installation"
     },
@@ -1199,23 +1762,12 @@
       "labels": [],
       "help_url": "configuration.html#pv-forecast",
       "validation": {},
-      "depends_on": null,
-      "hot_reload": true,
-      "display_group": "Installation"
-    },
-    {
-      "key": "pv_forecast.resource_id",
-      "type": "str",
-      "default": "",
-      "section": "pv_forecast",
-      "level": "standard",
-      "description": "Resource ID for Solcast API (only needed for Solcast provider)",
-      "labels": [],
-      "help_url": "configuration.html#pv-forecast",
-      "validation": {},
       "depends_on": {
         "pv_forecast_source.source": [
-          "solcast"
+          "akkudoktor",
+          "openmeteo",
+          "openmeteo_local",
+          "forecast_solar"
         ]
       },
       "hot_reload": true,
@@ -1242,51 +1794,13 @@
           "default"
         ]
       },
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Hardware"
-    },
-    {
-      "key": "inverter.url",
-      "type": "str",
-      "default": "",
-      "section": "inverter",
-      "level": "getting_started",
-      "description": "Home Assistant URL for inverter control (e.g. http://homeassistant.local:8123)",
-      "labels": [
-        "restart_required",
-        "deprecated"
-      ],
-      "help_url": "configuration.html#inverter",
-      "validation": {},
-      "depends_on": {
-        "inverter.type": [
-          "homeassistant"
-        ]
-      },
-      "hot_reload": false,
-      "display_group": "Home Assistant"
-    },
-    {
-      "key": "inverter.token",
-      "type": "password",
-      "default": "",
-      "section": "inverter",
-      "level": "getting_started",
-      "description": "Long-lived access token for Home Assistant inverter control",
-      "labels": [
-        "restart_required",
-        "deprecated"
-      ],
-      "help_url": "configuration.html#inverter",
-      "validation": {},
-      "depends_on": {
-        "inverter.type": [
-          "homeassistant"
-        ]
-      },
-      "hot_reload": false,
-      "display_group": "Home Assistant"
     },
     {
       "key": "inverter.address",
@@ -1389,6 +1903,66 @@
       "depends_on": null,
       "hot_reload": false,
       "display_group": "Power Limits"
+    },
+    {
+      "key": "inverter.charge_from_grid",
+      "type": "json",
+      "default": [],
+      "section": "inverter",
+      "level": "standard",
+      "description": "Array of Home Assistant service calls for force-charge mode",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#inverter",
+      "validation": {},
+      "depends_on": {
+        "inverter.type": [
+          "homeassistant"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Home Assistant Service Calls"
+    },
+    {
+      "key": "inverter.avoid_discharge",
+      "type": "json",
+      "default": [],
+      "section": "inverter",
+      "level": "standard",
+      "description": "Array of Home Assistant service calls for avoid-discharge mode",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#inverter",
+      "validation": {},
+      "depends_on": {
+        "inverter.type": [
+          "homeassistant"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Home Assistant Service Calls"
+    },
+    {
+      "key": "inverter.discharge_allowed",
+      "type": "json",
+      "default": [],
+      "section": "inverter",
+      "level": "standard",
+      "description": "Array of Home Assistant service calls for discharge-allowed mode",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#inverter",
+      "validation": {},
+      "depends_on": {
+        "inverter.type": [
+          "homeassistant"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Home Assistant Service Calls"
     },
     {
       "key": "evcc.url",

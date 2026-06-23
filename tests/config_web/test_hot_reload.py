@@ -1,9 +1,11 @@
 """
 Unit tests for the HotReloadAdapter.
 """
+# pylint: disable=redefined-outer-name
 
 from unittest.mock import MagicMock
 import time
+from zoneinfo import ZoneInfo
 import pytest
 
 from src.config_web.hot_reload import HotReloadAdapter
@@ -16,11 +18,16 @@ def price_interface():
     mock.fixed_price_adder_ct = 0.0
     mock.relative_price_multiplier = 0.0
     mock.feed_in_tariff_price = 0.0
+    mock.recalculate_feedin_prices = MagicMock(return_value=[0.05, 0.05, 0.05])
+    return mock
+
+
+@pytest.fixture
+def feed_in_price_interface():
+    """Mock FeedInPriceInterface with negative_price_switch."""
+    mock = MagicMock()
     mock.negative_price_switch = False
-    mock.current_prices_direct = [0.1, 0.2, 0.3]
-    mock.current_feedin = [0.0, 0.0, 0.0]
-    # Make __create_feedin_prices accessible via name mangling
-    mock._PriceInterface__create_feedin_prices = MagicMock(return_value=[0.05, 0.05, 0.05])
+    mock.get_current_feedin_prices = MagicMock(return_value=[0.05, 0.05, 0.05])
     return mock
 
 
@@ -76,11 +83,12 @@ def merged_config_provider():
 
 
 @pytest.fixture
-def adapter(price_interface, battery_interface):
+def adapter(price_interface, battery_interface, feed_in_price_interface):
     """HotReloadAdapter wired to mocked interfaces."""
     return HotReloadAdapter(
         price_interface=price_interface,
         battery_interface=battery_interface,
+        feed_in_price_interface=feed_in_price_interface,
     )
 
 
@@ -102,18 +110,201 @@ class TestHotReloadPrice:
         """Changing feed_in_price should update attr and recalculate feed-in."""
         adapter.on_config_changed("price.feed_in_price", 0.0, 0.08)
         assert price_interface.feed_in_tariff_price == 0.08
-        price_interface._PriceInterface__create_feedin_prices.assert_called_once()
+        price_interface.recalculate_feedin_prices.assert_called_once()
 
-    def test_negative_price_switch(self, adapter, price_interface):
-        """Changing negative_price_switch should update attr and recalculate feed-in."""
-        adapter.on_config_changed("price.negative_price_switch", False, True)
-        assert price_interface.negative_price_switch is True
-        price_interface._PriceInterface__create_feedin_prices.assert_called_once()
+    def test_feed_in_price_fires_run_trigger(self, price_interface, battery_interface):
+        """Changing feed_in_price should also trigger an immediate optimization run."""
+        trigger = MagicMock()
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            battery_interface=battery_interface,
+            on_run_trigger=trigger,
+        )
+        adapter.on_config_changed("price.feed_in_price", 0.0, 0.08)
+        trigger.assert_called_once()
+
+    def test_fixed_price_adder_does_not_fire_run_trigger(self, price_interface, battery_interface):
+        """Changing fixed_price_adder_ct should NOT trigger an immediate run."""
+        trigger = MagicMock()
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            battery_interface=battery_interface,
+            on_run_trigger=trigger,
+        )
+        adapter.on_config_changed("price.fixed_price_adder_ct", 0.0, 1.0)
+        trigger.assert_not_called()
+
+    def test_negative_price_switch(self, adapter, feed_in_price_interface):
+        """Changing feed_in_negative_price_switch should update attr and recalculate feed-in."""
+        adapter.on_config_changed("price.feed_in_negative_price_switch", False, True)
+        assert feed_in_price_interface.negative_price_switch is True
 
     def test_non_feedin_field_no_recalc(self, adapter, price_interface):
         """Changing a non-feedin price field should NOT recalculate feed-in."""
         adapter.on_config_changed("price.fixed_price_adder_ct", 0.0, 1.0)
         price_interface._PriceInterface__create_feedin_prices.assert_not_called()
+
+    def test_price_data_source_reload_triggers_immediate_fetch(self, price_interface):
+        """Changing timeseries DATA fields while source=timeseries triggers immediate fetch."""
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "source": "timeseries",  # Already timeseries
+                "data_url": "http://new-api.com/forecast",
+                "data_path": "forecast.data",
+                "data_token": "new_token",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=config_provider,
+        )
+
+        # Changing data_url while source is already timeseries → FETCH
+        adapter.on_config_changed("price.data_url", "old_url", "new_url")
+
+        # Verify config was updated
+        assert "price.data_url" in adapter.last_applied
+
+        # Verify immediate price fetch was triggered
+        price_interface.update_prices.assert_called_once()
+        call_args = price_interface.update_prices.call_args
+        assert call_args[0][0] == 48  # tgt_duration for 3600 second time frame
+
+    def test_price_source_change_skips_immediate_fetch(self, price_interface):
+        """Changing price.source FROM timeseries TO another source should NOT fetch.
+        
+        When switching FROM timeseries to another source, the config is updated but
+        fetch is deferred to avoid fetching with incomplete config for the new source.
+        """
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "source": "tibber",  # New source is tibber, not timeseries
+                "tibber_token": "token123",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=config_provider,
+        )
+
+        # Changing source from timeseries to tibber → NO FETCH
+        adapter.on_config_changed("price.source", "timeseries", "tibber")
+
+        # Verify config was updated
+        assert "price.source" in adapter.last_applied
+
+        # Verify NO immediate fetch was triggered (deferred to next cycle)
+        price_interface.update_prices.assert_not_called()
+
+    def test_price_source_change_to_timeseries_triggers_immediate_fetch(self, price_interface):
+        """Changing price.source TO timeseries FROM any other source SHOULD fetch.
+        
+        When switching TO timeseries, we want to immediately load the timeseries data
+        instead of waiting for the next scheduled update cycle.
+        """
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "source": "timeseries",  # New source is timeseries
+                "data_url": "http://ha:8123/api/states/sensor.prices",
+                "data_path": "attributes.data",
+                "data_token": "token123",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=config_provider,
+        )
+
+        # Changing source from tibber to timeseries → FETCH
+        adapter.on_config_changed("price.source", "tibber", "timeseries")
+
+        # Verify config was updated
+        assert "price.source" in adapter.last_applied
+
+        # Verify immediate fetch WAS triggered (switching TO timeseries)
+        price_interface.update_prices.assert_called_once()
+        call_args = price_interface.update_prices.call_args
+        assert call_args[0][0] == 48  # tgt_duration for 3600 second time frame
+
+    def test_price_data_fields_reload_updates_config(self, price_interface):
+        """Changing price.data_url should update interface config and fetch prices."""
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 900  # 15-minute slots
+        price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "source": "timeseries",  # Must be timeseries for fetch to trigger
+                "data_url": "http://ha:8123/api/states/sensor.new_prices",
+                "data_path": "attributes.new_path",
+                "data_token": "new_token",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=config_provider,
+        )
+
+        adapter.on_config_changed("price.data_url", "old_url", "new_url")
+
+        # Verify config was updated
+        assert price_interface.data_url == "http://ha:8123/api/states/sensor.new_prices"
+        assert price_interface.data_path == "attributes.new_path"
+        assert price_interface.data_token == "new_token"
+        assert "price.data_url" in adapter.last_applied
+
+        # Verify immediate price fetch with 192 slots (15-minute resolution)
+        price_interface.update_prices.assert_called_once()
+        call_args = price_interface.update_prices.call_args
+        assert call_args[0][0] == 192  # tgt_duration for 900 second time frame
+
+    def test_price_data_field_change_when_source_not_timeseries_skips_fetch(self, price_interface):
+        """Changing timeseries data fields when source != timeseries should NOT fetch.
+        
+        This prevents errors when other price sources (tibber, fixed, etc.) don't use
+        those fields.
+        """
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "source": "tibber",  # NOT timeseries
+                "data_url": "old_url",  # These are being changed but won't be used
+                "data_path": "old_path",
+                "data_token": "old_token",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=config_provider,
+        )
+
+        adapter.on_config_changed("price.data_url", "old_url", "new_url")
+
+        # Verify config was updated
+        assert "price.data_url" in adapter.last_applied
+
+        # Verify NO fetch was triggered (source is not timeseries)
+        price_interface.update_prices.assert_not_called()
 
     def test_invalid_value_coercion(self, adapter, price_interface):
         """Non-numeric value for a float field should be handled gracefully."""
@@ -185,7 +376,7 @@ class TestHotReloadGeneral:
         adapter.on_config_changed("battery.min_soc_percentage", 5, 10)
         assert adapter.last_applied == []
 
-    def test_last_applied_resets(self, adapter, price_interface):
+    def test_last_applied_resets(self, adapter, price_interface):  # pylint: disable=unused-argument
         """last_applied should reset on each callback invocation."""
         adapter.on_config_changed("price.fixed_price_adder_ct", 0.0, 1.0)
         assert len(adapter.last_applied) == 1
@@ -205,11 +396,82 @@ class TestHotReloadGeneral:
         assert battery_interface.price_handler.last_price_calculation is None
 
 
+@pytest.fixture
+def feed_in_price_interface():
+    """Mock FeedInPriceInterface with hot-reloadable attributes."""
+    mock = MagicMock()
+    mock.static_adder_ct_kwh = 0.0
+    mock.multiplier = 1.0
+    mock.time_zone = ZoneInfo("Europe/Berlin")
+    mock.time_frame_base = 3600
+    mock.update_prices = MagicMock()
+    return mock
+
+
+class TestHotReloadFeedInPrice:
+    """Tests for feed-in price interface hot-reload."""
+
+    def test_static_adder_change(self, feed_in_price_interface):
+        """Changing feed_in_static_adder should update attr and recalculate."""
+        adapter = HotReloadAdapter(feed_in_price_interface=feed_in_price_interface)
+        adapter.on_config_changed("price.feed_in_static_adder", 0.0, 1.5)
+        assert feed_in_price_interface.static_adder_ct_kwh == 1.5
+        feed_in_price_interface.update_prices.assert_called_once()
+        assert "price.feed_in_static_adder" in adapter.last_applied
+
+    def test_static_adder_fires_run_trigger(self, feed_in_price_interface):
+        """Changing feed_in_static_adder should trigger an immediate optimization run."""
+        trigger = MagicMock()
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            on_run_trigger=trigger,
+        )
+        adapter.on_config_changed("price.feed_in_static_adder", 0.0, 2.0)
+        trigger.assert_called_once()
+
+    def test_multiplier_does_not_fire_run_trigger(self, feed_in_price_interface):
+        """Changing feed_in_multiplier should NOT trigger an immediate run."""
+        trigger = MagicMock()
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            on_run_trigger=trigger,
+        )
+        adapter.on_config_changed("price.feed_in_multiplier", 1.0, 1.1)
+        trigger.assert_not_called()
+
+    def test_no_feed_in_interface_no_crash(self):
+        """Missing feed-in price interface should be handled silently."""
+        adapter = HotReloadAdapter(feed_in_price_interface=None)
+        adapter.on_config_changed("price.feed_in_static_adder", 0.0, 1.5)
+        assert adapter.last_applied == []
+
+    def test_feed_in_price_syncs_fixed_price_ct_kwh(self, feed_in_price_interface):
+        """price.feed_in_price hot-reload must update FeedInPriceInterface.fixed_price_ct_kwh.
+
+        The optimizer reads feed_in_price_interface.get_current_feedin_prices(), not
+        price_interface.feed_in_tariff_price, so the FeedInPriceInterface must be kept
+        in sync when the fixed feed-in price changes.
+        """
+        feed_in_price_interface.fixed_price_ct_kwh = 0.0
+        price_mock = MagicMock()
+        price_mock.src = "fixed"
+        price_mock.time_zone = ZoneInfo("Europe/Berlin")
+        price_mock.recalculate_feedin_prices = MagicMock(return_value=[])
+        adapter = HotReloadAdapter(
+            price_interface=price_mock,
+            feed_in_price_interface=feed_in_price_interface,
+        )
+        adapter.on_config_changed("price.feed_in_price", 0.0, 8.0)
+
+        assert feed_in_price_interface.fixed_price_ct_kwh == 8.0
+        feed_in_price_interface.update_prices.assert_called_once()
+
+
 class TestHotReloadPv:
     """Tests for PV source/entry hot-reload behavior."""
 
-    def test_pv_source_reload_applies_live(self, pv_interface, merged_config_provider):
-        """Changing PV source key should reload PvInterface from merged config."""
+    def test_pv_source_change_to_per_installation_source_reloads(self, pv_interface, merged_config_provider):
+        """Changing PV source TO a per-installation source should reload PvInterface."""
         adapter = HotReloadAdapter(
             pv_interface=pv_interface,
             config_provider=merged_config_provider,
@@ -225,6 +487,64 @@ class TestHotReloadPv:
             temperature_forecast_enabled=True,
             timezone="Europe/Berlin",
         )
+        assert "pv_forecast_source.source" in adapter.last_applied
+
+    def test_pv_source_change_to_timeseries_triggers_immediate_reload(self, pv_interface):
+        """Changing PV source TO timeseries triggers IMMEDIATE reload for user visibility.
+        
+        Timeseries is a summarized data source. Now that PvInterface handles timeseries
+        efficiently (single fetch, not per-installation), we trigger immediate reload
+        so user sees PV data from new source immediately instead of waiting 15+ minutes.
+        """
+        # Mock config provider to return timeseries as the new source
+        config_provider = MagicMock(return_value={
+            "pv_forecast_source": {"source": "timeseries"},
+            "pv_forecast": [],
+            "evcc": {},
+            "eos": {"source": "eos_server"},
+            "time_zone": "Europe/Berlin",
+        })
+
+        adapter = HotReloadAdapter(
+            pv_interface=pv_interface,
+            config_provider=config_provider,
+            pv_reload_debounce_seconds=0,
+        )
+
+        # Switch to timeseries (summarized source)
+        adapter.on_config_changed("pv_forecast_source.source", "akkudoktor", "timeseries")
+
+        # IMMEDIATE reload should be triggered for timeseries (user gets instant feedback)
+        pv_interface.reload_config.assert_called_once()
+        assert "pv_forecast_source.source" in adapter.last_applied
+
+    def test_pv_source_change_to_evcc_triggers_immediate_reload(self, pv_interface):
+        """Changing PV source TO evcc triggers IMMEDIATE reload for user visibility.
+        
+        EVCC is a summarized data source. User should see new PV data immediately
+        instead of waiting 15+ minutes for background loop. PvInterface now handles
+        summarized sources efficiently.
+        """
+        # Mock config provider to return evcc as the new source
+        config_provider = MagicMock(return_value={
+            "pv_forecast_source": {"source": "evcc"},
+            "pv_forecast": [],
+            "evcc": {"url": "http://evcc:7070"},
+            "eos": {"source": "eos_server"},
+            "time_zone": "Europe/Berlin",
+        })
+
+        adapter = HotReloadAdapter(
+            pv_interface=pv_interface,
+            config_provider=config_provider,
+            pv_reload_debounce_seconds=0,
+        )
+
+        # Switch to evcc (summarized source)
+        adapter.on_config_changed("pv_forecast_source.source", "akkudoktor", "evcc")
+
+        # IMMEDIATE reload should be triggered for evcc (user gets instant feedback)
+        pv_interface.reload_config.assert_called_once()
         assert "pv_forecast_source.source" in adapter.last_applied
 
     def test_pv_changes_are_debounced_to_single_reload(
@@ -295,3 +615,245 @@ class TestHotReloadOptimizer:
         adapter.on_config_changed("eos.dyn_override_discharge_allowed_pv_greater_load", False, True)
         assert adapter.last_applied == []
 
+    def test_dyn_override_fires_run_trigger(self, optimization_interface):
+        """Changing dyn_override flag should also trigger an immediate run."""
+        trigger = MagicMock()
+        adapter = HotReloadAdapter(
+            optimization_interface=optimization_interface,
+            on_run_trigger=trigger,
+        )
+        adapter.on_config_changed(
+            "eos.dyn_override_discharge_allowed_pv_greater_load", False, True
+        )
+        assert optimization_interface.dyn_override_discharge_allowed is True
+        trigger.assert_called_once()
+
+    def test_timeout_does_not_fire_run_trigger(self, optimization_interface):
+        """Changing eos.timeout should NOT trigger an immediate run."""
+        trigger = MagicMock()
+        adapter = HotReloadAdapter(
+            optimization_interface=optimization_interface,
+            on_run_trigger=trigger,
+        )
+        adapter.on_config_changed("eos.timeout", 180, 240)
+        trigger.assert_not_called()
+
+
+class TestHotReloadFeedInSource:
+    """Tests for feed-in source and zone hot-reload."""
+
+    def test_feed_in_source_change(self, feed_in_price_interface):
+        """Changing price.feed_in_source should update source and call update_prices."""
+        feed_in_price_interface.source = "fixed"
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "feed_in_source": "elpris_dk",
+                "feed_in_zone": "DK1",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+        adapter.on_config_changed("price.feed_in_source", "fixed", "elpris_dk")
+
+        assert feed_in_price_interface.source == "elpris_dk"
+        assert "price.feed_in_source" in adapter.last_applied
+        feed_in_price_interface.update_prices.assert_called_once()
+
+    def test_feed_in_zone_change(self, feed_in_price_interface):
+        """Changing price.feed_in_zone should update zone and call update_prices."""
+        feed_in_price_interface.source = "elpris_dk"
+        feed_in_price_interface.zone = "DK1"
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "feed_in_source": "elpris_dk",
+                "feed_in_zone": "DK2",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+        adapter.on_config_changed("price.feed_in_zone", "DK1", "DK2")
+
+        assert feed_in_price_interface.zone == "DK2"
+        assert "price.feed_in_zone" in adapter.last_applied
+        feed_in_price_interface.update_prices.assert_called_once()
+
+    def test_feed_in_source_to_evcc(self, feed_in_price_interface):
+        """Switching to EVCC source should work without requiring restart."""
+        feed_in_price_interface.source = "fixed"
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "feed_in_source": "evcc",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+        adapter.on_config_changed("price.feed_in_source", "fixed", "evcc")
+
+        assert feed_in_price_interface.source == "evcc"
+        assert "price.feed_in_source" in adapter.last_applied
+        feed_in_price_interface.update_prices.assert_called_once()
+
+    def test_no_feed_in_interface_no_crash(self):
+        """Feed-in source changes with no feed-in interface should not crash."""
+        adapter = HotReloadAdapter(feed_in_price_interface=None)
+        adapter.on_config_changed("price.feed_in_source", "fixed", "elpris_dk")
+        assert adapter.last_applied == []
+
+    def test_feed_in_source_change_with_forced_source(self, feed_in_price_interface):
+        """Forced source should override config_provider value."""
+        feed_in_price_interface.source = "fixed"
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "feed_in_source": "epex_spot",  # This will be overridden
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+        # Pass "evcc" as new_value, which should be used via force_source
+        adapter.on_config_changed("price.feed_in_source", "fixed", "evcc")
+
+        assert feed_in_price_interface.source == "evcc"
+        assert "price.feed_in_source" in adapter.last_applied
+
+
+@pytest.fixture
+def local_evopt_backend():
+    """Mock LocalEVOptBackend with hot-reloadable strategy attributes."""
+    mock = MagicMock()
+    mock.charging_strategy = "charge_before_export"
+    mock.discharging_strategy = "discharge_before_import"
+    mock.emergency_reserve_pct = 0
+    return mock
+
+
+@pytest.fixture
+def optimization_interface_local(local_evopt_backend):
+    """Mock OptimizationInterface configured with local_evopt backend."""
+    mock = MagicMock()
+    mock.timeout = 180
+    mock.backend_type = "local_evopt"
+    mock.backend = local_evopt_backend
+    return mock
+
+
+class TestHotReloadLocalEVopt:
+    """Tests for local_evopt strategy hot-reload."""
+
+    def test_charging_strategy_change(self, optimization_interface_local, local_evopt_backend):
+        """Changing charging strategy should update backend attr."""
+        adapter = HotReloadAdapter(optimization_interface=optimization_interface_local)
+        adapter.on_config_changed(
+            "eos.local_evopt_charging_strategy", "charge_before_export", "maximize_self_consumption"
+        )
+        assert local_evopt_backend.charging_strategy == "maximize_self_consumption"
+        assert "eos.local_evopt_charging_strategy" in adapter.last_applied
+
+    def test_discharging_strategy_change(self, optimization_interface_local, local_evopt_backend):
+        """Changing discharging strategy should update backend attr."""
+        adapter = HotReloadAdapter(optimization_interface=optimization_interface_local)
+        adapter.on_config_changed(
+            "eos.local_evopt_discharging_strategy", "discharge_before_import", "emergency_reserve"
+        )
+        assert local_evopt_backend.discharging_strategy == "emergency_reserve"
+        assert "eos.local_evopt_discharging_strategy" in adapter.last_applied
+
+    def test_emergency_reserve_pct_change(self, optimization_interface_local, local_evopt_backend):
+        """Changing emergency_reserve_pct should update backend attr and clamp to 0-80."""
+        adapter = HotReloadAdapter(optimization_interface=optimization_interface_local)
+        adapter.on_config_changed("eos.local_evopt_emergency_reserve_pct", 0, 20)
+        assert local_evopt_backend.emergency_reserve_pct == 20
+
+        # Clamp above 80
+        adapter.on_config_changed("eos.local_evopt_emergency_reserve_pct", 20, 99)
+        assert local_evopt_backend.emergency_reserve_pct == 80
+
+        # Clamp below 0
+        adapter.on_config_changed("eos.local_evopt_emergency_reserve_pct", 80, -5)
+        assert local_evopt_backend.emergency_reserve_pct == 0
+
+    def test_run_trigger_called_on_strategy_change(
+        self, optimization_interface_local, local_evopt_backend  # pylint: disable=unused-argument
+    ):
+        """on_run_trigger must be called after a local_evopt strategy hot-reload."""
+        trigger = MagicMock()
+        adapter = HotReloadAdapter(
+            optimization_interface=optimization_interface_local,
+            on_run_trigger=trigger,
+        )
+        adapter.on_config_changed(
+            "eos.local_evopt_charging_strategy", "charge_before_export", "none"
+        )
+        trigger.assert_called_once()
+
+    def test_run_trigger_not_called_for_unrelated_key(self, optimization_interface_local):
+        """on_run_trigger must not fire for keys unrelated to local_evopt strategies."""
+        trigger = MagicMock()
+        adapter = HotReloadAdapter(
+            optimization_interface=optimization_interface_local,
+            on_run_trigger=trigger,
+        )
+        adapter.on_config_changed("eos.timeout", 180, 240)
+        trigger.assert_not_called()
+
+    def test_run_trigger_exception_does_not_propagate(
+        self, optimization_interface_local, local_evopt_backend
+    ):
+        """A crash in on_run_trigger must not abort the hot-reload."""
+        def bad_trigger():
+            raise RuntimeError("scheduler exploded")
+
+        adapter = HotReloadAdapter(
+            optimization_interface=optimization_interface_local,
+            on_run_trigger=bad_trigger,
+        )
+        # Should not raise
+        adapter.on_config_changed(
+            "eos.local_evopt_charging_strategy", "charge_before_export", "none"
+        )
+        assert local_evopt_backend.charging_strategy == "none"
+
+    def test_wrong_backend_type_skipped(self):
+        """Keys should be ignored when backend_type is not local_evopt."""
+        mock_opt = MagicMock()
+        mock_opt.backend_type = "eos_server"
+        adapter = HotReloadAdapter(optimization_interface=mock_opt)
+        adapter.on_config_changed(
+            "eos.local_evopt_charging_strategy", "charge_before_export", "none"
+        )
+        assert adapter.last_applied == []
+
+    def test_no_optimizer_no_crash(self):
+        """local_evopt keys with no optimizer interface should be silently ignored."""
+        adapter = HotReloadAdapter(optimization_interface=None)
+        adapter.on_config_changed(
+            "eos.local_evopt_charging_strategy", "charge_before_export", "none"
+        )
+        assert adapter.last_applied == []

@@ -302,16 +302,21 @@ def test_default_temperature_forecast_length_and_values():
 
 def test_check_config_missing_parameters():
     """
-    Test that missing required config parameters cause SystemExit.
+    Test that missing required config parameters result in graceful degradation.
+    The interface should initialize successfully but with configuration_valid=False.
+    This allows users to fix the config via the web UI instead of crashing.
     """
     config = [{"lat": 50, "lon": 8}]  # missing required parameters
-    with pytest.raises(SystemExit):
-        PvInterface({}, config, time_frame_base, {}, timezone="UTC")
+    pv = PvInterface({}, config, time_frame_base, {}, timezone="UTC")
+    
+    # Should not crash, but should start in degraded mode
+    assert pv.configuration_valid is False
+    assert pv.configuration_state == "incomplete"
 
 
 def test_pv_forecast_config_must_be_list():
     """
-    Test that pv_forecast must be a list (with YAML '-'), not a single object.
+    Test that pv_forecast as a dict (wrong YAML format) results in graceful degradation.
     This catches user config errors where they forget the '-' in YAML.
 
     WRONG: pv_forecast:
@@ -321,12 +326,18 @@ def test_pv_forecast_config_must_be_list():
     CORRECT: pv_forecast:
                - name: "test"
                  lat: 50
+    
+    The interface should not crash, but should start in degraded mode so user can fix via web UI.
     """
     # Config is a dict instead of a list - simulates wrong YAML format
     config = {"name": "test", "lat": 50, "lon": 8}
 
-    with pytest.raises(SystemExit):
-        PvInterface({}, config, time_frame_base, {}, timezone="UTC")
+    # Should not crash with SystemExit, but should degrade gracefully
+    pv = PvInterface({}, config, time_frame_base, {}, timezone="UTC")
+    
+    # Should be in degraded mode
+    assert pv.configuration_valid is False
+    assert pv.configuration_state == "incomplete"
 
 
 def test_summarized_pv_forecast_aggregation():
@@ -754,10 +765,9 @@ def test_solcast_data_adaption(monkeypatch):
         "name": "solcast_test",
         "lat": 50,
         "lon": 8,
-        "resource_id": "dummy_resource",
         "inverterEfficiency": 1.0,  # Test expects no efficiency loss
     }
-    config_source = {"source": "solcast", "api_key": "dummy_key"}
+    config_source = {"source": "solcast", "api_key": "dummy_key", "resource_id": "dummy_resource"}
 
     pv = PvInterface(config_source, [config_entry], time_frame_base, {}, timezone="UTC")
 
@@ -814,8 +824,9 @@ def test_solcast_data_adaption(monkeypatch):
 
 def test_victron_config_validation_missing_vrm_id():
     """
-    Test that Victron provider requires resource_id in first pv_forecast entry.
-    Should raise ValueError during initialization.
+    Test that Victron provider requires resource_id in pv_forecast_source.
+    With Issue #259 fix, missing VRM should result in graceful degradation,
+    not a crash. This allows users to fix the config via the web UI.
     """
     config_source = {"source": "victron", "api_key": "test_token"}
     config = [
@@ -830,16 +841,21 @@ def test_victron_config_validation_missing_vrm_id():
             "inverterEfficiency": 0.95,
         }
     ]
-    with pytest.raises(SystemExit):
-        PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+    # Should not crash with SystemExit
+    pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+    
+    # Should be in degraded mode
+    assert pv.configuration_valid is False
+    assert pv.configuration_state == "incomplete"
 
 
 def test_victron_config_validation_missing_api_key():
     """
     Test that Victron provider requires api_key in pv_forecast_source.
-    Should raise ValueError during initialization.
+    With Issue #259 fix, missing API key should result in graceful degradation,
+    not a crash. This allows users to fix the config via the web UI.
     """
-    config_source = {"source": "victron"}
+    config_source = {"source": "victron", "resource_id": "12345678"}
     config = [
         {
             "name": "test",
@@ -850,11 +866,14 @@ def test_victron_config_validation_missing_api_key():
             "power": 5000,
             "powerInverter": 5000,
             "inverterEfficiency": 0.95,
-            "resource_id": "12345678",
         }
     ]
-    with pytest.raises(SystemExit):
-        PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+    # Should not crash with SystemExit
+    pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+    
+    # Should be in degraded mode
+    assert pv.configuration_valid is False
+    assert pv.configuration_state == "incomplete"
 
 
 def test_victron_resource_id_as_integer(monkeypatch):
@@ -864,7 +883,7 @@ def test_victron_resource_id_as_integer(monkeypatch):
     This simulates the YAML parse result when a user writes: resource_id: 12345678
     instead of: resource_id: "12345678"
     """
-    config_source = {"source": "victron", "api_key": "test_token"}
+    config_source = {"source": "victron", "api_key": "test_token", "resource_id": 12345678}
     config = [
         {
             "name": "test",
@@ -875,7 +894,6 @@ def test_victron_resource_id_as_integer(monkeypatch):
             "power": 5000,
             "powerInverter": 5000,
             "inverterEfficiency": 0.95,
-            "resource_id": 12345678,  # integer — unquoted YAML value
         }
     ]
 
@@ -915,7 +933,7 @@ def test_victron_resource_id_as_string(monkeypatch):
     works identically.
     This simulates: resource_id: "12345678"
     """
-    config_source = {"source": "victron", "api_key": "test_token"}
+    config_source = {"source": "victron", "api_key": "test_token", "resource_id": "12345678"}
     config = [
         {
             "name": "test",
@@ -926,7 +944,6 @@ def test_victron_resource_id_as_string(monkeypatch):
             "power": 5000,
             "powerInverter": 5000,
             "inverterEfficiency": 0.95,
-            "resource_id": "12345678",  # string — quoted YAML value
         }
     ]
 
@@ -964,7 +981,7 @@ def test_victron_successful_forecast_retrieval(monkeypatch):
     Test successful Victron VRM API forecast retrieval.
     Verifies the method returns a valid forecast array.
     """
-    config_source = {"source": "victron", "api_key": "test"}
+    config_source = {"source": "victron", "api_key": "test", "resource_id": "12345678"}
     config = [
         {
             "name": "test",
@@ -975,7 +992,6 @@ def test_victron_successful_forecast_retrieval(monkeypatch):
             "power": 5000,
             "powerInverter": 5000,
             "inverterEfficiency": 0.95,
-            "resource_id": "12345678",
         }
     ]
 
@@ -1020,7 +1036,7 @@ def test_victron_15min_time_frame_conversion(monkeypatch):
     Test that Victron forecast is correctly converted to 15-min intervals.
     48 hourly values should become 192 15-min values (each hourly value / 4).
     """
-    config_source = {"source": "victron", "api_key": "test"}
+    config_source = {"source": "victron", "api_key": "test", "resource_id": "12345678"}
     config = [
         {
             "name": "test",
@@ -1031,7 +1047,6 @@ def test_victron_15min_time_frame_conversion(monkeypatch):
             "power": 5000,
             "powerInverter": 5000,
             "inverterEfficiency": 0.95,
-            "resource_id": "12345678",
         }
     ]
 
@@ -1076,7 +1091,7 @@ def test_victron_api_timeout_error_handling(monkeypatch):
     Test that Victron provider handles API timeout errors gracefully.
     Should return empty list and set error state.
     """
-    config_source = {"source": "victron", "api_key": "test"}
+    config_source = {"source": "victron", "api_key": "test", "resource_id": "12345678"}
     config = [
         {
             "name": "test",
@@ -1087,7 +1102,6 @@ def test_victron_api_timeout_error_handling(monkeypatch):
             "power": 5000,
             "powerInverter": 5000,
             "inverterEfficiency": 0.95,
-            "resource_id": "12345678",
         }
     ]
 
@@ -1115,7 +1129,7 @@ def test_victron_api_request_error_handling(monkeypatch):
     """
     Test that Victron provider handles generic request errors gracefully.
     """
-    config_source = {"source": "victron", "api_key": "test"}
+    config_source = {"source": "victron", "api_key": "test", "resource_id": "12345678"}
     config = [
         {
             "name": "test",
@@ -1126,7 +1140,6 @@ def test_victron_api_request_error_handling(monkeypatch):
             "power": 5000,
             "powerInverter": 5000,
             "inverterEfficiency": 0.95,
-            "resource_id": "12345678",
         }
     ]
 
@@ -1154,7 +1167,7 @@ def test_victron_invalid_response_structure(monkeypatch):
     Test that Victron provider handles malformed API responses.
     Missing 'records' key should trigger error handling.
     """
-    config_source = {"source": "victron", "api_key": "test"}
+    config_source = {"source": "victron", "api_key": "test", "resource_id": "12345678"}
     config = [
         {
             "name": "test",
@@ -1165,7 +1178,6 @@ def test_victron_invalid_response_structure(monkeypatch):
             "power": 5000,
             "powerInverter": 5000,
             "inverterEfficiency": 0.95,
-            "resource_id": "12345678",
         }
     ]
 
@@ -1198,7 +1210,7 @@ def test_victron_malformed_forecast_points(monkeypatch):
     Test that Victron provider handles malformed forecast points in response.
     Invalid points should be skipped gracefully.
     """
-    config_source = {"source": "victron", "api_key": "test"}
+    config_source = {"source": "victron", "api_key": "test", "resource_id": "12345678"}
     config = [
         {
             "name": "test",
@@ -1209,7 +1221,6 @@ def test_victron_malformed_forecast_points(monkeypatch):
             "power": 5000,
             "powerInverter": 5000,
             "inverterEfficiency": 0.95,
-            "resource_id": "12345678",
         }
     ]
 
@@ -1263,7 +1274,7 @@ def test_victron_dispatch_routing(monkeypatch):
 
     monkeypatch.setattr("src.interfaces.pv_interface.datetime", FixedDatetimeVictron)
 
-    config_source = {"source": "victron", "api_key": "test"}
+    config_source = {"source": "victron", "api_key": "test", "resource_id": "12345678"}
     config = [
         {
             "name": "test",
@@ -1274,7 +1285,6 @@ def test_victron_dispatch_routing(monkeypatch):
             "power": 5000,
             "powerInverter": 5000,
             "inverterEfficiency": 0.95,
-            "resource_id": "12345678",
         }
     ]
 

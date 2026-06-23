@@ -12,6 +12,8 @@ import logging
 import re
 from flask import Blueprint, jsonify, request as flask_request, Response
 
+from .migration import _flatten_config
+
 logger = logging.getLogger("__main__")
 
 config_bp = Blueprint("config", __name__, url_prefix="/api/config")
@@ -37,10 +39,39 @@ def init_api(store, schema, module):
 
 @config_bp.route("/schema", methods=["GET"])
 def get_schema():
-    """Return the full config schema as JSON, including section metadata."""
+    """Return the full config schema as JSON, including section metadata and descriptions."""
+    # Get current config to resolve dynamic descriptions
+    current_config = _module.get_config()
+    # Flatten config to dot-notation for description resolution
+    flat_config = _flatten_config(current_config)
+
     sections_dict = _schema.section_meta()
+
+    # Build fields with resolved descriptions and description_map for frontend
+    fields = []
+    for f in _schema.all_fields():
+        resolved_desc = _schema.get_resolved_description(f.key, flat_config)
+        field_obj = {
+            "key": f.key,
+            "type": f.field_type,
+            "default": f.default,
+            "section": f.section,
+            "level": f.level,
+            "description": resolved_desc,
+            "labels": f.labels,
+            "help_url": f.help_url,
+            "validation": f.validation,
+            "depends_on": f.depends_on,
+            "hot_reload": f.hot_reload,
+            "display_group": f.display_group,
+        }
+        # Include description_map for fields that have dynamic descriptions
+        if f.description_map:
+            field_obj["description_map"] = f.description_map
+        fields.append(field_obj)
+
     data = {
-        "fields": _schema.to_json(),
+        "fields": fields,
         "sections": sections_dict,
         "section_order": list(sections_dict.keys()),  # Explicit order as array
     }
@@ -96,10 +127,10 @@ def update_config():
     Partial update — accepts a flat dict of dot-notation keys + values.
 
     Example body: ``{"price.feed_in_price": 0.08, "battery.min_soc_percentage": 10}``
-    
+
     Returns:
     - If validation errors: status 422 with "errors"
-    - If unmet dependencies (fields required by other fields): status 200 with "unmet_dependencies" + no save
+    - If unmet dependencies: status 200 with "unmet_dependencies" + no save
     - If success: status 200 with "updated", "restart_required", "hot_reloaded"
     """
     data = flask_request.get_json(silent=True)
@@ -119,6 +150,11 @@ def update_config():
             "unmet_dependencies": unmet_deps,
             "message": "Cannot save: required dependencies not configured"
         }), 200
+
+    # Check for timeseries configuration changes and run pre-flight validation if needed
+    preflight_errors = _check_timeseries_preflight(data)
+    if preflight_errors:
+        return jsonify({"errors": preflight_errors}), 422
 
     changed_keys = []
     restart_required = []
@@ -283,18 +319,18 @@ def _resolve_schema_key(key: str):
 def _check_dependencies(data: dict) -> list[dict]:
     """
     Check cross-field dependencies. Returns list of unmet dependency objects.
-    
+
     Examples:
     - If pv_forecast_source.source="evcc", then evcc.url must be populated
     - If mqtt.enabled=True, then mqtt.broker must be populated
-    
-    Each dependency object has: {"field": "...", "reason": "...", "requires": "..."}
+
+    Each dependency object has: {"field": "...", "reason": "...", "requires": "..."
     """
     dependencies = []
-    
+
     # Get current config for fields not in the update
     current_config = _module.get_config()
-    
+
     # Helper: get effective value (from update data or current config)
     def get_value(key):
         if key in data:
@@ -308,7 +344,7 @@ def _check_dependencies(data: dict) -> list[dict]:
             else:
                 return None
         return val
-    
+
     # PV Source: if "evcc" selected, EVCC URL must be configured
     pv_source = get_value("pv_forecast_source.source")
     if pv_source == "evcc":
@@ -320,7 +356,7 @@ def _check_dependencies(data: dict) -> list[dict]:
                 "requires": "evcc.url",
                 "blocking": True,
             })
-    
+
     # Inverter: if "evcc" selected, EVCC URL must be configured
     inverter_type = get_value("inverter.type")
     if inverter_type == "evcc":
@@ -332,20 +368,150 @@ def _check_dependencies(data: dict) -> list[dict]:
                 "requires": "evcc.url",
                 "blocking": True,
             })
-    
-    # MQTT: if enabled, broker must be set
-    mqtt_enabled = get_value("mqtt.enabled")
-    if mqtt_enabled:
-        mqtt_broker = get_value("mqtt.broker")
-        if not mqtt_broker or mqtt_broker.strip() == "":
+
+    # Price Source: if "evcc" selected, EVCC URL must be configured
+    price_source = get_value("price.source")
+    if price_source == "evcc":
+        evcc_url = get_value("evcc.url")
+        if not evcc_url or evcc_url.strip() == "" or evcc_url == "http://yourEVCCserver:7070":
             dependencies.append({
-                "field": "mqtt.enabled",
-                "reason": "MQTT enabled but broker address not configured",
-                "requires": "mqtt.broker",
+                "field": "price.source",
+                "reason": "EVCC selected as price source but EVCC URL is not configured",
+                "requires": "evcc.url",
                 "blocking": True,
             })
-    
+
+    # PV Source: validation for Solcast and Victron
+    pv_source = get_value("pv_forecast_source.source")
+    if pv_source in ["solcast", "victron"]:
+        resource_id = get_value("pv_forecast_source.resource_id")
+        if not resource_id or (isinstance(resource_id, str) and resource_id.strip() == ""):
+            dependencies.append({
+                "field": "pv_forecast_source.resource_id",
+                "reason": (
+                    f"{pv_source.capitalize()} selected as PV source but "
+                    "Resource ID/Installation ID is not configured"
+                ),
+                "requires": "pv_forecast_source.resource_id",
+                "blocking": True,
+            })
+
+    # PV Source: validation for location-based sources (must have at least 1 installation)
+    location_based_sources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]
+    if pv_source in location_based_sources:
+        # Get PV installations from current config
+        pv_forecast_data = (
+            data.get("pv_forecast")
+            if "pv_forecast" in data
+            else current_config.get("pv_forecast", [])
+        )
+        if not pv_forecast_data or len(pv_forecast_data) == 0:
+            dependencies.append({
+                "field": "pv_forecast",
+                "reason": "Location-based PV source selected but no PV installations configured",
+                "requires": "pv_forecast.0.lat",  # Indicate at least one entry needed
+                "blocking": True,
+            })
+
     return dependencies
+
+
+def _check_timeseries_preflight(data: dict) -> list[dict]:
+    """
+    Check if we're modifying a timeseries config and validate the sensor exists.
+    Returns list of error dicts if validation fails.
+    """
+    errors = []
+    current_config = _module.get_config()
+
+    # Helper: get effective value (from update data or current config)
+    def get_value(key):
+        if key in data:
+            return data[key]
+        # For data_source keys, check store directly
+        # (data_source is excluded from merged config)
+        if key.startswith("data_source."):
+            store_val = _store.get(key)
+            if store_val is not None:
+                return store_val
+        parts = key.split(".")
+        val = current_config
+        for part in parts:
+            if isinstance(val, dict):
+                val = val.get(part)
+            else:
+                return None
+        return val
+
+    # Check if we're modifying price timeseries config
+    price_source = get_value("price.source")
+    if price_source == "timeseries":
+        use_ha_central = get_value("price.use_ha_central_data_source")
+        if use_ha_central:
+            # Central HA mode: sensor name + data_source config
+            ha_sensor_name = get_value("price.ha_sensor_name")
+            data_source_url = get_value("data_source.url")
+            data_source_token = get_value("data_source.access_token")
+
+            if (
+                ha_sensor_name and data_source_url and data_source_token
+            ):
+                # Try to fetch the sensor from Home Assistant
+                ha_url = (
+                    f"{data_source_url.rstrip('/')}/api/states/{ha_sensor_name}"
+                )
+                try:
+                    import requests
+                    response = requests.get(
+                        ha_url,
+                        headers={"Authorization": f"Bearer {data_source_token}"},
+                        timeout=5
+                    )
+                    if response.status_code == 404:
+                        errors.append({
+                            "key": "price.ha_sensor_name",
+                            "error": (
+                                f"Sensor '{ha_sensor_name}' not found in "
+                                "Home Assistant"
+                            )
+                        })
+                    elif response.status_code != 200:
+                        errors.append({
+                            "key": "price.ha_sensor_name",
+                            "error": (
+                                f"Home Assistant error {response.status_code}: "
+                                f"{response.reason}"
+                            )
+                        })
+                except requests.exceptions.HTTPError as e:
+                    if hasattr(e, 'response') and e.response is not None:
+                        if e.response.status_code == 404:
+                            errors.append({
+                                "key": "price.ha_sensor_name",
+                                "error": (
+                                    f"Sensor '{ha_sensor_name}' not found in "
+                                    "Home Assistant"
+                                )
+                            })
+                        else:
+                            errors.append({
+                                "key": "price.ha_sensor_name",
+                                "error": (
+                                    f"Home Assistant error "
+                                    f"{e.response.status_code}: "
+                                    f"{e.response.reason}"
+                                )
+                            })
+                except Exception as e:
+                    # Log detailed error server-side only (not exposed to client)
+                    logger.error("Home Assistant connection error: %s", str(e), exc_info=True)
+                    errors.append({
+                        "key": "price.ha_sensor_name",
+                        "error": "Failed to connect to Home Assistant. Check configuration and logs."
+                    })
+
+    return errors
+
 
 
 def _validate_updates(data: dict) -> list[dict]:

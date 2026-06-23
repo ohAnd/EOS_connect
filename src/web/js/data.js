@@ -171,6 +171,32 @@ class DataManager {
     }
 
     /**
+     * Check if response data contains startup errors
+     */
+    hasStartupErrors(responseData) {
+        return responseData && 
+               responseData["startup_errors"] && 
+               responseData["startup_errors"].length > 0;
+    }
+
+    /**
+     * Get startup errors from response data
+     */
+    getStartupErrors(responseData) {
+        if (!responseData || !responseData["startup_errors"]) {
+            return [];
+        }
+        return responseData["startup_errors"];
+    }
+
+    /**
+     * Get errors by severity level
+     */
+    getStartupErrorsBySeverity(responseData, severity = "error") {
+        return this.getStartupErrors(responseData).filter(err => err.severity === severity);
+    }
+
+    /**
      * Check if response data contains errors
      */
     hasErrorInResponse(responseData) {

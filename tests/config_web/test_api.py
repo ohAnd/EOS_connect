@@ -295,6 +295,91 @@ class TestConfigAPI:
         assert data["completed"] is True
         assert data["pending"] is False
 
+    def test_timeseries_sensor_name_change_triggers_preflight(self, client, monkeypatch):
+        """
+        Test that changing sensor name on existing timeseries config triggers pre-flight validation.
+        
+        This validates the fix for the issue where changing sensor_name on an already-configured
+        timeseries didn't trigger the pre-flight test, allowing invalid sensor names to be saved.
+        """
+        import requests
+
+        # Mock successful response for valid sensor
+        def mock_get_valid(*args, **kwargs):
+            class MockResponse:
+                status_code = 200
+                def json(self):
+                    return {
+                        'state': 'available',
+                        'attributes': {
+                            'data': [
+                                {'start': '2024-01-01T00:00:00', 'end': '2024-01-01T01:00:00', 'value': 0.25},
+                                {'start': '2024-01-01T01:00:00', 'end': '2024-01-01T02:00:00', 'value': 0.30},
+                            ]
+                        }
+                    }
+                def raise_for_status(self):
+                    pass
+            return MockResponse()
+
+        # Mock response for invalid sensor (404)
+        def mock_get_invalid(*args, **kwargs):
+            exc = requests.exceptions.HTTPError()
+            exc.response = type('obj', (object,), {
+                'status_code': 404,
+                'reason': 'Not Found'
+            })()
+            raise exc
+
+        # Step 1: Set up working timeseries config with valid sensor
+        monkeypatch.setattr('requests.get', mock_get_valid)
+        resp1 = client.put(
+            "/api/config/",
+            data=json.dumps({
+                "price.source": "timeseries",
+                "price.use_ha_central_data_source": True,
+                "price.ha_sensor_name": "sensor.valid_prices",
+                "data_source.url": "http://ha:8123",
+                "data_source.access_token": "test_token",
+            }),
+            content_type="application/json",
+        )
+        assert resp1.status_code == 200, f"Setup failed: {resp1.get_json()}"
+
+        # Step 2: Try to change sensor name to invalid one (should trigger pre-flight and fail)
+        monkeypatch.setattr('requests.get', mock_get_invalid)
+        resp2 = client.put(
+            "/api/config/",
+            data=json.dumps({
+                "price.ha_sensor_name": "sensor.invalid_prices",
+            }),
+            content_type="application/json",
+        )
+        
+        # Should get 422 error because pre-flight test failed
+        assert resp2.status_code == 422, f"Expected 422, got {resp2.status_code}: {resp2.get_json()}"
+        data = resp2.get_json()
+        assert "errors" in data
+        assert any("invalid_prices" in str(e.get("error", "")) for e in data["errors"]), \
+            f"Error message should mention the invalid sensor name. Got: {data['errors']}"
+
+        # Step 3: Verify the invalid config was NOT saved by changing back to valid sensor
+        monkeypatch.setattr('requests.get', mock_get_valid)
+        resp3 = client.put(
+            "/api/config/",
+            data=json.dumps({
+                "price.ha_sensor_name": "sensor.valid_prices",
+            }),
+            content_type="application/json",
+        )
+        assert resp3.status_code == 200, f"Reverting to valid sensor failed: {resp3.get_json()}"
+        
+        # Get current config to verify valid sensor name is still set
+        resp4 = client.get("/api/config/")
+        current = resp4.get_json()
+        assert current["price"]["ha_sensor_name"] == "sensor.valid_prices", \
+            "Config should revert to valid sensor name"
+
 
 @pytest.fixture
 def fresh_client(tmp_path):

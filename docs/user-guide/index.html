@@ -19,7 +19,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.3.34</span>
+                <span class="version-badge">v0.3.35</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -61,7 +61,7 @@
             <main class="main-content">
         <div class="hero">
             <h1>User Guide</h1>
-            <p>Install, configure, and use EOS Connect to bridge your energy system with optimization engines</p>
+            <p>Install, configure, and use EOS Connect to fully optimize your energy system</p>
         </div>
 
         <!-- Quick Navigation -->
@@ -804,6 +804,11 @@ docker-compose up -d</code></pre>
                         <td>VM using generic CPU type (kvm64)</td>
                         <td>Change VM Settings → Hardware → Processor → Type from <code>kvm64</code> to <code>host</code>, then restart VM. This allows correct CPU instruction detection.</td>
                     </tr>
+                    <tr>
+                        <td>local_evopt fails: CBC file not found (Proxmox)</td>
+                        <td>Container using system Python instead of venv</td>
+                        <td>Force full rebuild: <code>docker rmi ghcr.io/ohand/ha-addon-eos_connect_develop_amd64:VERSION && restart addon</code>. Or verify Docker CMD is using <code>/opt/venv/bin/python</code>. Check <a href="../advanced/index.html">Advanced</a> for local_evopt details.</td>
+                    </tr>
                 </tbody>
             </table>
 
@@ -938,14 +943,15 @@ docker-compose up -d</code></pre>
 
         <!-- EOS Server Setup -->
         <div class="content-section" id="eos-server-setup">
-            <h2><i class="fas fa-desktop"></i> EOS/EVopt Server Setup</h2>
-            <p><strong>EOS Connect requires a running optimization backend to calculate energy strategies.</strong></p>
-            
+            <h2><i class="fas fa-desktop"></i> External Backend Setup (Optional)</h2>
+            <p>EOS Connect ships with a <strong>built-in optimizer</strong> (<code>local_evopt</code>) that works out of the box — no external server required. If you prefer to use an external backend, follow the steps below.</p>
+
             <div class="alert alert-info">
-                <strong><i class="fas fa-lightbulb"></i> Remember:</strong> EOS Connect is an <strong>integration and control platform</strong>. The optimization calculations are performed by:
+                <strong><i class="fas fa-lightbulb"></i> Optimizer options:</strong>
                 <ul style="margin-top: 0.5rem;">
-                    <li><strong>EOS</strong> - Akkudoktor Energy Optimization System (port 8503)</li>
-                    <li><strong>EVopt</strong> - Lightweight optimizer (port 7050)</li>
+                    <li><strong>Local EVopt</strong> (default) — built-in MILP optimizer, runs in-process. No setup needed.</li>
+                    <li><strong>Akkudoktor EOS</strong> — external engine on port 8503. Install separately if needed.</li>
+                    <li><strong>EVopt</strong> — lightweight external optimizer on port 7050. Install separately if needed.</li>
                 </ul>
             </div>
 

@@ -644,8 +644,8 @@ Override the system mode, duration, and grid charge power.
 | `Avoid Discharge`             | 1           | Prevent battery discharge                   |
 | `Discharge Allowed`           | 2           | Allow battery discharge                     |
 | `Avoid Discharge EVCC FAST`   | 3           | Avoid discharge with EVCC fast charge       |
-| `Avoid Discharge EVCC PV`     | 4           | Avoid discharge with EVCC PV mode           |
-| `Avoid Discharge EVCC MIN+PV` | 5           | Avoid discharge with EVCC MIN+PV mode       |
+| `Discharge Allowed EVCC PV`   | 4           | Discharge allowed with EVCC PV mode         |
+| `Discharge Allowed EVCC MIN+PV` | 5         | Discharge allowed with EVCC MIN+PV mode     |
 
 </details>
 

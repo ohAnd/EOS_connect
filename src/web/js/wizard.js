@@ -360,6 +360,17 @@ class SetupWizard {
                 }
             }
             
+            // Disable "evcc" option in price.source if evcc.url is not configured
+            if (f.key === "price.source" && String(c) === "evcc") {
+                const evccUrl = this.values["evcc.url"] || "http://yourEVCCserver:7070";
+                const isDefault = evccUrl.trim() === "" || evccUrl === "http://yourEVCCserver:7070";
+                if (isDefault) {
+                    disabled = "disabled";
+                    title = "title='Configure EVCC URL first'";
+                    displayLabel = `${c} (not available)`;
+                }
+            }
+            
             opts += `<option value="${this._escapeAttr(String(c))}"${sel} ${disabled} ${title} style="${disabled ? 'color: #888; font-style: italic;' : ''}">${this._escapeHtml(displayLabel)}</option>`;
         }
         return `<select id="wiz-${cssKey}" data-key="${this._escapeAttr(f.key)}">${opts}</select>`;
@@ -587,6 +598,18 @@ class SetupWizard {
                 }
                 this._collectFieldValue(el, key);
                 this._updateConditionalFields();
+                
+                // If pv_forecast_source.source changed, re-render the PV step
+                if (key === "pv_forecast_source.source") {
+                    const currentStep = this.steps[this.currentStepIndex];
+                    if (currentStep && currentStep.id === "pv") {
+                        const contentEl = document.getElementById("wizard-step-content");
+                        if (contentEl) {
+                            contentEl.innerHTML = this._renderFields(currentStep);
+                            this._attachFieldListeners();
+                        }
+                    }
+                }
             });
             container.addEventListener("input", (e) => {
                 const el = e.target;
@@ -870,9 +893,24 @@ class SetupWizard {
         if (!this.schema || !step.sections || step.sections.length === 0) {
             return [];
         }
-        return this.schema.filter(
+        let fields = this.schema.filter(
             f => step.sections.includes(f.section) && f.level === "getting_started"
         );
+        
+        // For PV step, hide pv_forecast fields if source is not location-based
+        if (step.id === "pv") {
+            const pvSource = this.values["pv_forecast_source.source"] ?? 
+                            this.schema.find(f => f.key === "pv_forecast_source.source")?.default ?? 
+                            "akkudoktor";
+            const locationBasedSources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar", "default"];
+            
+            if (!locationBasedSources.includes(pvSource)) {
+                // For non-location-based sources, exclude pv_forecast section fields
+                fields = fields.filter(f => f.section !== "pv_forecast");
+            }
+        }
+        
+        return fields;
     }
 
     /**
@@ -894,6 +932,11 @@ class SetupWizard {
                 // Compare loosely — schema may store bools/strings
                 const match = allowed.some(v => String(v) === String(current));
                 if (!match) {
+                    return false;
+                }
+            } else {
+                // Single string value — dependency not met if current value doesn't match
+                if (String(allowed) !== String(current) && allowed !== current) {
                     return false;
                 }
             }

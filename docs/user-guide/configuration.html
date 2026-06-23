@@ -20,7 +20,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.3.34</span>
+                <span class="version-badge">v0.3.35</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -53,6 +53,8 @@
                     <a href="#battery-price-calc" class="toc-link toc-sub">&rarr; Dynamic Price Calculation</a>
                     <a href="#load" class="toc-link">Load</a>
                     <a href="#price" class="toc-link">Electricity Prices</a>
+                    <a href="#price" class="toc-link toc-sub">→ Grid Purchase Prices</a>
+                    <a href="#price" class="toc-link toc-sub">→ Dynamic Feed-In Pricing</a>
                     <a href="#energyforecast" class="toc-link toc-sub">→ Smart Price Prediction</a>
                     <a href="#pv" class="toc-link">PV Forecasts</a>
                     <a href="#mqtt" class="toc-link">MQTT</a>
@@ -119,7 +121,11 @@
         <!-- Optimizer Configuration -->
         <div class="content-section" id="optimizer">
             <h2><i class="fas fa-server"></i> Optimizer Configuration</h2>
-            <p>Configure the connection to your external optimization backend (Akkudoktor EOS or EVopt).</p>
+            <p>
+                Choose your optimization backend. EOS Connect ships with a <strong>built-in optimizer</strong>
+                (<code>local_evopt</code>) that requires no external server, plus connectors to the Akkudoktor
+                EOS server and the external EVopt server.
+            </p>
 
             <h3>eos.source</h3>
             <table>
@@ -133,17 +139,21 @@
                 </tr>
                 <tr>
                     <th>Valid Values</th>
-                    <td><code>eos_server</code>, <code>evopt</code></td>
+                    <td><code>local_evopt</code>, <code>eos_server</code>, <code>evopt</code></td>
                 </tr>
                 <tr>
                     <th>Default</th>
-                    <td><code>eos_server</code></td>
+                    <td><code>local_evopt</code></td>
                 </tr>
                 <tr>
                     <th>Notes</th>
                     <td>
-                        <strong>eos_server</strong>: Full-featured Akkudoktor EOS (<a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">GitHub</a>)<br>
-                        <strong>evopt</strong>: Lightweight, faster alternative (<a href="https://github.com/thecem/hassio-evopt" target="_blank">GitHub</a>)
+                        <strong>local_evopt</strong>: Built-in MILP optimizer — no external server needed.
+                        Based on the <a href="https://github.com/evcc-io/optimizer" target="_blank">evcc-io/optimizer</a>
+                        engine (MIT license). Supports configurable charging/discharging strategies,
+                        emergency battery reserve, and optional grid import/export limits.<br><br>
+                        <strong>eos_server</strong>: Full-featured Akkudoktor EOS (<a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">GitHub</a>) — requires external server<br>
+                        <strong>evopt</strong>: External EVopt server (<a href="https://github.com/thecem/hassio-evopt" target="_blank">GitHub</a>) — requires external server
                     </td>
                 </tr>
             </table>
@@ -160,7 +170,7 @@
                 </tr>
                 <tr>
                     <th>Required</th>
-                    <td>Yes</td>
+                    <td>Only when <code>eos.source</code> is <code>eos_server</code> or <code>evopt</code></td>
                 </tr>
                 <tr>
                     <th>Examples</th>
@@ -191,8 +201,126 @@
                 </tr>
                 <tr>
                     <th>Required</th>
-                    <td>Yes</td>
+                    <td>Only when <code>eos.source</code> is <code>eos_server</code> or <code>evopt</code></td>
                 </tr>
+            </table>
+
+            <!-- ============================================================
+                 LOCAL EVOPT — BUILT-IN OPTIMIZER SETTINGS
+                 ============================================================ -->
+            <h3 id="local-evopt" style="margin-top: 2rem;">Built-in Optimizer Settings (<code>local_evopt</code>)</h3>
+            <p>
+                These settings are only active when <code>eos.source = local_evopt</code>.
+                They control the strategy, battery reserve, and optional grid limits used
+                by the built-in MILP solver.
+            </p>
+
+            <h4>eos.local_evopt_charging_strategy</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_charging_strategy</code></td></tr>
+                <tr><th>Description</th><td>How the optimizer prefers to charge the battery</td></tr>
+                <tr><th>Valid Values</th>
+                    <td>
+                        <code>charge_before_export</code> — charge battery before exporting surplus PV (default)<br>
+                        <code>maximize_self_consumption</code> — prefer charging from PV, penalise grid export and reward battery charging to lower the effective charge break-even price<br>
+                        <code>attenuate_grid_peaks</code> — charge when PV production is high to smooth grid peaks<br>
+                        <code>none</code> — no charging preference; pure cost optimization
+                    </td>
+                </tr>
+                <tr><th>Default</th><td><code>charge_before_export</code></td></tr>
+                <tr><th>Hot-reloadable</th><td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately and trigger a new optimization run. No restart required.</td></tr>
+            </table>
+
+            <h4>eos.local_evopt_discharging_strategy</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_discharging_strategy</code></td></tr>
+                <tr><th>Description</th><td>How the optimizer prefers to discharge the battery</td></tr>
+                <tr><th>Valid Values</th>
+                    <td>
+                        <code>discharge_before_import</code> — prefer using battery before importing from grid (default)<br>
+                        <code>emergency_reserve</code> — keep a minimum SOC at end of optimization horizon
+                        (configure the percentage with <code>local_evopt_emergency_reserve_pct</code>)<br>
+                        <code>none</code> — no discharging preference; pure cost optimization
+                    </td>
+                </tr>
+                <tr><th>Default</th><td><code>discharge_before_import</code></td></tr>
+                <tr><th>Hot-reloadable</th><td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately and trigger a new optimization run. No restart required.</td></tr>
+            </table>
+
+            <h4>eos.local_evopt_emergency_reserve_pct</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_emergency_reserve_pct</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Minimum battery state-of-charge to maintain at the end of the optimization horizon
+                        when <code>discharging_strategy = emergency_reserve</code>.
+                        The optimizer will strongly prefer to keep the battery above this level.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–80 (%)</td></tr>
+                <tr><th>Default</th><td><code>0</code> (disabled)</td></tr>
+                <tr><th>Requires</th><td><code>local_evopt_discharging_strategy = emergency_reserve</code></td></tr>
+                <tr><th>Example</th><td>Set to <code>20</code> to keep at least 20% battery charge in reserve</td></tr>
+                <tr><th>Hot-reloadable</th><td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately and trigger a new optimization run. No restart required.</td></tr>
+            </table>
+
+            <h4>eos.local_evopt_max_grid_import_w</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_max_grid_import_w</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Hard upper limit on grid import power in Watts. The optimizer will not schedule
+                        grid imports exceeding this value per time slot. Useful for households with a
+                        contracted grid connection limit or demand-charge tariffs.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–100000 (W). Set to <code>0</code> to disable this constraint (optimizer uses battery charge max and inverter limits only).</td></tr>
+                <tr><th>Default</th><td><code>0</code> (no additional limit)</td></tr>
+                <tr><th>Level</th><td>Expert</td></tr>
+            </table>
+
+            <h4>eos.local_evopt_max_grid_export_w</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_max_grid_export_w</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Hard upper limit on grid export power in Watts. Useful when your grid contract
+                        or inverter limits how much energy you can feed in.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–100000 (W). Set to <code>0</code> to disable this constraint (optimizer uses battery discharge max only).</td></tr>
+                <tr><th>Default</th><td><code>0</code> (no additional limit)</td></tr>
+                <tr><th>Level</th><td>Expert</td></tr>
+            </table>
+
+            <h4>eos.local_evopt_num_threads</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_num_threads</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Number of threads for the CBC solver. <code>0</code> lets the solver decide
+                        automatically. On low-powered devices (e.g. Raspberry Pi), limiting to
+                        <code>1</code> or <code>2</code> can improve stability.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–32. Set to <code>0</code> for auto.</td></tr>
+                <tr><th>Default</th><td><code>0</code> (auto)</td></tr>
+                <tr><th>Level</th><td>Expert</td></tr>
+            </table>
+
+            <h4>eos.local_evopt_time_limit</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.local_evopt_time_limit</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Maximum solver time in seconds. <code>0</code> uses 80% of the EOS timeout
+                        as the limit. Set explicitly if you want to cap solve time independently
+                        of the overall timeout.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–600 (seconds). Set to <code>0</code> for auto.</td></tr>
+                <tr><th>Default</th><td><code>0</code> (auto)</td></tr>
+                <tr><th>Level</th><td>Expert</td></tr>
             </table>
 
             <h3>eos.time_frame</h3>
@@ -286,6 +414,10 @@
                             <li><strong>Visual feedback:</strong> Green indicators on dashboard when active</li>
                         </ul>
                     </td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately <em>and</em> trigger a new optimization run so the effect is visible at once. No restart required.</td>
                 </tr>
             </table>
 
@@ -383,10 +515,10 @@
             </div>
         </div>
 
-        
+
 <div class="content-section" id="evcc">
             <h2><i class="fas fa-car"></i> EVCC Configuration</h2>
-            
+
             <div class="alert alert-info">
                 <strong><i class="fas fa-lightbulb"></i> Optional Section:</strong> Define EVCC URL here to use EVCC as:
                 <ul style="margin-top: 10px; margin-bottom: 0;">
@@ -425,7 +557,7 @@
             </div>
         </div>
 
-        
+
 <div class="content-section" id="inverter">
             <h2><i class="fas fa-solar-panel"></i> Inverter Configuration</h2>
             <p>Configure inverter control for automated battery management.</p>
@@ -605,23 +737,139 @@
                 </tr>
             </table>
 
+            <h3>Home Assistant Service Call Sequences</h3>
+            <p>When using <code>inverter.type: homeassistant</code>, define the HA service calls to execute for each battery control mode. Each field accepts a JSON array of service call objects.</p>
+
+            <h3>inverter.charge_from_grid</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.charge_from_grid</code></td>
+                </tr>
+                <tr>
+                    <th>Type</th>
+                    <td>JSON Array</td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Service calls to execute when charging from grid</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>[]</code></td>
+                </tr>
+                <tr>
+                    <th>Availability</th>
+                    <td>Only visible/required when <code>inverter.type = "homeassistant"</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        Use <code>{{ power }}</code> template variable in <code>data_template</code> to receive the optimal wattage from EOS Connect.<br><br>
+                        Example:
+                        <pre style="background-color: rgba(0,0,0,0.1); padding: 8px; margin-top: 8px; border-radius: 4px;"><code>[
+  {"service":"number.set_value","entity_id":"number.charge_power","data_template":{"value":"{{ power }}"}},
+  {"service":"select.select_option","entity_id":"select.mode","data":{"option":"Charge"}}
+]</code></pre>
+                    </td>
+                </tr>
+            </table>
+
+            <h3>inverter.avoid_discharge</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.avoid_discharge</code></td>
+                </tr>
+                <tr>
+                    <th>Type</th>
+                    <td>JSON Array</td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Service calls to execute when preventing battery discharge (hold mode)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>[]</code></td>
+                </tr>
+                <tr>
+                    <th>Availability</th>
+                    <td>Only visible/required when <code>inverter.type = "homeassistant"</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        Use this mode when battery should not discharge but PV charging is allowed. Typically sets the inverter to "hold" or "standby" mode.<br><br>
+                        Example for Sungrow:
+                        <pre style="background-color: rgba(0,0,0,0.1); padding: 8px; margin-top: 8px; border-radius: 4px;"><code>[
+  {"service":"select.select_option","entity_id":"select.sungrow_mode","data":{"option":"Backup"}}
+]</code></pre>
+                    </td>
+                </tr>
+            </table>
+
+            <h3>inverter.discharge_allowed</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>inverter.discharge_allowed</code></td>
+                </tr>
+                <tr>
+                    <th>Type</th>
+                    <td>JSON Array</td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Service calls to execute for normal battery discharge mode</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>[]</code></td>
+                </tr>
+                <tr>
+                    <th>Availability</th>
+                    <td>Only visible/required when <code>inverter.type = "homeassistant"</code></td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>
+                        Use this mode when battery is allowed to discharge normally (providing power to the home and grid).<br><br>
+                        Example:
+                        <pre style="background-color: rgba(0,0,0,0.1); padding: 8px; margin-top: 8px; border-radius: 4px;"><code>[
+  {"service":"select.select_option","entity_id":"select.mode","data":{"option":"Self Use"}}
+]</code></pre>
+                    </td>
+                </tr>
+            </table>
+
             <div class="alert alert-info">
                 <strong><i class="fas fa-info-circle"></i> Home Assistant Inverter Interface:</strong>
-                The <code>homeassistant</code> inverter type allows controlling any inverter/battery system that is integrated into Home Assistant via configurable service call sequences (e.g., Marstek, Sungrow, Goodwe).
-                <br><br>
-                For each EOS inverter mode, you define a list of HA service calls under <code>inverter:</code>:
+                <p>The <code>homeassistant</code> inverter type allows controlling any inverter/battery system that is integrated into Home Assistant via configurable service call sequences (e.g., Marstek, Sungrow, Goodwe, custom ESPHome integrations).</p>
+
+                <p><strong>Credentials:</strong> The inverter automatically uses your <strong>data_source credentials</strong> (URL and token) — no separate HA authentication needed. This ensures all HA integrations (sensors, inverter control) use the same connection.</p>
+
+                <p><strong>Service Call Sequences:</strong> For each battery control mode, define a JSON array of Home Assistant service calls:</p>
                 <ul>
-                    <li><code>charge_from_grid</code> &ndash; Service calls for grid charging. Supports <code>{{ power }}</code> in <code>data_template</code> for dynamic power values from EOS.</li>
-                    <li><code>avoid_discharge</code> &ndash; Service calls to hold the battery (no discharge, PV charging allowed).</li>
+                    <li><code>charge_from_grid</code> &ndash; Service calls to charge from grid. Supports <code>{{ power }}</code> template variable in <code>data_template</code> for dynamic wattage.</li>
+                    <li><code>avoid_discharge</code> &ndash; Service calls to hold battery (no discharge, PV charging allowed).</li>
                     <li><code>discharge_allowed</code> &ndash; Service calls for normal battery discharge.</li>
                 </ul>
-                Each step specifies: <code>service</code> (e.g., <code>select.select_option</code>), <code>entity_id</code>, and <code>data</code> (static) or <code>data_template</code> (with <code>{{ power }}</code> variable).
-                See the <a href="#example-ha-inverter">Marstek example</a> below for a complete configuration.
-                For the ESPHome config to connect a Marstek M1 via RS485/Modbus, see <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this Gist</a>.
+
+                <p><strong>Service Call Format:</strong> Each call in a sequence must specify:</p>
+                <ul>
+                    <li><code>service</code> – The HA service domain and action (e.g., <code>select.select_option</code>, <code>number.set_value</code>)</li>
+                    <li><code>entity_id</code> – The target entity (e.g., <code>select.mt1_betriebsmodus</code>)</li>
+                    <li><code>data</code> or <code>data_template</code> – Parameters for the service call</li>
+                </ul>
+
+                <p><strong style="color: #ffc107;"><i class="fas fa-exclamation-circle"></i> Note:</strong> These fields are JSON arrays. Use valid JSON syntax (square brackets, quotes on strings). The web UI provides a JSON editor with syntax validation.</p>
+
+                <p>See the <a href="#example-ha-inverter">Marstek example</a> below for a complete working configuration.</p>
             </div>
         </div>
 
-        
+
 <!-- Due to length, I'll create a placeholder for now -->
 
         <div class="content-section" id="data-source">
@@ -629,8 +877,8 @@
             <p>Define the primary data connection that EOS Connect uses to read sensor values and send control commands.</p>
 
             <div class="alert alert-info">
-                <strong><i class="fas fa-key"></i> Set Once, Used Everywhere:</strong> 
-                Once you configure this section, it becomes the single connection point for <strong>all</strong> sensor references in other sections. 
+                <strong><i class="fas fa-key"></i> Set Once, Used Everywhere:</strong>
+                Once you configure this section, it becomes the single connection point for <strong>all</strong> sensor references in other sections.
                 For example:
                 <ul style="margin-top: 10px; margin-bottom: 0;">
                     <li><code>battery.soc_sensor</code> refers to an entity or item from this source</li>
@@ -701,6 +949,71 @@
                     <td>Find or create an API token in OpenHAB settings</td>
                 </tr>
             </table>
+
+            <h3>data_source.ssl_ignore</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>data_source.ssl_ignore</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Disable SSL/TLS certificate verification for HTTPS connections</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>true</code> &ndash; Disable SSL verification (not recommended for production)<br>
+                        <code>false</code> &ndash; Enable SSL verification (default, secure)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>false</code></td>
+                </tr>
+                <tr>
+                    <th>Requires Restart</th>
+                    <td>Yes</td>
+                </tr>
+                <tr>
+                    <th>Expert Level</th>
+                    <td>Yes — only visible in advanced configuration</td>
+                </tr>
+            </table>
+
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-shield-exclamation"></i> Security Warning:</strong>
+                Disabling SSL certificate verification removes protection against man-in-the-middle (MITM) attacks.
+                <strong>Only use this in the following scenarios:</strong>
+                <ul style="margin-top: 10px; margin-bottom: 0;">
+                    <li>Your Home Assistant or OpenHAB uses a <strong>self-signed certificate</strong></li>
+                    <li>Your Home Assistant or OpenHAB uses a <strong>private CA certificate</strong></li>
+                    <li>The connection is within a <strong>trusted, isolated private network</strong></li>
+                    <li>You understand and accept the security trade-offs</li>
+                </ul>
+                <p style="margin-top: 10px; margin-bottom: 0;"><strong>If using HTTPS with a valid public certificate,</strong> keep this disabled.</p>
+            </div>
+
+            <h4>Troubleshooting Connection Errors</h4>
+            <p>If you see SSL certificate errors like:</p>
+            <code style="display: block; padding: 10px; background-color: rgb(54, 54, 54); border-radius: 5px; margin: 10px 0; overflow-x: auto;">
+                SSLError: Certificate verify failed<br>
+                SSLError: [SSL: SELF_SIGNED_CERT_REJECT] self signed certificate
+            </code>
+            <p><strong>Step 1 (Recommended):</strong> Install a valid certificate using Let's Encrypt (free) via your reverse proxy or DNS.</p>
+            <p><strong>Step 2:</strong> If Step 1 isn't feasible, enable this option in Settings → Data Source, then restart EOS Connect.</p>
+
+            <h4>Example Configuration</h4>
+            <pre style="background-color: rgb(54, 54, 54); padding: 12px; border-radius: 5px; overflow-x: auto;"><code>data_source:
+  type: homeassistant
+  url: https://homeassistant.local:8123  # Self-signed certificate
+  access_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  ssl_ignore: true  # ⚠️ Only because of self-signed cert in private network
+</code></pre>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-lightbulb"></i> Possible Future Enhancement:</strong> Support for custom root CA certificates is currently not planned for a future release. Feel free to draft a PR to allow secure HTTPS connections with private CAs without disabling certificate verification.
+            </div>
         </div>
 
         <div class="content-section" id="battery">
@@ -1113,7 +1426,7 @@
             <div class="alert alert-info">
                 <h4><i class="fas fa-calculator"></i> Dynamic Battery Price Calculation</h4>
                 <p>EOS Connect can automatically calculate the real cost of energy in your battery by analyzing historical charging events using a Last-In, First-Out (LIFO) inventory model.</p>
-                
+
                 <h5>How it Works:</h5>
                 <ol>
                     <li><strong>Event Detection:</strong> The system scans historical data (default 96h) to identify "charging events" where battery power was above the <code>charging_threshold_w</code>.</li>
@@ -1341,7 +1654,7 @@
             </table>
         </div>
 
-        
+
 <!-- Load Configuration -->
         <div class="content-section" id="load">
             <h2><i class="fas fa-plug"></i> Load Configuration</h2>
@@ -1546,12 +1859,12 @@
             </table>
         </div>
 
-        
+
 <!-- Price Configuration -->
         <div class="content-section" id="price">
             <h2><i class="fas fa-dollar-sign"></i> Electricity Price Configuration</h2>
             <p>Configure dynamic electricity pricing for cost optimization.</p>
-            
+
             <div class="alert alert-warning">
                 <strong><i class="fas fa-exclamation-triangle"></i> Important:</strong> All price values must use the same base - either all prices include taxes and fees, or all prices exclude taxes and fees. Mixing different bases will lead to incorrect optimization results.
             </div>
@@ -1572,7 +1885,9 @@
                         <code>tibber</code> - Tibber API<br>
                         <code>smartenergy_at</code> - Austrian provider<br>
                         <code>stromligning</code> - Danish provider<br>
+                        <code>evcc</code> - EVCC integration<br>
                         <code>fixed_24h</code> - Custom 24-hour array<br>
+                        <code>timeseries</code> - HTTP endpoint returning timeseries data (Home Assistant, custom API, etc.)<br>
                         <code>default</code> - Akkudoktor API
                     </td>
                 </tr>
@@ -1581,6 +1896,10 @@
                     <td><code>default</code></td>
                 </tr>
             </table>
+
+            <div class="alert alert-info" style="margin-top: 1rem;">
+                <strong><i class="fas fa-info-circle"></i> Unified Timeseries Source:</strong> The <code>timeseries</code> source enables fetching electricity prices from any HTTP endpoint that returns timeseries data. This includes Home Assistant, custom HTTP APIs, and other integration points. See <a href="#timeseries-guide">Timeseries Data Source Guide</a> below for detailed configuration and examples.
+            </div>
 
             <h3>price.token</h3>
             <table>
@@ -1708,37 +2027,345 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>Compensation you receive for feeding energy back to the grid</td>
+                    <td>Fixed compensation for feeding energy back to the grid (used when feed_in_source is "fixed")</td>
                 </tr>
                 <tr>
                     <th>Unit</th>
-                    <td>Euro per kWh (€/kWh)</td>
+                    <td>Cents per kWh (ct/kWh)</td>
                 </tr>
                 <tr>
                     <th>Example</th>
-                    <td><code>0.08</code> (8 cents per kWh)</td>
+                    <td><code>8</code> (8 cents per kWh)</td>
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Must use the same tax/fee basis as your purchase prices. Typical range: 0.05 - 0.12 €/kWh</td>
+                    <td>Only used when <code>feed_in_source: fixed</code>. Must use the same tax/fee basis as your purchase prices. Typical range: 5-12 ct/kWh</td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately <em>and</em> trigger a new optimization run. No restart required.</td>
                 </tr>
             </table>
 
-            <h3>price.negative_price_switch</h3>
+            <h3>price.feed_in_source</h3>
             <table>
                 <tr>
                     <th>Parameter</th>
-                    <td><code>price.negative_price_switch</code></td>
+                    <td><code>price.feed_in_source</code></td>
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>How to handle negative electricity market prices</td>
+                    <td>Source for dynamic feed-in (export) prices</td>
                 </tr>
                 <tr>
                     <th>Valid Values</th>
                     <td>
-                        <code>true</code> - Limit feed-in price to €0 when market price is negative<br>
-                        <code>false</code> - Always use the configured feed_in_price
+                        <code>fixed</code> - Use fixed price from <code>feed_in_price</code><br>
+                        <code>elpris_dk</code> - Elpris DK spot prices (Denmark only)<br>
+                        <code>epex_spot</code> - EPEX-Spot prices via Akkudoktor API<br>
+                        <code>evcc</code> - EVCC published feed-in tariff (requires EVCC configured)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>fixed</code></td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — switch sources immediately without restart. New prices are fetched instantly with the new source.</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Dynamic sources significantly improve battery discharge timing during high-price periods. Changing sources via the web UI triggers immediate price update with new source (no restart needed).</td>
+                </tr>
+            </table>
+
+            <h3>price.feed_in_zone</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.feed_in_zone</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Price zone for Elpris DK (Denmark)</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>DK1</code> - Western Denmark (Jylland, Fyn)<br>
+                        <code>DK2</code> - Eastern Denmark (Sjælland, Bornholm)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>DK1</code></td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — zone changes take effect immediately without restart</td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td>Only used when <code>feed_in_source: elpris_dk</code></td>
+                </tr>
+            </table>
+
+            <h3>price.data_url</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.data_url</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Full HTTP endpoint URL for fetching price timeseries data</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes, when <code>source: timeseries</code></td>
+                </tr>
+                <tr>
+                    <th>Format</th>
+                    <td>Must start with <code>http://</code> or <code>https://</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Home Assistant)</th>
+                    <td><code>http://homeassistant.local:8123/api/states/sensor.grid_prices</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Custom API)</th>
+                    <td><code>https://api.example.com/v1/prices</code></td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately without restart</td>
+                </tr>
+            </table>
+
+            <h3>price.data_path</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.data_path</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>JSON path to the timeseries array in the API response (using dot notation)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes, when <code>source: timeseries</code></td>
+                </tr>
+                <tr>
+                    <th>Format</th>
+                    <td>Dot notation: <code>object.nested.array</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Home Assistant)</th>
+                    <td><code>attributes.data</code> — accesses <code>response["attributes"]["data"]</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Nested Array)</th>
+                    <td><code>forecast[0].prices</code> — accesses <code>response["forecast"][0]["prices"]</code></td>
+                </tr>
+                <tr>
+                    <th>Data Format Expected</th>
+                    <td>JSON array: <code>[{start, end, value}, ...]</code><br>
+                        <strong>start:</strong> ISO8601 timestamp (e.g., "2024-06-12T14:00:00Z")<br>
+                        <strong>end:</strong> ISO8601 timestamp (e.g., "2024-06-12T15:00:00Z")<br>
+                        <strong>value:</strong> Price in EUR/Wh (e.g., 0.25)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately without restart</td>
+                </tr>
+            </table>
+
+            <h3>price.data_token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.data_token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Optional Bearer token for API authentication (sent in Authorization header)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>No — only if the API requires authentication</td>
+                </tr>
+                <tr>
+                    <th>Format</th>
+                    <td>Bearer token string (ASCII only)</td>
+                </tr>
+                <tr>
+                    <th>Example (Home Assistant)</th>
+                    <td><code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</code></td>
+                </tr>
+                <tr>
+                    <th>HTTP Behavior</th>
+                    <td>If provided, sends header: <code>Authorization: Bearer &lt;token&gt;</code></td>
+                </tr>
+                <tr>
+                    <th>Security Note</th>
+                    <td>Token must contain only ASCII characters (Latin-1 compatible) for HTTP header transmission</td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately without restart</td>
+                </tr>
+            </table>
+
+            <h3>price.feed_in_static_adder</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.feed_in_static_adder</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Fixed adjustment to feed-in price (e.g., transport costs, taxes)</td>
+                </tr>
+                <tr>
+                    <th>Unit</th>
+                    <td>Cents per kWh (ct/kWh)</td>
+                </tr>
+                <tr>
+                    <th>Valid Range</th>
+                    <td>-10 to +10 ct/kWh</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>0</code></td>
+                </tr>
+                <tr>
+                    <th>Examples</th>
+                    <td>
+                        <code>3.5</code> - Add 3.5 ct/kWh for transport costs<br>
+                        <code>-1.0</code> - Subtract 1 ct/kWh discount
+                    </td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Hot-reloadable:</strong> Changes take effect immediately <em>and</em> trigger a new optimization run. Applied BEFORE multiplier.<br>
+                    <strong>Only shown</strong> when <code>feed_in_source</code> is <code>elpris_dk</code> or <code>epex_spot</code> — not needed for <code>fixed</code> (just set the price directly).</td>
+                </tr>
+            </table>
+
+            <h3>price.feed_in_multiplier</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.feed_in_multiplier</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Percentage multiplier for feed-in prices (e.g., discount strategy)</td>
+                </tr>
+                <tr>
+                    <th>Valid Range</th>
+                    <td>0.5 to 1.5 (0.5 = 50%, 1.0 = no change, 1.5 = 150%)</td>
+                </tr>
+                <tr>
+                    <th>Default</th>
+                    <td><code>1.0</code></td>
+                </tr>
+                <tr>
+                    <th>Examples</th>
+                    <td>
+                        <code>0.95</code> - Use 95% of market price (conservative)<br>
+                        <code>1.05</code> - Use 105% of market price (aggressive)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Notes</th>
+                    <td><strong>Hot-reloadable:</strong> Changes take effect immediately. Expert level setting. Applied AFTER static adder.<br>
+                    <strong>Only shown</strong> when <code>feed_in_source</code> is <code>elpris_dk</code> or <code>epex_spot</code> — not needed for <code>fixed</code>.</td>
+                </tr>
+            </table>
+
+            <h4>Dynamic Feed-In Pricing Comparison</h4>
+            <table style="font-size: 0.9em;">
+                <tr>
+                    <th>Source</th>
+                    <th>Availability</th>
+                    <th>Update Frequency</th>
+                    <th>Typical Range</th>
+                    <th>Best For</th>
+                </tr>
+                <tr>
+                    <td><code>fixed</code></td>
+                    <td>Worldwide</td>
+                    <td>Manual</td>
+                    <td>5-12 ct/kWh</td>
+                    <td>Simple tariffs, flat rates</td>
+                </tr>
+                <tr>
+                    <td><code>elpris_dk</code></td>
+                    <td>Denmark only</td>
+                    <td>Daily 13:00 UTC</td>
+                    <td>1-80 ct/kWh</td>
+                    <td>Danish households, volatile pricing</td>
+                </tr>
+                <tr>
+                    <td><code>epex_spot</code></td>
+                    <td>Europe (DE, AT, FR, etc.)</td>
+                    <td>Every 15 minutes</td>
+                    <td>-50 to +80 ct/kWh</td>
+                    <td>Professional traders, maximum optimization</td>
+                </tr>
+                <tr>
+                    <td><code>evcc</code></td>
+                    <td>EVCC charger installations</td>
+                    <td>Real-time from EVCC API</td>
+                    <td>Depends on tariff</td>
+                    <td>Users with EVCC charger, real-time feed-in tariffs</td>
+                </tr>
+            </table>
+
+            <h4>Configuration Examples</h4>
+            <pre><code># Example 1: Fixed German tariff
+price:
+  feed_in_source: fixed
+  feed_in_price: 8  # 8 ct/kWh
+
+# Example 2: Danish dynamic pricing with adjustment
+price:
+  feed_in_source: elpris_dk
+  feed_in_zone: DK1
+  feed_in_static_adder: 2.5  # +2.5 ct/kWh for transport
+  feed_in_multiplier: 0.95    # Conservative: 95% of spot
+
+# Example 3: EPEX-Spot with cost adjustment
+price:
+  feed_in_source: epex_spot
+  feed_in_static_adder: -1.0  # -1 ct/kWh fee
+  feed_in_multiplier: 1.0     # Full spot price
+
+# Example 4: EVCC real-time feed-in tariff
+price:
+  feed_in_source: evcc  # Requires EVCC URL configured
+  # EVCC feed-in prices are used as-is (no adjustments)
+  # The EVCC charger provides real-time tariff data</code></pre>
+
+            <h3>price.feed_in_negative_price_switch</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>price.feed_in_negative_price_switch</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>How to handle negative electricity market prices for feed-in (battery export). When enabled, prevents exporting at a loss when market prices go negative.</td>
+                </tr>
+                <tr>
+                    <th>Valid Values</th>
+                    <td>
+                        <code>true</code> - Set feed-in price to €0 when market price goes negative (don't export)<br>
+                        <code>false</code> - Always use the configured feed-in price (including during negative price periods)
                     </td>
                 </tr>
                 <tr>
@@ -1747,13 +2374,18 @@
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Use <code>true</code> if your feed-in tariff pays €0 during negative market prices</td>
+                    <td>The market price reference varies based on the selected feed-in source:<br>
+                    • <strong>fixed:</strong> Uses Akkudoktor market prices as reference<br>
+                    • <strong>elpris_dk:</strong> Uses Elpris DK spot prices<br>
+                    • <strong>epex_spot:</strong> Uses EPEX Spot prices<br>
+                    • <strong>evcc:</strong> Not applicable (EVCC feed-in prices are used as-is, no negative price handling)<br>
+                    Enable when you want to avoid exporting battery power during periods when the market pays to consume.</td>
                 </tr>
             </table>
 
             <h3 id="energyforecast"><i class="fas fa-brain"></i> Smart Price Prediction (Energyforecast.de)</h3>
             <div class="alert alert-success">
-                <strong><i class="fas fa-lightbulb"></i> New Feature:</strong> Energyforecast.de integration provides <strong>smart price prediction</strong> when your primary price source lacks tomorrow's prices. The system automatically learns your grid fees and taxes pattern to provide accurate predictions.
+                <strong><i class="fas fa-star"></i> Production Ready:</strong> Energyforecast.de integration provides <strong>smart price prediction</strong> when your primary price source lacks tomorrow's prices. The system automatically learns your grid fees and taxes pattern to provide accurate predictions. Well-tested in production for extended period.
             </div>
 
             <h4>How It Works</h4>
@@ -1870,9 +2502,10 @@
             <pre><code>price:
   source: tibber
   token: "YOUR_TIBBER_TOKEN"
+  feed_in_source: fixed
   feed_in_price: 0.08
-  negative_price_switch: true
-  
+  feed_in_negative_price_switch: true
+
   # Smart price prediction with energyforecast.de
   energyforecast_enabled: true
   energyforecast_token: "YOUR_ENERGYFORECAST_TOKEN"
@@ -1955,7 +2588,7 @@
         </div>
 
         <!-- Continue with Battery, PV, Inverter, EVCC, MQTT, Other sections... -->
-        
+
 <div class="content-section" id="pv">
             <h2><i class="fas fa-sun"></i> PV Forecast Configuration</h2>
             <p>Configure solar generation forecasts from various providers.</p>
@@ -1984,7 +2617,8 @@
                         <code>evcc</code> - EVCC integration<br>
                         <code>solcast</code> - Solcast<br>
                         <code>victron</code> - Victron VRM API<br>
-                        <code>default</code> - Uses akkudoktor
+                        <code>timeseries</code> - HTTP endpoint returning timeseries data (Home Assistant, custom API, etc.)<br>
+                        <code>default</code> - Built-in default forecast with fixed values (no external configuration needed)
                     </td>
                 </tr>
                 <tr>
@@ -1992,6 +2626,25 @@
                     <td><code>akkudoktor</code></td>
                 </tr>
             </table>
+
+            <div class="alert alert-info" style="margin-top: 1rem;">
+                <strong><i class="fas fa-info-circle"></i> PV Installations Configuration:</strong> Only location-based forecast sources require PV Installations configuration:
+                <ul>
+                    <li><strong>Required for:</strong> <code>akkudoktor</code>, <code>openmeteo</code>, <code>openmeteo_local</code>, <code>forecast_solar</code> — these need latitude, longitude, and panel specifications</li>
+                    <li><strong>Not required for:</strong> <code>default</code>, <code>solcast</code>, <code>victron</code>, <code>evcc</code>, <code>timeseries</code> — these configure their data elsewhere:
+                        <ul>
+                            <li><code>default</code>: Uses built-in fixed forecast values (no external data source)</li>
+                            <li><code>solcast</code>, <code>victron</code>: Configure resource IDs in the PV Source section</li>
+                            <li><code>evcc</code>: Retrieves data from your configured EVCC instance</li>
+                            <li><code>timeseries</code>: Uses direct data from an HTTP endpoint or Home Assistant</li>
+                        </ul>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="alert alert-info" style="margin-top: 1rem;">
+                <strong><i class="fas fa-info-circle"></i> Unified Timeseries Source:</strong> The <code>timeseries</code> source enables fetching PV forecasts from any HTTP endpoint that returns timeseries data. This includes Home Assistant, custom HTTP APIs, and other integration points. See <a href="#timeseries-guide">Timeseries Data Source Guide</a> below for detailed configuration and examples.
+            </div>
 
             <h3 id="pv-forecast-evcc">pv_forecast_source.use_real_data_correction</h3>
             <table>
@@ -2050,6 +2703,114 @@
                         <strong>Solcast:</strong> Obtain from <a href="https://solcast.com/" target="_blank">solcast.com</a>. Free accounts limited to 10 calls/day.<br>
                         <strong>Victron:</strong> Generate in VRM portal (Preferences → API tokens). Requires "Dynamic ESS" configured in VRM portal.
                     </td>
+                </tr>
+            </table>
+
+            <h3>pv_forecast_source.data_url</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>pv_forecast_source.data_url</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Full HTTP endpoint URL for fetching PV forecast timeseries data</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes, when <code>source: timeseries</code></td>
+                </tr>
+                <tr>
+                    <th>Format</th>
+                    <td>Must start with <code>http://</code> or <code>https://</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Home Assistant)</th>
+                    <td><code>http://homeassistant.local:8123/api/states/sensor.pv_forecast</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Custom API)</th>
+                    <td><code>https://api.example.com/v1/pv/forecast</code></td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately without restart</td>
+                </tr>
+            </table>
+
+            <h3>pv_forecast_source.data_path</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>pv_forecast_source.data_path</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>JSON path to the timeseries array in the API response (using dot notation)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>Yes, when <code>source: timeseries</code></td>
+                </tr>
+                <tr>
+                    <th>Format</th>
+                    <td>Dot notation: <code>object.nested.array</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Home Assistant)</th>
+                    <td><code>attributes.data</code> — accesses <code>response["attributes"]["data"]</code></td>
+                </tr>
+                <tr>
+                    <th>Example (Nested Array)</th>
+                    <td><code>forecast[0].values</code> — accesses <code>response["forecast"][0]["values"]</code></td>
+                </tr>
+                <tr>
+                    <th>Data Format Expected</th>
+                    <td>JSON array: <code>[{start, end, value}, ...]</code><br>
+                        <strong>start:</strong> ISO8601 timestamp (e.g., "2024-06-12T14:00:00Z")<br>
+                        <strong>end:</strong> ISO8601 timestamp (e.g., "2024-06-12T15:00:00Z")<br>
+                        <strong>value:</strong> Power in Wh (e.g., 3600000 for 1 kWh)
+                    </td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately without restart</td>
+                </tr>
+            </table>
+
+            <h3>pv_forecast_source.data_token</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <td><code>pv_forecast_source.data_token</code></td>
+                </tr>
+                <tr>
+                    <th>Description</th>
+                    <td>Optional Bearer token for API authentication (sent in Authorization header)</td>
+                </tr>
+                <tr>
+                    <th>Required</th>
+                    <td>No — only if the API requires authentication</td>
+                </tr>
+                <tr>
+                    <th>Format</th>
+                    <td>Bearer token string (ASCII only)</td>
+                </tr>
+                <tr>
+                    <th>Example (Home Assistant)</th>
+                    <td><code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</code></td>
+                </tr>
+                <tr>
+                    <th>HTTP Behavior</th>
+                    <td>If provided, sends header: <code>Authorization: Bearer &lt;token&gt;</code></td>
+                </tr>
+                <tr>
+                    <th>Security Note</th>
+                    <td>Token must contain only ASCII characters (Latin-1 compatible) for HTTP header transmission</td>
+                </tr>
+                <tr>
+                    <th>Hot-reloadable</th>
+                    <td><strong><i class="fas fa-bolt" style="color:#28a745;"></i> Yes</strong> — changes take effect immediately without restart</td>
                 </tr>
             </table>
 
@@ -2458,7 +3219,7 @@
             </ol>
         </div>
 
-        
+
 <div class="content-section" id="mqtt">
             <h2><i class="fas fa-network-wired"></i> MQTT Configuration</h2>
             <p>Configure MQTT broker connection and Home Assistant Auto Discovery.</p>
@@ -2784,7 +3545,7 @@
 
             <h3 id="time-slot-config">Time Slot Configuration & Optimizer Constraints</h3>
             <p>The <code>time_frame</code> setting determines the granularity of optimization data:</p>
-            
+
             <table>
                 <tr>
                     <th>Time Frame</th>
@@ -2824,6 +3585,406 @@
                     <li><strong>Use 900s (15-min):</strong> If using EVopt and want finer-grained optimization for precise battery and solar control</li>
                 </ul>
             </div>
+        </div>
+
+        <!-- EVCC Price Source Guide -->
+        <div class="content-section" id="evcc-price-guide">
+            <h2><i class="fas fa-plug"></i> EVCC as Price Source (price.source: evcc)</h2>
+            <p>Use EVCC (Electric Vehicle Charging Controller) as your price source when you have an EVCC instance managing your electricity pricing or tariff data.</p>
+
+            <h3>When to Use EVCC Price Source</h3>
+            <ul>
+                <li><strong>EVCC Integration:</strong> You already have EVCC configured with tariff/pricing data</li>
+                <li><strong>Unified Control:</strong> Want to use the same EVCC instance for both EV charging and battery optimization</li>
+                <li><strong>Automatic Tariff Sync:</strong> Tariff rates automatically synchronize between EVCC and EOS Connect</li>
+                <li><strong>Multiple Tariffs:</strong> Need access to both grid consumption prices and feed-in tariffs from EVCC</li>
+            </ul>
+
+            <h3>Configuration Steps</h3>
+
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-exclamation-triangle"></i> Prerequisite:</strong> EVCC interface must be configured first (see <a href="#evcc">EVCC Configuration</a>). The price source will use the same <code>evcc.url</code>.
+            </div>
+
+            <ol>
+                <li><strong>Configure EVCC Interface:</strong>
+                    <ul>
+                        <li>Set <code>evcc.enabled: true</code></li>
+                        <li>Set <code>evcc.url</code> to your EVCC instance (e.g., <code>http://evcc.local:7070</code>)</li>
+                    </ul>
+                </li>
+                <li><strong>Enable EVCC Price Source:</strong>
+                    <ul>
+                        <li>Set <code>price.source: evcc</code></li>
+                        <li><code>price.token</code> should remain empty (EVCC API doesn't require authentication)</li>
+                    </ul>
+                </li>
+                <li><strong>Optional - Add Feed-In Tariff (EVCC 0.132+):</strong>
+                    <ul>
+                        <li>If your EVCC instance publishes <code>/api/tariff/feedin</code> data, it will be used automatically for feed-in pricing</li>
+                        <li>Set <code>price.feed_in_source: evcc</code> to use EVCC's published feed-in tariff</li>
+                    </ul>
+                </li>
+            </ol>
+
+            <h3>EVCC Price Data Format</h3>
+            <p>EVCC provides electricity prices via the grid tariff API endpoint with 15-minute resolution:</p>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">GET http://evcc.local:7070/api/tariff/grid
+
+Response:
+{
+  "rates": [
+    {
+      "start": "2026-06-15T00:00:00+02:00",
+      "end": "2026-06-15T00:15:00+02:00",
+      "value": 0.3236
+    },
+    {
+      "start": "2026-06-15T00:15:00+02:00",
+      "end": "2026-06-15T00:30:00+02:00",
+      "value": 0.3113
+    }
+  ]
+}</pre>
+            </div>
+
+            <table>
+                <tr>
+                    <th>Field</th>
+                    <th>Description</th>
+                    <th>Format</th>
+                </tr>
+                <tr>
+                    <td><strong>start</strong></td>
+                    <td>Start timestamp of the price period</td>
+                    <td>ISO8601 with timezone (e.g., +02:00)</td>
+                </tr>
+                <tr>
+                    <td><strong>end</strong></td>
+                    <td>End timestamp of the price period</td>
+                    <td>ISO8601 with timezone</td>
+                </tr>
+                <tr>
+                    <td><strong>value</strong></td>
+                    <td>Electricity price for that period</td>
+                    <td>EUR/kWh (automatically converted to EUR/Wh internally)</td>
+                </tr>
+            </table>
+
+            <h3>Price Unit Conversion</h3>
+            <p><strong>Important:</strong> EVCC provides prices in EUR/kWh. EOS Connect automatically converts these to EUR/Wh for internal calculations:</p>
+            <ul>
+                <li><strong>EVCC price:</strong> 0.120 EUR/kWh</li>
+                <li><strong>Converted:</strong> 0.000120 EUR/Wh (÷ 1000)</li>
+                <li><strong>Display:</strong> Always shown in EUR/kWh in the web UI</li>
+            </ul>
+
+            <h3>Automatic Updates</h3>
+            <p>EVCC prices are fetched:</p>
+            <ul>
+                <li><strong>On startup:</strong> Initial price load</li>
+                <li><strong>Every refresh cycle:</strong> Default 10 minutes (configurable via <code>refresh_time</code>)</li>
+                <li><strong>On configuration change:</strong> When <code>price.source</code> is changed to/from <code>evcc</code>, prices are fetched immediately (hot-reload)</li>
+                <li><strong>On EVCC URL change:</strong> Automatic reconnection with new URL</li>
+            </ul>
+
+            <h3>Troubleshooting EVCC Price Source</h3>
+            <table>
+                <tr>
+                    <th>Issue</th>
+                    <th>Solution</th>
+                </tr>
+                <tr>
+                    <td>No prices showing</td>
+                    <td>
+                        <ul>
+                            <li>Verify <code>evcc.enabled: true</code> and <code>evcc.url</code> is correct</li>
+                            <li>Check <code>price.source: evcc</code></li>
+                            <li>Verify EVCC is running and accessible at <code>http://evcc.url:7070/api/tariff/grid</code></li>
+                            <li>Check application logs for connection errors</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td>EVCC connection timeout</td>
+                    <td>
+                        <ul>
+                            <li>Verify network connectivity to EVCC server</li>
+                            <li>Check firewall rules allowing port 7070</li>
+                            <li>Verify EVCC service is running: <code>systemctl status evcc</code></li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td>Wrong prices after EVCC update</td>
+                    <td>
+                        <ul>
+                            <li>Trigger a manual config save to reload prices (hot-reload)</li>
+                            <li>Check EVCC tariff configuration is correct</li>
+                            <li>Verify price format matches expected EUR/kWh</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td>Price source won't switch</td>
+                    <td>
+                        <ul>
+                            <li>Verify EVCC interface is not disabled or in error state</li>
+                            <li>Check web UI Settings → Price Configuration for any errors</li>
+                            <li>If using hot-reload, wait 5-10 seconds for connection to establish</li>
+                        </ul>
+                    </td>
+                </tr>
+            </table>
+
+            <h3>Example Configuration (config.yaml)</h3>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">evcc:
+  enabled: true
+  url: "http://evcc.local:7070"
+
+price:
+  source: evcc
+  token:                    # Leave empty for EVCC
+  feed_in_source: evcc      # Optional: if EVCC publishes /api/tariff/feedin</pre>
+            </div>
+
+        <!-- Timeseries Data Source Guide -->
+        <div class="content-section" id="timeseries-guide">
+            <h2><i class="fas fa-stream"></i> Unified Timeseries Data Source Guide</h2>
+            <p>EOS Connect supports a flexible <strong>timeseries</strong> source for both <strong>electricity prices</strong> and <strong>PV forecasts</strong>. This unified approach allows you to fetch data from Home Assistant, custom HTTP APIs, or any endpoint that returns timeseries data in a standard format.</p>
+
+            <h3>Timeseries Data Format</h3>
+            <p>The timeseries source expects JSON data in this standard format:</p>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">{
+  "data": [
+    {
+      "start": "2024-06-12T14:00:00Z",
+      "end": "2024-06-12T15:00:00Z",
+      "value": 0.25
+    },
+    {
+      "start": "2024-06-12T15:00:00Z",
+      "end": "2024-06-12T16:00:00Z",
+      "value": 0.28
+    }
+  ]
+}</pre>
+            </div>
+
+            <table>
+                <tr>
+                    <th>Field</th>
+                    <th>Description</th>
+                    <th>Format</th>
+                </tr>
+                <tr>
+                    <td><strong>start</strong></td>
+                    <td>Start timestamp of the timeslot</td>
+                    <td>ISO8601 (e.g., "2024-06-12T14:00:00Z" or Unix timestamp)</td>
+                </tr>
+                <tr>
+                    <td><strong>end</strong></td>
+                    <td>End timestamp of the timeslot</td>
+                    <td>ISO8601 or Unix timestamp</td>
+                </tr>
+                <tr>
+                    <td><strong>value</strong></td>
+                    <td><strong>For Prices:</strong> Price in EUR/Wh (e.g., 0.25 for 25 ct/kWh)<br>
+                        <strong>For PV:</strong> Generated power in Wh for the timeslot</td>
+                    <td>Number (float)</td>
+                </tr>
+            </table>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Time Resolution:</strong> EOS Connect auto-detects whether the timeseries is 15-minute (900s) or hourly (3600s) based on the timestamp differences. It automatically converts 15-minute data to hourly by averaging 4 consecutive values.
+            </div>
+
+            <h3>Home Assistant Integration</h3>
+            <p>Home Assistant entity attributes can be accessed using the dot notation in <strong>data_path</strong>.</p>
+
+            <h4>Price Example (Home Assistant)</h4>
+            <table>
+                <tr>
+                    <th>Configuration</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td><code>price.source</code></td>
+                    <td><code>timeseries</code></td>
+                </tr>
+                <tr>
+                    <td><code>price.data_url</code></td>
+                    <td><code>http://homeassistant.local:8123/api/states/sensor.grid_prices</code></td>
+                </tr>
+                <tr>
+                    <td><code>price.data_path</code></td>
+                    <td><code>attributes.data</code></td>
+                </tr>
+                <tr>
+                    <td><code>price.data_token</code></td>
+                    <td>Your HA Long-Lived Access Token (optional if local)</td>
+                </tr>
+            </table>
+
+            <p><strong>HA Entity Response Example:</strong></p>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">{
+  "entity_id": "sensor.grid_prices",
+  "attributes": {
+    "data": [
+      {"start": "2024-06-12T14:00:00Z", "end": "2024-06-12T15:00:00Z", "value": 0.25},
+      {"start": "2024-06-12T15:00:00Z", "end": "2024-06-12T16:00:00Z", "value": 0.28}
+    ]
+  }
+}</pre>
+            </div>
+
+            <h4>PV Forecast Example (Home Assistant)</h4>
+            <table>
+                <tr>
+                    <th>Configuration</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td><code>pv_forecast_source.source</code></td>
+                    <td><code>timeseries</code></td>
+                </tr>
+                <tr>
+                    <td><code>pv_forecast_source.data_url</code></td>
+                    <td><code>http://homeassistant.local:8123/api/states/sensor.solar_forecast</code></td>
+                </tr>
+                <tr>
+                    <td><code>pv_forecast_source.data_path</code></td>
+                    <td><code>attributes.forecast</code></td>
+                </tr>
+                <tr>
+                    <td><code>pv_forecast_source.data_token</code></td>
+                    <td>Your HA Long-Lived Access Token (optional if local)</td>
+                </tr>
+            </table>
+
+            <h3>Custom HTTP API Integration</h3>
+            <p>Connect to custom HTTP endpoints that return timeseries data. Supports authentication via Bearer tokens.</p>
+
+            <h4>Example: Custom REST API</h4>
+            <table>
+                <tr>
+                    <th>Configuration</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td><code>price.source</code></td>
+                    <td><code>timeseries</code></td>
+                </tr>
+                <tr>
+                    <td><code>price.data_url</code></td>
+                    <td><code>https://api.example.com/v1/prices/current</code></td>
+                </tr>
+                <tr>
+                    <td><code>price.data_path</code></td>
+                    <td><code>prices</code> (or nested path like <code>result.data</code>)</td>
+                </tr>
+                <tr>
+                    <td><code>price.data_token</code></td>
+                    <td>Your API token (if required)</td>
+                </tr>
+            </table>
+
+            <p><strong>API Response Example:</strong></p>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">{
+  "prices": [
+    {"start": "2024-06-12T14:00:00Z", "end": "2024-06-12T15:00:00Z", "value": 0.25},
+    {"start": "2024-06-12T15:00:00Z", "end": "2024-06-12T16:00:00Z", "value": 0.28}
+  ]
+}</pre>
+            </div>
+
+            <h3>Testing Your Timeseries Configuration</h3>
+            <p>Use the built-in connectivity test to validate your timeseries configuration before enabling it.</p>
+
+            <p><strong>HTTP Request:</strong></p>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">POST /api/config/test-timeseries
+Content-Type: application/json
+
+{
+  "source": "price",
+  "data_url": "http://homeassistant.local:8123/api/states/sensor.grid_prices",
+  "data_path": "attributes.data",
+  "data_token": "eyJhbGciOiJIUzI1NiI..."
+}</pre>
+            </div>
+
+            <p><strong>Response (Success):</strong></p>
+            <div style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                <pre style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #28a745;">{
+  "success": true,
+  "message": "Successfully fetched 24 price values",
+  "sample_count": 24,
+  "first_entry": {
+    "start": "2024-06-12T14:00:00Z",
+    "end": "2024-06-12T15:00:00Z",
+    "value": 0.25
+  },
+  "last_entry": {
+    "start": "2024-06-13T14:00:00Z",
+    "end": "2024-06-13T15:00:00Z",
+    "value": 0.22
+  }
+}</pre>
+            </div>
+
+            <h3>Error Handling & Retries</h3>
+            <p>EOS Connect automatically handles transient API failures:</p>
+            <ul>
+                <li><strong>Automatic Retries:</strong> Up to 3 attempts with exponential backoff (0.5s → 2s → 4s)</li>
+                <li><strong>Cache Fallback:</strong> If API fails, uses the last successfully fetched data</li>
+                <li><strong>Graceful Degradation:</strong> Continues running with cached data if available</li>
+                <li><strong>Error Logging:</strong> Issues are logged with timestamps for troubleshooting</li>
+            </ul>
+
+            <h3>Hot-Reload Support</h3>
+            <p>All timeseries configuration fields support hot-reload — changes take effect immediately without restarting the application:</p>
+            <ul>
+                <li><code>price.data_url</code>, <code>price.data_path</code>, <code>price.data_token</code></li>
+                <li><code>pv_forecast_source.data_url</code>, <code>pv_forecast_source.data_path</code>, <code>pv_forecast_source.data_token</code></li>
+            </ul>
+            <p>Changes are applied within 1-2 seconds on the next update cycle.</p>
+
+            <h3>JSON Path Reference</h3>
+            <p>Examples of how to specify <code>data_path</code> for different response structures:</p>
+
+            <table>
+                <tr>
+                    <th>Response Structure</th>
+                    <th>data_path</th>
+                    <th>Notes</th>
+                </tr>
+                <tr>
+                    <td><code>{"data": [...]}</code></td>
+                    <td><code>data</code></td>
+                    <td>Top-level array</td>
+                </tr>
+                <tr>
+                    <td><code>{"attributes": {"data": [...]}}</code></td>
+                    <td><code>attributes.data</code></td>
+                    <td>Nested object (Home Assistant pattern)</td>
+                </tr>
+                <tr>
+                    <td><code>{"result": {"prices": [...]}}</code></td>
+                    <td><code>result.prices</code></td>
+                    <td>Multiple levels of nesting</td>
+                </tr>
+                <tr>
+                    <td><code>{"forecast": [{"data": [...]}]}</code></td>
+                    <td><code>forecast[0].data</code></td>
+                    <td>Array with indexed access</td>
+                </tr>
+            </table>
         </div>
 
         <!-- Configuration Examples Section -->
@@ -2993,23 +4154,37 @@
             <div class="alert alert-info" style="margin-top: 15px;">
                 <strong><i class="fas fa-cog"></i> Web UI Configuration:</strong>
                 <ol>
+                    <li><strong>Data Source Section:</strong> Set <code>type: homeassistant</code>, <code>url</code>, and <code>access_token</code>. These credentials are automatically used by the inverter.</li>
                     <li><strong>Inverter Section — Type:</strong> Select "homeassistant"</li>
                     <li><strong>Power Limits:</strong> Set max grid charge and PV charge rates in watts</li>
-                    <li><strong>Service Call Mappings:</strong> For each control state (charge_from_grid, avoid_discharge, discharge_allowed):
+                    <li><strong>Service Call Sequences:</strong> For each control state (charge_from_grid, avoid_discharge, discharge_allowed):
                         <ul style="margin-top: 8px;">
-                            <li>Define the sequence of HA service calls</li>
+                            <li>Enter a valid JSON array of HA service call objects</li>
                             <li>Each call specifies: service domain, entity ID, and data</li>
                             <li>Use <code>{{ power }}</code> template variable in <code>data_template</code> for dynamic power from EOS</li>
+                            <li>The web UI provides a JSON editor with real-time syntax validation</li>
                         </ul>
                     </li>
                 </ol>
-                <p style="margin-top: 10px;"><strong>Example service call sequence for Marstek:</strong></p>
-                <ul style="margin-top: 8px;">
-                    <li><code>select.select_option</code> → entity: <code>select.mt1_betriebsmodus</code> → option: "Manuell"</li>
-                    <li><code>select.select_option</code> → entity: <code>select.mt1_erzwungene_operation</code> → option: "Zwangsladen"</li>
-                    <li><code>number.set_value</code> → entity: <code>number.mt1_ziel_leistung_manuell</code> → value: <code>{{ power }}</code></li>
-                </ul>
-                <p style="margin-top: 10px;"><strong>Result:</strong> EOS Connect sends optimized battery commands to HA, which executes your custom service call sequence on the inverter.</p>
+                <p style="margin-top: 15px;"><strong>Example JSON for Marstek (charge_from_grid mode):</strong></p>
+                <pre style="background-color: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; overflow-x: auto;"><code>[
+  {
+    "service": "select.select_option",
+    "entity_id": "select.mt1_betriebsmodus",
+    "data": {"option": "Manuell"}
+  },
+  {
+    "service": "select.select_option",
+    "entity_id": "select.mt1_erzwungene_operation",
+    "data": {"option": "Zwangsladen"}
+  },
+  {
+    "service": "number.set_value",
+    "entity_id": "number.mt1_ziel_leistung_manuell",
+    "data_template": {"value": "{{ power }}"}
+  }
+]</code></pre>
+                <p style="margin-top: 15px;"><strong>Result:</strong> EOS Connect sends optimized battery commands to Home Assistant, which executes your custom service call sequence on the inverter every control cycle.</p>
             </div>
             <div class="alert alert-success">
                 <strong><i class="fas fa-lightbulb"></i> For Marstek Setup:</strong> See <a href="https://gist.github.com/chriszero/6940087c4fb3ef7552305602096f9d35" target="_blank">this complete ESPHome integration guide</a> for connecting a Marstek M1 via RS485/Modbus.
@@ -3035,10 +4210,10 @@
         if (!container) return;
         try {
             const res = await fetch('../assets/data/config_schema.json');
-            if (!res.ok) { 
+            if (!res.ok) {
                 console.error('Failed to load schema:', res.status, res.statusText);
-                container.innerHTML = '<p style="color:#888;">Parameter reference not available (HTTP ' + res.status + ').</p>'; 
-                return; 
+                container.innerHTML = '<p style="color:#888;">Parameter reference not available (HTTP ' + res.status + ').</p>';
+                return;
             }
             const schemaData = await res.json();
             const fields = schemaData.fields || schemaData;

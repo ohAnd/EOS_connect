@@ -39,6 +39,9 @@ SECTION_META = {
     "system":             {"icon": "fa-gears",           "label": "System"},
 }
 
+# Location-based PV forecast sources that require pv_forecast array configuration
+LOCATION_BASED_PV_SOURCES = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]
+
 
 @dataclass
 class FieldDef:
@@ -50,10 +53,11 @@ class FieldDef:
     section: str  # top-level group: data_source, load, eos, price, battery, ...
     level: str  # getting_started, standard, expert
     description: str  # short inline help text
-    labels: list = field(default_factory=list)  # experimental, deprecated, restart_required, conditional
+    labels: list = field(default_factory=list)  # experimental, deprecated, restart
     help_url: str = ""  # link to GitHub Pages docs anchor
-    validation: dict = field(default_factory=dict)  # min, max, pattern, choices, required
+    validation: dict = field(default_factory=dict)  # min, max, pattern, choices
     depends_on: Optional[dict] = None  # conditional visibility rules
+    description_map: Optional[dict] = None  # dynamic descriptions with parent refs
     hot_reload: bool = False
     display_group: str = ""  # sub-grouping for UI layout
 
@@ -95,6 +99,30 @@ class ConfigSchema:
         """Return all registered fields."""
         return list(self._fields.values())
 
+    def get_resolved_description(self, field_key: str, current_config: dict) -> str:
+        """
+        Get the description for a field, resolving dynamic descriptions if applicable.
+
+        Args:
+            field_key: The field key (e.g., "price.feed_in_negative_price_switch")
+            current_config: Current config dict (flattened with dot-notation keys)
+
+        Returns:
+            The static description, or resolved dynamic description based on config values.
+        """
+        field_def = self.get(field_key)
+        if not field_def or not field_def.description_map:
+            return field_def.description if field_def else ""
+
+        # description_map: {"parent_key": {"parent_value": "desc"}}
+        for parent_key, value_map in field_def.description_map.items():
+            parent_value = current_config.get(parent_key)
+            if parent_value in value_map:
+                return value_map[parent_value]
+
+        # Fall back to static description
+        return field_def.description
+
     def sections(self) -> list[str]:
         """Return ordered list of unique section names."""
         seen = []
@@ -107,7 +135,7 @@ class ConfigSchema:
         """Export the full schema as a JSON-serializable list of dicts."""
         result = []
         for f in self._fields.values():
-            result.append({
+            field_obj = {
                 "key": f.key,
                 "type": f.field_type,
                 "default": f.default,
@@ -120,7 +148,11 @@ class ConfigSchema:
                 "depends_on": f.depends_on,
                 "hot_reload": f.hot_reload,
                 "display_group": f.display_group,
-            })
+            }
+            # Include description_map for fields that have dynamic descriptions
+            if f.description_map:
+                field_obj["description_map"] = f.description_map
+            result.append(field_obj)
         return result
 
     @staticmethod
@@ -134,6 +166,9 @@ class ConfigSchema:
 
         Returns a dict like: {"load": {"source": "default", ...}, "battery": {...}, ...}
         Top-level keys (no dot) become top-level dict entries.
+        
+        Special handling: pv_forecast is a list and is built separately by the merger,
+        so we exclude it from the flat defaults dict.
         """
         result = {}
         for f in self._fields.values():
@@ -142,9 +177,18 @@ class ConfigSchema:
                 result[parts[0]] = f.default
             else:
                 section, subkey = parts
+                # Skip pv_forecast fields — they're built separately as a
+                # list by _build_pv_forecast()
+                if section == "pv_forecast":
+                    continue
                 if section not in result:
                     result[section] = {}
                 result[section][subkey] = f.default
+
+        # Ensure pv_forecast is initialized as an empty list (not a dict)
+        if "pv_forecast" not in result:
+            result["pv_forecast"] = []
+
         return result
 
 
@@ -189,6 +233,18 @@ _ALL_FIELDS: list[FieldDef] = [
         labels=["restart_required"],
         help_url="configuration.html#data-source",
         depends_on={"data_source.type": ["homeassistant"]},
+        display_group="Connection",
+    ),
+    FieldDef(
+        key="data_source.ssl_ignore",
+        field_type="bool",
+        default=False,
+        section="data_source",
+        level="expert",
+        description="Disable SSL certificate verification (use with private/self-signed CA)",
+        labels=["restart_required"],
+        help_url="configuration.html#data-source",
+        depends_on={"data_source.type": ["homeassistant", "openhab"]},
         display_group="Connection",
     ),
 
@@ -288,14 +344,14 @@ _ALL_FIELDS: list[FieldDef] = [
     FieldDef(
         key="eos.source",
         field_type="select",
-        default="eos_server",
+        default="local_evopt",
         section="eos",
         level="getting_started",
-        description="Optimization backend — EOS Server or EVopt",
+        description="Optimization backend — Local (built-in), EOS Server, or EVopt (external)",
         labels=["restart_required"],
         help_url="configuration.html#eos",
-        validation={"choices": ["eos_server", "evopt"]},
-        display_group="Server",
+        validation={"choices": ["local_evopt", "eos_server", "evopt"]},
+        display_group="Backend",
     ),
     FieldDef(
         key="eos.server",
@@ -306,7 +362,8 @@ _ALL_FIELDS: list[FieldDef] = [
         description="EOS or EVopt server address",
         labels=["restart_required"],
         help_url="configuration.html#eos",
-        display_group="Server",
+        depends_on={"eos.source": ["eos_server", "evopt"]},
+        display_group="External Server",
     ),
     FieldDef(
         key="eos.port",
@@ -318,7 +375,8 @@ _ALL_FIELDS: list[FieldDef] = [
         labels=["restart_required"],
         help_url="configuration.html#eos",
         validation={"min": 1, "max": 65535},
-        display_group="Server",
+        depends_on={"eos.source": ["eos_server", "evopt"]},
+        display_group="External Server",
     ),
     FieldDef(
         key="eos.time_frame",
@@ -371,6 +429,112 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
     ),
 
+    # --- Local EVopt (built-in optimizer) settings ---
+    FieldDef(
+        key="eos.local_evopt_charging_strategy",
+        field_type="select",
+        default="charge_before_export",
+        section="eos",
+        level="standard",
+        description="Charging strategy for the built-in optimizer",
+        help_url="configuration.html#eos",
+        validation={"choices": [
+            "charge_before_export",
+            "discharge_before_import",
+            "maximize_self_consumption",
+            "attenuate_grid_peaks",
+            "none",
+        ]},
+        depends_on={"eos.source": "local_evopt"},
+        display_group="Local Optimizer",
+        hot_reload=True,
+    ),
+    FieldDef(
+        key="eos.local_evopt_discharging_strategy",
+        field_type="select",
+        default="discharge_before_import",
+        section="eos",
+        level="standard",
+        description="Discharging strategy for the built-in optimizer",
+        help_url="configuration.html#eos",
+        validation={"choices": [
+            "discharge_before_import",
+            "emergency_reserve",
+            "none",
+        ]},
+        depends_on={"eos.source": "local_evopt"},
+        display_group="Local Optimizer",
+        hot_reload=True,
+    ),
+    FieldDef(
+        key="eos.local_evopt_emergency_reserve_pct",
+        field_type="int",
+        default=0,
+        section="eos",
+        level="standard",
+        description="Minimum battery SOC to maintain at end-of-horizon "
+        "(% of capacity, 0 = disabled)",
+        help_url="configuration.html#eos",
+        validation={"min": 0, "max": 80},
+        depends_on={"eos.local_evopt_discharging_strategy": "emergency_reserve"},
+        display_group="Local Optimizer",
+        hot_reload=True,
+    ),
+    FieldDef(
+        key="eos.local_evopt_max_grid_import_w",
+        field_type="int",
+        default=0,
+        section="eos",
+        level="expert",
+        description="Maximum grid import power (0 = no limit, uses inverter limit). "
+        "Use for grid connection limits.",
+        help_url="configuration.html#eos",
+        validation={"min": 0, "max": 100000},
+        depends_on={"eos.source": "local_evopt"},
+        display_group="Local Optimizer",
+        labels=["restart_required"],
+    ),
+    FieldDef(
+        key="eos.local_evopt_max_grid_export_w",
+        field_type="int",
+        default=0,
+        section="eos",
+        level="expert",
+        description="Maximum grid export power (0 = no limit, uses discharge max). "
+        "Use for grid feed-in limits.",
+        help_url="configuration.html#eos",
+        validation={"min": 0, "max": 100000},
+        depends_on={"eos.source": "local_evopt"},
+        display_group="Local Optimizer",
+        labels=["restart_required"],
+    ),
+    FieldDef(
+        key="eos.local_evopt_num_threads",
+        field_type="int",
+        default=0,
+        section="eos",
+        level="expert",
+        description="CBC solver thread count for built-in optimizer (0 = auto)",
+        help_url="configuration.html#eos",
+        validation={"min": 0, "max": 32},
+        depends_on={"eos.source": "local_evopt"},
+        display_group="Local Optimizer",
+        labels=["restart_required"],
+    ),
+    FieldDef(
+        key="eos.local_evopt_time_limit",
+        field_type="int",
+        default=0,
+        section="eos",
+        level="expert",
+        description="CBC solver time limit in seconds for built-in optimizer (0 = no limit)",
+        help_url="configuration.html#eos",
+        validation={"min": 0, "max": 600},
+        depends_on={"eos.source": "local_evopt"},
+        display_group="Local Optimizer",
+        labels=["restart_required"],
+    ),
+
     # ===== PRICE =====
     FieldDef(
         key="price.source",
@@ -379,12 +543,12 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="getting_started",
         description="Data source for electricity prices",
-        labels=["restart_required"],
+        hot_reload=True,
         help_url="configuration.html#price",
         validation={"choices": [
-            "tibber", "smartenergy_at", "stromligning", "fixed_24h", "default"
+            "tibber", "smartenergy_at", "stromligning", "fixed_24h", "timeseries", "evcc", "default"
         ]},
-        display_group="Provider",
+        display_group="Grid Price Provider",
     ),
     FieldDef(
         key="price.token",
@@ -392,11 +556,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default="tibberBearerToken",
         section="price",
         level="getting_started",
-        description="API token for price provider (Tibber bearer token, Stromligning supplierId/productId)",
+        description="API token for price provider (bearer token / supplier ID)",
         labels=["restart_required"],
         help_url="configuration.html#price",
         depends_on={"price.source": ["tibber", "stromligning"]},
-        display_group="Provider",
+        display_group="Grid Price Provider",
     ),
     FieldDef(
         key="price.fixed_price_adder_ct",
@@ -407,7 +571,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Fixed cost addition in ct per kWh",
         help_url="configuration.html#price",
         hot_reload=True,
-        display_group="Price Adjustments",
+        display_group="Grid Price - Adjustments",
     ),
     FieldDef(
         key="price.relative_price_multiplier",
@@ -418,7 +582,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Relative cost multiplier applied to (base + fixed adder). E.g. 0.05 = 5%",
         help_url="configuration.html#price",
         hot_reload=True,
-        display_group="Price Adjustments",
+        display_group="Grid Price - Adjustments",
     ),
     FieldDef(
         key="price.fixed_24h_array",
@@ -427,34 +591,13 @@ _ALL_FIELDS: list[FieldDef] = [
                 "23.52,23.52,23.52,23.52,28.17,28.17,34.28,34.28,34.28,34.28,34.28,28,23",
         section="price",
         level="standard",
-        description="24 comma-separated prices in ct/kWh for each hour (used with fixed_24h source)",
+        description="24 comma-separated prices in ct/kWh per hour (fixed_24h source)",
         labels=["restart_required"],
         help_url="configuration.html#price",
         depends_on={"price.source": ["fixed_24h"]},
-        display_group="Fixed Prices",
+        display_group="Grid Price Provider",
     ),
-    FieldDef(
-        key="price.feed_in_price",
-        field_type="float",
-        default=0.0,
-        section="price",
-        level="getting_started",
-        description="Feed-in price for the grid in €/kWh",
-        help_url="configuration.html#price",
-        hot_reload=True,
-        display_group="Price Adjustments",
-    ),
-    FieldDef(
-        key="price.negative_price_switch",
-        field_type="bool",
-        default=False,
-        section="price",
-        level="standard",
-        description="No payment when stock price is negative",
-        help_url="configuration.html#price",
-        hot_reload=True,
-        display_group="Price Adjustments",
-    ),
+    # ===== ENERGY PRICE FORECAST (Grid Price Subsection) =====
     FieldDef(
         key="price.energyforecast_enabled",
         field_type="bool",
@@ -462,9 +605,9 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="standard",
         description="Enable smart price prediction via energyforecast.de",
-        labels=["experimental", "restart_required"],
+        labels=["restart_required"],
         help_url="configuration.html#energyforecast",
-        display_group="Energy Price Forecast",
+        display_group="Grid Price - Forecast (Advanced)",
     ),
     FieldDef(
         key="price.energyforecast_token",
@@ -473,10 +616,10 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="standard",
         description="API token from energyforecast.de",
-        labels=["experimental", "restart_required"],
+        labels=["restart_required"],
         help_url="configuration.html#energyforecast",
         depends_on={"price.energyforecast_enabled": [True]},
-        display_group="Energy Price Forecast",
+        display_group="Grid Price - Forecast (Advanced)",
     ),
     FieldDef(
         key="price.energyforecast_market_zone",
@@ -485,11 +628,182 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="standard",
         description="Market zone for energy price forecast",
-        labels=["experimental", "restart_required"],
+        labels=["restart_required"],
         help_url="configuration.html#energyforecast",
         validation={"choices": ["DE-LU", "AT", "FR", "NL", "BE", "PL", "DK1", "DK2"]},
         depends_on={"price.energyforecast_enabled": [True]},
-        display_group="Energy Price Forecast",
+        display_group="Grid Price - Forecast (Advanced)",
+    ),
+
+    # ===== UNIFIED HTTP/HA DATA SOURCE (PRICES) =====
+    FieldDef(
+        key="price.use_ha_central_data_source",
+        field_type="bool",
+        default=False,
+        section="price",
+        level="standard",
+        description="Use centrally configured Home Assistant instance (from Data Source) "
+        "instead of manually specifying URL and token",
+        help_url="configuration.html#price-sources",
+        depends_on={"price.source": ["timeseries"]},
+        hot_reload=True,
+        display_group="Grid Price Provider",
+    ),
+    FieldDef(
+        key="price.ha_sensor_name",
+        field_type="str",
+        default="sensor.grid_prices",
+        section="price",
+        level="getting_started",
+        description="Home Assistant sensor entity containing price timeseries data "
+        "(e.g., sensor.grid_prices)",
+        help_url="configuration.html#price-sources",
+        depends_on={
+            "price.source": ["timeseries"],
+            "price.use_ha_central_data_source": [True],
+        },
+        hot_reload=True,
+        display_group="Grid Price Provider",
+    ),
+    FieldDef(
+        key="price.data_path",
+        field_type="str",
+        default="attributes.data",
+        section="price",
+        level="standard",
+        description=(
+            "JSON path to timeseries array in response. For HA sensors: "
+            "'attributes.data'. For custom HTTP servers: 'data', 'prices', 'values', "
+            "etc. (default: 'attributes.data')"
+        ),
+        help_url="configuration.html#price-sources",
+        depends_on={"price.source": ["timeseries"]},
+        hot_reload=True,
+        display_group="Grid Price Provider",
+    ),
+    FieldDef(
+        key="price.data_url",
+        field_type="str",
+        default="http://homeassistant.local:8123/api/states/sensor.grid_prices",
+        section="price",
+        level="getting_started",
+        description=(
+            "Data source URL. For Home Assistant: "
+            "http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. "
+            "For HTTP servers: endpoint URL returning JSON timeseries. "
+            "Must return JSON array with {start, end, value} format (values in EUR/Wh)."
+        ),
+        help_url="configuration.html#price-sources",
+        depends_on={
+            "price.source": ["timeseries"],
+            "price.use_ha_central_data_source": [False],
+        },
+        validation={"pattern": r"^https?://.+"},
+        hot_reload=True,
+        display_group="Grid Price Provider",
+    ),
+    FieldDef(
+        key="price.data_token",
+        field_type="password",
+        default="",
+        section="price",
+        level="standard",
+        description=(
+            "Optional bearer token for API authentication "
+            "(used as Authorization: Bearer [token]). "
+            "Leave empty for unauthenticated endpoints."
+        ),
+        help_url="configuration.html#price-sources",
+        depends_on={
+            "price.source": ["timeseries"],
+            "price.use_ha_central_data_source": [False],
+        },
+        hot_reload=True,
+        display_group="Grid Price Provider",
+    ),
+
+    # ===== DYNAMIC FEED-IN PRICING ====="
+    FieldDef(
+        key="price.feed_in_source",
+        field_type="select",
+        default="fixed",
+        section="price",
+        level="standard",
+        description="Source for feed-in (export) prices",
+        help_url="configuration.html#price",
+        validation={"choices": ["fixed", "elpris_dk", "epex_spot", "evcc"]},
+        hot_reload=True,
+        display_group="Feed-In Price",
+    ),
+    FieldDef(
+        key="price.feed_in_price",
+        field_type="float",
+        default=0.0,
+        section="price",
+        level="getting_started",
+        description="Fixed feed-in price for the grid in ct/kWh",
+        help_url="configuration.html#price",
+        depends_on={"price.feed_in_source": ["fixed"]},
+        hot_reload=True,
+        display_group="Feed-In Price",
+    ),
+    FieldDef(
+        key="price.feed_in_zone",
+        field_type="select",
+        default="DK1",
+        section="price",
+        level="standard",
+        description="Stromzone for Elpris (DK1 or DK2)",
+        help_url="configuration.html#price",
+        validation={"choices": ["DK1", "DK2"]},
+        depends_on={"price.feed_in_source": ["elpris_dk"]},
+        hot_reload=True,
+        display_group="Feed-In Price",
+    ),
+    FieldDef(
+        key="price.feed_in_static_adder",
+        field_type="float",
+        default=0.0,
+        section="price",
+        level="standard",
+        description="Static adjustment to feed-in price in ct/kWh (e.g., +3.5 for transport costs)",
+        help_url="configuration.html#price",
+        validation={"min": -10.0, "max": 10.0},
+        depends_on={"price.feed_in_source": ["elpris_dk", "epex_spot"]},
+        hot_reload=True,
+        display_group="Feed-In Price",
+    ),
+    FieldDef(
+        key="price.feed_in_multiplier",
+        field_type="float",
+        default=1.0,
+        section="price",
+        level="expert",
+        description="Relative multiplier for feed-in price (1.0 = no change, 1.05 = +5%)",
+        help_url="configuration.html#price",
+        validation={"min": 0.5, "max": 1.5},
+        depends_on={"price.feed_in_source": ["elpris_dk", "epex_spot"]},
+        hot_reload=True,
+        display_group="Feed-In Price",
+    ),
+    FieldDef(
+        key="price.feed_in_negative_price_switch",
+        field_type="bool",
+        default=False,
+        section="price",
+        level="standard",
+        description="Clamp negative market prices to feed-in price of 0",
+        help_url="configuration.html#price",
+        description_map={
+            "price.feed_in_source": {
+                "fixed": "Clamp to 0 when market price (Akkudoktor reference) goes negative",
+                "elpris_dk": "Clamp to 0 when market price (Elpris DK) goes negative",
+                "epex_spot": "Clamp to 0 when market price (EPEX Spot) goes negative",
+            }
+        },
+        depends_on={"price.feed_in_source": ["fixed", "elpris_dk", "epex_spot"]},
+        hot_reload=True,
+        display_group="Feed-In Price",
     ),
 
     # ===== BATTERY =====
@@ -800,7 +1114,7 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#pv-forecast",
         validation={"choices": [
             "akkudoktor", "openmeteo", "openmeteo_local",
-            "forecast_solar", "evcc", "solcast", "victron", "default"
+            "forecast_solar", "evcc", "solcast", "victron", "timeseries", "default"
         ]},
         display_group="Provider",
     ),
@@ -816,6 +1130,20 @@ _ALL_FIELDS: list[FieldDef] = [
         depends_on={"pv_forecast_source.source": ["solcast", "victron"]},
         display_group="Provider",
     ),
+    FieldDef(
+        key="pv_forecast_source.resource_id",
+        field_type="str",
+        default="",
+        section="pv_forecast_source",
+        level="standard",
+        description="Resource ID / Installation ID (Solcast: comma-separated list; "
+        "Victron: single VRM ID)",
+        hot_reload=True,
+        help_url="configuration.html#pv-forecast",
+        depends_on={"pv_forecast_source.source": ["solcast", "victron"]},
+        display_group="Provider",
+        validation={"max_length": 1000},
+    ),
 
     # Use real data correction for EVCC PV forecast (source-level)
     FieldDef(
@@ -824,16 +1152,105 @@ _ALL_FIELDS: list[FieldDef] = [
         default=True,
         section="pv_forecast_source",
         level="standard",
-        description="Apply the scaling factor from EVCC forecast API to correct PV forecast values"+
-        " using real measured data. If disabled, no scaling is applied (scale = 1.0).",
+        description="Apply scaling factor from EVCC forecast API to correct PV forecast values "
+        "using real measured data. If disabled, no scaling applied (scale = 1.0).",
         help_url="configuration.html#pv-forecast-evcc",
         depends_on={"pv_forecast_source.source": ["evcc"]},
         display_group="Provider",
     ),
 
-    # ===== PV FORECAST (array of installations) =====
+    # ===== UNIFIED HTTP/HA DATA SOURCE (PV) =====
+    FieldDef(
+        key="pv_forecast_source.use_ha_central_data_source",
+        field_type="bool",
+        default=False,
+        section="pv_forecast_source",
+        level="standard",
+        description="Use centrally configured Home Assistant instance (from Data Source) "
+        "instead of manually specifying URL and token",
+        help_url="configuration.html#pv-forecast-sources",
+        depends_on={"pv_forecast_source.source": ["timeseries"]},
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="pv_forecast_source.ha_sensor_name",
+        field_type="str",
+        default="sensor.pv_forecast",
+        section="pv_forecast_source",
+        level="getting_started",
+        description="Home Assistant sensor entity containing PV forecast timeseries data "
+        "(e.g., sensor.pv_forecast)",
+        help_url="configuration.html#pv-forecast-sources",
+        depends_on={
+            "pv_forecast_source.source": ["timeseries"],
+            "pv_forecast_source.use_ha_central_data_source": [True],
+        },
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="pv_forecast_source.data_path",
+        field_type="str",
+        default="attributes.data",
+        section="pv_forecast_source",
+        level="standard",
+        description=(
+            "JSON path to timeseries array in response. For HA sensors: "
+            "'attributes.data'. For custom HTTP servers: 'data', 'forecast', 'values', "
+            "etc. (default: 'attributes.data')"
+        ),
+        help_url="configuration.html#pv-forecast-sources",
+        depends_on={"pv_forecast_source.source": ["timeseries"]},
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="pv_forecast_source.data_url",
+        field_type="str",
+        default="http://homeassistant.local:8123/api/states/sensor.pv_forecast",
+        section="pv_forecast_source",
+        level="getting_started",
+        description=(
+            "Data source URL. For Home Assistant: "
+            "http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. "
+            "For HTTP servers: endpoint URL returning JSON timeseries. "
+            "Must return JSON array with {start, end, value} format."
+        ),
+        help_url="configuration.html#pv-forecast-sources",
+        depends_on={
+            "pv_forecast_source.source": ["timeseries"],
+            "pv_forecast_source.use_ha_central_data_source": [False],
+        },
+        validation={"pattern": r"^https?://.+"},
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="pv_forecast_source.data_token",
+        field_type="password",
+        default="",
+        section="pv_forecast_source",
+        level="standard",
+        description=(
+            "Optional bearer token for API authentication "
+            "(used as Authorization: Bearer [token]). "
+            "Leave empty for unauthenticated endpoints."
+        ),
+        help_url="configuration.html#pv-forecast-sources",
+        depends_on={
+            "pv_forecast_source.source": ["timeseries"],
+            "pv_forecast_source.use_ha_central_data_source": [False],
+        },
+        hot_reload=True,
+        display_group="Provider",
+    ),
+
+    # ===== PV FORECAST (array of installations) ====="
     # Note: pv_forecast is a list — handled specially by merger/migration.
     # The schema defines the template for ONE pv_forecast entry.
+    # This section is only shown for location-based sources
+    # (not for solcast, victron, evcc, timeseries).
     FieldDef(
         key="pv_forecast.name",
         field_type="str",
@@ -843,6 +1260,9 @@ _ALL_FIELDS: list[FieldDef] = [
         description="User-defined name for this PV installation (must be unique)",
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -855,6 +1275,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": -90, "max": 90},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -867,6 +1290,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": -180, "max": 180},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -879,6 +1305,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": -180, "max": 180},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -891,6 +1320,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": 0, "max": 90},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -903,6 +1335,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": 1},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -915,6 +1350,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": 1},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -927,6 +1365,9 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"min": 0.1, "max": 1.0},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
     FieldDef(
@@ -938,18 +1379,9 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Comma-separated horizon values for shading calculation",
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
-        display_group="Installation",
-    ),
-    FieldDef(
-        key="pv_forecast.resource_id",
-        field_type="str",
-        default="",
-        section="pv_forecast",
-        level="standard",
-        description="Resource ID for Solcast API (only needed for Solcast provider)",
-        hot_reload=True,
-        help_url="configuration.html#pv-forecast",
-        depends_on={"pv_forecast_source.source": ["solcast"]},
+        depends_on={
+            "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
+        },
         display_group="Installation",
     ),
 
@@ -967,31 +1399,8 @@ _ALL_FIELDS: list[FieldDef] = [
             "fronius_gen24", "fronius_gen24_legacy", "victron", "evcc",
             "homeassistant", "default"
         ]},
+        depends_on={"data_source.type": ["homeassistant"]},
         display_group="Hardware",
-    ),
-    FieldDef(
-        key="inverter.url",
-        field_type="str",
-        default="",
-        section="inverter",
-        level="getting_started",
-        description="Home Assistant URL for inverter control (e.g. http://homeassistant.local:8123)",
-        labels=["restart_required", "deprecated"],
-        help_url="configuration.html#inverter",
-        depends_on={"inverter.type": ["homeassistant"]},
-        display_group="Home Assistant",
-    ),
-    FieldDef(
-        key="inverter.token",
-        field_type="password",
-        default="",
-        section="inverter",
-        level="getting_started",
-        description="Long-lived access token for Home Assistant inverter control",
-        labels=["restart_required", "deprecated"],
-        help_url="configuration.html#inverter",
-        depends_on={"inverter.type": ["homeassistant"]},
-        display_group="Home Assistant",
     ),
     FieldDef(
         key="inverter.address",
@@ -1052,6 +1461,42 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#inverter",
         validation={"min": 0, "max": 100000},
         display_group="Power Limits",
+    ),
+    FieldDef(
+        key="inverter.charge_from_grid",
+        field_type="json",
+        default=[],
+        section="inverter",
+        level="standard",
+        description="Array of Home Assistant service calls for force-charge mode",
+        labels=["restart_required"],
+        help_url="configuration.html#inverter",
+        depends_on={"inverter.type": ["homeassistant"]},
+        display_group="Home Assistant Service Calls",
+    ),
+    FieldDef(
+        key="inverter.avoid_discharge",
+        field_type="json",
+        default=[],
+        section="inverter",
+        level="standard",
+        description="Array of Home Assistant service calls for avoid-discharge mode",
+        labels=["restart_required"],
+        help_url="configuration.html#inverter",
+        depends_on={"inverter.type": ["homeassistant"]},
+        display_group="Home Assistant Service Calls",
+    ),
+    FieldDef(
+        key="inverter.discharge_allowed",
+        field_type="json",
+        default=[],
+        section="inverter",
+        level="standard",
+        description="Array of Home Assistant service calls for discharge-allowed mode",
+        labels=["restart_required"],
+        help_url="configuration.html#inverter",
+        depends_on={"inverter.type": ["homeassistant"]},
+        display_group="Home Assistant Service Calls",
     ),
 
     # ===== EVCC =====

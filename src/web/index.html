@@ -25,6 +25,32 @@
             <p id="waiting_error_text"
                 style="font-size: 1.0em; font-weight: bold;  margin-bottom: 20px; text-align: center; color:rgb(241, 177, 0)">
                 ...</p>
+            
+            <!-- Startup Errors Panel -->
+            <div id="startup-errors-panel" style="
+                display: none;
+                background: rgba(211, 47, 47, 0.15);
+                border: 2px solid rgba(211, 47, 47, 0.4);
+                border-radius: 8px;
+                padding: 16px 20px;
+                margin-top: 24px;
+                margin-bottom: 16px;
+                max-width: 580px;
+                margin-left: auto;
+                margin-right: auto;
+                text-align: left;
+                max-height: 350px;
+                overflow-y: auto;
+            ">
+                <div style="margin-bottom: 12px;">
+                    <i class="fas fa-exclamation-circle" style="color: #d32f2f; margin-right: 8px; font-size: 1.2em;"></i>
+                    <span style="color: #ff6b6b; font-weight: bold; font-size: 0.95em;">Startup Issues Found</span>
+                </div>
+                <div id="startup-errors-list" style="font-size: 0.9em;">
+                    <!-- Error items will be inserted here -->
+                </div>
+            </div>
+            
             <div
                 style="border: 4px solid white; border-top: 4px solid gray; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto;">
             </div>

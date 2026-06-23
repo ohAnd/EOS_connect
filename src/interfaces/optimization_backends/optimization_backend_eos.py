@@ -5,7 +5,6 @@ measurement data.
 """
 
 import logging
-import sys
 import time
 import json
 from datetime import datetime, timedelta
@@ -88,8 +87,11 @@ class EOSBackend:
             logger.info("[OPT-EOS] Configuration validation successful")
         except ValueError as e:
             logger.error("[OPT-EOS] EOS backend configuration error: %s", str(e))
-            logger.error("[OPT-EOS] We have to exit now ...")
-            sys.exit(1)  # Exit if configuration is invalid
+            logger.error(
+                "[OPT-EOS] EOS backend will start in degraded mode - "
+                "Use Settings to fix configuration"
+            )
+            raise  # Let caller handle graceful degradation instead of sys.exit(1)
 
     def _get_expected_hourly_slots(self):
         """
@@ -220,7 +222,8 @@ class EOSBackend:
             elapsed_time = end_time - start_time
             minutes, seconds = divmod(elapsed_time, 60)
             logger.info(
-                "[OPT-EOS] OPTIMIZE response retrieved successfully in %d min %.2f sec for current run",
+                "[OPT-EOS] OPTIMIZE response retrieved successfully "
+                "in %d min %.2f sec for current run",
                 int(minutes),
                 seconds,
             )
@@ -239,13 +242,15 @@ class EOSBackend:
             return response.json(), avg_runtime
         except requests.exceptions.Timeout:
             logger.error(
-                "[OPT-EOS] OPTIMIZE Request timed out after %s seconds", timeout
+                "[OPT-EOS] OPTIMIZE Request timed out after %s seconds | "
+                "Config: #eos | ACTION REQUIRED",
+                timeout,
             )
             return {"error": "Request timed out - trying again with next run"}, None
         except requests.exceptions.ConnectionError as e:
             logger.error(
                 "[OPT-EOS] OPTIMIZE Connection error - EOS server not reachable at %s "
-                "will try again with next cycle - error: %s",
+                "will try again with next cycle - error: %s | Config: #eos | ACTION REQUIRED",
                 request_url,
                 str(e),
             )
@@ -407,21 +412,23 @@ class EOSBackend:
         except requests.exceptions.ConnectTimeout:
             logger.error(
                 "[OPT-EOS] Failed to get EOS version  - use preset version: '%s' - Server not "
-                + "reachable: Connection to %s timed out",
+                + "reachable: Connection to %s timed out | Config: #eos | ACTION REQUIRED",
                 self.eos_version,
                 self.base_url,
             )
             return self.eos_version
         except requests.exceptions.ConnectionError as e:
             logger.error(
-                "[OPT-EOS] Failed to get EOS version - use preset version: '%s' - Connection error: %s",
+                "[OPT-EOS] Failed to get EOS version - use preset version: '%s' - "
+                "Connection error: %s | Config: #eos | ACTION REQUIRED",
                 self.eos_version,
                 e,
             )
             return self.eos_version
         except requests.exceptions.RequestException as e:
             logger.error(
-                "[OPT-EOS] Failed to get EOS version - use preset version: '%s' - Error: %s ",
+                "[OPT-EOS] Failed to get EOS version - use preset version: '%s' - "
+                "Error: %s | Config: #eos | ACTION REQUIRED",
                 self.eos_version,
                 e,
             )
