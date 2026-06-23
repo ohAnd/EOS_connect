@@ -503,9 +503,11 @@ def _check_timeseries_preflight(data: dict) -> list[dict]:
                                 )
                             })
                 except Exception as e:
+                    # Log detailed error server-side only (not exposed to client)
+                    logger.error("Home Assistant connection error: %s", str(e), exc_info=True)
                     errors.append({
                         "key": "price.ha_sensor_name",
-                        "error": f"Failed to connect to Home Assistant: {str(e)}"
+                        "error": "Failed to connect to Home Assistant. Check configuration and logs."
                     })
 
     return errors
