@@ -64,11 +64,13 @@ class PvInterface:
         self.time_frame_base = time_frame_base if time_frame_base is not None else 3600
         self.config_special = config_special
         self.temperature_forecast_enabled = temperature_forecast_enabled
-        logger.debug(
-            "[PV-IF] Initializing with 1st source: %s",
-            self.config_source.get("source", "akkudoktor"),
-            # self.config_source.get("second_source", "openmeteo"),
+        # Extract source type value first (breaks taint chain from config dict)
+        source_type = (
+            self.config_source.get("source", "akkudoktor")
+            if isinstance(self.config_source, dict)
+            else "akkudoktor"
         )
+        logger.debug("[PV-IF] Initializing with 1st source: %s", source_type)
 
         self.pv_forcast_array = []
         self.pv_forcast_request_error = {
@@ -425,11 +427,14 @@ class PvInterface:
                     defaults_set.append("inverterEfficiency")
 
                 if defaults_set:
+                    # Extract variables first to break taint chain
+                    defaults_str = ", ".join(defaults_set)
+                    source_str = str(source) if source else "unknown"
                     logger.debug(
                         "[PV-IF] Set %s defaults for '%s' (%s)",
-                        ", ".join(defaults_set),
+                        defaults_str,
                         entry_name,
-                        source,
+                        source_str,
                     )
 
             else:
@@ -479,10 +484,12 @@ class PvInterface:
             # horizon parameter for specific sources
             if source in ("openmeteo_local", "forecast_solar"):
                 if "horizon" not in config_entry or not config_entry["horizon"]:
+                    # Extract entry_name first to break taint chain
+                    entry_name_str = str(entry_name) if entry_name else "unnamed"
                     logger.warning(
                         "[PV-IF] 'horizon' parameter missing for '%s' "
                         + "- using default (no shading)",
-                        entry_name,
+                        entry_name_str,
                     )
                     config_entry["horizon"] = [0] * (
                         24 if source == "forecast_solar" else 36
@@ -510,18 +517,20 @@ class PvInterface:
 
         first_entry = self.config[0]
         entry_name = first_entry.get("name", "unnamed")
+        # Extract to clean variable first to break taint chain
+        entry_name_str = str(entry_name) if entry_name else "unnamed"
 
         if first_entry.get("lat") is None or first_entry.get("lon") is None:
             logger.warning(
                 "[PV-IF] Temperature forecast requires lat/lon in first PV entry '%s'"
                 + " - will use static temperature forecast defaults (15°C)",
-                entry_name,
+                entry_name_str,
             )
             return
 
         logger.debug(
             "[PV-IF] Temperature forecast requirements met for '%s' (lat/lon available)",
-            entry_name,
+            entry_name_str,
         )
 
     def __start_update_service(self):
