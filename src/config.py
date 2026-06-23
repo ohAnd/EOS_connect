@@ -190,8 +190,8 @@ class ConfigManager:
         self.load_env_bootstrap()
 
         # If config.yaml doesn't exist, create it with defaults
-        # (for fresh install or HA addon mode)
-        if not os.path.exists(self.config_file):
+        # (for fresh install only, not for HA addon mode)
+        if not os.path.exists(self.config_file) and not self.is_ha_addon:
             logger.info(
                 "[Config] Creating new config.yaml with bootstrap defaults at %s",
                 self.config_file,
