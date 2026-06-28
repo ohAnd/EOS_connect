@@ -800,14 +800,20 @@ docker-compose up -d</code></pre>
                         <td>Check <code>eos_connect_web_port: 8081</code> is not in use, verify firewall rules</td>
                     </tr>
                     <tr>
-                        <td>Segmentation Fault on startup (Proxmox/VM)</td>
-                        <td>VM using generic CPU type (kvm64)</td>
-                        <td>Change VM Settings → Hardware → Processor → Type from <code>kvm64</code> to <code>host</code>, then restart VM. This allows correct CPU instruction detection.</td>
-                    </tr>
-                    <tr>
-                        <td>local_evopt fails: CBC file not found (Proxmox)</td>
-                        <td>Container using system Python instead of venv</td>
-                        <td>Force full rebuild: <code>docker rmi ghcr.io/ohand/ha-addon-eos_connect_develop_amd64:VERSION && restart addon</code>. Or verify Docker CMD is using <code>/opt/venv/bin/python</code>. Check <a href="../advanced/index.html">Advanced</a> for local_evopt details.</td>
+                        <td><strong>Proxmox VM Issues:</strong><br>
+                        • Segmentation Fault on startup<br>
+                        • local_evopt fails: "CBC file not found"</td>
+                        <td>VM using generic <code>kvm64</code> CPU emulation (default Proxmox setting)<br>
+                        <br>
+                        <code>kvm64</code> does not emulate advanced CPU instructions (AVX, SSE4.2, etc.) required by the CBC solver binary.</td>
+                        <td><strong>Solution:</strong> Change VM CPU type in Proxmox:
+                        <ol style="margin: 5px 0; padding-left: 20px;">
+                        <li>Stop the HA VM</li>
+                        <li>VM Settings → Hardware → Processor</li>
+                        <li>Change Type from <code>kvm64</code> → <code>host</code></li>
+                        <li>Restart the VM</li>
+                        </ol>
+                        This passes through your physical CPU directly, enabling all required instructions. Both issues will be resolved.</td>
                     </tr>
                 </tbody>
             </table>
