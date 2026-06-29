@@ -44,6 +44,8 @@
                 <h3>On This Page</h3>
                 <nav class="toc-nav">
                     <a href="#optimizer" class="toc-link">Optimizer</a>
+                    <a href="#local-evopt" class="toc-link toc-sub">→ Built-in EVopt Settings</a>
+                    <a href="#external-evopt" class="toc-link toc-sub">→ External EVopt Settings</a>
                     <a href="#dyn-override" class="toc-link toc-sub">→ Dynamic PV Override</a>
                     <a href="#pv-charge-control" class="toc-link toc-sub">→ PV Battery Charge Control</a>
                     <a href="#evcc" class="toc-link">EVCC</a>
@@ -379,6 +381,57 @@
                 <tr>
                     <th>Notes</th>
                     <td>Increase if optimization takes longer or server is slow</td>
+                </tr>
+            </table>
+
+            <h3 id="external-evopt" style="margin-top: 2rem;">External EVopt Optimizer Settings (<code>external_evopt</code>)</h3>
+            <p><strong>Applies only when:</strong> <code>eos.source = evopt</code> (External EVopt backend selected)</p>
+
+            <h4>eos.external_evopt_max_grid_import_w</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.external_evopt_max_grid_import_w</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Hard upper limit on grid import power (Watts) for the external EVopt optimizer. Prevents scheduling
+                        grid purchases exceeding your contracted limit or demand-charge threshold. When set to <code>0</code>
+                        (default), the optimizer uses your inverter's maximum charge rate as the effective limit, ensuring
+                        smart defaults align with your hardware capabilities.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–100000 (W)</td></tr>
+                <tr><th>Default</th><td><code>0</code> (use inverter max charge rate)</td></tr>
+                <tr><th>Level</th><td>Expert</td></tr>
+                <tr><th>Smart Default Behavior</th>
+                    <td>
+                        When set to <code>0</code>, the optimizer receives your inverter's configured
+                        <code>inverter.max_grid_charge_rate</code> (default: 5000 W) as the actual limit. This ensures
+                        optimization respects your hardware without requiring manual configuration of both settings.
+                        Explicitly set a value &gt; 0 to override this behavior if your grid contract is more restrictive
+                        than your inverter capability.
+                    </td>
+                </tr>
+            </table>
+
+            <h4>eos.external_evopt_max_grid_export_w</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.external_evopt_max_grid_export_w</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Hard upper limit on grid export power (Watts) for the external EVopt optimizer. Limits how much
+                        energy the battery can discharge to the grid per time slot. When set to <code>0</code> (default),
+                        the optimizer uses your inverter's maximum discharge rate as the effective limit.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–100000 (W)</td></tr>
+                <tr><th>Default</th><td><code>0</code> (use inverter max discharge rate)</td></tr>
+                <tr><th>Level</th><td>Expert</td></tr>
+                <tr><th>Smart Default Behavior</th>
+                    <td>
+                        When set to <code>0</code>, the optimizer receives your inverter's configured
+                        <code>inverter.max_pv_charge_rate</code> (default: 5000 W) as the actual limit. This ensures
+                        optimization respects your hardware without requiring manual configuration. Set a value &gt; 0
+                        to override if your grid contract or inverter firmware limits feed-in to less than this default.
+                    </td>
                 </tr>
             </table>
 

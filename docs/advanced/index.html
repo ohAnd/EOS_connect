@@ -61,6 +61,7 @@
                     <a href="#mqtt-examples" class="toc-link toc-sub">→ Examples</a>
                     <a href="#integrations" class="toc-link">Integrations</a>
                     <a href="#automation" class="toc-link">Automation</a>
+                    <a href="#grid-limits" class="toc-link">Smart Grid Limits (EVopt)</a>
                     <a href="#sensor-detection" class="toc-link">Sensor Auto-Detection</a>
                 </nav>
             </aside>
@@ -1825,6 +1826,131 @@ battery = response.json()
 if battery['soc'] < 0.20:
     requests.post('http://localhost:8081/api/controls/mode',
         json={'mode': 'ChargeFromGrid', 'duration_minutes': 120})</code></pre>
+        </div>
+
+        <!-- Smart Grid Limits (EVopt) -->
+        <div class="content-section" id="grid-limits">
+            <h2><i class="fas fa-bolt"></i> Smart Grid Limits (EVopt Optimizer)</h2>
+
+            <p><strong>Available for:</strong> External EVopt backend (<code>eos.source = evopt</code>)</p>
+
+            <h3>Understanding Smart Defaults</h3>
+            <p>
+                EOS Connect implements <strong>smart defaults</strong> for optimizer grid limits. When you configure external EVopt,
+                the grid import and export power limits can be set to automatically match your inverter capabilities.
+            </p>
+
+            <p><strong>How it works:</strong></p>
+            <ul>
+                <li>
+                    <strong>Default behavior (value = 0):</strong> The optimizer receives your inverter's physical limits
+                    as the actual grid constraints. This ensures optimization respects your hardware without manual configuration.
+                </li>
+                <li>
+                    <strong>Override (value &gt; 0):</strong> Explicitly set a value when your grid contract is more restrictive
+                    than your inverter capability (e.g., your grid operator limits you to 5 kW but your inverter can do 10 kW).
+                </li>
+            </ul>
+
+            <h3>Configuration Example</h3>
+
+            <h4>Scenario 1: Automatic Defaults (Recommended)</h4>
+            <p>Use your inverter limits as grid constraints:</p>
+            <pre><code>eos:
+  source: evopt  # Using external EVopt backend
+  external_evopt_max_grid_import_w: 0   # Uses inverter.max_grid_charge_rate (default 5000 W)
+  external_evopt_max_grid_export_w: 0   # Uses inverter.max_pv_charge_rate (default 5000 W)
+
+inverter:
+  max_grid_charge_rate: 5000   # From your hardware spec
+  max_pv_charge_rate: 5000     # From your hardware spec</code></pre>
+
+            <p>
+                <i class="fas fa-lightbulb" style="color: #ffc107;"></i>
+                <strong>Benefit:</strong> No need to configure grid limits separately. The optimizer automatically uses your
+                inverter's real capabilities, ensuring efficient energy management.
+            </p>
+
+            <h4>Scenario 2: Grid Constraint Override</h4>
+            <p>When your grid contract is more restrictive than your inverter:</p>
+            <pre><code>eos:
+  source: evopt
+  external_evopt_max_grid_import_w: 3000   # Grid operator limit (lower than inverter)
+  external_evopt_max_grid_export_w: 2000   # Restricted feed-in tariff
+
+inverter:
+  max_grid_charge_rate: 5000   # Inverter can do more, but grid limits us
+  max_pv_charge_rate: 5000</code></pre>
+
+            <p>
+                <i class="fas fa-info-circle" style="color: #17a2b8;"></i>
+                <strong>Result:</strong> Optimizer respects the 3 kW grid import constraint and 2 kW export limit, even though
+                the hardware could handle more.
+            </p>
+
+            <h4>Scenario 3: Demand Charge / Flexible Tariffs</h4>
+            <p>Temporarily lower limits during peak-price hours:</p>
+            <pre><code>eos:
+  source: evopt
+  external_evopt_max_grid_import_w: 4000   # Reduce during peak hours (e.g., 7-9 AM)
+
+# Update via REST API or MQTT during peak hours:
+# POST /api/config
+# MQTT: myhome/eos_connect/control/grid_limit_import/set 2000</code></pre>
+
+            <h3>Inverter Limits vs Grid Limits</h3>
+            <p><strong>Key distinction:</strong></p>
+            <ul>
+                <li>
+                    <strong>Inverter limits</strong> (<code>inverter.max_grid_charge_rate</code>, <code>inverter.max_pv_charge_rate</code>):
+                    Physical hardware constraints applied AFTER optimization (control layer). Always enforced.
+                </li>
+                <li>
+                    <strong>Grid limits</strong> (<code>external_evopt_max_grid_import_w</code>, <code>external_evopt_max_grid_export_w</code>):
+                    Constraints sent TO the optimizer (planning layer). Determines what strategies are considered.
+                </li>
+            </ul>
+
+            <p>
+                <strong>Best practice:</strong> Set inverter limits to your hardware max, then use grid limits for any external constraints.
+                The smart defaults feature ensures they work together seamlessly.
+            </p>
+
+            <h3>Testing Your Configuration</h3>
+            <p>Verify that your grid limits are being applied correctly:</p>
+            <pre><code># Check current configuration via REST API
+curl http://localhost:8081/api/config
+
+# Look for:
+# "external_evopt_max_grid_import_w": 0 or your custom value
+# "external_evopt_max_grid_export_w": 0 or your custom value
+
+# Check optimization logs for grid limit usage
+# Search logs at http://localhost:8081 for "grid" or "import" / "export"</code></pre>
+
+            <h3>Troubleshooting</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+                <tr style="background-color: #444; border: 1px solid #666;">
+                    <th style="padding: 8px; text-align: left;">Issue</th>
+                    <th style="padding: 8px; text-align: left;">Check</th>
+                    <th style="padding: 8px; text-align: left;">Solution</th>
+                </tr>
+                <tr style="border: 1px solid #666;">
+                    <td style="padding: 8px;">Optimizer receives wrong grid limit</td>
+                    <td style="padding: 8px;">Is <code>eos.source = evopt</code>?</td>
+                    <td style="padding: 8px;">Grid limits only apply to external EVopt. Use <code>local_evopt_max_grid_*</code> for built-in optimizer.</td>
+                </tr>
+                <tr style="border: 1px solid #666;">
+                    <td style="padding: 8px;">Grid limit doesn't match configured value</td>
+                    <td style="padding: 8px;">Is value set to 0?</td>
+                    <td style="padding: 8px;">Value 0 activates smart defaults. Explicitly set &gt; 0 to override.</td>
+                </tr>
+                <tr style="border: 1px solid #666;">
+                    <td style="padding: 8px;">Battery discharges more than grid export limit</td>
+                    <td style="padding: 8px;">Are inverter limits also set?</td>
+                    <td style="padding: 8px;">Grid limits are planning constraints; inverter limits enforce hardware max. Both must be configured appropriately.</td>
+                </tr>
+            </table>
         </div>
 
         <!-- Advanced Configuration -->

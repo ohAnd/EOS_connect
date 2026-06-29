@@ -534,6 +534,34 @@ _ALL_FIELDS: list[FieldDef] = [
         display_group="Local Optimizer",
         labels=["restart_required"],
     ),
+    FieldDef(
+        key="eos.external_evopt_max_grid_import_w",
+        field_type="int",
+        default=10000,
+        section="eos",
+        level="expert",
+        description="Maximum grid import power for external EVopt (0 = no limit). "
+        "Use for grid connection limits.",
+        help_url="configuration.html#eos",
+        validation={"min": 0, "max": 100000},
+        depends_on={"eos.source": "evopt"},
+        display_group="External Optimizer",
+        labels=["restart_required"],
+    ),
+    FieldDef(
+        key="eos.external_evopt_max_grid_export_w",
+        field_type="int",
+        default=10000,
+        section="eos",
+        level="expert",
+        description="Maximum grid export power for external EVopt (0 = no limit). "
+        "Use for grid feed-in limits.",
+        help_url="configuration.html#eos",
+        validation={"min": 0, "max": 100000},
+        depends_on={"eos.source": "evopt"},
+        display_group="External Optimizer",
+        labels=["restart_required"],
+    ),
 
     # ===== PRICE =====
     FieldDef(
