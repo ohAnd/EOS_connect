@@ -446,9 +446,9 @@ class LoadInterface:
                     except (TypeError, KeyError):
                         pass
 
-        # Log warning if any values were filled
+        # Log debug if any values were filled
         if filled_indices:
-            logger.warning(
+            logger.debug(
                 "[LOAD-IF] DATA QUALITY: Filled %d missing/invalid values in '%s' at indices %s. "
                 "Last known value was used. This indicates data gaps or corrupted states in Home Assistant history.",
                 len(filled_indices),
