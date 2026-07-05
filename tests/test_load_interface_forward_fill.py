@@ -104,17 +104,17 @@ class TestLoadInterfaceForwardFill:
         # Third onwards can be filled
         assert filled_data["data"][3]["state"] == "100.0"
 
-    def test_forward_fill_logging_warning(self, load_interface):
-        """Forward-fill should log a warning with filled indices."""
+    def test_forward_fill_logging_debug(self, load_interface):
+        """Forward-fill should log a debug message with filled indices."""
         data = self.get_mock_data(["100.0", "", "110.0", "", "120.0"])
         
         with patch("src.interfaces.load_interface.logger") as mock_logger:
             load_interface._LoadInterface__fill_missing_values_in_data(data, "sensor.test")
             
-            # Should call warning
-            assert mock_logger.warning.called
-            call_args = mock_logger.warning.call_args[0]
-            # Check that warning mentions forward-fill and indices
+            # Should call debug (not warning)
+            assert mock_logger.debug.called
+            call_args = mock_logger.debug.call_args[0]
+            # Check that debug message mentions filled values and indices
             assert "Filled" in call_args[0]
             assert "indices" in call_args[0]
 
@@ -183,7 +183,7 @@ class TestLoadInterfaceForwardFill:
             load_interface._LoadInterface__fill_missing_values_in_data(data, "sensor.test")
             
             # Should show truncated list with "..."
-            call_args = mock_logger.warning.call_args[0]
+            call_args = mock_logger.debug.call_args[0]
             assert "..." in str(call_args)
 
     def test_forward_fill_with_float_states(self, load_interface):
