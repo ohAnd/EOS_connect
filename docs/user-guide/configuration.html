@@ -54,6 +54,7 @@
                     <a href="#battery" class="toc-link">Battery</a>
                     <a href="#battery-price-calc" class="toc-link toc-sub">&rarr; Dynamic Price Calculation</a>
                     <a href="#load" class="toc-link">Load</a>
+                    <a href="#data-quality" class="toc-link toc-sub">&rarr; Data Quality & Gap Handling</a>
                     <a href="#price" class="toc-link">Electricity Prices</a>
                     <a href="#price" class="toc-link toc-sub">→ Grid Purchase Prices</a>
                     <a href="#price" class="toc-link toc-sub">→ Dynamic Feed-In Pricing</a>
@@ -1910,6 +1911,61 @@
                     <td><code>2000</code> (2 kWh per hour)</td>
                 </tr>
             </table>
+
+            <h3 id="data-quality"><i class="fas fa-shield-alt"></i> Data Quality & Gap Handling</h3>
+            <p><strong>EOS Connect automatically detects and recovers from incomplete sensor data</strong> using a forward-fill strategy. This section explains how it works and what you might see in logs.</p>
+
+            <h4>Why Data Gaps Occur</h4>
+            <p>Home Assistant sensor history can have gaps due to:</p>
+            <ul>
+                <li><strong>Database Issues:</strong> SQLite corruption, purges, or slow I/O (especially on Proxmox VirtualEnvironment with latency spikes)</li>
+                <li><strong>Sensor Unavailability:</strong> Temporary connectivity loss, sensor restart, or state transitions ("unavailable", "unknown")</li>
+                <li><strong>State Changes:</strong> Sensors returning empty strings or invalid values instead of numeric states</li>
+            </ul>
+
+            <h4>How EOS Connect Handles Gaps</h4>
+            <p>When building load profiles, EOS Connect:</p>
+            <ol>
+                <li><strong>Scans data</strong> for invalid entries (empty strings, "unavailable", "unknown", NaN)</li>
+                <li><strong>Fills gaps</strong> using the last known valid value (statistical LOCF — "Last-Observation-Carry-Forward" method)</li>
+                <li><strong>Logs the action</strong> as a WARNING, showing which datapoints were filled</li>
+                <li><strong>Guarantees complete arrays</strong> so optimization always receives 48 valid values (one per 30-minute interval)</li>
+            </ol>
+
+            <h4>Example: What You'll See in Logs</h4>
+            <pre style="background-color: rgb(54, 54, 54); padding: 12px; border-radius: 5px; overflow-x: auto; color: #ff9900;"><code>[LOAD-IF] DATA QUALITY: Filled 3 missing/invalid values in 'sensor.house_power' at indices [1, 2, 4].
+Last known value was used. This indicates data gaps or corrupted states in Home Assistant history.</code></pre>
+
+            <p><strong>What this means:</strong></p>
+            <ul>
+                <li>3 datapoints had invalid states (empty, unavailable, or NaN)</li>
+                <li>They were filled with the previous valid value</li>
+                <li>Optimization still received complete input</li>
+                <li>No optimization failures (422 errors) due to incomplete data</li>
+            </ul>
+
+            <h4>When to Take Action</h4>
+            <table style="margin-top: 15px;">
+                <tr>
+                    <th>Symptom</th>
+                    <th>Action</th>
+                </tr>
+                <tr>
+                    <td><strong>Occasional warnings</strong> (e.g., 1-2 per day)</td>
+                    <td>Normal in most setups. Forward-fill ensures stable optimization.</td>
+                </tr>
+                <tr>
+                    <td><strong>Frequent gaps</strong> (e.g., 10+ per hour)</td>
+                    <td>Check your HA database health: <code>Settings → System → Logs</code> or purge old history if database is corrupted.</td>
+                </tr>
+                <tr>
+                    <td><strong>All datapoints invalid</strong> (entire array is NaN/empty)</td>
+                    <td>Sensor is likely offline. Verify it's available: <code>Developer Tools → States → Search for your sensor</code>.</td>
+                </tr>
+            </table>
+
+            <h4>Bottom Line</h4>
+            <p style="font-style: italic; margin-top: 15px;">Data gaps are detected and healed automatically. EOS Connect's forward-fill strategy ensures optimization always has complete, valid input arrays—no manual intervention needed. If warnings appear frequently, consider investigating your Home Assistant database health.</p>
         </div>
 
 
