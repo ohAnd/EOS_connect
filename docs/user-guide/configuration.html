@@ -2101,7 +2101,7 @@ Last known value was used. This indicates data gaps or corrupted states in Home 
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>24-hour array of fixed prices for each hour of the day</td>
+                    <td>24-hour array of fixed prices for each hour of the day. Automatically expanded to 48 or 192 slots based on time frame setting (hourly or 15-min resolution)</td>
                 </tr>
                 <tr>
                     <th>Unit</th>
@@ -2109,8 +2109,9 @@ Last known value was used. This indicates data gaps or corrupted states in Home 
                 </tr>
                 <tr>
                     <th>Valid Values</th>
-                    <td>Comma-separated list of 24 values (no brackets)<br>
-                        Hour 0 (00:00-01:00), Hour 1 (01:00-02:00), ..., Hour 23 (23:00-24:00)
+                    <td><strong>Exactly 24 comma-separated numeric values</strong> (no brackets)<br>
+                        Hour 0 (00:00-01:00), Hour 1 (01:00-02:00), ..., Hour 23 (23:00-24:00)<br>
+                        <em>Note: The array is validated at save time to ensure exactly 24 values are provided</em>
                     </td>
                 </tr>
                 <tr>
@@ -2124,7 +2125,7 @@ Last known value was used. This indicates data gaps or corrupted states in Home 
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Only use when <code>source: fixed_24h</code></td>
+                    <td>Only use when <code>source: fixed_24h</code>. Configuration validation will reject this field with an error if fewer or more than 24 values are provided</td>
                 </tr>
             </table>
 

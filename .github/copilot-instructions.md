@@ -43,6 +43,10 @@
 **When preparing to commit (NEVER stage changed files and commit automatically - always review changes first and ask for confirmation):**
 
 1. **Update README.md** - Concise quick-start only (1-3 sentences per feature), links to full docs
+   - ⚠️ **Key Features Only**: README.md lists only user-facing, high-impact features that differentiate EOS Connect
+   - **NOT in README**: Implementation details, internal validation logic, bug fixes, or features users interact with indirectly
+   - **In README**: User-visible capabilities (battery control, price optimization, PV forecasting, integrations, automation, dashboards)
+   - **Guide**: Ask "Would a new user care about this on first read?" If NO → leave it for GitHub Pages only
 2. **Update GitHub Pages** (`/docs` folder) - Complete, detailed documentation
    - Always write from **user perspective** (except developer section)
    - Main focus: **"Easy entry for new and existing users"**

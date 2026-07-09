@@ -619,7 +619,7 @@ _ALL_FIELDS: list[FieldDef] = [
                 "23.52,23.52,23.52,23.52,28.17,28.17,34.28,34.28,34.28,34.28,34.28,28,23",
         section="price",
         level="standard",
-        description="24 comma-separated prices in ct/kWh per hour (fixed_24h source)",
+        description="Exactly 24 comma-separated prices in ct/kWh (one per hour, 00:00-23:00). Automatically expanded to 48 or 192 slots based on time frame setting.",
         labels=["restart_required"],
         help_url="configuration.html#price",
         depends_on={"price.source": ["fixed_24h"]},

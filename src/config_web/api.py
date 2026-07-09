@@ -156,6 +156,11 @@ def update_config():
     if preflight_errors:
         return jsonify({"errors": preflight_errors}), 422
 
+    # Validate price array configurations (fixed_24h_array format and counts)
+    array_errors = _validate_price_arrays(data)
+    if array_errors:
+        return jsonify({"errors": array_errors}), 422
+
     changed_keys = []
     restart_required = []
     hot_reloaded = []
@@ -512,6 +517,76 @@ def _check_timeseries_preflight(data: dict) -> list[dict]:
 
     return errors
 
+
+def _validate_price_arrays(data: dict) -> list[dict]:
+    """
+    Validate price array configurations at save time.
+
+    Checks:
+    - price.fixed_24h_array: must contain exactly 24 comma-separated numeric values
+      (only validated if price.source="fixed_24h")
+    - price.source="fixed_24h" requires fixed_24h_array to be populated
+
+    Args:
+        data: Configuration update dict
+
+    Returns:
+        list: Error dicts if validation fails, empty list otherwise
+    """
+    errors = []
+    current_config = _module.get_config()
+
+    # Determine effective price.source
+    price_source = (
+        data.get("price.source")
+        if "price.source" in data
+        else current_config.get("price", {}).get("source")
+    )
+
+    # Only validate fixed_24h_array if the source is or will be "fixed_24h"
+    if price_source == "fixed_24h":
+        # Check price.fixed_24h_array if being updated or already set
+        fixed_24h_array = (
+            data.get("price.fixed_24h_array")
+            if "price.fixed_24h_array" in data
+            else current_config.get("price", {}).get("fixed_24h_array")
+        )
+
+        # If not provided or empty, that's an error
+        if not fixed_24h_array or (isinstance(fixed_24h_array, str) and
+                                   not fixed_24h_array.strip()):
+            errors.append({
+                "key": "price.fixed_24h_array",
+                "error": (
+                    "fixed_24h_array is required when price source is 'fixed_24h'"
+                )
+            })
+            return errors  # Return early to avoid redundant errors
+
+        # Validate format only if we have data
+        if isinstance(fixed_24h_array, str) and fixed_24h_array.strip():
+            try:
+                # Split by comma and filter out empty strings
+                values = [v.strip() for v in fixed_24h_array.split(",") if v.strip()]
+                # Try to convert each value to float to catch non-numeric entries
+                for v in values:
+                    float(v)
+                # Check count
+                if len(values) != 24:
+                    errors.append({
+                        "key": "price.fixed_24h_array",
+                        "error": (
+                            f"Must contain exactly 24 comma-separated values, "
+                            f"got {len(values)}"
+                        )
+                    })
+            except ValueError as e:
+                errors.append({
+                    "key": "price.fixed_24h_array",
+                    "error": f"Array must contain numeric values: {e}"
+                })
+
+    return errors
 
 
 def _validate_updates(data: dict) -> list[dict]:

@@ -381,6 +381,133 @@ class TestConfigAPI:
             "Config should revert to valid sensor name"
 
 
+def test_price_fixed_24h_array_validation_count(client):
+    """Test that fixed_24h_array must contain exactly 24 values."""
+    # Test: Too few values (12) should fail
+    resp = client.put(
+        "/api/config/",
+        data=json.dumps({
+            "price.source": "fixed_24h",
+            "price.fixed_24h_array": "10,11,12,13,14,15,16,17,18,19,20,21",  # 12 values
+        }),
+        content_type="application/json",
+    )
+    assert resp.status_code == 422, "Should reject array with fewer than 24 values"
+    errors = resp.get_json()["errors"]
+    assert any("24" in e.get("error", "") for e in errors), \
+        "Error should mention exactly 24 values"
+
+
+def test_price_fixed_24h_array_validation_too_many(client):
+    """Test that fixed_24h_array rejects more than 24 values."""
+    # Test: Too many values (30) should fail
+    resp = client.put(
+        "/api/config/",
+        data=json.dumps({
+            "price.source": "fixed_24h",
+            "price.fixed_24h_array": ",".join(str(10 + i * 0.5) for i in range(30)),  # 30 values
+        }),
+        content_type="application/json",
+    )
+    assert resp.status_code == 422, "Should reject array with more than 24 values"
+    errors = resp.get_json()["errors"]
+    assert any("24" in e.get("error", "") for e in errors), \
+        "Error should mention exactly 24 values"
+
+
+def test_price_fixed_24h_array_validation_exact(client):
+    """Test that fixed_24h_array accepts exactly 24 values."""
+    # Exactly 24 values should succeed
+    valid_array = ",".join(str(10 + i * 0.5) for i in range(24))
+    resp = client.put(
+        "/api/config/",
+        data=json.dumps({
+            "price.source": "fixed_24h",
+            "price.fixed_24h_array": valid_array,
+        }),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200, f"Should accept 24 values: {resp.get_json()}"
+    assert resp.get_json().get("success") is True, "Save should succeed"
+
+
+def test_price_fixed_24h_array_non_numeric(client):
+    """Test that fixed_24h_array must contain only numeric values."""
+    # Non-numeric value should fail
+    resp = client.put(
+        "/api/config/",
+        data=json.dumps({
+            "price.source": "fixed_24h",
+            "price.fixed_24h_array": "10,11,abc,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33",
+        }),
+        content_type="application/json",
+    )
+    assert resp.status_code == 422, "Should reject non-numeric values"
+    errors = resp.get_json()["errors"]
+    assert any("numeric" in e.get("error", "").lower() for e in errors), \
+        "Error should mention numeric values"
+
+
+def test_price_fixed_24h_array_required_when_source_fixed(client):
+    """Test that fixed_24h_array is required when source is fixed_24h."""
+    # Empty array should fail when source is fixed_24h
+    resp = client.put(
+        "/api/config/",
+        data=json.dumps({
+            "price.source": "fixed_24h",
+            "price.fixed_24h_array": "",
+        }),
+        content_type="application/json",
+    )
+    assert resp.status_code == 422, "Should reject empty array when source is fixed_24h"
+    errors = resp.get_json()["errors"]
+    assert any("required" in e.get("error", "").lower() for e in errors), \
+        "Error should indicate field is required"
+
+
+def test_price_fixed_24h_array_not_required_other_source(client):
+    """Test that fixed_24h_array is not validated when source is not fixed_24h."""
+    # Should allow any value when source is not fixed_24h
+    resp = client.put(
+        "/api/config/",
+        data=json.dumps({
+            "price.source": "default",
+            "price.fixed_24h_array": "10,20,30",  # Only 3 values, but not used
+        }),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200, "Should accept array when source is not fixed_24h"
+
+
+def test_price_fixed_24h_array_whitespace_handling(client):
+    """Test that fixed_24h_array handles whitespace correctly."""
+    # Whitespace in values should be trimmed
+    resp = client.put(
+        "/api/config/",
+        data=json.dumps({
+            "price.source": "fixed_24h",
+            "price.fixed_24h_array": "10.5 , 11.2 , 12.3 , 13.1 , 14.2 , 15.3 , 16.1 , 17.2 , 18.3 , 19.1 , 20.2 , 21.3 , 22.1 , 23.2 , 24.3 , 25.1 , 26.2 , 27.3 , 28.1 , 29.2 , 30.3 , 31.1 , 32.2 , 33.3",  # 24 values with spaces
+        }),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200, "Should accept 24 values with whitespace"
+
+
+def test_price_fixed_24h_array_zero_and_negative(client):
+    """Test that fixed_24h_array accepts zero and negative values."""
+    # Zero and negative values should be valid (they affect grid discharge prices)
+    valid_array = ",".join(["-5.2" if i % 3 == 0 else "0" if i % 3 == 1 else str(10 + i * 0.5) for i in range(24)])
+    resp = client.put(
+        "/api/config/",
+        data=json.dumps({
+            "price.source": "fixed_24h",
+            "price.fixed_24h_array": valid_array,
+        }),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200, "Should accept zero and negative numeric values"
+
+
 @pytest.fixture
 def fresh_client(tmp_path):
     """Create a Flask test client with NO migration (fresh install)."""
