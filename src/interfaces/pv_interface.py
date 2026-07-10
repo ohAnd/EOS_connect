@@ -950,6 +950,10 @@ class PvInterface:
             logger.debug("[PV-IF] fetching forecast for evcc config")
             forecast = self.__get_pv_forecast("evcc_config")
             forecast_values = forecast
+        elif self.config_source.get("source") == "timeseries":
+            logger.debug("[PV-IF] fetching forecast for timeseries config")
+            forecast = self.__get_pv_forecast_timeseries()
+            forecast_values = forecast
         else:
             for config_entry in self.config:
                 logger.debug("[PV-IF] fetching forecast for '%s'", config_entry["name"])
@@ -974,6 +978,315 @@ class PvInterface:
             )
 
         return forecast_values
+
+    def __get_pv_forecast_timeseries(self, tgt_duration=48):
+        """
+        Retrieve the PV forecast from a generic timeseries data source (HTTP
+        endpoint or Home Assistant sensor), analogous to
+        PriceInterface.__retrieve_prices_from_url.
+
+        Fetched once globally (not per pv_forecast.N array entry), since the
+        external source is expected to already provide the combined forecast
+        for the whole installation - mirrors how the "evcc" source is handled.
+
+        Standardized format: [{start, end, value}, ...] with value in Wh for
+        that slot (hourly or 15-min resolution, auto-detected).
+
+        Config fields used (from pv_forecast_source):
+        - data_url: Full HTTP endpoint URL (HA or HTTP custom endpoint)
+        - data_path: JSON path to the timeseries array (e.g. "data")
+        - data_token: Optional bearer token for authentication
+        """
+        data_url = self.config_source.get("data_url", "").strip()
+        data_path = self.config_source.get("data_path", "data").strip() or "data"
+        data_token = self.config_source.get("data_token", "").strip()
+
+        fallback_power = self.config[0]["power"] if self.config else 1000
+
+        if not data_url:
+            return self._handle_interface_error(
+                "config_error",
+                "Data URL (data_url) not configured for timeseries PV source",
+                "timeseries_config",
+                "timeseries",
+            ) or self.__get_default_pv_forcast(fallback_power)
+
+        headers = {"Content-Type": "application/json"}
+        if data_token:
+            headers["Authorization"] = f"Bearer {data_token}"
+
+        logger.debug(
+            "[PV-IF] Fetching PV forecast from timeseries source: %s (path: %s)",
+            data_url,
+            data_path,
+        )
+
+        def request_and_parse():
+            response = requests.get(data_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            response_data = response.json()
+            timeseries = self.__extract_json_path(response_data, data_path)
+            if not isinstance(timeseries, list):
+                raise ValueError(f"Data at path '{data_path}' is not a list")
+            return timeseries
+
+        def error_handler(error_type, exception):
+            return self._handle_interface_error(
+                error_type,
+                f"Timeseries data source error: {exception}",
+                "timeseries_source",
+                "timeseries",
+            )
+
+        timeseries = self._retry_request(request_and_parse, error_handler)
+        if not timeseries:
+            return self.last_successful_pv_forecast or self.__get_default_pv_forcast(
+                fallback_power
+            )
+
+        try:
+            forecast_values = self.__parse_pv_timeseries(timeseries, tgt_duration)
+            if not forecast_values:
+                return self._handle_interface_error(
+                    "processing_error",
+                    "Failed to parse PV timeseries data",
+                    "timeseries_source",
+                    "timeseries",
+                ) or self.__get_default_pv_forcast(fallback_power)
+            self.pv_forcast_request_error["error"] = None
+            return forecast_values
+        except (ValueError, TypeError) as e:
+            return self._handle_interface_error(
+                "processing_error",
+                f"Error parsing PV timeseries: {e}",
+                "timeseries_source",
+                "timeseries",
+            ) or self.__get_default_pv_forcast(fallback_power)
+
+    def __parse_pv_timeseries(self, timeseries, tgt_duration, resolution_seconds=None):
+        """
+        Parse and validate a PV forecast timeseries.
+
+        Standardized format: [{start, end, value}, ...]
+        - start/end: ISO8601 string or Unix timestamp (seconds)
+        - value: generated energy in Wh for that slot (non-negative)
+        - Supports hourly (48 values) or 15-minute (192 values) resolution
+
+        Mirrors PriceInterface.__parse_price_timeseries, adapted for PV: values
+        represent energy-per-slot rather than a rate, so 15-min-to-hourly
+        conversion sums instead of averages, and missing trailing slots are
+        padded with 0 (no production) rather than the last known value.
+        """
+        if not timeseries or not isinstance(timeseries, list):
+            logger.error("[PV-IF] PV timeseries is not a list")
+            return []
+
+        if len(timeseries) == 0:
+            logger.error("[PV-IF] PV timeseries is empty")
+            return []
+
+        first = timeseries[0]
+        required_keys = ["start", "end", "value"]
+        if not isinstance(first, dict) or not all(k in first for k in required_keys):
+            logger.error(
+                "[PV-IF] Invalid PV timeseries format: missing start, end, or value"
+            )
+            return []
+
+        if resolution_seconds is None:
+            resolution_seconds = self.__detect_pv_timeseries_resolution(timeseries)
+            if resolution_seconds is None:
+                logger.error("[PV-IF] Could not detect PV timeseries resolution")
+                return []
+
+        if resolution_seconds == 900 and self.time_frame_base == 3600:
+            logger.debug(
+                "[PV-IF] Converting source 15-min to system hourly resolution"
+            )
+            timeseries = self.__convert_15min_to_hourly_pv_timeseries(timeseries)
+        elif resolution_seconds == 3600 and self.time_frame_base == 900:
+            logger.error(
+                "[PV-IF] Resolution mismatch: data source provides hourly (3600s) "
+                "but system configured for 15-min (900s) slots. "
+                "Set time_frame_base to 3600 or switch to a 15-minute data source."
+            )
+            return []
+        elif resolution_seconds not in (900, 3600):
+            logger.error(
+                "[PV-IF] Unsupported resolution: %d seconds (expected 900 or 3600)",
+                resolution_seconds,
+            )
+            return []
+
+        # Align by absolute timestamp to the slot grid starting at local midnight
+        # today - NOT positionally. get_ems_data() indexes pv_forcast_array by
+        # "slots since midnight" (see eos_connect.py's current_slot calculation),
+        # the same convention __get_pv_forecast_evcc_api() already follows. A
+        # source whose first entry is "now" (like ours) rather than "midnight"
+        # would otherwise land at the wrong array index.
+        try:
+            tz = pytz.timezone(self.time_zone)
+        except (pytz.UnknownTimeZoneError, AttributeError):
+            tz = pytz.UTC
+
+        def parse_ts(ts_val):
+            if isinstance(ts_val, (int, float)):
+                return datetime.fromtimestamp(ts_val, tz=pytz.UTC).astimezone(tz)
+            if isinstance(ts_val, str):
+                try:
+                    parsed = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
+                except ValueError:
+                    parsed = datetime.fromisoformat(ts_val)
+                if parsed.tzinfo is None:
+                    parsed = tz.localize(parsed)
+                return parsed.astimezone(tz)
+            return None
+
+        slot_seconds = 3600 if self.time_frame_base == 3600 else 900
+        lookup = {}
+        try:
+            for item in timeseries:
+                ts = parse_ts(item.get("start"))
+                if ts is None:
+                    continue
+                value = float(item.get("value", 0))
+                if value < 0:
+                    logger.warning("[PV-IF] Negative PV value %.1f clamped to 0", value)
+                    value = 0.0
+                ts = ts.replace(second=0, microsecond=0)
+                lookup[ts] = value
+        except (ValueError, TypeError):
+            logger.error("[PV-IF] Failed to extract numeric PV values")
+            return []
+
+        now_local = datetime.now(tz)
+        midnight_today = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        expected_count = 48 if self.time_frame_base == 3600 else 192
+        values = [
+            round(lookup.get(midnight_today + timedelta(seconds=slot_seconds * i), 0.0), 1)
+            for i in range(expected_count)
+        ]
+
+        return values
+
+    def __detect_pv_timeseries_resolution(self, timeseries):
+        """
+        Detect time resolution (900s for 15-min, 3600s for hourly).
+        Identical logic to PriceInterface.__detect_price_timeseries_resolution.
+
+        Returns:
+            int: Seconds per interval (900 or 3600), or None if cannot detect
+        """
+        if len(timeseries) < 2:
+            return None
+
+        try:
+            from datetime import datetime as dt_class
+            import pytz
+
+            def parse_ts(ts_str):
+                if isinstance(ts_str, (int, float)):
+                    return dt_class.fromtimestamp(ts_str, tz=pytz.UTC)
+                if isinstance(ts_str, str):
+                    try:
+                        return dt_class.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    except ValueError:
+                        return dt_class.fromisoformat(ts_str)
+                return None
+
+            start1 = parse_ts(timeseries[0].get("start"))
+            start2 = parse_ts(timeseries[1].get("start"))
+
+            if start1 is None or start2 is None:
+                return None
+
+            delta = int((start2 - start1).total_seconds())
+
+            if delta == 900:
+                logger.debug("[PV-IF] Detected 15-minute PV timeseries resolution")
+                return 900
+            elif delta == 3600:
+                logger.debug("[PV-IF] Detected hourly PV timeseries resolution")
+                return 3600
+            else:
+                logger.warning(
+                    "[PV-IF] Unexpected PV timeseries resolution delta: %d seconds",
+                    delta,
+                )
+                return None
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def __convert_15min_to_hourly_pv_timeseries(self, timeseries):
+        """
+        Convert 15-minute PV energy values to hourly by summing 4 consecutive
+        slots. Unlike PriceInterface's rate-based averaging, PV values are
+        energy-per-slot, so summing (not averaging) is the correct aggregation.
+
+        Returns:
+            list: Hourly timeseries with summed values
+        """
+        if len(timeseries) < 4:
+            logger.warning("[PV-IF] Not enough 15-min PV data to sum hourly")
+            return timeseries
+
+        hourly = []
+        for i in range(0, len(timeseries), 4):
+            group = timeseries[i : i + 4]
+            try:
+                total_value = sum(float(item.get("value", 0)) for item in group)
+                hourly.append(
+                    {
+                        "start": group[0].get("start"),
+                        "end": group[-1].get("end"),
+                        "value": total_value,
+                    }
+                )
+            except (ValueError, TypeError):
+                pass
+
+        logger.debug(
+            "[PV-IF] Converted %d 15-min PV values to %d hourly values",
+            len(timeseries),
+            len(hourly),
+        )
+        return hourly
+
+    def __extract_json_path(self, obj, path):
+        """
+        Extract nested value from JSON object using dot notation.
+
+        Examples:
+        - 'attributes.data' -> obj['attributes']['data']
+        - 'data' -> obj['data']
+        - 'prices[0].data' -> obj['prices'][0]['data']
+
+        Args:
+            obj: JSON object (dict or list)
+            path: Dot-notation path string
+
+        Returns:
+            Extracted value or None if path not found
+        """
+        try:
+            parts = path.split(".")
+            current = obj
+            for part in parts:
+                if "[" in part:
+                    key, index_str = part.split("[")
+                    index = int(index_str.rstrip("]"))
+                    if key:
+                        current = current[key][index]
+                    else:
+                        current = current[index]
+                else:
+                    current = current[part]
+            return current
+        except (KeyError, IndexError, TypeError, ValueError):
+            logger.warning(
+                "[PV-IF] Could not extract path '%s' from JSON response", path
+            )
+            return None
 
     def __get_pv_forecast_akkudoktor_api(
         self, tgt_value="power", pv_config_entry=None, tgt_duration=48
