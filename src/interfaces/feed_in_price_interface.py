@@ -432,14 +432,19 @@ class FeedInPriceInterface:
 
     def _fetch_evcc_prices(self, tgt_duration, start_time):
         """
-        Fetch feed-in prices from EVCC /api/tariff/feedin endpoint.
+        Fetch feed-in prices from EVCC /api/tariff/feedin endpoint with timestamp-aware conversion.
 
-        EVCC provides real-time feed-in tariffs via REST API.
-        Prices are used as-is (no static adder/multiplier applied, unlike grid prices).
+        EVCC provides real-time feed-in tariffs via REST API (typically 15-min intervals).
+        This method:
+        1. Extracts timestamps and prices from EVCC response
+        2. Detects resolution (15-min vs hourly)
+        3. Filters to the requested 48-hour window
+        4. Converts 15-min to hourly using timestamp-aware slot assignment if needed
+        5. Returns exactly tgt_duration slots
 
         Args:
             tgt_duration (int): 48 (hourly) or 192 (15-min slots)
-            start_time (datetime): Start time
+            start_time (datetime): Start time for the requested window
 
         Returns:
             list: Prices in EUR/Wh or empty list on error
@@ -499,38 +504,76 @@ class FeedInPriceInterface:
                         max_price,
                     )
 
-            # Convert EVCC rates to hourly format
-            # EVCC provides rates with start, end, and value (EUR/kWh)
-            prices_eur_wh = []
+            # Extract timeseries with timestamps
+            timeseries = []
             for rate in rates:
-                if not isinstance(rate, dict) or "value" not in rate:
+                if not isinstance(rate, dict) or "value" not in rate or "start" not in rate:
                     logger.warning(f"[FEEDIN-IF] Skipping invalid EVCC rate entry: {rate}")
                     continue
 
                 try:
                     price_eur_kwh = float(rate["value"])
-                    # Convert EUR/kWh to EUR/Wh (divide by 1000)
+                    start_str = rate["start"]
+                    
+                    # Parse ISO 8601 timestamp
+                    if "T" in start_str:
+                        # Remove timezone for parsing, then add it back
+                        if "+" in start_str:
+                            ts_part, tz_part = start_str.rsplit("+", 1)
+                            ts = datetime.fromisoformat(ts_part).replace(tzinfo=self.time_zone)
+                        elif start_str.endswith("Z"):
+                            ts = datetime.fromisoformat(start_str.replace("Z", "+00:00")).astimezone(self.time_zone)
+                        else:
+                            ts = datetime.fromisoformat(start_str)
+                    else:
+                        continue
+                    
+                    # Convert EUR/kWh to EUR/Wh
                     price_eur_wh = price_eur_kwh / 1000.0
-                    # EVCC feed-in prices are used as-is (no adder/multiplier)
-                    prices_eur_wh.append(price_eur_wh)
+                    timeseries.append({"timestamp": ts, "value": price_eur_wh})
 
                 except (ValueError, KeyError, TypeError) as e:
                     logger.warning(f"[FEEDIN-IF] Error parsing EVCC rate entry: {e}")
                     continue
 
-            if not prices_eur_wh:
-                logger.error("[FEEDIN-IF] No valid rates converted from EVCC response")
+            if not timeseries:
+                logger.error("[FEEDIN-IF] No valid rates with timestamps converted from EVCC response")
                 return []
 
+            # Detect resolution
+            resolution_seconds = self._detect_resolution_from_timeseries(timeseries)
+            
+            # Convert to target resolution if needed
+            if resolution_seconds == 900 and self.time_frame_base == 3600:
+                # 15-min to hourly conversion using timestamp-aware method
+                prices = self.__convert_15min_to_hourly_feedin_timeseries(timeseries, start_time)
+            elif resolution_seconds == 3600 and self.time_frame_base == 900:
+                # Hourly to 15-min expansion
+                prices = [p for p in [r["value"] for r in timeseries] for _ in range(4)]
+            else:
+                # Already correct resolution, just extract values
+                prices = [r["value"] for r in timeseries]
+
+            # Trim or extend to exact tgt_duration
+            if len(prices) > tgt_duration:
+                prices = prices[:tgt_duration]
+            elif len(prices) < tgt_duration:
+                # Pad with last value or cycle if available
+                if prices:
+                    prices.extend([prices[-1]] * (tgt_duration - len(prices)))
+                else:
+                    prices = [0.0] * tgt_duration
+
             logger.debug(
-                "[FEEDIN-IF] Fetched %d EVCC feed-in prices",
-                len(prices_eur_wh),
+                "[FEEDIN-IF] Fetched %d EVCC feed-in prices (resolution: %ds), "
+                "returned %d slots for tgt_duration=%d",
+                len(timeseries),
+                resolution_seconds,
+                len(prices),
+                tgt_duration,
             )
 
-            # Extend to 48 or 192 hours if needed
-            prices_eur_wh = self._extend_prices_to_duration(prices_eur_wh, tgt_duration)
-
-            return prices_eur_wh
+            return prices
 
         except requests.RequestException as e:
             logger.error("[FEEDIN-IF] EVCC feed-in API request failed: %s", e)
@@ -678,3 +721,80 @@ class FeedInPriceInterface:
             prices.extend(prices[:remaining_slots])
 
         return prices
+
+    def _detect_resolution_from_timeseries(self, timeseries):
+        """
+        Detect resolution (15-min or hourly) from timeseries data using timestamps.
+
+        Args:
+            timeseries (list): List of dicts with "timestamp" and "value" keys
+
+        Returns:
+            int: Resolution in seconds (900 for 15-min, 3600 for hourly, etc.)
+        """
+        if len(timeseries) < 2:
+            return 3600  # Default to hourly
+
+        # Calculate time differences between consecutive entries
+        ts1 = timeseries[0]["timestamp"]
+        ts2 = timeseries[1]["timestamp"]
+        delta = int((ts2 - ts1).total_seconds())
+
+        # Common resolutions
+        if delta == 900:
+            return 900  # 15-minute
+        elif delta == 1800:
+            return 1800  # 30-minute
+        elif delta == 3600:
+            return 3600  # Hourly
+        else:
+            logger.warning(
+                "[FEEDIN-IF] Unusual resolution detected: %d seconds. Using as-is.",
+                delta
+            )
+            return delta
+
+    def __convert_15min_to_hourly_feedin_timeseries(self, timeseries, start_time):
+        """
+        Convert 15-minute feedin prices to hourly using timestamp-aware averaging.
+
+        Maps each 15-minute price to the correct hourly slot based on its timestamp.
+        Takes the average of 4 consecutive 15-min prices for each hourly slot.
+
+        Args:
+            timeseries (list): List of dicts with "timestamp" and "value" keys (15-min intervals)
+            start_time (datetime): Start time (midnight) for the requested 48-hour window
+
+        Returns:
+            list: 48 hourly prices in EUR/Wh
+        """
+        hourly_prices = []
+        
+        # Generate 48 hourly slots starting from start_time
+        for hour_index in range(48):
+            slot_start = start_time + timedelta(hours=hour_index)
+            slot_end = slot_start + timedelta(hours=1)
+            
+            # Find all 15-min prices that fall within this hour
+            prices_in_slot = []
+            for entry in timeseries:
+                ts = entry["timestamp"]
+                if slot_start <= ts < slot_end:
+                    prices_in_slot.append(entry["value"])
+            
+            # Average the prices in this slot (typically 4 for 15-min resolution)
+            if prices_in_slot:
+                hourly_price = sum(prices_in_slot) / len(prices_in_slot)
+            else:
+                # No data for this hour, use last known price
+                hourly_price = timeseries[-1]["value"] if timeseries else 0.0
+            
+            hourly_prices.append(hourly_price)
+        
+        logger.debug(
+            "[FEEDIN-IF] Converted %d 15-min feedin prices to %d hourly slots",
+            len(timeseries),
+            len(hourly_prices)
+        )
+        
+        return hourly_prices
