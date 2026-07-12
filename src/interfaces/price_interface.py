@@ -1819,7 +1819,7 @@ class PriceInterface:
 
         # Parse and validate timeseries
         try:
-            prices = self.__parse_price_timeseries(timeseries, tgt_duration)
+            prices = self.__parse_price_timeseries(timeseries, tgt_duration, None, start_time)
             if not prices:
                 logger.error("[PRICE-IF] Failed to parse price timeseries data")
                 return []
@@ -1890,7 +1890,7 @@ class PriceInterface:
             if not isinstance(rates, list) or not rates:
                 logger.error("[PRICE-IF] No rates found in EVCC response")
                 return []
-            
+
             # Log concise summary instead of full response
             if rates:
                 first_rate = rates[0].get("start", "unknown")
@@ -1946,7 +1946,7 @@ class PriceInterface:
             if resolution_seconds is None:
                 logger.warning("[PRICE-IF] Could not detect timeseries resolution")
                 return []
-            
+
             # Calculate expected timeseries length based on resolution
             if resolution_seconds == 900:  # 15-min resolution
                 expected_timeseries_count = 192  # 192 * 15min = 2880min = 48h
@@ -1954,13 +1954,42 @@ class PriceInterface:
                 expected_timeseries_count = 48  # 48 * 1h = 48h
             else:
                 expected_timeseries_count = 48  # Fallback
-            
+
             actual_timeseries_count = len(timeseries)
             is_incomplete = actual_timeseries_count < expected_timeseries_count
-            
+
             # Parse the converted timeseries using standard parser
-            # Pass resolution_seconds to avoid duplicate detection
-            prices = self.__parse_price_timeseries(timeseries, tgt_duration, resolution_seconds)
+            # Pass resolution_seconds and start_time for timestamp-aware conversion
+            prices = self.__parse_price_timeseries(timeseries, tgt_duration, resolution_seconds, start_time)
+
+            expected_slots = 48 if self.time_frame_base == 3600 else 192
+
+            # Validate EVCC data: only accept exactly 1 or 2 complete full days
+            # Partial days, gaps, or mixed data → treat as incomplete error
+            # This ensures cyclic padding only uses trustworthy complete daily patterns
+            is_valid_complete_data = False
+            if resolution_seconds == 900:  # 15-min resolution
+                # Accept exactly 96 entries (1 day) or 192 entries (2 days)
+                is_valid_complete_data = actual_timeseries_count in [96, 192]
+            elif resolution_seconds == 3600:  # Hourly resolution
+                # Accept exactly 24 entries (1 day) or 48 entries (2 days)
+                is_valid_complete_data = actual_timeseries_count in [24, 48]
+
+            if is_incomplete and is_valid_complete_data:
+                logger.debug(
+                    "[PRICE-IF] EVCC provided exactly %d entries (%s) — treating as "
+                    "valid complete data and using cyclic pattern for gap-filling",
+                    actual_timeseries_count,
+                    "1 full day" if actual_timeseries_count in [96, 24] else "2 full days",
+                )
+                is_incomplete = False
+            elif is_incomplete and not is_valid_complete_data:
+                logger.warning(
+                    "[PRICE-IF] EVCC data is incomplete/invalid: %d entries provided "
+                    "(expected exactly 96 or 192 for 15-min, or 24 or 48 for hourly). "
+                    "Falling back to cache or energyforecast",
+                    actual_timeseries_count,
+                )
 
             if prices and is_incomplete:
                 # Data was incomplete, try fallback chain
@@ -1972,14 +2001,14 @@ class PriceInterface:
                 else:
                     # No conversion, use actual timeseries count
                     num_real_slots = actual_timeseries_count
-                
+
                 expected_slots = 48 if self.time_frame_base == 3600 else 192
                 num_missing_slots = expected_slots - num_real_slots
-                
+
                 # For energyforecast, pass the actual number of prices needed
                 # (not converted to hours) - function returns that many prices
                 num_forecast_prices_needed = num_missing_slots
-                
+
                 logger.info(
                     "[PRICE-IF] EVCC returned incomplete data: got %d real price slots, "
                     "need %d total (%d prices missing). Attempting fallback chain...",
@@ -1987,17 +2016,17 @@ class PriceInterface:
                     expected_slots,
                     num_forecast_prices_needed,
                 )
-                
+
                 # Extract the real (unpadded) values
                 real_prices = prices[:num_real_slots] if num_real_slots > 0 else []
-                
+
                 if real_prices and num_missing_slots > 0:
                     # Fallback 1: Try energyforecast.de smart price prediction
                     forecast_prices = self._fetch_adaptive_energyforecast_fallback(
                         known_prices=real_prices,
                         num_missing_hours=num_forecast_prices_needed,
                     )
-                    
+
                     if forecast_prices and len(forecast_prices) == num_forecast_prices_needed:
                         logger.info(
                             "[PRICE-IF] EVCC incomplete, using energyforecast.de smart "
@@ -2012,7 +2041,7 @@ class PriceInterface:
                         else:
                             # hourly mode, use forecast directly
                             prices = real_prices + forecast_prices
-                        
+
                         self._set_forecast_metadata(
                             start_index=num_real_slots,
                             forecast_type="smart_forecast",
@@ -2055,7 +2084,7 @@ class PriceInterface:
                     forecast_type="all_real",
                     source=None,
                 )
-            
+
             if prices:
                 self.consecutive_failures = 0
                 self.last_successful_prices = prices.copy()
@@ -2076,7 +2105,7 @@ class PriceInterface:
             logger.error(f"[PRICE-IF] Unexpected error fetching EVCC prices: {e}")
             return []
 
-    def __parse_price_timeseries(self, timeseries, tgt_duration, resolution_seconds=None):
+    def __parse_price_timeseries(self, timeseries, tgt_duration, resolution_seconds=None, start_time=None):
         """
         Parse and validate price timeseries format.
 
@@ -2089,6 +2118,7 @@ class PriceInterface:
             timeseries: List of price entries with start, end, value
             tgt_duration: Target duration in hours
             resolution_seconds: Pre-detected resolution (900 or 3600), or None to auto-detect
+            start_time: Window start time (datetime) for timestamp-aware conversion
 
         Returns:
             list: Normalized hourly price values in EUR/Wh, or empty on error
@@ -2123,7 +2153,7 @@ class PriceInterface:
             logger.debug(
                 "[PRICE-IF] Converting source 15-min to system hourly resolution"
             )
-            timeseries = self.__convert_15min_to_hourly_price_timeseries(timeseries)
+            timeseries = self.__convert_15min_to_hourly_price_timeseries(timeseries, start_time)
         elif resolution_seconds == 3600 and self.time_frame_base == 900:
             # Source provides hourly, system wants 15-min - ERROR
             # User must choose: either use 3600s time frame or find 15-min source
@@ -2224,20 +2254,164 @@ class PriceInterface:
         except (KeyError, TypeError, ValueError):
             return None
 
-    def __convert_15min_to_hourly_price_timeseries(self, timeseries):
+    def __convert_15min_to_hourly_price_timeseries(self, timeseries, start_time=None):
         """
-        Convert 15-minute to hourly by averaging 4 consecutive values.
+        Convert 15-minute to hourly by averaging prices within each hour slot.
+        
+        Uses timestamps to determine which hour slot each 15-min price belongs to,
+        rather than naive index-based grouping. This ensures prices are correctly
+        aligned to the 48-hour window boundaries.
+
+        Args:
+            timeseries: List of 15-min price entries with start timestamps
+            start_time: Window start time (datetime) for alignment. If None, uses
+                       first timestamp as reference.
 
         Returns:
-            list: Averaged hourly timeseries
+            list: Averaged hourly timeseries aligned to window start
         """
-        if len(timeseries) < 4:
-            logger.warning("[PRICE-IF] Not enough 15-min data to average hourly")
-            return timeseries
+        if not timeseries:
+            logger.warning("[PRICE-IF] No 15-min data to convert")
+            return []
 
+        try:
+            from datetime import datetime as dt_class
+            import math
+
+            # Determine window start: use provided start_time or derive from first entry
+            if start_time is None:
+                # Parse first timestamp as reference
+                first_ts = timeseries[0].get("start")
+                if isinstance(first_ts, str):
+                    try:
+                        window_start = dt_class.fromisoformat(first_ts.replace('Z', '+00:00'))
+                    except (ValueError, AttributeError):
+                        # Fallback for Python < 3.7 or invalid format
+                        logger.debug(f"[PRICE-IF] Failed to parse timestamp: {first_ts}")
+                        return self.__convert_15min_to_hourly_price_timeseries_naive(timeseries)
+                else:
+                    # Unix timestamp
+                    from datetime import timezone
+                    window_start = dt_class.fromtimestamp(first_ts, tz=timezone.utc)
+            else:
+                # Use provided start_time (already datetime with timezone)
+                window_start = start_time
+
+            # Initialize 48 hour slots
+            hourly = [{"prices": [], "start": None, "end": None} for _ in range(48)]
+
+            # Parse timestamps and group by hour slot
+            for entry in timeseries:
+                try:
+                    # Parse entry timestamp
+                    ts_str = entry.get("start")
+                    if isinstance(ts_str, str):
+                        entry_time = dt_class.fromisoformat(ts_str.replace('Z', '+00:00'))
+                    else:
+                        from datetime import timezone
+                        entry_time = dt_class.fromtimestamp(ts_str, tz=timezone.utc)
+
+                    # Calculate which hour slot this entry belongs to
+                    time_diff = entry_time - window_start
+                    hours_offset = time_diff.total_seconds() / 3600.0
+                    # Use math.floor to properly handle negative values
+                    # floor(-0.25) = -1, floor(0.25) = 0, floor(1.75) = 1
+                    hour_slot = math.floor(hours_offset)
+
+                    # Validate hour slot is within 48-hour window
+                    if 0 <= hour_slot < 48:
+                        price_value = float(entry.get("value", 0))
+                        hourly[hour_slot]["prices"].append(price_value)
+
+                        # Set start/end timestamps for this slot (from first entry in slot)
+                        if not hourly[hour_slot]["start"]:
+                            hourly[hour_slot]["start"] = ts_str
+                        hourly[hour_slot]["end"] = entry.get("end")
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.debug(f"[PRICE-IF] Skipping entry during conversion: {e}")
+                    continue
+
+            # Average prices within each hour slot and collect filled/empty info
+            slot_values = [None] * 48  # None means no data for this slot
+            slots_with_data = 0
+            slots_without_data = 0
+
+            for slot_idx, slot_data in enumerate(hourly):
+                if slot_data["prices"]:
+                    slot_values[slot_idx] = sum(slot_data["prices"]) / len(slot_data["prices"])
+                    slots_with_data += 1
+                else:
+                    slots_without_data += 1
+
+            # Find first slot with actual data
+            first_data_slot = next((i for i, v in enumerate(slot_values) if v is not None), None)
+
+            if first_data_slot is None:
+                # No data at all - return empty so fallback chain can handle it
+                logger.warning("[PRICE-IF] No 15-min prices fell within 48-hour window")
+                return []
+
+            # Gap-fill all 48 slots:
+            # - Slots before first data: backward-fill with first known price
+            # - Slots after last data: for slots 24-47 (next day), cycle daily pattern from slots 0-23
+            #   For slots within same day after data ends: forward-fill with last known
+            first_price = slot_values[first_data_slot]
+            last_known = first_price  # Start with first data as seed for pre-data slots
+
+            result = []
+            for slot_idx in range(48):
+                if slot_values[slot_idx] is not None:
+                    last_known = slot_values[slot_idx]
+                    value = last_known
+                elif slot_idx < first_data_slot:
+                    # Before any data: use first known price
+                    value = first_price
+                else:
+                    # Inner gap or post-data within same day: forward-fill with last known
+                    # If we're in the next day (slot >= 24) and have no real data there,
+                    # cycle through today's pattern (slots 0-23) for better forecasting
+                    if slot_idx >= 24:
+                        # Next day: repeat today's pattern
+                        cycle_idx = (slot_idx - 24) % 24  # Map slots 24-47 to 0-23
+                        value = slot_values[cycle_idx] if slot_values[cycle_idx] is not None else last_known
+                    else:
+                        value = last_known
+
+                result.append({"start": hourly[slot_idx]["start"], "end": hourly[slot_idx]["end"], "value": value})
+
+            logger.debug(
+                "[PRICE-IF] Converted %d 15-min prices to 48 hourly slots "
+                "(slots with data: %d, gap-filled: %d)",
+                len(timeseries),
+                slots_with_data,
+                slots_without_data,
+            )
+            return result
+
+        except Exception as e:
+            logger.error(f"[PRICE-IF] Error converting 15-min to hourly: {e}")
+            # Fallback to naive grouping if timestamp parsing fails
+            logger.debug("[PRICE-IF] Falling back to naive grouping")
+            return self.__convert_15min_to_hourly_price_timeseries_naive(timeseries)
+
+    def __convert_15min_to_hourly_price_timeseries_naive(self, timeseries):
+        """
+        Fallback: convert 15-minute to hourly by naive 4-consecutive grouping.
+        
+        This is used when timestamp parsing fails. Groups consecutive 15-min
+        prices in groups of 4 without considering timestamps.
+        
+        Args:
+            timeseries: List of 15-min price entries
+            
+        Returns:
+            list: Averaged hourly timeseries using naive grouping
+        """
         hourly = []
         for i in range(0, len(timeseries), 4):
             group = timeseries[i : i + 4]
+            if not group:
+                continue
             try:
                 avg_value = (
                     sum(float(item.get("value", 0)) for item in group) / len(group)
@@ -2250,12 +2424,6 @@ class PriceInterface:
                 hourly.append(hourly_item)
             except (ValueError, TypeError):
                 pass
-
-        logger.debug(
-            "[PRICE-IF] Converted %d 15-min prices to %d hourly prices",
-            len(timeseries),
-            len(hourly),
-        )
         return hourly
 
     def __extract_json_path(self, obj, path):

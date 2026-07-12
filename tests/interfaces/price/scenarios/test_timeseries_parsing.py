@@ -263,7 +263,7 @@ class TestAveraging:
         return iface
 
     def test_average_4_values_to_1(self, price_interface):
-        """4 × 15-min values averaged to 1 hourly value."""
+        """4 × 15-min values averaged to 1 hourly value (padded to 48 slots)."""
         timeseries = [
             {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T00:15:00Z", "value": 0.20},
             {"start": "2024-01-01T00:15:00Z", "end": "2024-01-01T00:30:00Z", "value": 0.30},
@@ -271,29 +271,48 @@ class TestAveraging:
             {"start": "2024-01-01T00:45:00Z", "end": "2024-01-01T01:00:00Z", "value": 0.50},
         ]
 
-        averaged = price_interface._PriceInterface__convert_15min_to_hourly_price_timeseries(timeseries)
-        assert len(averaged) == 1
-        # Average: (0.20 + 0.30 + 0.40 + 0.50) / 4 = 0.35
+        # For conversion, provide start_time matching the first entry
+        start_time = datetime.fromisoformat("2024-01-01T00:00:00+00:00")
+        averaged = price_interface._PriceInterface__convert_15min_to_hourly_price_timeseries(
+            timeseries, start_time
+        )
+        # Method pads to 48 slots total
+        assert len(averaged) == 48
+        # First slot: Average of 4 × 15-min values = (0.20 + 0.30 + 0.40 + 0.50) / 4 = 0.35
         assert 0.349 < averaged[0]["value"] < 0.351
+        # Remaining slots are padded with the last value (0.35) via cyclic pattern
+        assert all(abs(v["value"] - 0.35) < 1e-6 for v in averaged)
 
     def test_average_multiple_hours(self, price_interface):
-        """Multiple hours of 15-min data correctly averaged to hourly."""
+        """Multiple hours of 15-min data correctly averaged to hourly (padded to 48 slots)."""
         timeseries = []
         for hour in range(3):
             for minute_offset in [0, 15, 30, 45]:
                 ts = f"2024-01-01T{hour:02d}:{minute_offset:02d}:00Z"
-                te = f"2024-01-01T{hour:02d}:{minute_offset+15:02d}:00Z" if minute_offset < 45 else f"2024-01-01T{hour+1:02d}:00:00Z"
-                timeseries.append({
-                    "start": ts,
-                    "end": te,
-                    "value": 0.20 + hour * 0.05,
-                })
+                te = (
+                    f"2024-01-01T{hour:02d}:{minute_offset+15:02d}:00Z"
+                    if minute_offset < 45
+                    else f"2024-01-01T{hour+1:02d}:00:00Z"
+                )
+                timeseries.append(
+                    {
+                        "start": ts,
+                        "end": te,
+                        "value": 0.20 + hour * 0.05,
+                    }
+                )
 
-        averaged = price_interface._PriceInterface__convert_15min_to_hourly_price_timeseries(timeseries)
-        assert len(averaged) == 3
-        assert abs(averaged[0]["value"] - 0.20) < 1e-6  # All values 0.20
-        assert abs(averaged[1]["value"] - 0.25) < 1e-6  # All values 0.25
-        assert abs(averaged[2]["value"] - 0.30) < 1e-6  # All values 0.30
+        start_time = datetime.fromisoformat("2024-01-01T00:00:00+00:00")
+        averaged = price_interface._PriceInterface__convert_15min_to_hourly_price_timeseries(
+            timeseries, start_time
+        )
+        # Method pads to 48 slots total
+        assert len(averaged) == 48
+        # First 3 slots contain actual hourly averages
+        assert abs(averaged[0]["value"] - 0.20) < 1e-6  # Hour 0: all 0.20
+        assert abs(averaged[1]["value"] - 0.25) < 1e-6  # Hour 1: all 0.25
+        assert abs(averaged[2]["value"] - 0.30) < 1e-6  # Hour 2: all 0.30
+        # Remaining slots are padded with cyclic daily pattern
 
     def test_incomplete_group_not_averaged(self, price_interface):
         """Incomplete group at end (< 4 values) is handled gracefully."""
@@ -304,7 +323,10 @@ class TestAveraging:
         ]
 
         # Should return as-is or with special handling
-        result = price_interface._PriceInterface__convert_15min_to_hourly_price_timeseries(timeseries)
+        start_time = datetime.fromisoformat("2024-01-01T00:00:00+00:00")
+        result = price_interface._PriceInterface__convert_15min_to_hourly_price_timeseries(
+            timeseries, start_time
+        )
         # With < 4 total values, returns original
         assert len(result) >= 0  # Depends on implementation
 
@@ -347,7 +369,7 @@ class TestValueRangeValidation:
             {
                 "start": f"2024-01-02T{i%24:02d}:00:00Z",
                 "end": f"2024-01-02T{(i+1)%24:02d}:00:00Z" if i < 23 else "2024-01-03T00:00:00Z",
-                "value": -0.9
+                "value": -0.9,
             }
             for i in range(48)
         ]
@@ -363,7 +385,7 @@ class TestValueRangeValidation:
             {
                 "start": f"2024-01-02T{i%24:02d}:00:00Z",
                 "end": f"2024-01-02T{(i+1)%24:02d}:00:00Z" if i < 23 else "2024-01-03T00:00:00Z",
-                "value": 2.5
+                "value": 2.5,
             }
             for i in range(48)
         ]
@@ -397,7 +419,11 @@ class TestDataCompleteness:
     def test_incomplete_hourly_data_padded(self, price_interface):
         """Incomplete hourly data (< 48 values) is padded with last value."""
         timeseries = [
-            {"start": f"2024-01-01T{i:02d}:00:00Z", "end": f"2024-01-01T{i+1:02d}:00:00Z", "value": 0.25}
+            {
+                "start": f"2024-01-01T{i:02d}:00:00Z",
+                "end": f"2024-01-01T{i+1:02d}:00:00Z",
+                "value": 0.25,
+            }
             for i in range(24)  # Only 24 hours instead of 48
         ]
 
@@ -409,7 +435,11 @@ class TestDataCompleteness:
     def test_complete_hourly_data_no_padding(self, price_interface):
         """Complete hourly data (48 values) requires no padding."""
         timeseries = [
-            {"start": f"2024-01-02T{i%24:02d}:00:00Z", "end": f"2024-01-02T{(i+1)%24:02d}:00:00Z", "value": 0.25}
+            {
+                "start": f"2024-01-02T{i%24:02d}:00:00Z",
+                "end": f"2024-01-02T{(i+1)%24:02d}:00:00Z",
+                "value": 0.25,
+            }
             for i in range(48)
         ]
 

@@ -3790,6 +3790,24 @@ Response:
                 <li><strong>Display:</strong> Always shown in EUR/kWh in the web UI</li>
             </ul>
 
+            <h3>15-Minute to Hourly Conversion</h3>
+            <p>EVCC provides prices at 15-minute resolution, while EOS Connect optimizes on hourly slots. To ensure accurate pricing:</p>
+            <ul>
+                <li><strong>Timestamp-aware mapping:</strong> Each 15-minute price is placed into its correct hourly slot based on its timestamp, not just sequential grouping. This ensures prices are correctly aligned even when data starts at non-boundary times (e.g., 09:00).</li>
+                <li><strong>Averaging:</strong> Multiple 15-minute prices within the same hour are averaged into a single hourly slot.</li>
+                <li><strong>Gap filling:</strong> When EVCC data doesn't cover the entire 48-hour optimization window:
+                    <ul>
+                        <li><strong>History slots (before data starts):</strong> Backward-filled with the first available price</li>
+                        <li><strong>Same-day post-data slots:</strong> Forward-filled with the last known price</li>
+                        <li><strong>Next-day slots (when EPEX lacks tomorrow's data):</strong> Cyclic daily pattern—tomorrow's prices repeat today's pattern for realistic forecasting instead of artificial constant values</li>
+                    </ul>
+                </li>
+            </ul>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Better Forecasting with Cyclic Padding:</strong> When grid price providers don't have data for tomorrow, EOS Connect repeats today's daily price pattern for tomorrow's forecast. This provides realistic overnight rates and peak/off-peak cycles, resulting in better optimization decisions than forward-filling with a constant value.
+            </div>
+
             <h3>Automatic Updates</h3>
             <p>EVCC prices are fetched:</p>
             <ul>
