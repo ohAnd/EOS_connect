@@ -9,6 +9,46 @@
 
 ---
 
+## ⚠️ GIT WORKFLOW - MANDATORY RULES (APPLIES TO ALL COMMITS)
+
+**These rules apply ALWAYS - regardless of whether user said "prepare for commit" or not.**
+
+### ❌ ABSOLUTELY FORBIDDEN
+
+- ❌ NEVER run `git commit` without explicit user approval ("yes", "approved", "confirmed")
+- ❌ NEVER assume user wants to commit
+- ❌ NEVER auto-commit changes silently
+- ❌ NEVER commit based on inferred intent without explicit confirmation
+
+### ✅ MANDATORY PROCESS (REQUIRED ORDER)
+
+1. ✅ Make all code changes and run tests
+2. ✅ Show user:
+   - Files modified/created (with line counts and paths)
+   - Test results (all test names and pass/fail status)
+   - Proposed commit message (exact text, ready to copy-paste)
+   - Summary of changes
+3. ✅ Present changes in clear format with section "## ❓ AWAITING YOUR APPROVAL"
+4. ✅ **WAIT FOR EXPLICIT USER RESPONSE**:
+   - "yes" / "approved" / "confirmed" → Proceed to step 5
+   - "no" / "modify" / feedback → Ask what to change, do NOT commit
+   - Any other response → Clarify what user wants, do NOT commit
+5. ✅ ONLY after explicit approval, execute git commands:
+   ```bash
+   git add <files>
+   git commit -m "message"
+   ```
+6. ✅ Optional: Only if user asks, also `git push` or create PR
+
+### 🔴 THE RULE THAT WAS VIOLATED
+
+**"NEVER run `git commit` without explicit user approval"**
+
+This was violated when attempting to commit without waiting for user confirmation.
+This is now documented explicitly so it cannot be missed.
+
+---
+
 ## Project Guidelines
 
 ### Icon Usage
