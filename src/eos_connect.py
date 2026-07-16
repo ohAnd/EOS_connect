@@ -175,6 +175,12 @@ eos_interface = interface_factory.create_optimization_interface(
     time_frame_base=time_frame_base,
     timezone=time_zone,
     critical=True,
+    inverter_max_grid_charge_rate_w=config_manager.config["inverter"].get(
+        "max_grid_charge_rate", 10000
+    ),
+    inverter_max_pv_charge_rate_w=config_manager.config["inverter"].get(
+        "max_pv_charge_rate", 10000
+    ),
 )
 
 base_control = BaseControl(config_manager.config, time_zone, time_frame_base)

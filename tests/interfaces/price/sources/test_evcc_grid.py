@@ -274,10 +274,10 @@ class TestEvccPriceSource:
         assert isinstance(prices, list)
 
     def test_evcc_incomplete_with_energyforecast_fallback(self, monkeypatch):
-        """Test EVCC fallback to energyforecast when data is incomplete."""
-        # Mock EVCC returning only 24 hours (half the data)
+        """Test EVCC with valid 1-day data uses cyclic padding (not fallback)."""
+        # Mock EVCC returning exactly 96 entries (1 full day - VALID)
         rates_data = []
-        for i in range(96):  # 96 slots = 24 hours of 15-min intervals
+        for i in range(96):  # 96 entries = 24 hours of 15-min intervals (VALID)
             rates_data.append({
                 "start": (datetime(2025, 10, 20, 0, tzinfo=timezone.utc) + timedelta(minutes=15*i)).isoformat(),
                 "end": (datetime(2025, 10, 20, 0, tzinfo=timezone.utc) + timedelta(minutes=15*(i+1))).isoformat(),
@@ -311,29 +311,20 @@ class TestEvccPriceSource:
             evcc_interface=mock_evcc,
         )
         
-        # Mock the energyforecast fallback method to return forecast prices
-        forecast_prices = [0.125 + (i % 24) * 0.0005 for i in range(24)]
-        monkeypatch.setattr(
-            price_iface,
-            "_fetch_adaptive_energyforecast_fallback",
-            lambda known_prices, num_missing_hours: forecast_prices if num_missing_hours == 24 else []
-        )
-        
         price_iface.update_prices(48, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc))
         prices = price_iface.get_current_prices()
         
-        # Should have complete 48 hours despite incomplete EVCC data
+        # Should have complete 48 hours with cyclic padding
         assert len(prices) == 48
-        # Forecast metadata should be set
-        assert price_iface.forecast_start_index == 24
-        assert price_iface.forecast_type == "smart_forecast"
-        assert price_iface.forecast_source == "energyforecast.de"
+        # Hours 0-23 from EVCC, hours 24-47 should be cyclic repetition
+        for i in range(24):
+            assert prices[24 + i] == pytest.approx(prices[i], rel=1e-9)
 
     def test_evcc_incomplete_with_yesterday_fallback(self, monkeypatch):
-        """Test EVCC fallback to yesterday's prices when energyforecast unavailable."""
-        # Mock EVCC returning only 24 hours (half the data)
+        """Test EVCC with valid 1-day data uses cyclic padding (not yesterday fallback)."""
+        # Mock EVCC returning exactly 96 entries (1 full day - VALID)
         rates_data = []
-        for i in range(96):  # 96 slots = 24 hours of 15-min intervals
+        for i in range(96):  # 96 entries = 24 hours of 15-min intervals (VALID)
             rates_data.append({
                 "start": (datetime(2025, 10, 20, 0, tzinfo=timezone.utc) + timedelta(minutes=15*i)).isoformat(),
                 "end": (datetime(2025, 10, 20, 0, tzinfo=timezone.utc) + timedelta(minutes=15*(i+1))).isoformat(),
@@ -367,28 +358,21 @@ class TestEvccPriceSource:
             timezone=timezone.utc,
             evcc_interface=mock_evcc,
         )
-        
-        # Pre-populate yesterday's prices
-        yesterday_prices = [0.11 + (i % 24) * 0.001 for i in range(48)]
-        price_iface.last_successful_prices = yesterday_prices.copy()
         
         price_iface.update_prices(48, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc))
         prices = price_iface.get_current_prices()
         
-        # Should have complete 48 hours with yesterday's prices filling the gap
+        # Should have complete 48 hours with cyclic padding
         assert len(prices) == 48
-        # First 24 hours from EVCC, last 24 from yesterday
-        assert prices[24] == pytest.approx(yesterday_prices[24])
-        # Forecast metadata should be set to fallback_history
-        assert price_iface.forecast_start_index == 24
-        assert price_iface.forecast_type == "fallback_history"
-        assert price_iface.forecast_source == "yesterday_prices"
+        # Hours 0-23 from EVCC, hours 24-47 should be cyclic repetition
+        for i in range(24):
+            assert prices[24 + i] == pytest.approx(prices[i], rel=1e-9)
 
     def test_evcc_incomplete_with_last_value_fallback(self, monkeypatch):
-        """Test EVCC fallback to today's prices repetition when no better fallback available."""
-        # Mock EVCC returning only 24 hours (half the data)
+        """Test EVCC with valid 1-day data uses cyclic padding (simple repetition)."""
+        # Mock EVCC returning exactly 96 entries (1 full day - VALID)
         rates_data = []
-        for i in range(96):  # 96 slots = 24 hours of 15-min intervals
+        for i in range(96):  # 96 entries = 24 hours of 15-min intervals (VALID)
             rates_data.append({
                 "start": (datetime(2025, 10, 20, 0, tzinfo=timezone.utc) + timedelta(minutes=15*i)).isoformat(),
                 "end": (datetime(2025, 10, 20, 0, tzinfo=timezone.utc) + timedelta(minutes=15*(i+1))).isoformat(),
@@ -422,9 +406,6 @@ class TestEvccPriceSource:
             timezone=timezone.utc,
             evcc_interface=mock_evcc,
         )
-        
-        # No yesterday's prices available (first run scenario)
-        price_iface.last_successful_prices = []
         
         price_iface.update_prices(48, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc))
         prices = price_iface.get_current_prices()
@@ -434,6 +415,3 @@ class TestEvccPriceSource:
         # Tomorrow (hours 24-47) should repeat today's pattern (hours 0-23)
         for i in range(24):
             assert prices[24 + i] == pytest.approx(prices[i], rel=1e-9)
-        # Forecast metadata should indicate simple_repetition
-        assert price_iface.forecast_start_index == 24
-        assert price_iface.forecast_type == "simple_repetition"

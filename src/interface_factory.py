@@ -9,8 +9,7 @@ approach to startup error collection.
 
 import logging
 from typing import Optional, Dict, Any
-from datetime import datetime
-import pytz
+from datetime import tzinfo
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ class InterfaceFactory:
         self,
         config: Dict[str, Any],
         time_frame_base: int,
-        time_zone: pytz.timezone,
+        time_zone: tzinfo,
         request_timeout: int = 10,
         critical: bool = True,
     ):
@@ -81,7 +80,7 @@ class InterfaceFactory:
         self,
         config: Dict[str, Any],
         load_interface,
-        time_zone: pytz.timezone,
+        time_zone: tzinfo,
         base_control,
         request_timeout: int = 10,
         critical: bool = True,
@@ -126,7 +125,7 @@ class InterfaceFactory:
         self,
         config: Dict[str, Any],
         time_frame_base: int,
-        time_zone: pytz.timezone,
+        time_zone: tzinfo,
         evcc_interface=None,
         critical: bool = False,
     ):
@@ -168,7 +167,7 @@ class InterfaceFactory:
         self,
         config: Dict[str, Any],
         time_frame_base: int,
-        time_zone: pytz.timezone,
+        time_zone: tzinfo,
         evcc_interface=None,
         critical: bool = False,
     ):
@@ -370,8 +369,10 @@ class InterfaceFactory:
         self,
         config: Dict[str, Any],
         time_frame_base: int,
-        timezone: pytz.timezone,
+        timezone: tzinfo,
         critical: bool = True,
+        inverter_max_grid_charge_rate_w: Optional[int] = None,
+        inverter_max_pv_charge_rate_w: Optional[int] = None,
     ):
         """
         Create OptimizationInterface with error handling.
@@ -401,6 +402,8 @@ class InterfaceFactory:
                 config=config,
                 time_frame_base=time_frame_base,
                 timezone=timezone,
+                inverter_max_grid_charge_rate_w=inverter_max_grid_charge_rate_w,
+                inverter_max_pv_charge_rate_w=inverter_max_pv_charge_rate_w,
             ),
         )
 

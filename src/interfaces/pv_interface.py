@@ -318,8 +318,44 @@ class PvInterface:
             logger.debug("[PV-IF] Solcast source-specific requirements validated")
 
         elif source == "timeseries":
-            # Timeseries validation is handled separately - can use data_url or ha_sensor_name
-            logger.debug("[PV-IF] Timeseries source-specific requirements validated")
+            # Timeseries source requires either data_url (for HTTP) or HA sensor integration
+            data_url = self.config_source.get("data_url", "").strip()
+            use_ha_central = self.config_source.get("use_ha_central_data_source", False)
+            
+            if not data_url and not use_ha_central:
+                log_func = logger.error if strict else logger.warning
+                log_func("[PV-IF] Timeseries data_url missing in pv_forecast_source section")
+                log_func(
+                    "[PV-IF] Please provide either:"
+                    " (1) data_url - HTTP endpoint returning timeseries data, OR"
+                    " (2) use_ha_central_data_source: true for HA sensor integration"
+                )
+                log_func("[PV-IF] Use Settings → PV Source to fix this")
+                raise ValueError(
+                    "[PV-IF] Timeseries requires data_url or use_ha_central_data_source"
+                    " - Use Settings → PV Source to fix"
+                )
+            
+            # If using HTTP URL, validate it's a valid URL format
+            if data_url and not (
+                data_url.startswith("http://") or data_url.startswith("https://")
+            ):
+                log_func = logger.error if strict else logger.warning
+                log_func(
+                    "[PV-IF] Timeseries data_url must be a valid HTTP/HTTPS URL,"
+                    f" got: {data_url}"
+                )
+                log_func("[PV-IF] Use Settings → PV Source to fix this")
+                raise ValueError(
+                    "[PV-IF] Timeseries data_url must start with http:// or https://"
+                )
+            
+            logger.debug(
+                "[PV-IF] Timeseries source-specific requirements validated"
+                " (data_url=%s, ha_central=%s)",
+                "***" if data_url else "none",
+                use_ha_central,
+            )
 
         elif source == "evcc":
             # EVCC-specific validation handled separately
@@ -372,14 +408,13 @@ class PvInterface:
                 # If NO resource_id, they would be needed (but Solcast requires resource_id)
                 has_resource_id = config_entry.get("resource_id", "").strip()
                 needs_lat_lon = not has_resource_id
+            elif source in ("timeseries", "evcc"):
+                # Timeseries/EVCC: only need lat/lon for temperature forecast
+                # PV data comes from external source, not location-based API
+                needs_lat_lon = self.temperature_forecast_enabled
             else:
                 # All other sources need lat/lon for their location-based API calls
                 needs_lat_lon = True
-                # Unless temperature is the only thing needed and we have a way to get temp
-                if source in ("evcc",):
-                    needs_lat_lon = self.temperature_forecast_enabled or (
-                        source != "evcc"
-                    )
 
             if needs_lat_lon:
                 missing = []
@@ -394,8 +429,8 @@ class PvInterface:
                     )
 
             # OPTIMIZATION: For sources that DON'T require full PV config
-            # (Victron, Solcast, etc.), set sensible defaults that also work for temperature API
-            if source in ("victron", "solcast", "evcc"):
+            # (Victron, Solcast, Timeseries, etc.), set sensible defaults that also work for temperature API
+            if source in ("victron", "solcast", "timeseries", "evcc"):
                 # These sources don't need detailed panel orientation for PV forecasting.
                 # However, defaults must be valid for Akkudoktor temperature API
                 # which validates them.
@@ -950,6 +985,10 @@ class PvInterface:
             logger.debug("[PV-IF] fetching forecast for evcc config")
             forecast = self.__get_pv_forecast("evcc_config")
             forecast_values = forecast
+        elif self.config_source.get("source") == "timeseries":
+            logger.debug("[PV-IF] fetching forecast for timeseries config")
+            forecast = self.__get_pv_forecast_timeseries()
+            forecast_values = forecast
         else:
             for config_entry in self.config:
                 logger.debug("[PV-IF] fetching forecast for '%s'", config_entry["name"])
@@ -974,6 +1013,374 @@ class PvInterface:
             )
 
         return forecast_values
+
+    def __get_pv_forecast_timeseries(self, tgt_duration=48):
+        """
+        Retrieve the PV forecast from a generic timeseries data source (HTTP
+        endpoint or Home Assistant sensor), analogous to
+        PriceInterface.__retrieve_prices_from_url.
+
+        Fetched once globally (not per pv_forecast.N array entry), since the
+        external source is expected to already provide the combined forecast
+        for the whole installation - mirrors how the "evcc" source is handled.
+
+        Standardized format: [{start, end, value}, ...] with value in Wh for
+        that slot (hourly or 15-min resolution, auto-detected).
+
+        Config fields used (from pv_forecast_source):
+        - data_url: Full HTTP endpoint URL (HA or HTTP custom endpoint)
+        - data_path: JSON path to the timeseries array (e.g. "data")
+        - data_token: Optional bearer token for authentication
+        """
+        data_url = self.config_source.get("data_url", "").strip()
+        data_path = self.config_source.get("data_path", "data").strip() or "data"
+        data_token = self.config_source.get("data_token", "").strip()
+
+        fallback_power = self.config[0]["power"] if self.config else 1000
+
+        if not data_url:
+            return self._handle_interface_error(
+                "config_error",
+                "Data URL (data_url) not configured for timeseries PV source",
+                "timeseries_config",
+                "timeseries",
+            ) or self.__get_default_pv_forcast(fallback_power)
+
+        headers = {"Content-Type": "application/json"}
+        if data_token:
+            headers["Authorization"] = f"Bearer {data_token}"
+
+        logger.debug(
+            "[PV-IF] Fetching PV forecast from timeseries source: %s (path: %s)",
+            data_url,
+            data_path,
+        )
+
+        def request_and_parse():
+            response = requests.get(data_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            response_data = response.json()
+            timeseries = self.__extract_json_path(response_data, data_path)
+            if not isinstance(timeseries, list):
+                raise ValueError(f"Data at path '{data_path}' is not a list")
+            return timeseries
+
+        def error_handler(error_type, exception):
+            error_detail = str(exception)
+            # Provide more helpful error messages based on error type
+            if error_type == "timeout":
+                error_msg = (
+                    f"Timeseries data source timeout after 10s - "
+                    f"check network connectivity to {data_url} | "
+                    f"Recovery: {self.consecutive_failures + 1}/{self.max_failures}"
+                )
+            elif error_type == "request_failed":
+                error_msg = (
+                    f"Timeseries data source request failed: {error_detail} | "
+                    f"Recovery: {self.consecutive_failures + 1}/{self.max_failures}"
+                )
+            elif error_type == "invalid_json":
+                error_msg = (
+                    f"Timeseries data source returned invalid JSON: {error_detail} | "
+                    f"check data_url and data_path | "
+                    f"Recovery: {self.consecutive_failures + 1}/{self.max_failures}"
+                )
+            elif error_type == "parsing_error":
+                error_msg = (
+                    f"Failed to extract data from path '{data_path}': {error_detail} | "
+                    f"check data_path setting | "
+                    f"Recovery: {self.consecutive_failures + 1}/{self.max_failures}"
+                )
+            else:
+                error_msg = f"Timeseries error ({error_type}): {error_detail}"
+            
+            return self._handle_interface_error(
+                error_type,
+                error_msg,
+                "timeseries_source",
+                "timeseries",
+            )
+
+        timeseries = self._retry_request(request_and_parse, error_handler)
+        if not timeseries:
+            logger.debug(
+                "[PV-IF] Timeseries fetch failed after retries - "
+                "using last_successful_forecast=%s or defaults",
+                "available" if self.last_successful_pv_forecast else "none",
+            )
+            return self.last_successful_pv_forecast or self.__get_default_pv_forcast(
+                fallback_power
+            )
+
+        try:
+            logger.debug(
+                "[PV-IF] Timeseries fetched successfully (%d entries) - parsing...",
+                len(timeseries),
+            )
+            forecast_values = self.__parse_pv_timeseries(timeseries, tgt_duration)
+            if not forecast_values:
+                logger.warning(
+                    "[PV-IF] Timeseries parsing returned empty - "
+                    "no valid data entries matched target duration"
+                )
+                return self._handle_interface_error(
+                    "processing_error",
+                    "Failed to parse PV timeseries data (empty result)",
+                    "timeseries_source",
+                    "timeseries",
+                ) or self.__get_default_pv_forcast(fallback_power)
+            
+            logger.debug(
+                "[PV-IF] Timeseries parsed successfully: %d values, "
+                "range [%.1f - %.1f Wh]",
+                len(forecast_values),
+                min(forecast_values) if forecast_values else 0,
+                max(forecast_values) if forecast_values else 0,
+            )
+            self.pv_forcast_request_error["error"] = None
+            return forecast_values
+        except (ValueError, TypeError) as e:
+            logger.error(
+                "[PV-IF] Timeseries parsing error: %s", str(e)
+            )
+            return self._handle_interface_error(
+                "processing_error",
+                f"Error parsing PV timeseries: {e}",
+                "timeseries_source",
+                "timeseries",
+            ) or self.__get_default_pv_forcast(fallback_power)
+
+    def __parse_pv_timeseries(self, timeseries, tgt_duration, resolution_seconds=None):
+        """
+        Parse and validate a PV forecast timeseries.
+
+        Standardized format: [{start, end, value}, ...]
+        - start/end: ISO8601 string or Unix timestamp (seconds)
+        - value: generated energy in Wh for that slot (non-negative)
+        - Supports hourly (48 values) or 15-minute (192 values) resolution
+
+        Mirrors PriceInterface.__parse_price_timeseries, adapted for PV: values
+        represent energy-per-slot rather than a rate, so 15-min-to-hourly
+        conversion sums instead of averages, and missing trailing slots are
+        padded with 0 (no production) rather than the last known value.
+        """
+        if not timeseries or not isinstance(timeseries, list):
+            logger.error("[PV-IF] PV timeseries is not a list")
+            return []
+
+        if len(timeseries) == 0:
+            logger.error("[PV-IF] PV timeseries is empty")
+            return []
+
+        first = timeseries[0]
+        required_keys = ["start", "end", "value"]
+        if not isinstance(first, dict) or not all(k in first for k in required_keys):
+            logger.error(
+                "[PV-IF] Invalid PV timeseries format: missing start, end, or value"
+            )
+            return []
+
+        if resolution_seconds is None:
+            resolution_seconds = self.__detect_pv_timeseries_resolution(timeseries)
+            if resolution_seconds is None:
+                logger.error("[PV-IF] Could not detect PV timeseries resolution")
+                return []
+
+        if resolution_seconds == 900 and self.time_frame_base == 3600:
+            logger.debug(
+                "[PV-IF] Converting source 15-min to system hourly resolution"
+            )
+            timeseries = self.__convert_15min_to_hourly_pv_timeseries(timeseries)
+        elif resolution_seconds == 3600 and self.time_frame_base == 900:
+            logger.error(
+                "[PV-IF] Resolution mismatch: data source provides hourly (3600s) "
+                "but system configured for 15-min (900s) slots. "
+                "Set time_frame_base to 3600 or switch to a 15-minute data source."
+            )
+            return []
+        elif resolution_seconds not in (900, 3600):
+            logger.error(
+                "[PV-IF] Unsupported resolution: %d seconds (expected 900 or 3600)",
+                resolution_seconds,
+            )
+            return []
+
+        # Align by absolute timestamp to the slot grid starting at local midnight
+        # today - NOT positionally. get_ems_data() indexes pv_forcast_array by
+        # "slots since midnight" (see eos_connect.py's current_slot calculation),
+        # the same convention __get_pv_forecast_evcc_api() already follows. A
+        # source whose first entry is "now" (like ours) rather than "midnight"
+        # would otherwise land at the wrong array index.
+        try:
+            tz = pytz.timezone(self.time_zone)
+        except (pytz.UnknownTimeZoneError, AttributeError):
+            tz = pytz.UTC
+
+        def parse_ts(ts_val):
+            if isinstance(ts_val, (int, float)):
+                return datetime.fromtimestamp(ts_val, tz=pytz.UTC).astimezone(tz)
+            if isinstance(ts_val, str):
+                try:
+                    parsed = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
+                except ValueError:
+                    parsed = datetime.fromisoformat(ts_val)
+                if parsed.tzinfo is None:
+                    parsed = tz.localize(parsed)
+                return parsed.astimezone(tz)
+            return None
+
+        slot_seconds = 3600 if self.time_frame_base == 3600 else 900
+        lookup = {}
+        try:
+            for item in timeseries:
+                ts = parse_ts(item.get("start"))
+                if ts is None:
+                    continue
+                value = float(item.get("value", 0))
+                if value < 0:
+                    logger.warning("[PV-IF] Negative PV value %.1f clamped to 0", value)
+                    value = 0.0
+                
+                # Align timestamp to resolution boundary (robust to arbitrary start times)
+                # E.g., for 3600s resolution: round to nearest hour
+                #       for 900s resolution: round to nearest 15-minute
+                ts = ts.replace(second=0, microsecond=0)
+                total_seconds = int(ts.timestamp())
+                aligned_seconds = (total_seconds // slot_seconds) * slot_seconds
+                ts = datetime.fromtimestamp(aligned_seconds, tz=pytz.UTC).astimezone(tz)
+                lookup[ts] = value
+        except (ValueError, TypeError):
+            logger.error("[PV-IF] Failed to extract numeric PV values")
+            return []
+
+        now_local = datetime.now(tz)
+        midnight_today = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        expected_count = 48 if self.time_frame_base == 3600 else 192
+        values = [
+            round(lookup.get(midnight_today + timedelta(seconds=slot_seconds * i), 0.0), 1)
+            for i in range(expected_count)
+        ]
+
+        return values
+
+    def __detect_pv_timeseries_resolution(self, timeseries):
+        """
+        Detect time resolution (900s for 15-min, 3600s for hourly).
+        Identical logic to PriceInterface.__detect_price_timeseries_resolution.
+
+        Returns:
+            int: Seconds per interval (900 or 3600), or None if cannot detect
+        """
+        if len(timeseries) < 2:
+            return None
+
+        try:
+            from datetime import datetime as dt_class
+            import pytz
+
+            def parse_ts(ts_str):
+                if isinstance(ts_str, (int, float)):
+                    return dt_class.fromtimestamp(ts_str, tz=pytz.UTC)
+                if isinstance(ts_str, str):
+                    try:
+                        return dt_class.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    except ValueError:
+                        return dt_class.fromisoformat(ts_str)
+                return None
+
+            start1 = parse_ts(timeseries[0].get("start"))
+            start2 = parse_ts(timeseries[1].get("start"))
+
+            if start1 is None or start2 is None:
+                return None
+
+            delta = int((start2 - start1).total_seconds())
+
+            if delta == 900:
+                logger.debug("[PV-IF] Detected 15-minute PV timeseries resolution")
+                return 900
+            elif delta == 3600:
+                logger.debug("[PV-IF] Detected hourly PV timeseries resolution")
+                return 3600
+            else:
+                logger.warning(
+                    "[PV-IF] Unexpected PV timeseries resolution delta: %d seconds",
+                    delta,
+                )
+                return None
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def __convert_15min_to_hourly_pv_timeseries(self, timeseries):
+        """
+        Convert 15-minute PV energy values to hourly by summing 4 consecutive
+        slots. Unlike PriceInterface's rate-based averaging, PV values are
+        energy-per-slot, so summing (not averaging) is the correct aggregation.
+
+        Returns:
+            list: Hourly timeseries with summed values
+        """
+        if len(timeseries) < 4:
+            logger.warning("[PV-IF] Not enough 15-min PV data to sum hourly")
+            return timeseries
+
+        hourly = []
+        for i in range(0, len(timeseries), 4):
+            group = timeseries[i : i + 4]
+            try:
+                total_value = sum(float(item.get("value", 0)) for item in group)
+                hourly.append(
+                    {
+                        "start": group[0].get("start"),
+                        "end": group[-1].get("end"),
+                        "value": total_value,
+                    }
+                )
+            except (ValueError, TypeError):
+                pass
+
+        logger.debug(
+            "[PV-IF] Converted %d 15-min PV values to %d hourly values",
+            len(timeseries),
+            len(hourly),
+        )
+        return hourly
+
+    def __extract_json_path(self, obj, path):
+        """
+        Extract nested value from JSON object using dot notation.
+
+        Examples:
+        - 'attributes.data' -> obj['attributes']['data']
+        - 'data' -> obj['data']
+        - 'prices[0].data' -> obj['prices'][0]['data']
+
+        Args:
+            obj: JSON object (dict or list)
+            path: Dot-notation path string
+
+        Returns:
+            Extracted value or None if path not found
+        """
+        try:
+            parts = path.split(".")
+            current = obj
+            for part in parts:
+                if "[" in part:
+                    key, index_str = part.split("[")
+                    index = int(index_str.rstrip("]"))
+                    if key:
+                        current = current[key][index]
+                    else:
+                        current = current[index]
+                else:
+                    current = current[part]
+            return current
+        except (KeyError, IndexError, TypeError, ValueError):
+            logger.warning(
+                "[PV-IF] Could not extract path '%s' from JSON response", path
+            )
+            return None
 
     def __get_pv_forecast_akkudoktor_api(
         self, tgt_value="power", pv_config_entry=None, tgt_duration=48
@@ -2269,7 +2676,65 @@ class PvInterface:
             logger.warning(
                 "[PV-IF] No forecast available and no cache - returning empty array"
             )
+        
+        # Log detailed recovery diagnostics for troubleshooting
+        self._log_error_diagnostics(error_type, source)
+        
         return []
+
+    def _log_error_diagnostics(self, error_type, source):
+        """
+        Log detailed error diagnostics including available sources and recovery hints.
+        Helps users troubleshoot and fix configuration issues faster.
+        """
+        available_sources = [
+            "akkudoktor",
+            "openmeteo",
+            "openmeteo_local",
+            "forecast_solar",
+            "solcast",
+            "victron",
+            "evcc",
+            "timeseries",
+            "default",
+        ]
+        current_source = self.config_source.get("source", "unknown")
+        
+        if self.consecutive_failures >= self.max_failures:
+            logger.error(
+                "[PV-IF] Maximum failures reached (%d) - "
+                "please check configuration in Settings > PV Forecast",
+                self.consecutive_failures,
+            )
+        
+        if source == "timeseries":
+            data_url = self.config_source.get("data_url", "").strip()
+            use_ha = self.config_source.get("use_ha_central_data_source", False)
+            
+            if error_type == "config_error" and not data_url and not use_ha:
+                logger.error(
+                    "[PV-IF] Timeseries requires either data_url or use_ha_central_data_source - "
+                    "at least one must be configured"
+                )
+            elif error_type == "timeout":
+                logger.error(
+                    "[PV-IF] Timeseries endpoint unreachable: %s - "
+                    "check network connectivity and endpoint availability",
+                    data_url,
+                )
+            elif error_type in ("request_failed", "invalid_json", "parsing_error"):
+                logger.error(
+                    "[PV-IF] Timeseries endpoint returned unexpected data - "
+                    "verify data_url and data_path in Settings > PV Source"
+                )
+        
+        logger.debug(
+            "[PV-IF] Available PV sources: %s (current: %s, consecutive_failures: %d/%d)",
+            ", ".join(available_sources),
+            current_source,
+            self.consecutive_failures,
+            self.max_failures,
+        )
 
     def _convert_hourly_to_15min(self, hourly_values):
         """

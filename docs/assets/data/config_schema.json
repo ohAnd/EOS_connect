@@ -517,6 +517,48 @@
       "display_group": "Local Optimizer"
     },
     {
+      "key": "eos.external_evopt_max_grid_import_w",
+      "type": "int",
+      "default": 10000,
+      "section": "eos",
+      "level": "expert",
+      "description": "Maximum grid import power for external EVopt (0 = no limit). Use for grid connection limits.",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 0,
+        "max": 100000
+      },
+      "depends_on": {
+        "eos.source": "evopt"
+      },
+      "hot_reload": false,
+      "display_group": "External Optimizer"
+    },
+    {
+      "key": "eos.external_evopt_max_grid_export_w",
+      "type": "int",
+      "default": 10000,
+      "section": "eos",
+      "level": "expert",
+      "description": "Maximum grid export power for external EVopt (0 = no limit). Use for grid feed-in limits.",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#eos",
+      "validation": {
+        "min": 0,
+        "max": 100000
+      },
+      "depends_on": {
+        "eos.source": "evopt"
+      },
+      "hot_reload": false,
+      "display_group": "External Optimizer"
+    },
+    {
       "key": "price.source",
       "type": "select",
       "default": "default",
@@ -595,7 +637,7 @@
       "default": "10.1,10.1,10.1,10.1,10.1,23,28.23,28.23,28.23,28.23,28.23,23.52,23.52,23.52,23.52,28.17,28.17,34.28,34.28,34.28,34.28,34.28,28,23",
       "section": "price",
       "level": "standard",
-      "description": "24 comma-separated prices in ct/kWh per hour (fixed_24h source)",
+      "description": "Exactly 24 comma-separated prices in ct/kWh (one per hour, 00:00-23:00). Automatically expanded to 48 or 192 slots based on time frame setting.",
       "labels": [
         "restart_required"
       ],

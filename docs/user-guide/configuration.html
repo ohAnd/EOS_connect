@@ -20,7 +20,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.3.35</span>
+                <span class="version-badge">v0.3.36</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -44,6 +44,8 @@
                 <h3>On This Page</h3>
                 <nav class="toc-nav">
                     <a href="#optimizer" class="toc-link">Optimizer</a>
+                    <a href="#local-evopt" class="toc-link toc-sub">→ Built-in EVopt Settings</a>
+                    <a href="#external-evopt" class="toc-link toc-sub">→ External EVopt Settings</a>
                     <a href="#dyn-override" class="toc-link toc-sub">→ Dynamic PV Override</a>
                     <a href="#pv-charge-control" class="toc-link toc-sub">→ PV Battery Charge Control</a>
                     <a href="#evcc" class="toc-link">EVCC</a>
@@ -52,6 +54,7 @@
                     <a href="#battery" class="toc-link">Battery</a>
                     <a href="#battery-price-calc" class="toc-link toc-sub">&rarr; Dynamic Price Calculation</a>
                     <a href="#load" class="toc-link">Load</a>
+                    <a href="#data-quality" class="toc-link toc-sub">&rarr; Data Quality & Gap Handling</a>
                     <a href="#price" class="toc-link">Electricity Prices</a>
                     <a href="#price" class="toc-link toc-sub">→ Grid Purchase Prices</a>
                     <a href="#price" class="toc-link toc-sub">→ Dynamic Feed-In Pricing</a>
@@ -379,6 +382,57 @@
                 <tr>
                     <th>Notes</th>
                     <td>Increase if optimization takes longer or server is slow</td>
+                </tr>
+            </table>
+
+            <h3 id="external-evopt" style="margin-top: 2rem;">External EVopt Optimizer Settings (<code>external_evopt</code>)</h3>
+            <p><strong>Applies only when:</strong> <code>eos.source = evopt</code> (External EVopt backend selected)</p>
+
+            <h4>eos.external_evopt_max_grid_import_w</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.external_evopt_max_grid_import_w</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Hard upper limit on grid import power (Watts) for the external EVopt optimizer. Prevents scheduling
+                        grid purchases exceeding your contracted limit or demand-charge threshold. When set to <code>0</code>
+                        (default), the optimizer uses your inverter's maximum charge rate as the effective limit, ensuring
+                        smart defaults align with your hardware capabilities.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–100000 (W)</td></tr>
+                <tr><th>Default</th><td><code>0</code> (use inverter max charge rate)</td></tr>
+                <tr><th>Level</th><td>Expert</td></tr>
+                <tr><th>Smart Default Behavior</th>
+                    <td>
+                        When set to <code>0</code>, the optimizer receives your inverter's configured
+                        <code>inverter.max_grid_charge_rate</code> (default: 5000 W) as the actual limit. This ensures
+                        optimization respects your hardware without requiring manual configuration of both settings.
+                        Explicitly set a value &gt; 0 to override this behavior if your grid contract is more restrictive
+                        than your inverter capability.
+                    </td>
+                </tr>
+            </table>
+
+            <h4>eos.external_evopt_max_grid_export_w</h4>
+            <table>
+                <tr><th>Parameter</th><td><code>eos.external_evopt_max_grid_export_w</code></td></tr>
+                <tr><th>Description</th>
+                    <td>
+                        Hard upper limit on grid export power (Watts) for the external EVopt optimizer. Limits how much
+                        energy the battery can discharge to the grid per time slot. When set to <code>0</code> (default),
+                        the optimizer uses your inverter's maximum discharge rate as the effective limit.
+                    </td>
+                </tr>
+                <tr><th>Valid Values</th><td>Integer 0–100000 (W)</td></tr>
+                <tr><th>Default</th><td><code>0</code> (use inverter max discharge rate)</td></tr>
+                <tr><th>Level</th><td>Expert</td></tr>
+                <tr><th>Smart Default Behavior</th>
+                    <td>
+                        When set to <code>0</code>, the optimizer receives your inverter's configured
+                        <code>inverter.max_pv_charge_rate</code> (default: 5000 W) as the actual limit. This ensures
+                        optimization respects your hardware without requiring manual configuration. Set a value &gt; 0
+                        to override if your grid contract or inverter firmware limits feed-in to less than this default.
+                    </td>
                 </tr>
             </table>
 
@@ -1857,6 +1911,61 @@
                     <td><code>2000</code> (2 kWh per hour)</td>
                 </tr>
             </table>
+
+            <h3 id="data-quality"><i class="fas fa-shield-alt"></i> Data Quality & Gap Handling</h3>
+            <p><strong>EOS Connect automatically detects and recovers from incomplete sensor data</strong> using a forward-fill strategy. This section explains how it works and what you might see in logs.</p>
+
+            <h4>Why Data Gaps Occur</h4>
+            <p>Home Assistant sensor history can have gaps due to:</p>
+            <ul>
+                <li><strong>Database Issues:</strong> SQLite corruption, purges, or slow I/O (especially on Proxmox VirtualEnvironment with latency spikes)</li>
+                <li><strong>Sensor Unavailability:</strong> Temporary connectivity loss, sensor restart, or state transitions ("unavailable", "unknown")</li>
+                <li><strong>State Changes:</strong> Sensors returning empty strings or invalid values instead of numeric states</li>
+            </ul>
+
+            <h4>How EOS Connect Handles Gaps</h4>
+            <p>When building load profiles, EOS Connect:</p>
+            <ol>
+                <li><strong>Scans data</strong> for invalid entries (empty strings, "unavailable", "unknown", NaN)</li>
+                <li><strong>Fills gaps</strong> using the last known valid value (statistical LOCF — "Last-Observation-Carry-Forward" method)</li>
+                <li><strong>Logs the action</strong> as a WARNING, showing which datapoints were filled</li>
+                <li><strong>Guarantees complete arrays</strong> so optimization always receives 48 valid values (one per 30-minute interval)</li>
+            </ol>
+
+            <h4>Example: What You'll See in Logs</h4>
+            <pre style="background-color: rgb(54, 54, 54); padding: 12px; border-radius: 5px; overflow-x: auto; color: #ff9900;"><code>[LOAD-IF] DATA QUALITY: Filled 3 missing/invalid values in 'sensor.house_power' at indices [1, 2, 4].
+Last known value was used. This indicates data gaps or corrupted states in Home Assistant history.</code></pre>
+
+            <p><strong>What this means:</strong></p>
+            <ul>
+                <li>3 datapoints had invalid states (empty, unavailable, or NaN)</li>
+                <li>They were filled with the previous valid value</li>
+                <li>Optimization still received complete input</li>
+                <li>No optimization failures (422 errors) due to incomplete data</li>
+            </ul>
+
+            <h4>When to Take Action</h4>
+            <table style="margin-top: 15px;">
+                <tr>
+                    <th>Symptom</th>
+                    <th>Action</th>
+                </tr>
+                <tr>
+                    <td><strong>Occasional warnings</strong> (e.g., 1-2 per day)</td>
+                    <td>Normal in most setups. Forward-fill ensures stable optimization.</td>
+                </tr>
+                <tr>
+                    <td><strong>Frequent gaps</strong> (e.g., 10+ per hour)</td>
+                    <td>Check your HA database health: <code>Settings → System → Logs</code> or purge old history if database is corrupted.</td>
+                </tr>
+                <tr>
+                    <td><strong>All datapoints invalid</strong> (entire array is NaN/empty)</td>
+                    <td>Sensor is likely offline. Verify it's available: <code>Developer Tools → States → Search for your sensor</code>.</td>
+                </tr>
+            </table>
+
+            <h4>Bottom Line</h4>
+            <p style="font-style: italic; margin-top: 15px;">Data gaps are detected and healed automatically. EOS Connect's forward-fill strategy ensures optimization always has complete, valid input arrays—no manual intervention needed. If warnings appear frequently, consider investigating your Home Assistant database health.</p>
         </div>
 
 
@@ -1992,7 +2101,7 @@
                 </tr>
                 <tr>
                     <th>Description</th>
-                    <td>24-hour array of fixed prices for each hour of the day</td>
+                    <td>24-hour array of fixed prices for each hour of the day. Automatically expanded to 48 or 192 slots based on time frame setting (hourly or 15-min resolution)</td>
                 </tr>
                 <tr>
                     <th>Unit</th>
@@ -2000,8 +2109,9 @@
                 </tr>
                 <tr>
                     <th>Valid Values</th>
-                    <td>Comma-separated list of 24 values (no brackets)<br>
-                        Hour 0 (00:00-01:00), Hour 1 (01:00-02:00), ..., Hour 23 (23:00-24:00)
+                    <td><strong>Exactly 24 comma-separated numeric values</strong> (no brackets)<br>
+                        Hour 0 (00:00-01:00), Hour 1 (01:00-02:00), ..., Hour 23 (23:00-24:00)<br>
+                        <em>Note: The array is validated at save time to ensure exactly 24 values are provided</em>
                     </td>
                 </tr>
                 <tr>
@@ -2015,7 +2125,7 @@
                 </tr>
                 <tr>
                     <th>Notes</th>
-                    <td>Only use when <code>source: fixed_24h</code></td>
+                    <td>Only use when <code>source: fixed_24h</code>. Configuration validation will reject this field with an error if fewer or more than 24 values are provided</td>
                 </tr>
             </table>
 
@@ -3679,6 +3789,24 @@ Response:
                 <li><strong>Converted:</strong> 0.000120 EUR/Wh (÷ 1000)</li>
                 <li><strong>Display:</strong> Always shown in EUR/kWh in the web UI</li>
             </ul>
+
+            <h3>15-Minute to Hourly Conversion</h3>
+            <p>EVCC provides prices at 15-minute resolution, while EOS Connect optimizes on hourly slots. To ensure accurate pricing:</p>
+            <ul>
+                <li><strong>Timestamp-aware mapping:</strong> Each 15-minute price is placed into its correct hourly slot based on its timestamp, not just sequential grouping. This ensures prices are correctly aligned even when data starts at non-boundary times (e.g., 09:00).</li>
+                <li><strong>Averaging:</strong> Multiple 15-minute prices within the same hour are averaged into a single hourly slot.</li>
+                <li><strong>Gap filling:</strong> When EVCC data doesn't cover the entire 48-hour optimization window:
+                    <ul>
+                        <li><strong>History slots (before data starts):</strong> Backward-filled with the first available price</li>
+                        <li><strong>Same-day post-data slots:</strong> Forward-filled with the last known price</li>
+                        <li><strong>Next-day slots (when EPEX lacks tomorrow's data):</strong> Cyclic daily pattern—tomorrow's prices repeat today's pattern for realistic forecasting instead of artificial constant values</li>
+                    </ul>
+                </li>
+            </ul>
+
+            <div class="alert alert-info">
+                <strong><i class="fas fa-info-circle"></i> Better Forecasting with Cyclic Padding:</strong> When grid price providers don't have data for tomorrow, EOS Connect repeats today's daily price pattern for tomorrow's forecast. This provides realistic overnight rates and peak/off-peak cycles, resulting in better optimization decisions than forward-filling with a constant value.
+            </div>
 
             <h3>Automatic Updates</h3>
             <p>EVCC prices are fetched:</p>

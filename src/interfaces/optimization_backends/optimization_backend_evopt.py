@@ -30,10 +30,19 @@ class EVOptBackend:
     Accepts EOS-format requests, transforms to EVopt format, and returns EOS-format responses.
     """
 
-    def __init__(self, base_url, time_frame_base, time_zone):
+    def __init__(
+        self,
+        base_url,
+        time_frame_base,
+        time_zone,
+        max_grid_import_w=None,
+        max_grid_export_w=None,
+    ):
         self.base_url = base_url
         self.time_frame_base = time_frame_base
         self.time_zone = time_zone
+        self.max_grid_import_w = max_grid_import_w if max_grid_import_w else 10000
+        self.max_grid_export_w = max_grid_export_w if max_grid_export_w else 10000
         self.last_optimization_runtimes = [0] * 5
         self.last_optimization_runtime_number = 0
 
@@ -315,8 +324,8 @@ class EVOptBackend:
                 }
             )
 
-        p_max_imp = 10000
-        p_max_exp = 10000
+        p_max_imp = self.max_grid_import_w
+        p_max_exp = self.max_grid_export_w
 
         # Compute dt series based on time_frame_base
         # Each entry corresponds to the time frame in seconds

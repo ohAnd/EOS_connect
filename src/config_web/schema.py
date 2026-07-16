@@ -534,6 +534,34 @@ _ALL_FIELDS: list[FieldDef] = [
         display_group="Local Optimizer",
         labels=["restart_required"],
     ),
+    FieldDef(
+        key="eos.external_evopt_max_grid_import_w",
+        field_type="int",
+        default=10000,
+        section="eos",
+        level="expert",
+        description="Maximum grid import power for external EVopt (0 = no limit). "
+        "Use for grid connection limits.",
+        help_url="configuration.html#eos",
+        validation={"min": 0, "max": 100000},
+        depends_on={"eos.source": "evopt"},
+        display_group="External Optimizer",
+        labels=["restart_required"],
+    ),
+    FieldDef(
+        key="eos.external_evopt_max_grid_export_w",
+        field_type="int",
+        default=10000,
+        section="eos",
+        level="expert",
+        description="Maximum grid export power for external EVopt (0 = no limit). "
+        "Use for grid feed-in limits.",
+        help_url="configuration.html#eos",
+        validation={"min": 0, "max": 100000},
+        depends_on={"eos.source": "evopt"},
+        display_group="External Optimizer",
+        labels=["restart_required"],
+    ),
 
     # ===== PRICE =====
     FieldDef(
@@ -591,7 +619,7 @@ _ALL_FIELDS: list[FieldDef] = [
                 "23.52,23.52,23.52,23.52,28.17,28.17,34.28,34.28,34.28,34.28,34.28,28,23",
         section="price",
         level="standard",
-        description="24 comma-separated prices in ct/kWh per hour (fixed_24h source)",
+        description="Exactly 24 comma-separated prices in ct/kWh (one per hour, 00:00-23:00). Automatically expanded to 48 or 192 slots based on time frame setting.",
         labels=["restart_required"],
         help_url="configuration.html#price",
         depends_on={"price.source": ["fixed_24h"]},

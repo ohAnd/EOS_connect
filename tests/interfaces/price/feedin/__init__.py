@@ -1,0 +1,1 @@
+"""Feed-in pricing tests."""

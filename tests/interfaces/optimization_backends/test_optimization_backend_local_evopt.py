@@ -487,6 +487,68 @@ class TestGridLimits:
                 f"grid_import[{i}]={wh:.2f} Wh exceeds hard limit {max_wh_per_slot:.0f} Wh"
             )
 
+    def test_tight_m_includes_grid_flow_energy(self, berlin_tz):
+        """
+        Test that Big-M constant includes grid flow energy to prevent spurious Infeasible.
+        
+        When grid limits are large (e.g., 20000 W) and time slots are long (15-min),
+        the grid flow energy per slot can exceed the Big-M constant if not explicitly
+        included, causing the solver to report Infeasible on feasible problems.
+
+        Scenario:
+        - 15-min intervals (900s)
+        - Battery: 28000 Wh capacity, 20000 W charge power
+        - Grid limit: 20000 W import (5000 Wh per 15-min slot)
+        - Without grid flow in tight_M: spurious Infeasible
+        - With grid flow in tight_M: Optimal
+        """
+        backend = LocalEVOptBackend(
+            time_frame_base=900,  # 15-min slots
+            time_zone=berlin_tz,
+            max_grid_import_w=20000,  # High grid limit that stresses tight_M sizing
+            max_grid_export_w=10000,
+        )
+
+        # Build a realistic 15-min EOS request with large battery and grid limit
+        eos_req = {
+            "ems": {
+                "pv_prognose_wh": [3000.0] * 192,  # Moderate PV
+                "strompreis_euro_pro_wh": [0.0003] * 192,
+                "einspeiseverguetung_euro_pro_wh": [0.00008] * 192,
+                "gesamtlast": [2000.0] * 192,  # Steady 2 kW load
+                "preis_euro_pro_wh_akku": 0.0002,
+            },
+            "pv_akku": {
+                "device_id": "battery1",
+                "capacity_wh": 28000,  # Large battery (stresses Big-M sizing)
+                "charging_efficiency": 0.95,
+                "discharging_efficiency": 0.95,
+                "max_charge_power_w": 20000,  # High charge power (large energy per slot)
+                "initial_soc_percentage": 50,
+                "min_soc_percentage": 5,
+                "max_soc_percentage": 100,
+            },
+        }
+
+        dt_mock = _midnight_mock()
+        with patch(
+            "src.interfaces.optimization_backends.optimization_backend_evopt.datetime", dt_mock
+        ):
+            result, avg_runtime = backend.optimize(eos_req, timeout=120)
+
+        # Should NOT return spurious Infeasible due to undersized tight_M
+        assert result.get("status") != "Infeasible", (
+            "Solver should find feasible solution when tight_M includes grid flow energy"
+        )
+
+        # Should return Optimal with valid control arrays
+        assert result.get("status") == "Optimal" or "ac_charge" in result, (
+            f"Expected valid optimization result, got status: {result.get('status')}"
+        )
+
+        # Verify average runtime was tracked
+        assert avg_runtime is not None
+
 
 # ---------------------------------------------------------------------------
 # 8. Optimizer settings (threads, time_limit)

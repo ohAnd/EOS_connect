@@ -32,6 +32,8 @@ EOS Connect fetches real-time and forecast data (solar, prices), runs the integr
 - **Dynamic Feed-In Pricing:** Optimize battery discharge for maximum profit when export prices are favorable. Switch feed-in sources live without restart via hot reload. Supports fixed, Elpris DK, EPEX Spot, and EVCC. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#price)
 - **Smart Price Prediction:** Learned grid fees and taxes for accurate planning even when future prices aren't yet available. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#energyforecast)
 - **Dynamic PV Override:** Intelligent discharge prevention during high solar production or intermittent clouds. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#dyn-override)
+- **Smart Grid Limits (EVopt):** Grid import/export limits automatically default to your inverter capabilities when not explicitly configured, ensuring optimization respects your hardware. [Learn more →](https://ohAnd.github.io/EOS_connect/advanced/index.html#grid-limits)
+- **Robust Data Quality Handling:** Automatic detection and recovery from incomplete Home Assistant sensor data gaps. Forward-fill strategy ensures optimization always receives complete, valid input arrays. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#data-quality)
 
 ---
 
@@ -91,21 +93,26 @@ Supported data sources and integrations:
   <sub><i>Figure: EOS Connect dashboard</i></sub>
 </div>
 
-**Note for Proxmox / VM Users:**
-If the add-on crashes with a Segmentation Fault on startup, your VM might be using a generic CPU type.
-- Go to your VM Settings > Hardware > Processor.
-- Change Type from `kvm64` (default) to `host`.
-- Restart the VM.
+⚠️ **Important: Proxmox / KVM64 CPU Limitation**
 
-This allows the add-on to correctly see and use your physical CPU's instructions.
+If you experience issues with EOS Connect on **Proxmox** with the default CPU type, your VM is likely using `kvm64` (a generic CPU emulation). This can cause two types of failures:
 
-**Note for Proxmox / local_evopt Users:**
-If local_evopt fails with "CBC file not found" in Proxmox, force a full container rebuild:
-```bash
-docker rmi ghcr.io/ohand/ha-addon-eos_connect_develop_amd64:VERSION
-# Then restart the addon from Home Assistant UI to pull and rebuild
-```
-Cached images may use system Python instead of the venv.
+1. **Segmentation Fault on startup** — add-on crashes immediately
+2. **CBC solver error** (`local_evopt` fails with "file not found") — optimizer cannot run
+
+Both issues are caused by `kvm64` not emulating advanced CPU instructions (AVX, SSE4.2, etc.) that the CBC solver binary requires.
+
+**✅ Solution:**
+
+1. **Stop the HA VM** in Proxmox
+2. **VM Settings → Hardware → Processor**
+3. **Change CPU Type** from `kvm64` → `host`
+   - This passes through your physical CPU directly instead of generic emulation
+4. **Restart the VM**
+
+After this change, EOS Connect (including `local_evopt`) will run normally and with full performance.
+
+**Note:** Changing to `host` CPU type is safe and recommended for all Proxmox VMs running containerized applications that require native CPU features.
 
 **Note on SSL Certificate Verification:**
 By default, EOS Connect validates SSL certificates when connecting to Home Assistant or OpenHAB. If you use a setup with **self-signed or private CA certificates**, you can disable verification in Settings → Data Source → **SSL Ignore** (expert level, requires restart). Only enable this in **trusted private networks** where you fully control the network path. Currently, EOS Connect does not support supplying custom root CA certificates — this feature is planned for future releases. For production setups, we recommend obtaining a valid certificate through Let's Encrypt (free) or your organization's certificate authority.

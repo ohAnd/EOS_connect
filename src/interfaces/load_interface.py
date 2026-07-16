@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from urllib.parse import quote
 import time
+import math
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import random
 import requests
@@ -391,6 +392,72 @@ class LoadInterface:
             )
             return []
 
+    def __fill_missing_values_in_data(self, data, debug_sensor=None):
+        """
+        Forward-fill missing or invalid sensor values in historical data.
+
+        This method scans through historical sensor data and replaces invalid values
+        (empty strings, None, NaN) with the last known valid value (forward-fill/LOCF).
+        This ensures that energy calculation always has valid data and prevents 422 errors
+        when sending incomplete arrays to EOS.
+
+        Args:
+            data (dict): {"data": [ {"state": str|float, "last_updated": ISOtimestamp}, ... ]}
+            debug_sensor (str|None): Sensor name for logging
+
+        Returns:
+            dict: Modified data dict with filled values
+        """
+        if data is None or "data" not in data or len(data["data"]) == 0:
+            return data
+
+        filled_indices = []
+        last_valid_state = None
+
+        for i in range(len(data["data"])):
+            try:
+                state = data["data"][i].get("state")
+                # Check if state is valid/non-empty
+                if state is None or state == "" or state == "unavailable" or state == "unknown":
+                    # Invalid state - try to fill with last known value
+                    if last_valid_state is not None:
+                        data["data"][i]["state"] = last_valid_state
+                        filled_indices.append(i)
+                    continue
+
+                # Try to convert to float to verify it's numeric
+                numeric_val = float(state)
+
+                # Check for NaN
+                if math.isnan(numeric_val):
+                    if last_valid_state is not None:
+                        data["data"][i]["state"] = last_valid_state
+                        filled_indices.append(i)
+                    continue
+
+                # Valid numeric value - save as last known
+                last_valid_state = state
+            except (ValueError, TypeError, KeyError):
+                # Cannot convert to float - try to fill
+                if last_valid_state is not None:
+                    try:
+                        data["data"][i]["state"] = last_valid_state
+                        filled_indices.append(i)
+                    except (TypeError, KeyError):
+                        pass
+
+        # Log debug if any values were filled
+        if filled_indices:
+            logger.debug(
+                "[LOAD-IF] DATA QUALITY: Filled %d missing/invalid values in '%s' at indices %s. "
+                "Last known value was used. This indicates data gaps or corrupted states in Home Assistant history.",
+                len(filled_indices),
+                debug_sensor if debug_sensor else "unknown sensor",
+                filled_indices[:10] + ["..."] if len(filled_indices) > 10 else filled_indices
+            )
+
+        return data
+
     def __process_energy_data(self, data, debug_sensor=None):
         """
         Calculate the average power (in W) from a sequence of historical sensor samples.
@@ -424,6 +491,9 @@ class LoadInterface:
         Returns:
             float: average power in watts (W), rounded to 4 decimals. Returns 0.0 if no valid data.
         """
+        # Forward-fill missing/invalid values before processing
+        data = self.__fill_missing_values_in_data(data, debug_sensor)
+
         total_energy = 0.0
         total_duration = 0.0
         current_state = 0.0
@@ -447,32 +517,75 @@ class LoadInterface:
                 last_state = float(data["data"][i + 1]["state"])
                 current_time = datetime.fromisoformat(data["data"][i]["last_updated"])
                 next_time = datetime.fromisoformat(data["data"][i + 1]["last_updated"])
-            except (ValueError, KeyError) as e:
+            except (ValueError, KeyError, TypeError) as e:
                 debug_url = None
+                error_context = None
+                problematic_state = None
+                problematic_time = None
+
+                # Determine which datapoint caused the error
                 if self.src == "homeassistant":
-                    current_time = datetime.fromisoformat(
-                        data["data"][i]["last_updated"]
+                    try:
+                        float(data["data"][i]["state"])
+                        float(data["data"][i + 1]["state"])
+                        # If both conversions work, error must be in datetime parsing
+                        error_context = (
+                            f"[Index {i}] '{data['data'][i].get('state', 'N/A')}' @ "
+                            f"{data['data'][i].get('last_updated', 'N/A')}, "
+                            f"[Index {i+1}] '{data['data'][i+1].get('state', 'N/A')}' @ "
+                            f"{data['data'][i+1].get('last_updated', 'N/A')} (datetime parse error)"
+                        )
+                        problematic_time = None
+                    except (ValueError, KeyError):
+                        # Error is in state conversion - find which one
+                        try:
+                            float(data["data"][i]["state"])
+                            # data[i] is valid, so error is in data[i+1]
+                            problematic_state = data["data"][i + 1].get("state", "N/A")
+                            problematic_time = data["data"][i + 1].get("last_updated", "N/A")
+                            error_context = (
+                                f"[Index {i}] Valid: '{data['data'][i]['state']}' @ "
+                                f"{data['data'][i]['last_updated'].split('.')[0] if '.' in str(data['data'][i]['last_updated']) else data['data'][i]['last_updated']}, "
+                                f"[Index {i+1}] PROBLEMATIC: '{problematic_state}' @ {problematic_time}"
+                            )
+                        except (ValueError, KeyError):
+                            # Error is in data[i]
+                            problematic_state = data["data"][i].get("state", "N/A")
+                            problematic_time = data["data"][i].get("last_updated", "N/A")
+                            error_context = (
+                                f"[Index {i}] PROBLEMATIC: '{problematic_state}' @ {problematic_time}"
+                            )
+
+                    # Generate debug URL only if we have a valid timestamp
+                    if problematic_time and isinstance(problematic_time, str):
+                        try:
+                            parsed_time = datetime.fromisoformat(problematic_time)
+                            debug_url = (
+                                "(check: "
+                                + self.url
+                                + "/history?entity_id="
+                                + quote(debug_sensor)
+                                + "&start_date="
+                                + quote((parsed_time - timedelta(hours=2)).isoformat())
+                                + "&end_date="
+                                + quote((parsed_time + timedelta(hours=2)).isoformat())
+                                + ")"
+                            )
+                        except (ValueError, TypeError):
+                            debug_url = "(invalid timestamp format in data)"
+                else:
+                    # For non-HA sources, show both values for clarity
+                    error_context = (
+                        f"[Index {i}] '{data['data'][i].get('state', 'N/A')}' vs "
+                        f"[Index {i+1}] '{data['data'][i + 1].get('state', 'N/A')}'"
                     )
-                    debug_url = (
-                        "(check: "
-                        + self.url
-                        + "/history?entity_id="
-                        + quote(debug_sensor)
-                        + "&start_date="
-                        + quote((current_time - timedelta(hours=2)).isoformat())
-                        + "&end_date="
-                        + quote((current_time + timedelta(hours=2)).isoformat())
-                        + ")"
-                    )
+
                 logger.info(
-                    "[LOAD-IF] Skipping invalid sensor data for '%s' at %s: state '%s' cannot be"
-                    + " processed (%s). "
+                    "[LOAD-IF] Skipping invalid sensor data for '%s': %s "
+                    "cannot be processed (%s). "
                     "This may indicate missing or corrupted data in the database. %s",
                     debug_sensor if debug_sensor is not None else "unknown sensor",
-                    datetime.fromisoformat(data["data"][i]["last_updated"]).strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    ),
-                    data["data"][i]["state"],
+                    error_context if error_context else f"state '{problematic_state}'",
                     str(e),
                     debug_url if debug_url is not None else "",
                 )

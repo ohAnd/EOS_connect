@@ -286,8 +286,17 @@ class LocalEVOptBackend(EVOptBackend):
         # Combine both series and find the maximum value across all elements
         all_values = (ts_data.get("gt") or [0.0]) + (ts_data.get("ft") or [0.0])
         _max_energy = max(all_values) if all_values else 0.0
+
+        # Include grid flow energy in tight_M calculation to prevent spurious Infeasible
+        # When grid limits are large (e.g., 20kW), the grid flow energy can exceed
+        # the Big-M constant if not explicitly included, causing unsatisfiable constraints
+        _max_grid_flow = max(
+            (self.max_grid_import_w or 0) * _max_dt / 3600,
+            (self.max_grid_export_w or 0) * _max_dt / 3600,
+        )
+
         # 2× safety margin so M is never inadvertently binding
-        tight_M = max(_max_bat_flow + _max_energy, 100.0) * 2
+        tight_M = max(_max_bat_flow + _max_energy + _max_grid_flow, 100.0) * 2
         _n_slots = len(ts_data.get("dt") or [])
         logger.debug(
             "[OPT-LocalEVopt] Building MILP: T=%d slots, dt=%ds, tight_M=%.0f "
