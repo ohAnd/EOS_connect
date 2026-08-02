@@ -159,6 +159,64 @@ class TestMergedConfigBuilder:
         assert len(merged["pv_forecast"]) == 1
         assert merged["pv_forecast"][0]["name"] == "Roof"
 
+    def test_pv_forecast_from_indexed_keys(self, store, schema):
+        """Indexed pv_forecast keys should rebuild a list entry."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        store.set("pv_forecast.0.name", "Roof")
+        store.set("pv_forecast.0.lat", 48.0)
+        store.set("pv_forecast.0.lon", 9.0)
+        store.set("pv_forecast.0.azimuth", 90)
+        store.set("pv_forecast.0.tilt", 30)
+        store.set("pv_forecast.0.power", 4600)
+        store.set("pv_forecast.0.powerInverter", 5000)
+        store.set("pv_forecast.0.inverterEfficiency", 0.9)
+        store.set("pv_forecast.0.horizon", "10")
+
+        merged = build_merged_config(config, store, schema)
+        assert len(merged["pv_forecast"]) == 1
+        assert merged["pv_forecast"][0]["name"] == "Roof"
+        assert merged["pv_forecast"][0]["lat"] == 48.0
+
+    def test_pv_forecast_from_unindexed_template_keys_synthesizes_entry(self, store, schema):
+        """Unindexed pv_forecast template keys should synthesize one installation entry."""
+        config = _sample_config()
+        config["pv_forecast"] = []
+
+        store.set("pv_forecast.name", "TemplateRoof")
+        store.set("pv_forecast.lat", 48.0)
+        store.set("pv_forecast.lon", 9.0)
+        store.set("pv_forecast.azimuth", 90)
+        store.set("pv_forecast.tilt", 30)
+        store.set("pv_forecast.power", 4600)
+
+        merged = build_merged_config(config, store, schema)
+        assert len(merged["pv_forecast"]) == 1
+        assert merged["pv_forecast"][0]["name"] == "TemplateRoof"
+        assert merged["pv_forecast"][0]["powerInverter"] == 5000
+        assert merged["pv_forecast"][0]["inverterEfficiency"] == 0.9
+
+    def test_pv_forecast_indexed_takes_precedence_over_template_keys(self, store, schema):
+        """Indexed pv_forecast keys should win over template keys when both exist."""
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+
+        store.set("pv_forecast.name", "TemplateRoof")
+        store.set("pv_forecast.0.name", "IndexedRoof")
+        store.set("pv_forecast.0.lat", 48.0)
+        store.set("pv_forecast.0.lon", 9.0)
+        store.set("pv_forecast.0.azimuth", 90)
+        store.set("pv_forecast.0.tilt", 30)
+        store.set("pv_forecast.0.power", 4600)
+        store.set("pv_forecast.0.powerInverter", 5000)
+        store.set("pv_forecast.0.inverterEfficiency", 0.9)
+        store.set("pv_forecast.0.horizon", "10")
+
+        merged = build_merged_config(config, store, schema)
+        assert len(merged["pv_forecast"]) == 1
+        assert merged["pv_forecast"][0]["name"] == "IndexedRoof"
+
     def test_data_source_inherits_to_load(self, store, schema):
         """If load.source is 'default', data_source should populate it."""
         config = _sample_config()

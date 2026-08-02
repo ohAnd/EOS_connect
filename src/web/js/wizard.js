@@ -812,7 +812,7 @@ class SetupWizard {
 
         try {
             // Build payload — only getting_started fields that differ from defaults
-            const payload = {};
+            let payload = {};
             for (const f of this.schema) {
                 if (f.level !== "getting_started") {
                     continue;
@@ -821,6 +821,21 @@ class SetupWizard {
                 if (val !== undefined) {
                     payload[f.key] = val;
                 }
+            }
+
+            const pvSource = payload["pv_forecast_source.source"] ?? this.values["pv_forecast_source.source"];
+            const locationBasedSources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"];
+            if (locationBasedSources.includes(pvSource)) {
+                const transformed = {};
+                for (const [key, value] of Object.entries(payload)) {
+                    const templateMatch = key.match(/^pv_forecast\.([^\.]+)$/);
+                    if (templateMatch) {
+                        transformed[`pv_forecast.0.${templateMatch[1]}`] = value;
+                    } else {
+                        transformed[key] = value;
+                    }
+                }
+                payload = transformed;
             }
 
             // Save config

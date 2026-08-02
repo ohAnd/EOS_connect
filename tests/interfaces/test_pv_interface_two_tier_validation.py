@@ -264,6 +264,28 @@ class TestConfigurationStateTracking:
         else:
             assert pv.configuration_valid is False
 
+    def test_startup_location_based_source_with_one_installation_is_valid(self):
+        """A location-based source with one complete installation should start valid."""
+        config_source = {"source": "akkudoktor"}
+        config = [{
+            "name": "Roof",
+            "lat": 48.0,
+            "lon": 9.0,
+            "azimuth": 90,
+            "tilt": 30,
+            "power": 4600,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.9,
+            "horizon": "10",
+        }]
+
+        pv = PvInterface(
+            config_source, config, time_frame_base, {}, timezone="UTC"
+        )
+
+        assert pv.configuration_state == "valid"
+        assert pv.configuration_valid is True
+
 
 # ============================================================================
 # TEST SUITE 3: get_summarized_pv_forecast() Guard for Incomplete Config
