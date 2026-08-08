@@ -1,39 +1,41 @@
-# pylint: disable=protected-access
+# pylint: disable=protected-access,redefined-outer-name
 """
 Unit tests for PvInterface two-tier validation system (Issue #259).
 
 Tests for graceful degradation at startup (lenient mode) vs strict validation
 at runtime/hot-reload. Ensures addon doesn't crash when config is incomplete,
 allowing users to access web UI to fix configuration.
+
+Note: redefined-outer-name is disabled because pytest fixtures with the same
+names are a standard pattern for parameterized and scoped test fixtures.
 """
+
+import logging
 
 import pytest
 from src.interfaces.pv_interface import PvInterface
 
-time_frame_base = 3600
+TIME_FRAME_BASE = 3600
 
 
 @pytest.fixture(autouse=True)
 def patch_thread(monkeypatch):
-    """
-    Fixture to patch threading.Thread to avoid starting real threads during tests.
-    """
-
+    """Patch threading.Thread to avoid starting real threads during tests."""
     class DummyThread:
         """A dummy thread class used for testing purposes."""
 
         def __init__(self, *args, **kwargs):
-            pass
+            """Initialize a dummy thread (no-op)."""
 
         def start(self):
-            pass
+            """Start the dummy thread (no-op)."""
 
         def is_alive(self):
             """Return False so shutdown() doesn't wait for thread."""
             return False
 
         def join(self):
-            pass
+            """Join the dummy thread (no-op)."""
 
     monkeypatch.setattr("threading.Thread", DummyThread)
 
@@ -120,7 +122,7 @@ class TestStartupValidationGracefulDegradation:
 
         # Should not raise SystemExit
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         assert pv.configuration_state == "incomplete"
@@ -133,7 +135,7 @@ class TestStartupValidationGracefulDegradation:
         config_source, config = incomplete_victron_no_api_key
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         assert pv.configuration_state == "incomplete"
@@ -146,7 +148,7 @@ class TestStartupValidationGracefulDegradation:
         config_source, config = incomplete_solcast_config
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         assert pv.configuration_state == "incomplete"
@@ -159,7 +161,7 @@ class TestStartupValidationGracefulDegradation:
         config_source, config = incomplete_solcast_no_resource_id
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         assert pv.configuration_state == "incomplete"
@@ -174,7 +176,7 @@ class TestStartupValidationGracefulDegradation:
         config_source, config = empty_config
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         # Empty config -> incomplete state (not yet configured)
@@ -191,7 +193,7 @@ class TestStartupValidationGracefulDegradation:
         config = {"name": "System", "lat": 51.5, "lon": 10.0}  # Dict, not list!
 
         # Should NOT crash with sys.exit, but should start in degraded mode
-        pv = PvInterface(config_source, config, time_frame_base, {}, timezone="UTC")
+        pv = PvInterface(config_source, config, TIME_FRAME_BASE, {}, timezone="UTC")
 
         # Structural errors result in incomplete/degraded mode
         assert pv.configuration_state == "incomplete"
@@ -202,7 +204,7 @@ class TestStartupValidationGracefulDegradation:
         config_source, config = valid_victron_config
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         assert pv.configuration_state == "valid"
@@ -223,7 +225,7 @@ class TestConfigurationStateTracking:
         config = []
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         # After initialization, state should be set (either incomplete or valid)
@@ -236,7 +238,7 @@ class TestConfigurationStateTracking:
         config_source, config = incomplete_victron_config
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         assert pv.configuration_state == "incomplete"
@@ -246,7 +248,7 @@ class TestConfigurationStateTracking:
         config_source, config = valid_victron_config
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         assert pv.configuration_state == "valid"
@@ -256,7 +258,7 @@ class TestConfigurationStateTracking:
         config_source, config = valid_victron_config
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         if pv.configuration_state == "valid":
@@ -264,10 +266,32 @@ class TestConfigurationStateTracking:
         else:
             assert pv.configuration_valid is False
 
+    def test_startup_location_based_source_with_one_installation_is_valid(self):
+        """A location-based source with one complete installation should start valid."""
+        config_source = {"source": "akkudoktor"}
+        config = [{
+            "name": "Roof",
+            "lat": 48.0,
+            "lon": 9.0,
+            "azimuth": 90,
+            "tilt": 30,
+            "power": 4600,
+            "powerInverter": 5000,
+            "inverterEfficiency": 0.9,
+            "horizon": "10",
+        }]
+
+        pv = PvInterface(
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
+        )
+
+        assert pv.configuration_state == "valid"
+        assert pv.configuration_valid is True
+
 
 # ============================================================================
 # TEST SUITE 3: get_summarized_pv_forecast() Guard for Incomplete Config
-# ============================================================================
+# ============================================================================  # pylint: disable=line-too-long
 
 
 class TestGetSummarizedPvForecastGuard:
@@ -283,7 +307,7 @@ class TestGetSummarizedPvForecastGuard:
         config_source, config = incomplete_victron_config
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         # Should return zeros, not crash
@@ -292,7 +316,7 @@ class TestGetSummarizedPvForecastGuard:
         # Should be array of zeros (48 elements)
         assert isinstance(forecast, list)
         assert len(forecast) == 48
-        assert all(v == 0.0 for v in forecast)
+        assert all(not v for v in forecast)
 
     def test_get_forecast_with_incomplete_config_does_not_crash(
         self, incomplete_solcast_config
@@ -301,14 +325,14 @@ class TestGetSummarizedPvForecastGuard:
         config_source, config = incomplete_solcast_config
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         # Should not raise any exception
         try:
             forecast = pv.get_summarized_pv_forecast()
             assert isinstance(forecast, list)
-        except Exception as exc:
+        except ValueError as exc:
             pytest.fail(f"get_summarized_pv_forecast() should not crash: {exc}")
 
     def test_get_forecast_logs_configuration_state_when_incomplete(
@@ -320,11 +344,11 @@ class TestGetSummarizedPvForecastGuard:
         config_source, config = incomplete_victron_config
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         with caplog.at_level("DEBUG"):
-            forecast = pv.get_summarized_pv_forecast()
+            _ = pv.get_summarized_pv_forecast()
 
         # Should log skipping forecast retrieval
         assert any("Skipping PV forecast retrieval" in record.message for record in caplog.records)
@@ -350,7 +374,7 @@ class TestHotReloadValidationStrict:
 
         # Start with valid config
         pv = PvInterface(
-            config_source_valid, config_valid, time_frame_base, {}, timezone="UTC"
+            config_source_valid, config_valid, TIME_FRAME_BASE, {}, timezone="UTC"
         )
         assert pv.configuration_state == "valid"
         assert pv.configuration_valid is True
@@ -380,7 +404,7 @@ class TestHotReloadValidationStrict:
 
         # Start with incomplete config
         pv = PvInterface(
-            config_source_incomplete, config_incomplete, time_frame_base, {}, timezone="UTC"
+            config_source_incomplete, config_incomplete, TIME_FRAME_BASE, {}, timezone="UTC"
         )
         assert pv.configuration_state == "incomplete"
         assert pv.configuration_valid is False
@@ -406,7 +430,7 @@ class TestHotReloadValidationStrict:
         config_source, config = valid_victron_config
 
         pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         # Access the internal old_state dict during reload by catching the exception
@@ -443,7 +467,7 @@ class TestValidationModeParameter:
         config_copy = [c.copy() for c in config]
 
         pv = PvInterface(
-            {"source": "akkudoktor"}, [], time_frame_base, {}, timezone="UTC"
+            {"source": "akkudoktor"}, [], TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         # Manually set config and call check_config with strict=True
@@ -465,7 +489,7 @@ class TestValidationModeParameter:
         config_copy = [c.copy() for c in config]
 
         pv = PvInterface(
-            {"source": "akkudoktor"}, [], time_frame_base, {}, timezone="UTC"
+            {"source": "akkudoktor"}, [], TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         # Manually set config and call check_config with strict=False
@@ -493,11 +517,10 @@ class TestLoggingBehavior:
         """
         config_source, config = incomplete_victron_config
 
-        import logging
         caplog.set_level(logging.WARNING)
 
-        pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+        _ = PvInterface(
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         # Should have warnings in logs
@@ -513,11 +536,10 @@ class TestLoggingBehavior:
         """
         config_source, config = incomplete_victron_config
 
-        import logging
         caplog.set_level(logging.WARNING)
 
-        pv = PvInterface(
-            config_source, config, time_frame_base, {}, timezone="UTC"
+        _ = PvInterface(
+            config_source, config, TIME_FRAME_BASE, {}, timezone="UTC"
         )
 
         # Should mention web UI or Settings

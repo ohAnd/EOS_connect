@@ -142,15 +142,6 @@ def update_config():
     if errors:
         return jsonify({"errors": errors}), 422
 
-    # Check cross-field dependencies (these don't block, but are returned as unmet_dependencies)
-    unmet_deps = _check_dependencies(data)
-    if unmet_deps:
-        return jsonify({
-            "success": False,
-            "unmet_dependencies": unmet_deps,
-            "message": "Cannot save: required dependencies not configured"
-        }), 200
-
     # Check for timeseries configuration changes and run pre-flight validation if needed
     preflight_errors = _check_timeseries_preflight(data)
     if preflight_errors:
@@ -181,6 +172,16 @@ def update_config():
 
     # Rebuild merged config so get_config() reflects changes
     _module.rebuild_config()
+
+    # Check cross-field dependencies after the new config has been merged.
+    # This ensures array updates like pv_forecast.0.* are visible to dependency logic.
+    unmet_deps = _check_dependencies(data)
+    if unmet_deps:
+        return jsonify({
+            "success": False,
+            "unmet_dependencies": unmet_deps,
+            "message": "Cannot save: required dependencies not configured"
+        }), 200
 
     # Persist restart-required fields for banner across reloads
     if restart_required:

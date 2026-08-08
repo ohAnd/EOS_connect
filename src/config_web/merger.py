@@ -8,6 +8,7 @@ from the SQLite store. Resolves the unified ``data_source`` into per-section
 """
 
 import logging
+import re
 from typing import Any
 
 from .store import ConfigStore
@@ -159,6 +160,25 @@ def _build_pv_forecast(
                     entry[field_name] = field_def.default
             result_list.append(entry)
         return result_list
+
+    # Try format 1.5: unindexed template keys like pv_forecast.name, pv_forecast.lat
+    template_entry = {}
+    for key, value in all_settings.items():
+        if key.startswith("pv_forecast.") and not re.match(r"^pv_forecast\.\d+\.", key):
+            parts = key.split(".")
+            if len(parts) == 2:
+                template_entry[parts[1]] = value
+
+    if template_entry:
+        logger.warning(
+            "[Merger] Found unindexed pv_forecast template keys in the store; synthesizing one installation"
+        )
+        entry = template_entry.copy()
+        for field_def in schema.get_section("pv_forecast"):
+            field_name = field_def.key.split(".")[-1]
+            if field_name not in entry:
+                entry[field_name] = field_def.default
+        return [entry]
 
     # Try format 2: single key (from migration) — fallback
     if "pv_forecast" in all_settings:

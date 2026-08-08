@@ -519,6 +519,7 @@ def fresh_client(tmp_path):
     store.open()
 
     config = _sample_config()
+    config["pv_forecast"] = []
     module = _FakeModule(config, store, schema)
     init_api(store, schema, module)
     app.register_blueprint(config_bp)
@@ -548,6 +549,83 @@ class TestWizardAPI:
         data = resp.get_json()
         assert data["pending"] is False
         assert data["migrated"] is True
+
+    def test_save_location_based_pv_installation_succeeds(self, fresh_client):
+        """Saving a location-based PV source with an indexed pv_forecast entry should succeed."""
+        payload = {
+            "pv_forecast_source.source": "openmeteo",
+            "pv_forecast.0.name": "Roof",
+            "pv_forecast.0.lat": 48.0,
+            "pv_forecast.0.lon": 9.0,
+            "pv_forecast.0.azimuth": 90,
+            "pv_forecast.0.tilt": 30,
+            "pv_forecast.0.power": 4600,
+            "pv_forecast.0.powerInverter": 5000,
+            "pv_forecast.0.inverterEfficiency": 0.9,
+            "pv_forecast.0.horizon": "10",
+        }
+
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+        assert "pv_forecast.0.name" in data["updated"]
+
+        resp2 = fresh_client.get("/api/config/")
+        merged = resp2.get_json()
+        assert isinstance(merged["pv_forecast"], list)
+        assert len(merged["pv_forecast"]) == 1
+        assert merged["pv_forecast"][0]["name"] == "Roof"
+
+    def test_save_location_based_source_without_installations_blocks(self, fresh_client):
+        """Saving a location-based source without PV installations should return unmet dependencies."""
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"pv_forecast_source.source": "openmeteo"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is False
+        assert data["unmet_dependencies"]
+        assert any(dep["field"] == "pv_forecast" for dep in data["unmet_dependencies"])
+
+    def test_save_pv_installation_after_location_source_succeeds(self, fresh_client):
+        """After saving a location-based source, adding a pv_forecast entry later should succeed."""
+        resp1 = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"pv_forecast_source.source": "openmeteo"}),
+            content_type="application/json",
+        )
+        assert resp1.status_code == 200
+        assert resp1.get_json()["success"] is False
+
+        resp2 = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({
+                "pv_forecast.0.name": "Roof",
+                "pv_forecast.0.lat": 48.0,
+                "pv_forecast.0.lon": 9.0,
+                "pv_forecast.0.azimuth": 90,
+                "pv_forecast.0.tilt": 30,
+                "pv_forecast.0.power": 4600,
+                "pv_forecast.0.powerInverter": 5000,
+                "pv_forecast.0.inverterEfficiency": 0.9,
+                "pv_forecast.0.horizon": "10",
+            }),
+            content_type="application/json",
+        )
+        assert resp2.status_code == 200
+        assert resp2.get_json()["success"] is True
+
+        resp3 = fresh_client.get("/api/config/")
+        merged = resp3.get_json()
+        assert len(merged["pv_forecast"]) == 1
+        assert merged["pv_forecast"][0]["name"] == "Roof"
 
     def test_wizard_complete_marks_done(self, fresh_client):
         """POST /api/config/wizard-complete should mark wizard as completed."""

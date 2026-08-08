@@ -462,6 +462,14 @@ class EOSBackend:
                 "[OPT-EOS] 'packaging' module not found. Cannot compare EOS versions."
             )
             return False
+        except version.InvalidVersion:
+            logger.warning(
+                "[OPT-EOS] Invalid EOS version string '%s'. "
+                "Cannot compare versions. Assuming version < %s",
+                self.eos_version,
+                version_string,
+            )
+            return False
 
     def create_dataframe(self, profile):
         """
