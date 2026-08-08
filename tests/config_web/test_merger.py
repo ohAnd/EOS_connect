@@ -1,5 +1,9 @@
+# pylint: disable=redefined-outer-name
 """
 Unit tests for the merged config builder.
+
+Note: redefined-outer-name is disabled because pytest fixtures with the same
+names are a standard pattern for parameterized and scoped test fixtures.
 """
 
 import pytest
@@ -294,8 +298,8 @@ class TestMergedConfigBuilder:
         merged = build_merged_config(config, store, schema)
 
         # Verify injected empty values
-        assert merged["inverter"]["url"] == ""
-        assert merged["inverter"]["token"] == ""
+        assert not merged["inverter"]["url"]
+        assert not merged["inverter"]["token"]
 
     def test_ssl_ignore_propagates_to_load(self, store, schema):
         """ssl_ignore from data_source should propagate to load section."""
@@ -368,7 +372,10 @@ class TestMergedConfigBuilder:
         merged = build_merged_config(config, store, schema)
 
         # Verify URL and token are constructed from central HA
-        assert merged["price"]["data_url"] == "http://homeassistant.local:8123/api/states/sensor.electricity_prices"
+        expected_url = (
+            "http://homeassistant.local:8123/api/states/sensor.electricity_prices"
+        )
+        assert merged["price"]["data_url"] == expected_url
         assert merged["price"]["data_token"] == "ha_token_123"
 
     def test_central_ha_pv_timeseries(self, store, schema):
@@ -387,7 +394,10 @@ class TestMergedConfigBuilder:
         merged = build_merged_config(config, store, schema)
 
         # Verify URL and token are constructed from central HA
-        assert merged["pv_forecast_source"]["data_url"] == "http://homeassistant.local:8123/api/states/sensor.pv_forecast_data"
+        expected_pv_url = (
+            "http://homeassistant.local:8123/api/states/sensor.pv_forecast_data"
+        )
+        assert merged["pv_forecast_source"]["data_url"] == expected_pv_url
         assert merged["pv_forecast_source"]["data_token"] == "ha_token_456"
 
     def test_manual_url_used_when_central_ha_disabled(self, store, schema):
