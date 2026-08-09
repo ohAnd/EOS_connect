@@ -114,6 +114,10 @@ After this change, EOS Connect (including `local_evopt`) will run normally and w
 
 **Note:** Changing to `host` CPU type is safe and recommended for all Proxmox VMs running containerized applications that require native CPU features.
 
+⚠️ **Important: Home Assistant OS Add-on (x86_64) CBC Solver**
+
+On x86_64 HAOS add-ons, the CBC solver binary bundled with `pulp` is compiled for glibc and cannot run on Alpine's musl runtime. EOS Connect now auto-detects a system-installed `cbc` (e.g. `/usr/bin/cbc` from the `coin-or-cbc` package) and prefers it over the bundled binary. Make sure your add-on version includes the native `coin-or-cbc` package; for full details see the [troubleshooting docs](https://ohAnd.github.io/EOS_connect/user-guide/index.html#troubleshooting).
+
 **Note on SSL Certificate Verification:**
 By default, EOS Connect validates SSL certificates when connecting to Home Assistant or OpenHAB. If you use a setup with **self-signed or private CA certificates**, you can disable verification in Settings → Data Source → **SSL Ignore** (expert level, requires restart). Only enable this in **trusted private networks** where you fully control the network path. Currently, EOS Connect does not support supplying custom root CA certificates — this feature is planned for future releases. For production setups, we recommend obtaining a valid certificate through Let's Encrypt (free) or your organization's certificate authority.
 

@@ -37,12 +37,53 @@ Modifications made for EOS_connect integration (adapted from main branch, ~2025-
 - Module is invoked in-process; no HTTP server needed
 """
 
+import logging
+import shutil
 from dataclasses import dataclass, field
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pulp
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_cbc_solver(
+    msg: int = 0,
+    num_threads: Optional[int] = None,
+    time_limit: Optional[float] = None,
+    gapRel: Optional[float] = None,
+) -> pulp.LpSolver:
+    """
+    Return a PuLP CBC solver instance, preferring a system CBC binary.
+
+    The CBC binary bundled with the PyPI `pulp` package on x86_64 is linked
+    against glibc and fails on Alpine Linux / musl (e.g. Home Assistant OS
+    add-ons). If a system `cbc` executable is available on PATH, use it so
+    Alpine's `coin-or-cbc` package can take over. Otherwise fall back to the
+    bundled binary, which works on Debian/glibc native Docker images.
+    """
+    system_cbc = shutil.which("cbc")
+    if system_cbc:
+        logger.info("Using system CBC solver: %s", system_cbc)
+        # PULP_CBC_CMD does not accept a custom path in current PuLP versions;
+        # use COIN_CMD (its underlying implementation) for a system executable.
+        return pulp.COIN_CMD(
+            path=system_cbc,
+            msg=msg,
+            threads=num_threads,
+            timeLimit=time_limit,
+            gapRel=gapRel,
+        )
+
+    logger.info("No system CBC solver found; using PuLP bundled CBC")
+    return pulp.PULP_CBC_CMD(
+        msg=msg,
+        threads=num_threads,
+        timeLimit=time_limit,
+        gapRel=gapRel,
+    )
 
 
 @dataclass
@@ -704,10 +745,10 @@ class Optimizer:
         if self.problem is None:
             self.create_model()
 
-        solver = pulp.PULP_CBC_CMD(
+        solver = _resolve_cbc_solver(
             msg=0,
-            threads=self.settings.num_threads,
-            timeLimit=self.settings.time_limit,
+            num_threads=self.settings.num_threads,
+            time_limit=self.settings.time_limit,
             gapRel=self.settings.gapRel,
         )
 

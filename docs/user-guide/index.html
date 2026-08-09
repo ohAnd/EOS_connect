@@ -848,6 +848,17 @@ docker-compose up -d</code></pre>
                         <td>Incorrect EOS prediction mode</td>
                         <td>Verify EOS is in prediction mode, not simulation</td>
                     </tr>
+                    <tr>
+                        <td><strong>local_evopt fails on HAOS x86_64 add-on</strong><br>
+                        Logs show <code>CBC file not found</code> or <code>FileNotFoundError</code></td>
+                        <td>The CBC solver binary bundled with PyPI <code>pulp</code> is linked against glibc,
+                        but the Home Assistant OS add-on container uses Alpine Linux / musl.</td>
+                        <td>EOS Connect automatically prefers a system-installed <code>cbc</code>
+                        (e.g. <code>/usr/bin/cbc</code> from the Alpine <code>coin-or-cbc</code> package)
+                        when one is available, and falls back to the bundled binary only when needed.
+                        Make sure you are running an add-on version that includes the native
+                        <code>coin-or-cbc</code> package.</td>
+                    </tr>
                 </tbody>
             </table>
 

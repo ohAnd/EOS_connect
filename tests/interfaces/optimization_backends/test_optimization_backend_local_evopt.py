@@ -19,6 +19,7 @@ Usage:
 # pylint: disable=protected-access
 
 import pytest
+import pulp
 import pytz
 from datetime import datetime as _real_datetime
 from unittest.mock import patch
@@ -30,6 +31,7 @@ from src.interfaces.optimization_backends.local_evopt.optimizer import (
     OptimizationStrategy,
     Optimizer,
     TimeSeriesData,
+    _resolve_cbc_solver,
 )
 
 
@@ -591,6 +593,65 @@ class TestOptimizerSettings:
 # ---------------------------------------------------------------------------
 # 9. OptimizationInterface backend selection
 # ---------------------------------------------------------------------------
+
+class TestCbcSolverSelection:
+    """Test auto-detection of system vs bundled CBC solver."""
+
+    def test_uses_system_binary_when_available(self):
+        """Prefer a system-installed CBC executable when present on PATH."""
+        with patch(
+            "src.interfaces.optimization_backends.local_evopt.optimizer.shutil.which",
+            return_value="/usr/bin/cbc",
+        ):
+            solver = _resolve_cbc_solver(
+                msg=0,
+                num_threads=2,
+                time_limit=30.0,
+                gapRel=0.01,
+            )
+
+        # A system path uses COIN_CMD (PULP_CBC_CMD rejects custom paths).
+        assert isinstance(solver, pulp.COIN_CMD)
+        assert solver.path == "/usr/bin/cbc"
+        assert solver.msg == 0
+        assert solver.optionsDict.get("threads") == 2
+        assert solver.timeLimit == 30.0
+        assert solver.optionsDict.get("gapRel") == 0.01
+
+    def test_falls_back_to_bundled_binary_when_no_system_cbc(self):
+        """Fall back to the PuLP bundled CBC when no system binary is found."""
+        with patch(
+            "src.interfaces.optimization_backends.local_evopt.optimizer.shutil.which",
+            return_value=None,
+        ):
+            solver = _resolve_cbc_solver(
+                msg=0,
+                num_threads=4,
+                time_limit=120.0,
+                gapRel=0.05,
+            )
+
+        assert isinstance(solver, pulp.PULP_CBC_CMD)
+        # The bundled default uses pulp's internal default path; the important
+        # thing is that we did NOT pass a system path in.
+        assert solver.path != "/usr/bin/cbc"
+        assert solver.optionsDict.get("threads") == 4
+        assert solver.timeLimit == 120.0
+        assert solver.optionsDict.get("gapRel") == 0.05
+
+    def test_default_settings_forwarded(self):
+        """Default OptimizerSettings values are forwarded to the solver."""
+        with patch(
+            "src.interfaces.optimization_backends.local_evopt.optimizer.shutil.which",
+            return_value="/usr/bin/cbc",
+        ):
+            solver = _resolve_cbc_solver(msg=1)
+
+        assert solver.msg == 1
+        assert solver.optionsDict.get("threads") is None
+        assert solver.timeLimit is None
+        assert solver.optionsDict.get("gapRel") is None
+
 
 class TestOptimizationInterfaceSelection:
     """Test OptimizationInterface backend selection for local_evopt."""
