@@ -141,6 +141,14 @@ _PV_KEY_PREFIXES = (
     "pv_forecast.",
 )
 
+# PV Autoscaler hot-reload map: map of config key to (autoscaler_attr, coerce_fn)
+_PV_AUTOSCALER_FIELD_MAP = {
+    "pv_autoscaling.enabled": ("enabled", bool),    "pv_autoscaling.use_ha_central_data_source": ("use_ha_central_data_source", bool),    "pv_autoscaling.min_scale": ("min_scale", float),
+    "pv_autoscaling.max_scale": ("max_scale", float),
+    "pv_autoscaling.retention_days": ("retention_days", int),
+    "pv_autoscaling.min_data_hours_required": ("min_data_hours_required", int),
+}
+
 
 class HotReloadAdapter:
     """
@@ -220,6 +228,8 @@ class HotReloadAdapter:
             self._apply_optimizer(key, new_value)
         elif key in _LOCAL_EVOPT_FIELD_MAP:
             self._apply_local_evopt(key, new_value)
+        elif key in _PV_AUTOSCALER_FIELD_MAP:
+            self._apply_pv_autoscaler(key, new_value)
         elif key.startswith(_PV_KEY_PREFIXES):
             self._schedule_pv_reload(key, new_value)
         else:
@@ -535,6 +545,36 @@ class HotReloadAdapter:
             coerced,
             old_val,
         )
+
+    def _apply_pv_autoscaler(self, key, new_value):
+        """Apply pv_autoscaler related live changes if autoscaler exists."""
+        if self._pv is None:
+            logger.debug("[HotReload] No pv interface/autoscaler — skipping %s", key)
+            return
+
+        # pv_interface holds the autoscaler reference (if attached)
+        autoscaler = getattr(self._pv, "_autoscaler", None)
+        if autoscaler is None:
+            logger.debug("[HotReload] No pv_autoscaler attached to pv_interface — skipping %s", key)
+            return
+
+        attr, coerce = _PV_AUTOSCALER_FIELD_MAP.get(key, (None, None))
+        if attr is None:
+            logger.debug("[HotReload] PV autoscaler key %s not recognized", key)
+            return
+        try:
+            coerced = coerce(new_value)
+        except (TypeError, ValueError) as exc:
+            logger.warning("[HotReload] Cannot coerce %s=%r: %s", key, new_value, exc)
+            return
+
+        old_val = getattr(autoscaler, attr, "?")
+        try:
+            setattr(autoscaler, attr, coerced)
+            self._applied_keys.append(key)
+            logger.info("[HotReload] Updated pv_autoscaler.%s = %s (was %s)", attr, coerced, old_val)
+        except Exception as exc:
+            logger.warning("[HotReload] Failed to apply pv_autoscaler change %s: %s", key, exc)
 
     def _schedule_pv_reload(self, key, new_value=None):
         """Schedule PV reload when config changes.

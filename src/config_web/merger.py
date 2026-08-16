@@ -250,18 +250,21 @@ def _apply_inverter_data_source_injection(result: dict, all_settings: dict[str, 
 
 def _apply_central_ha_data_source(result: dict, all_settings: dict[str, Any]) -> None:
     """
-    Apply central Home Assistant data source to price and pv_forecast_source.
+    Apply central Home Assistant data source to price, pv_forecast_source, and pv_autoscaling.
 
-    When price.use_ha_central_data_source or pv_forecast_source.use_ha_central_data_source
-    is true, construct the data_url and data_token from the centrally configured
-    data_source (url and access_token), avoiding repetition for end users.
+    When price.use_ha_central_data_source, pv_forecast_source.use_ha_central_data_source,
+    or pv_autoscaling.use_ha_central_data_source is true, construct the connection details
+    from the centrally configured data_source (url and access_token), avoiding repetition
+    for end users.
 
     Args:
         result: The merged config dict to modify in-place.
         all_settings: All settings from the store.
     """
+    ds_type = all_settings.get("data_source.type", "homeassistant")
     ds_url = all_settings.get("data_source.url", "")
     ds_token = all_settings.get("data_source.access_token", "")
+    ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
 
     # Apply to price section
     if "price" in result:
@@ -280,3 +283,13 @@ def _apply_central_ha_data_source(result: dict, all_settings: dict[str, Any]) ->
             # Construct HA API URL from sensor entity
             pv_source["data_url"] = f"{ds_url}/api/states/{sensor_name}"
             pv_source["data_token"] = ds_token
+
+    # Apply to pv_autoscaling section
+    if "pv_autoscaling" in result:
+        pv_auto = result["pv_autoscaling"]
+        if pv_auto.get("use_ha_central_data_source"):
+            # For autoscaler, apply src, url, and token from central data_source
+            pv_auto["src"] = ds_type
+            pv_auto["url"] = ds_url
+            pv_auto["access_token"] = ds_token
+            pv_auto["ssl_ignore"] = ds_ssl_ignore

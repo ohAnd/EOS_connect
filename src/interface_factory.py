@@ -261,6 +261,48 @@ class InterfaceFactory:
             ),
         )
 
+    def create_pv_autoscaler(
+        self,
+        config: Dict[str, Any],
+        pv_yield_store,
+        timezone: str = "UTC",
+        request_timeout: int = 10,
+        ssl_ignore: bool = False,
+        critical: bool = False,
+    ):
+        """
+        Create PvAutoscaler with error handling.
+
+        Args:
+            config: pv_autoscaling config dict
+            pv_yield_store: PvYieldStore instance
+            timezone: timezone string
+            request_timeout: request timeout in seconds
+            ssl_ignore: whether to ignore SSL certificate errors
+            critical: whether autoscaler is critical
+
+        Returns:
+            PvAutoscaler instance or None if non-critical and failed
+        """
+        return self._create_interface(
+            component_name="pv_autoscaler",
+            category="connectivity",
+            critical=critical,
+            title="PV Autoscaler unavailable",
+            error_message="Failed to initialize PV autoscaler",
+            config_link="#pv_autoscaling",
+            creator_func=lambda: self._import_and_create(
+                "interfaces.pv_autoscaler",
+                "PvAutoscaler",
+                config,
+                pv_yield_store,
+                timezone=timezone,
+                request_timeout=request_timeout,
+                ssl_ignore=ssl_ignore,
+                auto_start=False,
+            ),
+        )
+
     def create_mqtt_interface(
         self,
         config: Dict[str, Any],

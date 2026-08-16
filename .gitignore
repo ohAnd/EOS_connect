@@ -17,3 +17,4 @@ test_config_ui.py
 *.db
 *.db-wal
 *.db-shm
+src/data/pv_yield_history.csv

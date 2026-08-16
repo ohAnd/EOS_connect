@@ -115,7 +115,14 @@ class PvInterface:
             self.configuration_valid = False
 
         logger.info("[PV-IF] Initialized (config_state=%s)", self.configuration_state)
+        # Autoscaler hook (injected later via eos_connect wiring)
+        self._autoscaler = None
+
         self.__start_update_service()  # Start the background thread for periodic updates
+
+    def set_autoscaler(self, autoscaler):
+        """Attach a `PvAutoscaler` instance for runtime scaling of forecasts."""
+        self._autoscaler = autoscaler
 
     def __configure_update_interval(self):
         """Set update interval based on active PV provider and installation count."""
@@ -1003,6 +1010,18 @@ class PvInterface:
         forecast_values = [round(value, 1) for value in forecast_values]
         logger.debug("[PV-IF] Summarized PV forecast values: %s", forecast_values)
 
+        # Apply autoscaling if available and enabled (use cached factors computed by autoscaler's hourly cycle)
+        if self._autoscaler is not None and getattr(self._autoscaler, "enabled", False):
+            try:
+                scaled = self._autoscaler.apply_scaling(forecast_values, self.time_frame_base)
+                logger.info(
+                    "[PV-IF] Auto-scaling applied. Multipliers: %s",
+                    getattr(self._autoscaler, "_scale_factors", {}),
+                )
+                forecast_values = scaled
+            except Exception:
+                logger.exception("[PV-IF] Error applying autoscaler - returning raw forecast")
+
         # Cache successful forecast for fallback on future failures
         if forecast_values:
             self.last_successful_pv_forecast = forecast_values.copy()
@@ -1868,15 +1887,15 @@ class PvInterface:
             # Build a lookup dict for fast access
             lookup = {dt: v for dt, v in parsed}
             # Fill the forecast array
-            forecast_wh = []
+            forecast_values = []
             for h in hours_list:
                 # Use value if exact hour exists, else 0
-                forecast_wh.append(lookup.get(h, 0))
+                forecast_values.append(lookup.get(h, 0))
 
             # Clear any previous errors on success
             self.pv_forcast_request_error["error"] = None
 
-            pv_forecast = forecast_wh
+            pv_forecast = forecast_values
             if self.time_frame_base == 900:
                 return self._convert_hourly_to_15min(pv_forecast)
             return pv_forecast
