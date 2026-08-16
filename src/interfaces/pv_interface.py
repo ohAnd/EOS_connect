@@ -22,7 +22,7 @@ Logging:
     and errors related to configuration, API requests, and background updates.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import threading
 import logging
 import time
@@ -1966,13 +1966,43 @@ class PvInterface:
             # --- AGGREGATE 15-min intervals to hourly Wh if needed ---
             forecast_items = []
             for item in solar_forecast:
-                ts_str = item.get("ts", "")
-                if ts_str:
-                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                # EVCC <= 0.312 used objects ({ts, val}); newer EVCC
+                # versions publish compact [unix_timestamp, value] arrays.
+                if isinstance(item, dict):
+                    timestamp_value = item.get("ts")
+                    power_value = item.get("val", 0)
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    timestamp_value, power_value = item[0], item[1]
+                else:
+                    logger.warning("[PV-IF] Ignoring invalid EVCC forecast item: %r", item)
+                    continue
+
+                try:
+                    if isinstance(timestamp_value, (int, float)):
+                        # Unix timestamps may be published in seconds or milliseconds.
+                        timestamp_seconds = (
+                            timestamp_value / 1000.0
+                            if abs(timestamp_value) >= 1_000_000_000_000
+                            else timestamp_value
+                        )
+                        ts = datetime.fromtimestamp(timestamp_seconds, tz=timezone.utc)
+                    elif isinstance(timestamp_value, str):
+                        ts = datetime.fromisoformat(timestamp_value.replace("Z", "+00:00"))
+                        if ts.tzinfo is None:
+                            ts = tz.localize(ts)
+                    else:
+                        raise ValueError("unsupported timestamp type")
+
                     ts = ts.astimezone(tz)
-                    # Convert W to Wh for 15 min: Wh = W * 0.25
-                    val_wh = item.get("val", 0) * 0.25
+                    # EVCC values are power in W for each 15-minute slot.
+                    val_wh = float(power_value) * 0.25
                     forecast_items.append((ts, val_wh))
+                except (TypeError, ValueError, OverflowError, OSError) as exc:
+                    logger.warning(
+                        "[PV-IF] Ignoring invalid EVCC forecast item %r: %s",
+                        item,
+                        exc,
+                    )
 
             if self.time_frame_base == 3600:
                 # Group by hour and sum Wh values
