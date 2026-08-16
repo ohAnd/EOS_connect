@@ -971,9 +971,14 @@ class PvInterface:
             logger.error("[PV-IF] No valid source configured for PV forecast")
             return self.__get_default_pv_forcast(config_entry["power"])
 
-    def get_summarized_pv_forecast(self):
+    def get_summarized_pv_forecast(self, scale: bool = True):
         """
-        requesting pv forecast freach config entry and summarize the values
+        Request PV forecast for each config entry and summarize the values.
+
+        Args:
+            scale: If True (default), apply the current autoscaler factors when
+                available and enabled. If False, return the raw aggregated source
+                values without any autoscaling adjustment.
 
         Returns an empty forecast array if configuration is incomplete or invalid.
         On success, caches the result for fallback on future API failures.
@@ -1010,15 +1015,16 @@ class PvInterface:
         forecast_values = [round(value, 1) for value in forecast_values]
         logger.debug("[PV-IF] Summarized PV forecast values: %s", forecast_values)
 
-        # Apply autoscaling if available and enabled (use cached factors computed by autoscaler's hourly cycle)
-        if self._autoscaler is not None and getattr(self._autoscaler, "enabled", False):
+        # Keep all autoscaler logic in one place: the final summary boundary.
+        if scale and self._autoscaler is not None and getattr(self._autoscaler, "enabled", False):
             try:
-                scaled = self._autoscaler.apply_scaling(forecast_values, self.time_frame_base)
+                forecast_values = self._autoscaler.apply_scaling(
+                    forecast_values, self.time_frame_base
+                )
                 logger.info(
                     "[PV-IF] Auto-scaling applied. Multipliers: %s",
                     getattr(self._autoscaler, "_scale_factors", {}),
                 )
-                forecast_values = scaled
             except Exception:
                 logger.exception("[PV-IF] Error applying autoscaler - returning raw forecast")
 
@@ -1931,14 +1937,9 @@ class PvInterface:
             response = requests.get(url, timeout=5)
             response.raise_for_status()
             data = response.json()
-            solar_forecast_all = data.get("forecast", {}).get("solar", {})
-            solar_forecast_scale = solar_forecast_all.get("scale", "unknown")
-            solar_forecast = solar_forecast_all.get("timeseries", [])
-            logger.debug(
-                "[PV-IF] EVCC API solar forecast received with scale: %s",
-                solar_forecast_scale,
-            )
-            return solar_forecast, solar_forecast_scale
+            solar_forecast = data.get("forecast", {}).get("solar", {}).get("timeseries", [])
+            logger.debug("[PV-IF] EVCC API solar forecast received (%d entries)", len(solar_forecast))
+            return solar_forecast
 
         def error_handler(error_type, exception):
             return self._handle_interface_error(
@@ -1957,7 +1958,7 @@ class PvInterface:
                 pv_config_entry,
                 "evcc",
             )
-        solar_forecast, solar_forecast_scale = result
+        solar_forecast = result
 
         if not solar_forecast or not isinstance(solar_forecast, list):
             return self._handle_interface_error(
@@ -1966,11 +1967,6 @@ class PvInterface:
                 pv_config_entry,
                 "evcc",
             )
-
-        # --- Read use_real_data_correction from pv_forecast_source config ---
-        use_real_data_correction = True
-        if hasattr(self, "config_source") and isinstance(self.config_source, dict):
-            use_real_data_correction = self.config_source.get("use_real_data_correction", True)
 
         try:
             # Get timezone-aware current time
@@ -2044,33 +2040,9 @@ class PvInterface:
                 pv_forecast = forecast_15min
 
 
-            # Apply scaling factor if enabled
-            if use_real_data_correction:
-                try:
-                    scale_factor = float(solar_forecast_scale)
-                    if scale_factor < 0.1:
-                        scale_factor = 0.5
-                        logger.debug(
-                            "[PV-IF] EVCC PV forecast scale factor too low "
-                            "(< 0.1 - %s) - using 0.5",
-                            scale_factor,
-                        )
-                except (TypeError, ValueError):
-                    scale_factor = 1.0
-                if scale_factor <= 0:
-                    logger.debug(
-                        "[PV-IF] EVCC PV forecast scale factor invalid (%s) - using 1.0",
-                        scale_factor,
-                    )
-                    scale_factor = 1.0
-            else:
-                scale_factor = 1.0
-                logger.debug(
-                    "[PV-IF] EVCC PV forecast: Real data correction disabled," +
-                    " forcing scale factor to 1.0"
-                )
-
-            pv_forecast = [round(val * scale_factor, 1) for val in pv_forecast]
+            # Raw EVCC forecast is returned as-is; any autoscaling decision is
+            # handled centrally in get_summarized_pv_forecast(scale=...).
+            pv_forecast = [round(val, 1) for val in pv_forecast]
 
             # Clear any previous errors on success
             self.pv_forcast_request_error["error"] = None

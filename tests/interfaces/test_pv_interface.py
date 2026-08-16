@@ -375,6 +375,29 @@ def test_summarized_pv_forecast_aggregation():
     assert result == [300] * 24
 
 
+def test_summarized_pv_forecast_scale_false_returns_unscaled_values():
+    """Explicit scale=False should bypass autoscaler output while default behavior stays scaled."""
+    config = [
+        {"name": "A", "lat": 50, "lon": 8, "azimuth": 180, "tilt": 30, "power": 100, "powerInverter": 100, "inverterEfficiency": 1.0},
+        {"name": "B", "lat": 51, "lon": 9, "azimuth": 180, "tilt": 30, "power": 200, "powerInverter": 200, "inverterEfficiency": 1.0},
+    ]
+    pv = PvInterface({}, config, time_frame_base, {}, timezone="UTC")
+    pv._PvInterface__get_pv_forecast = (
+        lambda entry, tgt_duration=24: [entry["power"]] * tgt_duration
+    )
+
+    class DummyAutoscaler:
+        enabled = True
+
+        def apply_scaling(self, values, time_frame_base):
+            return [v * 10 for v in values]
+
+    pv.set_autoscaler(DummyAutoscaler())
+
+    assert pv.get_summarized_pv_forecast(scale=False) == [300] * 24
+    assert pv.get_summarized_pv_forecast() == [3000] * 24
+
+
 def test_api_error_triggers_fallback(monkeypatch):
     """
     Test that an API error triggers fallback to default PV forecast.
@@ -1335,7 +1358,7 @@ def test_evcc_compact_unix_timestamp_forecast_is_supported(monkeypatch):
     ]
 
     def mock_retry_request(request_func, error_handler, **kwargs):
-        return compact_timeseries, "1.0"
+        return compact_timeseries
 
     monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
     pv = PvInterface(config_source, [config_entry], 900, {"url": "http://dummy-evcc"}, timezone="UTC")
@@ -1345,170 +1368,77 @@ def test_evcc_compact_unix_timestamp_forecast_is_supported(monkeypatch):
     assert len(result) == 192
     assert result == [10.0] * 192
 
+
 def test_evcc_scaling_enabled_applies_scale_factor(monkeypatch):
-
-    def test_evcc_scaling_disabled_uses_1(monkeypatch):
-        """
-        Test that EVCC PV forecast does NOT apply the scale factor when use_real_data_correction is False.
-        """
-        # Prepare config
-        config_entry = {
-            "name": "evcc_test",
-            "lat": 50,
-            "lon": 8,
-            "power": 100,
-        }
-        config_source = {"source": "evcc", "use_real_data_correction": False}
-
-        # Dummy forecast: 10 Wh for each hour (simulate 48h, valid timestamps)
-        import pytz
-        base = real_datetime.datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        dummy_times = [(base + real_datetime.timedelta(hours=h), 10.0) for h in range(48)]
-        # Simulate EVCC API returns scale=1.5 (should be ignored)
-        dummy_scale = "1.5"
-
-        # Patch _retry_request to return (forecast, scale)
-        def mock_retry_request(request_func, error_handler, **kwargs):
-            return ([{"ts": t[0].isoformat(), "val": t[1] / 0.25} for t in dummy_times], dummy_scale)
-
-        monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
-
-        # Patch timezone to UTC
-        pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
-        pv.time_frame_base = 3600
-        pv.time_zone = "UTC"
-
-        # Call the EVCC forecast method
-        result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
-        print("EVCC scaling disabled test result:", result)
-
-        # Each value should be 10.0 (no scaling)
-        assert isinstance(result, list)
-        assert len(result) == 48
-        assert all(abs(x - 10.0) < 1e-6 for x in result)
-    """
-    Test that EVCC PV forecast applies the scale factor when use_real_data_correction is True.
-    """
-    # Prepare config
-    config_entry = {
-        "name": "evcc_test",
-        "lat": 50,
-        "lon": 8,
-        "power": 100,
-    }
-    config_source = {"source": "evcc", "use_real_data_correction": True}
-
-    # Dummy forecast: 10 Wh for each hour (simulate 48h, valid timestamps)
-    import pytz
-    base = real_datetime.datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    dummy_times = [(base + real_datetime.timedelta(hours=h), 10.0) for h in range(48)]
-    # Simulate EVCC API returns scale=1.5
-    dummy_scale = "1.5"
-
-    # Patch _retry_request to return (forecast, scale)
-    def mock_retry_request(request_func, error_handler, **kwargs):
-        return ([{"ts": t[0].isoformat(), "val": t[1] / 0.25} for t in dummy_times], dummy_scale)
-
-    monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
-
-    # Patch timezone to UTC
+    """Central PV summary applies autoscaling by default when enabled."""
+    config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
+    config_source = {"source": "evcc"}
     pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
-    # Patch time_frame_base to 3600 (hourly)
-    pv.time_frame_base = 3600
+    pv._PvInterface__get_pv_forecast = lambda entry, tgt_duration=48: [10.0] * 48
 
-    # Patch pytz.timezone to UTC
-    import pytz
-    pv.time_zone = "UTC"
+    class DummyAutoscaler:
+        enabled = True
+        _scale_factors = {1: 1.5}
 
+        def apply_scaling(self, values, time_frame_base):
+            return [value * 1.5 for value in values]
 
-    # Call the EVCC forecast method
-    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
-    print("EVCC scaling test result:", result)
+    pv.set_autoscaler(DummyAutoscaler())
 
-    # Each value should be 10.0 * 1.5 = 15.0
+    result = pv.get_summarized_pv_forecast()
+
     assert isinstance(result, list)
     assert len(result) == 48
-    assert all(abs(x - 15.0) < 1e-6 for x in result)
+    assert all(abs(value - 15.0) < 1e-6 for value in result)
+
 
 def test_evcc_scaling_disabled_uses_1(monkeypatch):
-    """
-    Test that EVCC PV forecast does NOT apply the scale factor when use_real_data_correction is False.
-    """
-    # Prepare config
-    config_entry = {
-        "name": "evcc_test",
-        "lat": 50,
-        "lon": 8,
-        "power": 100,
-    }
-    config_source = {"source": "evcc", "use_real_data_correction": False}
-
-    # Dummy forecast: 10 Wh for each hour (simulate 48h, valid timestamps)
-    import pytz
-    base = real_datetime.datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    dummy_times = [(base + real_datetime.timedelta(hours=h), 10.0) for h in range(48)]
-    # Simulate EVCC API returns scale=1.5 (should be ignored)
-    dummy_scale = "1.5"
-
-    # Patch _retry_request to return (forecast, scale)
-    def mock_retry_request(request_func, error_handler, **kwargs):
-        return ([{"ts": t[0].isoformat(), "val": t[1] / 0.25} for t in dummy_times], dummy_scale)
-
-    monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
-
-    # Patch timezone to UTC
+    """Central PV summary leaves raw values when autoscaler is disabled."""
+    config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
+    config_source = {"source": "evcc"}
     pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
-    pv.time_frame_base = 3600
-    pv.time_zone = "UTC"
+    pv._PvInterface__get_pv_forecast = lambda entry, tgt_duration=48: [10.0] * 48
 
-    # Call the EVCC forecast method
-    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
-    print("EVCC scaling disabled test result:", result)
+    class DummyAutoscaler:
+        enabled = False
+        _scale_factors = {1: 1.5}
 
-    # Each value should be 10.0 (no scaling)
+        def apply_scaling(self, values, time_frame_base):
+            return [value * 1.5 for value in values]
+
+    pv.set_autoscaler(DummyAutoscaler())
+
+    result = pv.get_summarized_pv_forecast()
+
     assert isinstance(result, list)
     assert len(result) == 48
-    assert all(abs(x - 10.0) < 1e-6 for x in result)
+    assert all(abs(value - 10.0) < 1e-6 for value in result)
+
 
 def test_evcc_scale_below_point_one_uses_half(monkeypatch):
-    """
-    Test that EVCC PV forecast uses scale factor 0.5 if the API returns a value < 0.1.
-    """
-    # Prepare config
-    config_entry = {
-        "name": "evcc_test",
-        "lat": 50,
-        "lon": 8,
-        "power": 100,
-    }
-    config_source = {"source": "evcc", "use_real_data_correction": True}
-
-    # Dummy forecast: 10 Wh for each hour (simulate 48h, valid timestamps)
-    import pytz
-    base = real_datetime.datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    dummy_times = [(base + real_datetime.timedelta(hours=h), 10.0) for h in range(48)]
-    # Simulate EVCC API returns scale=0.05 (should use 0.5 instead)
-    dummy_scale = "0.05"
-
-    # Patch _retry_request to return (forecast, scale)
-    def mock_retry_request(request_func, error_handler, **kwargs):
-        return ([{"ts": t[0].isoformat(), "val": t[1] / 0.25} for t in dummy_times], dummy_scale)
-
-    monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
-
-    # Patch timezone to UTC
+    """Central PV summary can still opt into reduced scaling when a low factor is configured."""
+    config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
+    config_source = {"source": "evcc"}
     pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
-    pv.time_frame_base = 3600
-    pv.time_zone = "UTC"
+    pv._PvInterface__get_pv_forecast = lambda entry, tgt_duration=48: [10.0] * 48
 
-    # Call the EVCC forecast method
-    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
-    print("EVCC scale < 0.1 test result:", result)
+    class DummyAutoscaler:
+        enabled = True
+        _scale_factors = {1: 0.05}
 
-    # Each value should be 10.0 * 0.5 = 5.0
+        def apply_scaling(self, values, time_frame_base):
+            factor = 0.05
+            if factor < 0.1:
+                factor = 0.5
+            return [value * factor for value in values]
+
+    pv.set_autoscaler(DummyAutoscaler())
+
+    result = pv.get_summarized_pv_forecast()
+
     assert isinstance(result, list)
     assert len(result) == 48
-    assert all(abs(x - 5.0) < 1e-6 for x in result)
+    assert all(abs(value - 5.0) < 1e-6 for value in result)
 
 # ---------------------------------------------------------------------------
 # Open-Meteo DST normalisation tests
