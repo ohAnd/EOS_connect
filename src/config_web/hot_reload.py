@@ -143,8 +143,10 @@ _PV_KEY_PREFIXES = (
 
 # PV Autoscaler hot-reload map: map of config key to (autoscaler_attr, coerce_fn)
 _PV_AUTOSCALER_FIELD_MAP = {
-    "pv_autoscaling.enabled": ("enabled", bool),    "pv_autoscaling.use_ha_central_data_source": ("use_ha_central_data_source", bool),    "pv_autoscaling.min_scale": ("min_scale", float),
-    "pv_autoscaling.max_scale": ("max_scale", float),
+    "pv_autoscaling.enabled": ("enabled", bool),
+    "pv_autoscaling.use_ha_central_data_source": ("use_ha_central_data_source", bool),
+    "pv_autoscaling.min_scale_factor": ("min_scale_factor", float),
+    "pv_autoscaling.max_scale_factor": ("max_scale_factor", float),
     "pv_autoscaling.retention_days": ("retention_days", int),
     "pv_autoscaling.min_data_hours_required": ("min_data_hours_required", int),
 }

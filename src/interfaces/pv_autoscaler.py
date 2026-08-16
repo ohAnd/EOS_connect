@@ -425,6 +425,7 @@ class PvAutoscaler:
                 self._pv_yield_store.purge_old_records(self.retention_days)
             except Exception:
                 logger.exception("[PV-AUTO] Error writing pv_yield_history record after reset")
+            self._previous_counter_ts = utc_period_start.isoformat()
             self.last_collection = datetime.utcnow()
             return True
         else:
@@ -552,6 +553,7 @@ class PvAutoscaler:
         # Update baseline counter after successful insertion(s)
         try:
             self._previous_counter_kwh = current_counter
+            self._previous_counter_ts = utc_period_start.isoformat()
         except Exception:
             pass
 
@@ -788,4 +790,9 @@ class PvAutoscaler:
             "scale_factors": self._scale_factors.copy(),
             "total_hours_recorded": total_hours,
             "last_reading_timestamp": self._previous_counter_ts,
+            # Last time the loop attempted a collection, success or not; useful to
+            # detect a stalled collector (e.g. sensor fetch failing every cycle).
+            "last_collection_attempt": (
+                self.last_collection.isoformat() if self.last_collection else None
+            ),
         }
