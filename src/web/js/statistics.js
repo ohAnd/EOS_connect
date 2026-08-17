@@ -100,7 +100,8 @@ class StatisticsManager {
             const aggregated = pa.aggregated_history || data.aggregated || {};
             const days = aggregated.days || [];
             const todays_partial = pa.todays_partial_data || {};
-            const forecastArray = pa.current_forecast_array || [];
+            const forecastArray = pa.current_forecast_array_raw || [];
+            const forecastArrayScaled = pa.current_forecast_array_scaled || [];
 
             // Helper to safely convert to number
             const toNum = v => Number(String(v || 1).replace(',', '.')) || 1.0;
@@ -255,8 +256,8 @@ class StatisticsManager {
 
                 // Calculate today's forecast from forecastArray (we already know this!)
                 let todayForecastByTimeframe = {};
-                if (forecastArray && forecastArray.length > 0) {
-                    const slotsPerDay = forecastArray.length >= 48 ? Math.min(forecastArray.length, 96) : 24;
+                if (forecastArrayScaled && forecastArrayScaled.length > 0) {
+                    const slotsPerDay = forecastArrayScaled.length >= 48 ? Math.min(forecastArrayScaled.length, 96) : 24;
                     const slotsPerHour = slotsPerDay / 24;
 
                     for (let tf = 1; tf <= 4; tf++) {
@@ -264,8 +265,8 @@ class StatisticsManager {
                         const slotStart = hourStart * slotsPerHour;
                         const slotEnd = slotStart + 6 * slotsPerHour;
                         let sum = 0;
-                        for (let i = slotStart; i < slotEnd && i < forecastArray.length; i++) {
-                            sum += toNum(forecastArray[i]);
+                        for (let i = slotStart; i < slotEnd && i < forecastArrayScaled.length; i++) {
+                            sum += toNum(forecastArrayScaled[i]);
                         }
                         todayForecastByTimeframe[tf] = sum / 1000;  // Convert Wh to kWh
                     }
@@ -411,13 +412,50 @@ class StatisticsManager {
             const statusIcon = enabled ? '<i class="fa-solid fa-check-circle" style="color: #4caf50;"></i>' : '<i class="fa-solid fa-times-circle" style="color: #f44336;"></i>';
             const statusText = enabled ? '<span style="color: #4caf50;">Enabled</span>' : '<span style="color: #f44336;">Disabled</span>';
 
-            // Calculate daily average
+            // Calculate daily average - weighted by forecast distribution
             const s1f = toNum(sf['1'] || sf[1]);
             const s2f = toNum(sf['2'] || sf[2]);
             const s3f = toNum(sf['3'] || sf[3]);
             const s4f = toNum(sf['4'] || sf[4]);
-            const dailyAvg = (s1f + s2f + s3f + s4f) / 4;
-            const percentChange = ((dailyAvg - 1.0) * 100);
+            
+            // Compute weighted average based on current forecast distribution
+            let dailyAvg, percentChange, isWeighted = false;
+            const arithmeticAvg = (s1f + s2f + s3f + s4f) / 4;
+            
+            if (forecastArray && forecastArray.length > 0) {
+                const slotsPerDay = forecastArray.length >= 48 ? Math.min(forecastArray.length, 96) : 24;
+                const slotsPerHour = slotsPerDay / 24;
+                const sumForecastTimeframe = (dayIndex, timeframeId) => {
+                    const hourStart = (timeframeId - 1) * 6;
+                    const slotStart = dayIndex * slotsPerDay + hourStart * slotsPerHour;
+                    const slotEnd = slotStart + 6 * slotsPerHour;
+                    let sum = 0;
+                    for (let i = slotStart; i < slotEnd && i < forecastArray.length; i++) {
+                        sum += toNum(forecastArray[i]);
+                    }
+                    return sum;
+                };
+                
+                let totalForecast = 0;
+                let weightedSum = 0;
+                for (let tf = 1; tf <= 4; tf++) {
+                    const tfForecast = sumForecastTimeframe(0, tf);
+                    const factor = toNum(sf[tf.toString()] || sf[tf]);
+                    totalForecast += tfForecast;
+                    weightedSum += tfForecast * factor;
+                }
+                
+                if (totalForecast > 0) {
+                    dailyAvg = weightedSum / totalForecast;
+                    isWeighted = true;
+                } else {
+                    dailyAvg = arithmeticAvg;
+                }
+            } else {
+                dailyAvg = arithmeticAvg;
+            }
+            
+            percentChange = ((dailyAvg - 1.0) * 100);
             let percentColor = '#90ee90';
             if (dailyAvg < 0.98) {
                 percentColor = '#90caf9';
@@ -473,7 +511,7 @@ class StatisticsManager {
                                 </div>
 
                                 <div style="background-color: rgba(65, 105, 225, 0.15); border: 2px solid rgba(100, 149, 237, 0.4); border-radius: 6px; padding: 12px; text-align: center;">
-                                    <div style="font-size: 0.85em; color: #6495ed; margin-bottom: 4px; font-weight: 600;">WHOLE DAY</div>
+                                    <div style="font-size: 0.85em; color: #6495ed; margin-bottom: 4px; font-weight: 600;">WHOLE DAY${isWeighted ? '<br><span style="font-size: 0.7em; font-weight: normal;">(forecast weighted)</span>' : ''}</div>
                                     <div style="font-size: 1.8em; font-weight: bold; color: #6495ed; font-family: monospace;">${dailyAvg.toFixed(3)}× (${percentChange >= 0 ? '+' : ''}${percentChange.toFixed(1)}%)</div>
                                 </div>
                             </div>
