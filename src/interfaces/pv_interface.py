@@ -73,6 +73,7 @@ class PvInterface:
         logger.debug("[PV-IF] Initializing with 1st source: %s", source_type)
 
         self.pv_forcast_array = []
+        self.pv_forcast_array_raw = []
         self.pv_forcast_request_error = {
             "error": None,
             "timestamp": None,
@@ -603,9 +604,11 @@ class PvInterface:
         while not self._stop_event.is_set():
             # Fetch the PV forecast data
             pv_forcast_array = self.get_summarized_pv_forecast()
+            pv_forcast_array_raw = self.get_summarized_pv_forecast( scale=False )
             if not self.pv_forcast_request_error["error"]:
                 logger.debug("[PV-IF] PV forecast updated successfully")
                 self.pv_forcast_array = pv_forcast_array
+                self.pv_forcast_array_raw = pv_forcast_array_raw
             elif pv_forcast_array:  # Fallback forecast available from cache
                 # If there was an error but cache provided a forecast, use it
                 logger.warning(
@@ -613,6 +616,7 @@ class PvInterface:
                     self.pv_forcast_request_error["message"],
                 )
                 self.pv_forcast_array = pv_forcast_array
+                self.pv_forcast_array_raw = pv_forcast_array_raw
             elif self.pv_forcast_array == []:
                 # If there was an error and no forecast was cached, use default values
                 logger.warning(
@@ -623,8 +627,12 @@ class PvInterface:
                     self.pv_forcast_array = self.__get_default_pv_forcast(
                         self.config[0]["power"]
                     )
+                    self.pv_forcast_array_raw = self.__get_default_pv_forcast(
+                        self.config[0]["power"]
+                    )
                 else:
                     self.pv_forcast_array = self.__get_default_pv_forcast(1000)
+                    self.pv_forcast_array_raw = self.__get_default_pv_forcast(1000)
             else:
                 # If there was an error but we have a previous forecast, log it
                 logger.warning(
@@ -668,7 +676,7 @@ class PvInterface:
 
         self.__start_update_service()
 
-    def get_current_pv_forecast(self):
+    def get_current_pv_forecast(self, scale=True):
         """
         Returns the current photovoltaic (PV) forecast array.
 
@@ -678,7 +686,10 @@ class PvInterface:
         # logger.debug(
         #     "[PV-IF] Returning current PV forecast: %s", self.pv_forcast_array
         # )
-        return self.pv_forcast_array
+        if scale:            
+            return self.pv_forcast_array
+        else:
+            return self.pv_forcast_array_raw
 
     def get_current_temp_forecast(self):
         """

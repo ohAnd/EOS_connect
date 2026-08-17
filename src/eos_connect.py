@@ -2396,9 +2396,11 @@ def get_pv_autoscaling_status():
 
         # Get current PV forecast snapshot (for display of before/after scaling)
         current_forecast_array = None
+        current_forecast_array_raw = None
         try:
             if pv_interface is not None:
                 current = getattr(pv_interface, "get_current_pv_forecast", lambda: None)()
+                current_forecast_array_raw = getattr(pv_interface, "get_current_pv_forecast", lambda: None)(scale=False)
                 if isinstance(current, list):
                     # This is the same array used by get_ems_data() for the EOS request.
                     current_forecast_array = [round(float(x), 3) for x in current]
@@ -2412,7 +2414,8 @@ def get_pv_autoscaling_status():
                 "computed_scale_factors": computed_factors,
                 "todays_partial_data": todays_partial,
                 "aggregated_history": aggregated,
-                "current_forecast_array": current_forecast_array,
+                "current_forecast_array_scaled": current_forecast_array,
+                "current_forecast_array_raw": current_forecast_array_raw,
                 "current_forecast_array_unit": "Wh per forecast slot",
             },
             "timestamp": datetime.now(time_zone).isoformat(),

@@ -331,8 +331,11 @@ class PvAutoscaler:
         except (TypeError, ValueError):
             time_frame_base = 3600
             expected_slots = 48
+        # Use scale=False to get the ORIGINAL (unscaled) forecast values for database storage.
+        # This ensures we store the raw forecast before autoscaling is applied, which is
+        # needed to calculate accurate scale factors by comparing real data with original forecast.
         current_forecast = (
-            getattr(self._pv_interface, "get_current_pv_forecast", lambda: None)()
+            getattr(self._pv_interface, "get_current_pv_forecast", lambda: None)(scale=False)
             if self._pv_interface is not None
             else None
         )
@@ -345,11 +348,9 @@ class PvAutoscaler:
             )
             return False
 
-        # Read the same full-day forecast array that get_ems_data() passes to the
-        # optimizer. The array is aligned to local midnight and contains Wh per
-        # configured slot (hourly or 15-minute). Do not use the separate raw
-        # snapshot here: it can represent a different refresh than the live EOS
-        # request array.
+        # Read the full-day forecast array. The array is aligned to local midnight and contains
+        # Wh per configured slot (hourly or 15-minute). Using scale=False ensures we get the
+        # original forecast values, not the autoscaled ones.
         forecast_kwh = None
         try:
             if self._pv_interface is not None:
