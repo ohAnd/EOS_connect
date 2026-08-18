@@ -329,7 +329,7 @@ class PvInterface:
             # Timeseries source requires either data_url (for HTTP) or HA sensor integration
             data_url = self.config_source.get("data_url", "").strip()
             use_ha_central = self.config_source.get("use_ha_central_data_source", False)
-            
+
             if not data_url and not use_ha_central:
                 log_func = logger.error if strict else logger.warning
                 log_func("[PV-IF] Timeseries data_url missing in pv_forecast_source section")
@@ -343,7 +343,7 @@ class PvInterface:
                     "[PV-IF] Timeseries requires data_url or use_ha_central_data_source"
                     " - Use Settings → PV Source to fix"
                 )
-            
+
             # If using HTTP URL, validate it's a valid URL format
             if data_url and not (
                 data_url.startswith("http://") or data_url.startswith("https://")
@@ -357,7 +357,7 @@ class PvInterface:
                 raise ValueError(
                     "[PV-IF] Timeseries data_url must start with http:// or https://"
                 )
-            
+
             logger.debug(
                 "[PV-IF] Timeseries source-specific requirements validated"
                 " (data_url=%s, ha_central=%s)",
@@ -686,7 +686,7 @@ class PvInterface:
         # logger.debug(
         #     "[PV-IF] Returning current PV forecast: %s", self.pv_forcast_array
         # )
-        if scale:            
+        if scale:
             return self.pv_forcast_array
         else:
             return self.pv_forcast_array_raw
@@ -1129,7 +1129,7 @@ class PvInterface:
                 )
             else:
                 error_msg = f"Timeseries error ({error_type}): {error_detail}"
-            
+
             return self._handle_interface_error(
                 error_type,
                 error_msg,
@@ -1165,7 +1165,7 @@ class PvInterface:
                     "timeseries_source",
                     "timeseries",
                 ) or self.__get_default_pv_forcast(fallback_power)
-            
+
             logger.debug(
                 "[PV-IF] Timeseries parsed successfully: %d values, "
                 "range [%.1f - %.1f Wh]",
@@ -1276,7 +1276,7 @@ class PvInterface:
                 if value < 0:
                     logger.warning("[PV-IF] Negative PV value %.1f clamped to 0", value)
                     value = 0.0
-                
+
                 # Align timestamp to resolution boundary (robust to arbitrary start times)
                 # E.g., for 3600s resolution: round to nearest hour
                 #       for 900s resolution: round to nearest 15-minute
@@ -2708,10 +2708,10 @@ class PvInterface:
             logger.warning(
                 "[PV-IF] No forecast available and no cache - returning empty array"
             )
-        
+
         # Log detailed recovery diagnostics for troubleshooting
         self._log_error_diagnostics(error_type, source)
-        
+
         return []
 
     def _log_error_diagnostics(self, error_type, source):
@@ -2731,18 +2731,18 @@ class PvInterface:
             "default",
         ]
         current_source = self.config_source.get("source", "unknown")
-        
+
         if self.consecutive_failures >= self.max_failures:
             logger.error(
                 "[PV-IF] Maximum failures reached (%d) - "
                 "please check configuration in Settings > PV Forecast",
                 self.consecutive_failures,
             )
-        
+
         if source == "timeseries":
             data_url = self.config_source.get("data_url", "").strip()
             use_ha = self.config_source.get("use_ha_central_data_source", False)
-            
+
             if error_type == "config_error" and not data_url and not use_ha:
                 logger.error(
                     "[PV-IF] Timeseries requires either data_url or use_ha_central_data_source - "
@@ -2759,7 +2759,7 @@ class PvInterface:
                     "[PV-IF] Timeseries endpoint returned unexpected data - "
                     "verify data_url and data_path in Settings > PV Source"
                 )
-        
+
         logger.debug(
             "[PV-IF] Available PV sources: %s (current: %s, consecutive_failures: %d/%d)",
             ", ".join(available_sources),

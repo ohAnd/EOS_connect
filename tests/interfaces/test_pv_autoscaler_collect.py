@@ -36,10 +36,13 @@ class InMemoryPvYieldStore:
 class FakePvInterface:
     def __init__(self, array, time_frame_base=3600):
         self._current_forecast = array
+        self._current_forecast_raw = array
         self.time_frame_base = time_frame_base
 
-    def get_current_pv_forecast(self):
-        return self._current_forecast
+    def get_current_pv_forecast(self, scale=True):
+        if scale:
+            return self._current_forecast
+        return self._current_forecast_raw
 
 
 def test_collect_if_needed_populates_forecast_kwh_and_recomputes():
@@ -236,6 +239,9 @@ def test_collect_waits_for_forecast_at_startup():
     previous_hour = (datetime.now(timezone.utc).hour - 1) % 24
     current_forecast = [0.0] * 192
     current_forecast[previous_hour * 4 : previous_hour * 4 + 4] = [100.0] * 4
+    # The autoscaler intentionally reads the raw/unscaled forecast when it
+    # stores the previous-hour yield. The scaled forecast is used elsewhere.
+    fake._current_forecast_raw = current_forecast
     fake._current_forecast = current_forecast
 
     assert autoscaler.collect_if_needed() is True

@@ -46,10 +46,13 @@ class InMemoryPvYieldStore:
 class FakePvInterface:
     def __init__(self, array):
         self._current_forecast = array
+        self._current_forecast_raw = array
         self.time_frame_base = 3600
 
-    def get_current_pv_forecast(self):
-        return self._current_forecast
+    def get_current_pv_forecast(self, scale=True):
+        if scale:
+            return self._current_forecast
+        return self._current_forecast_raw
 
 
 def test_collect_handles_spring_forward_dst():
