@@ -195,12 +195,13 @@ def test_collect_if_needed_distributes_over_missed_hours():
 
     ok = autoscaler.collect_if_needed()
     assert ok is True
-    # One seed row + 4 distributed rows expected
-    assert len(store.rows) == 5
-    new_rows = store.rows[-4:]
-    # Each distributed delta should be ~2.0 kWh
+    # One seed row + 3 distributed rows expected (missed_hours now correctly
+    # counts from end of last period, not start: 4h gap - 1h = 3 missed hours)
+    assert len(store.rows) == 4
+    new_rows = store.rows[-3:]
+    # Each distributed delta should be ~8.0/3 kWh (2.666...)
     for i, r in enumerate(new_rows):
-        assert r["real_delta_kwh"] == pytest.approx(2.0), f"Row {i}: delta mismatch"
+        assert r["real_delta_kwh"] == pytest.approx(8.0 / 3), f"Row {i}: delta mismatch"
         # Missed hours should have forecast_kwh = None (we don't have snapshots from that time)
         assert r["forecast_kwh"] is None, f"Row {i}: missed hour should have forecast_kwh=None, got {r['forecast_kwh']}"
     # Final cumulative counter equals 108.0
