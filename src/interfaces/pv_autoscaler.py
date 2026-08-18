@@ -465,8 +465,9 @@ class PvAutoscaler:
                         last_db_ts = last_db_ts.replace(tzinfo=timezone.utc)
                     # Calculate difference using boundary time for consistent
                     # hour counting
+                    last_period_end = last_db_ts + timedelta(hours=1)  # End of last recorded period
                     diff_seconds = (
-                        utc_now_boundary.replace(tzinfo=timezone.utc) - last_db_ts
+                        utc_now_boundary.replace(tzinfo=timezone.utc) - last_period_end
                     ).total_seconds()
                     missed_hours = int(max(1, math.ceil(diff_seconds / 3600.0)))
                 except (ValueError, TypeError, AttributeError):
