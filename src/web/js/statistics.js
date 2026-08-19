@@ -254,22 +254,24 @@ class StatisticsManager {
                 const todaysActual = todays_partial.actual_kwh || {};
                 const todaysHours = todays_partial.hours_collected || 0;
 
-                // Calculate today's forecast from forecastArray (we already know this!)
+                // Calculate today's forecast from forecastArray (both original and scaled)
+                let todayForecastByTimeframeOriginal = {};
                 let todayForecastByTimeframe = {};
-                if (forecastArrayScaled && forecastArrayScaled.length > 0) {
-                    const slotsPerDay = forecastArrayScaled.length >= 48 ? Math.min(forecastArrayScaled.length, 96) : 24;
-                    const slotsPerHour = slotsPerDay / 24;
+                const maxArrayLength = Math.max(forecastArray.length || 0, forecastArrayScaled.length || 0);
+                const slotsPerDay = maxArrayLength >= 48 ? Math.min(maxArrayLength, 96) : 24;
+                const slotsPerHour = slotsPerDay / 24;
 
-                    for (let tf = 1; tf <= 4; tf++) {
-                        const hourStart = (tf - 1) * 6;
-                        const slotStart = hourStart * slotsPerHour;
-                        const slotEnd = slotStart + 6 * slotsPerHour;
-                        let sum = 0;
-                        for (let i = slotStart; i < slotEnd && i < forecastArrayScaled.length; i++) {
-                            sum += toNum(forecastArrayScaled[i]);
-                        }
-                        todayForecastByTimeframe[tf] = sum / 1000;  // Convert Wh to kWh
+                for (let tf = 1; tf <= 4; tf++) {
+                    const hourStart = (tf - 1) * 6;
+                    const slotStart = hourStart * slotsPerHour;
+                    const slotEnd = slotStart + 6 * slotsPerHour;
+                    let sumOrig = 0, sumScaled = 0;
+                    for (let i = slotStart; i < slotEnd && i < maxArrayLength; i++) {
+                        if (forecastArray && forecastArray[i]) sumOrig += toNum(forecastArray[i]);
+                        if (forecastArrayScaled && forecastArrayScaled[i]) sumScaled += toNum(forecastArrayScaled[i]);
                     }
+                    todayForecastByTimeframeOriginal[tf] = sumOrig / 1000;
+                    todayForecastByTimeframe[tf] = sumScaled / 1000;
                 }
 
                 todaysPartialHtml = `
@@ -286,22 +288,22 @@ class StatisticsManager {
                                 <div style="text-align: center; padding: 6px; background-color: rgba(76,175,80,0.15); border-radius: 4px;">
                                     <div style="color: #999; font-size: 0.75em;">T1</div>
                                     <div style="color: #7ccc7c;">R: ${formatKwh(todaysActual['1'])}</div>
-                                    <div style="color: #aaa;">F: ${todayForecastByTimeframe[1] ? todayForecastByTimeframe[1].toFixed(2) + ' kWh' : '-- kWh'}</div>
+                                    <div style="color: #aaa;">F: ${todayForecastByTimeframeOriginal[1]?.toFixed(2) || '--'} → ${todayForecastByTimeframe[1]?.toFixed(2) || '--'} kWh</div>
                                 </div>
                                 <div style="text-align: center; padding: 6px; background-color: rgba(76,175,80,0.15); border-radius: 4px;">
                                     <div style="color: #999; font-size: 0.75em;">T2</div>
                                     <div style="color: #7ccc7c;">R: ${formatKwh(todaysActual['2'])}</div>
-                                    <div style="color: #aaa;">F: ${todayForecastByTimeframe[2] ? todayForecastByTimeframe[2].toFixed(2) + ' kWh' : '-- kWh'}</div>
+                                    <div style="color: #aaa;">F: ${todayForecastByTimeframeOriginal[2]?.toFixed(2) || '--'} → ${todayForecastByTimeframe[2]?.toFixed(2) || '--'} kWh</div>
                                 </div>
                                 <div style="text-align: center; padding: 6px; background-color: rgba(255,193,7,0.15); border-radius: 4px;">
                                     <div style="color: #999; font-size: 0.75em;">T3</div>
                                     <div style="color: #ffd860;">R: ${formatKwh(todaysActual['3'])}</div>
-                                    <div style="color: #aaa;">F: ${todayForecastByTimeframe[3] ? todayForecastByTimeframe[3].toFixed(2) + ' kWh' : '-- kWh'}</div>
+                                    <div style="color: #aaa;">F: ${todayForecastByTimeframeOriginal[3]?.toFixed(2) || '--'} → ${todayForecastByTimeframe[3]?.toFixed(2) || '--'} kWh</div>
                                 </div>
                                 <div style="text-align: center; padding: 6px; background-color: rgba(244,67,54,0.15); border-radius: 4px;">
                                     <div style="color: #999; font-size: 0.75em;">T4</div>
                                     <div style="color: #f77777;">R: ${formatKwh(todaysActual['4'])}</div>
-                                    <div style="color: #aaa;">F: ${todayForecastByTimeframe[4] ? todayForecastByTimeframe[4].toFixed(2) + ' kWh' : '-- kWh'}</div>
+                                    <div style="color: #aaa;">F: ${todayForecastByTimeframeOriginal[4]?.toFixed(2) || '--'} → ${todayForecastByTimeframe[4]?.toFixed(2) || '--'} kWh</div>
                                 </div>
                             </div>
                         </div>
