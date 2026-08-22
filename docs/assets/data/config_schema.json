@@ -1866,7 +1866,7 @@
           true
         ]
       },
-      "hot_reload": false,
+      "hot_reload": true,
       "display_group": "Sensors"
     },
     {
@@ -1876,9 +1876,7 @@
       "section": "pv_autoscaling",
       "level": "standard",
       "description": "Data source type (Home Assistant or OpenHAB) for reading PV sensor",
-      "labels": [
-        "restart_required"
-      ],
+      "labels": [],
       "help_url": "configuration.html#pv-autoscaling",
       "validation": {
         "choices": [
@@ -1894,7 +1892,7 @@
           false
         ]
       },
-      "hot_reload": false,
+      "hot_reload": true,
       "display_group": "Connection"
     },
     {
@@ -1904,9 +1902,7 @@
       "section": "pv_autoscaling",
       "level": "standard",
       "description": "Override URL for data source (used when not reusing central Data Source)",
-      "labels": [
-        "restart_required"
-      ],
+      "labels": [],
       "help_url": "",
       "validation": {},
       "depends_on": {
@@ -1917,7 +1913,7 @@
           false
         ]
       },
-      "hot_reload": false,
+      "hot_reload": true,
       "display_group": "Connection"
     },
     {
@@ -1927,9 +1923,7 @@
       "section": "pv_autoscaling",
       "level": "standard",
       "description": "Bearer token for manual data source access (only when not using central data source)",
-      "labels": [
-        "restart_required"
-      ],
+      "labels": [],
       "help_url": "",
       "validation": {},
       "depends_on": {
@@ -1940,7 +1934,28 @@
           false
         ]
       },
-      "hot_reload": false,
+      "hot_reload": true,
+      "display_group": "Connection"
+    },
+    {
+      "key": "pv_autoscaling.ssl_ignore",
+      "type": "bool",
+      "default": false,
+      "section": "pv_autoscaling",
+      "level": "expert",
+      "description": "Skip TLS certificate verification for the manual data source (self-signed certificates)",
+      "labels": [],
+      "help_url": "",
+      "validation": {},
+      "depends_on": {
+        "pv_autoscaling.enabled": [
+          true
+        ],
+        "pv_autoscaling.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
       "display_group": "Connection"
     },
     {

@@ -1449,6 +1449,7 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#pv-autoscaling",
         depends_on={"pv_autoscaling.enabled": [True]},
         validation={"required": True},
+        hot_reload=True,
         display_group="Sensors",
     ),
     FieldDef(
@@ -1461,7 +1462,7 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#pv-autoscaling",
         validation={"choices": ["homeassistant", "openhab"]},
         depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
-        labels=["restart_required"],
+        hot_reload=True,
         display_group="Connection",
     ),
     FieldDef(
@@ -1472,7 +1473,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Override URL for data source (used when not reusing central Data Source)",
         depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
-        labels=["restart_required"],
+        hot_reload=True,
         display_group="Connection",
     ),
     FieldDef(
@@ -1483,7 +1484,18 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Bearer token for manual data source access (only when not using central data source)",
         depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
-        labels=["restart_required"],
+        hot_reload=True,
+        display_group="Connection",
+    ),
+    FieldDef(
+        key="pv_autoscaling.ssl_ignore",
+        field_type="bool",
+        default=False,
+        section="pv_autoscaling",
+        level="expert",
+        description="Skip TLS certificate verification for the manual data source (self-signed certificates)",
+        depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
+        hot_reload=True,
         display_group="Connection",
     ),
     FieldDef(

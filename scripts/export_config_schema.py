@@ -18,18 +18,11 @@ import sys
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-import importlib.util
+from src.config_web.schema import ConfigSchema  # noqa: E402
 
 
 def export_schema():
     """Export the full config schema to JSON."""
-    # Load schema module directly to avoid importing package-level
-    # __init__.py which may require optional runtime dependencies (flask).
-    schema_path = os.path.join(project_root, "src", "config_web", "schema.py")
-    spec = importlib.util.spec_from_file_location("config_schema_module", schema_path)
-    schema_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(schema_mod)
-    ConfigSchema = schema_mod.ConfigSchema
     schema = ConfigSchema()
     data = {
         "fields": schema.to_json(),
