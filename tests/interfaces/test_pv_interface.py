@@ -1322,6 +1322,29 @@ def test_victron_dispatch_routing(monkeypatch):
 # evcc tests
 # ---------------------------------------------------------------------------
 
+def test_evcc_compact_unix_timestamp_forecast_is_supported(monkeypatch):
+    """Support EVCC #32391 compact [unix_timestamp, power] entries."""
+    config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
+    config_source = {"source": "evcc", "use_real_data_correction": False}
+    base = real_datetime.datetime.now(real_datetime.timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    compact_timeseries = [
+        [int((base + real_datetime.timedelta(minutes=15 * i)).timestamp()), 40.0]
+        for i in range(192)
+    ]
+
+    def mock_retry_request(request_func, error_handler, **kwargs):
+        return compact_timeseries, "1.0"
+
+    monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
+    pv = PvInterface(config_source, [config_entry], 900, {"url": "http://dummy-evcc"}, timezone="UTC")
+
+    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
+
+    assert len(result) == 192
+    assert result == [10.0] * 192
+
 def test_evcc_scaling_enabled_applies_scale_factor(monkeypatch):
 
     def test_evcc_scaling_disabled_uses_1(monkeypatch):

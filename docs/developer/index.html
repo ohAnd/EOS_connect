@@ -19,7 +19,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.3.36</span>
+                <span class="version-badge">v0.3.37</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -506,6 +506,14 @@ pytest --cov=src tests/
 
 # Run with verbose output
 pytest -v tests/</code></pre>
+
+            <h3>EVCC Forecast Compatibility</h3>
+            <p>
+                The PV interface accepts both legacy EVCC forecast entries (<code>{ts, val}</code>) and the
+                compact wire format introduced by EVCC (<code>[unix_timestamp, value]</code>). Unix timestamps
+                in seconds and milliseconds are supported. EVCC values are power in watts for 15-minute slots
+                and are converted to Wh before the common PV forecast array is built.
+            </p>
 
             <h3>Writing Tests</h3>
             <h4>Test File Naming</h4>

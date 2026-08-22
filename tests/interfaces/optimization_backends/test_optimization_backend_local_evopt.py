@@ -18,19 +18,41 @@ Usage:
 
 # pylint: disable=protected-access
 
-import pytest
-import pytz
+import subprocess
 from datetime import datetime as _real_datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+import pulp
+import pytz
+
 from src.interfaces.optimization_backends.optimization_backend_local_evopt import LocalEVOptBackend
+from src.interfaces.optimization_backends.local_evopt import optimizer as _optimizer_mod
 from src.interfaces.optimization_backends.local_evopt.optimizer import (
     BatteryConfig,
+    CbcSolverUnavailableError,
     GridConfig,
     OptimizationStrategy,
     Optimizer,
     TimeSeriesData,
+    _cbc_runs,
+    _resolve_cbc_solver,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_cbc_probe_cache():
+    """
+    Reset the module-level CBC probe cache around every test.
+
+    The probe result is cached for the process lifetime, so without this a
+    mocked selection would leak into the tests further down this file that
+    perform real solves.
+    """
+    _optimizer_mod._resolved_cbc = None
+    yield
+    _optimizer_mod._resolved_cbc = None
 
 
 # ---------------------------------------------------------------------------
@@ -591,6 +613,168 @@ class TestOptimizerSettings:
 # ---------------------------------------------------------------------------
 # 9. OptimizationInterface backend selection
 # ---------------------------------------------------------------------------
+
+_OPT = "src.interfaces.optimization_backends.local_evopt.optimizer"
+_BUNDLED_CBC = pulp.PULP_CBC_CMD.pulp_cbc_path
+
+
+class TestCbcSolverSelection:
+    """Test auto-detection of system vs bundled CBC solver."""
+
+    def test_uses_system_binary_when_available(self):
+        """Prefer a system-installed CBC executable when present on PATH."""
+        with patch(f"{_OPT}.shutil.which", return_value="/usr/bin/cbc"), \
+             patch(f"{_OPT}._cbc_runs", return_value=None):
+            solver = _resolve_cbc_solver(
+                msg=0,
+                num_threads=2,
+                time_limit=30.0,
+                gapRel=0.01,
+            )
+
+        # Both candidates use COIN_CMD: PULP_CBC_CMD rejects custom paths, and
+        # COIN_CMD is its base class with an identical solve path.
+        assert isinstance(solver, pulp.COIN_CMD)
+        assert solver.path == "/usr/bin/cbc"
+        assert solver.msg == 0
+        assert solver.optionsDict.get("threads") == 2
+        assert solver.timeLimit == 30.0
+        assert solver.optionsDict.get("gapRel") == 0.01
+
+    def test_falls_back_to_bundled_binary_when_no_system_cbc(self):
+        """Fall back to the PuLP bundled CBC when no system binary is found."""
+        with patch(f"{_OPT}.shutil.which", return_value=None), \
+             patch(f"{_OPT}._cbc_runs", return_value=None):
+            solver = _resolve_cbc_solver(
+                msg=0,
+                num_threads=4,
+                time_limit=120.0,
+                gapRel=0.05,
+            )
+
+        assert isinstance(solver, pulp.COIN_CMD)
+        assert solver.path == _BUNDLED_CBC
+        assert solver.optionsDict.get("threads") == 4
+        assert solver.timeLimit == 120.0
+        assert solver.optionsDict.get("gapRel") == 0.05
+
+    def test_broken_system_cbc_does_not_shadow_bundled(self):
+        """
+        A system cbc that cannot be executed must not win over a working
+        bundled binary. Regression guard: the previous implementation trusted
+        shutil.which() without ever running the candidate.
+        """
+        def _probe(path):
+            return "boom: cannot exec" if path == "/usr/bin/cbc" else None
+
+        with patch(f"{_OPT}.shutil.which", return_value="/usr/bin/cbc"), \
+             patch(f"{_OPT}._cbc_runs", side_effect=_probe):
+            solver = _resolve_cbc_solver(msg=0)
+
+        assert solver.path == _BUNDLED_CBC
+
+    def test_raises_when_no_cbc_can_run(self):
+        """
+        When neither candidate executes — the Alpine/musl x86_64 case — raise an
+        actionable error instead of leaking a bare FileNotFoundError from the
+        solve (issues #260, #264, #265, #273).
+        """
+        with patch(f"{_OPT}.shutil.which", return_value="/usr/bin/cbc"), \
+             patch(f"{_OPT}._cbc_runs", return_value="missing ELF interpreter"):
+            with pytest.raises(CbcSolverUnavailableError) as excinfo:
+                _resolve_cbc_solver(msg=0)
+
+        message = str(excinfo.value)
+        assert "missing ELF interpreter" in message
+        assert "system CBC" in message
+        assert "bundled CBC" in message
+        # Must tell the user what to actually do about it.
+        assert "add-on" in message
+
+    def test_probe_result_is_cached(self):
+        """The probe forks a subprocess, so it must run once per process."""
+        with patch(f"{_OPT}.shutil.which", return_value="/usr/bin/cbc"), \
+             patch(f"{_OPT}._cbc_runs", return_value=None) as probe:
+            _resolve_cbc_solver(msg=0)
+            _resolve_cbc_solver(msg=0)
+            _resolve_cbc_solver(msg=0)
+
+        assert probe.call_count == 1
+
+    def test_default_settings_forwarded(self):
+        """Default OptimizerSettings values are forwarded to the solver."""
+        with patch(f"{_OPT}.shutil.which", return_value="/usr/bin/cbc"), \
+             patch(f"{_OPT}._cbc_runs", return_value=None):
+            solver = _resolve_cbc_solver(msg=1)
+
+        assert solver.msg == 1
+        assert solver.optionsDict.get("threads") is None
+        assert solver.timeLimit is None
+        assert solver.optionsDict.get("gapRel") is None
+
+
+class TestCbcProbe:
+    """Test _cbc_runs() rejection reasons — no real subprocess is spawned."""
+
+    def test_accepts_clean_exit(self):
+        """A candidate that runs and exits 0 is accepted."""
+        with patch(f"{_OPT}.subprocess.run", return_value=SimpleNamespace(returncode=0)):
+            assert _cbc_runs("/usr/bin/cbc") is None
+
+    def test_missing_elf_interpreter(self):
+        """The Alpine/musl case: the file exists but execve returns ENOENT."""
+        with patch(f"{_OPT}.subprocess.run", side_effect=FileNotFoundError()):
+            reason = _cbc_runs("/opt/venv/.../solverdir/cbc/linux/i64/cbc")
+
+        assert reason is not None
+        assert "ELF interpreter" in reason
+        assert "musl" in reason
+
+    def test_illegal_instruction(self):
+        """A binary needing CPU features the host lacks (Proxmox kvm64)."""
+        with patch(f"{_OPT}.subprocess.run", return_value=SimpleNamespace(returncode=-4)):
+            reason = _cbc_runs("/usr/bin/cbc")
+
+        assert reason is not None
+        assert "signal 4" in reason
+        assert "illegal instruction" in reason
+
+    def test_nonzero_exit(self):
+        """A candidate that runs but reports failure is rejected."""
+        with patch(f"{_OPT}.subprocess.run", return_value=SimpleNamespace(returncode=1)):
+            reason = _cbc_runs("/usr/bin/cbc")
+
+        assert reason is not None
+        assert "status 1" in reason
+
+    def test_timeout(self):
+        """A candidate that hangs is rejected rather than blocking the solve."""
+        with patch(
+            f"{_OPT}.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="cbc", timeout=15.0),
+        ):
+            reason = _cbc_runs("/usr/bin/cbc")
+
+        assert reason is not None
+        assert "15s" in reason
+
+    def test_other_oserror(self):
+        """Any other OSError (e.g. permissions) is reported, not raised."""
+        with patch(f"{_OPT}.subprocess.run", side_effect=PermissionError("denied")):
+            reason = _cbc_runs("/usr/bin/cbc")
+
+        assert reason is not None
+        assert "could not be started" in reason
+
+    def test_real_bundled_binary_probe(self):
+        """
+        Sanity check against the actual installed pulp binary. On glibc CI this
+        proves the probe accepts a genuinely working CBC rather than only
+        agreeing with mocks.
+        """
+        reason = _cbc_runs(_BUNDLED_CBC)
+        assert reason is None, f"bundled CBC unexpectedly rejected: {reason}"
+
 
 class TestOptimizationInterfaceSelection:
     """Test OptimizationInterface backend selection for local_evopt."""

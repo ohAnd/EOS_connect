@@ -30,19 +30,157 @@ Modifications made for EOS_connect integration (adapted from main branch, ~2025-
 - Added 'emergency_reserve' discharging strategy (end-of-horizon SOC floor)
 - Added 'emergency_reserve' fields (s_reserve) to BatteryConfig and corresponding
   penalty variable/constraint in the MILP model
-- Added gapRel to OptimizerSettings and PULP_CBC_CMD invocation (1% optimality gap)
+- Added gapRel to OptimizerSettings and the CBC invocation (1% optimality gap)
+- Solver resolution probes CBC candidates with a real execve() and prefers the
+  first that runs (system PATH, then pulp's bundled binary), because pulp's
+  bundled x86_64 CBC is glibc-linked and cannot exec on Alpine/musl
 - Per-slot tight Big-M bounds in energy-balance and battery constraints replace the
   upstream global M=1e6, tightening the LP relaxation and reducing B&B tree size
 - or 0.0 guard on pulp.value() calls in solve() to handle None results
 - Module is invoked in-process; no HTTP server needed
 """
 
+import logging
+import shutil
+import subprocess
 from dataclasses import dataclass, field
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pulp
+
+# eos_connect.py attaches its handlers to the "__main__" logger, not to root, so
+# a logging.getLogger(__name__) here propagates to a handler-less root and the
+# solver diagnostics are silently discarded.
+logger = logging.getLogger("__main__")
+
+# Seconds allowed for a CBC candidate to answer `cbc -quit`.
+CBC_PROBE_TIMEOUT_S = 15.0
+
+# Cached probe result: the CBC path to use, or None until probed. The probe
+# forks a subprocess and solves run on a timer, so it must happen only once.
+_resolved_cbc: Optional[str] = None
+
+
+class CbcSolverUnavailableError(RuntimeError):
+    """No runnable CBC binary could be found for the built-in optimizer."""
+
+
+def _cbc_runs(path: str) -> Optional[str]:
+    """
+    Return None if `path` can actually be executed, else a rejection reason.
+
+    Executing the candidate is required, not optional: pulp's
+    COIN_CMD.available() only does os.path.exists() + os.access(X_OK), so on
+    Alpine/musl the glibc-linked CBC bundled in the pulp wheel passes that
+    check and then fails at solve time with a bare
+    "FileNotFoundError: .../solverdir/cbc/linux/i64/cbc" -- the file exists,
+    but its ELF interpreter /lib64/ld-linux-x86-64.so.2 does not.
+    """
+    try:
+        proc = subprocess.run(
+            [path, "-quit"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=CBC_PROBE_TIMEOUT_S,
+            check=False,
+        )
+    except FileNotFoundError:
+        return (
+            f"{path}: exists but cannot be started - missing ELF interpreter "
+            "(a glibc-linked binary on a musl system, e.g. Alpine Linux / "
+            "Home Assistant OS add-on)"
+        )
+    except OSError as exc:
+        return f"{path}: could not be started ({exc})"
+    except subprocess.TimeoutExpired:
+        return f"{path}: no response within {CBC_PROBE_TIMEOUT_S:.0f}s"
+    if proc.returncode < 0:
+        return (
+            f"{path}: killed by signal {-proc.returncode} "
+            "(signal 4 = illegal instruction: the binary needs CPU features "
+            "this machine does not provide, e.g. Proxmox kvm64/qemu64)"
+        )
+    if proc.returncode != 0:
+        return f"{path}: exited with status {proc.returncode}"
+    return None
+
+
+def _bundled_cbc_path() -> Optional[str]:
+    """Path of the CBC binary shipped inside the installed pulp wheel, if any."""
+    cls = getattr(pulp, "PULP_CBC_CMD", None)  # removed in PuLP 4.0
+    if cls is None:
+        return None
+    # Read the class attribute rather than instantiating, to avoid PuLP 3.x's
+    # "PULP_CBC_CMD will be removed in PuLP 4.0" deprecation warning.
+    return getattr(cls, "pulp_cbc_path", None)
+
+
+def probe_cbc_solver() -> str:
+    """
+    Determine once which CBC binary to use, logging the decision and any
+    rejections, and return its path.
+
+    Preference order:
+      1. a system `cbc` on PATH  -- lets an image ship a working build
+      2. the CBC bundled with pulp -- the historical default; fine on glibc
+
+    Both candidates must survive a real execve() probe, so a broken system
+    `cbc` no longer shadows a working bundled binary.
+    """
+    global _resolved_cbc  # pylint: disable=global-statement
+    if _resolved_cbc is not None:
+        return _resolved_cbc
+
+    rejections = []
+    candidates = (
+        ("system", shutil.which("cbc")),
+        ("bundled", _bundled_cbc_path()),
+    )
+    for label, path in candidates:
+        if not path:
+            logger.debug("[OPT-LocalEVopt] No %s CBC binary found", label)
+            continue
+        reason = _cbc_runs(path)
+        if reason is None:
+            logger.info("[OPT-LocalEVopt] Using %s CBC solver: %s", label, path)
+            _resolved_cbc = path
+            return path
+        rejections.append(f"{label} CBC -> {reason}")
+        logger.warning("[OPT-LocalEVopt] Rejected %s CBC -- %s", label, reason)
+
+    raise CbcSolverUnavailableError(
+        "No runnable CBC solver found for the built-in optimizer (local_evopt).\n"
+        + ("\n".join(f"  - {r}" for r in rejections) or "  - no CBC binary found at all")
+        + "\nOn Home Assistant OS x86_64 add-ons the CBC binary bundled with pulp "
+        "is glibc-linked and cannot run on Alpine/musl; update to an add-on "
+        "version that ships a static CBC solver, or switch the optimization "
+        "backend away from the built-in optimizer in Settings."
+    )
+
+
+def _resolve_cbc_solver(
+    msg: int = 0,
+    num_threads: Optional[int] = None,
+    time_limit: Optional[float] = None,
+    gapRel: Optional[float] = None,
+) -> pulp.LpSolver:
+    """
+    Return a configured PuLP CBC solver bound to a verified-runnable binary.
+
+    COIN_CMD is used for both candidates: it is PULP_CBC_CMD's own base class
+    with an identical solve path, it accepts an explicit path, and it survives
+    PuLP 4.0 dropping PULP_CBC_CMD.
+    """
+    return pulp.COIN_CMD(
+        path=probe_cbc_solver(),
+        msg=msg,
+        threads=num_threads,
+        timeLimit=time_limit,
+        gapRel=gapRel,
+    )
 
 
 @dataclass
@@ -704,10 +842,10 @@ class Optimizer:
         if self.problem is None:
             self.create_model()
 
-        solver = pulp.PULP_CBC_CMD(
+        solver = _resolve_cbc_solver(
             msg=0,
-            threads=self.settings.num_threads,
-            timeLimit=self.settings.time_limit,
+            num_threads=self.settings.num_threads,
+            time_limit=self.settings.time_limit,
             gapRel=self.settings.gapRel,
         )
 
