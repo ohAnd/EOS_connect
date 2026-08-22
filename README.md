@@ -96,12 +96,9 @@ Supported data sources and integrations:
 
 ⚠️ **Important: Proxmox / KVM64 CPU Limitation**
 
-If you experience issues with EOS Connect on **Proxmox** with the default CPU type, your VM is likely using `kvm64` (a generic CPU emulation). This can cause two types of failures:
+If EOS Connect **crashes with a segmentation fault on startup** on **Proxmox** with the default CPU type, your VM is likely using `kvm64` (a generic CPU emulation) which does not expose advanced CPU instructions (AVX, SSE4.2, …). The prebuilt `numpy` / `pandas` wheels need them.
 
-1. **Segmentation Fault on startup** — add-on crashes immediately
-2. **CBC solver error** (`local_evopt` fails with "file not found") — optimizer cannot run
-
-Both issues are caused by `kvm64` not emulating advanced CPU instructions (AVX, SSE4.2, etc.) that the CBC solver binary requires.
+> **Not this:** if `local_evopt` fails with `FileNotFoundError … solverdir/cbc/linux/i64/cbc`, that is **not** a CPU issue — see the add-on section below.
 
 **✅ Solution:**
 
@@ -117,7 +114,11 @@ After this change, EOS Connect (including `local_evopt`) will run normally and w
 
 ⚠️ **Important: Home Assistant OS Add-on (x86_64) CBC Solver**
 
-On x86_64 HAOS add-ons, the CBC solver binary bundled with `pulp` is compiled for glibc and cannot run on Alpine's musl runtime. EOS Connect now auto-detects a system-installed `cbc` (e.g. `/usr/bin/cbc` from the `coin-or-cbc` package) and prefers it over the bundled binary. Make sure your add-on version includes the native `coin-or-cbc` package; for full details see the [troubleshooting docs](https://ohAnd.github.io/EOS_connect/user-guide/index.html#troubleshooting).
+The CBC solver binary that ships inside the `pulp` package is, on x86_64 only, dynamically linked against glibc. The add-on images are Alpine-based (musl), which provides no glibc loader, so the binary cannot be started at all — Linux reports the misleading `FileNotFoundError: [Errno 2] No such file or directory` even though the file is present. aarch64 add-ons are unaffected, because the arm64 binary that `pulp` ships is statically linked.
+
+The add-on now installs a **statically linked CBC** of its own, which needs no glibc and runs on musl. Update to the latest add-on version and `local_evopt` works out of the box. EOS Connect also verifies the solver by actually executing it at startup and logs which binary it selected, so any remaining problem is visible in the log rather than surfacing as a cryptic error mid-optimization.
+
+For full details see the [troubleshooting docs](https://ohAnd.github.io/EOS_connect/user-guide/index.html#troubleshooting).
 
 **Note on SSL Certificate Verification:**
 By default, EOS Connect validates SSL certificates when connecting to Home Assistant or OpenHAB. If you use a setup with **self-signed or private CA certificates**, you can disable verification in Settings → Data Source → **SSL Ignore** (expert level, requires restart). Only enable this in **trusted private networks** where you fully control the network path. Currently, EOS Connect does not support supplying custom root CA certificates — this feature is planned for future releases. For production setups, we recommend obtaining a valid certificate through Let's Encrypt (free) or your organization's certificate authority.

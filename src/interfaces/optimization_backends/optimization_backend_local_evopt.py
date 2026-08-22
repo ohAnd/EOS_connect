@@ -18,11 +18,13 @@ import time
 from .optimization_backend_evopt import EVOptBackend
 from .local_evopt.optimizer import (
     BatteryConfig,
+    CbcSolverUnavailableError,
     GridConfig,
     OptimizationStrategy,
     Optimizer,
     OptimizerSettings,
     TimeSeriesData,
+    probe_cbc_solver,
 )
 
 logger = logging.getLogger("__main__")
@@ -53,6 +55,8 @@ class LocalEVOptBackend(EVOptBackend):
         time_zone:                pytz timezone for time calculations.
         num_threads:              CBC solver thread count (None = auto).
         time_limit:               CBC solver time limit in seconds (None = unlimited).
+                                  The CBC binary is resolved at construction time; see
+                                  local_evopt.optimizer.probe_cbc_solver().
         charging_strategy:        Strategy string for charging preferences.
         discharging_strategy:     Strategy string for discharging preferences.
         emergency_reserve_pct:    Minimum battery SOC at end-of-horizon (0-80 %).
@@ -94,6 +98,14 @@ class LocalEVOptBackend(EVOptBackend):
         # Initialize rolling average runtime tracking (5-element circular buffer)
         self.last_optimization_runtimes = [0.0] * 5
         self.last_optimization_runtime_number = 0
+        # Resolve the CBC binary now rather than on first solve: the probe forks a
+        # subprocess, and doing it inside the first solve would both hide the
+        # result from the startup log and inflate the rolling-average seed below.
+        try:
+            self.cbc_path = probe_cbc_solver()
+        except CbcSolverUnavailableError as exc:
+            self.cbc_path = None
+            logger.error("[OPT-LocalEVopt] %s", exc)
 
     def optimize(self, eos_request, timeout=180):
         """
@@ -143,10 +155,11 @@ class LocalEVOptBackend(EVOptBackend):
             elapsed = time.time() - start_time
             minutes, seconds = divmod(elapsed, 60)
             logger.info(
-                "[OPT-LocalEVopt] Solved in %d min %.2f sec — status: %s",
+                "[OPT-LocalEVopt] Solved in %d min %.2f sec — status: %s (cbc: %s)",
                 int(minutes),
                 seconds,
                 evopt_response.get("status", "unknown"),
+                self.cbc_path or "unresolved",
             )
 
             # Update rolling average runtime
@@ -175,12 +188,17 @@ class LocalEVOptBackend(EVOptBackend):
             )
             return eos_response, avg_runtime
 
+        except CbcSolverUnavailableError as exc:
+            # Already logged in full at construction time; keep the cyclic log terse
+            # but still hand the actionable message to the UI.
+            logger.error("[OPT-LocalEVopt] %s", exc)
+            return {"error": str(exc)}, None
         except ImportError as exc:
             logger.error(
                 "[OPT-LocalEVopt] PuLP is not installed — cannot run local optimizer. "
-                "Install it with: pip install pulp>=2.7.0 — error: %s", exc
+                "Install it with: pip install 'pulp>=2.7.0,<4' — error: %s", exc
             )
-            return {"error": "PuLP not installed — run: pip install pulp>=2.7.0"}, None
+            return {"error": "PuLP not installed — run: pip install 'pulp>=2.7.0,<4'"}, None
         except Exception as exc:  # pylint: disable=broad-except
             logger.error("[OPT-LocalEVopt] Optimization failed: %s", exc, exc_info=True)
             return {"error": f"Local optimizer failed: {exc}"}, None

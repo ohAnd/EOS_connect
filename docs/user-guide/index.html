@@ -19,7 +19,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.3.37</span>
+                <span class="version-badge">v0.3.38</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -800,12 +800,13 @@ docker-compose up -d</code></pre>
                         <td>Check <code>eos_connect_web_port: 8081</code> is not in use, verify firewall rules</td>
                     </tr>
                     <tr>
-                        <td><strong>Proxmox VM Issues:</strong><br>
-                        • Segmentation Fault on startup<br>
-                        • local_evopt fails: "CBC file not found"</td>
+                        <td><strong>Proxmox VM Issue:</strong><br>
+                        • Segmentation Fault on startup</td>
                         <td>VM using generic <code>kvm64</code> CPU emulation (default Proxmox setting)<br>
                         <br>
-                        <code>kvm64</code> does not emulate advanced CPU instructions (AVX, SSE4.2, etc.) required by the CBC solver binary.</td>
+                        <code>kvm64</code> does not emulate advanced CPU instructions (AVX, SSE4.2, etc.) required by the prebuilt <code>numpy</code> / <code>pandas</code> wheels.<br>
+                        <br>
+                        <em>Note: a <code>local_evopt</code> "CBC file not found" error is <strong>not</strong> caused by this — see the next row.</em></td>
                         <td><strong>Solution:</strong> Change VM CPU type in Proxmox:
                         <ol style="margin: 5px 0; padding-left: 20px;">
                         <li>Stop the HA VM</li>
@@ -813,7 +814,7 @@ docker-compose up -d</code></pre>
                         <li>Change Type from <code>kvm64</code> → <code>host</code></li>
                         <li>Restart the VM</li>
                         </ol>
-                        This passes through your physical CPU directly, enabling all required instructions. Both issues will be resolved.</td>
+                        This passes through your physical CPU directly, enabling all required instructions.</td>
                     </tr>
                 </tbody>
             </table>
@@ -850,14 +851,41 @@ docker-compose up -d</code></pre>
                     </tr>
                     <tr>
                         <td><strong>local_evopt fails on HAOS x86_64 add-on</strong><br>
-                        Logs show <code>CBC file not found</code> or <code>FileNotFoundError</code></td>
-                        <td>The CBC solver binary bundled with PyPI <code>pulp</code> is linked against glibc,
-                        but the Home Assistant OS add-on container uses Alpine Linux / musl.</td>
-                        <td>EOS Connect automatically prefers a system-installed <code>cbc</code>
-                        (e.g. <code>/usr/bin/cbc</code> from the Alpine <code>coin-or-cbc</code> package)
-                        when one is available, and falls back to the bundled binary only when needed.
-                        Make sure you are running an add-on version that includes the native
-                        <code>coin-or-cbc</code> package.</td>
+                        Logs show <code>FileNotFoundError: [Errno 2] No such file or directory:
+                        '.../solverdir/cbc/linux/i64/cbc'</code></td>
+                        <td>On x86_64 <em>only</em>, the CBC solver binary bundled with PyPI
+                        <code>pulp</code> is dynamically linked against glibc. The add-on container is
+                        Alpine Linux (musl), which provides no glibc loader
+                        (<code>/lib64/ld-linux-x86-64.so.2</code>), so the binary cannot be started —
+                        and Linux reports the misleading "No such file or directory" even though the
+                        file is there.<br>
+                        <br>
+                        aarch64 add-ons are unaffected: the arm64 binary <code>pulp</code> ships is
+                        statically linked. This is <strong>not</strong> a CPU/AVX issue.</td>
+                        <td><strong>Update to the latest add-on version.</strong> The add-on now
+                        installs a statically linked CBC that needs no glibc and runs on musl.<br>
+                        <br>
+                        EOS Connect verifies the solver by actually executing it at startup, and logs
+                        the binary it selected — look for
+                        <code>[OPT-LocalEVopt] Using system CBC solver: /usr/local/bin/cbc</code>.<br>
+                        <br>
+                        <em>Note:</em> installing the Alpine <code>coin-or-cbc</code> package is not a
+                        workaround — no such package exists in any Alpine repository. Adding
+                        <code>gcompat</code> does not help either, as CBC requires glibc's internal
+                        <code>__fpu_control</code> symbol which gcompat does not implement.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>local_evopt fails with</strong>
+                        <code>No runnable CBC solver found</code></td>
+                        <td>Neither a system <code>cbc</code> on <code>PATH</code> nor the binary
+                        bundled with <code>pulp</code> could be executed on this machine. The log line
+                        names the exact reason for each candidate.</td>
+                        <td>Read the two rejection reasons in the log. <em>"missing ELF interpreter"</em>
+                        means a glibc binary on a musl system — update the add-on (see the row above).
+                        <em>"killed by signal 4 (illegal instruction)"</em> means the CPU lacks
+                        instructions the binary needs — on Proxmox, switch the VM CPU type to
+                        <code>host</code>. Otherwise switch the optimization backend away from the
+                        built-in optimizer.</td>
                     </tr>
                 </tbody>
             </table>
