@@ -34,7 +34,11 @@ from .store import ConfigStore
 from .migration import migrate_yaml_to_store, migrate_ha_options_to_store
 from .merger import build_merged_config
 from .api import config_bp, init_api
-from ..persistence import PvYieldStore
+
+try:  # running from src/ as a script — src/ is on sys.path
+    from persistence import PvYieldStore
+except ImportError:  # imported as src.config_web (tests)
+    from ..persistence import PvYieldStore
 
 logger = logging.getLogger("__main__")
 
