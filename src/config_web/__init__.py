@@ -35,6 +35,11 @@ from .migration import migrate_yaml_to_store, migrate_ha_options_to_store
 from .merger import build_merged_config
 from .api import config_bp, init_api
 
+try:  # running from src/ as a script — src/ is on sys.path
+    from persistence import PvYieldStore
+except ImportError:  # imported as src.config_web (tests)
+    from ..persistence import PvYieldStore
+
 logger = logging.getLogger("__main__")
 
 
@@ -134,6 +139,16 @@ class ConfigWebModule:
             db_path,
         )
 
+        # Ensure PV yield history table exists for autoscaling feature. On failure the
+        # attribute stays None so callers degrade instead of hitting AttributeError.
+        self._pv_yield_store = None
+        try:
+            store = PvYieldStore(self._store)
+            store.ensure_schema()
+            self._pv_yield_store = store
+        except Exception:
+            logger.exception("[ConfigWeb] Failed to initialize PvYieldStore schema")
+
     def start_api(self, flask_app):
         """
         Phase 2 — register the Flask REST API blueprint.
@@ -223,3 +238,8 @@ class ConfigWebModule:
     def store(self) -> ConfigStore:
         """The SQLite config store."""
         return self._store
+
+    @property
+    def pv_yield_store(self) -> PvYieldStore:
+        """PvYieldStore wrapper for the pv_yield_history table."""
+        return getattr(self, "_pv_yield_store", None)

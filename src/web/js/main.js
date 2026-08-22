@@ -257,10 +257,10 @@ function handlingErrorInResponse(data_response) {
 async function showCurrentData() {
     //console.log("------- showCurrentControls -------");
     data_controls = await dataManager.fetchCurrentControls(currentTestScenario);
-    
+
     // Display startup errors from /logs/alerts endpoint (live updates)
     await displayStartupErrors(data_controls);
-    
+
     showCarChargingData(data_controls);
 
     // Use controlsManager to update controls (check if it exists first)

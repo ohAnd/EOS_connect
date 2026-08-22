@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,17 +8,20 @@
     <link rel="stylesheet" href="../assets/css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
 </head>
+
 <body>
     <!-- DRAFT BANNER - REMOVE WHEN FINALIZED -->
     <div class="draft-banner">
-        <i class="fas fa-exclamation-triangle"></i> DRAFT DOCUMENTATION - UNDER REVIEW <i class="fas fa-exclamation-triangle"></i>
+        <i class="fas fa-exclamation-triangle"></i> DRAFT DOCUMENTATION - UNDER REVIEW <i
+            class="fas fa-exclamation-triangle"></i>
     </div>
     <!-- END DRAFT BANNER -->
 
     <nav class="nav-header">
         <div class="nav-container">
             <a href="../index.html" class="nav-logo">
-                <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
+                <img src="../assets/images/icon.png" alt="EOS Connect"
+                    style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
                 <span class="version-badge">v0.3.38</span>
             </a>
@@ -31,8 +35,10 @@
                 <li><a href="../user-guide/configuration.html">Configuration</a></li>
                 <li><a href="../advanced/index.html">Advanced</a></li>
                 <li><a href="index.html" class="active">Developer</a></li>
-                <li><a href="https://github.com/ohAnd/EOS_connect" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
-                <li><a href="https://github.com/sponsors/ohAnd" target="_blank" title="Sponsor the project"><i class="fas fa-mug-hot"></i></a></li>
+                <li><a href="https://github.com/ohAnd/EOS_connect" target="_blank"><i class="fab fa-github"></i>
+                        GitHub</a></li>
+                <li><a href="https://github.com/sponsors/ohAnd" target="_blank" title="Sponsor the project"><i
+                            class="fas fa-mug-hot"></i></a></li>
             </ul>
         </div>
     </nav>
@@ -52,143 +58,143 @@
             </aside>
 
             <main class="main-content">
-        <div class="hero">
-            <h1>Developer Guide</h1>
-            <p>Architecture, contributing guidelines, and development setup</p>
-        </div>
+                <div class="hero">
+                    <h1>Developer Guide</h1>
+                    <p>Architecture, contributing guidelines, and development setup</p>
+                </div>
 
-        <!-- Quick Links -->
-        <div class="main-blocks">
-            <div class="block-card">
-                <div class="card-header">
-                    <div class="icon"><i class="fas fa-sitemap"></i></div>
-                    <h3>Architecture</h3>
+                <!-- Quick Links -->
+                <div class="main-blocks">
+                    <div class="block-card">
+                        <div class="card-header">
+                            <div class="icon"><i class="fas fa-sitemap"></i></div>
+                            <h3>Architecture</h3>
+                        </div>
+                        <p>System design and component overview</p>
+                        <a href="#architecture" class="btn">Learn →</a>
+                    </div>
+                    <div class="block-card">
+                        <div class="card-header">
+                            <div class="icon"><i class="fas fa-code-branch"></i></div>
+                            <h3>Contributing</h3>
+                        </div>
+                        <p>How to contribute to EOS Connect</p>
+                        <a href="#contributing" class="btn">Contribute →</a>
+                    </div>
+                    <div class="block-card">
+                        <div class="card-header">
+                            <div class="icon"><i class="fas fa-vial"></i></div>
+                            <h3>Testing</h3>
+                        </div>
+                        <p>Running and writing tests</p>
+                        <a href="#testing" class="btn">Test →</a>
+                    </div>
+                    <div class="block-card">
+                        <div class="card-header">
+                            <div class="icon"><i class="fas fa-wrench"></i></div>
+                            <h3>Dev Setup</h3>
+                        </div>
+                        <p>Setting up development environment</p>
+                        <a href="#dev-setup" class="btn">Setup →</a>
+                    </div>
+                    <div class="block-card">
+                        <div class="card-header">
+                            <div class="icon"><i class="fas fa-gear"></i></div>
+                            <h3>Config Web Module</h3>
+                        </div>
+                        <p>Web-based configuration system architecture</p>
+                        <a href="#config-web" class="btn">Explore →</a>
+                    </div>
                 </div>
-                <p>System design and component overview</p>
-                <a href="#architecture" class="btn">Learn →</a>
-            </div>
-            <div class="block-card">
-                <div class="card-header">
-                    <div class="icon"><i class="fas fa-code-branch"></i></div>
-                    <h3>Contributing</h3>
-                </div>
-                <p>How to contribute to EOS Connect</p>
-                <a href="#contributing" class="btn">Contribute →</a>
-            </div>
-            <div class="block-card">
-                <div class="card-header">
-                    <div class="icon"><i class="fas fa-vial"></i></div>
-                    <h3>Testing</h3>
-                </div>
-                <p>Running and writing tests</p>
-                <a href="#testing" class="btn">Test →</a>
-            </div>
-            <div class="block-card">
-                <div class="card-header">
-                    <div class="icon"><i class="fas fa-wrench"></i></div>
-                    <h3>Dev Setup</h3>
-                </div>
-                <p>Setting up development environment</p>
-                <a href="#dev-setup" class="btn">Setup →</a>
-            </div>
-            <div class="block-card">
-                <div class="card-header">
-                    <div class="icon"><i class="fas fa-gear"></i></div>
-                    <h3>Config Web Module</h3>
-                </div>
-                <p>Web-based configuration system architecture</p>
-                <a href="#config-web" class="btn">Explore →</a>
-            </div>
-        </div>
 
-        <!-- Architecture -->
-        <div class="content-section" id="architecture">
-            <h2><i class="fas fa-building"></i> Architecture Overview</h2>
+                <!-- Architecture -->
+                <div class="content-section" id="architecture">
+                    <h2><i class="fas fa-building"></i> Architecture Overview</h2>
 
-            <h3>System Components</h3>
-            <div class="feature-grid">
-                <div class="feature-item">
-                    <h4>eos_connect.py</h4>
-                    <p>Main application entry point and orchestration</p>
-                </div>
-                <div class="feature-item">
-                    <h4>config.py</h4>
-                    <p>Bootstrap configuration, HA addon detection, ENV variable loading</p>
-                </div>
-                <div class="feature-item">
-                    <h4>config_web/</h4>
-                    <p>Web-based configuration module (schema, SQLite store, REST API, hot-reload)</p>
-                </div>
-                <div class="feature-item">
-                    <h4>interfaces/</h4>
-                    <p>Data source and control interfaces</p>
-                </div>
-                <div class="feature-item">
-                    <h4>web/</h4>
-                    <p>Web dashboard, config UI, setup wizard (HTML/CSS/JS)</p>
-                </div>
-            </div>
+                    <h3>System Components</h3>
+                    <div class="feature-grid">
+                        <div class="feature-item">
+                            <h4>eos_connect.py</h4>
+                            <p>Main application entry point and orchestration</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4>config.py</h4>
+                            <p>Bootstrap configuration, HA addon detection, ENV variable loading</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4>config_web/</h4>
+                            <p>Web-based configuration module (schema, SQLite store, REST API, hot-reload)</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4>interfaces/</h4>
+                            <p>Data source and control interfaces</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4>web/</h4>
+                            <p>Web dashboard, config UI, setup wizard (HTML/CSS/JS)</p>
+                        </div>
+                    </div>
 
-            <h3>Core Interfaces</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Interface</th>
-                        <th>Purpose</th>
-                        <th>File</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>Base Control</td>
-                        <td>Core control state management</td>
-                        <td>base_control.py</td>
-                    </tr>
-                    <tr>
-                        <td>Battery Interface</td>
-                        <td>Battery data retrieval and management</td>
-                        <td>battery_interface.py</td>
-                    </tr>
-                    <tr>
-                        <td>PV Interface</td>
-                        <td>Solar forecast retrieval</td>
-                        <td>pv_interface.py</td>
-                    </tr>
-                    <tr>
-                        <td>Price Interface</td>
-                        <td>Electricity price forecasts</td>
-                        <td>price_interface.py</td>
-                    </tr>
-                    <tr>
-                        <td>Load Interface</td>
-                        <td>Household load data</td>
-                        <td>load_interface.py</td>
-                    </tr>
-                    <tr>
-                        <td>Inverter (Fronius)</td>
-                        <td>Inverter control and monitoring</td>
-                        <td>inverter_fronius_v2.py</td>
-                    </tr>
-                    <tr>
-                        <td>EVCC Interface</td>
-                        <td>EV charging control</td>
-                        <td>evcc_interface.py</td>
-                    </tr>
-                    <tr>
-                        <td>MQTT Interface</td>
-                        <td>MQTT publishing and subscription</td>
-                        <td>mqtt_interface.py</td>
-                    </tr>
-                    <tr>
-                        <td>Optimization Interface</td>
-                        <td>EOS/EVopt communication</td>
-                        <td>optimization_interface.py</td>
-                    </tr>
-                </tbody>
-            </table>
+                    <h3>Core Interfaces</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Interface</th>
+                                <th>Purpose</th>
+                                <th>File</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Base Control</td>
+                                <td>Core control state management</td>
+                                <td>base_control.py</td>
+                            </tr>
+                            <tr>
+                                <td>Battery Interface</td>
+                                <td>Battery data retrieval and management</td>
+                                <td>battery_interface.py</td>
+                            </tr>
+                            <tr>
+                                <td>PV Interface</td>
+                                <td>Solar forecast retrieval</td>
+                                <td>pv_interface.py</td>
+                            </tr>
+                            <tr>
+                                <td>Price Interface</td>
+                                <td>Electricity price forecasts</td>
+                                <td>price_interface.py</td>
+                            </tr>
+                            <tr>
+                                <td>Load Interface</td>
+                                <td>Household load data</td>
+                                <td>load_interface.py</td>
+                            </tr>
+                            <tr>
+                                <td>Inverter (Fronius)</td>
+                                <td>Inverter control and monitoring</td>
+                                <td>inverter_fronius_v2.py</td>
+                            </tr>
+                            <tr>
+                                <td>EVCC Interface</td>
+                                <td>EV charging control</td>
+                                <td>evcc_interface.py</td>
+                            </tr>
+                            <tr>
+                                <td>MQTT Interface</td>
+                                <td>MQTT publishing and subscription</td>
+                                <td>mqtt_interface.py</td>
+                            </tr>
+                            <tr>
+                                <td>Optimization Interface</td>
+                                <td>EOS/EVopt communication</td>
+                                <td>optimization_interface.py</td>
+                            </tr>
+                        </tbody>
+                    </table>
 
-            <h3>Data Flow</h3>
-            <pre><code>1. Main Loop (every refresh_time minutes)
+                    <h3>Data Flow</h3>
+                    <pre><code>1. Main Loop (every refresh_time minutes)
    ├─ Fetch battery SOC (battery_interface)
    ├─ Fetch PV forecast (pv_interface)
    ├─ Fetch price forecast (price_interface)
@@ -208,21 +214,25 @@
    ├─ Hot-reloadable fields → apply instantly via HotReloadAdapter
    └─ Restart-required fields → flag in UI, apply on next restart</code></pre>
 
-            <h3>Interface Creation & Startup Error Handling</h3>
-            <p>Two new modules work together to centralize interface creation and provide startup visibility:</p>
+                    <h3>Interface Creation & Startup Error Handling</h3>
+                    <p>Two new modules work together to centralize interface creation and provide startup visibility:
+                    </p>
 
-            <h4>InterfaceFactory (src/interface_factory.py)</h4>
-            <p><strong>Factory pattern for centralized interface creation with integrated startup validation.</strong></p>
-            <p>Responsibilities:</p>
-            <ul>
-                <li>Instantiate all interface types (Load, Battery, Price, PV, MQTT, EVCC, Inverter, Optimization)</li>
-                <li>Catch errors during instantiation</li>
-                <li>Register errors with <code>StartupValidator</code> for visibility in startup panel</li>
-                <li>Support critical vs non-critical interfaces (critical failures halt startup, non-critical fall back to defaults)</li>
-                <li>Track created interfaces for lifecycle management</li>
-            </ul>
-            <p><strong>Usage in eos_connect.py:</strong></p>
-            <pre><code>from interface_factory import InterfaceFactory
+                    <h4>InterfaceFactory (src/interface_factory.py)</h4>
+                    <p><strong>Factory pattern for centralized interface creation with integrated startup
+                            validation.</strong></p>
+                    <p>Responsibilities:</p>
+                    <ul>
+                        <li>Instantiate all interface types (Load, Battery, Price, PV, MQTT, EVCC, Inverter,
+                            Optimization)</li>
+                        <li>Catch errors during instantiation</li>
+                        <li>Register errors with <code>StartupValidator</code> for visibility in startup panel</li>
+                        <li>Support critical vs non-critical interfaces (critical failures halt startup, non-critical
+                            fall back to defaults)</li>
+                        <li>Track created interfaces for lifecycle management</li>
+                    </ul>
+                    <p><strong>Usage in eos_connect.py:</strong></p>
+                    <pre><code>from interface_factory import InterfaceFactory
 from startup_validator import StartupValidator
 
 # Initialize validator and factory at startup
@@ -242,25 +252,28 @@ load_interface = factory.create_load_interface(
     time_zone=time_zone,
     critical=False,  # Failure doesn't halt, uses default
 )</code></pre>
-            <p><strong>Benefits:</strong></p>
-            <ul>
-                <li>Reduces boilerplate in main app (no try/except for each interface)</li>
-                <li>Consistent error categorization across all interface types</li>
-                <li>Centralized startup error collection for web UI visibility</li>
-                <li>Easy to extend with new interface types</li>
-            </ul>
+                    <p><strong>Benefits:</strong></p>
+                    <ul>
+                        <li>Reduces boilerplate in main app (no try/except for each interface)</li>
+                        <li>Consistent error categorization across all interface types</li>
+                        <li>Centralized startup error collection for web UI visibility</li>
+                        <li>Easy to extend with new interface types</li>
+                    </ul>
 
-            <h4>StartupValidator (src/startup_validator.py)</h4>
-            <p><strong>Lightweight facade for startup error registration to the logging system.</strong></p>
-            <p>Responsibilities:</p>
-            <ul>
-                <li>Register startup errors with structured metadata</li>
-                <li>Write ERROR/WARNING logs captured by <code>MemoryLogHandler</code></li>
-                <li>Embed metadata markers in log messages for frontend parsing (e.g., <code>| Config: #section | ACTION REQUIRED</code>)</li>
-                <li>Act as single source of truth for startup errors accessible via <code>/logs/alerts</code> endpoint</li>
-            </ul>
-            <p><strong>Method signature:</strong></p>
-            <pre><code>validator.add_error(
+                    <h4>StartupValidator (src/startup_validator.py)</h4>
+                    <p><strong>Lightweight facade for startup error registration to the logging system.</strong></p>
+                    <p>Responsibilities:</p>
+                    <ul>
+                        <li>Register startup errors with structured metadata</li>
+                        <li>Write ERROR/WARNING logs captured by <code>MemoryLogHandler</code></li>
+                        <li>Embed metadata markers in log messages for frontend parsing (e.g.,
+                            <code>| Config: #section | ACTION REQUIRED</code>)
+                        </li>
+                        <li>Act as single source of truth for startup errors accessible via <code>/logs/alerts</code>
+                            endpoint</li>
+                    </ul>
+                    <p><strong>Method signature:</strong></p>
+                    <pre><code>validator.add_error(
     category="connectivity",        # initialization, configuration, connectivity
     component="battery_interface",  # Component name for identification
     severity="error",              # error or warning
@@ -269,18 +282,18 @@ load_interface = factory.create_load_interface(
     action_required=True,          # Flag for startup panel badge
     config_link="#battery",        # Link to config section
 )</code></pre>
-            <p><strong>Frontend Integration:</strong></p>
-            <p>The web UI's startup panel fetches errors via:</p>
-            <pre><code>GET /logs/alerts?startup_only=1&limit=20</code></pre>
-            <p>Errors with metadata markers are parsed and rendered with:</p>
-            <ul>
-                <li>Timestamp and occurrence count</li>
-                <li>ACTION REQUIRED badge (yellow) if flagged</li>
-                <li>"Open Configuration" link pointing to the config section</li>
-            </ul>
+                    <p><strong>Frontend Integration:</strong></p>
+                    <p>The web UI's startup panel fetches errors via:</p>
+                    <pre><code>GET /logs/alerts?startup_only=1&limit=20</code></pre>
+                    <p>Errors with metadata markers are parsed and rendered with:</p>
+                    <ul>
+                        <li>Timestamp and occurrence count</li>
+                        <li>ACTION REQUIRED badge (yellow) if flagged</li>
+                        <li>"Open Configuration" link pointing to the config section</li>
+                    </ul>
 
-            <h4>Startup Error Flow</h4>
-            <pre><code>Startup:
+                    <h4>Startup Error Flow</h4>
+                    <pre><code>Startup:
   InterfaceFactory.create_*_interface()
     │
     ├─ Try to create interface
@@ -307,17 +320,18 @@ Runtime (user views dashboard):
        ├─ Shows: timestamp, count, config link button
        └─ User clicks → showConfigurationMenu(section)</code></pre>
 
-            <h4>Extending with New Interface Types</h4>
-            <p>To add a new interface creation method to <code>InterfaceFactory</code>:</p>
-            <ol>
-                <li>Add method to <code>InterfaceFactory</code> following the pattern of existing methods</li>
-                <li>Specify error category, component name, config link, and whether critical</li>
-                <li>Call from <code>eos_connect.py</code> during startup</li>
-                <li>If instantiation fails, <code>StartupValidator.add_error()</code> is called automatically</li>
-                <li>Errors appear in startup panel within 1-2 seconds</li>
-            </ol>
-            <p><strong>Example:</strong></p>
-            <pre><code>def create_my_new_interface(
+                    <h4>Extending with New Interface Types</h4>
+                    <p>To add a new interface creation method to <code>InterfaceFactory</code>:</p>
+                    <ol>
+                        <li>Add method to <code>InterfaceFactory</code> following the pattern of existing methods</li>
+                        <li>Specify error category, component name, config link, and whether critical</li>
+                        <li>Call from <code>eos_connect.py</code> during startup</li>
+                        <li>If instantiation fails, <code>StartupValidator.add_error()</code> is called automatically
+                        </li>
+                        <li>Errors appear in startup panel within 1-2 seconds</li>
+                    </ol>
+                    <p><strong>Example:</strong></p>
+                    <pre><code>def create_my_new_interface(
     self,
     config: Dict[str, Any],
     critical: bool = True,
@@ -337,72 +351,72 @@ Runtime (user views dashboard):
         ),
     )</code></pre>
 
-            <h3>Startup Error Metadata in Logs</h3>
-            <p>Error messages can embed metadata for frontend parsing:</p>
-            <pre><code>Log message format:
+                    <h3>Startup Error Metadata in Logs</h3>
+                    <p>Error messages can embed metadata for frontend parsing:</p>
+                    <pre><code>Log message format:
 "[component] Title: Message | Config: #section | ACTION REQUIRED"
 
 Examples:
 "[eos_backend] EOS Connection failed: Connection timeout | Config: #eos | ACTION REQUIRED"
 "[battery_interface] Battery SOC error: Authentication failed | Config: #battery | ACTION REQUIRED"
 "[load_interface] Load data unavailable: Request timeout | Config: #load"</code></pre>
-            <p>The frontend's <code>parseAlertMeta()</code> function extracts:</p>
-            <ul>
-                <li><strong>Config link:</strong> Matches <code>Config: (#\w+)</code></li>
-                <li><strong>Action required flag:</strong> Presence of "ACTION REQUIRED"</li>
-                <li><strong>Component:</strong> Text in square brackets at start</li>
-            </ul>
-        </div>
+                    <p>The frontend's <code>parseAlertMeta()</code> function extracts:</p>
+                    <ul>
+                        <li><strong>Config link:</strong> Matches <code>Config: (#\w+)</code></li>
+                        <li><strong>Action required flag:</strong> Presence of "ACTION REQUIRED"</li>
+                        <li><strong>Component:</strong> Text in square brackets at start</li>
+                    </ul>
+                </div>
 
-        <!-- Contributing -->
-        <div class="content-section" id="contributing">
-            <h2><i class="fas fa-handshake"></i> Contributing</h2>
+                <!-- Contributing -->
+                <div class="content-section" id="contributing">
+                    <h2><i class="fas fa-handshake"></i> Contributing</h2>
 
-            <h3>Branch Strategy</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Branch Type</th>
-                        <th>Purpose</th>
-                        <th>Naming</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td><strong>main</strong></td>
-                        <td>Stable, tagged releases only</td>
-                        <td>-</td>
-                    </tr>
-                    <tr>
-                        <td><strong>develop</strong></td>
-                        <td>Integration branch (PR target)</td>
-                        <td>-</td>
-                    </tr>
-                    <tr>
-                        <td>feature</td>
-                        <td>New functionality</td>
-                        <td>feature/&lt;desc&gt; or feature/&lt;issue&gt;-&lt;desc&gt;</td>
-                    </tr>
-                    <tr>
-                        <td>bugfix</td>
-                        <td>Fix for develop</td>
-                        <td>bugfix/&lt;issue&gt;-&lt;desc&gt;</td>
-                    </tr>
-                    <tr>
-                        <td>hotfix</td>
-                        <td>Urgent production fix</td>
-                        <td>hotfix/&lt;issue&gt;-&lt;desc&gt;</td>
-                    </tr>
-                    <tr>
-                        <td>issue</td>
-                        <td>GitHub auto-created</td>
-                        <td>issue-&lt;number&gt;-&lt;desc&gt;</td>
-                    </tr>
-                </tbody>
-            </table>
+                    <h3>Branch Strategy</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Branch Type</th>
+                                <th>Purpose</th>
+                                <th>Naming</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>main</strong></td>
+                                <td>Stable, tagged releases only</td>
+                                <td>-</td>
+                            </tr>
+                            <tr>
+                                <td><strong>develop</strong></td>
+                                <td>Integration branch (PR target)</td>
+                                <td>-</td>
+                            </tr>
+                            <tr>
+                                <td>feature</td>
+                                <td>New functionality</td>
+                                <td>feature/&lt;desc&gt; or feature/&lt;issue&gt;-&lt;desc&gt;</td>
+                            </tr>
+                            <tr>
+                                <td>bugfix</td>
+                                <td>Fix for develop</td>
+                                <td>bugfix/&lt;issue&gt;-&lt;desc&gt;</td>
+                            </tr>
+                            <tr>
+                                <td>hotfix</td>
+                                <td>Urgent production fix</td>
+                                <td>hotfix/&lt;issue&gt;-&lt;desc&gt;</td>
+                            </tr>
+                            <tr>
+                                <td>issue</td>
+                                <td>GitHub auto-created</td>
+                                <td>issue-&lt;number&gt;-&lt;desc&gt;</td>
+                            </tr>
+                        </tbody>
+                    </table>
 
-            <h3>Contribution Workflow</h3>
-            <pre><code># 1. Update local
+                    <h3>Contribution Workflow</h3>
+                    <pre><code># 1. Update local
 git fetch origin
 git switch develop
 git pull --ff-only
@@ -433,34 +447,38 @@ git push -u origin feature/better-forecast
 # - Link relevant issues (Closes #123)
 # - Provide clear description</code></pre>
 
-            <h3>Code Quality Requirements</h3>
-            <ul>
-                <li><strong>Formatting:</strong> Use <a href="https://black.readthedocs.io/" target="_blank">Black</a> for all Python files</li>
-                <li><strong>Linting:</strong> <a href="https://pylint.pycqa.org/" target="_blank">Pylint</a> score ≥9.0</li>
-                <li><strong>Testing:</strong> Add/update tests for logic changes</li>
-                <li><strong>Documentation:</strong> Update relevant docs</li>
-            </ul>
+                    <h3>Code Quality Requirements</h3>
+                    <ul>
+                        <li><strong>Formatting:</strong> Use <a href="https://black.readthedocs.io/"
+                                target="_blank">Black</a> for all Python files</li>
+                        <li><strong>Linting:</strong> <a href="https://pylint.pycqa.org/" target="_blank">Pylint</a>
+                            score ≥9.0</li>
+                        <li><strong>Testing:</strong> Add/update tests for logic changes</li>
+                        <li><strong>Documentation:</strong> Update relevant docs</li>
+                    </ul>
 
-            <h3>Commit Message Format (Conventional Commits)</h3>
-            <pre><code>feat: add battery forecast smoothing
+                    <h3>Commit Message Format (Conventional Commits)</h3>
+                    <pre><code>feat: add battery forecast smoothing
 fix: correct negative PV handling
 docs: update MQTT topic table
 test: add tests for price calculation
 refactor: simplify config loading
 chore: update dependencies</code></pre>
 
-            <div class="alert alert-info">
-                <strong><i class="fas fa-lightbulb"></i> VS Code Tip:</strong> Install the <a href="https://github.com/microsoft/vscode-black-formatter" target="_blank">Black Formatter extension</a> for automatic formatting on save.
-            </div>
-        </div>
+                    <div class="alert alert-info">
+                        <strong><i class="fas fa-lightbulb"></i> VS Code Tip:</strong> Install the <a
+                            href="https://github.com/microsoft/vscode-black-formatter" target="_blank">Black Formatter
+                            extension</a> for automatic formatting on save.
+                    </div>
+                </div>
 
-        <!-- Testing -->
-        <div class="content-section" id="testing">
-            <h2><i class="fas fa-flask"></i> Testing</h2>
+                <!-- Testing -->
+                <div class="content-section" id="testing">
+                    <h2><i class="fas fa-flask"></i> Testing</h2>
 
-            <h3>Test Structure</h3>
-            <p>Tests are organized to mirror the source structure:</p>
-            <pre><code>tests/
+                    <h3>Test Structure</h3>
+                    <p>Tests are organized to mirror the source structure:</p>
+                    <pre><code>tests/
 ├── test_control_states.py
 ├── config_web/
 │   ├── test_api.py
@@ -494,8 +512,8 @@ chore: update dependencies</code></pre>
         ├── test_optimization_backend_eos.py
         └── test_optimization_backend_evopt.py</code></pre>
 
-            <h3>Running Tests</h3>
-            <pre><code># Run all tests
+                    <h3>Running Tests</h3>
+                    <pre><code># Run all tests
 pytest tests/
 
 # Run specific test file
@@ -507,24 +525,34 @@ pytest --cov=src tests/
 # Run with verbose output
 pytest -v tests/</code></pre>
 
-            <h3>EVCC Forecast Compatibility</h3>
-            <p>
-                The PV interface accepts both legacy EVCC forecast entries (<code>{ts, val}</code>) and the
-                compact wire format introduced by EVCC (<code>[unix_timestamp, value]</code>). Unix timestamps
-                in seconds and milliseconds are supported. EVCC values are power in watts for 15-minute slots
-                and are converted to Wh before the common PV forecast array is built.
-            </p>
+                    <h3>EVCC Forecast Compatibility</h3>
+                    <p>
+                        The PV interface accepts both legacy EVCC forecast entries (<code>{ts, val}</code>) and the
+                        compact wire format introduced by EVCC (<code>[unix_timestamp, value]</code>). Unix timestamps
+                        in seconds and milliseconds are supported. EVCC values are power in watts for 15-minute slots
+                        and are converted to Wh before the common PV forecast array is built.
+                    </p>
 
-            <h3>Writing Tests</h3>
-            <h4>Test File Naming</h4>
-            <ul>
-                <li>Place in <code>tests/</code> directory</li>
-                <li>Mirror source structure</li>
-                <li>Name as <code>test_&lt;module&gt;.py</code></li>
-            </ul>
+                    <h3>PV Auto-Scaling Development Helper</h3>
+                    <p>
+                        Runtime collection is implemented by <code>src/interfaces/pv_autoscaler.py</code> and stores
+                        forecast values in kWh through <code>src/persistence/pv_yield_store.py</code>. The manual seeding
+                        helper at <code>scripts/insert_data_to_db.py</code> is for test data only and is not used by the
+                        application. It accepts a database path and initializes the current PV history schema; call
+                        <code>insert_pv_yields()</code> from a test or Python shell when supplying sample timeframe
+                        data.
+                    </p>
 
-            <h4>Example Test</h4>
-            <pre><code>import pytest
+                    <h3>Writing Tests</h3>
+                    <h4>Test File Naming</h4>
+                    <ul>
+                        <li>Place in <code>tests/</code> directory</li>
+                        <li>Mirror source structure</li>
+                        <li>Name as <code>test_&lt;module&gt;.py</code></li>
+                    </ul>
+
+                    <h4>Example Test</h4>
+                    <pre><code>import pytest
 from src.interfaces.battery_interface import BatteryInterface
 
 def test_battery_soc_calculation():
@@ -550,29 +578,29 @@ def test_battery_temperature_protection():
     )
     assert power < 500  # Should be ~5-7.5% of max</code></pre>
 
-            <h3>Test Configuration</h3>
-            <p>Configure pytest in <code>pytest.ini</code>:</p>
-            <pre><code>[pytest]
+                    <h3>Test Configuration</h3>
+                    <p>Configure pytest in <code>pytest.ini</code>:</p>
+                    <pre><code>[pytest]
 testpaths = tests
 python_files = test_*.py
 python_classes = Test*
 python_functions = test_*</code></pre>
-        </div>
+                </div>
 
-        <!-- Development Setup -->
-        <div class="content-section" id="dev-setup">
-            <h2><i class="fas fa-wrench"></i> Development Setup</h2>
+                <!-- Development Setup -->
+                <div class="content-section" id="dev-setup">
+                    <h2><i class="fas fa-wrench"></i> Development Setup</h2>
 
-            <h3>Prerequisites</h3>
-            <ul>
-                <li>Python 3.11 or higher</li>
-                <li>Git</li>
-                <li>pip</li>
-                <li>(Optional) VS Code with Python extension</li>
-            </ul>
+                    <h3>Prerequisites</h3>
+                    <ul>
+                        <li>Python 3.11 or higher</li>
+                        <li>Git</li>
+                        <li>pip</li>
+                        <li>(Optional) VS Code with Python extension</li>
+                    </ul>
 
-            <h3>Setup Steps</h3>
-            <pre><code># 1. Clone repository
+                    <h3>Setup Steps</h3>
+                    <pre><code># 1. Clone repository
 git clone https://github.com/ohAnd/EOS_connect.git
 cd EOS_connect
 
@@ -591,9 +619,9 @@ python src/eos_connect.py
 # On first launch, a Setup Wizard in the web UI guides you through configuration.
 # Only bootstrap settings (port, timezone, log level) can optionally be set in config.yaml.</code></pre>
 
-            <h3>VS Code Configuration</h3>
-            <p>Recommended <code>.vscode/settings.json</code>:</p>
-            <pre><code>{
+                    <h3>VS Code Configuration</h3>
+                    <p>Recommended <code>.vscode/settings.json</code>:</p>
+                    <pre><code>{
   "python.defaultInterpreterPath": "./venv/bin/python",
   "python.linting.enabled": true,
   "python.linting.pylintEnabled": true,
@@ -609,47 +637,90 @@ python src/eos_connect.py
   "python.testing.pytestArgs": ["tests"]
 }</code></pre>
 
-            <h3>Environment Variables</h3>
-            <p>For development, you can override config with environment variables:</p>
-            <pre><code># Linux/Mac
+                    <h3>Environment Variables</h3>
+                    <p>For development, you can override config with environment variables:</p>
+                    <pre><code># Linux/Mac
 export EOS_CONNECT_LOG_LEVEL=debug
 export EOS_CONNECT_PORT=8081
 
 # Windows
 set EOS_CONNECT_LOG_LEVEL=debug
 set EOS_CONNECT_PORT=8081</code></pre>
-        </div>
+                </div>
 
-        <!-- Config Web Module -->
-        <div class="content-section" id="config-web">
-            <h2><i class="fas fa-gear"></i> Config Web Module</h2>
-            <p>The web-based configuration system lives in <code>src/config_web/</code> as a self-contained module. It replaces direct YAML editing with a browser UI, SQLite persistence, and a REST API &mdash; while keeping every existing interface working unchanged.</p>
+                <!-- Config Web Module -->
+                <div class="content-section" id="config-web">
+                    <h2><i class="fas fa-gear"></i> Config Web Module</h2>
+                    <p>The web-based configuration system lives in <code>src/config_web/</code> as a self-contained
+                        module. It replaces direct YAML editing with a browser UI, SQLite persistence, and a REST API
+                        &mdash; while keeping every existing interface working unchanged.</p>
 
-            <h3>Module Files</h3>
-            <table>
-                <thead><tr><th>File</th><th>Purpose</th></tr></thead>
-                <tbody>
-                    <tr><td><code>__init__.py</code></td><td><strong>ConfigWebModule</strong> facade &mdash; single entry point used by <code>eos_connect.py</code></td></tr>
-                    <tr><td><code>schema.py</code></td><td><strong>SPOT (Single Point of Truth)</strong> &mdash; all <code>FieldDef</code> entries, <code>BOOTSTRAP_KEYS</code>, <code>SECTION_META</code></td></tr>
-                    <tr><td><code>store.py</code></td><td>SQLite persistence (WAL mode, thread-safe, change callbacks)</td></tr>
-                    <tr><td><code>migration.py</code></td><td><code>config.yaml</code> &rarr; SQLite and HA <code>options.json</code> &rarr; SQLite migration</td></tr>
-                    <tr><td><code>merger.py</code></td><td>Builds merged config dict &mdash; same shape interfaces always received</td></tr>
-                    <tr><td><code>api.py</code></td><td>Flask Blueprint with 10 REST endpoints at <code>/api/config/</code></td></tr>
-                    <tr><td><code>hot_reload.py</code></td><td><code>HotReloadAdapter</code> &mdash; applies selected changes to running interfaces without restart</td></tr>
-                </tbody>
-            </table>
+                    <h3>Module Files</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>File</th>
+                                <th>Purpose</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>__init__.py</code></td>
+                                <td><strong>ConfigWebModule</strong> facade &mdash; single entry point used by
+                                    <code>eos_connect.py</code>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>schema.py</code></td>
+                                <td><strong>SPOT (Single Point of Truth)</strong> &mdash; all <code>FieldDef</code>
+                                    entries, <code>BOOTSTRAP_KEYS</code>, <code>SECTION_META</code></td>
+                            </tr>
+                            <tr>
+                                <td><code>store.py</code></td>
+                                <td>SQLite persistence (WAL mode, thread-safe, change callbacks)</td>
+                            </tr>
+                            <tr>
+                                <td><code>migration.py</code></td>
+                                <td><code>config.yaml</code> &rarr; SQLite and HA <code>options.json</code> &rarr;
+                                    SQLite migration</td>
+                            </tr>
+                            <tr>
+                                <td><code>merger.py</code></td>
+                                <td>Builds merged config dict &mdash; same shape interfaces always received</td>
+                            </tr>
+                            <tr>
+                                <td><code>api.py</code></td>
+                                <td>Flask Blueprint with 10 REST endpoints at <code>/api/config/</code></td>
+                            </tr>
+                            <tr>
+                                <td><code>hot_reload.py</code></td>
+                                <td><code>HotReloadAdapter</code> &mdash; applies selected changes to running interfaces
+                                    without restart</td>
+                            </tr>
+                        </tbody>
+                    </table>
 
-            <h3>Key Design Principles</h3>
-            <ul>
-                <li><strong>Zero interface changes:</strong> The merger produces the same dict shape interfaces always consumed. No code changes needed in existing interfaces.</li>
-                <li><strong>SPOT:</strong> <code>schema.py</code> defines all field metadata. The web UI, REST API validation, docs export, and merger all consume it &mdash; never duplicate field definitions.</li>
-                <li><strong>Bootstrap vs Store:</strong> ~5 bootstrap keys (<code>web_port</code>, <code>time_zone</code>, <code>log_level</code>, &hellip;) stay in <code>config.yaml</code> / ENV / HA options. Everything else lives in SQLite.</li>
-                <li><strong>3-level progressive disclosure:</strong> Fields have a <code>level</code> (<code>getting_started</code>, <code>standard</code>, <code>expert</code>) controlling visibility in the setup wizard and config UI.</li>
-                <li><strong>Static asset caching:</strong> HTML is revalidated on each load, while local CSS/JS assets use versioned URLs (<code>?v=&lt;app_version&gt;</code>) so browsers can cache aggressively and still fetch new assets automatically after upgrades.</li>
-            </ul>
+                    <h3>Key Design Principles</h3>
+                    <ul>
+                        <li><strong>Zero interface changes:</strong> The merger produces the same dict shape interfaces
+                            always consumed. No code changes needed in existing interfaces.</li>
+                        <li><strong>SPOT:</strong> <code>schema.py</code> defines all field metadata. The web UI, REST
+                            API validation, docs export, and merger all consume it &mdash; never duplicate field
+                            definitions.</li>
+                        <li><strong>Bootstrap vs Store:</strong> ~5 bootstrap keys (<code>web_port</code>,
+                            <code>time_zone</code>, <code>log_level</code>, &hellip;) stay in <code>config.yaml</code> /
+                            ENV / HA options. Everything else lives in SQLite.
+                        </li>
+                        <li><strong>3-level progressive disclosure:</strong> Fields have a <code>level</code>
+                            (<code>getting_started</code>, <code>standard</code>, <code>expert</code>) controlling
+                            visibility in the setup wizard and config UI.</li>
+                        <li><strong>Static asset caching:</strong> HTML is revalidated on each load, while local CSS/JS
+                            assets use versioned URLs (<code>?v=&lt;app_version&gt;</code>) so browsers can cache
+                            aggressively and still fetch new assets automatically after upgrades.</li>
+                    </ul>
 
-            <h3>SPOT Pipeline</h3>
-            <pre><code>schema.py (Python FieldDefs)
+                    <h3>SPOT Pipeline</h3>
+                    <pre><code>schema.py (Python FieldDefs)
    │
    ├──► export_config_schema.py ──► docs/assets/data/config_schema.json
    │                                     (consumed by GitHub Pages docs)
@@ -658,10 +729,13 @@ set EOS_CONNECT_PORT=8081</code></pre>
               │
               ├──► config.js  (ConfigurationManager reads fields + sections)
               └──► wizard.js  (SetupWizard reads fields + sections)</code></pre>
-            <p>When you change a field definition in <code>schema.py</code>, the web UI, API validation, docs table, and merger all update automatically. Run <code>python scripts/export_config_schema.py</code> to regenerate the docs JSON.</p>
+                    <p>When you change a field definition in <code>schema.py</code>, the web UI, API validation, docs
+                        table, and merger all update automatically. Run
+                        <code>python scripts/export_config_schema.py</code> to regenerate the docs JSON.
+                    </p>
 
-            <h3>Data Flow: Config Lifecycle</h3>
-            <pre><code>Startup:
+                    <h3>Data Flow: Config Lifecycle</h3>
+                    <pre><code>Startup:
   config.yaml ──► ConfigManager (bootstrap keys)
        │
        ▼
@@ -682,69 +756,148 @@ Runtime (user saves via web UI):
        ├──► hot_reload.py applies hot-reloadable fields instantly
        └──► restart-required fields flagged in UI banner</code></pre>
 
-            <h3>REST API Endpoints</h3>
-            <p>All endpoints are under <code>/api/config/</code>:</p>
-            <table>
-                <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
-                <tbody>
-                    <tr><td>GET</td><td><code>/schema</code></td><td>Full schema JSON (fields + section metadata)</td></tr>
-                    <tr><td>GET</td><td><code>/</code></td><td>Current config values (passwords masked)</td></tr>
-                    <tr><td>PUT</td><td><code>/</code></td><td>Partial update (validates, categorizes restart vs hot-reload)</td></tr>
-                    <tr><td>GET</td><td><code>/section/&lt;name&gt;</code></td><td>Single section values</td></tr>
-                    <tr><td>POST</td><td><code>/validate</code></td><td>Validate without saving</td></tr>
-                    <tr><td>GET</td><td><code>/restart-required</code></td><td>Pending restart-required fields</td></tr>
-                    <tr><td>GET</td><td><code>/export</code></td><td>Export all settings as flat JSON</td></tr>
-                    <tr><td>POST</td><td><code>/import</code></td><td>Import settings from JSON</td></tr>
-                    <tr><td>GET</td><td><code>/wizard-status</code></td><td>Setup wizard completion state</td></tr>
-                    <tr><td>POST</td><td><code>/wizard-complete</code></td><td>Mark wizard as completed</td></tr>
-                </tbody>
-            </table>
+                    <h3>REST API Endpoints</h3>
+                    <p>All endpoints are under <code>/api/config/</code>:</p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Method</th>
+                                <th>Path</th>
+                                <th>Purpose</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>GET</td>
+                                <td><code>/schema</code></td>
+                                <td>Full schema JSON (fields + section metadata)</td>
+                            </tr>
+                            <tr>
+                                <td>GET</td>
+                                <td><code>/</code></td>
+                                <td>Current config values (passwords masked)</td>
+                            </tr>
+                            <tr>
+                                <td>PUT</td>
+                                <td><code>/</code></td>
+                                <td>Partial update (validates, categorizes restart vs hot-reload)</td>
+                            </tr>
+                            <tr>
+                                <td>GET</td>
+                                <td><code>/section/&lt;name&gt;</code></td>
+                                <td>Single section values</td>
+                            </tr>
+                            <tr>
+                                <td>POST</td>
+                                <td><code>/validate</code></td>
+                                <td>Validate without saving</td>
+                            </tr>
+                            <tr>
+                                <td>GET</td>
+                                <td><code>/restart-required</code></td>
+                                <td>Pending restart-required fields</td>
+                            </tr>
+                            <tr>
+                                <td>GET</td>
+                                <td><code>/export</code></td>
+                                <td>Export all settings as flat JSON</td>
+                            </tr>
+                            <tr>
+                                <td>POST</td>
+                                <td><code>/import</code></td>
+                                <td>Import settings from JSON</td>
+                            </tr>
+                            <tr>
+                                <td>GET</td>
+                                <td><code>/wizard-status</code></td>
+                                <td>Setup wizard completion state</td>
+                            </tr>
+                            <tr>
+                                <td>POST</td>
+                                <td><code>/wizard-complete</code></td>
+                                <td>Mark wizard as completed</td>
+                            </tr>
+                        </tbody>
+                    </table>
 
-            <h3>Hot Reload</h3>
-            <p><code>HotReloadAdapter</code> registers interface references at startup. When hot-reloadable fields are saved, changes are applied immediately without restart:</p>
-            <ul>
-                <li><strong>Price fields</strong> &mdash; tibber token, awattar country, energycharts zone, etc.</li>
-                <li><strong>Battery SOC fields</strong> &mdash; min/max SOC percentages</li>
-            </ul>
-            <p>Fields that require a restart (e.g., MQTT broker URL, web port) are flagged in the API response, and the UI shows a restart banner.</p>
+                    <h3>Hot Reload</h3>
+                    <p><code>HotReloadAdapter</code> registers interface references at startup. When hot-reloadable
+                        fields are saved, changes are applied immediately without restart:</p>
+                    <ul>
+                        <li><strong>Price fields</strong> &mdash; tibber token, awattar country, energycharts zone, etc.
+                        </li>
+                        <li><strong>Battery SOC fields</strong> &mdash; min/max SOC percentages</li>
+                    </ul>
+                    <p>Fields that require a restart (e.g., MQTT broker URL, web port) are flagged in the API response,
+                        and the UI shows a restart banner.</p>
 
-            <h3>Frontend Architecture</h3>
-            <table>
-                <thead><tr><th>File</th><th>Purpose</th></tr></thead>
-                <tbody>
-                    <tr><td><code>config.js</code></td><td><code>ConfigurationManager</code> class &mdash; fetches schema, renders section tabs, field inputs, handles save/validate/import/export</td></tr>
-                    <tr><td><code>wizard.js</code></td><td><code>SetupWizard</code> class &mdash; first-run wizard showing <code>getting_started</code> fields only</td></tr>
-                    <tr><td><code>config.css</code></td><td>Config page styles (section sidebar, field groups, badges)</td></tr>
-                    <tr><td><code>wizard.css</code></td><td>Wizard overlay and step styles</td></tr>
-                </tbody>
-            </table>
-            <p>Both <code>config.js</code> and <code>wizard.js</code> read the <code>CONFIG_SECTIONS</code> from the API response (<code>schemaData.sections</code>) &mdash; section icons and labels are never hardcoded in the frontend.</p>
+                    <h3>Frontend Architecture</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>File</th>
+                                <th>Purpose</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>config.js</code></td>
+                                <td><code>ConfigurationManager</code> class &mdash; fetches schema, renders section
+                                    tabs, field inputs, handles save/validate/import/export</td>
+                            </tr>
+                            <tr>
+                                <td><code>wizard.js</code></td>
+                                <td><code>SetupWizard</code> class &mdash; first-run wizard showing
+                                    <code>getting_started</code> fields only
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>config.css</code></td>
+                                <td>Config page styles (section sidebar, field groups, badges)</td>
+                            </tr>
+                            <tr>
+                                <td><code>wizard.css</code></td>
+                                <td>Wizard overlay and step styles</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <p>Both <code>config.js</code> and <code>wizard.js</code> read the <code>CONFIG_SECTIONS</code> from
+                        the API response (<code>schemaData.sections</code>) &mdash; section icons and labels are never
+                        hardcoded in the frontend.</p>
 
-            <h3>How to Add a New Config Field</h3>
-            <ol>
-                <li>Add a <code>FieldDef(...)</code> to <code>_ALL_FIELDS</code> in <code>src/config_web/schema.py</code></li>
-                <li>Run <code>python scripts/export_config_schema.py</code> to update docs JSON</li>
-                <li><strong>Done</strong> &mdash; Web UI, API validation, docs table, migration, and merger all pick it up automatically</li>
-                <li>If the field is hot-reloadable: add mapping to <code>_PRICE_FIELD_MAP</code> or <code>_BATTERY_SOC_FIELDS</code> in <code>hot_reload.py</code></li>
-            </ol>
+                    <h3>How to Add a New Config Field</h3>
+                    <ol>
+                        <li>Add a <code>FieldDef(...)</code> to <code>_ALL_FIELDS</code> in
+                            <code>src/config_web/schema.py</code>
+                        </li>
+                        <li>Run <code>python scripts/export_config_schema.py</code> to update docs JSON</li>
+                        <li><strong>Done</strong> &mdash; Web UI, API validation, docs table, migration, and merger all
+                            pick it up automatically</li>
+                        <li>If the field is hot-reloadable: add mapping to <code>_PRICE_FIELD_MAP</code> or
+                            <code>_BATTERY_SOC_FIELDS</code> in <code>hot_reload.py</code>
+                        </li>
+                    </ol>
 
-            <h3>How to Add a New Config Section</h3>
-            <ol>
-                <li>Add fields with the new <code>section</code> name in <code>schema.py</code></li>
-                <li>Add an entry to <code>SECTION_META</code> dict in <code>schema.py</code> (icon + label)</li>
-                <li>Run <code>python scripts/export_config_schema.py</code></li>
-                <li><strong>Done</strong> &mdash; Frontend falls back gracefully, but <code>SECTION_META</code> gives it the correct icon and label</li>
-            </ol>
+                    <h3>How to Add a New Config Section</h3>
+                    <ol>
+                        <li>Add fields with the new <code>section</code> name in <code>schema.py</code></li>
+                        <li>Add an entry to <code>SECTION_META</code> dict in <code>schema.py</code> (icon + label)</li>
+                        <li>Run <code>python scripts/export_config_schema.py</code></li>
+                        <li><strong>Done</strong> &mdash; Frontend falls back gracefully, but <code>SECTION_META</code>
+                            gives it the correct icon and label</li>
+                    </ol>
 
-            <div class="alert alert-info">
-                <strong><i class="fas fa-lightbulb"></i> Tip:</strong> The <code>schema.py</code> file is the single source of truth. If you need to change a field's label, default value, validation, or section &mdash; change it there and re-export.
-            </div>
-        </div>
+                    <div class="alert alert-info">
+                        <strong><i class="fas fa-lightbulb"></i> Tip:</strong> The <code>schema.py</code> file is the
+                        single source of truth. If you need to change a field's label, default value, validation, or
+                        section &mdash; change it there and re-export.
+                    </div>
+                </div>
 
-        <!-- Project Structure -->
-        <div class="content-section">
-            <h2><i class="fas fa-folder"></i> Project Structure</h2>
-            <pre><code>EOS_connect/
+                <!-- Project Structure -->
+                <div class="content-section">
+                    <h2><i class="fas fa-folder"></i> Project Structure</h2>
+                    <pre><code>EOS_connect/
 ├── src/
 │   ├── eos_connect.py         # Main application
 │   ├── config.py              # Bootstrap configuration
@@ -790,7 +943,8 @@ Runtime (user saves via web UI):
 │   │       └── ...            # Other dashboard modules
 │   └── json/                  # JSON schemas and examples
 ├── scripts/
-│   └── export_config_schema.py  # SPOT → docs JSON export
+│   ├── export_config_schema.py  # SPOT → docs JSON export
+│   └── insert_data_to_db.py     # Test-only PV history seeding helper
 ├── tests/                     # Test suite (659+ tests)
 ├── docs/                      # Documentation (GitHub Pages)
 │   └── assets/data/
@@ -802,100 +956,139 @@ Runtime (user saves via web UI):
 ├── README.md                  # Project overview
 ├── CONTRIBUTING.md            # Contribution guidelines
 └── LICENSE                    # MIT License</code></pre>
-        </div>
-
-        <!-- Resources -->
-        <div class="content-section">
-            <h2><i class="fas fa-book-open"></i> Resources</h2>
-
-            <h3>Documentation</h3>
-            <ul>
-                <li><a href="https://github.com/ohAnd/EOS_connect" target="_blank">GitHub Repository</a></li>
-                <li><a href="https://github.com/ohAnd/EOS_connect/blob/main/README.md" target="_blank">README</a></li>
-                <li><a href="../user-guide/configuration.html" target="_blank">Configuration Reference</a></li>
-                <li><a href="https://github.com/ohAnd/EOS_connect/blob/main/CONTRIBUTING.md" target="_blank">Contributing Guidelines</a></li>
-            </ul>
-
-            <h3>Related Projects</h3>
-            <ul>
-                <li><a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">Akkudoktor EOS</a> - Main optimization backend</li>
-                <li><a href="https://github.com/evcc-io/evcc" target="_blank">EVCC</a> - EV charging controller</li>
-                <li><a href="https://www.home-assistant.io/" target="_blank">Home Assistant</a> - Smart home platform</li>
-            </ul>
-
-            <h3>Tools</h3>
-            <ul>
-                <li><a href="https://black.readthedocs.io/" target="_blank">Black</a> - Code formatter</li>
-                <li><a href="https://pylint.pycqa.org/" target="_blank">Pylint</a> - Code analyzer</li>
-                <li><a href="https://docs.pytest.org/" target="_blank">Pytest</a> - Testing framework</li>
-            </ul>
-        </div>
-
-        <!-- Get Involved -->
-        <div class="content-section">
-            <h2><i class="fas fa-trophy"></i> Get Involved!</h2>
-            <p>We welcome contributions of all kinds:</p>
-
-            <div class="feature-grid">
-                <div class="feature-item">
-                    <h4><i class="fas fa-bug"></i> Report Bugs</h4>
-                    <p><a href="https://github.com/ohAnd/EOS_connect/issues" target="_blank">Open an issue</a> with detailed reproduction steps</p>
                 </div>
-                <div class="feature-item">
-                    <h4><i class="fas fa-lightbulb"></i> Suggest Features</h4>
-                    <p>Share your ideas in <a href="https://github.com/ohAnd/EOS_connect/discussions" target="_blank">GitHub Discussions</a></p>
+
+                <!-- Resources -->
+                <div class="content-section">
+                    <h2><i class="fas fa-book-open"></i> Resources</h2>
+
+                    <h3>Documentation</h3>
+                    <ul>
+                        <li><a href="https://github.com/ohAnd/EOS_connect" target="_blank">GitHub Repository</a></li>
+                        <li><a href="https://github.com/ohAnd/EOS_connect/blob/main/README.md"
+                                target="_blank">README</a></li>
+                        <li><a href="../user-guide/configuration.html" target="_blank">Configuration Reference</a></li>
+                        <li><a href="https://github.com/ohAnd/EOS_connect/blob/main/CONTRIBUTING.md"
+                                target="_blank">Contributing Guidelines</a></li>
+                    </ul>
+
+                    <h3>Related Projects</h3>
+                    <ul>
+                        <li><a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">Akkudoktor EOS</a> - Main
+                            optimization backend</li>
+                        <li><a href="https://github.com/evcc-io/evcc" target="_blank">EVCC</a> - EV charging controller
+                        </li>
+                        <li><a href="https://www.home-assistant.io/" target="_blank">Home Assistant</a> - Smart home
+                            platform</li>
+                    </ul>
+
+                    <h3>Tools</h3>
+                    <ul>
+                        <li><a href="https://black.readthedocs.io/" target="_blank">Black</a> - Code formatter</li>
+                        <li><a href="https://pylint.pycqa.org/" target="_blank">Pylint</a> - Code analyzer</li>
+                        <li><a href="https://docs.pytest.org/" target="_blank">Pytest</a> - Testing framework</li>
+                    </ul>
                 </div>
-                <div class="feature-item">
-                    <h4><i class="fas fa-edit"></i> Improve Docs</h4>
-                    <p>Documentation PRs are always welcome!</p>
+
+                <!-- Get Involved -->
+                <div class="content-section">
+                    <h2><i class="fas fa-trophy"></i> Get Involved!</h2>
+                    <p>We welcome contributions of all kinds:</p>
+
+                    <div class="feature-grid">
+                        <div class="feature-item">
+                            <h4><i class="fas fa-bug"></i> Report Bugs</h4>
+                            <p><a href="https://github.com/ohAnd/EOS_connect/issues" target="_blank">Open an issue</a>
+                                with detailed reproduction steps</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-lightbulb"></i> Suggest Features</h4>
+                            <p>Share your ideas in <a href="https://github.com/ohAnd/EOS_connect/discussions"
+                                    target="_blank">GitHub Discussions</a></p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-edit"></i> Improve Docs</h4>
+                            <p>Documentation PRs are always welcome!</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-wrench"></i> Submit PRs</h4>
+                            <p>Follow the contribution workflow and submit your changes</p>
+                        </div>
+                    </div>
                 </div>
-                <div class="feature-item">
-                    <h4><i class="fas fa-wrench"></i> Submit PRs</h4>
-                    <p>Follow the contribution workflow and submit your changes</p>
-                </div>
-            </div>
-        </div>
 
-        <!-- HA Addon Integration -->
-        <div class="content-section" id="ha-addon">
-            <h2><i class="fas fa-house-signal"></i> HA Addon Integration</h2>
-            <p>EOS Connect runs as a Home Assistant add-on via the <a href="https://github.com/ohAnd/ha_addons" target="_blank">ohAnd/ha_addons</a> repository. The web-based config system changes how configuration is handled.</p>
+                <!-- HA Addon Integration -->
+                <div class="content-section" id="ha-addon">
+                    <h2><i class="fas fa-house-signal"></i> HA Addon Integration</h2>
+                    <p>EOS Connect runs as a Home Assistant add-on via the <a href="https://github.com/ohAnd/ha_addons"
+                            target="_blank">ohAnd/ha_addons</a> repository. The web-based config system changes how
+                        configuration is handled.</p>
 
-            <h3>How it Works</h3>
-            <table>
-                <thead><tr><th>Aspect</th><th>Old (config.yaml only)</th><th>New (SQLite + web UI)</th></tr></thead>
-                <tbody>
-                    <tr><td>Config storage</td><td>HA writes <code>/data/options.json</code> with all settings</td><td>SQLite at <code>/data/eos_connect.db</code>, web UI for editing</td></tr>
-                    <tr><td>HA addon options</td><td>Full config in <code>options.json</code></td><td>Bootstrap only: <code>web_port</code>, <code>time_zone</code>, <code>log_level</code></td></tr>
-                    <tr><td>User edits config</td><td>HA addon config panel</td><td>EOS Connect web UI (<code>/config</code>)</td></tr>
-                    <tr><td>Data persistence</td><td><code>/data/options.json</code> (HA managed)</td><td><code>/data/eos_connect.db</code> (persistent volume)</td></tr>
-                </tbody>
-            </table>
+                    <h3>How it Works</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Aspect</th>
+                                <th>Old (config.yaml only)</th>
+                                <th>New (SQLite + web UI)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Config storage</td>
+                                <td>HA writes <code>/data/options.json</code> with all settings</td>
+                                <td>SQLite at <code>/data/eos_connect.db</code>, web UI for editing</td>
+                            </tr>
+                            <tr>
+                                <td>HA addon options</td>
+                                <td>Full config in <code>options.json</code></td>
+                                <td>Bootstrap only: <code>web_port</code>, <code>time_zone</code>,
+                                    <code>log_level</code>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>User edits config</td>
+                                <td>HA addon config panel</td>
+                                <td>EOS Connect web UI (<code>/config</code>)</td>
+                            </tr>
+                            <tr>
+                                <td>Data persistence</td>
+                                <td><code>/data/options.json</code> (HA managed)</td>
+                                <td><code>/data/eos_connect.db</code> (persistent volume)</td>
+                            </tr>
+                        </tbody>
+                    </table>
 
-            <h3>Detection &amp; Data Path</h3>
-            <p><code>ConfigManager.is_ha_addon</code> returns <code>True</code> when any of these are true:</p>
-            <ul>
-                <li><code>HASSIO</code> environment variable is set</li>
-                <li><code>HASSIO_TOKEN</code> environment variable is set</li>
-                <li><code>/data/options.json</code> exists</li>
-            </ul>
-            <p>When detected, <code>data_dir</code> resolves to <code>/data</code> and the SQLite DB is created at <code>/data/eos_connect.db</code>.</p>
+                    <h3>Detection &amp; Data Path</h3>
+                    <p><code>ConfigManager.is_ha_addon</code> returns <code>True</code> when any of these are true:</p>
+                    <ul>
+                        <li><code>HASSIO</code> environment variable is set</li>
+                        <li><code>HASSIO_TOKEN</code> environment variable is set</li>
+                        <li><code>/data/options.json</code> exists</li>
+                    </ul>
+                    <p>When detected, <code>data_dir</code> resolves to <code>/data</code> and the SQLite DB is created
+                        at <code>/data/eos_connect.db</code>.</p>
 
-            <h3>Bootstrap from <code>options.json</code></h3>
-            <p>Bootstrap values (<code>web_port</code>, <code>time_zone</code>, <code>log_level</code>) are read from <code>/data/options.json</code> and override <code>config.yaml</code> defaults. These are the only settings managed through the HA addon config panel.</p>
+                    <h3>Bootstrap from <code>options.json</code></h3>
+                    <p>Bootstrap values (<code>web_port</code>, <code>time_zone</code>, <code>log_level</code>) are read
+                        from <code>/data/options.json</code> and override <code>config.yaml</code> defaults. These are
+                        the only settings managed through the HA addon config panel.</p>
 
-            <h3>Legacy Migration</h3>
-            <p>Older HA addon versions provided ALL configuration options in <code>options.json</code>. On first run with the new system:</p>
-            <ol>
-                <li>If SQLite store is empty AND <code>options.json</code> has non-bootstrap keys:</li>
-                <li><code>migrate_ha_options_to_store()</code> imports all non-bootstrap values into SQLite</li>
-                <li>Bootstrap keys are skipped (they stay in <code>options.json</code>)</li>
-                <li>The migration is one-time and idempotent</li>
-            </ol>
+                    <h3>Legacy Migration</h3>
+                    <p>Older HA addon versions provided ALL configuration options in <code>options.json</code>. On first
+                        run with the new system:</p>
+                    <ol>
+                        <li>If SQLite store is empty AND <code>options.json</code> has non-bootstrap keys:</li>
+                        <li><code>migrate_ha_options_to_store()</code> imports all non-bootstrap values into SQLite</li>
+                        <li>Bootstrap keys are skipped (they stay in <code>options.json</code>)</li>
+                        <li>The migration is one-time and idempotent</li>
+                    </ol>
 
-            <h3>Required Changes in <code>ha_addons</code> Repo</h3>
-            <p>The following changes are needed in <a href="https://github.com/ohAnd/ha_addons" target="_blank">ohAnd/ha_addons</a>:</p>
-            <div class="code-block"><pre><code># eos_connect/config.yaml (addon manifest)
+                    <h3>Required Changes in <code>ha_addons</code> Repo</h3>
+                    <p>The following changes are needed in <a href="https://github.com/ohAnd/ha_addons"
+                            target="_blank">ohAnd/ha_addons</a>:</p>
+                    <div class="code-block">
+                        <pre><code># eos_connect/config.yaml (addon manifest)
 options:
   web_port: 8081
   time_zone: "Europe/Berlin"
@@ -911,16 +1104,22 @@ map:
   - addon_config:rw   # persistent /data/ for SQLite DB
 
 # Point to EOS Connect web UI
-webui: http://[HOST]:[PORT:8081]</code></pre></div>
-            <p>The same changes apply to both <code>eos_connect/config.yaml</code> and <code>eos_connect_develop/config.yaml</code>. Update <code>translations/en.yaml</code> to match the reduced option set.</p>
-        </div>
+webui: http://[HOST]:[PORT:8081]</code></pre>
+                    </div>
+                    <p>The same changes apply to both <code>eos_connect/config.yaml</code> and
+                        <code>eos_connect_develop/config.yaml</code>. Update <code>translations/en.yaml</code> to match
+                        the reduced option set.
+                    </p>
+                </div>
 
             </main>
         </div>
     </div>
 
     <footer class="footer">
-        <p>EOS Connect Documentation | <a href="../index.html">Home</a> | <a href="https://github.com/ohAnd/EOS_connect">GitHub</a> | <a href="https://github.com/sponsors/ohAnd">Sponsor</a></p>
+        <p>EOS Connect Documentation | <a href="../index.html">Home</a> | <a
+                href="https://github.com/ohAnd/EOS_connect">GitHub</a> | <a
+                href="https://github.com/sponsors/ohAnd">Sponsor</a></p>
     </footer>
 
     <!-- Scroll spy for TOC -->
@@ -955,39 +1154,40 @@ webui: http://[HOST]:[PORT:8081]</code></pre></div>
     </button>
 
     <script>
-function toggleMobileMenu() {
-    const menu = document.querySelector('.nav-menu');
-    menu.classList.toggle('mobile-active');
-}
+        function toggleMobileMenu() {
+            const menu = document.querySelector('.nav-menu');
+            menu.classList.toggle('mobile-active');
+        }
 
-// Close mobile menu when clicking outside
-document.addEventListener('click', function(event) {
-    const menu = document.querySelector('.nav-menu');
-    const toggle = document.querySelector('.mobile-menu-toggle');
-    if (menu.classList.contains('mobile-active') && !menu.contains(event.target) && !toggle.contains(event.target)) {
-        menu.classList.remove('mobile-active');
-    }
-});
+        // Close mobile menu when clicking outside
+        document.addEventListener('click', function (event) {
+            const menu = document.querySelector('.nav-menu');
+            const toggle = document.querySelector('.mobile-menu-toggle');
+            if (menu.classList.contains('mobile-active') && !menu.contains(event.target) && !toggle.contains(event.target)) {
+                menu.classList.remove('mobile-active');
+            }
+        });
     </script>
 
     <script>
-// Back to top button functionality
-const backToTopButton = document.querySelector('.back-to-top');
+        // Back to top button functionality
+        const backToTopButton = document.querySelector('.back-to-top');
 
-window.addEventListener('scroll', function() {
-    if (window.pageYOffset > 300) {
-        backToTopButton.classList.add('visible');
-    } else {
-        backToTopButton.classList.remove('visible');
-    }
-});
+        window.addEventListener('scroll', function () {
+            if (window.pageYOffset > 300) {
+                backToTopButton.classList.add('visible');
+            } else {
+                backToTopButton.classList.remove('visible');
+            }
+        });
 
-function scrollToTop() {
-    window.scrollTo({
-        top: 0,
-        behavior: 'smooth'
-    });
-}
+        function scrollToTop() {
+            window.scrollTo({
+                top: 0,
+                behavior: 'smooth'
+            });
+        }
     </script>
 </body>
+
 </html>

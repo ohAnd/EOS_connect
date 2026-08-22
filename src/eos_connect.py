@@ -42,6 +42,7 @@ from interfaces.update_checker import UpdateChecker
 from interfaces.inverters import create_inverter
 from interfaces.inverters.null_inverter import NullInverter
 from interfaces.inverters.evcc_inverter import EvccInverter
+from interfaces.pv_autoscaler import PvAutoscaler
 from config_web import ConfigWebModule
 
 # Check Python version early
@@ -273,6 +274,62 @@ pv_interface = interface_factory.create_pv_interface(
     eos_source == "eos_server",
     config_manager.config.get("time_zone", "UTC"),
 )
+
+# Initialize PV autoscaler and attach to PvInterface (best-effort)
+pv_autoscaler = None
+try:
+    pv_autoscaler_cfg = config_manager.config.get("pv_autoscaling", {})
+
+    # Central data source values are already applied by the merger (config_web.start_db)
+    # when use_ha_central_data_source=True. Log for diagnostics.
+    if pv_autoscaler_cfg.get("use_ha_central_data_source"):
+        token_status = "SET" if pv_autoscaler_cfg.get("access_token") else "NOT SET"
+        logger.info(
+            "[Main] PvAutoscaler using CENTRAL data source: url=%s, src=%s, token=%s",
+            pv_autoscaler_cfg.get("url", "(not set)"),
+            pv_autoscaler_cfg.get("src", "homeassistant"),
+            token_status,
+        )
+
+        if not pv_autoscaler_cfg.get("access_token"):
+            logger.warning(
+                "[Main] PvAutoscaler: access_token is EMPTY! Requests to %s will fail with 401.",
+                pv_autoscaler_cfg.get("url", "(not set)"),
+            )
+    else:
+        logger.info(
+            "[Main] PvAutoscaler using MANUAL (non-central) data source: url=%s",
+            pv_autoscaler_cfg.get("url", "(not set)"),
+        )
+
+    pv_autoscaler = interface_factory.create_pv_autoscaler(
+        config=pv_autoscaler_cfg,
+        pv_yield_store=config_web.pv_yield_store,
+        timezone=time_zone,
+        request_timeout=10,
+        ssl_ignore=pv_autoscaler_cfg.get("ssl_ignore", False),
+        critical=False,
+    )
+    if pv_autoscaler is not None:
+        pv_interface.set_autoscaler(pv_autoscaler)
+        # Wire reverse reference so autoscaler can read raw forecasts for comparison
+        try:
+            pv_autoscaler.set_pv_interface(pv_interface)
+        except Exception:
+            logger.exception("[Main] Failed to set pv_interface on pv_autoscaler")
+        if pv_autoscaler_cfg.get("enabled", False):
+            pv_autoscaler.start_update_service()
+            # The PV update thread starts inside PvInterface.__init__, so its first fetch
+            # already completed unscaled. Re-derive from the raw array it holds rather
+            # than leaving the first EOS request uncorrected.
+            pv_interface.refresh_scaled_forecast()
+    logger.info(
+        "[Main] PVAutoscaler initialized (enabled=%s)",
+        bool(pv_autoscaler_cfg.get("enabled", False)),
+    )
+except Exception:
+    logger.exception("[Main] Failed to initialize PvAutoscaler")
+    pv_autoscaler = None
 
 # Callback functions for event handling
 def charging_state_callback(new_state):
@@ -2190,9 +2247,100 @@ def get_update_status():
     except (ValueError, TypeError, KeyError, AttributeError) as e:
         logger.error("[Web] Error retrieving update status: %s", e)
         return Response(
-            json.dumps(
-                {"error": "Failed to retrieve update status", "message": str(e)}
-            ),
+            json.dumps({"error": "Failed to retrieve update status"}),
+            status=500,
+            content_type="application/json",
+        )
+
+
+@app.route("/api/pv_autoscaling/status", methods=["GET"])
+def get_pv_autoscaling_status():
+    """Return PV autoscaler status and metrics."""
+    try:
+        # Every field has a usable default so a failure in any one section degrades to a
+        # partial response instead of taking the whole statistics overlay down with a 500.
+        status = {"enabled": False}
+        computed_factors = {"1": 1.0, "2": 1.0, "3": 1.0, "4": 1.0}
+        aggregated = {"days": [], "summary_by_timeframe": {}}
+        todays_partial = {}
+
+        # The autoscaler owns the aggregation, so the numbers shown here are the ones the
+        # scale factors were actually derived from.
+        autoscaler = pv_autoscaler
+        if autoscaler is None and getattr(config_web, "pv_yield_store", None) is not None:
+            # Not running (feature disabled): build a throwaway instance so the page can
+            # still show what the factors would be.
+            try:
+                autoscaler = PvAutoscaler(
+                    config_manager.config.get("pv_autoscaling", {}),
+                    config_web.pv_yield_store,
+                    timezone=time_zone,
+                    auto_start=False,
+                )
+            except Exception:
+                logger.exception("[Web] Could not build pv autoscaler for status")
+
+        if autoscaler is not None:
+            try:
+                status = autoscaler.get_status()
+            except Exception:
+                logger.exception("[Web] Error reading pv autoscaler status")
+            try:
+                computed = autoscaler.compute_timeframe_scaling_factors()
+                computed_factors = {str(k): v for k, v in computed.items()}
+            except Exception:
+                logger.exception("[Web] Error computing pv autoscaler factors")
+            try:
+                aggregated = autoscaler.get_aggregated_history()
+            except Exception:
+                logger.exception("[Web] Error aggregating pv yield history")
+            try:
+                todays_partial = autoscaler.get_todays_partial_data()
+            except Exception:
+                logger.exception("[Web] Error reading today's partial pv yield data")
+
+        # Current PV forecast snapshot, so the UI can show before/after scaling.
+        current_forecast_array = None
+        current_forecast_array_raw = None
+        try:
+            getter = getattr(pv_interface, "get_current_pv_forecast", None)
+            if callable(getter):
+                current = getter()
+                raw = getter(scale=False)
+                if isinstance(current, list):
+                    # This is the same array used by get_ems_data() for the EOS request.
+                    current_forecast_array = [round(float(x), 3) for x in current]
+                if isinstance(raw, list):
+                    current_forecast_array_raw = [round(float(x), 3) for x in raw]
+        except Exception:
+            logger.exception("[Web] Error fetching current PV forecast snapshot")
+
+        # Build response merging runtime status with computed and aggregated data
+        response_data = {
+            "pv_autoscaling": {
+                **status,
+                "computed_scale_factors": computed_factors,
+                "todays_partial_data": todays_partial,
+                "aggregated_history": aggregated,
+                "current_forecast_array_scaled": current_forecast_array,
+                "current_forecast_array_raw": current_forecast_array_raw,
+                "current_forecast_array_unit": "Wh per forecast slot",
+                "used_time_frame_base": getattr(pv_interface, "time_frame_base", 3600),
+            },
+            "timestamp": datetime.now(time_zone).isoformat(),
+            "api_version": "0.0.1",
+        }
+
+        response = Response(json.dumps(response_data, indent=2), content_type="application/json")
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+    except Exception as exc:
+        logger.exception("[Web] Error retrieving pv_autoscaling status: %s", exc)
+        return Response(
+            json.dumps({"error": "Failed to retrieve pv_autoscaling status"}),
             status=500,
             content_type="application/json",
         )
@@ -2251,6 +2399,11 @@ if __name__ == "__main__":
         ):
             inverter_interface.shutdown()
         pv_interface.shutdown()
+        if pv_autoscaler is not None:
+            try:
+                pv_autoscaler.stop_update_service()
+            except Exception:
+                logger.exception("[Main] Error stopping pv_autoscaler update service")
         price_interface.shutdown()
         mqtt_interface.shutdown()
         evcc_interface.shutdown()
