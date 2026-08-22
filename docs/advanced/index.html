@@ -285,6 +285,10 @@
                     <pre><code>{
   "pv_autoscaling": {
     "enabled": true,
+    "running": true,
+    "sensor_entity_id": "sensor.pv_total_yield_kwh",
+    "retention_days": 7,
+    "min_data_hours_required": 24,
     "scale_factors": {
       "1": 0.85,
       "2": 1.05,
@@ -292,14 +296,26 @@
       "4": 0.92
     },
     "total_hours_recorded": 47,
-    "last_reading_timestamp": "2026-08-12T14:00:00",
+    "last_reading_timestamp": "2026-08-12T14:00:00+00:00",
+    "last_collection_attempt": "2026-08-12T14:00:03+00:00",
+    "last_error": null,
+    "last_error_timestamp": null,
+    "consecutive_failures": 0,
     "computed_scale_factors": {
       "1": 0.85,
       "2": 1.05,
       "3": 1.12,
       "4": 0.92
     },
-    "aggregated_history": { ... }
+    "todays_partial_data": { ... },
+    "aggregated_history": {
+      "days": [ ... ],
+      "summary_by_timeframe": { ... }
+    },
+    "current_forecast_array_raw": [ ... ],
+    "current_forecast_array_scaled": [ ... ],
+    "current_forecast_array_unit": "Wh per forecast slot",
+    "used_time_frame_base": 3600
   },
   "timestamp": "2026-08-12T14:05:00+02:00",
   "api_version": "0.0.1"
@@ -311,11 +327,29 @@
                         3 = 12–17 h, 4 = 18–23 h (local time).
                     </p>
                     <p>
-                        When present, <code>current_forecast_array</code> contains raw forecast energy in
-                        <strong>Wh per configured forecast slot</strong> (192 values at 15-minute resolution).
-                        <code>current_forecast_array_unit</code> identifies this unit.
-                        The database stores hourly history as <code>forecast_kwh</code>; the autoscaler sums the
-                        four 15-minute slots for the target local hour and divides by 1000 before insertion.
+                        <code>running</code> reports whether the background collection thread is alive.
+                        <code>last_collection_attempt</code> is updated on every attempt, successful or not, so a
+                        stalled collector can be told apart from one that has simply not reached its first hour.
+                        When a reading fails, <code>last_error</code> carries the reason and
+                        <code>consecutive_failures</code> counts the run of failures; both reset on the next success.
+                    </p>
+                    <p>
+                        <code>current_forecast_array_raw</code> is the unscaled forecast and
+                        <code>current_forecast_array_scaled</code> is the array actually handed to the optimizer. Both
+                        hold energy in <strong>Wh per configured forecast slot</strong> — 48 values at hourly
+                        resolution, 192 at 15-minute resolution — and both start at local midnight today.
+                        <code>used_time_frame_base</code> gives the slot width in seconds, which is the only reliable
+                        way to tell the two layouts apart.
+                        The database stores hourly history as <code>forecast_kwh</code>; the autoscaler sums the slots
+                        of the target local hour and divides by 1000 before insertion.
+                    </p>
+                    <p>
+                        <code>aggregated_history.days</code> lists one entry per recorded day, newest first, each with
+                        <code>date</code>, <code>hours_collected</code>, per-timeframe <code>actual_kwh</code> and
+                        <code>forecast_kwh</code>, and the day totals. <code>summary_by_timeframe</code> aggregates
+                        those over the retention window, counting only days that recorded both an actual and a
+                        forecast — the same days the scale factors are derived from. Today is excluded from both and
+                        reported separately in <code>todays_partial_data</code>.
                     </p>
 
                     <h4 id="field-reference">Response Field Reference</h4>

@@ -3138,9 +3138,11 @@ price:
                             <code>sensor.pv_total_yield_kwh</code>).
                         </li>
                         <li>The hourly measured delta is compared with the forecast for the same hour.</li>
-                        <li>For each of the four daily timeframes (00–05, 06–11, 12–17, 18–23) a 7-day rolling scale
-                            factor is computed:<br>
-                            <code>scale = average measured kWh / average forecast kWh</code>
+                        <li>For each of the four daily timeframes (00–05, 06–11, 12–17, 18–23) a rolling scale
+                            factor is computed over the last <code>retention_days</code> days (7 by default):<br>
+                            <code>scale = average measured kWh / average forecast kWh</code><br>
+                            Only days that recorded <em>both</em> a measured yield and a forecast are averaged, so a
+                            gap in collection cannot inflate the factor.
                         </li>
                         <li>The factor is clamped between <code>min_scale_factor</code> and
                             <code>max_scale_factor</code>.
@@ -3259,11 +3261,40 @@ price:
                         </tr>
                     </table>
 
-                    <h3>Dashboard status card</h3>
+                    <h3>Checking that it works</h3>
                     <p>
-                        When enabled, the dashboard shows a <strong>PV Autoscaling</strong> card with the current scale
-                        factors
-                        for all four timeframes and the timestamp of the last measured counter reading.
+                        Open the <strong>PV Auto-Scaling</strong> panel from the <em>Statistics</em> tile on the
+                        dashboard — click either yield badge, or the
+                        <i class="fa-solid fa-arrows-up-down"></i> icon next to them. The panel shows the current
+                        scale factor for each of the four timeframes, today's partial collection, the history the
+                        factors were derived from, and a before/after comparison of the forecast.
+                    </p>
+                    <p>
+                        If the counter cannot be read — a mistyped entity id, an expired token, an unreachable host —
+                        the panel shows a red error banner naming the failing sensor. Without that banner, "no data
+                        yet" simply means collection has started and the first hourly reading has not landed.
+                        Collection progress is also logged under the <code>PV-AUTO</code> component in the log viewer.
+                    </p>
+                    <div class="note">
+                        <strong>After a restart</strong> the scale factors are reloaded from the stored history
+                        immediately, so the first optimization run is already corrected.
+                    </div>
+
+                    <h3>Interaction with EVCC</h3>
+                    <p>
+                        When the PV forecast source is EVCC, EVCC applies its own learned correction
+                        (<code>forecast.solar.scale</code>) first — that is the
+                        <code>pv_forecast_source.use_real_data_correction</code> setting. The autoscaler then measures
+                        against the already-corrected forecast, so it learns only the bias EVCC did not remove and
+                        settles at <code>1.000</code> when EVCC is accurate. The two corrections compose; they do not
+                        double-count.
+                    </p>
+
+                    <h3>Multiple PV installations and sources</h3>
+                    <p>
+                        Scaling is applied once, to the summed forecast of every configured installation. A single set
+                        of four factors therefore corrects the total. If you combine sources with very different
+                        accuracy, the correction for one is spread across all of them.
                     </p>
 
                     <h3>Missed polls</h3>
