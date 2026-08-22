@@ -310,11 +310,18 @@
                     <span class="header_notification" id="statistics_header_left"
                         style="cursor: pointer;left: 10px;min-width: 20px;right: unset;"
                         onclick="if(typeof statisticsManager !== 'undefined') statisticsManager.showPvAutoscalingOverlay();"
-                        title="Click to view PV autoscaling details"></span>
+                        title="Click to view PV autoscaling details">...</span>
                     <span class="header_notification" id="statistics_header_right"
                         style="min-width: 20px; cursor: pointer;"
                         onclick="if(typeof statisticsManager !== 'undefined') statisticsManager.showPvAutoscalingOverlay();"
-                        title="Click to view PV autoscaling details"></span>
+                        title="Click to view PV autoscaling details">...</span>
+                    <!-- Explicit entry point: the yield badges above are only filled in
+                         after the first optimization cycle, which is exactly when a user
+                         wants to check whether autoscaling is collecting. -->
+                    <i class="fa-solid fa-arrows-up-down" id="pv_autoscaling_open"
+                        style="cursor: pointer; margin-left: 8px; opacity: 0.75; font-size: 0.85em;"
+                        onclick="if(typeof statisticsManager !== 'undefined') statisticsManager.showPvAutoscalingOverlay();"
+                        title="PV Auto-Scaling details"></i>
                 </div>
                 <div class="content">
                     <table style="width: 100%; text-align: left;padding-top: 10px;">

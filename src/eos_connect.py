@@ -319,6 +319,10 @@ try:
             logger.exception("[Main] Failed to set pv_interface on pv_autoscaler")
         if pv_autoscaler_cfg.get("enabled", False):
             pv_autoscaler.start_update_service()
+            # The PV update thread starts inside PvInterface.__init__, so its first fetch
+            # already completed unscaled. Re-derive from the raw array it holds rather
+            # than leaving the first EOS request uncorrected.
+            pv_interface.refresh_scaled_forecast()
     logger.info(
         "[Main] PVAutoscaler initialized (enabled=%s)",
         bool(pv_autoscaler_cfg.get("enabled", False)),
@@ -2255,168 +2259,75 @@ def get_update_status():
 def get_pv_autoscaling_status():
     """Return PV autoscaler status and metrics."""
     try:
-        # Fetch raw history from the pv_yield_store (available even if autoscaler not initialized)
-        pv_store = getattr(config_web, "pv_yield_store", None)
-        rows = []
+        # Every field has a usable default so a failure in any one section degrades to a
+        # partial response instead of taking the whole statistics overlay down with a 500.
+        status = {"enabled": False}
+        computed_factors = {"1": 1.0, "2": 1.0, "3": 1.0, "4": 1.0}
         aggregated = {"days": [], "summary_by_timeframe": {}}
         todays_partial = {}
-        try:
-            if pv_store is not None:
-                retention = config_manager.config.get("pv_autoscaling", {}).get("retention_days", 7)
-                rows = pv_store.get_history_last_n_days(retention)
-        except Exception:
-            logger.exception("[Web] Error reading pv_yield_history for status")
 
-        # Get today's date in local timezone
-        try:
-            from pytz import timezone as pytz_tz
-            if time_zone:
-                tz = pytz_tz(time_zone) if isinstance(time_zone, str) else time_zone
-                today_date = datetime.now(tz).date().isoformat()
-            else:
-                today_date = datetime.now().date().isoformat()
-        except Exception:
-            today_date = datetime.now().date().isoformat()
-
-        # Aggregate per-day / per-timeframe summaries, separating today from history
-        per_day = {}
-        today_data = {}
-        tf_summary_actual = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
-        tf_summary_forecast = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
-        tf_summary_days = {1: 0, 2: 0, 3: 0, 4: 0}
-        for r in rows:
+        # The autoscaler owns the aggregation, so the numbers shown here are the ones the
+        # scale factors were actually derived from.
+        autoscaler = pv_autoscaler
+        if autoscaler is None and getattr(config_web, "pv_yield_store", None) is not None:
+            # Not running (feature disabled): build a throwaway instance so the page can
+            # still show what the factors would be.
             try:
-                if isinstance(r, dict):
-                    # Use local_date for proper timezone-aware today comparison
-                    date = r.get("local_date")
-                    # Use timeframe_id if stored, otherwise calculate from local_hour
-                    tf = int(r.get("timeframe_id") or ((int(r.get("local_hour") or 0) // 6) + 1))
-                    actual = r.get("real_delta_kwh")
-                    forecast = r.get("forecast_kwh")
-                else:
-                    # For tuple results: use local_date (index 9) and local_hour (index 10)
-                    date = r[9]
-                    local_hour = int(r[10]) if r[10] is not None else 0
-                    tf = int(r[4]) if r[4] is not None else (local_hour // 6) + 1
-                    actual = r[6]
-                    forecast = r[7]
+                autoscaler = PvAutoscaler(
+                    config_manager.config.get("pv_autoscaling", {}),
+                    config_web.pv_yield_store,
+                    timezone=time_zone,
+                    auto_start=False,
+                )
             except Exception:
-                continue
+                logger.exception("[Web] Could not build pv autoscaler for status")
 
-            # Separate today's data from historical data
-            if date == today_date:
-                if date not in today_data:
-                    today_data[date] = {"tf_actual": {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}, "tf_forecast": {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}, "hours": set()}
-                if actual is not None:
-                    try:
-                        today_data[date]["tf_actual"][tf] += float(actual)
-                        today_data[date]["hours"].add(int(r[10]) if not isinstance(r, dict) else int(r.get("local_hour", 0)))
-                    except Exception:
-                        pass
-                if forecast is not None:
-                    try:
-                        today_data[date]["tf_forecast"][tf] += float(forecast)
-                    except Exception:
-                        pass
-            else:
-                # Historical data (yesterday and before)
-                if date not in per_day:
-                    per_day[date] = {"tf_actual": {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}, "tf_forecast": {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}, "hours": 0}
-
-                if actual is not None:
-                    try:
-                        per_day[date]["tf_actual"][tf] += float(actual)
-                        per_day[date]["hours"] += 1
-                    except Exception:
-                        pass
-                if forecast is not None:
-                    try:
-                        per_day[date]["tf_forecast"][tf] += float(forecast)
-                    except Exception:
-                        pass
-
-        # Build today's partial data response (if we have any data for today)
-        if today_data:
-            date = today_date
-            data = today_data[date]
-            todays_partial = {
-                "date": date,
-                "hours_collected": len(data["hours"]),
-                "collected_timeframes": sorted([tf for tf in (1, 2, 3, 4) if data["tf_actual"][tf] > 0]),
-                "actual_kwh": {str(k): round(v, 3) for k, v in data["tf_actual"].items()},
-                "forecast_kwh": {str(k): round(v, 3) for k, v in data["tf_forecast"].items()},
-            }
-
-        # Build historical days summary (excluding today)
-        for date, data in sorted(per_day.items()):
-            aggregated["days"].append({
-                "date": date,
-                "hours_recorded": int(data.get("hours", 0)),
-                "actual_kwh": {str(k): round(v, 3) for k, v in data.get("tf_actual", {}).items()},
-                "forecast_kwh": {str(k): round(v, 3) for k, v in data.get("tf_forecast", {}).items()},
-            })
-            for tf in (1, 2, 3, 4):
-                a = data["tf_actual"].get(tf, 0.0)
-                f = data["tf_forecast"].get(tf, 0.0)
-                if a > 0.0 or f > 0.0:
-                    tf_summary_actual[tf] += a
-                    tf_summary_forecast[tf] += f
-                    tf_summary_days[tf] += 1
-
-        for tf in (1, 2, 3, 4):
-            aggregated["summary_by_timeframe"][str(tf)] = {
-                "total_actual_kwh": round(tf_summary_actual[tf], 3),
-                "total_forecast_kwh": round(tf_summary_forecast[tf], 3),
-                "days_with_data": int(tf_summary_days[tf]),
-            }
-
-        # Compute factors on-demand (best-effort). This allows the API to show
-        # the computed multipliers for debugging even if the autoscaler is not
-        # currently enabled in the running configuration.
-        computed_factors = {"1": 1.0, "2": 1.0, "3": 1.0, "4": 1.0}
-        try:
-            if pv_autoscaler is not None:
-                computed = pv_autoscaler.compute_timeframe_scaling_factors()
+        if autoscaler is not None:
+            try:
+                status = autoscaler.get_status()
+            except Exception:
+                logger.exception("[Web] Error reading pv autoscaler status")
+            try:
+                computed = autoscaler.compute_timeframe_scaling_factors()
                 computed_factors = {str(k): v for k, v in computed.items()}
-                status = pv_autoscaler.get_status()
-            else:
-                # Temporary instance for computation without changing runtime autoscaler
-                tmp_cfg = config_manager.config.get("pv_autoscaling", {})
-                tmp = PvAutoscaler(tmp_cfg, config_web.pv_yield_store, timezone=time_zone, auto_start=False)
-                computed = tmp.compute_timeframe_scaling_factors()
-                computed_factors = {str(k): v for k, v in computed.items()}
-                status = {
-                    "enabled": False,
-                    "scale_factors": {"1": 1.0, "2": 1.0, "3": 1.0, "4": 1.0},
-                    "total_hours_recorded": len(rows),
-                    "last_reading_timestamp": None,
-                }
-        except Exception:
-            logger.exception("[Web] Error computing pv autoscaler factors")
+            except Exception:
+                logger.exception("[Web] Error computing pv autoscaler factors")
+            try:
+                aggregated = autoscaler.get_aggregated_history()
+            except Exception:
+                logger.exception("[Web] Error aggregating pv yield history")
+            try:
+                todays_partial = autoscaler.get_todays_partial_data()
+            except Exception:
+                logger.exception("[Web] Error reading today's partial pv yield data")
 
-        # Get current PV forecast snapshot (for display of before/after scaling)
+        # Current PV forecast snapshot, so the UI can show before/after scaling.
         current_forecast_array = None
         current_forecast_array_raw = None
         try:
-            if pv_interface is not None:
-                current = getattr(pv_interface, "get_current_pv_forecast", lambda: None)()
-                current_forecast_array_raw = getattr(pv_interface, "get_current_pv_forecast", lambda: None)(scale=False)
+            getter = getattr(pv_interface, "get_current_pv_forecast", None)
+            if callable(getter):
+                current = getter()
+                raw = getter(scale=False)
                 if isinstance(current, list):
                     # This is the same array used by get_ems_data() for the EOS request.
                     current_forecast_array = [round(float(x), 3) for x in current]
+                if isinstance(raw, list):
+                    current_forecast_array_raw = [round(float(x), 3) for x in raw]
         except Exception:
             logger.exception("[Web] Error fetching current PV forecast snapshot")
 
         # Build response merging runtime status with computed and aggregated data
         response_data = {
             "pv_autoscaling": {
-                **(status if isinstance(status, dict) else {}),
+                **status,
                 "computed_scale_factors": computed_factors,
                 "todays_partial_data": todays_partial,
                 "aggregated_history": aggregated,
                 "current_forecast_array_scaled": current_forecast_array,
                 "current_forecast_array_raw": current_forecast_array_raw,
                 "current_forecast_array_unit": "Wh per forecast slot",
+                "used_time_frame_base": getattr(pv_interface, "time_frame_base", 3600),
             },
             "timestamp": datetime.now(time_zone).isoformat(),
             "api_version": "0.0.1",

@@ -81,9 +81,6 @@ class StatisticsManager {
     /**
      * Show PV autoscaling details in a full-screen overlay
      */
-    /**
-     * Show PV autoscaling details in a full-screen overlay
-     */
     async showPvAutoscalingOverlay() {
         try {
             const res = await fetch('api/pv_autoscaling/status?nocache=' + Date.now());
@@ -103,8 +100,33 @@ class StatisticsManager {
             const forecastArray = pa.current_forecast_array_raw || [];
             const forecastArrayScaled = pa.current_forecast_array_scaled || [];
 
-            // Helper to safely convert to number
+            // Scale factors: a missing or unparseable multiplier means "no scaling".
             const toNum = v => Number(String(v || 1).replace(',', '.')) || 1.0;
+            // Forecast slots: a missing or zero slot is zero energy, not 1 Wh. Reusing
+            // toNum here would invent a watt-hour for every night slot.
+            const slotWh = v => {
+                const n = Number(String(v ?? '').replace(',', '.'));
+                return isFinite(n) ? n : 0;
+            };
+
+            // Slot width comes from the resolution the backend reports, never from the
+            // array length: an hourly install publishes a 48-value two-day horizon, which
+            // read as "48 slots per day" would double every "today" total and push
+            // "tomorrow" past the end of the array.
+            const slotsPerHour = Math.max(1, Math.round(3600 / (Number(pa.used_time_frame_base) || 3600)));
+            const slotsPerDay = 24 * slotsPerHour;
+
+            /** Sum one timeframe of one day from a Wh-per-slot array, returning kWh. */
+            const sumTimeframe = (arr, dayIndex, timeframeId) => {
+                if (!arr || !arr.length) return 0;
+                const slotStart = dayIndex * slotsPerDay + (timeframeId - 1) * 6 * slotsPerHour;
+                const slotEnd = slotStart + 6 * slotsPerHour;
+                let sum = 0;
+                for (let i = slotStart; i < slotEnd && i < arr.length; i++) {
+                    sum += slotWh(arr[i]);
+                }
+                return sum / 1000;
+            };
 
             // Helper to format kWh with proper handling of zero vs missing data
             const formatKwh = (value) => {
@@ -127,14 +149,51 @@ class StatisticsManager {
 
             // Check data collection state
             const totalHoursRecorded = pa.total_hours_recorded || 0;
+            const hoursRequired = Number(pa.min_data_hours_required) > 0
+                ? Number(pa.min_data_hours_required)
+                : 24;
             const hasHistoricalData = days.length > 0;
             const hasPartialToday = Object.keys(todays_partial).length > 0;
             const isInitializing = totalHoursRecorded === 0 && !hasPartialToday;
-            const isCollecting = totalHoursRecorded < 24 && !hasHistoricalData;
+            const isCollecting = totalHoursRecorded < hoursRequired && !hasHistoricalData;
+
+            // A stalled collector looks exactly like a fresh install unless the error is
+            // shown: same "no data", same enabled tick. Surface it above everything else.
+            const lastError = pa.last_error;
+            const failures = Number(pa.consecutive_failures) || 0;
 
             // Build status banner
             let statusBanner = '';
-            if (isInitializing) {
+            if (lastError) {
+                statusBanner = `
+                    <div style="background: linear-gradient(135deg, rgba(220, 53, 69, 0.18) 0%, rgba(220, 53, 69, 0.08) 100%); border: 1px solid rgba(220, 53, 69, 0.45); border-radius: 8px; padding: 15px;">
+                        <div style="display: flex; align-items: flex-start; gap: 12px;">
+                            <div style="font-size: 1.4em; margin-top: 2px;">⚠️</div>
+                            <div>
+                                <div style="font-weight: 600; color: #ef5350; margin-bottom: 6px;">
+                                    PV Autoscaler cannot read the yield counter${failures > 1 ? ` (${failures} attempts in a row)` : ''}
+                                </div>
+                                <div style="font-size: 0.9em; color: #ffcdd2; line-height: 1.4;">
+                                    <code style="background: rgba(0,0,0,0.25); padding: 2px 6px; border-radius: 4px;">${escapeHtml(String(lastError))}</code>
+                                    <br><br>
+                                    No new data is being collected, so the scale factors below will not update.
+                                    Check <strong>Sensor entity</strong>${pa.sensor_entity_id ? ` (<code>${escapeHtml(String(pa.sensor_entity_id))}</code>)` : ''},
+                                    the data source URL and the access token in the configuration.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else if (enabled && pa.running === false) {
+                statusBanner = `
+                    <div style="background: rgba(255, 152, 0, 0.12); border: 1px solid rgba(255, 152, 0, 0.35); border-radius: 8px; padding: 15px;">
+                        <div style="font-weight: 600; color: #ffb74d;">Autoscaler enabled but not collecting</div>
+                        <div style="font-size: 0.9em; color: #ffe082; margin-top: 6px;">
+                            The background collection service is not running. Restart EOS connect to start it.
+                        </div>
+                    </div>
+                `;
+            } else if (isInitializing) {
                 statusBanner = `
                     <div style="background: linear-gradient(135deg, rgba(33, 150, 243, 0.15) 0%, rgba(100, 149, 237, 0.1) 100%); border: 1px solid rgba(100, 149, 237, 0.3); border-radius: 8px; padding: 15px;">
                         <div style="display: flex; align-items: flex-start; gap: 12px;">
@@ -142,12 +201,12 @@ class StatisticsManager {
                             <div>
                                 <div style="font-weight: 600; color: #64b5f6; margin-bottom: 6px;">Initializing PV Autoscaler</div>
                                 <div style="font-size: 0.9em; color: #90caf9; line-height: 1.4;">
-                                    No data collected yet. The autoscaler will collect hourly PV yield data and needs at least <strong>24 hours</strong> of historical data to calculate accurate scale factors.
+                                    No data collected yet. The autoscaler will collect hourly PV yield data and needs at least <strong>${hoursRequired} hours</strong> of historical data to calculate accurate scale factors.
                                     <br><br>
                                     <strong>What happens next:</strong>
                                     <ul style="margin: 8px 0 0 20px; padding: 0;">
                                         <li>Hourly data collection starts immediately (check "Today" section below)</li>
-                                        <li>After 24 hours, scale factors will be calculated from yesterday's data</li>
+                                        <li>After ${hoursRequired} hours, scale factors will be calculated from yesterday's data</li>
                                         <li>Forecast multipliers will appear in the timeframe cards above</li>
                                         <li>Scaling improves with more historical data (recomm. 7+ days)</li>
                                     </ul>
@@ -157,14 +216,14 @@ class StatisticsManager {
                     </div>
                 `;
             } else if (isCollecting) {
-                const hoursRemaining = 24 - totalHoursRecorded;
-                const progressPercent = (totalHoursRecorded / 24) * 100;
+                const hoursRemaining = hoursRequired - totalHoursRecorded;
+                const progressPercent = (totalHoursRecorded / hoursRequired) * 100;
                 statusBanner = `
                     <div style="background: linear-gradient(135deg, rgba(255, 152, 0, 0.15) 0%, rgba(255, 193, 7, 0.1) 100%); border: 1px solid rgba(255, 152, 0, 0.3); border-radius: 8px; padding: 15px;">
                         <div style="display: flex; align-items: flex-start; gap: 12px;">
                             <div style="font-size: 1.4em; margin-top: 2px;">⏳</div>
                             <div style="flex: 1;">
-                                <div style="font-weight: 600; color: #ffb74d; margin-bottom: 6px;">Collecting Historical Data (${totalHoursRecorded}/24 hours)</div>
+                                <div style="font-weight: 600; color: #ffb74d; margin-bottom: 6px;">Collecting Historical Data (${totalHoursRecorded}/${hoursRequired} hours)</div>
                                 <div style="background-color: rgba(0,0,0,0.2); height: 6px; border-radius: 3px; overflow: hidden; margin-bottom: 8px;">
                                     <div style="background: linear-gradient(90deg, #ffc107 0%, #ff9800 100%); height: 100%; width: ${progressPercent}%;"></div>
                                 </div>
@@ -186,22 +245,16 @@ class StatisticsManager {
             // Build forecast comparison
             let forecastComparison = '';
             if (forecastArray && forecastArray.length > 0) {
-                const slotsPerDay = forecastArray.length >= 48 ? Math.min(forecastArray.length, 96) : 24;
-                const slotsPerHour = slotsPerDay / 24;
-
-                const sumForecastTimeframe = (dayIndex, timeframeId) => {
-                    const hourStart = (timeframeId - 1) * 6;
-                    const slotStart = dayIndex * slotsPerDay + hourStart * slotsPerHour;
-                    const slotEnd = slotStart + 6 * slotsPerHour;
-                    let sum = 0;
-                    for (let i = slotStart; i < slotEnd && i < forecastArray.length; i++) {
-                        sum += toNum(forecastArray[i]);
-                    }
-                    return sum / 1000;
-                };
+                const sumForecastTimeframe = (dayIndex, timeframeId) =>
+                    sumTimeframe(forecastArray, dayIndex, timeframeId);
 
                 let todayOriginal = 0, tomorrowOriginal = 0;
                 let todayScaled = 0, tomorrowScaled = 0;
+
+                // Prefer the scaled array the backend actually handed to the optimizer.
+                // Re-multiplying here would drift from it, because apply_scaling rounds
+                // every slot to one decimal.
+                const haveScaled = forecastArrayScaled && forecastArrayScaled.length > 0;
 
                 for (let tf = 1; tf <= 4; tf++) {
                     const scale = toNum(sf[tf.toString()] || sf[tf]);
@@ -210,8 +263,8 @@ class StatisticsManager {
 
                     todayOriginal += todayTf;
                     tomorrowOriginal += tomorrowTf;
-                    todayScaled += todayTf * scale;
-                    tomorrowScaled += tomorrowTf * scale;
+                    todayScaled += haveScaled ? sumTimeframe(forecastArrayScaled, 0, tf) : todayTf * scale;
+                    tomorrowScaled += haveScaled ? sumTimeframe(forecastArrayScaled, 1, tf) : tomorrowTf * scale;
                 }
 
                 forecastComparison = `
@@ -257,21 +310,9 @@ class StatisticsManager {
                 // Calculate today's forecast from forecastArray (both original and scaled)
                 let todayForecastByTimeframeOriginal = {};
                 let todayForecastByTimeframe = {};
-                const maxArrayLength = Math.max(forecastArray.length || 0, forecastArrayScaled.length || 0);
-                const slotsPerDay = maxArrayLength >= 48 ? Math.min(maxArrayLength, 96) : 24;
-                const slotsPerHour = slotsPerDay / 24;
-
                 for (let tf = 1; tf <= 4; tf++) {
-                    const hourStart = (tf - 1) * 6;
-                    const slotStart = hourStart * slotsPerHour;
-                    const slotEnd = slotStart + 6 * slotsPerHour;
-                    let sumOrig = 0, sumScaled = 0;
-                    for (let i = slotStart; i < slotEnd && i < maxArrayLength; i++) {
-                        if (forecastArray && forecastArray[i]) sumOrig += toNum(forecastArray[i]);
-                        if (forecastArrayScaled && forecastArrayScaled[i]) sumScaled += toNum(forecastArrayScaled[i]);
-                    }
-                    todayForecastByTimeframeOriginal[tf] = sumOrig / 1000;
-                    todayForecastByTimeframe[tf] = sumScaled / 1000;
+                    todayForecastByTimeframeOriginal[tf] = sumTimeframe(forecastArray, 0, tf);
+                    todayForecastByTimeframe[tf] = sumTimeframe(forecastArrayScaled, 0, tf);
                 }
 
                 todaysPartialHtml = `
@@ -336,14 +377,20 @@ class StatisticsManager {
                         <div style="display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto;">
                 `;
 
-                const sortedDays = [...days].sort((a, b) => new Date(b.date) - new Date(a.date));
+                // Drop rows with no usable date rather than rendering them as "Jan 1":
+                // new Date(null) is the epoch, which reads as a real day in the list.
+                const sortedDays = [...days]
+                    .filter(day => day && day.date)
+                    .sort((a, b) => new Date(b.date) - new Date(a.date));
 
                 sortedDays.forEach(day => {
                     const dateObj = new Date(day.date);
-                    const dateStr = dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                    const dateStr = isNaN(dateObj.getTime())
+                        ? String(day.date)
+                        : dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
                     const actual = day.actual_kwh || {};
                     const forecast = day.forecast_kwh || {};
-                    const hours = day.hours_recorded || 0;
+                    const hours = day.hours_collected || 0;
 
                     historicalHtml += `
                         <div style="background-color: rgba(255,255,255,0.05); border-radius: 6px; padding: 10px; border-left: 3px solid #4a9eff;">
@@ -425,23 +472,10 @@ class StatisticsManager {
             const arithmeticAvg = (s1f + s2f + s3f + s4f) / 4;
             
             if (forecastArray && forecastArray.length > 0) {
-                const slotsPerDay = forecastArray.length >= 48 ? Math.min(forecastArray.length, 96) : 24;
-                const slotsPerHour = slotsPerDay / 24;
-                const sumForecastTimeframe = (dayIndex, timeframeId) => {
-                    const hourStart = (timeframeId - 1) * 6;
-                    const slotStart = dayIndex * slotsPerDay + hourStart * slotsPerHour;
-                    const slotEnd = slotStart + 6 * slotsPerHour;
-                    let sum = 0;
-                    for (let i = slotStart; i < slotEnd && i < forecastArray.length; i++) {
-                        sum += toNum(forecastArray[i]);
-                    }
-                    return sum;
-                };
-                
                 let totalForecast = 0;
                 let weightedSum = 0;
                 for (let tf = 1; tf <= 4; tf++) {
-                    const tfForecast = sumForecastTimeframe(0, tf);
+                    const tfForecast = sumTimeframe(forecastArray, 0, tf);
                     const factor = toNum(sf[tf.toString()] || sf[tf]);
                     totalForecast += tfForecast;
                     weightedSum += tfForecast * factor;
