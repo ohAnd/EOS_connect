@@ -125,6 +125,21 @@ class PvInterface:
         """Attach a `PvAutoscaler` instance for runtime scaling of forecasts."""
         self._autoscaler = autoscaler
 
+    def get_autoscaler(self):
+        """Return the attached `PvAutoscaler`, or None when autoscaling is not wired up."""
+        return self._autoscaler
+
+    def refresh_scaled_forecast(self):
+        """
+        Re-derive the scaled forecast from the raw array already held in memory.
+
+        The update thread starts in __init__, so its first fetch finishes before the
+        autoscaler is attached. Without this the forecast handed to EOS stays unscaled
+        until the next update cycle - up to 15 minutes, or hours on a slow provider.
+        """
+        if self.pv_forcast_array_raw:
+            self.pv_forcast_array = self.apply_autoscaling(self.pv_forcast_array_raw)
+
     def __configure_update_interval(self):
         """Set update interval based on active PV provider and installation count."""
         source = self.config_source.get("source")
@@ -602,9 +617,13 @@ class PvInterface:
         The loop that runs in the background thread to update the pv state.
         """
         while not self._stop_event.is_set():
-            # Fetch the PV forecast data
-            pv_forcast_array = self.get_summarized_pv_forecast()
-            pv_forcast_array_raw = self.get_summarized_pv_forecast( scale=False )
+            # Fetch the PV forecast data once per cycle and derive the scaled array
+            # locally. Calling get_summarized_pv_forecast() twice would double the
+            # upstream API traffic for every provider - which breaks the request budget
+            # Solcast and forecast.solar are rate-limited on - and lets a transient
+            # failure on one of the two calls desynchronise the raw/scaled pair.
+            pv_forcast_array_raw = self.get_summarized_pv_forecast(scale=False)
+            pv_forcast_array = self.apply_autoscaling(pv_forcast_array_raw)
             if not self.pv_forcast_request_error["error"]:
                 logger.debug("[PV-IF] PV forecast updated successfully")
                 self.pv_forcast_array = pv_forcast_array
@@ -1026,20 +1045,9 @@ class PvInterface:
         forecast_values = [round(value, 1) for value in forecast_values]
         logger.debug("[PV-IF] Summarized PV forecast values: %s", forecast_values)
 
-        # Keep all autoscaler logic in one place: the final summary boundary.
-        if scale and self._autoscaler is not None and getattr(self._autoscaler, "enabled", False):
-            try:
-                forecast_values = self._autoscaler.apply_scaling(
-                    forecast_values, self.time_frame_base
-                )
-                logger.info(
-                    "[PV-IF] Auto-scaling applied. Multipliers: %s",
-                    getattr(self._autoscaler, "_scale_factors", {}),
-                )
-            except Exception:
-                logger.exception("[PV-IF] Error applying autoscaler - returning raw forecast")
-
-        # Cache successful forecast for fallback on future failures
+        # Cache successful forecast for fallback on future failures. The cache must hold
+        # unscaled source values: the autoscaler derives its factors from this array, so a
+        # scaled array served from the cache would feed the correction its own output.
         if forecast_values:
             self.last_successful_pv_forecast = forecast_values.copy()
             self.consecutive_failures = 0  # Reset failure counter on success
@@ -1048,7 +1056,35 @@ class PvInterface:
                 len(forecast_values),
             )
 
+        # Keep all autoscaler logic in one place: the final summary boundary.
+        if scale:
+            forecast_values = self.apply_autoscaling(forecast_values)
+
         return forecast_values
+
+    def apply_autoscaling(self, forecast_values):
+        """
+        Apply the autoscaler's timeframe multipliers to an unscaled forecast array.
+
+        Returns the input unchanged when no autoscaler is attached, it is disabled, or
+        scaling raises - the unscaled forecast is always a valid result.
+        """
+        if not forecast_values:
+            return forecast_values
+        if self._autoscaler is None or not getattr(self._autoscaler, "enabled", False):
+            return forecast_values
+        try:
+            scaled = self._autoscaler.apply_scaling(forecast_values, self.time_frame_base)
+        except Exception:
+            logger.exception("[PV-IF] Error applying autoscaler - returning raw forecast")
+            return forecast_values
+        if logger.isEnabledFor(logging.DEBUG):
+            getter = getattr(self._autoscaler, "get_scale_factors", None)
+            logger.debug(
+                "[PV-IF] Auto-scaling applied. Multipliers: %s",
+                getter() if callable(getter) else "n/a",
+            )
+        return scaled
 
     def __get_pv_forecast_timeseries(self, tgt_duration=48):
         """
@@ -1925,6 +1961,43 @@ class PvInterface:
                 "forecast_solar",
             )
 
+    def _resolve_evcc_scale_factor(self, solar_forecast_scale):
+        """
+        Resolve the correction factor EVCC publishes with its solar forecast.
+
+        Returns 1.0 when the user has disabled real-data correction or EVCC reported no
+        usable value. A scale below 0.1 means EVCC has barely any measured data yet and
+        would otherwise wipe out the forecast, so it is floored at 0.5.
+        """
+        use_real_data_correction = True
+        if isinstance(getattr(self, "config_source", None), dict):
+            use_real_data_correction = self.config_source.get("use_real_data_correction", True)
+
+        if not use_real_data_correction:
+            logger.debug(
+                "[PV-IF] EVCC PV forecast: real data correction disabled - scale factor 1.0"
+            )
+            return 1.0
+
+        try:
+            scale_factor = float(solar_forecast_scale)
+        except (TypeError, ValueError):
+            return 1.0
+
+        if scale_factor <= 0:
+            logger.debug(
+                "[PV-IF] EVCC PV forecast scale factor invalid (%s) - using 1.0",
+                scale_factor,
+            )
+            return 1.0
+        if scale_factor < 0.1:
+            logger.debug(
+                "[PV-IF] EVCC PV forecast scale factor too low (< 0.1 - %s) - using 0.5",
+                scale_factor,
+            )
+            return 0.5
+        return scale_factor
+
     def __get_pv_forecast_evcc_api(self, pv_config_entry, hours=48):
         """
         Fetches PV forecast from an EVCC instance.
@@ -1948,9 +2021,15 @@ class PvInterface:
             response = requests.get(url, timeout=5)
             response.raise_for_status()
             data = response.json()
-            solar_forecast = data.get("forecast", {}).get("solar", {}).get("timeseries", [])
-            logger.debug("[PV-IF] EVCC API solar forecast received (%d entries)", len(solar_forecast))
-            return solar_forecast
+            solar_forecast_all = data.get("forecast", {}).get("solar", {})
+            solar_forecast = solar_forecast_all.get("timeseries", [])
+            solar_forecast_scale = solar_forecast_all.get("scale", "unknown")
+            logger.debug(
+                "[PV-IF] EVCC API solar forecast received (%d entries, scale: %s)",
+                len(solar_forecast),
+                solar_forecast_scale,
+            )
+            return solar_forecast, solar_forecast_scale
 
         def error_handler(error_type, exception):
             return self._handle_interface_error(
@@ -1969,7 +2048,12 @@ class PvInterface:
                 pv_config_entry,
                 "evcc",
             )
-        solar_forecast = result
+        # On a handled error the error_handler returns a bare list (cache or []), so
+        # only unpack when the retried closure actually produced its pair.
+        if isinstance(result, tuple):
+            solar_forecast, solar_forecast_scale = result
+        else:
+            solar_forecast, solar_forecast_scale = result, "unknown"
 
         if not solar_forecast or not isinstance(solar_forecast, list):
             return self._handle_interface_error(
@@ -2051,9 +2135,12 @@ class PvInterface:
                 pv_forecast = forecast_15min
 
 
-            # Raw EVCC forecast is returned as-is; any autoscaling decision is
-            # handled centrally in get_summarized_pv_forecast(scale=...).
-            pv_forecast = [round(val, 1) for val in pv_forecast]
+            # EVCC learns its own correction factor from measured yield and publishes it
+            # alongside the forecast. Apply it here, per source. The PV autoscaler then
+            # sits on top of the corrected values and learns only the residual bias, so
+            # the two corrections compose instead of double-counting.
+            scale_factor = self._resolve_evcc_scale_factor(solar_forecast_scale)
+            pv_forecast = [round(val * scale_factor, 1) for val in pv_forecast]
 
             # Clear any previous errors on success
             self.pv_forcast_request_error["error"] = None

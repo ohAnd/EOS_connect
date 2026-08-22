@@ -42,6 +42,7 @@ import time
 from datetime import datetime
 import requests
 from .battery_price_handler import BatteryPriceHandler
+from .state_source import fetch_remote_state
 
 logger = logging.getLogger("__main__")
 logger.info("[BATTERY-IF] loading module ")
@@ -223,27 +224,14 @@ class BatteryInterface:
         Returns the trimmed state string. Raises the original requests
         exceptions for callers to handle.
         """
-        if not sensor:
-            raise ValueError("Sensor/item identifier must be provided")
-
-        if source == "openhab":
-            url = self.url + "/rest/items/" + sensor
-            response = requests.get(url, timeout=self.request_timeout, verify=not self.ssl_ignore)
-            response.raise_for_status()
-            data = response.json()
-            return str(data.get("state", "")).strip()
-        elif source == "homeassistant":
-            url = f"{self.url}/api/states/{sensor}"
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json",
-            }
-            response = requests.get(url, headers=headers, timeout=self.request_timeout, verify=not self.ssl_ignore)
-            response.raise_for_status()
-            data = response.json()
-            return str(data.get("state", "")).strip()
-        else:
-            raise ValueError(f"Unknown source: {source}")
+        return fetch_remote_state(
+            source,
+            sensor,
+            url=self.url,
+            access_token=self.access_token,
+            request_timeout=self.request_timeout,
+            ssl_ignore=self.ssl_ignore,
+        )
 
     def __fetch_soc_data_unified(self):
         """Unified SOC fetch using the configured `self.src` source."""
