@@ -1415,30 +1415,88 @@ def test_evcc_scaling_disabled_uses_1(monkeypatch):
     assert all(abs(value - 10.0) < 1e-6 for value in result)
 
 
-def test_evcc_scale_below_point_one_uses_half(monkeypatch):
-    """Central PV summary can still opt into reduced scaling when a low factor is configured."""
+def _evcc_interface(use_real_data_correction=None):
+    """Build a PvInterface configured for the EVCC source."""
     config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
     config_source = {"source": "evcc"}
-    pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
-    pv._PvInterface__get_pv_forecast = lambda entry, tgt_duration=48: [10.0] * 48
+    if use_real_data_correction is not None:
+        config_source["use_real_data_correction"] = use_real_data_correction
+    return PvInterface(
+        config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC"
+    )
 
-    class DummyAutoscaler:
-        enabled = True
-        _scale_factors = {1: 0.05}
 
-        def apply_scaling(self, values, time_frame_base):
-            factor = 0.05
-            if factor < 0.1:
-                factor = 0.5
-            return [value * factor for value in values]
+@pytest.mark.parametrize(
+    "published_scale, expected",
+    [
+        (0.8, 0.8),            # normal correction is applied as published
+        (1.0, 1.0),
+        (0.05, 0.5),           # below 0.1 EVCC has too little data: floor at 0.5
+        (0.0, 1.0),            # non-positive is meaningless: fall back to neutral
+        (-1.0, 1.0),
+        ("unknown", 1.0),      # EVCC omitted the field
+        (None, 1.0),
+    ],
+)
+def test_evcc_scale_factor_resolution(published_scale, expected):
+    """The published EVCC correction factor is validated before it is applied."""
+    pv = _evcc_interface()
+    assert pv._resolve_evcc_scale_factor(published_scale) == pytest.approx(expected)
 
-    pv.set_autoscaler(DummyAutoscaler())
 
-    result = pv.get_summarized_pv_forecast()
+def test_evcc_scale_factor_ignored_when_correction_disabled():
+    """use_real_data_correction=False opts out of EVCC's own correction entirely."""
+    pv = _evcc_interface(use_real_data_correction=False)
+    assert pv._resolve_evcc_scale_factor(0.8) == pytest.approx(1.0)
+    assert pv._resolve_evcc_scale_factor(0.05) == pytest.approx(1.0)
 
-    assert isinstance(result, list)
+
+def test_evcc_forecast_applies_published_scale(monkeypatch):
+    """EVCC's learned scale is applied to the forecast it publishes."""
+    config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
+    base = real_datetime.datetime.now(real_datetime.timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    timeseries = [
+        [int((base + real_datetime.timedelta(minutes=15 * i)).timestamp()), 40.0]
+        for i in range(192)
+    ]
+
+    monkeypatch.setattr(
+        PvInterface,
+        "_retry_request",
+        staticmethod(lambda request_func, error_handler, **kwargs: (timeseries, 0.5)),
+    )
+    pv = _evcc_interface()
+
+    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
+
+    # 40 W over four 15-minute slots is 40 Wh per hour, halved by the 0.5 scale.
     assert len(result) == 48
-    assert all(abs(value - 5.0) < 1e-6 for value in result)
+    assert result == [20.0] * 48
+
+
+def test_evcc_forecast_unscaled_when_correction_disabled(monkeypatch):
+    """With correction disabled the raw EVCC values pass through untouched."""
+    config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
+    base = real_datetime.datetime.now(real_datetime.timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    timeseries = [
+        [int((base + real_datetime.timedelta(minutes=15 * i)).timestamp()), 40.0]
+        for i in range(192)
+    ]
+
+    monkeypatch.setattr(
+        PvInterface,
+        "_retry_request",
+        staticmethod(lambda request_func, error_handler, **kwargs: (timeseries, 0.5)),
+    )
+    pv = _evcc_interface(use_real_data_correction=False)
+
+    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
+
+    assert result == [40.0] * 48
 
 # ---------------------------------------------------------------------------
 # Open-Meteo DST normalisation tests
