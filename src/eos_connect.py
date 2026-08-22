@@ -2247,9 +2247,7 @@ def get_update_status():
     except (ValueError, TypeError, KeyError, AttributeError) as e:
         logger.error("[Web] Error retrieving update status: %s", e)
         return Response(
-            json.dumps(
-                {"error": "Failed to retrieve update status", "message": str(e)}
-            ),
+            json.dumps({"error": "Failed to retrieve update status"}),
             status=500,
             content_type="application/json",
         )
@@ -2342,7 +2340,7 @@ def get_pv_autoscaling_status():
     except Exception as exc:
         logger.exception("[Web] Error retrieving pv_autoscaling status: %s", exc)
         return Response(
-            json.dumps({"error": "Failed to retrieve pv_autoscaling status", "message": str(exc)}),
+            json.dumps({"error": "Failed to retrieve pv_autoscaling status"}),
             status=500,
             content_type="application/json",
         )
