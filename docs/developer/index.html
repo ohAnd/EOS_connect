@@ -536,7 +536,7 @@ pytest -v tests/</code></pre>
                     <h3>PV Auto-Scaling Development Helper</h3>
                     <p>
                         Runtime collection is implemented by <code>src/interfaces/pv_autoscaler.py</code> and stores
-                        forecast values in kWh through <code>src/config_web/pv_yield_store.py</code>. The manual seeding
+                        forecast values in kWh through <code>src/persistence/pv_yield_store.py</code>. The manual seeding
                         helper at <code>scripts/insert_data_to_db.py</code> is for test data only and is not used by the
                         application. It accepts a database path and initializes the current PV history schema; call
                         <code>insert_pv_yields()</code> from a test or Python shell when supplying sample timeframe

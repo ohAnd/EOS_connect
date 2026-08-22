@@ -34,7 +34,7 @@ from .store import ConfigStore
 from .migration import migrate_yaml_to_store, migrate_ha_options_to_store
 from .merger import build_merged_config
 from .api import config_bp, init_api
-from .pv_yield_store import PvYieldStore
+from ..persistence import PvYieldStore
 
 logger = logging.getLogger("__main__")
 
@@ -135,10 +135,13 @@ class ConfigWebModule:
             db_path,
         )
 
-        # Ensure PV yield history table exists for autoscaling feature
+        # Ensure PV yield history table exists for autoscaling feature. On failure the
+        # attribute stays None so callers degrade instead of hitting AttributeError.
+        self._pv_yield_store = None
         try:
-            self._pv_yield_store = PvYieldStore(self._store)
-            self._pv_yield_store.ensure_schema()
+            store = PvYieldStore(self._store)
+            store.ensure_schema()
+            self._pv_yield_store = store
         except Exception:
             logger.exception("[ConfigWeb] Failed to initialize PvYieldStore schema")
 

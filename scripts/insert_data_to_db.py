@@ -17,25 +17,25 @@ import pytz
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from src.config_web.pv_yield_store import PvYieldStore
+from src.persistence import PvYieldStore
 from src.config_web.store import ConfigStore
 
 logging.basicConfig(level=logging.INFO, format="[PV-INSERT] %(message)s")
 logger = logging.getLogger(__name__)
 
 def delete_pv_yields_for_date(store, target_date: str):
-    """Delete all PV yield records for a specific date."""
+    """Delete all PV yield records for a specific local date."""
     try:
-        cursor = store._conn.cursor()
-        cursor.execute(
-            "DELETE FROM pv_yield_history WHERE date = ?",
-            (target_date,)
+        # Go through ConfigStore.execute so the write takes the store's lock, rather
+        # than opening a second path to the same connection.
+        cursor = store.execute(
+            "DELETE FROM pv_yield_history WHERE local_date = ?",
+            (target_date,),
         )
-        store._conn.commit()
-        logger.info(f"Deleted all records for date: {target_date}")
+        deleted = cursor.rowcount if hasattr(cursor, "rowcount") else 0
+        logger.info("Deleted %s record(s) for date %s", deleted, target_date)
     except Exception as exc:
-        logger.error(f"Failed to delete records for date {target_date}: {exc}")
-        store._conn.rollback()
+        logger.error("Failed to delete records for date %s: %s", target_date, exc)
 
 def insert_pv_yields(
     pv_yield_store,
@@ -120,9 +120,10 @@ def insert_pv_yields(
         )
 
     try:
-        inserted_rows = [pv_yield_store.insert_hourly_record(**row) for row in rows]
-        logger.info(f"Inserted {len(inserted_rows)} records into pv_yield_history.")
-        return inserted_rows
+        for row in rows:
+            pv_yield_store.insert_hourly_record(**row)
+        logger.info("Inserted %d records into pv_yield_history.", len(rows))
+        return len(rows)
     except Exception as exc:
         logger.error("Failed to insert PV yield records: %s", exc)
         return None
@@ -148,7 +149,7 @@ def main() -> None:
 
     # Log the full path of the database file
     db_path = os.path.abspath(args.db)
-    logger.info(f"Using database file: {db_path}")
+    logger.info("Using database file: %s", db_path)
 
     store = ConfigStore(db_path)
     store.open()
@@ -166,7 +167,7 @@ def main() -> None:
             parser.error("The following arguments are required for insertion: --t1_r, --t2_r, --t3_r, --t4_r")
 
         # Insert the PV yields using the provided timeframe values
-        inserted_rows = insert_pv_yields(
+        inserted_count = insert_pv_yields(
             pv_yield_store=yield_store,
             previous_counter_kwh=0.0,  # Start with 0 or fetch the last value from the database
             t1_r=args.t1_r,
@@ -181,8 +182,8 @@ def main() -> None:
             timezone_name=args.timezone,
         )
 
-        if inserted_rows is not None:
-            logger.info(f"Successfully inserted {len(inserted_rows)} records.")
+        if inserted_count is not None:
+            logger.info("Successfully inserted %d records.", inserted_count)
         else:
             logger.error("No records were inserted.")
     finally:
