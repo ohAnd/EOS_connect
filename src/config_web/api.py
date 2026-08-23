@@ -18,6 +18,13 @@ logger = logging.getLogger("__main__")
 
 config_bp = Blueprint("config", __name__, url_prefix="/api/config")
 
+# Top-level keys a full backup file uses for non-setting data.  They sit alongside the
+# settings rather than in a nested envelope so that an older build, which resolves every
+# top-level key against the schema and skips what it does not know, still restores the
+# settings instead of silently importing nothing.  Listed here so the settings importer
+# can tell "not a setting" apart from "unknown key".
+_DATASET_KEYS = ("pv_yield_history",)
+
 # These are set by ConfigWebModule.start() before any request is served
 _store = None
 _schema = None
@@ -251,27 +258,165 @@ def export_config():
 
 @config_bp.route("/import", methods=["POST"])
 def import_config():
-    """Import a flat JSON dict of settings (from backup)."""
+    """Import a flat JSON dict of settings (from backup).
+
+    Config-scoped: any non-setting payload a full backup carries (e.g.
+    ``pv_yield_history``) is reported back but not restored here — that is what
+    ``/api/backup/import`` is for.
+    """
     data = flask_request.get_json(silent=True)
     if not data or not isinstance(data, dict):
         return jsonify({"error": "Request body must be a JSON object"}), 400
 
-    # Filter to known keys only, skip internal keys
+    result = apply_settings(data, mode="merge")
+    result["ignored_datasets"] = [k for k in _DATASET_KEYS if k in data]
+    return jsonify(result)
+
+
+def apply_settings(data: dict, mode: str = "merge") -> dict:
+    """
+    Write a flat dict of settings to the store the same way a normal save does.
+
+    ``ConfigStore.import_dict`` writes SQL directly, which skips validation, the
+    hot-reload callbacks and the restart-required bookkeeping that ``PUT /api/config/``
+    performs.  An import that bypasses those leaves the database updated while the
+    running interfaces keep their old values, with no restart banner to say so.  Both
+    import endpoints go through here instead.
+
+    Args:
+        data: Flat dot-notation key/value pairs.  Unknown and ``_``-prefixed keys are
+            ignored; a whole-backup payload can be passed unfiltered.
+        mode: ``"merge"`` keeps settings absent from *data*.  ``"replace"`` removes
+            them, so the stored config ends up matching the file exactly.
+
+    Returns:
+        Counts and per-key detail: ``imported``, ``removed``, ``skipped``, ``invalid``,
+        ``restart_required``, ``hot_reloaded``, ``warnings``.
+    """
+    before = _store.get_all()
+
+    # Validate before writing anything.  A single out-of-range value in an old backup
+    # must not abort the restore, so offenders are reported and skipped individually.
     valid_data = {}
+    invalid = []
     skipped = 0
     for key, value in data.items():
-        if key.startswith("_"):
-            skipped += 1
+        # Internal bookkeeping keys and file metadata are not settings, and are not
+        # "unknown keys" either — counting them as skipped makes re-importing your own
+        # export look like it lost something.
+        if key.startswith("_") or key in _DATASET_KEYS:
             continue
         field_def = _resolve_schema_key(key)
         if field_def is None:
             skipped += 1
             continue
-        valid_data[key] = _coerce_value(field_def, value)
+        err = _validate_single(field_def, value)
+        if err:
+            invalid.append({"key": key, "error": err})
+            continue
+        try:
+            valid_data[key] = _coerce_value(field_def, value)
+        except (TypeError, ValueError) as exc:
+            invalid.append({"key": key, "error": f"Invalid type: {exc}"})
 
-    count = _store.import_dict(valid_data) if valid_data else 0
+    removed = _remove_stale_keys(before, valid_data) if mode == "replace" else []
+
+    count = _store.set_batch(valid_data) if valid_data else 0
     _module.rebuild_config()
-    return jsonify({"imported": count, "skipped": skipped})
+
+    restart_required, hot_reloaded = _replay_changes(before, valid_data, removed)
+
+    # Persist restart-required fields so the banner survives a page reload, matching
+    # what update_config() does after a normal save.
+    if restart_required:
+        existing = _store.get("_restart_pending", []) or []
+        _store.set("_restart_pending", list(set(existing + restart_required)))
+
+    # Reported, never blocking: a restore is applied as a whole, and refusing it
+    # because one cross-field dependency is unmet would leave the user with nothing.
+    warnings = _check_dependencies(valid_data) if valid_data else []
+
+    logger.info(
+        "[ConfigWeb] Imported %d setting(s), removed %d, skipped %d, invalid %d (mode=%s)",
+        count,
+        len(removed),
+        skipped,
+        len(invalid),
+        mode,
+    )
+
+    return {
+        "imported": count,
+        "removed": removed,
+        "skipped": skipped,
+        "invalid": invalid,
+        "restart_required": restart_required,
+        "hot_reloaded": hot_reloaded,
+        "warnings": warnings,
+    }
+
+
+def _remove_stale_keys(before: dict, valid_data: dict) -> list[str]:
+    """
+    Delete stored settings that the imported file does not contain.
+
+    Only keys ``export_config()`` would have written are eligible, which makes replace
+    the exact inverse of export.  Two kinds of key are therefore left alone:
+
+    - ``_``-prefixed internals.  Wiping ``_wizard_completed`` would pop the setup
+      wizard after every restore, and ``_restart_pending`` carries the banner state.
+    - Keys with no schema definition, such as the raw ``pv_forecast`` list kept as a
+      migration fallback by the merger.  The indexed ``pv_forecast.0.*`` keys take
+      precedence over it, so it is inert rather than stale.
+    """
+    stale = [
+        key
+        for key in before
+        if not key.startswith("_")
+        and key not in valid_data
+        and _resolve_schema_key(key) is not None
+    ]
+    for key in stale:
+        _store.delete(key)
+    return stale
+
+
+def _replay_changes(
+    before: dict, valid_data: dict, removed: list[str]
+) -> tuple[list[str], list[str]]:
+    """
+    Fire hot-reload callbacks for everything the import actually changed.
+
+    ``set_batch()`` and ``delete()`` skip the store's own change callbacks so the write
+    stays a single transaction; without this replay the restored values would never
+    reach the running interfaces.  Returns the changed keys split into those needing a
+    restart and those applied live, classified exactly as ``update_config()`` does.
+    """
+    changes = [
+        (key, before.get(key), value)
+        for key, value in valid_data.items()
+        if key not in before or before[key] != value
+    ]
+    # A removed key falls back to its schema default, which is the value the interfaces
+    # now need to see.
+    for key in removed:
+        field_def = _resolve_schema_key(key)
+        changes.append((key, before.get(key), field_def.default if field_def else None))
+
+    restart_required = []
+    hot_reloaded = []
+    notify = getattr(_module, "notify_config_changed", None)
+    for key, old_value, new_value in changes:
+        field_def = _resolve_schema_key(key)
+        if field_def is not None:
+            if "restart_required" in field_def.labels:
+                restart_required.append(key)
+            elif field_def.hot_reload:
+                hot_reloaded.append(key)
+        if notify is not None:
+            notify(key, old_value, new_value)
+
+    return restart_required, hot_reloaded
 
 
 # ------------------------------------------------------------------

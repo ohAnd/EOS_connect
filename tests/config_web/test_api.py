@@ -71,6 +71,7 @@ class _FakeModule:
         self._config = config
         self._store = store
         self._schema = schema
+        self.notified = []
 
     def get_config(self):
         """Return current merged config."""
@@ -78,6 +79,10 @@ class _FakeModule:
 
     def rebuild_config(self):
         """No-op for tests."""
+
+    def notify_config_changed(self, key, old_value, new_value):
+        """Record hot-reload notifications so tests can assert they were fired."""
+        self.notified.append((key, old_value, new_value))
 
 
 @pytest.fixture
@@ -98,6 +103,10 @@ def client(tmp_path):
     app.register_blueprint(config_bp)
 
     with app.test_client() as c:
+        # Handed to tests that need to inspect what the API did to the store or
+        # which hot-reload notifications it fired.
+        c.store = store
+        c.module = module
         yield c
 
     store.close()
@@ -646,3 +655,208 @@ class TestWizardAPI:
         resp = fresh_client.post("/api/config/wizard-complete")
         assert resp.status_code == 200
         assert resp.get_json()["completed"] is True
+
+
+class TestImportAppliesChanges:
+    """
+    Import must behave like a save, not a raw database write.
+
+    ``ConfigStore.import_dict`` wrote straight to SQL, so an imported config never
+    reached the running interfaces and never raised the restart banner.  These pin the
+    behaviour that replaced it.
+    """
+
+    def test_import_fires_hot_reload_notifications(self, client):
+        """Imported values must be replayed to the hot-reload callbacks."""
+        client.module.notified.clear()
+        resp = client.post(
+            "/api/config/import",
+            data=json.dumps({"price.feed_in_price": 0.42}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+
+        notified = dict((k, v) for k, _o, v in client.module.notified)
+        assert notified.get("price.feed_in_price") == 0.42
+
+    def test_import_skips_notification_for_unchanged_values(self, client):
+        """A key already holding the imported value must not trigger a reload."""
+        client.post(
+            "/api/config/import",
+            data=json.dumps({"price.feed_in_price": 0.42}),
+            content_type="application/json",
+        )
+        client.module.notified.clear()
+        client.post(
+            "/api/config/import",
+            data=json.dumps({"price.feed_in_price": 0.42}),
+            content_type="application/json",
+        )
+        assert [k for k, _o, _n in client.module.notified] == []
+
+    def test_import_records_restart_pending(self, client):
+        """A restart_required field must raise the banner that survives a reload."""
+        resp = client.post(
+            "/api/config/import",
+            data=json.dumps({"eos_connect_web_port": 8099}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        assert "eos_connect_web_port" in resp.get_json()["restart_required"]
+
+        resp2 = client.get("/api/config/restart-required")
+        assert "eos_connect_web_port" in resp2.get_json()["fields"]
+
+    def test_import_reports_hot_reloaded_fields(self, client):
+        """Hot-reloadable fields are reported separately from restart-required ones."""
+        resp = client.post(
+            "/api/config/import",
+            data=json.dumps({"price.feed_in_price": 0.11}),
+            content_type="application/json",
+        )
+        data = resp.get_json()
+        assert "price.feed_in_price" in data["hot_reloaded"]
+        assert data["restart_required"] == []
+
+    def test_import_skips_invalid_values_without_aborting(self, client):
+        """An out-of-range value is reported and skipped; the rest still imports."""
+        resp = client.post(
+            "/api/config/import",
+            data=json.dumps(
+                {"battery.min_soc_percentage": 9999, "battery.capacity_wh": 15000}
+            ),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["imported"] == 1
+        assert [e["key"] for e in data["invalid"]] == ["battery.min_soc_percentage"]
+
+        exported = client.get("/api/config/export").get_json()
+        assert exported["battery.capacity_wh"] == 15000
+        assert exported["battery.min_soc_percentage"] != 9999
+
+    def test_import_does_not_count_metadata_as_skipped(self, client):
+        """Backup metadata is not a setting and not an unknown key either."""
+        resp = client.post(
+            "/api/config/import",
+            data=json.dumps(
+                {
+                    "_format": "eos-connect-backup",
+                    "_version": 1,
+                    "battery.capacity_wh": 12345,
+                }
+            ),
+            content_type="application/json",
+        )
+        data = resp.get_json()
+        assert data["imported"] == 1
+        assert data["skipped"] == 0
+
+    def test_import_still_counts_unknown_keys(self, client):
+        """Genuinely unrecognised keys remain reported as skipped."""
+        resp = client.post(
+            "/api/config/import",
+            data=json.dumps({"there.is.no.such.key": 1, "battery.capacity_wh": 11000}),
+            content_type="application/json",
+        )
+        data = resp.get_json()
+        assert data["imported"] == 1
+        assert data["skipped"] == 1
+
+    def test_config_import_reports_but_ignores_yield_history(self, client):
+        """A full backup dropped here restores settings and names what it left alone."""
+        resp = client.post(
+            "/api/config/import",
+            data=json.dumps(
+                {
+                    "_format": "eos-connect-backup",
+                    "battery.capacity_wh": 17000,
+                    "pv_yield_history": [{"timestamp": "2026-08-19T06:00:00+00:00"}],
+                }
+            ),
+            content_type="application/json",
+        )
+        data = resp.get_json()
+        assert data["imported"] == 1
+        assert data["skipped"] == 0
+        assert data["ignored_datasets"] == ["pv_yield_history"]
+
+    def test_config_import_is_merge_only(self, client):
+        """The config-scoped endpoint never removes settings absent from the file."""
+        resp = client.post(
+            "/api/config/import",
+            data=json.dumps({"battery.capacity_wh": 16000}),
+            content_type="application/json",
+        )
+        assert resp.get_json()["removed"] == []
+        exported = client.get("/api/config/export").get_json()
+        assert exported["eos.port"] == 8503
+
+
+class TestApplySettingsReplaceMode:
+    """Replace mode is the exact inverse of export — no more, no less."""
+
+    def _apply(self, client, data, mode):
+        from src.config_web.api import apply_settings
+
+        with client.application.test_request_context():
+            return apply_settings(data, mode=mode)
+
+    def test_replace_removes_stale_keys(self, client):
+        """Settings absent from the file are removed, not left behind."""
+        exported = client.get("/api/config/export").get_json()
+        assert "eos.port" in exported
+
+        payload = {k: v for k, v in exported.items() if k != "eos.port"}
+        result = self._apply(client, payload, "replace")
+
+        assert "eos.port" in result["removed"]
+        assert "eos.port" not in client.get("/api/config/export").get_json()
+
+    def test_replace_preserves_internal_keys(self, client):
+        """Wiping _wizard_completed would pop the setup wizard after every restore."""
+        client.post("/api/config/wizard-complete")
+        assert client.get("/api/config/wizard-status").get_json()["completed"] is True
+
+        self._apply(client, {"battery.capacity_wh": 20000}, "replace")
+
+        assert client.get("/api/config/wizard-status").get_json()["completed"] is True
+
+    def test_replace_leaves_unschemad_keys_alone(self, client):
+        """The raw pv_forecast list is a merger fallback, not a stale setting."""
+        client.store.set("pv_forecast", [{"name": "legacy"}])
+        self._apply(client, {"battery.capacity_wh": 20000}, "replace")
+        assert client.store.has_key("pv_forecast")
+
+    def test_replace_drops_surplus_pv_installations(self, client):
+        """Restoring a one-installation backup must remove the second installation."""
+        client.store.set("pv_forecast.1.name", "second")
+        exported = client.get("/api/config/export").get_json()
+        assert "pv_forecast.1.name" in exported
+
+        payload = {k: v for k, v in exported.items() if not k.startswith("pv_forecast.1.")}
+        result = self._apply(client, payload, "replace")
+
+        assert "pv_forecast.1.name" in result["removed"]
+
+    def test_replace_notifies_removed_keys_with_default(self, client):
+        """A removed key reverts to its schema default; interfaces must be told."""
+        exported = client.get("/api/config/export").get_json()
+        payload = {k: v for k, v in exported.items() if k != "price.feed_in_price"}
+
+        client.module.notified.clear()
+        self._apply(client, payload, "replace")
+
+        notified = dict((k, v) for k, _o, v in client.module.notified)
+        assert "price.feed_in_price" in notified
+        assert notified["price.feed_in_price"] == 0.0
+
+    def test_replace_round_trip_is_stable(self, client):
+        """Exporting and replacing with the same file must change nothing."""
+        exported = client.get("/api/config/export").get_json()
+        result = self._apply(client, exported, "replace")
+
+        assert result["removed"] == []
+        assert result["invalid"] == []
+        assert client.get("/api/config/export").get_json() == exported
