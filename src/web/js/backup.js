@@ -97,11 +97,21 @@ class BackupManager {
      * Render the whole panel from current state.
      */
     _render() {
+        // Mid-restore the backup card is just noise, and leaving it on screen pushed the
+        // Confirm button below the fold. Show one thing at a time.
+        const cards = this.preview || this.result
+            ? this._restoreCard()
+            : `${this._backupCard()}${this._restoreCard()}`;
+
         this._renderInto(`
             <div style="max-width:820px;margin:0 auto;display:flex;flex-direction:column;gap:18px;">
-                ${this._backupCard()}
-                ${this._restoreCard()}
+                ${cards}
             </div>`);
+
+        const content = document.getElementById("full_screen_content");
+        if (content) {
+            content.scrollTop = 0;
+        }
     }
 
     /**
@@ -115,26 +125,15 @@ class BackupManager {
             ? `${this._day(history.oldest)} → ${this._day(history.newest)}`
             : "nothing recorded yet";
 
-        const counts = [
-            `<div style="display:flex;justify-content:space-between;gap:12px;">
-                <span><i class="fa-solid fa-gear" style="width:18px;color:#888;"></i>
-                Configuration</span>
-                <span style="color:#bbb;">${settings.count || 0} settings</span>
-            </div>`,
-            `<div style="display:flex;justify-content:space-between;gap:12px;">
-                <span><i class="fa-solid fa-solar-panel" style="width:18px;color:#888;"></i>
-                PV yield history</span>
-                <span style="color:#bbb;">${history.available === false
-                    ? "unavailable"
-                    : `${history.count || 0} hours · ${this._escape(span)}`}</span>
-            </div>`,
-        ].join("");
+        const details = {
+            settings: `${settings.count || 0} settings`,
+            pv_yield_history: history.available === false
+                ? "unavailable"
+                : `${history.count || 0} hours · ${this._escape(span)}`,
+        };
 
         return this._card("fa-download", "Create a backup", `
-            <div style="display:flex;flex-direction:column;gap:8px;font-size:0.92em;">
-                ${counts}
-            </div>
-            ${this._datasetPicker("backup")}
+            ${this._datasetPicker("backup", details)}
             ${this._warning(`
                 The backup file contains your access tokens and inverter password in
                 <strong>plain text</strong>. It has to — a masked file could not restore.
@@ -189,38 +188,54 @@ class BackupManager {
         rows.push(this._metaRow("Written", p.exported_at
             ? this._escape(this._day(p.exported_at))
             : "<span style='color:#ffc107;'>unknown — older config export</span>"));
-
-        if (settings) {
-            rows.push(this._metaRow("Settings to write", `${settings.imported}
-                (${settings.changed} changed)`));
-            if (settings.removed.length) {
-                rows.push(this._metaRow(
-                    "Settings to remove",
-                    `<span style="color:#ffc107;">${settings.removed.length}</span>`
-                ));
-            }
-            if (settings.invalid.length) {
-                rows.push(this._metaRow(
-                    "Values rejected",
-                    `<span style="color:#ffc107;">${settings.invalid.length} — skipped</span>`
-                ));
-            }
+        if (settings && settings.invalid.length) {
+            rows.push(this._metaRow(
+                "Values rejected",
+                `<span style="color:#ffc107;">${settings.invalid.length} — skipped</span>`
+            ));
         }
         if (history && history.available !== false) {
-            rows.push(this._metaRow("Yield hours in file", `${history.total || 0}`));
             if (history.skipped) {
                 rows.push(this._metaRow(
                     "Yield rows unusable",
                     `<span style="color:#ffc107;">${history.skipped} — skipped</span>`
                 ));
             }
+            // Without these two the dataset line reads "2 of 6 hours" with no
+            // explanation of where the other four went.
+            if (history.collisions) {
+                rows.push(this._metaRow(
+                    "Hours already measured here",
+                    `${history.collisions} — will be left untouched`
+                ));
+            }
+            if (history.dropped_old) {
+                rows.push(this._metaRow(
+                    "Hours too old to keep",
+                    `${history.dropped_old} — will not be written`
+                ));
+            }
+        }
+
+        // What each dataset would actually do, shown against its own checkbox rather
+        // than as a second list repeating the same two labels.
+        const details = {};
+        if (settings) {
+            details.settings = `${settings.imported} to write, ${settings.changed} changed`
+                + (settings.removed.length
+                    ? `, <span style="color:#ffc107;">${settings.removed.length} removed</span>`
+                    : "");
+        }
+        if (history && history.available !== false) {
+            details.pv_yield_history = `${history.valid || 0} of ${history.total || 0} hours`;
         }
 
         return `
-            <div style="display:flex;flex-direction:column;gap:6px;font-size:0.9em;">
+            <div style="display:flex;flex-direction:column;gap:6px;font-size:0.9em;
+                        margin-bottom:16px;">
                 ${rows.join("")}
             </div>
-            ${this._datasetPicker("restore")}
+            ${this._datasetPicker("restore", details)}
             ${this._modePicker()}
             ${this._historyPicker()}
             ${this._removalWarning()}
@@ -318,35 +333,41 @@ class BackupManager {
     // ── Pickers ─────────────────────────────────────────────────
 
     /**
-     * Dataset checkboxes.
-     * @param {string} scope - "backup" or "restore", used only for input ids
+     * Dataset checkboxes, each with what it currently amounts to.
+     * @param {string} scope - "backup" or "restore"; selects which selection it drives
+     * @param {object} details - Per-dataset right-hand summary, keyed by dataset key
      * @returns {string} HTML
      */
-    _datasetPicker(scope) {
+    _datasetPicker(scope, details = {}) {
         const selection = scope === "backup" ? this.forBackup : this.forRestore;
         const items = BACKUP_DATASETS.map(ds => {
             const unavailable = ds.key === "pv_yield_history"
                 && this.info && this.info.pv_yield_history
                 && this.info.pv_yield_history.available === false;
+            const detail = details[ds.key];
             return `
-                <label style="display:flex;align-items:flex-start;gap:9px;cursor:${
+                <label for="ds-${scope}-${ds.key}"
+                       style="display:flex;align-items:flex-start;gap:9px;cursor:${
                     unavailable ? "not-allowed" : "pointer"};opacity:${unavailable ? "0.5" : "1"};">
                     <input type="checkbox" id="ds-${scope}-${ds.key}"
                            ${selection[ds.key] && !unavailable ? "checked" : ""}
                            ${unavailable ? "disabled" : ""}
                            onchange="backupManager._toggle('${scope}', '${ds.key}', this.checked)"
                            style="margin-top:3px;">
-                    <span>
+                    <span style="flex:1;">
                         <i class="fa-solid ${ds.icon}" style="width:18px;color:#888;"></i>
                         ${ds.label}
                         <span style="display:block;margin-left:26px;color:#8d8d8d;font-size:0.82em;">
                             ${ds.hint}
                         </span>
                     </span>
+                    ${detail
+                        ? `<span style="color:#bbb;white-space:nowrap;">${detail}</span>`
+                        : ""}
                 </label>`;
         }).join("");
 
-        return `<div style="margin-top:14px;display:flex;flex-direction:column;gap:10px;
+        return `<div style="display:flex;flex-direction:column;gap:12px;
                             font-size:0.9em;">${items}</div>`;
     }
 
@@ -360,6 +381,8 @@ class BackupManager {
         }
         return this._choice("How to restore the configuration", [
             {
+                id: "backup-mode-replace",
+                group: "backup-mode",
                 value: "replace",
                 checked: this.mode === "replace",
                 label: "Replace",
@@ -368,6 +391,8 @@ class BackupManager {
                 on: "backupManager._setMode('replace')",
             },
             {
+                id: "backup-mode-merge",
+                group: "backup-mode",
                 value: "merge",
                 checked: this.mode === "merge",
                 label: "Merge",
@@ -401,6 +426,8 @@ class BackupManager {
 
         return this._choice("How to restore the measured history", [
             {
+                id: "backup-history-as-is",
+                group: "backup-history-mode",
                 value: "as_is",
                 checked: this.historyMode === "as_is",
                 label: "Keep original dates",
@@ -408,6 +435,8 @@ class BackupManager {
                 on: "backupManager._setHistoryMode('as_is')",
             },
             {
+                id: "backup-history-seed",
+                group: "backup-history-mode",
                 value: "seed",
                 checked: this.historyMode === "seed",
                 label: `Shift into the current window${stale ? " — recommended" : ""}`,
@@ -706,14 +735,19 @@ class BackupManager {
 
     /**
      * A labelled radio group.
+     *
+     * Each option carries an explicit `id` and shared `group` name so the label is
+     * properly associated with its input rather than relying on nesting alone.
      * @param {string} title - Group title
-     * @param {Array<object>} options - Radio option descriptors
+     * @param {Array<object>} options - Radio option descriptors: id, group, checked,
+     *     label, hint, on
      * @returns {string} HTML
      */
     _choice(title, options) {
         const radios = options.map(o => `
-            <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;">
-                <input type="radio" ${o.checked ? "checked" : ""} onchange="${o.on}"
+            <label for="${o.id}" style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;">
+                <input type="radio" id="${o.id}" name="${o.group}"
+                       ${o.checked ? "checked" : ""} onchange="${o.on}"
                        style="margin-top:3px;">
                 <span>
                     ${o.label}
