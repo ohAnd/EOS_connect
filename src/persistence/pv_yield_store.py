@@ -118,6 +118,29 @@ def _parse_date(value) -> Optional[str]:
         return None
 
 
+def _shift_row(row: dict, shift_days: int, zone) -> dict:
+    """
+    Move one row forward by whole days, keeping its local wall-clock hour.
+
+    Shifting the UTC instant instead would move the local hour by an hour across a DST
+    boundary, and every consumer buckets by local date and hour. Rebuilding the local
+    time and converting back also yields the correct ``local_offset_minutes`` for the
+    new date, which is what distinguishes the two 02:00 hours of an autumn transition.
+    """
+    new_date = date_cls.fromisoformat(row["local_date"]) + timedelta(days=shift_days)
+    local = datetime(
+        new_date.year, new_date.month, new_date.day, row["local_hour"], tzinfo=zone
+    )
+    offset = local.utcoffset() or timedelta()
+    return {
+        **row,
+        "timestamp": local.astimezone(timezone.utc).isoformat(),
+        "date": new_date.isoformat(),
+        "local_date": new_date.isoformat(),
+        "local_offset_minutes": int(offset.total_seconds() // 60),
+    }
+
+
 def _coerce_row(raw) -> tuple[Optional[dict], str]:
     """
     Validate and normalise one exported row. Returns ``(row, error)``.
@@ -389,6 +412,7 @@ class PvYieldStore:
         rows: Any,
         retention_days: int = 7,
         tz_name: Optional[str] = None,
+        mode: str = "as_is",
     ) -> Dict[str, Any]:
         """
         Work out what restoring *rows* would do, without writing anything.
@@ -408,13 +432,18 @@ class PvYieldStore:
             rows: The ``pv_yield_history`` list from a backup file. Anything else yields
                 an empty plan rather than an error.
             retention_days: The window the autoscaler currently keeps.
-            tz_name: Configured local timezone, used to place "today".
+            tz_name: Configured local timezone, used to place "today" and to rebuild
+                local times when seeding.
+            mode: ``"as_is"`` restores rows at their original timestamps. ``"seed"``
+                shifts them forward so the newest lands on yesterday - see
+                ``_plan_seed``.
 
         Returns:
             A plan with ``rows`` ready for ``insert_hourly_record``, plus the counts the
             preview shows: ``total``, ``valid``, ``skipped``, ``invalid``,
             ``outside_retention``, ``newest_local_date``, ``oldest_local_date``,
-            ``age_days`` and ``seed_recommended``.
+            ``age_days``, ``seed_recommended``, ``shift_days``, ``dropped_old`` and
+            ``collisions``.
         """
         empty = {
             "total": 0,
@@ -427,6 +456,9 @@ class PvYieldStore:
             "oldest_local_date": None,
             "age_days": None,
             "seed_recommended": False,
+            "shift_days": 0,
+            "dropped_old": 0,
+            "collisions": 0,
         }
         if not isinstance(rows, list) or not rows:
             return empty
@@ -449,27 +481,87 @@ class PvYieldStore:
         zone = _zone(tz_name)
         today_local = datetime.now(zone).date()
         cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
-        outside = sum(
-            1 for row in prepared if _parse_timestamp(row["timestamp"]) < cutoff
-        )
 
         local_dates = sorted(row["local_date"] for row in prepared)
         newest = local_dates[-1]
         age_days = (today_local - date_cls.fromisoformat(newest)).days
 
-        return {
+        plan = {
             "total": len(rows),
             "rows": prepared,
             "valid": len(prepared),
             "skipped": skipped,
             "invalid": invalid,
-            "outside_retention": outside,
+            "outside_retention": sum(
+                1 for row in prepared if _parse_timestamp(row["timestamp"]) < cutoff
+            ),
             "newest_local_date": newest,
             "oldest_local_date": local_dates[0],
             "age_days": age_days,
             # Past the retention window the stored history and the backup cannot
             # overlap, which is what makes shifting the rows forward safe.
             "seed_recommended": age_days > retention_days,
+            "shift_days": 0,
+            "dropped_old": 0,
+            "collisions": 0,
+        }
+        if mode == "seed":
+            plan.update(self._plan_seed(plan, today_local, cutoff, zone))
+        return plan
+
+    def _plan_seed(
+        self, plan: Dict[str, Any], today_local: date_cls, cutoff: datetime, zone
+    ) -> Dict[str, Any]:
+        """
+        Shift a plan's rows forward so the newest one lands on yesterday.
+
+        Restoring history that predates the retention window is otherwise futile: the
+        rows are deleted at the next hourly collection and the user waits days for
+        usable scale factors to be re-learnt. Shifting the block forward keeps each
+        hour's measured/forecast ratio - which is what the factors are made of - while
+        placing it where the autoscaler still reads it.
+
+        Whole days only, so hour-of-day and therefore ``timeframe_id`` are preserved
+        exactly. Rows that still land outside the window after the shift are dropped
+        rather than written for immediate purging, and a row that would land on a
+        timestamp already present is skipped: the stored row is either a real
+        measurement or an earlier restore, and neither should be overwritten by a
+        synthetic one.
+        """
+        shift_days = (today_local - timedelta(days=1)) - date_cls.fromisoformat(
+            plan["newest_local_date"]
+        )
+        shift_days = shift_days.days
+        if shift_days <= 0:
+            return {}
+
+        occupied = {
+            row[0]
+            for row in self._store.query("SELECT timestamp FROM pv_yield_history")
+        }
+        shifted = []
+        dropped_old = 0
+        collisions = 0
+        for row in plan["rows"]:
+            moved = _shift_row(row, shift_days, zone)
+            if _parse_timestamp(moved["timestamp"]) < cutoff:
+                dropped_old += 1
+                continue
+            # Also catches two source rows collapsing onto one local hour, which the
+            # duplicated 02:00 of an autumn DST transition produces.
+            if moved["timestamp"] in occupied:
+                collisions += 1
+                continue
+            occupied.add(moved["timestamp"])
+            shifted.append(moved)
+
+        return {
+            "rows": shifted,
+            "valid": len(shifted),
+            "shift_days": shift_days,
+            "dropped_old": dropped_old,
+            "collisions": collisions,
+            "outside_retention": 0,
         }
 
     def import_rows(
@@ -477,36 +569,55 @@ class PvYieldStore:
         rows: Any,
         retention_days: int = 7,
         tz_name: Optional[str] = None,
+        mode: str = "as_is",
     ) -> Dict[str, Any]:
         """
-        Restore exported rows at their original timestamps.
+        Restore exported rows.
 
         Writes through ``insert_hourly_record``, which upserts on the UTC timestamp, so
-        re-importing the same file is idempotent. Rows already outside the retention
+        re-importing the same file is idempotent.
+
+        In ``as_is`` mode rows keep their timestamps. Any already outside the retention
         window are still written and reported: they will be purged at the next hourly
         collection, and the count tells the user to raise ``retention_days`` and try
         again rather than leaving them to vanish silently.
 
+        In ``seed`` mode the block is shifted forward into the window and marked
+        ``seeded``, so a restore made long after the backup still yields usable scale
+        factors from startup instead of days of neutral 1.0.
+
         Returns the plan counts plus ``imported``.
         """
-        plan = self.plan_import(rows, retention_days=retention_days, tz_name=tz_name)
+        plan = self.plan_import(
+            rows, retention_days=retention_days, tz_name=tz_name, mode=mode
+        )
+        # A shift of zero means seeding had nothing to do, so the rows are unmoved and
+        # should not claim to be synthetic.
+        seeded = mode == "seed" and plan["shift_days"] > 0
+        origin = ORIGIN_SEEDED if seeded else ORIGIN_IMPORTED
+
         imported = 0
         for row in plan["rows"]:
-            self.insert_hourly_record(
-                real_counter_kwh=None,
-                origin=ORIGIN_IMPORTED,
-                **row,
-            )
+            self.insert_hourly_record(real_counter_kwh=None, origin=origin, **row)
             imported += 1
 
         if imported:
             logger.info(
-                "[PV-STORE] Restored %d yield row(s), %d skipped, %d outside retention",
+                "[PV-STORE] Restored %d yield row(s) as %s (shift=%dd), "
+                "%d skipped, %d outside retention, %d dropped, %d collision(s)",
                 imported,
+                origin,
+                plan["shift_days"],
                 plan["skipped"],
                 plan["outside_retention"],
+                plan["dropped_old"],
+                plan["collisions"],
             )
-        return {**{k: v for k, v in plan.items() if k != "rows"}, "imported": imported}
+        return {
+            **{k: v for k, v in plan.items() if k != "rows"},
+            "imported": imported,
+            "origin": origin if imported else None,
+        }
 
     @staticmethod
     def _as_dict(row) -> dict:

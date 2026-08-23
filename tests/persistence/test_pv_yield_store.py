@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from src.persistence import PvYieldStore
+from src.persistence.pv_yield_store import _shift_row
 from src.config_web.store import ConfigStore
 
 
@@ -402,3 +404,146 @@ def test_plan_recommends_seeding_only_past_retention(pv_store):
     )
     assert stale["age_days"] == 20
     assert stale["seed_recommended"] is True
+
+
+# ----------------------------------------------------------------------
+# Seeded (time-shifted) restore
+# ----------------------------------------------------------------------
+
+
+def _stale_day(days_ago, hours=(8, 12, 16)):
+    """One day of exported rows, `days_ago` days in the past."""
+    base = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    return [_exported(base.replace(hour=h, minute=0, second=0, microsecond=0)) for h in hours]
+
+
+def test_seed_shifts_newest_row_to_yesterday(pv_store):
+    """A three-week-old backup must land inside the retention window."""
+    result = pv_store.import_rows(_stale_day(21), retention_days=7, mode="seed")
+
+    assert result["shift_days"] == 20
+    assert result["imported"] == 3
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    assert {row["local_date"] for row in pv_store.get_all_history()} == {yesterday}
+
+
+def test_seed_preserves_hour_and_timeframe(pv_store):
+    """Shifting whole days must not move the solar hour."""
+    pv_store.import_rows(_stale_day(21, hours=(5, 13, 20)), retention_days=7, mode="seed")
+
+    stored = pv_store.get_all_history()
+    assert sorted(row["local_hour"] for row in stored) == [5, 13, 20]
+    assert sorted(row["timeframe_id"] for row in stored) == [1, 3, 4]
+
+
+def test_seed_marks_rows_as_seeded(pv_store):
+    """Seeded factors must never be mistaken for local measurements."""
+    pv_store.import_rows(_stale_day(21), retention_days=7, mode="seed")
+    assert {row["origin"] for row in pv_store.get_all_history()} == {"seeded"}
+
+
+def test_seed_keeps_measured_data_the_ratio_needs(pv_store):
+    """The measured/forecast pair is the whole point of seeding."""
+    pv_store.import_rows(_stale_day(21, hours=(10,)), retention_days=7, mode="seed")
+
+    stored = pv_store.get_all_history()[0]
+    assert stored["real_delta_kwh"] == 1.0
+    assert stored["forecast_kwh"] == 1.2
+    assert stored["real_counter_kwh"] is None
+
+
+def test_seed_drops_rows_still_outside_the_window(pv_store):
+    """Only the newest retention_days survive the shift; the rest are not written."""
+    rows = _stale_day(30, hours=(10,)) + _stale_day(21, hours=(10,))
+    result = pv_store.import_rows(rows, retention_days=7, mode="seed")
+
+    assert result["imported"] == 1
+    assert result["dropped_old"] == 1
+    assert len(pv_store.get_all_history()) == 1
+
+
+def test_seed_never_overwrites_an_existing_row(pv_store):
+    """A real measurement outranks a synthetic one landing on the same hour."""
+    yesterday = _yesterday(10)
+    _record(pv_store, yesterday, real_delta_kwh=9.9)
+
+    result = pv_store.import_rows(_stale_day(21, hours=(10,)), retention_days=7, mode="seed")
+
+    assert result["collisions"] == 1
+    assert result["imported"] == 0
+    stored = pv_store.get_all_history()
+    assert len(stored) == 1
+    assert stored[0]["real_delta_kwh"] == 9.9
+    assert stored[0]["origin"] is None
+
+
+def test_seed_is_a_no_op_for_a_fresh_backup(pv_store):
+    """Nothing to shift means the rows stay put and stay honest about it."""
+    result = pv_store.import_rows([_exported(_yesterday(10))], retention_days=7, mode="seed")
+
+    assert result["shift_days"] == 0
+    assert result["origin"] == "imported"
+    assert pv_store.get_all_history()[0]["origin"] == "imported"
+
+
+def test_seed_is_idempotent(pv_store):
+    """Running the same seeded restore twice must not double the rows."""
+    rows = _stale_day(21)
+    first = pv_store.import_rows(rows, retention_days=7, mode="seed")
+    second = pv_store.import_rows(rows, retention_days=7, mode="seed")
+
+    assert first["imported"] == 3
+    assert second["imported"] == 0
+    assert second["collisions"] == 3
+    assert len(pv_store.get_all_history()) == 3
+
+
+def test_shift_recomputes_the_utc_offset_for_the_new_date():
+    """Winter rows moved into summer must take the target date's DST offset."""
+    winter = {
+        "timestamp": "2026-01-15T09:00:00+00:00",
+        "date": "2026-01-15",
+        "hour": 10,
+        "timeframe_id": 2,
+        "real_delta_kwh": 1.0,
+        "forecast_kwh": 1.2,
+        "local_date": "2026-01-15",
+        "local_hour": 10,
+        "local_offset_minutes": 60,  # CET
+    }
+    shifted = _shift_row(winter, 181, ZoneInfo("Europe/Berlin"))
+
+    assert shifted["local_date"] == "2026-07-15"
+    assert shifted["local_hour"] == 10       # local wall clock preserved
+    assert shifted["local_offset_minutes"] == 120  # CEST
+    assert shifted["timestamp"].startswith("2026-07-15T08:00:00")
+
+
+def test_shift_keeps_local_hour_across_the_spring_transition():
+    """The UTC instant moves by 23h here; the local hour must not move at all."""
+    before = {
+        "timestamp": "2026-03-28T09:00:00+00:00",
+        "date": "2026-03-28",
+        "hour": 10,
+        "timeframe_id": 2,
+        "real_delta_kwh": 1.0,
+        "forecast_kwh": 1.2,
+        "local_date": "2026-03-28",
+        "local_hour": 10,
+        "local_offset_minutes": 60,
+    }
+    shifted = _shift_row(before, 1, ZoneInfo("Europe/Berlin"))
+
+    assert shifted["local_hour"] == 10
+    assert shifted["local_offset_minutes"] == 120
+    assert shifted["timestamp"].startswith("2026-03-29T08:00:00")
+
+
+def test_seed_uses_local_midnight_boundaries(pv_store):
+    """Late-evening rows must not slide into the next local day."""
+    pv_store.import_rows(
+        _stale_day(21, hours=(23,)), retention_days=7, tz_name="Europe/Berlin", mode="seed"
+    )
+    stored = pv_store.get_all_history()[0]
+    assert stored["local_hour"] == 23
+    assert stored["local_date"] == stored["date"]
