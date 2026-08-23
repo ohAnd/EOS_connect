@@ -422,3 +422,65 @@ def test_status_reports_no_restored_hours_for_a_normal_install():
     autoscaler = _autoscaler(store, today="2026-08-20")
 
     assert autoscaler.get_status()["restored_hours"] == 0
+
+
+class FakePvInterfaceForRefresh:
+    """Minimal PvInterface stand-in that re-derives its scaled array on demand."""
+
+    def __init__(self, autoscaler, raw):
+        self._autoscaler = autoscaler
+        self.time_frame_base = 3600
+        self.pv_forcast_array_raw = list(raw)
+        self.pv_forcast_array = autoscaler.apply_scaling(raw, self.time_frame_base)
+        self.refresh_calls = 0
+
+    def refresh_scaled_forecast(self):
+        self.refresh_calls += 1
+        self.pv_forcast_array = self._autoscaler.apply_scaling(
+            self.pv_forcast_array_raw, self.time_frame_base
+        )
+
+
+def test_dropping_below_min_hours_refreshes_the_scaled_forecast():
+    """
+    Resetting to neutral factors must re-derive the cached scaled array.
+
+    Without this the UI reports every factor as 1.000x while still serving a forecast
+    multiplied by the superseded factors, and EOS optimizes against it too.
+    """
+    store = InMemoryPvYieldStore()
+    # A full day of history first, so the factors start non-neutral (4.8/6.0 = 0.8).
+    store.rows = _day_rows("2026-08-19", 4.8, 6.0)
+    autoscaler = _autoscaler(store, today="2026-08-20", min_data_hours_required=1)
+    assert autoscaler.get_scale_factors()[2] == 0.8
+
+    raw = [0.0] * 24
+    for hour in range(6, 12):
+        raw[hour] = 1000.0
+    pv = FakePvInterfaceForRefresh(autoscaler, raw)
+    autoscaler.set_pv_interface(pv)
+    assert sum(pv.pv_forcast_array) == pytest.approx(4800.0)
+
+    # Now the same store no longer clears the bar, so the factors go neutral.
+    autoscaler.min_data_hours_required = 999
+    autoscaler.compute_timeframe_scaling_factors()
+
+    assert autoscaler.get_scale_factors() == {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0}
+    assert pv.refresh_calls == 1
+    # The served array must match the factors the UI reports, not the old 0.8.
+    assert sum(pv.pv_forcast_array) == pytest.approx(6000.0)
+
+
+def test_unchanged_factors_do_not_refresh_the_forecast():
+    """A recompute that lands on the same factors must not rebuild the array."""
+    store = InMemoryPvYieldStore()
+    store.rows = _day_rows("2026-08-19", 4.8, 6.0)
+    autoscaler = _autoscaler(store, today="2026-08-20", min_data_hours_required=1)
+
+    pv = FakePvInterfaceForRefresh(autoscaler, [1000.0] * 24)
+    autoscaler.set_pv_interface(pv)
+
+    autoscaler.compute_timeframe_scaling_factors()
+    autoscaler.compute_timeframe_scaling_factors()
+
+    assert pv.refresh_calls == 0

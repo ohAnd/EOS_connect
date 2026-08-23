@@ -769,6 +769,28 @@ class PvAutoscaler:
 
         return actual, forecast, hours, recorded_hours, origins
 
+    def _set_scale_factors(self, factors: Dict[int, float]) -> None:
+        """
+        Cache new factors, re-deriving the scaled forecast when they actually changed.
+
+        The scaled array is otherwise only rebuilt on a provider fetch - up to 15
+        minutes apart, or 2.5 hours on Solcast - so without this both EOS and the UI
+        keep receiving a forecast multiplied by superseded factors. That is most
+        visible on a fresh install: the hour count drops back under
+        `min_data_hours_required` at the day rollover, the factors reset to neutral,
+        and the still-scaled array reports a correction the UI says is not applied.
+        """
+        changed = factors != self._scale_factors
+        self._scale_factors = factors
+        if not changed:
+            return
+        if not hasattr(self._pv_interface, "refresh_scaled_forecast"):
+            return
+        try:
+            self._pv_interface.refresh_scaled_forecast()
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.exception("[PV-AUTO] Could not refresh scaled forecast after factor change")
+
     def compute_timeframe_scaling_factors(self) -> Dict[int, float]:
         """Compute scale factors for each timeframe (1..4) based on historical data."""
         rows = self._pv_yield_store.get_history_last_n_days(self.retention_days)
@@ -788,7 +810,7 @@ class PvAutoscaler:
                 self.min_data_hours_required,
             )
             neutral = {tf: 1.0 for tf in TIMEFRAME_IDS}
-            self._scale_factors = neutral
+            self._set_scale_factors(neutral)
             return neutral.copy()
 
         # For each timeframe compute average across days that have data for that timeframe
@@ -827,7 +849,7 @@ class PvAutoscaler:
             scale = min(max(scale, self.min_scale_factor), self.max_scale_factor)
             scale_factors[tf] = round(scale, 3)
 
-        self._scale_factors = scale_factors
+        self._set_scale_factors(scale_factors)
         logger.info(
             "[PV-AUTO] Computed scale factors: %s (hours=%d)", scale_factors, recorded_hours
         )
