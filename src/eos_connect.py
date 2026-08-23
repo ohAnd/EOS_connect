@@ -642,6 +642,12 @@ def create_optimize_request():
             else:
                 current_slot = seconds_since_midnight // time_frame_base
 
+            # Discount our own copies. Both series are backed by a cache on the
+            # interface that produced them, and scaling a slot in place accumulated
+            # into that cache: the in-progress slot was discounted again on every
+            # optimizer run, decaying towards zero until the next provider fetch.
+            pv_prognose_wh = list(pv_prognose_wh)
+            gesamtlast = list(gesamtlast)
             for ts in (pv_prognose_wh, gesamtlast):
                 if ts and len(ts) > current_slot:
                     ts[current_slot] *= scale_factor

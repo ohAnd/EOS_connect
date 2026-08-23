@@ -1764,3 +1764,76 @@ class TestOpenMeteoLibDSTNormalisation:
         assert (
             len(result) == 48
         ), f"Fall-back: expected 48 elements after trimming, got {len(result)}"
+
+
+def test_get_current_pv_forecast_returns_a_copy():
+    """
+    The accessor must not hand out the cached arrays themselves.
+
+    The EOS request builder discounts the in-progress slot to the fraction of it that
+    is still ahead (src/eos_connect.py, get_ems_data). While this returned the cached
+    list, that discount accumulated into the cache and shrank the current slot again on
+    every optimizer run, so the panel reported a phantom autoscaler correction for a
+    single slot and EOS was handed a forecast that decayed between runs.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    pv.pv_forcast_array = [100.0, 200.0, 300.0]
+    pv.pv_forcast_array_raw = [110.0, 210.0, 310.0]
+
+    scaled = pv.get_current_pv_forecast()
+    raw = pv.get_current_pv_forecast(scale=False)
+
+    assert scaled is not pv.pv_forcast_array
+    assert raw is not pv.pv_forcast_array_raw
+
+    # Exactly what get_ems_data does to the partial slot.
+    scaled[0] *= 0.25
+    raw[0] *= 0.25
+
+    assert pv.pv_forcast_array == [100.0, 200.0, 300.0]
+    assert pv.pv_forcast_array_raw == [110.0, 210.0, 310.0]
+
+
+def test_partial_slot_discount_does_not_accumulate_across_runs():
+    """
+    Repeating the partial-slot discount must not compound into the cached forecast.
+
+    Reproduces the observed decay of one slot (718.8 -> 557.5 -> 291.7 -> 79.4 Wh)
+    while every autoscaler factor was still 1.0.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    pv.pv_forcast_array = [718.8] * 4
+
+    for remaining_fraction in (0.7756, 0.5233, 0.2722):
+        series = pv.get_current_pv_forecast()
+        series[1] *= remaining_fraction
+        # Each run sees the undecayed forecast, discounted only for its own slot.
+        assert series[1] == pytest.approx(718.8 * remaining_fraction)
+
+    assert pv.pv_forcast_array == [718.8] * 4
+
+
+@pytest.mark.parametrize("autoscaler", [None, "disabled"])
+def test_scaled_and_raw_forecasts_are_never_the_same_object(autoscaler):
+    """
+    apply_autoscaling must copy even when it applies nothing.
+
+    Returning its input let the update loop store one list as both pv_forcast_array and
+    pv_forcast_array_raw whenever autoscaling was off, so a single in-place edit would
+    corrupt the raw array too - the one the autoscaler records as forecast_kwh and
+    trains the correction on.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    if autoscaler == "disabled":
+        class _Disabled:
+            enabled = False
+        pv.set_autoscaler(_Disabled())
+
+    raw = [718.8] * 4
+    scaled = pv.apply_autoscaling(raw)
+
+    assert scaled == raw
+    assert scaled is not raw
+
+    scaled[1] *= 0.5
+    assert raw == [718.8] * 4

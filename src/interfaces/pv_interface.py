@@ -697,18 +697,24 @@ class PvInterface:
 
     def get_current_pv_forecast(self, scale=True):
         """
-        Returns the current photovoltaic (PV) forecast array.
+        Returns a copy of the current photovoltaic (PV) forecast array.
+
+        The copy is deliberate: callers adjust the series they get back - the EOS request
+        builder discounts the in-progress slot to the fraction of it that is still ahead -
+        and handing out the cached list itself let that adjustment accumulate into the
+        cache, shrinking the current slot again on every optimizer run until the next
+        provider fetch replaced the array.
 
         Returns:
-            list or np.ndarray: The current PV forecast values stored in pv_forcast_array.
+            list: The current PV forecast values, scaled by the autoscaler unless
+            `scale` is False.
         """
         # logger.debug(
         #     "[PV-IF] Returning current PV forecast: %s", self.pv_forcast_array
         # )
         if scale:
-            return self.pv_forcast_array
-        else:
-            return self.pv_forcast_array_raw
+            return list(self.pv_forcast_array)
+        return list(self.pv_forcast_array_raw)
 
     def get_current_temp_forecast(self):
         """
@@ -1066,18 +1072,21 @@ class PvInterface:
         """
         Apply the autoscaler's timeframe multipliers to an unscaled forecast array.
 
-        Returns the input unchanged when no autoscaler is attached, it is disabled, or
-        scaling raises - the unscaled forecast is always a valid result.
+        Returns an unscaled copy when no autoscaler is attached, it is disabled, or
+        scaling raises - the unscaled forecast is always a valid result. It is a copy so
+        that the caller never ends up storing the scaled and raw arrays as one object:
+        aliasing them would let a single in-place edit corrupt both, including the raw
+        array the autoscaler records as `forecast_kwh` and trains the correction on.
         """
         if not forecast_values:
-            return forecast_values
+            return list(forecast_values)
         if self._autoscaler is None or not getattr(self._autoscaler, "enabled", False):
-            return forecast_values
+            return list(forecast_values)
         try:
             scaled = self._autoscaler.apply_scaling(forecast_values, self.time_frame_base)
         except Exception:
             logger.exception("[PV-IF] Error applying autoscaler - returning raw forecast")
-            return forecast_values
+            return list(forecast_values)
         if logger.isEnabledFor(logging.DEBUG):
             getter = getattr(self._autoscaler, "get_scale_factors", None)
             logger.debug(
