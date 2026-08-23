@@ -58,6 +58,7 @@
                     <a href="#opt-request-response" class="toc-link toc-sub">→ Optimization Request/Response</a>
                     <a href="#feedin-pricing-details" class="toc-link toc-sub">→ Feed-In Pricing Details</a>
                     <a href="#pv-autoscaling-api" class="toc-link toc-sub">→ PV Auto-Scaling API</a>
+                    <a href="#backup-api" class="toc-link toc-sub">→ Backup &amp; Restore API</a>
                     <a href="#system-mode-ref" class="toc-link toc-sub">→ System Modes</a>
                     <a href="#logging-api" class="toc-link toc-sub">→ Logging API</a>
                     <a href="#mqtt" class="toc-link">MQTT Integration</a>
@@ -351,6 +352,178 @@
                         forecast — the same days the scale factors are derived from. Today is excluded from both and
                         reported separately in <code>todays_partial_data</code>.
                     </p>
+
+                    <p>
+                        <code>restored_hours</code> counts how many hours of the window came from a restored backup
+                        rather than this system's own meter, and each entry in <code>aggregated_history.days</code>
+                        carries an <code>origin</code> of <code>measured</code>, <code>imported</code> or
+                        <code>seeded</code>. A day counts as measured as soon as one of its hours was recorded
+                        locally. See <a href="#backup-api">Backup &amp; Restore API</a>.
+                    </p>
+
+                    <h3 id="backup-api">Backup &amp; Restore API</h3>
+                    <p>
+                        Endpoints behind <strong>Menu → Backup &amp; Restore</strong>, covering the whole install:
+                        the configuration and the measured PV yield history. The configuration-only pair
+                        (<code>GET /api/config/export</code>, <code>POST /api/config/import</code>) is unchanged and
+                        still writes the flat settings file earlier versions produced.
+                    </p>
+
+                    <div class="alert alert-warning">
+                        <i class="fas fa-triangle-exclamation"></i>
+                        <strong>A backup file contains secrets in plain text</strong> — Home Assistant access
+                        tokens, price API tokens and the inverter password. It is never masked, because a masked
+                        file could not restore. Store it the way you would store a password.
+                    </div>
+
+                    <h4>Endpoints</h4>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Endpoint</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>GET /api/backup/info</code></td>
+                                <td>What a backup taken now would contain: setting count, yield row count, the
+                                    oldest and newest recorded hour, and the current retention window.</td>
+                            </tr>
+                            <tr>
+                                <td><code>GET /api/backup/export</code></td>
+                                <td>The backup file itself.</td>
+                            </tr>
+                            <tr>
+                                <td><code>POST /api/backup/import</code></td>
+                                <td>Restore a backup, or preview one with <code>dry_run=1</code>.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <h4>Query parameters</h4>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Parameter</th>
+                                <th>Values</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>include</code></td>
+                                <td><code>settings</code>, <code>pv_yield_history</code></td>
+                                <td>Comma-separated datasets to act on. Omit for all; pass it empty for none.</td>
+                            </tr>
+                            <tr>
+                                <td><code>mode</code></td>
+                                <td><code>replace</code> (default), <code>merge</code></td>
+                                <td>Import only. <code>replace</code> makes the stored configuration match the file
+                                    exactly, removing settings the file does not contain. <code>merge</code> keeps
+                                    them.</td>
+                            </tr>
+                            <tr>
+                                <td><code>history_mode</code></td>
+                                <td><code>as_is</code> (default), <code>seed</code></td>
+                                <td>Import only. <code>seed</code> shifts the yield rows forward so the newest lands
+                                    on yesterday.</td>
+                            </tr>
+                            <tr>
+                                <td><code>dry_run</code></td>
+                                <td><code>1</code></td>
+                                <td>Import only. Report what would happen and write nothing.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <h4>File format</h4>
+                    <p>
+                        The file is <strong>flat</strong>: settings sit at the top level in dot notation, next to the
+                        metadata and the dataset keys. This is deliberate. An older build resolves every top-level
+                        key against its own schema and skips what it does not recognise, so a flat file still
+                        restores every setting that build knows — whereas a nested
+                        <code>{"settings": {…}}</code> envelope would restore nothing and report success.
+                    </p>
+                    <pre><code>{
+  "battery.capacity_wh": 20000,
+  "eos.port": 8503,
+  "_format": "eos-connect-backup",
+  "_version": 1,
+  "_exported_at": "2026-08-23T10:00:00+00:00",
+  "_datasets": ["settings", "pv_yield_history"],
+  "pv_yield_history": [
+    {"timestamp": "2026-08-19T06:00:00+00:00", "date": "2026-08-19", "hour": 8,
+     "timeframe_id": 2, "real_delta_kwh": 0.83, "forecast_kwh": 0.91,
+     "local_date": "2026-08-19", "local_hour": 8, "local_offset_minutes": 120,
+     "origin": null}
+  ]
+}</code></pre>
+                    <p>
+                        Exported rows omit <code>id</code>, <code>created_at</code> and
+                        <code>real_counter_kwh</code>. The first two are local database artifacts; the meter counter
+                        is excluded because the autoscaler seeds its baseline from the newest stored row on startup,
+                        and a reading from another install would make the first live collection record the difference
+                        between two unrelated meters as one hour of yield. Scale factors are computed from
+                        <code>real_delta_kwh</code> and <code>forecast_kwh</code> only, so nothing is lost.
+                    </p>
+
+                    <h4>Import response</h4>
+                    <pre><code>{
+  "dry_run": false,
+  "datasets": ["settings", "pv_yield_history"],
+  "mode": "replace",
+  "history_mode": "seed",
+  "format": "eos-connect-backup",
+  "version": 1,
+  "exported_at": "2026-08-23T10:00:00+00:00",
+  "settings": {
+    "imported": 124, "changed": 3, "removed": ["evcc.url"],
+    "skipped": 0, "invalid": [],
+    "restart_required": ["eos_connect_web_port"],
+    "hot_reloaded": ["price.feed_in_price"],
+    "warnings": []
+  },
+  "pv_yield_history": {
+    "available": true, "imported": 84, "skipped": 0,
+    "total": 96, "valid": 84,
+    "outside_retention": 0, "shift_days": 18,
+    "collisions": 2, "dropped_old": 10,
+    "age_days": 19, "seed_recommended": true,
+    "retention_days": 7, "origin": "seeded",
+    "newest_local_date": "2026-08-04", "oldest_local_date": "2026-07-29",
+    "invalid": []
+  }
+}</code></pre>
+                    <p>
+                        <code>removed</code> lists settings deleted by <code>replace</code>; <code>invalid</code>
+                        lists values the current schema rejects, which are skipped individually rather than failing
+                        the whole restore. <code>hot_reloaded</code> fields take effect immediately;
+                        <code>restart_required</code> fields need a restart. <code>warnings</code> carries unmet
+                        cross-field dependencies, which are reported but never block a restore.
+                    </p>
+                    <p>
+                        For the history: <code>collisions</code> counts rows that would have landed on an hour
+                        already stored — existing rows are never overwritten — and <code>dropped_old</code> counts
+                        rows still outside the retention window after shifting, which are not written because the
+                        next hourly collection would delete them anyway.
+                    </p>
+
+                    <h4>Examples</h4>
+                    <pre><code># Download a full backup
+curl -o backup.json http://localhost:8081/api/backup/export
+
+# Preview what restoring it would do — writes nothing
+curl -X POST -H "Content-Type: application/json" --data-binary @backup.json \
+  "http://localhost:8081/api/backup/import?dry_run=1"
+
+# Restore configuration only, keeping settings the file does not contain
+curl -X POST -H "Content-Type: application/json" --data-binary @backup.json \
+  "http://localhost:8081/api/backup/import?include=settings&amp;mode=merge"
+
+# Restore an old backup, shifting its history into the current window
+curl -X POST -H "Content-Type: application/json" --data-binary @backup.json \
+  "http://localhost:8081/api/backup/import?history_mode=seed"</code></pre>
 
                     <h4 id="field-reference">Response Field Reference</h4>
 
