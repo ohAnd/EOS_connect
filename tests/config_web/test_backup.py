@@ -99,6 +99,7 @@ class TestBackupInfo:
     """What the panel shows before anything is downloaded."""
 
     def test_info_counts_both_datasets(self, client):
+        """Both datasets are reported with the counts the panel shows."""
         _seed_hours(client)
         data = client.get("/api/backup/info").get_json()
 
@@ -107,11 +108,20 @@ class TestBackupInfo:
         assert data["pv_yield_history"]["available"] is True
         assert data["retention_days"] == 7
 
+    def test_info_survives_a_corrupt_retention_setting(self, client):
+        """A garbage retention value must not take the whole panel down with it."""
+        client.store.set("pv_autoscaling.retention_days", "not a number")
+
+        data = client.get("/api/backup/info").get_json()
+
+        assert data["retention_days"] == 7
+
     def test_info_warns_the_file_holds_secrets(self, client):
         """A backup is never masked, so the UI has to say so."""
         assert client.get("/api/backup/info").get_json()["contains_secrets"] is True
 
     def test_info_degrades_without_a_yield_store(self, storeless_client):
+        """A missing yield store is reported, not raised."""
         data = storeless_client.get("/api/backup/info").get_json()
 
         assert data["pv_yield_history"]["available"] is False
@@ -123,6 +133,7 @@ class TestBackupExport:
     """The file's shape is a compatibility contract."""
 
     def test_export_is_flat_with_metadata(self, client):
+        """Settings at the top level, marked with an explicit format version."""
         data = client.get("/api/backup/export").get_json()
 
         assert data["_format"] == "eos-connect-backup"
@@ -135,6 +146,7 @@ class TestBackupExport:
         assert "settings" not in data
 
     def test_export_carries_yield_history(self, client):
+        """Measured hours travel with the settings."""
         _seed_hours(client)
         rows = client.get("/api/backup/export").get_json()["pv_yield_history"]
 
@@ -142,6 +154,7 @@ class TestBackupExport:
         assert rows[0]["real_delta_kwh"] == 0.83
 
     def test_export_omits_local_only_row_fields(self, client):
+        """Database artifacts and the meter counter do not travel."""
         _seed_hours(client)
         row = client.get("/api/backup/export").get_json()["pv_yield_history"][0]
 
@@ -150,12 +163,14 @@ class TestBackupExport:
         assert "real_counter_kwh" not in row
 
     def test_export_degrades_to_empty_history(self, storeless_client):
+        """No yield store means an empty history, not a failed export."""
         data = storeless_client.get("/api/backup/export").get_json()
 
         assert data["pv_yield_history"] == []
         assert data["battery.capacity_wh"] == 10000
 
     def test_export_honours_dataset_selection(self, client):
+        """Each dataset can be backed up on its own."""
         _seed_hours(client)
 
         only_history = client.get("/api/backup/export?include=pv_yield_history").get_json()
@@ -187,6 +202,7 @@ class TestBackupRestore:
     """Restoring, and previewing a restore."""
 
     def test_round_trip_restores_history(self, client):
+        """Export, wipe, import — the hours come back."""
         _seed_hours(client)
         backup = client.get("/api/backup/export").get_json()
         client.store.execute("DELETE FROM pv_yield_history")
@@ -198,6 +214,7 @@ class TestBackupRestore:
         assert len(client.module.pv_yield_store.get_all_history()) == 2
 
     def test_restore_is_idempotent(self, client):
+        """Restoring twice must not duplicate rows."""
         _seed_hours(client)
         backup = client.get("/api/backup/export").get_json()
         client.store.execute("DELETE FROM pv_yield_history")
@@ -218,6 +235,7 @@ class TestBackupRestore:
         assert client.store.get("battery.capacity_wh") == 10000
 
     def test_restore_removes_settings_absent_from_the_file(self, client):
+        """Replace mode deletes what the file does not carry."""
         backup = client.get("/api/backup/export").get_json()
         del backup["eos.port"]
 
@@ -227,6 +245,7 @@ class TestBackupRestore:
         assert not client.store.has_key("eos.port")
 
     def test_merge_mode_keeps_them(self, client):
+        """Merge mode leaves settings the file does not carry alone."""
         backup = client.get("/api/backup/export").get_json()
         del backup["eos.port"]
 
@@ -236,6 +255,7 @@ class TestBackupRestore:
         assert client.store.has_key("eos.port")
 
     def test_dry_run_writes_nothing(self, client):
+        """The preview must not touch either table."""
         _seed_hours(client)
         backup = client.get("/api/backup/export").get_json()
         client.store.execute("DELETE FROM pv_yield_history")
@@ -261,6 +281,7 @@ class TestBackupRestore:
         assert client.store.has_key("eos.port")
 
     def test_restore_reports_the_file_metadata_back(self, client):
+        """The response echoes what the file claimed to be."""
         backup = client.get("/api/backup/export").get_json()
         result = _post(client, backup, "?dry_run=1").get_json()
 
@@ -269,6 +290,7 @@ class TestBackupRestore:
         assert result["exported_at"] == backup["_exported_at"]
 
     def test_restore_honours_dataset_selection(self, client):
+        """Restoring one dataset must not touch the other."""
         _seed_hours(client)
         backup = client.get("/api/backup/export").get_json()
         client.store.execute("DELETE FROM pv_yield_history")
@@ -291,6 +313,7 @@ class TestBackupRestore:
         assert client.store.get("battery.capacity_wh") == 99999
 
     def test_restore_degrades_without_a_yield_store(self, storeless_client):
+        """Settings still restore; the history is reported as unavailable."""
         payload = {
             "_format": "eos-connect-backup",
             "battery.capacity_wh": 12000,
@@ -303,6 +326,7 @@ class TestBackupRestore:
         assert storeless_client.store.get("battery.capacity_wh") == 12000
 
     def test_restore_rejects_a_non_object_body(self, client):
+        """A JSON array is not a backup."""
         resp = client.post(
             "/api/backup/import", data=json.dumps([1, 2]), content_type="application/json"
         )
@@ -320,6 +344,7 @@ class TestBackupRestore:
         assert client.store.get("battery.capacity_wh") == 13500
 
     def test_seed_mode_shifts_a_stale_backup_into_the_window(self, client):
+        """Old rows land inside the retention window, marked seeded."""
         _seed_hours(client, days_ago=25)
         backup = client.get("/api/backup/export").get_json()
         client.store.execute("DELETE FROM pv_yield_history")
@@ -332,6 +357,7 @@ class TestBackupRestore:
         assert {row["origin"] for row in stored} == {"seeded"}
 
     def test_preview_flags_a_stale_backup_for_seeding(self, client):
+        """The preview reports the age that makes shifting worthwhile."""
         _seed_hours(client, days_ago=25)
         backup = client.get("/api/backup/export").get_json()
 
@@ -342,9 +368,38 @@ class TestBackupRestore:
         assert preview["retention_days"] == 7
 
     def test_preview_does_not_flag_a_fresh_backup(self, client):
+        """A recent backup needs no shifting, so none is recommended."""
         _seed_hours(client, days_ago=1)
         backup = client.get("/api/backup/export").get_json()
 
         preview = _post(client, backup, "?dry_run=1").get_json()["pv_yield_history"]
 
         assert preview["seed_recommended"] is False
+
+
+class TestPreviewClassifiesFields:
+    """The preview must say what a restore would apply live and what needs a restart."""
+
+    def test_dry_run_separates_live_from_restart_required(self, client):
+        """Knowing a restart is coming is part of deciding whether to restore now."""
+        backup = client.get("/api/backup/export").get_json()
+        backup["price.feed_in_price"] = 0.27          # hot-reloadable
+        backup["eos_connect_web_port"] = 8099         # needs a restart
+
+        settings = _post(client, backup, "?dry_run=1").get_json()["settings"]
+
+        assert "price.feed_in_price" in settings["hot_reloaded"]
+        assert "eos_connect_web_port" in settings["restart_required"]
+        # Still a preview: neither value reached the store.
+        assert client.store.get("price.feed_in_price") != 0.27
+
+    def test_dry_run_reports_nothing_to_do_for_an_identical_file(self, client):
+        """Re-restoring the current state must not claim pending changes."""
+        backup = client.get("/api/backup/export").get_json()
+
+        settings = _post(client, backup, "?dry_run=1").get_json()["settings"]
+
+        assert settings["changed"] == 0
+        assert settings["removed"] == []
+        assert settings["hot_reloaded"] == []
+        assert settings["restart_required"] == []

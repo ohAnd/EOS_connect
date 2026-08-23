@@ -83,6 +83,7 @@ def test_menu_offers_backup_and_restore(page):
 
 
 def test_panel_opens_from_the_menu(page):
+    """Both halves of the feature are on screen when the panel opens."""
     _open_panel(page)
 
     assert page.is_visible("text=Create a backup")
@@ -90,6 +91,7 @@ def test_panel_opens_from_the_menu(page):
 
 
 def test_panel_reports_what_the_install_holds(server, page):
+    """The counts come from the live install, not from placeholders."""
     _seed_hours(server, hours=(8, 12, 16))
     _open_panel(page)
 
@@ -108,6 +110,7 @@ def test_panel_warns_that_the_file_holds_secrets(page):
 
 
 def test_history_shows_as_unavailable_when_there_is_none(page):
+    """An empty history says so rather than showing a bare zero."""
     _open_panel(page)
 
     assert "nothing recorded yet" in page.inner_text("#full_screen_content")
@@ -119,6 +122,7 @@ def test_history_shows_as_unavailable_when_there_is_none(page):
 
 
 def test_download_produces_a_backup_file(server, page):
+    """The download is offered under a name that says what it is."""
     _seed_hours(server)
     _open_panel(page)
 
@@ -131,6 +135,7 @@ def test_download_produces_a_backup_file(server, page):
 
 
 def test_downloaded_file_carries_both_datasets(server, page, tmp_path):
+    """What lands on disk is the whole install, minus the meter counter."""
     _seed_hours(server)
     _open_panel(page)
 
@@ -147,6 +152,7 @@ def test_downloaded_file_carries_both_datasets(server, page, tmp_path):
 
 
 def test_deselecting_a_dataset_leaves_it_out_of_the_download(server, page, tmp_path):
+    """The checkboxes decide what the file contains."""
     _seed_hours(server)
     _open_panel(page)
     page.uncheck("#ds-backup-pv_yield_history")
@@ -195,6 +201,7 @@ def test_preview_names_the_settings_it_would_remove(server, page, tmp_path):
 
 
 def test_confirming_applies_the_restore(server, page, tmp_path):
+    """Confirming is what finally writes."""
     path, _ = _write_backup(tmp_path, page)
     server.store.set("battery.capacity_wh", 99999)
 
@@ -207,6 +214,7 @@ def test_confirming_applies_the_restore(server, page, tmp_path):
 
 
 def test_restore_result_reports_what_happened(server, page, tmp_path):
+    """The result names what was restored, not just that it worked."""
     _seed_hours(server)
     path, _ = _write_backup(tmp_path, page)
     server.store.execute("DELETE FROM pv_yield_history")
@@ -222,6 +230,7 @@ def test_restore_result_reports_what_happened(server, page, tmp_path):
 
 
 def test_cancel_discards_the_pending_restore(server, page, tmp_path):
+    """Backing out must leave the install untouched."""
     path, _ = _write_backup(tmp_path, page)
     server.store.set("battery.capacity_wh", 99999)
 
@@ -234,6 +243,7 @@ def test_cancel_discards_the_pending_restore(server, page, tmp_path):
 
 
 def test_merge_mode_keeps_settings_the_file_lacks(server, page, tmp_path):
+    """Switching to merge re-previews and then keeps the extra settings."""
     _, data = _write_backup(tmp_path, page)
     del data["eos.port"]
     path = tmp_path / "merge.json"
@@ -283,7 +293,7 @@ def test_backup_and_restore_selections_are_independent(server, page, tmp_path):
     assert page.evaluate("() => backupManager.forBackup.pv_yield_history") is True
 
 
-def test_preview_replaces_the_backup_card(server, page, tmp_path):
+def test_preview_replaces_the_backup_card(page, tmp_path):
     """Mid-restore the Confirm button must not sit below an irrelevant card."""
     path, _ = _write_backup(tmp_path, page)
 
@@ -328,6 +338,7 @@ def _stale_backup(page, tmp_path, days_ago=25):
 
 
 def test_stale_backup_preselects_time_shifting(page, tmp_path):
+    """An unusably old backup offers the shift by default, with its reason."""
     path = _stale_backup(page, tmp_path)
 
     _open_panel(page)
@@ -340,6 +351,7 @@ def test_stale_backup_preselects_time_shifting(page, tmp_path):
 
 
 def test_fresh_backup_does_not_preselect_time_shifting(server, page, tmp_path):
+    """A recent backup warns against shifting instead of offering it."""
     _seed_hours(server)
     path, _ = _write_backup(tmp_path, page)
 
@@ -351,6 +363,7 @@ def test_fresh_backup_does_not_preselect_time_shifting(server, page, tmp_path):
 
 
 def test_seeded_restore_marks_the_rows(server, page, tmp_path):
+    """Seeded rows are labelled and carry no meter reading."""
     path = _stale_backup(page, tmp_path)
 
     _open_panel(page)
@@ -371,7 +384,7 @@ def test_seeded_restore_marks_the_rows(server, page, tmp_path):
 # ----------------------------------------------------------------------
 
 
-def test_config_import_says_it_ignored_the_yield_history(server, page, tmp_path):
+def test_config_import_says_it_ignored_the_yield_history(server, page):
     """A full backup dropped into the config importer must not lose it silently."""
     _seed_hours(server)
     result = page.evaluate(
@@ -428,6 +441,7 @@ def test_cards_sit_side_by_side_on_a_wide_screen(server, page):
 
 
 def test_cards_stack_on_a_phone(server, page):
+    """Narrow screens put the two actions one above the other."""
     _seed_hours(server)
     page.set_viewport_size(PHONE)
     _open_panel(page)
@@ -473,7 +487,7 @@ def test_nothing_overflows_horizontally(server, page, tmp_path, viewport):
     )
 
 
-def test_explainer_is_present_when_idle_and_hidden_mid_restore(server, page, tmp_path):
+def test_explainer_is_present_when_idle_and_hidden_mid_restore(page, tmp_path):
     """It fills the desktop dead space, but must not compete with the review."""
     path, _ = _write_backup(tmp_path, page)
     page.set_viewport_size(DESKTOP)
@@ -486,6 +500,7 @@ def test_explainer_is_present_when_idle_and_hidden_mid_restore(server, page, tmp
 
 
 def test_result_counts_are_laid_out_as_a_row_on_a_wide_screen(server, page, tmp_path):
+    """The counts read as a tile row, like the other overlays."""
     _seed_hours(server)
     path, _ = _write_backup(tmp_path, page)
     server.store.execute("DELETE FROM pv_yield_history")

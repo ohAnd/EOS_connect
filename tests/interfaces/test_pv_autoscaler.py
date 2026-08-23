@@ -416,6 +416,7 @@ def test_status_counts_restored_hours():
 
 
 def test_status_reports_no_restored_hours_for_a_normal_install():
+    """An install that never restored a backup reports none."""
     store = InMemoryPvYieldStore()
     store.rows = _day_rows("2026-08-19", 6.0, 6.0)
     autoscaler = _autoscaler(store, today="2026-08-20")

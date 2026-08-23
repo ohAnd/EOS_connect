@@ -547,3 +547,113 @@ def test_seed_uses_local_midnight_boundaries(pv_store):
     stored = pv_store.get_all_history()[0]
     assert stored["local_hour"] == 23
     assert stored["local_date"] == stored["date"]
+
+
+# ----------------------------------------------------------------------
+# Rejecting a hostile or corrupt file
+# ----------------------------------------------------------------------
+
+
+def test_import_rejects_an_unparseable_timestamp(pv_store):
+    """The timestamp is the row's key; without a usable one there is no row."""
+    result = pv_store.import_rows([_exported(_yesterday(), timestamp="not-a-date")])
+
+    assert result["imported"] == 0
+    assert result["skipped"] == 1
+    assert "timestamp" in result["invalid"][0]["error"]
+
+
+@pytest.mark.parametrize("value", [True, {"kwh": 1}, [1], "abc", float("nan"), float("inf")])
+def test_import_rejects_non_numeric_energy(pv_store, value):
+    """A boolean, a container or a non-finite float is not an energy reading."""
+    result = pv_store.import_rows([_exported(_yesterday(), real_delta_kwh=value)])
+
+    assert result["imported"] == 0
+    assert result["skipped"] == 1
+
+
+def test_import_derives_the_hour_when_it_is_garbage(pv_store):
+    """An unusable hour falls back to the timestamp rather than sinking the row."""
+    when = _yesterday(9)
+    result = pv_store.import_rows(
+        [_exported(when, hour="lunchtime", local_hour=None, local_offset_minutes=0)]
+    )
+
+    assert result["imported"] == 1
+    assert pv_store.get_all_history()[0]["local_hour"] == 9
+
+
+def test_import_derives_the_date_when_it_is_garbage(pv_store):
+    """Same for a malformed date: the timestamp is authoritative."""
+    when = _yesterday(9)
+    result = pv_store.import_rows(
+        [_exported(when, date="31.12.2026", local_date="not-a-date", local_offset_minutes=0)]
+    )
+
+    assert result["imported"] == 1
+    assert pv_store.get_all_history()[0]["local_date"] == when.strftime("%Y-%m-%d")
+
+
+def test_import_ignores_an_out_of_range_hour(pv_store):
+    """Hour 47 is not a clock hour; the timestamp decides instead."""
+    when = _yesterday(9)
+    result = pv_store.import_rows(
+        [_exported(when, hour=47, local_hour=47, local_offset_minutes=0)]
+    )
+
+    assert result["imported"] == 1
+    assert pv_store.get_all_history()[0]["local_hour"] == 9
+
+
+def test_plan_reports_a_file_whose_every_row_is_unusable(pv_store):
+    """A wholly corrupt history must be counted, not mistaken for an empty one."""
+    plan = pv_store.plan_import([{"nope": 1}, {"timestamp": "???"}])
+
+    assert plan["total"] == 2
+    assert plan["skipped"] == 2
+    assert plan["valid"] == 0
+    assert plan["rows"] == []
+
+
+def test_seed_falls_back_to_utc_for_an_unknown_time_zone(pv_store):
+    """A time zone this build does not know must not abort the restore."""
+    result = pv_store.import_rows(
+        _stale_day(21, hours=(10,)),
+        retention_days=7,
+        tz_name="Mars/Olympus_Mons",
+        mode="seed",
+    )
+
+    assert result["imported"] == 1
+    assert result["shift_days"] == 20
+    assert pv_store.get_all_history()[0]["local_offset_minutes"] == 0
+
+
+def test_import_accepts_rows_with_an_unknown_forecast(pv_store):
+    """
+    A NULL forecast is normal, not corrupt.
+
+    The autoscaler stores NULL for an hour whose forecast was implausible or missing,
+    and for hours rebuilt by gap reconstruction. Those rows must survive a round trip -
+    rejecting them would quietly drop the measured yield they carry.
+    """
+    result = pv_store.import_rows(
+        [_exported(_yesterday(9), forecast_kwh=None, real_delta_kwh=None)]
+    )
+
+    assert result["imported"] == 1
+    stored = pv_store.get_all_history()[0]
+    assert stored["forecast_kwh"] is None
+    assert stored["real_delta_kwh"] is None
+
+
+def test_import_does_not_erase_a_stored_value_with_a_null(pv_store):
+    """COALESCE means a NULL in the file completes a row, never blanks it."""
+    when = _yesterday(9)
+    _record(pv_store, when, real_delta_kwh=2.5, forecast_kwh=3.0)
+
+    pv_store.import_rows([_exported(when, real_delta_kwh=None, forecast_kwh=None)])
+
+    stored = pv_store.get_all_history()[0]
+    assert stored["real_delta_kwh"] == 2.5
+    assert stored["forecast_kwh"] == 3.0
