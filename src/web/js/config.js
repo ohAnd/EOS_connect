@@ -210,13 +210,13 @@ class ConfigurationManager {
                     <button onclick="configurationManager._exportConfig()"
                             class="config-btn config-btn-secondary config-header-tool"
                             style="padding:5px 10px;font-size:0.8em;"
-                            title="Export Configuration">
+                            title="Export configuration only — for a full backup including measured PV history, use Menu ▸ Backup &amp; Restore">
                         <i class="fas fa-download"></i>
                     </button>
                     <button onclick="document.getElementById('cfg-import-file').click()"
                             class="config-btn config-btn-secondary config-header-tool"
                             style="padding:5px 10px;font-size:0.8em;"
-                            title="Import Configuration">
+                            title="Import configuration only — for a full restore, use Menu ▸ Backup &amp; Restore">
                         <i class="fas fa-upload"></i>
                     </button>
                     <input type="file" id="cfg-import-file" accept=".json"
@@ -920,12 +920,12 @@ class ConfigurationManager {
             </button>
             <button class="config-btn config-btn-secondary config-actions-tool"
                     onclick="configurationManager._exportConfig()"
-                    title="Export Configuration">
+                    title="Export configuration only — for a full backup including measured PV history, use Menu ▸ Backup &amp; Restore">
                 <i class="fas fa-download"></i>
             </button>
             <button class="config-btn config-btn-secondary config-actions-tool"
                     onclick="document.getElementById('cfg-import-file').click()"
-                    title="Import Configuration">
+                    title="Import configuration only — for a full restore, use Menu ▸ Backup &amp; Restore">
                 <i class="fas fa-upload"></i>
             </button>
         </div>`;
@@ -1360,7 +1360,10 @@ class ConfigurationManager {
     // ── Import / Export ─────────────────────────────────────────
 
     /**
-     * Export the full configuration as a downloadable JSON file.
+     * Export the configuration as a downloadable JSON file.
+     *
+     * Configuration only. The measured PV yield history lives in the same database but
+     * is not part of this file — Menu ▸ Backup & Restore covers the whole install.
      */
     async _exportConfig() {
         try {
@@ -1379,7 +1382,12 @@ class ConfigurationManager {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            this._showToast("Configuration exported.", "success");
+            this._showToast(
+                "Configuration exported. For a full backup including measured PV "
+                + "history, use Menu ▸ Backup & Restore.",
+                "success",
+                6000
+            );
         } catch (err) {
             this._showToast("Export failed: " + (err.message || err), "error");
         }
@@ -1387,6 +1395,9 @@ class ConfigurationManager {
 
     /**
      * Import configuration from a JSON file.
+     *
+     * Configuration only. A full backup dropped here restores its settings and leaves
+     * the measured PV history alone; the toast says so rather than ignoring it quietly.
      * @param {File} file - The selected JSON file
      */
     async _importConfig(file) {
@@ -1416,15 +1427,37 @@ class ConfigurationManager {
 
             const count = result.imported || 0;
             const skipped = result.skipped || 0;
+            const invalid = (result.invalid || []).length;
+            const restart = result.restart_required || [];
+            const ignored = result.ignored_datasets || [];
+
             let msg = `Imported ${count} setting(s).`;
             if (skipped > 0) {
                 msg += ` Skipped ${skipped} unknown key(s).`;
+            }
+            if (invalid > 0) {
+                msg += ` Skipped ${invalid} value(s) that are no longer valid.`;
+            }
+            if (restart.length > 0) {
+                msg += ` Restart required for ${restart.length} field(s).`;
+                this.restartFields = [...new Set([...this.restartFields, ...restart])];
             }
 
             // Reload data to reflect imported values
             await this._loadData();
             this._selectSection(this.currentSection || this._orderedSections()[0]);
-            this._showToast(msg, "success");
+            this._showToast(msg, invalid > 0 || restart.length > 0 ? "warning" : "success");
+
+            if (ignored.length > 0) {
+                // This is a full backup, not a config export. Say what was left behind
+                // instead of silently dropping it.
+                this._showToast(
+                    "This file also contains measured PV yield history, which was not "
+                    + "restored. Use Menu ▸ Backup & Restore to restore it.",
+                    "info",
+                    9000
+                );
+            }
         } catch (err) {
             this._showToast("Import failed: " + (err.message || err), "error");
         }

@@ -359,3 +359,66 @@ def test_empty_store_degrades_to_empty_history():
 
     assert autoscaler.get_aggregated_history() == {"days": [], "summary_by_timeframe": {}}
     assert autoscaler.get_todays_partial_data() == {}
+
+
+# ---------------------------------------------------------------------------
+# Provenance — restored days must not read as locally measured
+# ---------------------------------------------------------------------------
+
+def test_aggregated_history_labels_days_measured_by_default():
+    """Rows with no origin came from this system's own meter."""
+    store = InMemoryPvYieldStore()
+    store.rows = _day_rows("2026-08-19", 6.0, 6.0)
+    autoscaler = _autoscaler(store, today="2026-08-20")
+
+    assert autoscaler.get_aggregated_history()["days"][0]["origin"] == "measured"
+
+
+def test_aggregated_history_labels_a_seeded_day():
+    """A day made entirely of restored rows is not a measurement."""
+    store = InMemoryPvYieldStore()
+    rows = _day_rows("2026-08-19", 6.0, 6.0)
+    for row in rows:
+        row["origin"] = "seeded"
+    store.rows = rows
+    autoscaler = _autoscaler(store, today="2026-08-20")
+
+    assert autoscaler.get_aggregated_history()["days"][0]["origin"] == "seeded"
+
+
+def test_a_restored_day_topped_up_by_real_collection_reads_as_measured():
+    """One genuinely measured hour is enough to stop calling the day seeded."""
+    store = InMemoryPvYieldStore()
+    rows = _day_rows("2026-08-19", 6.0, 6.0)
+    for row in rows:
+        row["origin"] = "seeded"
+    rows[8]["origin"] = None
+    store.rows = rows
+    autoscaler = _autoscaler(store, today="2026-08-20")
+
+    assert autoscaler.get_aggregated_history()["days"][0]["origin"] == "measured"
+
+
+def test_status_counts_restored_hours():
+    """The panel needs to say how much of the window was not measured here."""
+    store = InMemoryPvYieldStore()
+    measured = _day_rows("2026-08-19", 6.0, 6.0)
+    restored = _day_rows("2026-08-18", 6.0, 6.0)
+    for row in restored:
+        row["origin"] = "imported"
+    store.rows = measured + restored
+    autoscaler = _autoscaler(store, today="2026-08-20")
+
+    status = autoscaler.get_status()
+
+    assert status["total_hours_recorded"] == 48
+    assert status["restored_hours"] == 24
+
+
+def test_status_reports_no_restored_hours_for_a_normal_install():
+    """An install that never restored a backup reports none."""
+    store = InMemoryPvYieldStore()
+    store.rows = _day_rows("2026-08-19", 6.0, 6.0)
+    autoscaler = _autoscaler(store, today="2026-08-20")
+
+    assert autoscaler.get_status()["restored_hours"] == 0

@@ -36,6 +36,19 @@ TIMEFRAME_IDS = (1, 2, 3, 4)
 MAX_MISSED_HOURS = 48
 
 
+def _day_origin(origins: set) -> str:
+    """
+    Reduce a day's row origins to one label for the UI.
+
+    A day counts as measured as soon as one of its hours was recorded here, so a
+    restored day that live collection has since topped up stops being labelled as
+    seeded. Only a day made entirely of restored rows keeps their label.
+    """
+    if not origins or None in origins:
+        return "measured"
+    return "seeded" if "seeded" in origins else "imported"
+
+
 def timeframe_for_hour(hour: int) -> int:
     """Return the timeframe id (1..4) that a local hour-of-day belongs to."""
     return (int(hour) // TIMEFRAME_HOURS) + 1
@@ -680,15 +693,17 @@ class PvAutoscaler:
             timeframe = row.get("timeframe_id")
             real_delta = row.get("real_delta_kwh")
             forecast_kwh = row.get("forecast_kwh")
+            origin = row.get("origin")
         else:
             # row tuple: id, timestamp, date, hour, timeframe_id, real_counter_kwh,
             # real_delta_kwh, forecast_kwh, created_at, local_date, local_hour,
-            # local_offset_minutes
+            # local_offset_minutes, origin
             date = row[9] if len(row) > 9 and row[9] else row[2]
             hour = row[10] if len(row) > 10 and row[10] is not None else row[3]
             timeframe = row[4]
             real_delta = row[6]
             forecast_kwh = row[7]
+            origin = row[12] if len(row) > 12 else None
 
         if date is None:
             return None
@@ -706,6 +721,9 @@ class PvAutoscaler:
             "timeframe": tf,
             "real_delta_kwh": real_delta,
             "forecast_kwh": forecast_kwh,
+            # NULL for hours measured here; "imported" or "seeded" for a restored
+            # backup, which the UI must label rather than pass off as measured.
+            "origin": origin,
         }
 
     def _aggregate_by_day_and_timeframe(self, rows, keep_date, count_hours=False):
@@ -714,10 +732,14 @@ class PvAutoscaler:
 
         A timeframe is present in a day's dict only when at least one row contributed a
         non-NULL value, so callers can tell "recorded as zero" apart from "not recorded".
+
+        Also returns the set of row origins seen per day, so a day restored from a
+        backup is not presented as one this system measured.
         """
         actual: Dict[str, Dict[int, float]] = defaultdict(dict)
         forecast: Dict[str, Dict[int, float]] = defaultdict(dict)
         hours: Dict[str, set] = defaultdict(set)
+        origins: Dict[str, set] = defaultdict(set)
         recorded_hours = 0
 
         for raw in rows:
@@ -725,6 +747,7 @@ class PvAutoscaler:
             if row is None or not keep_date(row["date"]):
                 continue
             date, tf = row["date"], row["timeframe"]
+            origins[date].add(row["origin"])
             if row["real_delta_kwh"] is not None:
                 bucket = actual[date]
                 bucket[tf] = bucket.get(tf, 0.0) + float(row["real_delta_kwh"])
@@ -738,7 +761,7 @@ class PvAutoscaler:
                 bucket = forecast[date]
                 bucket[tf] = bucket.get(tf, 0.0) + float(row["forecast_kwh"])
 
-        return actual, forecast, hours, recorded_hours
+        return actual, forecast, hours, recorded_hours, origins
 
     def compute_timeframe_scaling_factors(self) -> Dict[int, float]:
         """Compute scale factors for each timeframe (1..4) based on historical data."""
@@ -748,7 +771,7 @@ class PvAutoscaler:
 
         # Today is still in progress, so it is collected but never scored.
         today_date = self._today_local_iso()
-        per_day_actual, per_day_forecast, _, recorded_hours = (
+        per_day_actual, per_day_forecast, _, recorded_hours, _origins = (
             self._aggregate_by_day_and_timeframe(rows, lambda d: d != today_date)
         )
 
@@ -811,8 +834,8 @@ class PvAutoscaler:
             return {}
 
         today_date = self._today_local_iso()
-        per_day_actual, per_day_forecast, hours, _ = self._aggregate_by_day_and_timeframe(
-            rows, lambda d: d == today_date, count_hours=True
+        per_day_actual, per_day_forecast, hours, _, _origins = (
+            self._aggregate_by_day_and_timeframe(rows, lambda d: d == today_date, count_hours=True)
         )
 
         hours_collected = hours.get(today_date, set())
@@ -842,8 +865,8 @@ class PvAutoscaler:
             return {"days": [], "summary_by_timeframe": {}}
 
         today_date = self._today_local_iso()
-        per_day_actual, per_day_forecast, hours, _ = self._aggregate_by_day_and_timeframe(
-            rows, lambda d: d != today_date, count_hours=True
+        per_day_actual, per_day_forecast, hours, _, origins = (
+            self._aggregate_by_day_and_timeframe(rows, lambda d: d != today_date, count_hours=True)
         )
 
         days = []
@@ -854,6 +877,9 @@ class PvAutoscaler:
                 {
                     "date": date,
                     "hours_collected": len(hours.get(date, set())),
+                    # "measured" unless every row for the day came from a restore, so a
+                    # day that has since been topped up by real collection reads as real.
+                    "origin": _day_origin(origins.get(date, set())),
                     "actual_kwh": {
                         str(tf): round(actual.get(tf, 0.0), 3) for tf in TIMEFRAME_IDS
                     },
@@ -901,15 +927,22 @@ class PvAutoscaler:
 
     def get_status(self) -> Dict[str, Any]:
         """Summarize the autoscaler's runtime state for the status endpoint and UI."""
+        restored_hours = 0
         try:
             rows = self._pv_yield_store.get_history_last_n_days(self.retention_days)
             total_hours = len(rows) if rows else 0
+            # Hours that came from a backup rather than this system's own meter. The UI
+            # says so, so nobody reads a seeded scale factor as a local measurement.
+            restored_hours = sum(
+                1 for row in rows or [] if (self._normalize_row(row) or {}).get("origin")
+            )
         except (AttributeError, TypeError, ValueError):
             logger.exception("[PV-AUTO] Could not read history for status")
             total_hours = 0
         return {
             "enabled": self.enabled,
             "running": self.is_running(),
+            "restored_hours": restored_hours,
             "sensor_entity_id": self.sensor_entity_id,
             "min_data_hours_required": self.min_data_hours_required,
             "retention_days": self.retention_days,

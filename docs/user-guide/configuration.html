@@ -72,6 +72,7 @@
                     <a href="#timing-controls" class="toc-link toc-sub">→ Timing Controls</a>
                     <a href="#time-slot-config" class="toc-link toc-sub">→ Time Slot Configuration</a>
                     <a href="#other" class="toc-link">Other Settings</a>
+                    <a href="#backup-restore" class="toc-link">Backup &amp; Restore</a>
                     <a href="#examples" class="toc-link">Config Examples</a>
                     <a href="#param-reference" class="toc-link">Parameter Reference</a>
                     <a href="#example-full" class="toc-link toc-sub">→ Full Config</a>
@@ -4360,6 +4361,136 @@ price:
                         <p>The combination of <code>refresh_time</code> and <code>time_frame</code> allows you to
                             control both how frequently the system updates and how detailed the optimization is.</p>
                     </div>
+                </div>
+
+                <!-- Backup & Restore Section -->
+                <div class="content-section" id="backup-restore">
+                    <h2><i class="fas fa-box-archive"></i> Backup &amp; Restore</h2>
+                    <p>
+                        <strong>Menu → Backup &amp; Restore</strong> saves and restores your whole install in one
+                        file: the configuration, and the measured PV yield history the auto-scaler learns from.
+                    </p>
+
+                    <div class="alert alert-warning">
+                        <h4><i class="fas fa-triangle-exclamation"></i> The backup file holds your passwords</h4>
+                        <p>
+                            It contains your Home Assistant access token, price API tokens and the inverter password
+                            in plain text. It has to — a file with those blanked out could not restore your system.
+                            Keep it wherever you keep passwords, and think twice before attaching it to a bug report
+                            or a forum post.
+                        </p>
+                    </div>
+
+                    <h3 id="backup-whats-included">What is in a backup</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Contents</th>
+                                <th>Why it matters</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Configuration</strong></td>
+                                <td>Every setting on this install, exactly as the configuration page shows them.</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Measured PV yield history</strong></td>
+                                <td>The hourly record of what your panels actually produced against what was
+                                    forecast. This is what <a href="#pv-autoscaling">PV Auto-Scaling</a> derives its
+                                    scale factors from, and it is <strong>deleted on a rolling window</strong> — at
+                                    the default <code>retention_days</code> of 7, anything older than a week is gone
+                                    for good. Nothing else backs it up.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <p>
+                        You can tick either one on its own. The configuration page keeps its own small
+                        export/import buttons, and those stay <em>configuration only</em> — they do not touch the
+                        yield history.
+                    </p>
+
+                    <h3 id="backup-restoring">Restoring</h3>
+                    <p>
+                        Choosing a file never applies it straight away. EOS Connect first shows you what the restore
+                        would do — how many settings it would write, which ones it would remove, and what it would
+                        do with the history — and waits for you to confirm.
+                    </p>
+
+                    <h4>Configuration: replace or merge</h4>
+                    <ul>
+                        <li><strong>Replace</strong> (default) leaves your configuration exactly as the file has it.
+                            Settings the file does not contain are removed and fall back to their defaults. The
+                            preview lists them by name first.</li>
+                        <li><strong>Merge</strong> applies what the file contains and leaves everything else alone.</li>
+                    </ul>
+
+                    <div class="alert alert-info">
+                        <p>
+                            <i class="fas fa-circle-info"></i>
+                            <strong>Restoring a backup from an older version?</strong> Replace mode will remove
+                            settings that version did not have, and they will revert to their defaults. That is
+                            usually what you want after rolling back, but the preview lists exactly which settings
+                            are affected — read it before confirming, or use merge instead.
+                        </p>
+                    </div>
+
+                    <h4>PV history: original dates or shifted</h4>
+                    <p>
+                        A backup restored a few days after it was taken can go back at its original timestamps.
+                        An older one cannot usefully: anything beyond <code>retention_days</code> is deleted at the
+                        next hourly collection, so the auto-scaler would start from neutral factors and spend days
+                        re-learning your system.
+                    </p>
+                    <p>
+                        For that case EOS Connect offers to <strong>shift the history into the current window</strong>
+                        — whole days only, so every hour keeps its time of day and its timeframe. What the scale
+                        factors are actually made of is each hour's measured-to-forecast <em>ratio</em>, and that
+                        travels with the rows. You get working scale factors from the first optimization run instead
+                        of after a week of collection.
+                    </p>
+                    <ul>
+                        <li>Shifted rows are marked <strong>seeded</strong> and shown as such in the PV Auto-Scaling
+                            panel, so they are never mistaken for measurements from this system.</li>
+                        <li>They age out normally as real collection replaces them.</li>
+                        <li>An hour already recorded here is never overwritten by a shifted one.</li>
+                        <li>Shifting is only offered by default when the backup is older than your retention window.
+                            Inside it, shifted rows could land beside days this system already measured and count the
+                            same yield twice.</li>
+                    </ul>
+
+                    <div class="alert alert-info">
+                        <p>
+                            <i class="fas fa-circle-info"></i>
+                            The meter reading (<code>real_counter_kwh</code>) is deliberately not restored. It is an
+                            absolute counter, and a reading from another install or another meter would make the
+                            first live measurement record a nonsense value. The auto-scaler simply re-establishes its
+                            baseline on the first collection after a restore, costing one hour of measurement.
+                        </p>
+                    </div>
+
+                    <h3 id="backup-after-restore">After restoring</h3>
+                    <p>
+                        Settings that can be applied live are applied immediately — no restart needed. Settings that
+                        cannot raise the usual restart banner, and the restore summary says how many. Restart EOS
+                        Connect (or the add-on) to complete those.
+                    </p>
+
+                    <div class="alert alert-warning">
+                        <p>
+                            <i class="fas fa-triangle-exclamation"></i>
+                            If the restore reports hours <em>outside the retention window</em>, those rows will be
+                            deleted at the next hourly collection. Raise <code>retention_days</code> under
+                            <a href="#pv-autoscaling">PV Auto-Scaling</a> and restore again to keep them, or restore
+                            with shifting instead.
+                        </p>
+                    </div>
+
+                    <p>
+                        The REST endpoints behind this feature are documented under
+                        <a href="../advanced/index.html#backup-api">Backup &amp; Restore API</a>.
+                    </p>
                 </div>
 
                 <!-- Optimization Configuration Section -->

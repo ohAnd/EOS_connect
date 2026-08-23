@@ -391,11 +391,23 @@ class StatisticsManager {
                     const actual = day.actual_kwh || {};
                     const forecast = day.forecast_kwh || {};
                     const hours = day.hours_collected || 0;
+                    // Days restored from a backup are not measurements from this
+                    // system; label them so a seeded scale factor is never mistaken
+                    // for one this install learnt.
+                    const restored = day.origin && day.origin !== 'measured';
+                    const originBadge = restored
+                        ? `<span title="Restored from a backup${day.origin === 'seeded'
+                            ? ', with its dates shifted into the current window'
+                            : ''} - not measured on this system"
+                                 style="font-size: 0.7em; color: #ffc107; border: 1px solid rgba(255,193,7,0.5); border-radius: 3px; padding: 1px 5px; margin-left: 6px;">
+                            <i class="fa-solid fa-box-archive"></i> ${day.origin}
+                           </span>`
+                        : '';
 
                     historicalHtml += `
-                        <div style="background-color: rgba(255,255,255,0.05); border-radius: 6px; padding: 10px; border-left: 3px solid #4a9eff;">
+                        <div style="background-color: rgba(255,255,255,0.05); border-radius: 6px; padding: 10px; border-left: 3px solid ${restored ? '#ffc107' : '#4a9eff'};">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                <span style="font-weight: 600; color: #ddd;">${dateStr}</span>
+                                <span style="font-weight: 600; color: #ddd;">${dateStr}${originBadge}</span>
                                 <span style="font-size: 0.8em; color: #888;">${hours} hours recorded</span>
                             </div>
                             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; font-size: 0.8em;">
@@ -428,6 +440,9 @@ class StatisticsManager {
                             </div>
                             <div style="font-size: 0.8em; color: #888; margin-top: 10px;">
                                 <strong>Legend:</strong> R = Real yield | F = Forecast
+                                ${(pa.restored_hours || 0) > 0
+                                    ? ` | <span style="color: #ffc107;"><i class="fa-solid fa-box-archive"></i> ${pa.restored_hours} hour(s) restored from a backup, not measured here</span>`
+                                    : ''}
                             </div>
                         </div>
                     `;

@@ -34,6 +34,7 @@ EOS Connect fetches real-time and forecast data (solar, prices), runs the integr
 - **Dynamic PV Override:** Intelligent discharge prevention during high solar production or intermittent clouds. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#dyn-override)
 - **PV Auto-Scaling:** Learns from historical measured solar yield and automatically corrects PV forecasts with per-timeframe scale factors before optimization. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#pv-autoscaling)
 - **Smart Grid Limits (EVopt):** Grid import/export limits automatically default to your inverter capabilities when not explicitly configured, ensuring optimization respects your hardware. [Learn more →](https://ohAnd.github.io/EOS_connect/advanced/index.html#grid-limits)
+- **Backup & Restore:** One file holding your whole install — configuration plus the measured PV yield history the auto-scaler learns from, which is otherwise deleted on a rolling window. Restores preview before they apply, and an old backup's history can be shifted into the current window so scaling works from the first run. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#backup-restore)
 - **Robust Data Quality Handling:** Automatic detection and recovery from incomplete Home Assistant sensor data gaps. Forward-fill strategy ensures optimization always receives complete, valid input arrays. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#data-quality)
 
 ---
@@ -167,6 +168,13 @@ log_level: info             # Log level: debug, info, warning, error
 - Open `http://localhost:8081` and click the gear icon to access the configuration page
 - Changes marked as **"hot-reloadable"** (e.g., feed-in price, SOC limits) take effect immediately
 - Other changes require a restart (the UI shows which fields need restart)
+
+### Backup & Restore
+- **Menu → Backup & Restore** saves configuration *and* measured PV yield history to one file, and restores both
+- The measured history is not backed up anywhere else and is purged on a rolling window (7 days by default)
+- Restoring always previews first — including which settings it would remove — and nothing is written until you confirm
+- **The backup file contains your tokens and inverter password in plain text.** Store it accordingly
+- Full details: [Backup & Restore](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#backup-restore)
 ---
 
 ## Troubleshooting & Advanced Configuration

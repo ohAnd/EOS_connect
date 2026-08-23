@@ -18,6 +18,13 @@ logger = logging.getLogger("__main__")
 
 config_bp = Blueprint("config", __name__, url_prefix="/api/config")
 
+# Top-level keys a full backup file uses for non-setting data.  They sit alongside the
+# settings rather than in a nested envelope so that an older build, which resolves every
+# top-level key against the schema and skips what it does not know, still restores the
+# settings instead of silently importing nothing.  Listed here so the settings importer
+# can tell "not a setting" apart from "unknown key".
+_DATASET_KEYS = ("pv_yield_history",)
+
 # These are set by ConfigWebModule.start() before any request is served
 _store = None
 _schema = None
@@ -234,44 +241,247 @@ def get_restart_required():
 # ------------------------------------------------------------------
 
 
+def export_settings_dict() -> dict:
+    """
+    Every stored setting worth writing to a backup file, flat and dot-notated.
+
+    Excludes internal keys (prefixed with ``_``) and raw array keys that are redundant
+    with their indexed children (the ``pv_forecast`` list is already present as
+    ``pv_forecast.0.azimuth`` and friends).  Shared with ``/api/backup`` so both files
+    carry exactly the same settings, and so replace mode can be the precise inverse of
+    what this writes.
+    """
+    return {
+        k: v
+        for k, v in _store.export_dict().items()
+        if not k.startswith("_") and _resolve_schema_key(k) is not None
+    }
+
+
 @config_bp.route("/export", methods=["GET"])
 def export_config():
     """Export current config as a flat JSON dict (for backup)."""
-    all_settings = _store.export_dict()
-    # Exclude internal keys (prefixed with _) and raw array keys that are
-    # redundant with their indexed children (e.g. "pv_forecast" array is
-    # already present as "pv_forecast.0.azimuth" etc.)
-    filtered = {
-        k: v
-        for k, v in all_settings.items()
-        if not k.startswith("_") and _resolve_schema_key(k) is not None
-    }
-    return jsonify(filtered)
+    return jsonify(export_settings_dict())
 
 
 @config_bp.route("/import", methods=["POST"])
 def import_config():
-    """Import a flat JSON dict of settings (from backup)."""
+    """Import a flat JSON dict of settings (from backup).
+
+    Config-scoped: any non-setting payload a full backup carries (e.g.
+    ``pv_yield_history``) is reported back but not restored here — that is what
+    ``/api/backup/import`` is for.
+    """
     data = flask_request.get_json(silent=True)
     if not data or not isinstance(data, dict):
         return jsonify({"error": "Request body must be a JSON object"}), 400
 
-    # Filter to known keys only, skip internal keys
+    result = apply_settings(data, mode="merge")
+    result["ignored_datasets"] = [k for k in _DATASET_KEYS if k in data]
+    return jsonify(result)
+
+
+def _classify_settings(data: dict) -> tuple[dict, list[dict], int]:
+    """
+    Split an incoming payload into writable values, rejects and unknown keys.
+
+    A single out-of-range value in an old backup must not abort the restore, so
+    offenders are reported and skipped individually rather than failing the request.
+
+    Returns ``(valid_data, invalid, skipped)``.
+    """
     valid_data = {}
+    invalid = []
     skipped = 0
     for key, value in data.items():
-        if key.startswith("_"):
-            skipped += 1
+        # Internal bookkeeping keys and file metadata are not settings, and are not
+        # "unknown keys" either — counting them as skipped makes re-importing your own
+        # export look like it lost something.
+        if key.startswith("_") or key in _DATASET_KEYS:
             continue
         field_def = _resolve_schema_key(key)
         if field_def is None:
             skipped += 1
             continue
-        valid_data[key] = _coerce_value(field_def, value)
+        err = _validate_single(field_def, value)
+        if err:
+            invalid.append({"key": key, "error": err})
+            continue
+        try:
+            valid_data[key] = _coerce_value(field_def, value)
+        except (TypeError, ValueError) as exc:
+            logger.warning("[ConfigWeb] Rejected imported value for '%s': %s", key, exc)
+            invalid.append({"key": key, "error": _type_error_message(field_def)})
+    return valid_data, invalid, skipped
 
-    count = _store.import_dict(valid_data) if valid_data else 0
+
+def plan_settings(data: dict, mode: str = "merge") -> dict:
+    """
+    Report what ``apply_settings`` would do, without touching the store.
+
+    Restoring a whole install is not something to discover the consequences of
+    afterwards, so the restore dialog previews this first — above all the list of
+    settings replace mode would remove.  Shares its classification with the real thing
+    so the preview and the write cannot disagree.
+    """
+    before = _store.get_all()
+    valid_data, invalid, skipped = _classify_settings(data)
+    removed = (
+        _stale_keys(before, valid_data) if mode == "replace" else []
+    )
+    changed = [k for k, v in valid_data.items() if k not in before or before[k] != v]
+
+    restart_required = []
+    hot_reloaded = []
+    for key in changed + removed:
+        field_def = _resolve_schema_key(key)
+        if field_def is None:
+            continue
+        if "restart_required" in field_def.labels:
+            restart_required.append(key)
+        elif field_def.hot_reload:
+            hot_reloaded.append(key)
+
+    return {
+        "imported": len(valid_data),
+        "changed": len(changed),
+        "removed": removed,
+        "skipped": skipped,
+        "invalid": invalid,
+        "restart_required": restart_required,
+        "hot_reloaded": hot_reloaded,
+        "warnings": _check_dependencies(valid_data) if valid_data else [],
+    }
+
+
+def apply_settings(data: dict, mode: str = "merge") -> dict:
+    """
+    Write a flat dict of settings to the store the same way a normal save does.
+
+    ``ConfigStore.import_dict`` writes SQL directly, which skips validation, the
+    hot-reload callbacks and the restart-required bookkeeping that ``PUT /api/config/``
+    performs.  An import that bypasses those leaves the database updated while the
+    running interfaces keep their old values, with no restart banner to say so.  Both
+    import endpoints go through here instead.
+
+    Args:
+        data: Flat dot-notation key/value pairs.  Unknown and ``_``-prefixed keys are
+            ignored; a whole-backup payload can be passed unfiltered.
+        mode: ``"merge"`` keeps settings absent from *data*.  ``"replace"`` removes
+            them, so the stored config ends up matching the file exactly.
+
+    Returns:
+        Counts and per-key detail: ``imported``, ``removed``, ``skipped``, ``invalid``,
+        ``restart_required``, ``hot_reloaded``, ``warnings``.
+    """
+    before = _store.get_all()
+    valid_data, invalid, skipped = _classify_settings(data)
+
+    removed = _remove_stale_keys(before, valid_data) if mode == "replace" else []
+
+    count = _store.set_batch(valid_data) if valid_data else 0
     _module.rebuild_config()
-    return jsonify({"imported": count, "skipped": skipped})
+
+    restart_required, hot_reloaded, changed = _replay_changes(before, valid_data, removed)
+
+    # Persist restart-required fields so the banner survives a page reload, matching
+    # what update_config() does after a normal save.
+    if restart_required:
+        existing = _store.get("_restart_pending", []) or []
+        _store.set("_restart_pending", list(set(existing + restart_required)))
+
+    # Reported, never blocking: a restore is applied as a whole, and refusing it
+    # because one cross-field dependency is unmet would leave the user with nothing.
+    warnings = _check_dependencies(valid_data) if valid_data else []
+
+    logger.info(
+        "[ConfigWeb] Imported %d setting(s), removed %d, skipped %d, invalid %d (mode=%s)",
+        count,
+        len(removed),
+        skipped,
+        len(invalid),
+        mode,
+    )
+
+    return {
+        "imported": count,
+        "changed": changed,
+        "removed": removed,
+        "skipped": skipped,
+        "invalid": invalid,
+        "restart_required": restart_required,
+        "hot_reloaded": hot_reloaded,
+        "warnings": warnings,
+    }
+
+
+def _stale_keys(before: dict, valid_data: dict) -> list[str]:
+    """
+    Stored settings that the imported file does not contain.
+
+    Only keys ``export_config()`` would have written are eligible, which makes replace
+    the exact inverse of export.  Two kinds of key are therefore left alone:
+
+    - ``_``-prefixed internals.  Wiping ``_wizard_completed`` would pop the setup
+      wizard after every restore, and ``_restart_pending`` carries the banner state.
+    - Keys with no schema definition, such as the raw ``pv_forecast`` list kept as a
+      migration fallback by the merger.  The indexed ``pv_forecast.0.*`` keys take
+      precedence over it, so it is inert rather than stale.
+    """
+    return [
+        key
+        for key in before
+        if not key.startswith("_")
+        and key not in valid_data
+        and _resolve_schema_key(key) is not None
+    ]
+
+
+def _remove_stale_keys(before: dict, valid_data: dict) -> list[str]:
+    """Delete the stale keys and return them."""
+    stale = _stale_keys(before, valid_data)
+    for key in stale:
+        _store.delete(key)
+    return stale
+
+
+def _replay_changes(
+    before: dict, valid_data: dict, removed: list[str]
+) -> tuple[list[str], list[str], int]:
+    """
+    Fire hot-reload callbacks for everything the import actually changed.
+
+    ``set_batch()`` and ``delete()`` skip the store's own change callbacks so the write
+    stays a single transaction; without this replay the restored values would never
+    reach the running interfaces.  Returns the keys needing a restart, those applied
+    live — classified exactly as ``update_config()`` does — and how many values changed
+    in total.
+    """
+    changes = [
+        (key, before.get(key), value)
+        for key, value in valid_data.items()
+        if key not in before or before[key] != value
+    ]
+    # A removed key falls back to its schema default, which is the value the interfaces
+    # now need to see.
+    for key in removed:
+        field_def = _resolve_schema_key(key)
+        changes.append((key, before.get(key), field_def.default if field_def else None))
+
+    restart_required = []
+    hot_reloaded = []
+    notify = getattr(_module, "notify_config_changed", None)
+    for key, old_value, new_value in changes:
+        field_def = _resolve_schema_key(key)
+        if field_def is not None:
+            if "restart_required" in field_def.labels:
+                restart_required.append(key)
+            elif field_def.hot_reload:
+                hot_reloaded.append(key)
+        if notify is not None:
+            notify(key, old_value, new_value)
+
+    return restart_required, hot_reloaded, len(changes)
 
 
 # ------------------------------------------------------------------
@@ -581,10 +791,11 @@ def _validate_price_arrays(data: dict) -> list[dict]:
                             f"got {len(values)}"
                         )
                     })
-            except ValueError as e:
+            except ValueError as exc:
+                logger.debug("[ConfigWeb] fixed_24h_array is not parseable: %s", exc)
                 errors.append({
                     "key": "price.fixed_24h_array",
-                    "error": f"Array must contain numeric values: {e}"
+                    "error": "Array must contain numeric values only"
                 })
 
     return errors
@@ -633,8 +844,9 @@ def _validate_single(field_def, value) -> str:
     # Type coercion for comparison
     try:
         value = _coerce_value(field_def, value)
-    except (TypeError, ValueError) as e:
-        return f"Invalid type: {e}"
+    except (TypeError, ValueError) as exc:
+        logger.debug("[ConfigWeb] Value for '%s' will not coerce: %s", field_def.key, exc)
+        return _type_error_message(field_def)
 
     # Choices
     if "choices" in v:
@@ -659,6 +871,24 @@ def _validate_single(field_def, value) -> str:
         return "This field is required"
 
     return ""
+
+
+def _type_error_message(field_def) -> str:
+    """
+    A stable message for a value that will not coerce to the field's type.
+
+    Deliberately excludes the exception text.  ``int("abc")`` puts the offending value
+    into its own message, and interpolating that into an HTTP response is information
+    exposure through an exception — CodeQL flags it, and it reads as developer noise to
+    the person who has to act on it.  The detail is logged instead.
+    """
+    expected = {
+        "int": "a whole number",
+        "float": "a number",
+        "bool": "true or false",
+        "select": "one of the allowed choices",
+    }.get(field_def.field_type, f"a valid {field_def.field_type} value")
+    return f"Expected {expected}"
 
 
 def _coerce_value(field_def, value):

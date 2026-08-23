@@ -212,6 +212,13 @@ function showMainMenu(version, backend, granularity) {
             <i class="fa-solid fa-gear" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
             <span>Configuration</span>
         </div>
+
+        <div onclick="showBackupMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;"
+            onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'"
+            onmouseout="this.style.backgroundColor='transparent'">
+            <i class="fa-solid fa-box-archive" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
+            <span>Backup &amp; Restore</span>
+        </div>
         
         <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 5px 0;">
 

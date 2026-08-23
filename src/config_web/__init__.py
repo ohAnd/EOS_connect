@@ -34,6 +34,7 @@ from .store import ConfigStore
 from .migration import migrate_yaml_to_store, migrate_ha_options_to_store
 from .merger import build_merged_config
 from .api import config_bp, init_api
+from .backup import backup_bp, init_backup
 
 try:  # running from src/ as a script — src/ is on sys.path
     from persistence import PvYieldStore
@@ -160,7 +161,9 @@ class ConfigWebModule:
         """
         self._flask_app = flask_app
         init_api(self._store, self._schema, self)
+        init_backup(self._store, self._schema, self)
         self._flask_app.register_blueprint(config_bp)
+        self._flask_app.register_blueprint(backup_bp)
         logger.info("[ConfigWeb] API registered on Flask app")
 
     def start(self):
@@ -219,6 +222,23 @@ class ConfigWebModule:
         self._hot_reload_callbacks.append(callback)
         if self._store:
             self._store.register_change_callback(callback)
+
+    def notify_config_changed(self, key, old_value, new_value):
+        """
+        Fire the hot-reload callbacks for a key that changed outside ``ConfigStore.set()``.
+
+        Bulk writes go through ``set_batch()``/``delete()``, which deliberately skip the
+        store's change callbacks so the whole import lands in one transaction.  The
+        importer replays the changes here afterwards, otherwise a restored config sits
+        in the database while the running interfaces keep their old values.
+        """
+        for cb in self._hot_reload_callbacks:
+            try:
+                cb(key, old_value, new_value)
+            except Exception:  # pylint: disable=broad-except
+                logger.exception(
+                    "[ConfigWeb] Error in hot-reload callback for key '%s'", key
+                )
 
     # ------------------------------------------------------------------
     # Properties
