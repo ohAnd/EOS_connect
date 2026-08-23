@@ -183,7 +183,11 @@ class EVOptBackend:
                 "[OPT-EVopt] ERROR - payload for the request was:\n%s",
                 evopt_request,
             )
-            return {"error": str(e)}, None
+            # Logged above, not returned - see the note in the EOS backend.
+            return {
+                "error": f"Request to the EVopt server at {self.base_url} failed "
+                "- see the log for details, will try again with next cycle"
+            }, None
 
     def _transform_request_from_eos_to_evopt(self, eos_request):
         """

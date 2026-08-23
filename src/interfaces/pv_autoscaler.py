@@ -401,7 +401,13 @@ class PvAutoscaler:
                 exc,
                 self.sensor_entity_id,
             )
-            self._record_failure(f"Cannot read {self.sensor_entity_id or '<no sensor>'}: {exc}")
+            # The full diagnostic - source, url, token status and the exception - is in
+            # the log line above. This message is served by
+            # GET /api/pv_autoscaling/status, so it names the sensor and stops there.
+            self._record_failure(
+                f"Cannot read {self.sensor_entity_id or '<no sensor>'} "
+                "- see the log for details"
+            )
             self.last_collection = datetime.now(timezone.utc)
             return False
 
