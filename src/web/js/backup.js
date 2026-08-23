@@ -9,6 +9,10 @@
  * overwrite a working configuration, which is not something to discover afterwards.
  */
 
+// Narrowest a column may get before the grid drops to a single column. Matches the
+// auto-fit minmax() widths used by the statistics and logging overlays.
+const GRID_MIN = "330px";
+
 const BACKUP_DATASETS = [
     {
         key: "settings",
@@ -99,19 +103,62 @@ class BackupManager {
     _render() {
         // Mid-restore the backup card is just noise, and leaving it on screen pushed the
         // Confirm button below the fold. Show one thing at a time.
-        const cards = this.preview || this.result
-            ? this._restoreCard()
-            : `${this._backupCard()}${this._restoreCard()}`;
+        const busy = this.preview || this.result;
 
-        this._renderInto(`
-            <div style="max-width:820px;margin:0 auto;display:flex;flex-direction:column;gap:18px;">
-                ${cards}
-            </div>`);
+        // Two independent actions sit side by side where there is room and stack where
+        // there is not, matching the auto-fit grids the other overlays use. A restore in
+        // progress takes the full width instead — it has the most to say.
+        const body = busy
+            ? this._restoreCard()
+            : `<div style="display:grid;
+                          grid-template-columns:repeat(auto-fit, minmax(${GRID_MIN}, 1fr));
+                          gap:15px;">
+                   ${this._backupCard()}
+                   ${this._restoreCard()}
+               </div>`;
+
+        this._renderInto(`${body}${busy ? "" : this._explainer()}`);
 
         const content = document.getElementById("full_screen_content");
         if (content) {
             content.scrollTop = 0;
         }
+    }
+
+    /**
+     * Closing prose, in the same place and style as the other overlays' "How it works".
+     *
+     * Also stops the panel from being two short cards above a large empty area on a
+     * desktop screen, which is what it looked like before.
+     * @returns {string} HTML
+     */
+    _explainer() {
+        const days = (this.info && this.info.retention_days) || 7;
+        return `
+            <div style="padding:15px 5px;color:#aaa;font-size:0.88em;line-height:1.6;">
+                <div style="font-weight:bold;color:#ccc;margin-bottom:10px;">How it works:</div>
+                <p style="margin:0 0 10px;">
+                    A backup holds everything this install keeps: every configuration
+                    setting, and the hourly record of measured PV yield against forecast
+                    that <strong>PV Auto-Scaling</strong> derives its correction factors
+                    from. That measured history is stored nowhere else and is deleted on a
+                    rolling ${days}-day window, so a backup is the only way to keep it.
+                </p>
+                <p style="margin:0 0 10px;">
+                    <strong>Restoring never applies straight away.</strong> The file is
+                    inspected first and you are shown what would change — including any
+                    settings that would be removed — before anything is written. Settings
+                    that can be applied live take effect immediately; the rest raise the
+                    usual restart banner.
+                </p>
+                <p style="margin:0;">
+                    A backup older than the retention window can have its history
+                    <strong>shifted into the current window</strong>, keeping each hour's
+                    measured-to-forecast ratio so scaling works from the first run instead
+                    of after days of re-learning. Those rows are marked as seeded, never
+                    passed off as measured here.
+                </p>
+            </div>`;
     }
 
     /**
@@ -146,7 +193,7 @@ class BackupManager {
                     <i class="fas fa-download"></i> Download backup
                 </button>
             </div>
-        `);
+        `, "everything this install keeps");
     }
 
     /**
@@ -168,10 +215,11 @@ class BackupManager {
                    onchange="backupManager._pick(this.files[0])">
             <button onclick="document.getElementById('backup-restore-file').click()"
                     style="background:#5a5a5a;color:#e0e0e0;border:1px solid rgba(255,255,255,0.15);
-                           border-radius:6px;padding:9px 16px;cursor:pointer;font-size:0.9em;">
+                           border-radius:6px;padding:9px 16px;cursor:pointer;font-size:0.9em;
+                           align-self:flex-start;">
                 <i class="fas fa-folder-open"></i> Choose backup file…
             </button>
-        `);
+        `, "previewed before anything is written");
     }
 
     /**
@@ -230,14 +278,29 @@ class BackupManager {
             details.pv_yield_history = `${history.valid || 0} of ${history.total || 0} hours`;
         }
 
+        // Wide screens put "what is in the file" beside "how to restore it" instead of
+        // running one long column the user has to scroll to reach the buttons.
         return `
-            <div style="display:flex;flex-direction:column;gap:6px;font-size:0.9em;
-                        margin-bottom:16px;">
-                ${rows.join("")}
+            <div style="display:grid;
+                        grid-template-columns:repeat(auto-fit, minmax(${GRID_MIN}, 1fr));
+                        gap:15px;">
+                <div style="background-color:rgba(255,255,255,0.05);border-radius:6px;
+                            padding:12px;border-left:3px solid #4a9eff;">
+                    <div style="font-weight:600;color:#ddd;margin-bottom:10px;">
+                        What this file holds
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:6px;font-size:0.9em;
+                                margin-bottom:14px;">
+                        ${rows.join("")}
+                    </div>
+                    ${this._datasetPicker("restore", details)}
+                </div>
+                <div style="background-color:rgba(255,255,255,0.05);border-radius:6px;
+                            padding:12px;border-left:3px solid #4a9eff;">
+                    ${this._modePicker()}
+                    ${this._historyPicker()}
+                </div>
             </div>
-            ${this._datasetPicker("restore", details)}
-            ${this._modePicker()}
-            ${this._historyPicker()}
             ${this._removalWarning()}
             ${this._invalidWarning()}
             ${this._anySelectedForRestore() ? "" : this._warning(
@@ -271,35 +334,30 @@ class BackupManager {
         const lines = [];
 
         if (settings) {
-            lines.push(this._metaRow("Settings restored", `${settings.imported}`));
+            lines.push(this._tile("Settings restored", settings.imported));
             if (settings.removed.length) {
-                lines.push(this._metaRow("Settings removed", `${settings.removed.length}`));
+                lines.push(this._tile("Settings removed", settings.removed.length));
             }
             if (settings.invalid.length) {
-                lines.push(this._metaRow(
-                    "Values skipped",
-                    `<span style="color:#ffc107;">${settings.invalid.length}</span>`
-                ));
+                lines.push(this._tile("Values skipped", settings.invalid.length, "#ffc107"));
             }
         }
         if (history && history.available !== false) {
-            lines.push(this._metaRow("Yield hours restored", `${history.imported || 0}`));
+            lines.push(this._tile("Yield hours restored", history.imported || 0));
             if (history.shift_days > 0) {
-                lines.push(this._metaRow(
-                    "History shifted",
-                    `${history.shift_days} day(s) forward — marked as seeded`
+                lines.push(this._tile(
+                    "History shifted", `${history.shift_days}d`, "#ffc107",
+                    "forward — marked as seeded"
                 ));
             }
             if (history.collisions) {
-                lines.push(this._metaRow(
-                    "Hours already measured here",
-                    `${history.collisions} — left untouched`
+                lines.push(this._tile(
+                    "Hours already measured here", history.collisions, null, "left untouched"
                 ));
             }
             if (history.dropped_old) {
-                lines.push(this._metaRow(
-                    "Hours too old to keep",
-                    `${history.dropped_old} — not written`
+                lines.push(this._tile(
+                    "Hours too old to keep", history.dropped_old, null, "not written"
                 ));
             }
         }
@@ -308,7 +366,9 @@ class BackupManager {
         const outside = history ? history.outside_retention : 0;
 
         return `
-            <div style="display:flex;flex-direction:column;gap:6px;font-size:0.9em;">
+            <div style="display:grid;
+                        grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));
+                        gap:10px;">
                 ${lines.join("")}
             </div>
             ${restart.length ? this._warning(`
@@ -345,6 +405,15 @@ class BackupManager {
                 && this.info && this.info.pv_yield_history
                 && this.info.pv_yield_history.available === false;
             const detail = details[ds.key];
+            // Beside the label where there is room; underneath it on a phone, where a
+            // nowrap detail column squeezes the label into a two-character ribbon.
+            const narrow = typeof isMobile === "function" && isMobile();
+            const detailHtml = detail
+                ? narrow
+                    ? `<span style="display:block;margin-left:26px;margin-top:3px;
+                                    color:#bbb;">${detail}</span>`
+                    : `<span style="color:#bbb;white-space:nowrap;">${detail}</span>`
+                : "";
             return `
                 <label for="ds-${scope}-${ds.key}"
                        style="display:flex;align-items:flex-start;gap:9px;cursor:${
@@ -354,16 +423,15 @@ class BackupManager {
                            ${unavailable ? "disabled" : ""}
                            onchange="backupManager._toggle('${scope}', '${ds.key}', this.checked)"
                            style="margin-top:3px;">
-                    <span style="flex:1;">
+                    <span style="flex:1;min-width:0;">
                         <i class="fa-solid ${ds.icon}" style="width:18px;color:#888;"></i>
                         ${ds.label}
                         <span style="display:block;margin-left:26px;color:#8d8d8d;font-size:0.82em;">
                             ${ds.hint}
                         </span>
+                        ${narrow ? detailHtml : ""}
                     </span>
-                    ${detail
-                        ? `<span style="color:#bbb;white-space:nowrap;">${detail}</span>`
-                        : ""}
+                    ${narrow ? "" : detailHtml}
                 </label>`;
         }).join("");
 
@@ -715,19 +783,25 @@ class BackupManager {
     // ── Small helpers ───────────────────────────────────────────
 
     /**
-     * Card wrapper.
+     * Section wrapper, styled like the sections in the other full-screen overlays.
      * @param {string} icon - Font Awesome icon class
-     * @param {string} title - Card title
-     * @param {string} body - Card body markup
+     * @param {string} title - Section title
+     * @param {string} body - Section body markup
+     * @param {string} note - Optional right-aligned subtitle
      * @returns {string} HTML
      */
-    _card(icon, title, body) {
+    _card(icon, title, body, note = "") {
         return `
-            <div style="background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.08);
-                        border-radius:8px;padding:18px;">
-                <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px;
-                            font-weight:600;color:#e0e0e0;">
-                    <i class="fa-solid ${icon}" style="color:#4a9eff;"></i>${title}
+            <div style="background-color:rgba(0,0,0,0.2);border-radius:8px;padding:15px;
+                        display:flex;flex-direction:column;">
+                <div style="display:flex;justify-content:space-between;align-items:center;
+                            gap:12px;margin-bottom:12px;">
+                    <div style="font-weight:bold;color:#ccc;">
+                        <i class="fa-solid ${icon}" style="margin-right:6px;"></i>${title}
+                    </div>
+                    ${note && !(typeof isMobile === "function" && isMobile())
+                        ? `<div style="font-size:0.85em;color:#888;text-align:right;">${note}</div>`
+                        : ""}
                 </div>
                 ${body}
             </div>`;
@@ -758,9 +832,8 @@ class BackupManager {
             </label>`).join("");
 
         return `
-            <div style="margin-top:16px;">
-                <div style="color:#bbb;font-size:0.85em;text-transform:uppercase;
-                            letter-spacing:0.04em;margin-bottom:8px;">${title}</div>
+            <div style="margin-bottom:16px;">
+                <div style="font-weight:600;color:#ddd;margin-bottom:10px;">${title}</div>
                 <div style="display:flex;flex-direction:column;gap:10px;font-size:0.9em;">
                     ${radios}
                 </div>
@@ -779,6 +852,28 @@ class BackupManager {
                         font-size:0.87em;color:#ddd;line-height:1.5;">
                 <i class="fas fa-exclamation-triangle"
                    style="color:#ffc107;margin-right:7px;"></i>${html}
+            </div>`;
+    }
+
+    /**
+     * A single count, rendered like the stat tiles in the other overlays.
+     * @param {string} label - What is being counted
+     * @param {string|number} value - The count
+     * @param {string} color - Optional accent for the value
+     * @param {string} note - Optional qualifier under the value
+     * @returns {string} HTML
+     */
+    _tile(label, value, color = null, note = "") {
+        return `
+            <div style="background-color:rgba(255,255,255,0.05);border-radius:6px;
+                        padding:12px;text-align:center;border-left:3px solid ${
+                            color || "#4a9eff"};">
+                <div style="font-size:0.85em;color:#888;margin-bottom:6px;">${label}</div>
+                <div style="font-size:1.6em;font-weight:bold;font-family:monospace;
+                            color:${color || "#4caf50"};">${value}</div>
+                ${note
+                    ? `<div style="font-size:0.78em;color:#aaa;margin-top:4px;">${note}</div>`
+                    : ""}
             </div>`;
     }
 

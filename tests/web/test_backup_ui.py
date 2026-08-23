@@ -400,3 +400,108 @@ def test_preview_explains_hours_it_will_not_write(server, page, tmp_path):
     body = page.inner_text("#full_screen_content")
     assert "Hours already measured here" in body
     assert "left untouched" in body
+
+
+# ----------------------------------------------------------------------
+# Layout and responsiveness
+# ----------------------------------------------------------------------
+
+# Wide enough for two columns, and a phone in portrait. isMobile() switches at 768.
+DESKTOP = {"width": 1920, "height": 1080}
+PHONE = {"width": 390, "height": 844}
+
+
+def test_cards_sit_side_by_side_on_a_wide_screen(server, page):
+    """A narrow centred column in a 1920px overlay is not how the other panels look."""
+    _seed_hours(server)
+    page.set_viewport_size(DESKTOP)
+    _open_panel(page)
+
+    backup = page.eval_on_selector("#ds-backup-settings", "e => e.getBoundingClientRect()")
+    restore_btn = page.eval_on_selector(
+        "#backup-restore-file + button", "e => e.getBoundingClientRect()"
+    )
+
+    # The restore action starts to the right of the backup action, not beneath it.
+    assert restore_btn["left"] > backup["left"] + 300
+    assert abs(restore_btn["top"] - backup["top"]) < 120
+
+
+def test_cards_stack_on_a_phone(server, page):
+    _seed_hours(server)
+    page.set_viewport_size(PHONE)
+    _open_panel(page)
+
+    backup = page.eval_on_selector("#ds-backup-settings", "e => e.getBoundingClientRect()")
+    restore_btn = page.eval_on_selector(
+        "#backup-restore-file + button", "e => e.getBoundingClientRect()"
+    )
+
+    assert restore_btn["top"] > backup["top"] + 100
+    assert abs(restore_btn["left"] - backup["left"]) < 40
+
+
+def test_panel_uses_the_full_overlay_width(server, page):
+    """The other overlays fill the width; a centred 820px column looked out of place."""
+    _seed_hours(server)
+    page.set_viewport_size(DESKTOP)
+    _open_panel(page)
+
+    content = page.eval_on_selector("#full_screen_content", "e => e.clientWidth")
+    widest = page.eval_on_selector_all(
+        "#full_screen_content > *", "els => Math.max(...els.map(e => e.offsetWidth))"
+    )
+
+    assert widest > content * 0.9
+
+
+@pytest.mark.parametrize("viewport", [DESKTOP, PHONE, {"width": 820, "height": 1180}])
+def test_nothing_overflows_horizontally(server, page, tmp_path, viewport):
+    """Guards the squeeze that pushed the dataset labels into a two-character ribbon."""
+    _seed_hours(server)
+    path, _ = _write_backup(tmp_path, page)
+    page.set_viewport_size(viewport)
+
+    _open_panel(page)
+    assert page.eval_on_selector(
+        "#full_screen_content", "e => e.scrollWidth <= e.clientWidth + 1"
+    )
+
+    _choose_file(page, path)
+    assert page.eval_on_selector(
+        "#full_screen_content", "e => e.scrollWidth <= e.clientWidth + 1"
+    )
+
+
+def test_explainer_is_present_when_idle_and_hidden_mid_restore(server, page, tmp_path):
+    """It fills the desktop dead space, but must not compete with the review."""
+    path, _ = _write_backup(tmp_path, page)
+    page.set_viewport_size(DESKTOP)
+
+    _open_panel(page)
+    assert "How it works:" in page.inner_text("#full_screen_content")
+
+    _choose_file(page, path)
+    assert "How it works:" not in page.inner_text("#full_screen_content")
+
+
+def test_result_counts_are_laid_out_as_a_row_on_a_wide_screen(server, page, tmp_path):
+    _seed_hours(server)
+    path, _ = _write_backup(tmp_path, page)
+    server.store.execute("DELETE FROM pv_yield_history")
+    page.set_viewport_size(DESKTOP)
+
+    _open_panel(page)
+    _choose_file(page, path)
+    page.click("text=Restore now")
+    page.wait_for_selector("text=Restore complete")
+
+    tops = page.eval_on_selector_all(
+        "#full_screen_content div:has(> div + div)",
+        """els => els
+            .filter(e => /^\\d/.test(
+                e.querySelectorAll(':scope > div')[1]?.textContent?.trim() || ''))
+            .map(e => e.offsetTop)""",
+    )
+    assert len(tops) >= 2
+    assert len(set(tops)) == 1, "count tiles should share one row"
