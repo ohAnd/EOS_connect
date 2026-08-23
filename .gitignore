@@ -19,3 +19,4 @@ test_config_ui.py
 *.db-shm
 src/data/pv_yield_history.csv
 CLAUDE.md
+TODO_pv_yield_backup.md
