@@ -166,6 +166,15 @@ class TestBackupExport:
         assert only_settings["battery.capacity_wh"] == 10000
         assert "pv_yield_history" not in only_settings
 
+    def test_empty_include_selects_nothing(self, client):
+        """`?include=` must not collapse into "everything" — the UI sends it verbatim."""
+        _seed_hours(client)
+        data = client.get("/api/backup/export?include=").get_json()
+
+        assert data["_datasets"] == []
+        assert "battery.capacity_wh" not in data
+        assert "pv_yield_history" not in data
+
     def test_export_matches_the_config_endpoint_for_settings(self, client):
         """Both files must carry exactly the same settings."""
         backup = client.get("/api/backup/export").get_json()
@@ -268,6 +277,17 @@ class TestBackupRestore:
         _post(client, backup, "?include=pv_yield_history")
 
         assert len(client.module.pv_yield_store.get_all_history()) == 2
+        assert client.store.get("battery.capacity_wh") == 99999
+
+    def test_empty_include_restores_nothing(self, client):
+        """Deselecting every dataset must not silently restore all of them."""
+        backup = client.get("/api/backup/export").get_json()
+        client.store.set("battery.capacity_wh", 99999)
+
+        result = _post(client, backup, "?include=").get_json()
+
+        assert result["datasets"] == []
+        assert "settings" not in result
         assert client.store.get("battery.capacity_wh") == 99999
 
     def test_restore_degrades_without_a_yield_store(self, storeless_client):

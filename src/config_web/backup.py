@@ -89,12 +89,14 @@ def _requested_datasets():
     """
     Parse ``?include=a,b`` into the datasets to act on.
 
-    Absent means everything, so a plain URL still produces a full backup.  Unknown names
-    are dropped rather than rejected: a newer file naming a dataset this build does not
-    have should degrade, not fail.
+    An *absent* parameter means everything, so a plain URL still produces a full backup.
+    An *empty* one means nothing — the two must not collapse together, or a UI that has
+    deselected every dataset would ask for none and be handed all of them.  Unknown
+    names are dropped rather than rejected: a newer file naming a dataset this build
+    does not have should degrade, not fail.
     """
     raw = flask_request.args.get("include")
-    if not raw:
+    if raw is None:
         return list(_DATASETS)
     wanted = {name.strip() for name in raw.split(",") if name.strip()}
     return [name for name in _DATASETS if name in wanted]
