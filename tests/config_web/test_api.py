@@ -85,8 +85,8 @@ class _FakeModule:
         self.notified.append((key, old_value, new_value))
 
 
-@pytest.fixture
-def client(tmp_path):
+@pytest.fixture(name="client")
+def client_fixture(tmp_path):
     """Create a Flask test client with the config blueprint."""
     app = Flask(__name__)
     app.config["TESTING"] = True
@@ -517,8 +517,8 @@ def test_price_fixed_24h_array_zero_and_negative(client):
     assert resp.status_code == 200, "Should accept zero and negative numeric values"
 
 
-@pytest.fixture
-def fresh_client(tmp_path):
+@pytest.fixture(name="fresh_client")
+def fresh_client_fixture(tmp_path):
     """Create a Flask test client with NO migration (fresh install)."""
     app = Flask(__name__)
     app.config["TESTING"] = True
@@ -735,6 +735,27 @@ class TestImportAppliesChanges:
         exported = client.get("/api/config/export").get_json()
         assert exported["battery.capacity_wh"] == 15000
         assert exported["battery.min_soc_percentage"] != 9999
+
+    def test_import_reports_a_value_that_cannot_be_coerced(self, client):
+        """
+        Validation and coercion are separate gates, and both must be survivable.
+
+        A field with no validation rules skips the range checks entirely, so a value of
+        the wrong shape only fails later when it is coerced to the column's type. That
+        must be reported like any other rejected value, not raise a 500.
+        """
+        resp = client.post(
+            "/api/config/import",
+            data=json.dumps(
+                {"price.feed_in_price": "not a number", "battery.capacity_wh": 14000}
+            ),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["imported"] == 1
+        assert [e["key"] for e in data["invalid"]] == ["price.feed_in_price"]
+        assert "Invalid type" in data["invalid"][0]["error"]
 
     def test_import_does_not_count_metadata_as_skipped(self, client):
         """Backup metadata is not a setting and not an unknown key either."""

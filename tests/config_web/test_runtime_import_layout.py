@@ -32,10 +32,12 @@ def _import_in_runtime_layout(module: str):
 
 
 def test_config_web_imports_as_a_top_level_package():
+    """config_web must import with src/ as the root, as the container runs it."""
     result = _import_in_runtime_layout("config_web")
     assert result.returncode == 0, result.stderr
 
 
 def test_persistence_imports_as_a_top_level_package():
+    """persistence must import the same way — config_web depends on it."""
     result = _import_in_runtime_layout("persistence")
     assert result.returncode == 0, result.stderr

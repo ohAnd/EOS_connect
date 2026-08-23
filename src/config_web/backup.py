@@ -36,9 +36,12 @@ SETTINGS = "settings"
 PV_YIELD_HISTORY = "pv_yield_history"
 _DATASETS = (SETTINGS, PV_YIELD_HISTORY)
 
+# Set by ConfigWebModule.start_api() before any request is served.
+# pylint: disable=invalid-name
 _store = None
 _schema = None
 _module = None
+# pylint: enable=invalid-name
 
 
 def init_backup(store, schema, module):

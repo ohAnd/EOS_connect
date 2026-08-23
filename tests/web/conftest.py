@@ -123,7 +123,9 @@ def server_fixture(tmp_path):
     )
     thread.start()
 
-    class Server:
+    class Server:  # pylint: disable=too-few-public-methods
+        """Handle to the running app: its URL and the stores behind it."""
+
         url = f"http://127.0.0.1:{port}"
 
     Server.store = store
@@ -137,12 +139,16 @@ def server_fixture(tmp_path):
 @pytest.fixture(name="page")
 def page_fixture(server):
     """A browser page with the app open and the dashboard's own noise suppressed."""
-    from playwright.sync_api import sync_playwright
+    # Imported here, not at module scope: the directory is skipped when Playwright is
+    # absent, and a top-level import would run before that check.
+    from playwright.sync_api import sync_playwright  # pylint: disable=import-outside-toplevel
 
     with sync_playwright() as p:
         try:
             browser = p.chromium.launch()
-        except Exception as exc:  # pragma: no cover - environment dependent
+        # Playwright raises a variety of errors for a browser that will not start
+        # (missing libraries, no sandbox, out of memory); all of them mean "skip".
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             pytest.skip(f"Chromium could not be launched: {exc}")
 
         page = browser.new_page()

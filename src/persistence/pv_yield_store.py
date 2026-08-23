@@ -19,6 +19,24 @@ _COLUMNS = (
     "forecast_kwh, created_at, local_date, local_hour, local_offset_minutes, origin"
 )
 
+# The shape every plan returns, so callers can read the same keys whether or not there
+# was anything to plan.
+_EMPTY_PLAN = {
+    "total": 0,
+    "rows": [],
+    "valid": 0,
+    "skipped": 0,
+    "invalid": [],
+    "outside_retention": 0,
+    "newest_local_date": None,
+    "oldest_local_date": None,
+    "age_days": None,
+    "seed_recommended": False,
+    "shift_days": 0,
+    "dropped_old": 0,
+    "collisions": 0,
+}
+
 # Provenance of a row, stored in the `origin` column. NULL means measured on this
 # system - the only kind of row that existed before backup restore was added.
 ORIGIN_MEASURED = None
@@ -116,6 +134,27 @@ def _parse_date(value) -> Optional[str]:
         return date_cls.fromisoformat(value.strip()).isoformat()
     except ValueError:
         return None
+
+
+def _coerce_rows(rows: list) -> tuple[list, list, int]:
+    """
+    Validate every exported row, keeping the good ones and counting the rest.
+
+    Returns ``(prepared, invalid, skipped)``, where *invalid* carries a capped sample of
+    rejection reasons while *skipped* stays an exact count.
+    """
+    prepared = []
+    invalid = []
+    skipped = 0
+    for index, raw in enumerate(rows):
+        row, error = _coerce_row(raw)
+        if row is None:
+            skipped += 1
+            if len(invalid) < _MAX_INVALID_DETAILS:
+                invalid.append({"index": index, "error": error})
+            continue
+        prepared.append(row)
+    return prepared, invalid, skipped
 
 
 def _shift_row(row: dict, shift_days: int, zone) -> dict:
@@ -445,38 +484,17 @@ class PvYieldStore:
             ``age_days``, ``seed_recommended``, ``shift_days``, ``dropped_old`` and
             ``collisions``.
         """
-        empty = {
-            "total": 0,
-            "rows": [],
-            "valid": 0,
-            "skipped": 0,
-            "invalid": [],
-            "outside_retention": 0,
-            "newest_local_date": None,
-            "oldest_local_date": None,
-            "age_days": None,
-            "seed_recommended": False,
-            "shift_days": 0,
-            "dropped_old": 0,
-            "collisions": 0,
-        }
         if not isinstance(rows, list) or not rows:
-            return empty
+            return dict(_EMPTY_PLAN)
 
-        prepared = []
-        invalid = []
-        skipped = 0
-        for index, raw in enumerate(rows):
-            row, error = _coerce_row(raw)
-            if row is None:
-                skipped += 1
-                if len(invalid) < _MAX_INVALID_DETAILS:
-                    invalid.append({"index": index, "error": error})
-                continue
-            prepared.append(row)
-
+        prepared, invalid, skipped = _coerce_rows(rows)
         if not prepared:
-            return {**empty, "total": len(rows), "skipped": skipped, "invalid": invalid}
+            return {
+                **_EMPTY_PLAN,
+                "total": len(rows),
+                "skipped": skipped,
+                "invalid": invalid,
+            }
 
         zone = _zone(tz_name)
         today_local = datetime.now(zone).date()
