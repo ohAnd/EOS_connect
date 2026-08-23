@@ -34,6 +34,7 @@ from .store import ConfigStore
 from .migration import migrate_yaml_to_store, migrate_ha_options_to_store
 from .merger import build_merged_config
 from .api import config_bp, init_api
+from .backup import backup_bp, init_backup
 
 try:  # running from src/ as a script — src/ is on sys.path
     from persistence import PvYieldStore
@@ -160,7 +161,9 @@ class ConfigWebModule:
         """
         self._flask_app = flask_app
         init_api(self._store, self._schema, self)
+        init_backup(self._store, self._schema, self)
         self._flask_app.register_blueprint(config_bp)
+        self._flask_app.register_blueprint(backup_bp)
         logger.info("[ConfigWeb] API registered on Flask app")
 
     def start(self):

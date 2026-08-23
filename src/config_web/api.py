@@ -241,19 +241,27 @@ def get_restart_required():
 # ------------------------------------------------------------------
 
 
+def export_settings_dict() -> dict:
+    """
+    Every stored setting worth writing to a backup file, flat and dot-notated.
+
+    Excludes internal keys (prefixed with ``_``) and raw array keys that are redundant
+    with their indexed children (the ``pv_forecast`` list is already present as
+    ``pv_forecast.0.azimuth`` and friends).  Shared with ``/api/backup`` so both files
+    carry exactly the same settings, and so replace mode can be the precise inverse of
+    what this writes.
+    """
+    return {
+        k: v
+        for k, v in _store.export_dict().items()
+        if not k.startswith("_") and _resolve_schema_key(k) is not None
+    }
+
+
 @config_bp.route("/export", methods=["GET"])
 def export_config():
     """Export current config as a flat JSON dict (for backup)."""
-    all_settings = _store.export_dict()
-    # Exclude internal keys (prefixed with _) and raw array keys that are
-    # redundant with their indexed children (e.g. "pv_forecast" array is
-    # already present as "pv_forecast.0.azimuth" etc.)
-    filtered = {
-        k: v
-        for k, v in all_settings.items()
-        if not k.startswith("_") and _resolve_schema_key(k) is not None
-    }
-    return jsonify(filtered)
+    return jsonify(export_settings_dict())
 
 
 @config_bp.route("/import", methods=["POST"])
@@ -271,6 +279,78 @@ def import_config():
     result = apply_settings(data, mode="merge")
     result["ignored_datasets"] = [k for k in _DATASET_KEYS if k in data]
     return jsonify(result)
+
+
+def _classify_settings(data: dict) -> tuple[dict, list[dict], int]:
+    """
+    Split an incoming payload into writable values, rejects and unknown keys.
+
+    A single out-of-range value in an old backup must not abort the restore, so
+    offenders are reported and skipped individually rather than failing the request.
+
+    Returns ``(valid_data, invalid, skipped)``.
+    """
+    valid_data = {}
+    invalid = []
+    skipped = 0
+    for key, value in data.items():
+        # Internal bookkeeping keys and file metadata are not settings, and are not
+        # "unknown keys" either — counting them as skipped makes re-importing your own
+        # export look like it lost something.
+        if key.startswith("_") or key in _DATASET_KEYS:
+            continue
+        field_def = _resolve_schema_key(key)
+        if field_def is None:
+            skipped += 1
+            continue
+        err = _validate_single(field_def, value)
+        if err:
+            invalid.append({"key": key, "error": err})
+            continue
+        try:
+            valid_data[key] = _coerce_value(field_def, value)
+        except (TypeError, ValueError) as exc:
+            invalid.append({"key": key, "error": f"Invalid type: {exc}"})
+    return valid_data, invalid, skipped
+
+
+def plan_settings(data: dict, mode: str = "merge") -> dict:
+    """
+    Report what ``apply_settings`` would do, without touching the store.
+
+    Restoring a whole install is not something to discover the consequences of
+    afterwards, so the restore dialog previews this first — above all the list of
+    settings replace mode would remove.  Shares its classification with the real thing
+    so the preview and the write cannot disagree.
+    """
+    before = _store.get_all()
+    valid_data, invalid, skipped = _classify_settings(data)
+    removed = (
+        _stale_keys(before, valid_data) if mode == "replace" else []
+    )
+    changed = [k for k, v in valid_data.items() if k not in before or before[k] != v]
+
+    restart_required = []
+    hot_reloaded = []
+    for key in changed + removed:
+        field_def = _resolve_schema_key(key)
+        if field_def is None:
+            continue
+        if "restart_required" in field_def.labels:
+            restart_required.append(key)
+        elif field_def.hot_reload:
+            hot_reloaded.append(key)
+
+    return {
+        "imported": len(valid_data),
+        "changed": len(changed),
+        "removed": removed,
+        "skipped": skipped,
+        "invalid": invalid,
+        "restart_required": restart_required,
+        "hot_reloaded": hot_reloaded,
+        "warnings": _check_dependencies(valid_data) if valid_data else [],
+    }
 
 
 def apply_settings(data: dict, mode: str = "merge") -> dict:
@@ -294,37 +374,14 @@ def apply_settings(data: dict, mode: str = "merge") -> dict:
         ``restart_required``, ``hot_reloaded``, ``warnings``.
     """
     before = _store.get_all()
-
-    # Validate before writing anything.  A single out-of-range value in an old backup
-    # must not abort the restore, so offenders are reported and skipped individually.
-    valid_data = {}
-    invalid = []
-    skipped = 0
-    for key, value in data.items():
-        # Internal bookkeeping keys and file metadata are not settings, and are not
-        # "unknown keys" either — counting them as skipped makes re-importing your own
-        # export look like it lost something.
-        if key.startswith("_") or key in _DATASET_KEYS:
-            continue
-        field_def = _resolve_schema_key(key)
-        if field_def is None:
-            skipped += 1
-            continue
-        err = _validate_single(field_def, value)
-        if err:
-            invalid.append({"key": key, "error": err})
-            continue
-        try:
-            valid_data[key] = _coerce_value(field_def, value)
-        except (TypeError, ValueError) as exc:
-            invalid.append({"key": key, "error": f"Invalid type: {exc}"})
+    valid_data, invalid, skipped = _classify_settings(data)
 
     removed = _remove_stale_keys(before, valid_data) if mode == "replace" else []
 
     count = _store.set_batch(valid_data) if valid_data else 0
     _module.rebuild_config()
 
-    restart_required, hot_reloaded = _replay_changes(before, valid_data, removed)
+    restart_required, hot_reloaded, changed = _replay_changes(before, valid_data, removed)
 
     # Persist restart-required fields so the banner survives a page reload, matching
     # what update_config() does after a normal save.
@@ -347,6 +404,7 @@ def apply_settings(data: dict, mode: str = "merge") -> dict:
 
     return {
         "imported": count,
+        "changed": changed,
         "removed": removed,
         "skipped": skipped,
         "invalid": invalid,
@@ -356,9 +414,9 @@ def apply_settings(data: dict, mode: str = "merge") -> dict:
     }
 
 
-def _remove_stale_keys(before: dict, valid_data: dict) -> list[str]:
+def _stale_keys(before: dict, valid_data: dict) -> list[str]:
     """
-    Delete stored settings that the imported file does not contain.
+    Stored settings that the imported file does not contain.
 
     Only keys ``export_config()`` would have written are eligible, which makes replace
     the exact inverse of export.  Two kinds of key are therefore left alone:
@@ -369,13 +427,18 @@ def _remove_stale_keys(before: dict, valid_data: dict) -> list[str]:
       migration fallback by the merger.  The indexed ``pv_forecast.0.*`` keys take
       precedence over it, so it is inert rather than stale.
     """
-    stale = [
+    return [
         key
         for key in before
         if not key.startswith("_")
         and key not in valid_data
         and _resolve_schema_key(key) is not None
     ]
+
+
+def _remove_stale_keys(before: dict, valid_data: dict) -> list[str]:
+    """Delete the stale keys and return them."""
+    stale = _stale_keys(before, valid_data)
     for key in stale:
         _store.delete(key)
     return stale
@@ -383,14 +446,15 @@ def _remove_stale_keys(before: dict, valid_data: dict) -> list[str]:
 
 def _replay_changes(
     before: dict, valid_data: dict, removed: list[str]
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], int]:
     """
     Fire hot-reload callbacks for everything the import actually changed.
 
     ``set_batch()`` and ``delete()`` skip the store's own change callbacks so the write
     stays a single transaction; without this replay the restored values would never
-    reach the running interfaces.  Returns the changed keys split into those needing a
-    restart and those applied live, classified exactly as ``update_config()`` does.
+    reach the running interfaces.  Returns the keys needing a restart, those applied
+    live — classified exactly as ``update_config()`` does — and how many values changed
+    in total.
     """
     changes = [
         (key, before.get(key), value)
@@ -416,7 +480,7 @@ def _replay_changes(
         if notify is not None:
             notify(key, old_value, new_value)
 
-    return restart_required, hot_reloaded
+    return restart_required, hot_reloaded, len(changes)
 
 
 # ------------------------------------------------------------------
