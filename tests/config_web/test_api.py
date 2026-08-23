@@ -755,7 +755,26 @@ class TestImportAppliesChanges:
         data = resp.get_json()
         assert data["imported"] == 1
         assert [e["key"] for e in data["invalid"]] == ["price.feed_in_price"]
-        assert "Invalid type" in data["invalid"][0]["error"]
+        assert data["invalid"][0]["error"] == "Expected a number"
+
+    def test_import_does_not_echo_exception_text(self, client):
+        """
+        The rejection message must not carry the exception's own text.
+
+        float("...") puts the offending value into its message, and returning that in an
+        HTTP response is information exposure through an exception (CodeQL). The detail
+        belongs in the log; the response gets a stable, actionable message.
+        """
+        resp = client.post(
+            "/api/config/import",
+            data=json.dumps({"price.feed_in_price": "sekrit-looking-value"}),
+            content_type="application/json",
+        )
+
+        body = resp.get_data(as_text=True)
+        assert "could not convert" not in body
+        assert "sekrit-looking-value" not in body
+        assert resp.get_json()["invalid"][0]["error"] == "Expected a number"
 
     def test_import_does_not_count_metadata_as_skipped(self, client):
         """Backup metadata is not a setting and not an unknown key either."""

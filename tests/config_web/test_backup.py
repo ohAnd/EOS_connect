@@ -325,6 +325,25 @@ class TestBackupRestore:
         assert result["pv_yield_history"]["present_in_file"] == 1
         assert storeless_client.store.get("battery.capacity_wh") == 12000
 
+    def test_restore_does_not_echo_exception_text(self, client):
+        """
+        The second sink CodeQL reported: the same rejection path reaches this endpoint.
+
+        Both import endpoints share apply_settings, so both would have echoed the
+        coercion exception. Guarded here as well as on /api/config/import.
+        """
+        backup = client.get("/api/backup/export").get_json()
+        backup["price.feed_in_price"] = "sekrit-looking-value"
+
+        resp = _post(client, backup)
+
+        body = resp.get_data(as_text=True)
+        assert "could not convert" not in body
+        assert "sekrit-looking-value" not in body
+        invalid = resp.get_json()["settings"]["invalid"]
+        assert [e["key"] for e in invalid] == ["price.feed_in_price"]
+        assert invalid[0]["error"] == "Expected a number"
+
     def test_restore_rejects_a_non_object_body(self, client):
         """A JSON array is not a backup."""
         resp = client.post(

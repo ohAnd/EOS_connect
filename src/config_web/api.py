@@ -310,7 +310,8 @@ def _classify_settings(data: dict) -> tuple[dict, list[dict], int]:
         try:
             valid_data[key] = _coerce_value(field_def, value)
         except (TypeError, ValueError) as exc:
-            invalid.append({"key": key, "error": f"Invalid type: {exc}"})
+            logger.warning("[ConfigWeb] Rejected imported value for '%s': %s", key, exc)
+            invalid.append({"key": key, "error": _type_error_message(field_def)})
     return valid_data, invalid, skipped
 
 
@@ -790,10 +791,11 @@ def _validate_price_arrays(data: dict) -> list[dict]:
                             f"got {len(values)}"
                         )
                     })
-            except ValueError as e:
+            except ValueError as exc:
+                logger.debug("[ConfigWeb] fixed_24h_array is not parseable: %s", exc)
                 errors.append({
                     "key": "price.fixed_24h_array",
-                    "error": f"Array must contain numeric values: {e}"
+                    "error": "Array must contain numeric values only"
                 })
 
     return errors
@@ -842,8 +844,9 @@ def _validate_single(field_def, value) -> str:
     # Type coercion for comparison
     try:
         value = _coerce_value(field_def, value)
-    except (TypeError, ValueError) as e:
-        return f"Invalid type: {e}"
+    except (TypeError, ValueError) as exc:
+        logger.debug("[ConfigWeb] Value for '%s' will not coerce: %s", field_def.key, exc)
+        return _type_error_message(field_def)
 
     # Choices
     if "choices" in v:
@@ -868,6 +871,24 @@ def _validate_single(field_def, value) -> str:
         return "This field is required"
 
     return ""
+
+
+def _type_error_message(field_def) -> str:
+    """
+    A stable message for a value that will not coerce to the field's type.
+
+    Deliberately excludes the exception text.  ``int("abc")`` puts the offending value
+    into its own message, and interpolating that into an HTTP response is information
+    exposure through an exception — CodeQL flags it, and it reads as developer noise to
+    the person who has to act on it.  The detail is logged instead.
+    """
+    expected = {
+        "int": "a whole number",
+        "float": "a number",
+        "bool": "true or false",
+        "select": "one of the allowed choices",
+    }.get(field_def.field_type, f"a valid {field_def.field_type} value")
+    return f"Expected {expected}"
 
 
 def _coerce_value(field_def, value):
