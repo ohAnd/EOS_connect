@@ -200,8 +200,9 @@ load_interface = interface_factory.create_load_interface(
 )
 
 battery_config = dict(config_manager.config["battery"])
-battery_config["feed_in_price"] = config_manager.config.get("price", {}).get(
-    "feed_in_price", 0.0
+# price.feed_in_price is ct/kWh; BatteryPriceHandler.pv_cost_euro_per_kwh expects €/kWh
+battery_config["feed_in_price"] = (
+    config_manager.config.get("price", {}).get("feed_in_price", 0.0) / 100.0
 )
 
 battery_interface = interface_factory.create_battery_interface(
