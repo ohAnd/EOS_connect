@@ -17,6 +17,7 @@ Supported fields (Price data source reload — immediate data fetch):
 - ``price.data_url``  (triggers immediate fetch when source=timeseries)
 - ``price.data_path``  (triggers immediate fetch when source=timeseries)
 - ``price.data_token``  (triggers immediate fetch when source=timeseries)
+- ``price.value_unit``  (triggers immediate fetch when source=timeseries)
 - ``price.use_ha_central_data_source``  (triggers immediate fetch when source=timeseries)
 - ``price.ha_sensor_name``  (triggers immediate fetch when source=timeseries)
 
@@ -71,12 +72,13 @@ _PRICE_FIELD_MAP = {
     "price.feed_in_price": ("feed_in_tariff_price", float),
 }
 
-# Price data source fields that require reload (timeseries URL/path/token)
+# Price data source fields that require reload (timeseries URL/path/token/unit)
 _PRICE_DATA_FIELDS = {
     "price.source",
     "price.data_url",
     "price.data_path",
     "price.data_token",
+    "price.value_unit",
     "price.use_ha_central_data_source",
     "price.ha_sensor_name",
 }
@@ -709,6 +711,7 @@ class HotReloadAdapter:
             self._price.data_url = price_config.get("data_url", "").strip()
             self._price.data_path = price_config.get("data_path", "attributes.data").strip()
             self._price.data_token = price_config.get("data_token", "").strip()
+            self._price.value_unit = price_config.get("value_unit", "EUR/kWh").strip()
             self._applied_keys.append(key)
             # Determine if we should trigger immediate fetch
             # Fetch if new source is timeseries (either switching TO it or already using

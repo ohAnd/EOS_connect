@@ -12,7 +12,9 @@ import logging
 import re
 from flask import Blueprint, jsonify, request as flask_request, Response
 
+from .hot_reload import _coerce_bool
 from .migration import _flatten_config
+from .timeseries_probe import probe
 
 logger = logging.getLogger("__main__")
 
@@ -632,24 +634,61 @@ def _check_dependencies(data: dict) -> list[dict]:
     return dependencies
 
 
-def _check_timeseries_preflight(data: dict) -> list[dict]:
+# Config keys that make a timeseries probe worthwhile. Saving anything else must not
+# trigger a network round-trip, so an unrelated setting change stays fast and cannot be
+# blocked by a momentarily unreachable endpoint.
+_TIMESERIES_PROBE_TRIGGERS = {
+    "price": {
+        "price.source",
+        "price.data_url",
+        "price.data_path",
+        "price.data_token",
+        "price.value_unit",
+        "price.use_ha_central_data_source",
+        "price.ha_sensor_name",
+    },
+    "pv": {
+        "pv_forecast_source.source",
+        "pv_forecast_source.data_url",
+        "pv_forecast_source.data_path",
+        "pv_forecast_source.data_token",
+        "pv_forecast_source.value_unit",
+        "pv_forecast_source.use_ha_central_data_source",
+        "pv_forecast_source.ha_sensor_name",
+    },
+}
+
+# The shared data source only feeds a domain that opted into central mode, so it may
+# only trigger that domain's probe. Listing it unconditionally would let an unreachable
+# PV endpoint block an unrelated edit of the Home Assistant URL.
+_CENTRAL_DATA_SOURCE_TRIGGERS = {"data_source.url", "data_source.access_token"}
+
+_TIMESERIES_DOMAIN_SECTIONS = {
+    "price": ("price", "sensor.grid_prices", "EUR/kWh"),
+    "pv": ("pv_forecast_source", "sensor.pv_forecast", "W"),
+}
+
+
+def _effective_value_getter(data: dict):
     """
-    Check if we're modifying a timeseries config and validate the sensor exists.
-    Returns list of error dicts if validation fails.
+    Build a resolver for "value after this update would be applied".
+
+    Resolution order is update body → store → merged config. The store has to come
+    before the merged config: ``merger._apply_central_ha_data_source`` overwrites
+    ``<section>.data_url`` / ``data_token`` with values derived from the central data
+    source, so reading the merged config would hand back a derived HA URL even for a
+    request that is switching central mode off. The store still holds what the user
+    actually entered. The merged config remains the last resort so schema defaults are
+    picked up for keys never written.
     """
-    errors = []
     current_config = _module.get_config()
 
-    # Helper: get effective value (from update data or current config)
     def get_value(key):
         if key in data:
             return data[key]
-        # For data_source keys, check store directly
-        # (data_source is excluded from merged config)
-        if key.startswith("data_source."):
-            store_val = _store.get(key)
-            if store_val is not None:
-                return store_val
+        store_val = _store.get(key)
+        if store_val is not None:
+            return store_val
         parts = key.split(".")
         val = current_config
         for part in parts:
@@ -659,74 +698,221 @@ def _check_timeseries_preflight(data: dict) -> list[dict]:
                 return None
         return val
 
-    # Check if we're modifying price timeseries config
-    price_source = get_value("price.source")
-    if price_source == "timeseries":
-        use_ha_central = get_value("price.use_ha_central_data_source")
-        if use_ha_central:
-            # Central HA mode: sensor name + data_source config
-            ha_sensor_name = get_value("price.ha_sensor_name")
-            data_source_url = get_value("data_source.url")
-            data_source_token = get_value("data_source.access_token")
+    return get_value
 
-            if (
-                ha_sensor_name and data_source_url and data_source_token
-            ):
-                # Try to fetch the sensor from Home Assistant
-                ha_url = (
-                    f"{data_source_url.rstrip('/')}/api/states/{ha_sensor_name}"
-                )
-                try:
-                    import requests
-                    response = requests.get(
-                        ha_url,
-                        headers={"Authorization": f"Bearer {data_source_token}"},
-                        timeout=5
-                    )
-                    if response.status_code == 404:
-                        errors.append({
-                            "key": "price.ha_sensor_name",
-                            "error": (
-                                f"Sensor '{ha_sensor_name}' not found in "
-                                "Home Assistant"
-                            )
-                        })
-                    elif response.status_code != 200:
-                        errors.append({
-                            "key": "price.ha_sensor_name",
-                            "error": (
-                                f"Home Assistant error {response.status_code}: "
-                                f"{response.reason}"
-                            )
-                        })
-                except requests.exceptions.HTTPError as e:
-                    if hasattr(e, 'response') and e.response is not None:
-                        if e.response.status_code == 404:
-                            errors.append({
-                                "key": "price.ha_sensor_name",
-                                "error": (
-                                    f"Sensor '{ha_sensor_name}' not found in "
-                                    "Home Assistant"
-                                )
-                            })
-                        else:
-                            errors.append({
-                                "key": "price.ha_sensor_name",
-                                "error": (
-                                    f"Home Assistant error "
-                                    f"{e.response.status_code}: "
-                                    f"{e.response.reason}"
-                                )
-                            })
-                except Exception as e:
-                    # Log detailed error server-side only (not exposed to client)
-                    logger.error("Home Assistant connection error: %s", str(e), exc_info=True)
-                    errors.append({
-                        "key": "price.ha_sensor_name",
-                        "error": "Failed to connect to Home Assistant. Check configuration and logs."
-                    })
+
+def _raw_value_getter(data: dict):
+    """
+    Resolve a key without consulting the merged config.
+
+    ``merger._apply_central_ha_data_source`` overwrites ``<section>.data_url`` and
+    ``data_token`` with values derived from the shared data source. For a request that
+    turns central mode off, the merged config would therefore hand back the derived HA
+    URL rather than the user's own — and the probe would happily green-light a config
+    that 401s at runtime. Falling back to the schema default instead keeps this
+    resolution honest for exactly those two keys.
+    """
+    def get_raw(key):
+        if key in data:
+            return data[key]
+        store_val = _store.get(key)
+        if store_val is not None:
+            return store_val
+        field_def = _schema.get(key)
+        return field_def.default if field_def else None
+
+    return get_raw
+
+
+def _resolve_timeseries_config(domain: str, data: dict, get_value) -> dict:
+    """
+    Resolve the connection details a timeseries probe needs for one domain.
+
+    Mirrors merger._apply_central_ha_data_source: in central mode the URL is built
+    from the shared data_source plus the sensor entity, so the probe tests exactly
+    what the interface will later fetch.
+    """
+    section, default_sensor, default_unit = _TIMESERIES_DOMAIN_SECTIONS[domain]
+    get_raw = _raw_value_getter(data)
+
+    def merger_style(key, default):
+        """Default only on absence, as the merger's dict.get(key, default) does."""
+        value = get_value(key)
+        return default if value is None else value
+
+    # Coerced, not truthiness-tested: pre-flight runs before _coerce_value, so a REST
+    # client sending the string "false" would otherwise take the central-HA branch.
+    if _coerce_bool(get_value(f"{section}.use_ha_central_data_source")):
+        ds_url = get_value("data_source.url") or ""
+        sensor = merger_style(f"{section}.ha_sensor_name", default_sensor)
+        # Built exactly as merger._apply_central_ha_data_source builds it — including
+        # the absence of rstrip and the empty-string passthrough — so the probe can
+        # never pass on a URL the running interface would fetch differently.
+        data_url = f"{ds_url}/api/states/{sensor}" if ds_url else ""
+        data_token = get_value("data_source.access_token") or ""
+        sensor_field = f"{section}.ha_sensor_name"
+        resource_label = sensor or f"{section}.ha_sensor_name"
+    else:
+        data_url = get_raw(f"{section}.data_url") or ""
+        data_token = get_raw(f"{section}.data_token") or ""
+        sensor_field = f"{section}.data_url"
+        resource_label = data_url
+
+    return {
+        "data_url": data_url,
+        "data_path": get_value(f"{section}.data_path") or "attributes.data",
+        "data_token": data_token,
+        "value_unit": get_value(f"{section}.value_unit") or default_unit,
+        "sensor_field": sensor_field,
+        "resource_label": resource_label,
+    }
+
+
+def _effective_time_frame_base(get_value) -> int:
+    """
+    The slot length the interfaces will actually run at.
+
+    Mirrors the coercion in eos_connect.py: 15-minute slots are only honoured for the
+    EVopt backends and otherwise fall back to hourly. Using the stored value verbatim
+    would make the probe reject an hourly source for a system that in fact runs
+    hourly.
+    """
+    try:
+        time_frame_base = int(get_value("eos.time_frame") or 3600)
+    except (TypeError, ValueError):
+        return 3600
+
+    if time_frame_base not in (900, 3600):
+        return 3600
+    if time_frame_base == 900 and get_value("eos.source") not in (
+        "evopt",
+        "local_evopt",
+    ):
+        return 3600
+    return time_frame_base
+
+
+def _installed_pv_power_w(config: dict) -> float:
+    """Total configured array power, or 0 when no PV installations are defined."""
+    total = 0.0
+    for entry in config.get("pv_forecast") or []:
+        if isinstance(entry, dict):
+            try:
+                total += float(entry.get("power", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+    return total
+
+
+def _probe_timeseries_domain(domain: str, data: dict, get_value) -> dict:
+    """Run the probe for one domain using the effective (post-update) config."""
+    resolved = _resolve_timeseries_config(domain, data, get_value)
+    config = _module.get_config() or {}
+    time_zone = config.get("time_zone", "UTC")
+    time_frame_base = _effective_time_frame_base(get_value)
+    result = probe(
+        domain,
+        resolved["data_url"],
+        resolved["data_path"],
+        resolved["data_token"],
+        resolved["value_unit"],
+        time_zone,
+        resource_label=resolved["resource_label"],
+        time_frame_base=time_frame_base,
+        installed_power_w=_installed_pv_power_w(config) if domain == "pv" else 0,
+    )
+    # In central-HA mode the actionable field is the sensor name, not the derived URL.
+    if not result.get("ok") and result.get("field", "").endswith(".data_url"):
+        result["field"] = resolved["sensor_field"]
+    return result
+
+
+def _check_timeseries_preflight(data: dict) -> list[dict]:
+    """
+    Validate timeseries sources before saving.
+
+    Covers price and PV, and both connection modes. Beyond reachability this also
+    resolves the configured data_path and parses the payload, so a format or unit
+    mistake is reported against the field that caused it instead of surfacing hours
+    later as an implausible schedule. Warnings (e.g. an odd price level) never block
+    the save — only hard failures do.
+    """
+    errors = []
+    get_value = _effective_value_getter(data)
+
+    for domain, (section, _sensor, _unit) in _TIMESERIES_DOMAIN_SECTIONS.items():
+        if get_value(f"{section}.source") != "timeseries":
+            continue
+
+        own_keys_touched = bool(_TIMESERIES_PROBE_TRIGGERS[domain] & data.keys())
+        central_touched = bool(
+            _CENTRAL_DATA_SOURCE_TRIGGERS & data.keys()
+        ) and _coerce_bool(get_value(f"{section}.use_ha_central_data_source"))
+        if not (own_keys_touched or central_touched):
+            continue
+
+        result = _probe_timeseries_domain(domain, data, get_value)
+        if result.get("ok"):
+            continue
+
+        if not own_keys_touched:
+            # Only the shared data source changed. The user is not editing this
+            # domain, so a failure here is collateral — a deleted PV sensor must not
+            # make it impossible to rotate the Home Assistant token.
+            logger.info(
+                "[ConfigAPI] Timeseries pre-flight for the %s source failed while "
+                "the shared data source changed: %s",
+                domain,
+                result.get("error"),
+            )
+            continue
+
+        if result.get("transport"):
+            # The endpoint did not answer at all. That is not necessarily a bad
+            # configuration — it is also what a source being briefly down looks like,
+            # and what switching `source` to timeseries before filling in the URL
+            # looks like. Blocking the whole PUT on it would hold every other key in
+            # the request hostage to a 10s timeout, so record it and let the save
+            # proceed; the running interface reports it on the next cycle.
+            logger.info(
+                "[ConfigAPI] Timeseries pre-flight could not reach the %s source: %s",
+                domain,
+                result.get("error"),
+            )
+            continue
+
+        errors.append(
+            {
+                "key": result.get("field", f"{section}.data_url"),
+                "error": result.get("error", "Timeseries check failed."),
+            }
+        )
 
     return errors
+
+
+@config_bp.route("/test-timeseries", methods=["POST"])
+def test_timeseries():
+    """
+    Probe a timeseries data source and report what it yields.
+
+    Body: optional flat dot-notation keys (as for PUT /), so the UI can test values
+    the user has typed but not yet saved. Anything absent falls back to the stored
+    config. ``domain`` selects "price" (default) or "pv".
+
+    Returns 200 with the probe result in both the success and the failure case — a
+    source that does not answer is a finding, not a server error.
+    """
+    data = flask_request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+
+    domain = data.pop("domain", "price")
+    if domain not in _TIMESERIES_DOMAIN_SECTIONS:
+        return jsonify({"error": "domain must be 'price' or 'pv'"}), 400
+
+    get_value = _effective_value_getter(data)
+    return jsonify(_probe_timeseries_domain(domain, data, get_value)), 200
 
 
 def _validate_price_arrays(data: dict) -> list[dict]:

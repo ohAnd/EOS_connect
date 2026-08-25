@@ -41,6 +41,14 @@ import threading
 import time
 import requests
 
+from .timeseries_normalizer import (
+    TimeseriesFormatError,
+    convert_price_values,
+    extract_json_path,
+    normalize_entries,
+    price_plausibility_message,
+)
+
 logger = logging.getLogger("__main__")
 logger.info("[PRICE-IF] loading module ")
 
@@ -144,6 +152,9 @@ class PriceInterface:
         self.data_url = config.get("data_url", "").strip()
         self.data_path = config.get("data_path", "attributes.data").strip()
         self.data_token = config.get("data_token", "").strip()
+        # Unit of the source's "value" field. Default matches EVCC's `rates`, which is
+        # the reference format for this source — see timeseries_normalizer.
+        self.value_unit = config.get("value_unit", "EUR/kWh").strip()
 
         # EVCC interface for EVCC price source
         self.evcc_interface = evcc_interface
@@ -1760,15 +1771,17 @@ class PriceInterface:
         """
         Retrieve grid prices from timeseries data source (Home Assistant or HTTP).
 
-        Unified approach for both HA sensors and custom HTTP servers using
-        standardized timeseries format: [{start, end, value}, ...] with values
-        in EUR/Wh.
+        Unified approach for both HA sensors and custom HTTP servers using the
+        canonical timeseries format: [{start, end, value}, ...] — the format EVCC
+        publishes, so an EVCC endpoint or an EVCC-shaped HA template sensor works
+        unchanged. See timeseries_normalizer for the exact contract.
 
         Config fields used:
         - data_url: Full HTTP endpoint URL (HA or HTTP custom endpoint)
         - data_path: JSON path to timeseries array (e.g., 'attributes.data')
         - data_token: Optional bearer token for authentication
-        
+        - value_unit: Unit of the "value" field (default EUR/kWh, as EVCC delivers)
+
         Args:
             tgt_duration (int): Target duration in hours (48) or 15-min slots (192)
             start_time (datetime, optional): Optional start time
@@ -1788,9 +1801,10 @@ class PriceInterface:
             headers["Authorization"] = f"Bearer {self.data_token}"
 
         logger.debug(
-            "[PRICE-IF] Fetching prices from timeseries source: %s (path: %s)",
+            "[PRICE-IF] Fetching prices from timeseries source: %s (path: %s, unit: %s)",
             self.data_url,
             self.data_path,
+            self.value_unit,
         )
 
         def request_and_parse():
@@ -1800,7 +1814,9 @@ class PriceInterface:
             response_data = response.json()
 
             # Extract timeseries using data_path
-            timeseries = self.__extract_json_path(response_data, self.data_path)
+            timeseries = extract_json_path(
+                response_data, self.data_path, label="PRICE-IF"
+            )
 
             if not isinstance(timeseries, list):
                 msg = f"Data at path '{self.data_path}' is not array"
@@ -1819,7 +1835,13 @@ class PriceInterface:
 
         # Parse and validate timeseries
         try:
-            prices = self.__parse_price_timeseries(timeseries, tgt_duration, None, start_time)
+            prices = self.__parse_price_timeseries(
+                timeseries,
+                tgt_duration,
+                None,
+                start_time,
+                value_unit=self.value_unit,
+            )
             if not prices:
                 logger.error("[PRICE-IF] Failed to parse price timeseries data")
                 return []
@@ -1828,6 +1850,19 @@ class PriceInterface:
             self.consecutive_failures = 0
             self.last_successful_prices = prices.copy()
             self.last_successful_prices_direct = prices.copy()
+
+            # State the unit once per unit change. The canonical unit moved from
+            # EUR/Wh to EUR/kWh, so a config carried over from an earlier version
+            # silently changes meaning — this makes the active interpretation visible
+            # in the log without spamming it every cycle.
+            if getattr(self, "_logged_value_unit", None) != self.value_unit:
+                logger.info(
+                    "[PRICE-IF] Timeseries prices interpreted as '%s' "
+                    "(first slot: %.2f ct/kWh)",
+                    self.value_unit,
+                    prices[0] * 100_000,
+                )
+                self._logged_value_unit = self.value_unit
 
             logger.debug(
                 "[PRICE-IF] Timeseries prices received: %d values, "
@@ -2105,20 +2140,32 @@ class PriceInterface:
             logger.error(f"[PRICE-IF] Unexpected error fetching EVCC prices: {e}")
             return []
 
-    def __parse_price_timeseries(self, timeseries, tgt_duration, resolution_seconds=None, start_time=None):
+    def __parse_price_timeseries(
+        self,
+        timeseries,
+        tgt_duration,
+        resolution_seconds=None,
+        start_time=None,
+        value_unit=None,
+    ):
         """
         Parse and validate price timeseries format.
 
         Standardized format: [{start, end, value}, ...]
-        - start/end: ISO8601 string or Unix timestamp (seconds)
-        - value: numeric in EUR/Wh
+        - start: ISO8601 string or Unix timestamp (seconds)
+        - end: optional, derived from the next entry when absent
+        - value: numeric, in *value_unit*
         - Supports hourly (48 values) or 15-minute (192 values) resolution
 
         Args:
-            timeseries: List of price entries with start, end, value
+            timeseries: List of price entries with start and value
             tgt_duration: Target duration in hours
             resolution_seconds: Pre-detected resolution (900 or 3600), or None to auto-detect
             start_time: Window start time (datetime) for timestamp-aware conversion
+            value_unit: Unit of the incoming values (see
+                timeseries_normalizer.PRICE_UNIT_TO_EUR_PER_WH). ``None`` means the
+                caller already supplies canonical EUR/Wh values and needs no
+                normalization — that is how the EVCC path feeds this method.
 
         Returns:
             list: Normalized hourly price values in EUR/Wh, or empty on error
@@ -2131,14 +2178,33 @@ class PriceInterface:
             logger.error("[PRICE-IF] Price timeseries is empty")
             return []
 
-        # Validate first entry structure
-        first = timeseries[0]
-        required_keys = ["start", "end", "value"]
-        if not isinstance(first, dict) or not all(k in first for k in required_keys):
-            logger.error(
-                "[PRICE-IF] Invalid price timeseries format: missing start, end, or value"
+        if value_unit is not None:
+            # External source: normalize field/timestamp shape and convert the unit
+            # before any of the resolution logic below looks at the entries.
+            try:
+                timeseries = normalize_entries(
+                    timeseries, self.time_zone, label="PRICE-IF"
+                )
+                convert_price_values(timeseries, value_unit)
+            except TimeseriesFormatError as exc:
+                logger.error("[PRICE-IF] Invalid price timeseries: %s", exc)
+                return []
+
+            warning = price_plausibility_message(
+                [entry["value"] for entry in timeseries], value_unit
             )
-            return []
+            if warning:
+                logger.warning("[PRICE-IF] %s", warning)
+        else:
+            # Validate first entry structure for pre-normalized input
+            first = timeseries[0]
+            if not isinstance(first, dict) or not all(
+                k in first for k in ("start", "value")
+            ):
+                logger.error(
+                    "[PRICE-IF] Invalid price timeseries format: missing start or value"
+                )
+                return []
 
         # Detect time resolution from timestamp delta (unless already provided)
         if resolution_seconds is None:
@@ -2222,7 +2288,10 @@ class PriceInterface:
             import pytz
 
             def parse_ts(ts_str):
-                """Parse timestamp from ISO8601 or Unix seconds."""
+                """Parse timestamp from a datetime, ISO8601 string or Unix seconds."""
+                if isinstance(ts_str, dt_class):
+                    # Already normalized by timeseries_normalizer.
+                    return ts_str
                 if isinstance(ts_str, (int, float)):
                     return dt_class.fromtimestamp(ts_str, tz=pytz.UTC)
                 if isinstance(ts_str, str):
@@ -2282,7 +2351,10 @@ class PriceInterface:
             if start_time is None:
                 # Parse first timestamp as reference
                 first_ts = timeseries[0].get("start")
-                if isinstance(first_ts, str):
+                if isinstance(first_ts, dt_class):
+                    # Already normalized by timeseries_normalizer.
+                    window_start = first_ts
+                elif isinstance(first_ts, str):
                     try:
                         window_start = dt_class.fromisoformat(first_ts.replace('Z', '+00:00'))
                     except (ValueError, AttributeError):
@@ -2305,7 +2377,10 @@ class PriceInterface:
                 try:
                     # Parse entry timestamp
                     ts_str = entry.get("start")
-                    if isinstance(ts_str, str):
+                    if isinstance(ts_str, dt_class):
+                        # Already normalized by timeseries_normalizer.
+                        entry_time = ts_str
+                    elif isinstance(ts_str, str):
                         entry_time = dt_class.fromisoformat(ts_str.replace('Z', '+00:00'))
                     else:
                         from datetime import timezone
@@ -2425,38 +2500,3 @@ class PriceInterface:
             except (ValueError, TypeError):
                 pass
         return hourly
-
-    def __extract_json_path(self, obj, path):
-        """
-        Extract nested value from JSON object using dot notation.
-
-        Examples:
-        - 'attributes.data' -> obj['attributes']['data']
-        - 'data' -> obj['data']
-        - 'prices[0].data' -> obj['prices'][0]['data']
-
-        Args:
-            obj: JSON object (dict or list)
-            path: Dot-notation path string
-
-        Returns:
-            Extracted value or None if path not found
-        """
-        try:
-            parts = path.split(".")
-            current = obj
-            for part in parts:
-                if "[" in part:
-                    # Handle array index notation (e.g., "prices[0]")
-                    key, index_str = part.split("[")
-                    index = int(index_str.rstrip("]"))
-                    if key:
-                        current = current[key][index]
-                    else:
-                        current = current[index]
-                else:
-                    current = current[part]
-            return current
-        except (KeyError, IndexError, TypeError, ValueError):
-            logger.warning("[PRICE-IF] Could not extract path '%s' from JSON response", path)
-            return None
