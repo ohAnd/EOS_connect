@@ -280,6 +280,63 @@ def test_handle_interface_error_with_empty_config():
     assert pv.pv_forcast_request_error["timestamp"] is not None
 
 
+def test_handle_interface_error_temperature_target_ignores_pv_cache():
+    """
+    Regression test for issue #276: a failed temperature request must not
+    fall back to the PV power cache, even when it holds unrelated Watt
+    values and the temperature cache is still empty.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    pv.last_successful_pv_forecast = [2090.0, 1500.0, 800.0]
+    pv.last_successful_temp_forecast = []
+
+    result = pv._handle_interface_error(
+        "timeout", "temp failed", {}, "akkudoktor", target="temperature"
+    )
+
+    assert result == []
+    assert pv.consecutive_temp_failures == 1
+    assert pv.consecutive_failures == 0
+
+
+def test_handle_interface_error_temperature_target_uses_own_cache():
+    """
+    Test that a failed temperature request falls back to its own cache when
+    available, not the PV power cache.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    pv.last_successful_pv_forecast = [2090.0, 1500.0, 800.0]
+    pv.last_successful_temp_forecast = [15.0, 16.0, 17.0]
+
+    result = pv._handle_interface_error(
+        "timeout", "temp failed", {}, "akkudoktor", target="temperature"
+    )
+
+    assert result == [15.0, 16.0, 17.0]
+
+
+def test_consecutive_temp_failures_independent_of_pv_success():
+    """
+    Temperature failures must accumulate toward max_failures even while PV
+    power keeps succeeding and resetting its own counter every cycle -
+    reproduces the 0/1 oscillation from issue #276 that kept the temperature
+    failure count from ever reaching the threshold.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    for _ in range(30):
+        # PV power fetch succeeds and resets only the power counter.
+        pv.last_successful_pv_forecast = [100.0]
+        pv.consecutive_failures = 0
+        # Temperature fetch fails every cycle.
+        pv._handle_interface_error(
+            "timeout", "temp failed", {}, "akkudoktor", target="temperature"
+        )
+
+    assert pv.consecutive_temp_failures == 30
+    assert pv.consecutive_temp_failures >= pv.max_failures
+    assert pv.consecutive_failures == 0
+
+
 def test_default_pv_forecast_length_and_values():
     """
     Test that the default PV forecast returns 48 values of type int or float.
@@ -420,6 +477,134 @@ def test_api_error_triggers_fallback(monkeypatch):
     )
     assert result == [0] * 48
     assert pv.pv_forcast_request_error["error"] in (None, "api_error")
+
+
+def test_temperature_api_error_never_returns_pv_watts(monkeypatch):
+    """
+    Regression test for issue #276: a total temperature-fetch failure must
+    never return data derived from the cached PV power (Watts) array, even
+    though both forecasts are fetched through this same shared method.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    pv.last_successful_pv_forecast = [2090.0, 1500.0, 800.0]
+    pv._retry_request = lambda req, err, *args, **kwargs: err(
+        "timeout", Exception("fail")
+    )
+
+    result = pv._PvInterface__get_pv_forecast_akkudoktor_api(
+        tgt_value="temperature",
+        pv_config_entry={
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 100,
+            "powerInverter": 800,
+            "inverterEfficiency": 0.95,
+            "horizon": "0",
+        },
+    )
+
+    # No temperature cache exists yet, so this falls through to the same
+    # zero-padding default the power path uses (see test_api_error_triggers_fallback).
+    assert result == [0] * 48
+    assert 2090.0 not in result
+
+
+def test_temperature_api_error_falls_back_to_temp_cache(monkeypatch):
+    """
+    Once a temperature forecast has succeeded at least once, a later
+    failure must reuse the temperature cache, not the PV power cache.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    pv.last_successful_pv_forecast = [2090.0, 1500.0, 800.0]
+    pv.last_successful_temp_forecast = [15.0, 16.0, 17.0]
+    pv._retry_request = lambda req, err, *args, **kwargs: err(
+        "timeout", Exception("fail")
+    )
+
+    result = pv._PvInterface__get_pv_forecast_akkudoktor_api(
+        tgt_value="temperature",
+        pv_config_entry={
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 100,
+            "powerInverter": 800,
+            "inverterEfficiency": 0.95,
+            "horizon": "0",
+        },
+    )
+
+    assert result == [15.0, 16.0, 17.0]
+
+
+def _run_one_update_loop_iteration(pv):
+    """
+    Helper to run exactly one iteration of the background update loop.
+    threading.Thread is stubbed by the autouse patch_thread fixture, so the
+    loop was never actually started - it is safe to invoke directly here.
+    """
+    calls = {"n": 0}
+
+    def is_set_once():
+        calls["n"] += 1
+        return calls["n"] > 1
+
+    pv._stop_event.is_set = is_set_once
+    pv._PvInterface__update_pv_state_loop()
+
+
+def test_update_loop_temperature_failure_never_uses_pv_cache(monkeypatch):
+    """
+    End-to-end regression test for issue #276: with PV power succeeding and
+    caching Watt values, and the temperature fetch exhausting its own retries
+    with no temperature cache yet, the update loop must fall back to the
+    default 15C forecast - never to the cached PV power array.
+    """
+    config = [{"name": "roof", "lat": 50, "lon": 8, "power": 5000}]
+    pv = PvInterface(
+        {}, config, time_frame_base, {}, temperature_forecast_enabled=True,
+        timezone="UTC",
+    )
+    pv.last_successful_pv_forecast = [2090.0, 1500.0, 800.0]
+    monkeypatch.setattr(pv, "get_summarized_pv_forecast", lambda scale=False: [100.0])
+    monkeypatch.setattr(pv, "apply_autoscaling", lambda values: values)
+    monkeypatch.setattr(
+        pv,
+        "_PvInterface__get_pv_forecast_akkudoktor_api",
+        lambda tgt_value, pv_config_entry: [],
+    )
+
+    _run_one_update_loop_iteration(pv)
+
+    assert pv.temp_forecast_array == pv._PvInterface__get_default_temperature_forecast()
+    assert pv.temp_forecast_array != pv.last_successful_pv_forecast
+
+
+def test_update_loop_rejects_implausible_temperature_values(monkeypatch):
+    """
+    Defense-in-depth: even if a mislabeled PV-Watts array slipped past the
+    target-aware cache fix, physically implausible values must still be
+    rejected in favor of the default 15C forecast.
+    """
+    config = [{"name": "roof", "lat": 50, "lon": 8, "power": 5000}]
+    pv = PvInterface(
+        {}, config, time_frame_base, {}, temperature_forecast_enabled=True,
+        timezone="UTC",
+    )
+    monkeypatch.setattr(pv, "get_summarized_pv_forecast", lambda scale=False: [100.0])
+    monkeypatch.setattr(pv, "apply_autoscaling", lambda values: values)
+    monkeypatch.setattr(
+        pv,
+        "_PvInterface__get_pv_forecast_akkudoktor_api",
+        lambda tgt_value, pv_config_entry: [2090.0, 1500.0, 800.0],
+    )
+
+    _run_one_update_loop_iteration(pv)
+
+    assert pv.temp_forecast_array == pv._PvInterface__get_default_temperature_forecast()
 
 
 def test_get_current_pv_forecast_returns_array():

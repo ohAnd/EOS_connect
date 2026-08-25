@@ -86,7 +86,9 @@ class PvInterface:
         # Cache mechanism for fallback on API failures (similar to PriceInterface)
         # When Akkudoktor is unavailable, reuse last successful forecast
         self.last_successful_pv_forecast = []
+        self.last_successful_temp_forecast = []
         self.consecutive_failures = 0
+        self.consecutive_temp_failures = 0
         self.max_failures = 24  # Max consecutive failures before using defaults
 
         self._update_thread = None
@@ -199,7 +201,9 @@ class PvInterface:
             }
             # Reset cache when configuration changes (source switch, etc.)
             self.last_successful_pv_forecast = []
+            self.last_successful_temp_forecast = []
             self.consecutive_failures = 0
+            self.consecutive_temp_failures = 0
 
             try:
                 self.__configure_update_interval()
@@ -666,7 +670,10 @@ class PvInterface:
                     temp_result = self.__get_pv_forecast_akkudoktor_api(
                         tgt_value="temperature", pv_config_entry=temp_config
                     )
-                    if not temp_result:  # If empty array or None due to API error
+                    # Reject empty/None results and physically implausible values
+                    # (e.g. PV Watts leaking into the temperature array) as a
+                    # fail-safe on top of the target-aware cache/counter below.
+                    if not temp_result or any(v > 60 or v < -60 for v in temp_result):
                         logger.warning(
                             "[PV-IF] Temperature forecast API failed - using default"
                             + " temperature forecast (15°C)"
@@ -1476,6 +1483,7 @@ class PvInterface:
                 f"No PV config entry provided for target: {tgt_value}",
                 {},
                 "akkudoktor",
+                target=tgt_value,
             )
 
         # Use standard request format for both PV and temperature
@@ -1490,15 +1498,29 @@ class PvInterface:
             day_values = response.json()
             return day_values["values"]
 
+        # Tracked locally (not via self.pv_forcast_request_error, which can
+        # still hold a stale error from an earlier unrelated call) so we know
+        # whether day_values below is raw API JSON or an already-final
+        # fallback array from _handle_interface_error.
+        failure = {"occurred": False}
+
         def error_handler(error_type, exception):
+            failure["occurred"] = True
             return self._handle_interface_error(
                 error_type,
                 f"Akkudoktor API error for {tgt_value}: {exception}",
                 pv_config_entry,
                 "akkudoktor",
+                target=tgt_value,
             )
 
         day_values = self._retry_request(request_func, error_handler, 5, 3)
+        if failure["occurred"] and day_values:
+            # day_values is a non-empty cache _handle_interface_error chose as
+            # fallback; feeding it into the raw-JSON processing below would
+            # corrupt it. An empty fallback ([] - no cache available) is safe
+            # to fall through: the processing below pads it to tgt_duration.
+            return day_values
 
         # Data processing
         try:
@@ -1571,14 +1593,20 @@ class PvInterface:
             )
 
             if self.time_frame_base == 900 and tgt_value == "power":
-                return self._convert_hourly_to_15min(forecast_values)
-            # all value have to be repeated 4 times for 15min base for temperature
-            if self.time_frame_base == 900 and tgt_value == "temperature":
-                extended_values = []
+                result = self._convert_hourly_to_15min(forecast_values)
+            elif self.time_frame_base == 900 and tgt_value == "temperature":
+                # all values have to be repeated 4 times for 15min base for temperature
+                result = []
                 for val in forecast_values:
-                    extended_values.extend([val] * 4)
-                return extended_values
-            return forecast_values
+                    result.extend([val] * 4)
+            else:
+                result = forecast_values
+
+            if tgt_value == "temperature" and result:
+                self.last_successful_temp_forecast = list(result)
+                self.consecutive_temp_failures = 0
+
+            return result
 
         except (ValueError, TypeError, AttributeError, KeyError) as e:
             return self._handle_interface_error(
@@ -1586,6 +1614,7 @@ class PvInterface:
                 f"Error processing {tgt_value} forecast data: {e}",
                 pv_config_entry,
                 "akkudoktor",
+                target=tgt_value,
             )
 
     def __get_horizon_elevation(self, sun_azimuth, horizon_for_elev):
@@ -2766,12 +2795,16 @@ class PvInterface:
             time.sleep(delay)
 
     def _handle_interface_error(
-        self, error_type, message, pv_config_entry, source="unknown"
+        self, error_type, message, pv_config_entry, source="unknown", target="power"
     ):
         """
         Centralized error handling for all API errors.
         Uses last successful forecast as fallback if available.
         Similar to PriceInterface.last_successful_prices mechanism.
+
+        `target` selects which cache/counter pair to use ("power" or
+        "temperature") so a failed temperature request never falls back to
+        the PV power cache (and vice versa).
         """
         logger.error("[PV-IF] %s", message)
         self.pv_forcast_request_error.update(
@@ -2783,34 +2816,42 @@ class PvInterface:
                 "source": source,
             }
         )
-        self.consecutive_failures += 1
+
+        if target == "temperature":
+            self.consecutive_temp_failures += 1
+            failures = self.consecutive_temp_failures
+            last_successful = self.last_successful_temp_forecast
+        else:
+            self.consecutive_failures += 1
+            failures = self.consecutive_failures
+            last_successful = self.last_successful_pv_forecast
 
         # Fallback strategy: Use last successful forecast if available
         # and within failure threshold
-        if (
-            self.consecutive_failures <= self.max_failures
-            and len(self.last_successful_pv_forecast) > 0
-        ):
+        if failures <= self.max_failures and len(last_successful) > 0:
             logger.warning(
-                "[PV-IF] No forecast retrieved (failure %d/%d). Using last successful forecast.",
-                self.consecutive_failures,
+                "[PV-IF] No %s forecast retrieved (failure %d/%d)."
+                " Using last successful forecast.",
+                target,
+                failures,
                 self.max_failures,
             )
-            return self.last_successful_pv_forecast
+            return last_successful
 
         # If max failures exceeded or no cache available, return empty array
         # (let caller handle default generation)
-        if len(self.last_successful_pv_forecast) == 0:
+        if len(last_successful) == 0:
             logger.warning(
-                "[PV-IF] No forecast available and no cache - returning empty array"
+                "[PV-IF] No %s forecast available and no cache - returning empty array",
+                target,
             )
 
         # Log detailed recovery diagnostics for troubleshooting
-        self._log_error_diagnostics(error_type, source)
+        self._log_error_diagnostics(error_type, source, target)
 
         return []
 
-    def _log_error_diagnostics(self, error_type, source):
+    def _log_error_diagnostics(self, error_type, source, target="power"):
         """
         Log detailed error diagnostics including available sources and recovery hints.
         Helps users troubleshoot and fix configuration issues faster.
@@ -2828,11 +2869,17 @@ class PvInterface:
         ]
         current_source = self.config_source.get("source", "unknown")
 
-        if self.consecutive_failures >= self.max_failures:
+        failures = (
+            self.consecutive_temp_failures
+            if target == "temperature"
+            else self.consecutive_failures
+        )
+        if failures >= self.max_failures:
             logger.error(
-                "[PV-IF] Maximum failures reached (%d) - "
+                "[PV-IF] Maximum %s failures reached (%d) - "
                 "please check configuration in Settings > PV Forecast",
-                self.consecutive_failures,
+                target,
+                failures,
             )
 
         if source == "timeseries":
