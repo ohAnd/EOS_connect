@@ -671,9 +671,10 @@ docker-compose up -d</code></pre>
   # Thresholds
   charging_threshold_w: 50
   grid_charge_threshold_w: 100
-  
-  # Feed-in price (for valuing PV surplus energy)
-  feed_in_price: 0.04  # €0.04/kWh when not charging from grid</code></pre>
+
+  # To value PV surplus at the feed-in tariff instead of €0, also set:
+  # battery_price_include_feedin: true
+  # and configure price.feed_in_price (in the price: section, in ct/kWh)</code></pre>
         </div>
 
         <!-- Battery Overview -->
