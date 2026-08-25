@@ -720,7 +720,8 @@ _ALL_FIELDS: list[FieldDef] = [
             "Data source URL. For Home Assistant: "
             "http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. "
             "For HTTP servers: endpoint URL returning JSON timeseries. "
-            "Must return JSON array with {start, end, value} format (values in EUR/Wh)."
+            "Must return a JSON array in EVCC's {start, end, value} format; "
+            "'end' is optional. The unit of 'value' is set by price.value_unit."
         ),
         help_url="configuration.html#price-sources",
         depends_on={
@@ -747,6 +748,24 @@ _ALL_FIELDS: list[FieldDef] = [
             "price.source": ["timeseries"],
             "price.use_ha_central_data_source": [False],
         },
+        hot_reload=True,
+        display_group="Grid Price Provider",
+    ),
+    FieldDef(
+        key="price.value_unit",
+        field_type="select",
+        default="EUR/kWh",
+        section="price",
+        level="getting_started",
+        description=(
+            "Unit of the 'value' field in the timeseries. Default matches EVCC's "
+            "/api/tariff/grid and the common Home Assistant price integrations "
+            "(EUR/kWh). Pick EUR/Wh only for a source that already delivers the "
+            "internal unit."
+        ),
+        help_url="configuration.html#price-sources",
+        validation={"choices": ["EUR/kWh", "ct/kWh", "EUR/Wh"]},
+        depends_on={"price.source": ["timeseries"]},
         hot_reload=True,
         display_group="Grid Price Provider",
     ),
@@ -1244,7 +1263,9 @@ _ALL_FIELDS: list[FieldDef] = [
             "Data source URL. For Home Assistant: "
             "http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. "
             "For HTTP servers: endpoint URL returning JSON timeseries. "
-            "Must return JSON array with {start, end, value} format."
+            "Must return a JSON array in EVCC's {start, end, value} format; "
+            "'end' is optional. The unit of 'value' is set by "
+            "pv_forecast_source.value_unit."
         ),
         help_url="configuration.html#pv-forecast-sources",
         depends_on={
@@ -1271,6 +1292,24 @@ _ALL_FIELDS: list[FieldDef] = [
             "pv_forecast_source.source": ["timeseries"],
             "pv_forecast_source.use_ha_central_data_source": [False],
         },
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="pv_forecast_source.value_unit",
+        field_type="select",
+        default="W",
+        section="pv_forecast_source",
+        level="getting_started",
+        description=(
+            "Unit of the 'value' field in the timeseries. Default matches EVCC's "
+            "solar forecast and the usual Home Assistant PV sensors, which report "
+            "power (W) per slot. Pick Wh/kWh for a source that reports energy per "
+            "slot instead."
+        ),
+        help_url="configuration.html#pv-forecast-sources",
+        validation={"choices": ["W", "kW", "Wh", "kWh"]},
+        depends_on={"pv_forecast_source.source": ["timeseries"]},
         hot_reload=True,
         display_group="Provider",
     ),

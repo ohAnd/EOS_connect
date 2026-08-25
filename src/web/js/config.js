@@ -419,6 +419,7 @@ class ConfigurationManager {
                 html += `<div class="config-group${allHidden ? ' hidden' : ''}" data-group="${groupName}" data-subsection="${subsection}">
                     <div class="config-group-title">${groupName}</div>
                     ${groupFields.map(f => this._renderField(f)).join("")}
+                    ${this._renderTimeseriesTester(groupFields)}
                 </div>`;
             } else {
                 html += groupFields.map(f => this._renderField(f)).join("");
@@ -1094,7 +1095,34 @@ class ConfigurationManager {
             }
         }
 
+        this._updateTimeseriesTesterVisibility();
         this._updateGroupVisibility();
+    }
+
+    /**
+     * Show or hide the "Test connection" panels alongside their timeseries fields.
+     *
+     * The panels are not schema fields, so the depends_on loop above does not reach
+     * them; without this they would keep the visibility they had at render time and
+     * stay behind after a source switch.
+     */
+    _updateTimeseriesTesterVisibility() {
+        if (!this.schema) {
+            return;
+        }
+        for (const el of document.querySelectorAll("[data-timeseries-tester]")) {
+            const domain = el.getAttribute("data-timeseries-tester");
+            const section = domain === "price" ? "price" : "pv_forecast_source";
+            const unitField = this.schema.find(f => f.key === `${section}.value_unit`);
+            if (!unitField) {
+                continue;
+            }
+            if (this._isDependencyHidden(unitField)) {
+                el.classList.add("hidden");
+            } else {
+                el.classList.remove("hidden");
+            }
+        }
     }
 
     /**
@@ -1810,6 +1838,129 @@ class ConfigurationManager {
     }
 
     // ── Utility ─────────────────────────────────────────────────
+
+    /**
+     * Render the "Test connection" panel for a group holding timeseries fields.
+     *
+     * The timeseries source accepts exactly one format, so the user needs to see what
+     * their source actually yields: a payload can match the format perfectly and still
+     * be off by a factor of 1000 if the unit is wrong. Showing the first slots in the
+     * unit displayed elsewhere in the UI makes that visible before saving.
+     *
+     * @param {Array<Object>} groupFields - Fields rendered in this group
+     * @returns {string} Panel HTML, or "" when the group has no timeseries fields
+     */
+    _renderTimeseriesTester(groupFields) {
+        const unitField = groupFields.find(f => f.key.endsWith(".value_unit"));
+        if (!unitField) {
+            return "";
+        }
+        const section = unitField.key.split(".")[0];
+        const domain = section === "price" ? "price" : "pv";
+        const hidden = this._isDependencyHidden(unitField) ? " hidden" : "";
+
+        return `
+            <div class="config-field config-timeseries-tester${hidden}" data-timeseries-tester="${domain}">
+                <div class="config-field-label"><span>Connection test</span></div>
+                <div class="config-field-input">
+                    <button type="button" class="config-btn"
+                            id="cfg-ts-test-${domain}"
+                            onclick="configurationManager.testTimeseries('${domain}')">
+                        <i class="fas fa-plug"></i> Test connection
+                    </button>
+                </div>
+                <div class="config-timeseries-result" id="cfg-ts-result-${domain}"></div>
+            </div>`;
+    }
+
+    /**
+     * Probe the configured timeseries source and render the outcome.
+     *
+     * Sends the values currently in the form (not just the saved ones) so the user can
+     * test before committing.
+     *
+     * @param {string} domain - "price" or "pv"
+     */
+    async testTimeseries(domain) {
+        const section = domain === "price" ? "price" : "pv_forecast_source";
+        const resultEl = document.getElementById(`cfg-ts-result-${domain}`);
+        const btnEl = document.getElementById(`cfg-ts-test-${domain}`);
+        if (!resultEl) {
+            return;
+        }
+
+        const body = { domain };
+        for (const suffix of [
+            "source", "data_url", "data_path", "data_token",
+            "value_unit", "use_ha_central_data_source", "ha_sensor_name",
+        ]) {
+            const key = `${section}.${suffix}`;
+            if (this.values[key] !== undefined) {
+                body[key] = this.values[key];
+            }
+        }
+        for (const key of ["data_source.url", "data_source.access_token"]) {
+            if (this.values[key] !== undefined) {
+                body[key] = this.values[key];
+            }
+        }
+
+        resultEl.className = "config-timeseries-result visible";
+        resultEl.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Testing…`;
+        if (btnEl) {
+            btnEl.disabled = true;
+        }
+
+        try {
+            const res = await fetch("api/config/test-timeseries", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            const data = await res.json();
+            resultEl.innerHTML = this._renderTimeseriesResult(data);
+            resultEl.className = `config-timeseries-result visible ${data.ok ? "ok" : "error"}`;
+        } catch (err) {
+            console.error("[ConfigurationManager] Timeseries test failed:", err);
+            resultEl.className = "config-timeseries-result visible error";
+            resultEl.innerHTML = `<i class="fas fa-times-circle"></i> Test request failed.`;
+        } finally {
+            if (btnEl) {
+                btnEl.disabled = false;
+            }
+        }
+    }
+
+    /**
+     * Turn a probe result into readable HTML.
+     * @param {Object} data - Probe response
+     * @returns {string} Result HTML
+     */
+    _renderTimeseriesResult(data) {
+        if (!data.ok) {
+            return `<i class="fas fa-times-circle"></i> ${this._escapeHtml(data.error || "Test failed.")}`;
+        }
+
+        const resolution = data.resolution_seconds === 900 ? "15 min" : "hourly";
+        const slots = (data.slots || []).map(slot => {
+            const time = String(slot.start || "").replace("T", " ").slice(0, 16);
+            return `<tr><td>${this._escapeHtml(time)}</td>
+                        <td style="text-align:right;">${slot.value}</td>
+                        <td>${this._escapeHtml(slot.unit)}</td></tr>`;
+        }).join("");
+
+        const warnings = (data.warnings || []).map(
+            w => `<div class="config-timeseries-warning">
+                    <i class="fas fa-triangle-exclamation"></i> ${this._escapeHtml(w)}
+                  </div>`
+        ).join("");
+
+        return `<div><i class="fas fa-circle-check"></i>
+                    ${data.entry_count} entries, ${resolution} resolution,
+                    read as ${this._escapeHtml(data.value_unit)}</div>
+                <table class="config-timeseries-slots">${slots}</table>
+                ${warnings}`;
+    }
 
     /**
      * Convert a dot-notation key to a CSS-safe id fragment.

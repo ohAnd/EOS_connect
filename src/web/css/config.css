@@ -349,6 +349,80 @@
     text-decoration: underline;
 }
 
+/* --- Timeseries connection test --- */
+.config-timeseries-tester .config-btn {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #ccc;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.config-timeseries-tester .config-btn:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.config-timeseries-tester .config-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.config-timeseries-result {
+    display: none;
+    width: 100%;
+    font-size: 0.82em;
+    line-height: 1.5;
+    color: #ccc;
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border-left: 3px solid rgba(255, 255, 255, 0.2);
+    background-color: rgba(0, 0, 0, 0.18);
+}
+
+.config-timeseries-result.visible {
+    display: block;
+}
+
+.config-timeseries-result.ok {
+    border-left-color: #4caf50;
+}
+
+.config-timeseries-result.ok .fa-circle-check {
+    color: #4caf50;
+}
+
+.config-timeseries-result.error {
+    border-left-color: #ff6b6b;
+    color: #ffb3b3;
+}
+
+.config-timeseries-result.error .fa-times-circle {
+    color: #ff6b6b;
+}
+
+/* The sample slots are the point of the test: they show the converted value in the
+   same unit the schedule uses, so a wrong value_unit is visible before saving. */
+.config-timeseries-slots {
+    margin-top: 8px;
+    border-collapse: collapse;
+    font-family: "Courier New", monospace;
+    font-size: 0.95em;
+}
+
+.config-timeseries-slots td {
+    padding: 2px 10px 2px 0;
+    color: #ddd;
+    white-space: nowrap;
+}
+
+.config-timeseries-warning {
+    margin-top: 8px;
+    color: #ffc107;
+}
+
+.config-timeseries-warning .fa-triangle-exclamation {
+    margin-right: 4px;
+}
+
 /* --- Level switcher --- */
 .config-level-select {
     padding: 5px 10px;

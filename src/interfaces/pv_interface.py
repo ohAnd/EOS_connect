@@ -36,6 +36,15 @@ import pandas as pd
 import numpy as np
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
 
+from .timeseries_normalizer import (
+    TEMPLATE_DOCS_ANCHOR,
+    TimeseriesFormatError,
+    convert_pv_values,
+    extract_json_path,
+    normalize_entries,
+    pv_plausibility_message,
+)
+
 logger = logging.getLogger("__main__")
 logger.info("[PV-IF] loading module ")
 
@@ -1105,17 +1114,23 @@ class PvInterface:
         external source is expected to already provide the combined forecast
         for the whole installation - mirrors how the "evcc" source is handled.
 
-        Standardized format: [{start, end, value}, ...] with value in Wh for
-        that slot (hourly or 15-min resolution, auto-detected).
+        Canonical format: [{start, end, value}, ...] — the format EVCC publishes, so
+        an EVCC-shaped HA template sensor works unchanged. See timeseries_normalizer
+        for the exact contract. Resolution (hourly or 15-min) is auto-detected.
 
         Config fields used (from pv_forecast_source):
         - data_url: Full HTTP endpoint URL (HA or HTTP custom endpoint)
-        - data_path: JSON path to the timeseries array (e.g. "data")
+        - data_path: JSON path to the timeseries array (e.g. "attributes.data")
         - data_token: Optional bearer token for authentication
+        - value_unit: Unit of the "value" field (default W, as EVCC delivers)
         """
         data_url = self.config_source.get("data_url", "").strip()
-        data_path = self.config_source.get("data_path", "data").strip() or "data"
+        data_path = (
+            self.config_source.get("data_path", "attributes.data").strip()
+            or "attributes.data"
+        )
         data_token = self.config_source.get("data_token", "").strip()
+        value_unit = self.config_source.get("value_unit", "W").strip() or "W"
 
         fallback_power = self.config[0]["power"] if self.config else 1000
 
@@ -1132,16 +1147,17 @@ class PvInterface:
             headers["Authorization"] = f"Bearer {data_token}"
 
         logger.debug(
-            "[PV-IF] Fetching PV forecast from timeseries source: %s (path: %s)",
+            "[PV-IF] Fetching PV forecast from timeseries source: %s (path: %s, unit: %s)",
             data_url,
             data_path,
+            value_unit,
         )
 
         def request_and_parse():
             response = requests.get(data_url, headers=headers, timeout=10)
             response.raise_for_status()
             response_data = response.json()
-            timeseries = self.__extract_json_path(response_data, data_path)
+            timeseries = extract_json_path(response_data, data_path, label="PV-IF")
             if not isinstance(timeseries, list):
                 raise ValueError(f"Data at path '{data_path}' is not a list")
             return timeseries
@@ -1198,7 +1214,9 @@ class PvInterface:
                 "[PV-IF] Timeseries fetched successfully (%d entries) - parsing...",
                 len(timeseries),
             )
-            forecast_values = self.__parse_pv_timeseries(timeseries, tgt_duration)
+            forecast_values = self.__parse_pv_timeseries(
+                timeseries, tgt_duration, value_unit=value_unit
+            )
             if not forecast_values:
                 logger.warning(
                     "[PV-IF] Timeseries parsing returned empty - "
@@ -1231,19 +1249,27 @@ class PvInterface:
                 "timeseries",
             ) or self.__get_default_pv_forcast(fallback_power)
 
-    def __parse_pv_timeseries(self, timeseries, tgt_duration, resolution_seconds=None):
+    def __parse_pv_timeseries(
+        self, timeseries, tgt_duration, resolution_seconds=None, value_unit=None
+    ):
         """
         Parse and validate a PV forecast timeseries.
 
-        Standardized format: [{start, end, value}, ...]
-        - start/end: ISO8601 string or Unix timestamp (seconds)
-        - value: generated energy in Wh for that slot (non-negative)
+        Canonical format: [{start, end, value}, ...]
+        - start: ISO8601 string or Unix timestamp (seconds)
+        - end: optional, derived from the next entry when absent
+        - value: generated power/energy in *value_unit* (non-negative)
         - Supports hourly (48 values) or 15-minute (192 values) resolution
 
         Mirrors PriceInterface.__parse_price_timeseries, adapted for PV: values
         represent energy-per-slot rather than a rate, so 15-min-to-hourly
         conversion sums instead of averages, and missing trailing slots are
         padded with 0 (no production) rather than the last known value.
+
+        Args:
+            value_unit: Unit of the incoming values (see
+                timeseries_normalizer.PV_UNITS). ``None`` means the caller already
+                supplies canonical Wh-per-slot values and needs no normalization.
         """
         if not timeseries or not isinstance(timeseries, list):
             logger.error("[PV-IF] PV timeseries is not a list")
@@ -1253,13 +1279,70 @@ class PvInterface:
             logger.error("[PV-IF] PV timeseries is empty")
             return []
 
-        first = timeseries[0]
-        required_keys = ["start", "end", "value"]
-        if not isinstance(first, dict) or not all(k in first for k in required_keys):
-            logger.error(
-                "[PV-IF] Invalid PV timeseries format: missing start, end, or value"
+        # self.time_zone is a zone *name* here, not a tzinfo — resolve it once for both
+        # normalization and the slot alignment further down.
+        try:
+            tz = pytz.timezone(self.time_zone)
+        except (pytz.UnknownTimeZoneError, AttributeError):
+            tz = pytz.UTC
+
+        if value_unit is not None:
+            # External source: normalize field/timestamp shape first, then detect the
+            # source resolution, because a power unit only becomes energy once the
+            # slot length is known.
+            try:
+                timeseries = normalize_entries(timeseries, tz, label="PV-IF")
+            except TimeseriesFormatError as exc:
+                logger.error("[PV-IF] Invalid PV timeseries: %s", exc)
+                return []
+
+            if resolution_seconds is None:
+                resolution_seconds = self.__detect_pv_timeseries_resolution(timeseries)
+                if resolution_seconds is None:
+                    logger.error("[PV-IF] Could not detect PV timeseries resolution")
+                    return []
+
+            try:
+                convert_pv_values(timeseries, value_unit, resolution_seconds)
+            except TimeseriesFormatError as exc:
+                logger.error("[PV-IF] Invalid PV timeseries: %s", exc)
+                return []
+
+            installed_power_w = sum(
+                float(entry.get("power", 0) or 0)
+                for entry in (self.config or [])
+                if isinstance(entry, dict)
             )
-            return []
+            warning = pv_plausibility_message(
+                [entry["value"] for entry in timeseries],
+                value_unit,
+                resolution_seconds,
+                installed_power_w,
+            )
+            if warning:
+                logger.warning("[PV-IF] %s", warning)
+
+            # State the unit once per unit change. The canonical unit moved from
+            # Wh-per-slot to W, so a config carried over from an earlier version
+            # silently changes meaning on 15-minute data.
+            if getattr(self, "_logged_value_unit", None) != value_unit:
+                logger.info(
+                    "[PV-IF] Timeseries PV values interpreted as '%s' at %ds "
+                    "resolution (peak %.0f Wh per slot)",
+                    value_unit,
+                    resolution_seconds,
+                    max((entry["value"] for entry in timeseries), default=0.0),
+                )
+                self._logged_value_unit = value_unit
+        else:
+            first = timeseries[0]
+            if not isinstance(first, dict) or not all(
+                k in first for k in ("start", "value")
+            ):
+                logger.error(
+                    "[PV-IF] Invalid PV timeseries format: missing start or value"
+                )
+                return []
 
         if resolution_seconds is None:
             resolution_seconds = self.__detect_pv_timeseries_resolution(timeseries)
@@ -1291,13 +1374,12 @@ class PvInterface:
         # "slots since midnight" (see eos_connect.py's current_slot calculation),
         # the same convention __get_pv_forecast_evcc_api() already follows. A
         # source whose first entry is "now" (like ours) rather than "midnight"
-        # would otherwise land at the wrong array index.
-        try:
-            tz = pytz.timezone(self.time_zone)
-        except (pytz.UnknownTimeZoneError, AttributeError):
-            tz = pytz.UTC
+        # would otherwise land at the wrong array index. (tz resolved above.)
 
         def parse_ts(ts_val):
+            if isinstance(ts_val, datetime):
+                # Already normalized (and localized) by timeseries_normalizer.
+                return ts_val.astimezone(tz)
             if isinstance(ts_val, (int, float)):
                 return datetime.fromtimestamp(ts_val, tz=pytz.UTC).astimezone(tz)
             if isinstance(ts_val, str):
@@ -1337,10 +1419,34 @@ class PvInterface:
         now_local = datetime.now(tz)
         midnight_today = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
         expected_count = 48 if self.time_frame_base == 3600 else 192
-        values = [
-            round(lookup.get(midnight_today + timedelta(seconds=slot_seconds * i), 0.0), 1)
+        slot_keys = [
+            midnight_today + timedelta(seconds=slot_seconds * i)
             for i in range(expected_count)
         ]
+        values = [round(lookup.get(key, 0.0), 1) for key in slot_keys]
+
+        matched = sum(1 for key in slot_keys if key in lookup)
+        if matched == 0 and lookup:
+            # Every entry parsed but none landed in the window. Returning 48 zeros
+            # here reads as "no sun for two days" and used to pass silently; the most
+            # common cause is a timestamp without UTC offset, so name what we saw.
+            first_source_ts = min(lookup)
+            logger.warning(
+                "[PV-IF] None of %d PV timeseries entries fell into the %d-slot "
+                "window starting %s. First source timestamp is %s — if the source "
+                "renders UTC without an offset, every slot is shifted. See %s",
+                len(lookup),
+                expected_count,
+                midnight_today.isoformat(),
+                first_source_ts.isoformat(),
+                TEMPLATE_DOCS_ANCHOR,
+            )
+        elif matched < expected_count:
+            logger.debug(
+                "[PV-IF] PV timeseries filled %d of %d slots (rest padded with 0)",
+                matched,
+                expected_count,
+            )
 
         return values
 
@@ -1360,6 +1466,9 @@ class PvInterface:
             import pytz
 
             def parse_ts(ts_str):
+                if isinstance(ts_str, dt_class):
+                    # Already normalized by timeseries_normalizer.
+                    return ts_str
                 if isinstance(ts_str, (int, float)):
                     return dt_class.fromtimestamp(ts_str, tz=pytz.UTC)
                 if isinstance(ts_str, str):
@@ -1426,42 +1535,6 @@ class PvInterface:
             len(hourly),
         )
         return hourly
-
-    def __extract_json_path(self, obj, path):
-        """
-        Extract nested value from JSON object using dot notation.
-
-        Examples:
-        - 'attributes.data' -> obj['attributes']['data']
-        - 'data' -> obj['data']
-        - 'prices[0].data' -> obj['prices'][0]['data']
-
-        Args:
-            obj: JSON object (dict or list)
-            path: Dot-notation path string
-
-        Returns:
-            Extracted value or None if path not found
-        """
-        try:
-            parts = path.split(".")
-            current = obj
-            for part in parts:
-                if "[" in part:
-                    key, index_str = part.split("[")
-                    index = int(index_str.rstrip("]"))
-                    if key:
-                        current = current[key][index]
-                    else:
-                        current = current[index]
-                else:
-                    current = current[part]
-            return current
-        except (KeyError, IndexError, TypeError, ValueError):
-            logger.warning(
-                "[PV-IF] Could not extract path '%s' from JSON response", path
-            )
-            return None
 
     def __get_pv_forecast_akkudoktor_api(
         self, tgt_value="power", pv_config_entry=None, tgt_duration=48

@@ -4782,28 +4782,55 @@ price:
                     <!-- Timeseries Data Source Guide -->
                     <div class="content-section" id="timeseries-guide">
                         <h2><i class="fas fa-stream"></i> Unified Timeseries Data Source Guide</h2>
-                        <p>EOS Connect supports a flexible <strong>timeseries</strong> source for both
-                            <strong>electricity prices</strong> and <strong>PV forecasts</strong>. This unified approach
-                            allows you to fetch data from Home Assistant, custom HTTP APIs, or any endpoint that returns
-                            timeseries data in a standard format.
+                        <p>EOS Connect supports a unified <strong>timeseries</strong> source for both
+                            <strong>electricity prices</strong> and <strong>PV forecasts</strong>. It fetches data from
+                            Home Assistant, custom HTTP APIs, or any endpoint that returns timeseries data in the
+                            expected format.
+                        </p>
+                        <p><strong>The expected format is EVCC's format.</strong> That is deliberate: it is the format
+                            you most likely already have. An EVCC endpoint such as
+                            <code>/api/tariff/grid</code> can be used as-is, and a Home Assistant template sensor
+                            written to feed EVCC works unchanged. Home Assistant is the <em>transport</em> here
+                            (state API, entity attributes, bearer token) — the <em>format</em> comes from EVCC.
+                        </p>
+                        <p>EOS Connect accepts exactly this one format and does not try to guess foreign attribute
+                            names. Where an integration uses different names, you shape it once with a Home Assistant
+                            template sensor — see
+                            <a href="#timeseries-templates">Home Assistant Template Snippets</a> for ready-made
+                            examples.
                         </p>
 
+                        <div class="alert alert-warning">
+                            <strong><i class="fas fa-triangle-exclamation"></i> Changed in this release:</strong>
+                            The unit of <code>value</code> now matches what EVCC and the common Home Assistant
+                            integrations actually deliver: <strong>EUR/kWh</strong> for prices and <strong>W</strong>
+                            for PV. Previously EOS Connect expected EUR/Wh and Wh-per-slot — units no real source
+                            provides.
+                            <br><br>
+                            If you already run a <code>timeseries</code> source, check it after updating: set
+                            <code>price.value_unit</code> / <code>pv_forecast_source.value_unit</code> to whatever your
+                            source actually delivers. Selecting <code>EUR/Wh</code> resp. <code>Wh</code> restores the
+                            previous behaviour exactly. Use
+                            <a href="#timeseries-testing">Test connection</a> to see the resulting values before
+                            saving.
+                        </div>
+
                         <h3>Timeseries Data Format</h3>
-                        <p>The timeseries source expects JSON data in this standard format:</p>
+                        <p>The timeseries source expects JSON data in this format:</p>
                         <div
                             style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
                             <pre
                                 style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">{
   "data": [
     {
-      "start": "2024-06-12T14:00:00Z",
-      "end": "2024-06-12T15:00:00Z",
-      "value": 0.25
+      "start": "2026-08-23T00:00:00+02:00",
+      "end": "2026-08-23T00:15:00+02:00",
+      "value": 0.3811
     },
     {
-      "start": "2024-06-12T15:00:00Z",
-      "end": "2024-06-12T16:00:00Z",
-      "value": 0.28
+      "start": "2026-08-23T00:15:00+02:00",
+      "end": "2026-08-23T00:30:00+02:00",
+      "value": 0.3727
     }
   ]
 }</pre>
@@ -4817,28 +4844,74 @@ price:
                             </tr>
                             <tr>
                                 <td><strong>start</strong></td>
-                                <td>Start timestamp of the timeslot</td>
-                                <td>ISO8601 (e.g., "2024-06-12T14:00:00Z" or Unix timestamp)</td>
+                                <td><strong>Required.</strong> Start timestamp of the timeslot. Always include the UTC
+                                    offset — a timestamp without one is read as local time, which silently shifts every
+                                    slot.</td>
+                                <td>ISO8601 (e.g., "2026-08-23T00:00:00+02:00" or "…Z"), or Unix timestamp</td>
                             </tr>
                             <tr>
                                 <td><strong>end</strong></td>
-                                <td>End timestamp of the timeslot</td>
+                                <td><strong>Optional.</strong> If absent, EOS Connect derives it from the next entry's
+                                    <code>start</code> (and the last entry from the preceding interval), so a source
+                                    that only publishes start times is accepted.</td>
                                 <td>ISO8601 or Unix timestamp</td>
                             </tr>
                             <tr>
                                 <td><strong>value</strong></td>
-                                <td><strong>For Prices:</strong> Price in EUR/Wh (e.g., 0.25 for 25 ct/kWh)<br>
-                                    <strong>For PV:</strong> Generated power in Wh for the timeslot
+                                <td><strong>Required.</strong><br>
+                                    <strong>For Prices:</strong> price per slot, by default in <strong>EUR/kWh</strong>
+                                    (e.g. 0.3811 for 38.11&nbsp;ct/kWh) — as EVCC's <code>rates</code> deliver it.<br>
+                                    <strong>For PV:</strong> generated power per slot, by default in <strong>W</strong> —
+                                    as EVCC's solar forecast delivers it.<br>
+                                    Use <code>value_unit</code> if your source uses a different unit.
                                 </td>
                                 <td>Number (float)</td>
                             </tr>
                         </table>
 
+                        <h3>Value Unit</h3>
+                        <p>If your source does not use the default unit, select the matching one instead of building a
+                            conversion into your template:</p>
+                        <table>
+                            <tr>
+                                <th>Setting</th>
+                                <th>Options</th>
+                                <th>Default</th>
+                            </tr>
+                            <tr>
+                                <td><code>price.value_unit</code></td>
+                                <td><code>EUR/kWh</code>, <code>ct/kWh</code>, <code>EUR/Wh</code></td>
+                                <td><code>EUR/kWh</code></td>
+                            </tr>
+                            <tr>
+                                <td><code>pv_forecast_source.value_unit</code></td>
+                                <td><code>W</code>, <code>kW</code>, <code>Wh</code>, <code>kWh</code></td>
+                                <td><code>W</code></td>
+                            </tr>
+                        </table>
+                        <div class="alert alert-info">
+                            <strong><i class="fas fa-info-circle"></i> Power vs. energy for PV:</strong>
+                            <code>W</code> and <code>kW</code> are power readings and are integrated over the slot
+                            length — 4000&nbsp;W across a 15-minute slot becomes 1000&nbsp;Wh. <code>Wh</code> and
+                            <code>kWh</code> are taken as the energy of that slot directly. Picking the wrong one is a
+                            factor-of-four error on 15-minute data, so use
+                            <a href="#timeseries-testing">Test connection</a> if you are unsure.
+                        </div>
+
                         <div class="alert alert-info">
                             <strong><i class="fas fa-info-circle"></i> Time Resolution:</strong> EOS Connect
-                            auto-detects whether the timeseries is 15-minute (900s) or hourly (3600s) based on the
-                            timestamp differences. It automatically converts 15-minute data to hourly by averaging 4
-                            consecutive values.
+                            auto-detects whether the timeseries is 15-minute (900s) or hourly (3600s) from the
+                            timestamp differences. 15-minute data is converted to hourly automatically — prices are
+                            averaged, PV energy is summed. An hourly source cannot serve a system configured for
+                            15-minute slots; the connection test reports that rather than letting it fail at runtime.
+                        </div>
+
+                        <div class="alert alert-info">
+                            <strong><i class="fas fa-info-circle"></i> All-or-nothing parsing:</strong> if a single
+                            entry is malformed — a <code>null</code> value, an unparseable timestamp, a missing field —
+                            the whole payload is rejected and EOS Connect keeps using the last good data. Skipping just
+                            the bad entry would shift every following hourly price by one slot, which is not visible
+                            anywhere in the UI. The log names the offending entry by index.
                         </div>
 
                         <h3>Home Assistant Integration</h3>
@@ -4949,9 +5022,106 @@ price:
 }</pre>
                         </div>
 
-                        <h3>Testing Your Timeseries Configuration</h3>
-                        <p>Use the built-in connectivity test to validate your timeseries configuration before enabling
-                            it.</p>
+                        <h3 id="timeseries-templates">Home Assistant Template Snippets</h3>
+                        <p>Home Assistant integrations name their attributes differently — Tibber and EPEX use
+                            <code>start_time</code> and <code>price_per_kwh</code>, Solcast uses
+                            <code>period_start</code> and <code>pv_estimate</code>. EOS Connect does not guess these
+                            names. Instead you publish one template sensor in the expected format; adapting to a
+                            different provider then means editing the template, not reconfiguring EOS Connect.</p>
+                        <p>Because <code>end</code> is derived automatically, the templates only need
+                            <code>start</code> and <code>value</code>.</p>
+
+                        <h4>Prices: Tibber Price Information / EPEX Spot (HACS)</h4>
+                        <p>Both provide a <code>data</code> attribute with <code>start_time</code> and
+                            <code>price_per_kwh</code> (EUR/kWh):</p>
+                        <div
+                            style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                            <pre
+                                style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">template:
+  - trigger:
+      - platform: time_pattern
+        minutes: "/5"
+    sensor:
+      - name: eos_grid_prices
+        state: "ok"
+        attributes:
+          data: &gt;
+            {% set src = state_attr('sensor.YOUR_PRICE_SENSOR', 'data') %}
+            [
+            {%- for e in src %}
+              {"start": "{{ e.start_time }}", "value": {{ e.price_per_kwh }}}
+              {%- if not loop.last %},{% endif %}
+            {%- endfor %}
+            ]</pre>
+                        </div>
+                        <p>Then set <code>price.data_url</code> to
+                            <code>http://homeassistant.local:8123/api/states/sensor.eos_grid_prices</code>,
+                            <code>price.data_path</code> to <code>attributes.data</code> and
+                            <code>price.value_unit</code> to <code>EUR/kWh</code>.</p>
+
+                        <h4>Prices: Tibber core integration (via action)</h4>
+                        <p>The built-in Tibber integration no longer exposes the price list as a sensor attribute. Its
+                            action response is keyed by address and uses <code>start_time</code> and
+                            <code>price</code>, so fetch it in an automation and feed the result into a trigger-based
+                            template sensor built the same way as above:</p>
+                        <div
+                            style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                            <pre
+                                style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">{% set src = prices['YOUR_ADDRESS'] %}
+[
+{%- for e in src %}
+  {"start": "{{ e.start_time }}", "value": {{ e.price }}}
+  {%- if not loop.last %},{% endif %}
+{%- endfor %}
+]</pre>
+                        </div>
+
+                        <h4>PV forecast: Solcast</h4>
+                        <p>Based on the template shared by <strong>@bennobiber</strong> in
+                            <a href="https://github.com/ohAnd/EOS_connect/discussions/214" target="_blank"
+                                rel="noopener">discussion #214</a>, which already feeds EVCC. <code>value</code> stays
+                            in W, matching the default <code>pv_forecast_source.value_unit</code>.</p>
+                        <div
+                            style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                            <pre
+                                style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #e0e0e0;">template:
+  - trigger:
+      - platform: time_pattern
+        minutes: "/5"
+    sensor:
+      - name: eos_pv_forecast
+        state: "ok"
+        attributes:
+          data: &gt;
+            {% set today = state_attr('sensor.solcast_pv_forecast_forecast_today', 'detailedForecast') %}
+            {% set tomorrow = state_attr('sensor.solcast_pv_forecast_forecast_tomorrow', 'detailedForecast') %}
+            {% set all = (today if today else []) + (tomorrow if tomorrow else []) %}
+            [
+            {%- for e in all %}
+              {"start": "{{ e.period_start.isoformat() }}", "value": {{ (e.pv_estimate * 1000) | round(0) }}}
+              {%- if not loop.last %},{% endif %}
+            {%- endfor %}
+            ]</pre>
+                        </div>
+                        <div class="alert alert-warning">
+                            <strong><i class="fas fa-triangle-exclamation"></i> Use
+                                <code>.isoformat()</code>, not <code>| timestamp_utc</code>:</strong>
+                            <code>timestamp_utc</code> renders UTC wall-clock time <em>without</em> an offset. EOS
+                            Connect then reads it as local time and every slot is shifted by your UTC offset.
+                            <code>period_start.isoformat()</code> keeps the offset. If you already use such a template
+                            for EVCC, adjust this one line.
+                        </div>
+
+                        <h3 id="timeseries-testing">Testing Your Timeseries Configuration</h3>
+                        <p>Use <strong>Test connection</strong> in the configuration UI, next to the timeseries
+                            settings. It fetches the endpoint, resolves <code>data_path</code>, parses the payload and
+                            shows the first slots <em>converted into the unit the schedule uses</em> — so a wrong
+                            <code>value_unit</code> shows up as an absurd number before you save, rather than hours
+                            later in the schedule. It tests the values currently in the form, including unsaved ones.
+                        </p>
+                        <p>The same check runs automatically when you save a timeseries setting; a hard failure blocks
+                            the save and is reported on the field that caused it, while a plausibility warning does not
+                            block.</p>
 
                         <p><strong>HTTP Request:</strong></p>
                         <div
@@ -4961,31 +5131,44 @@ price:
 Content-Type: application/json
 
 {
-  "source": "price",
-  "data_url": "http://homeassistant.local:8123/api/states/sensor.grid_prices",
-  "data_path": "attributes.data",
-  "data_token": "eyJhbGciOiJIUzI1NiI..."
+  "domain": "price",
+  "price.data_url": "http://homeassistant.local:8123/api/states/sensor.eos_grid_prices",
+  "price.data_path": "attributes.data",
+  "price.value_unit": "EUR/kWh"
 }</pre>
                         </div>
+                        <p>All keys are optional — anything omitted falls back to the stored configuration.
+                            <code>domain</code> is <code>price</code> (default) or <code>pv</code>.</p>
 
                         <p><strong>Response (Success):</strong></p>
                         <div
                             style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
                             <pre
                                 style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #28a745;">{
-  "success": true,
-  "message": "Successfully fetched 24 price values",
-  "sample_count": 24,
-  "first_entry": {
-    "start": "2024-06-12T14:00:00Z",
-    "end": "2024-06-12T15:00:00Z",
-    "value": 0.25
-  },
-  "last_entry": {
-    "start": "2024-06-13T14:00:00Z",
-    "end": "2024-06-13T15:00:00Z",
-    "value": 0.22
-  }
+  "ok": true,
+  "entry_count": 192,
+  "resolution_seconds": 900,
+  "value_unit": "EUR/kWh",
+  "slots": [
+    {"start": "2026-08-23T00:00:00+02:00", "end": "2026-08-23T00:15:00+02:00",
+     "value": 38.11, "unit": "ct/kWh"}
+  ],
+  "warnings": []
+}</pre>
+                        </div>
+
+                        <p><strong>Response (Format mismatch):</strong> the message names the fields the payload
+                            actually contained, so you can see what to map in your template:</p>
+                        <div
+                            style="background: rgb(78, 78, 78); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 1rem 0;">
+                            <pre
+                                style="margin: 0; font-size: 0.85rem; font-family: 'Courier New', monospace; color: #ff6b6b;">{
+  "ok": false,
+  "field": "price.data_path",
+  "error": "missing required field 'start' in the first entry (available fields:
+            'start_time', 'price_per_kwh'). The expected format is {start, end, value}
+            - shape the source with a Home Assistant template sensor, see
+            configuration.html#timeseries-templates"
 }</pre>
                         </div>
 
@@ -5006,10 +5189,12 @@ Content-Type: application/json
                         <p>All timeseries configuration fields support hot-reload — changes take effect immediately
                             without restarting the application:</p>
                         <ul>
-                            <li><code>price.data_url</code>, <code>price.data_path</code>, <code>price.data_token</code>
+                            <li><code>price.data_url</code>, <code>price.data_path</code>,
+                                <code>price.data_token</code>, <code>price.value_unit</code>
                             </li>
                             <li><code>pv_forecast_source.data_url</code>, <code>pv_forecast_source.data_path</code>,
-                                <code>pv_forecast_source.data_token</code>
+                                <code>pv_forecast_source.data_token</code>,
+                                <code>pv_forecast_source.value_unit</code>
                             </li>
                         </ul>
                         <p>Changes are applied within 1-2 seconds on the next update cycle.</p>
