@@ -194,6 +194,45 @@ def migrate_ha_options_to_store(
     return True
 
 
+_BATTERY_PRICE_UNIT_MIGRATION_KEY = "_migrated_battery_price_unit_v2"
+
+
+def migrate_battery_price_unit_to_ct_kwh(store: ConfigStore) -> bool:
+    """
+    One-time migration: ``battery.price_euro_per_wh_accu`` (€/Wh) becomes
+    ``battery.price_ct_kwh_accu`` (ct/kWh).
+
+    The old key name no longer matched its unit once the field was switched
+    to ct/kWh, so the field itself is renamed. Existing installations with a
+    nonzero value configured have it rescaled (×100000, €/Wh → ct/kWh) and
+    moved to the new key, so the real-world price they configured is
+    preserved across the change. Runs exactly once, guarded by a marker key.
+
+    Args:
+        store: An opened ConfigStore instance.
+
+    Returns:
+        True if the migration ran (first time), False if it was already done.
+    """
+    if store.get(_BATTERY_PRICE_UNIT_MIGRATION_KEY, False):
+        return False
+
+    old_value = store.get("battery.price_euro_per_wh_accu")
+    if old_value:
+        new_value = old_value * 100000
+        store.set("battery.price_ct_kwh_accu", new_value)
+        logger.info(
+            "[Migration] Moved battery.price_euro_per_wh_accu (%s €/Wh) to "
+            "battery.price_ct_kwh_accu (%s ct/kWh)",
+            old_value,
+            new_value,
+        )
+    store.delete("battery.price_euro_per_wh_accu")
+
+    store.set(_BATTERY_PRICE_UNIT_MIGRATION_KEY, True)
+    return True
+
+
 def _has_user_configured_values(config_dict: dict) -> bool:
     """
     Detect whether a config dict contains real user-configured values or just

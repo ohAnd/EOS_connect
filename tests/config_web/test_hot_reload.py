@@ -389,10 +389,14 @@ class TestHotReloadGeneral:
         price_interface,
         battery_interface,
     ):
-        """Changing feed_in_price should propagate to BatteryPriceHandler live."""
-        adapter.on_config_changed("price.feed_in_price", 0.0, 0.08)
-        assert price_interface.feed_in_tariff_price == 0.08
-        assert battery_interface.price_handler.pv_cost_euro_per_kwh == 0.08
+        """Changing feed_in_price should propagate to BatteryPriceHandler live.
+
+        price.feed_in_price arrives as ct/kWh; pv_cost_euro_per_kwh must be
+        converted to €/kWh (divide by 100) before being applied.
+        """
+        adapter.on_config_changed("price.feed_in_price", 0.0, 8.0)
+        assert price_interface.feed_in_tariff_price == 8.0
+        assert battery_interface.price_handler.pv_cost_euro_per_kwh == pytest.approx(0.08)
         assert battery_interface.price_handler.last_price_calculation is None
 
 

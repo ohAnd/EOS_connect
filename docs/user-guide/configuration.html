@@ -1676,11 +1676,11 @@
                         </tr>
                     </table>
 
-                    <h3>battery.price_euro_per_wh_accu</h3>
+                    <h3>battery.price_ct_kwh_accu</h3>
                     <table>
                         <tr>
                             <th>Parameter</th>
-                            <td><code>battery.price_euro_per_wh_accu</code></td>
+                            <td><code>battery.price_ct_kwh_accu</code></td>
                         </tr>
                         <tr>
                             <th>Description</th>
@@ -1688,7 +1688,7 @@
                         </tr>
                         <tr>
                             <th>Unit</th>
-                            <td>Euro per Wh (€/Wh)</td>
+                            <td>Cents per kWh (ct/kWh)</td>
                         </tr>
                         <tr>
                             <th>Default</th>
@@ -1770,7 +1770,7 @@
                         </tr>
                         <tr>
                             <th>Notes</th>
-                            <td>If configured, overrides static <code>price_euro_per_wh_accu</code> value. Leave empty
+                            <td>If configured, overrides static <code>price_ct_kwh_accu</code> value. Leave empty
                                 to use static price.</td>
                         </tr>
                     </table>
@@ -2015,7 +2015,7 @@
                             <td>
                                 <code>false</code> - PV-sourced energy costs €0 (default, free solar energy)<br>
                                 <code>true</code> - PV-sourced energy is valued at <code>price.feed_in_price</code>
-                                (€/kWh) as opportunity cost
+                                (ct/kWh, converted internally to €/kWh) as opportunity cost
                             </td>
                         </tr>
                         <tr>
@@ -3013,7 +3013,7 @@ price:
   source: tibber
   token: "YOUR_TIBBER_TOKEN"
   feed_in_source: fixed
-  feed_in_price: 0.08
+  feed_in_price: 8  # 8 ct/kWh
   feed_in_negative_price_switch: true
 
   # Smart price prediction with energyforecast.de

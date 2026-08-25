@@ -97,10 +97,6 @@ class FeedInPriceInterface:
         # Also try legacy key
         if fixed_price_ct_kwh == 0.0 and "fixed_price" in config:
             fixed_price_ct_kwh = config.get("fixed_price", 0.0)
-        # If value is suspiciously small (e.g., EUR instead of ct), convert it
-        if fixed_price_ct_kwh < 0.1 and fixed_price_ct_kwh > 0:
-            # Looks like EUR/kWh, convert to ct/kWh
-            fixed_price_ct_kwh = fixed_price_ct_kwh * 100
         self.fixed_price_ct_kwh = fixed_price_ct_kwh
 
         # Negative price switching: if True, clamps negative market prices to 0

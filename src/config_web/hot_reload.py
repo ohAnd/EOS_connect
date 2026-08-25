@@ -385,7 +385,11 @@ class HotReloadAdapter:
                 e)
 
     def _apply_battery_feedin_price(self, feedin_price):
-        """Apply live feed-in price updates to the battery price handler."""
+        """Apply live feed-in price updates to the battery price handler.
+
+        feedin_price arrives as ct/kWh (price.feed_in_price); pv_cost_euro_per_kwh
+        expects €/kWh.
+        """
         if self._battery is None:
             return
 
@@ -394,12 +398,13 @@ class HotReloadAdapter:
             return
 
         old_val = getattr(price_handler, "pv_cost_euro_per_kwh", "?")
-        price_handler.pv_cost_euro_per_kwh = feedin_price
+        new_val = feedin_price / 100.0
+        price_handler.pv_cost_euro_per_kwh = new_val
         # Force a fresh historical calculation on next battery update cycle.
         price_handler.last_price_calculation = None
         logger.info(
-            "[HotReload] Updated battery price feed-in cost = %s (was %s)",
-            feedin_price,
+            "[HotReload] Updated battery price feed-in cost = %s €/kWh (was %s)",
+            new_val,
             old_val,
         )
 
