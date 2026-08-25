@@ -466,7 +466,7 @@ These need more than a simple attribute swap:
 | Group              | Fields                                                                                                           | Interface           | Change Required                                  |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------ |
 | Battery capacity   | `battery.capacity_wh`, `battery.charge_efficiency`, `battery.discharge_efficiency`, `battery.max_charge_power_w` | BatteryInterface    | Update battery_data dict + recalc charging curve |
-| Battery price calc | `battery.price_update_interval`, `battery.price_history_lookback_hours`, `battery.price_euro_per_wh_accu`        | BatteryPriceHandler | Restart timer or update interval                 |
+| Battery price calc | `battery.price_update_interval`, `battery.price_history_lookback_hours`, `battery.price_ct_kwh_accu`             | BatteryPriceHandler | Restart timer or update interval                 |
 | Price fixed array  | `price.fixed_24h_array`                                                                                          | PriceInterface      | Re-parse array + recalc prices                   |
 | EOS time slot      | `eos.time_frame` (see Priority 1.5)                                                                              | Multiple            | Debounced reload with cache clear                |
 

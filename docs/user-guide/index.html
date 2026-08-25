@@ -510,9 +510,9 @@ docker-compose up -d</code></pre>
             <h4>Three Battery Pricing Modes</h4>
             <p><strong>Mode 1: Fixed Static Price</strong> (Default)</p>
             <ul>
-                <li>Battery energy cost set to a single fixed value (€/Wh)</li>
+                <li>Battery energy cost set to a single fixed value (ct/kWh)</li>
                 <li>Simple but inaccurate - doesn't reflect actual charging sources</li>
-                <li>Configuration: <code>battery.price_euro_per_wh_accu: 0.00004</code> (default)</li>
+                <li>Configuration: <code>battery.price_ct_kwh_accu: 4</code> (4 ct/kWh; <code>0</code> is the default, meaning "unused")</li>
                 <li>Use case: Quick setup when you don't have sensor data available</li>
             </ul>
 

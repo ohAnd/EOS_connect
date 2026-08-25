@@ -74,7 +74,7 @@ def _sample_config():
             "max_soc_percentage": 100,
             "charging_curve_enabled": True,
             "sensor_battery_temperature": "",
-            "price_euro_per_wh_accu": 0.0,
+            "price_ct_kwh_accu": 0.0,
             "price_euro_per_wh_sensor": "",
             "price_calculation_enabled": False,
             "price_update_interval": 900,

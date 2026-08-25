@@ -204,6 +204,13 @@ battery_config = dict(config_manager.config["battery"])
 battery_config["feed_in_price"] = (
     config_manager.config.get("price", {}).get("feed_in_price", 0.0) / 100.0
 )
+# battery.price_ct_kwh_accu is ct/kWh (user-facing); BatteryInterface/
+# BatteryPriceHandler expect price_euro_per_wh_accu in €/Wh internally
+battery_config.pop("price_ct_kwh_accu", None)
+battery_config["price_euro_per_wh_accu"] = (
+    config_manager.config.get("battery", {}).get("price_ct_kwh_accu", 0.0)
+    / 100000.0
+)
 
 battery_interface = interface_factory.create_battery_interface(
     battery_config,

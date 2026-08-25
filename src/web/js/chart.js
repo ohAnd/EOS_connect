@@ -228,7 +228,7 @@ class ChartManager {
 
         // Electricity Price - with segment styling for forecast data
         const priceRawData = data_response["result"]["Electricity_price"];
-        const priceData = priceRawData.map(value => value * 1000);
+        const priceData = priceRawData.map(value => value * 100000);
         
         // Apply segment styling if forecast data is available
         if (priceInfo && priceInfo.forecast_start_index !== null && priceInfo.forecast_type !== "all_real") {
@@ -268,7 +268,7 @@ class ChartManager {
             
             // Set dataset 10 (real prices) - solid orange
             this.chartInstance.data.datasets[10].data = dataset10Data;
-            this.chartInstance.data.datasets[10].label = `Electricity Price (${localization.currency_symbol}/kWh)`;
+            this.chartInstance.data.datasets[10].label = `Electricity Price (${localization.currency_minor_unit}/kWh)`;
             this.chartInstance.data.datasets[10].borderColor = 'rgba(255, 69, 0, 0.8)';
             this.chartInstance.data.datasets[10].borderDash = [];
             
@@ -277,7 +277,7 @@ class ChartManager {
                 console.warn('[ChartManager] Dataset 11 does not exist for forecast visualization');
             } else {
                 this.chartInstance.data.datasets[11].data = dataset11Data;
-                this.chartInstance.data.datasets[11].label = `Electricity Price Forecast - ${priceInfo.forecast_type.replace(/_/g, ' ')} (${localization.currency_symbol}/kWh)`;
+                this.chartInstance.data.datasets[11].label = `Electricity Price Forecast - ${priceInfo.forecast_type.replace(/_/g, ' ')} (${localization.currency_minor_unit}/kWh)`;
                 this.chartInstance.data.datasets[11].borderColor = 'rgba(167, 167, 167, 0.7)';
                 // this.chartInstance.data.datasets[11].borderDash = [5, 5];  // Dotted pattern
                 this.chartInstance.data.datasets[11].borderWidth = 2;  // Thicker to see dashing
@@ -290,11 +290,11 @@ class ChartManager {
                 this.chartInstance.data.datasets[11].hidden = false;
             }
             
-            this.chartInstance.options.scales.y1.title.text = `Price (${localization.currency_symbol}/kWh)`;
+            this.chartInstance.options.scales.y1.title.text = `Price (${localization.currency_minor_unit}/kWh)`;
         } else {
             // No forecasting - all real prices
             this.chartInstance.data.datasets[10].data = priceData;
-            this.chartInstance.data.datasets[10].label = `Electricity Price (${localization.currency_symbol}/kWh)`;
+            this.chartInstance.data.datasets[10].label = `Electricity Price (${localization.currency_minor_unit}/kWh)`;
             this.chartInstance.data.datasets[10].borderColor = 'rgba(255, 69, 0, 0.8)';
             this.chartInstance.data.datasets[10].borderDash = [];
             
@@ -304,7 +304,7 @@ class ChartManager {
                 this.chartInstance.data.datasets[11].hidden = true;
             }
             
-            this.chartInstance.options.scales.y1.title.text = `Price (${localization.currency_symbol}/kWh)`;
+            this.chartInstance.options.scales.y1.title.text = `Price (${localization.currency_minor_unit}/kWh)`;
         }
 
         this.chartInstance.update('none'); // Update without animation
@@ -330,7 +330,7 @@ class ChartManager {
                     { label: 'Income', data: [], type: 'line', borderColor: 'lightyellow', backgroundColor: 'yellow', borderWidth: 1, yAxisID: 'y1', stepped: true, hidden: true, pointRadius: 1, pointHoverRadius: 4 },
                     { label: 'Discharge Allowed', data: [], type: 'line', borderColor: 'rgba(144, 238, 144, 0.3)', backgroundColor: 'rgba(144, 238, 144, 0.05)', borderWidth: 1, fill: true, yAxisID: 'y3', pointRadius: 1, pointHoverRadius: 4, stepped: true },
                     { label: 'Dynamic Discharge Allowed (PV > Load)', data: [], type: 'line', borderColor: 'rgba(50, 205, 50, 0.6)', backgroundColor: 'rgba(50, 205, 50, 0.1)', borderWidth: 1, fill: true, yAxisID: 'y3', pointRadius: 1, pointHoverRadius: 4, stepped: true, hidden: false },
-                    { label: `Electricity Price (${localization.currency_symbol}/kWh)`, data: [], type: 'line', borderColor: 'rgba(255, 69, 0, 0.8)', backgroundColor: 'rgba(255, 165, 0, 0.2)', borderWidth: 1, yAxisID: 'y1', stepped: true, pointRadius: 1, pointHoverRadius: 4 },
+                    { label: `Electricity Price (${localization.currency_minor_unit}/kWh)`, data: [], type: 'line', borderColor: 'rgba(255, 69, 0, 0.8)', backgroundColor: 'rgba(255, 165, 0, 0.2)', borderWidth: 1, yAxisID: 'y1', stepped: true, pointRadius: 1, pointHoverRadius: 4 },
                     { label: 'Electricity Price - Forecast', data: [], type: 'line', borderColor: 'rgba(167, 167, 167, 0.7)', backgroundColor: 'rgba(220, 20, 60, 0.05)', borderWidth: 2, yAxisID: 'y1', stepped: true, pointRadius: 1, pointHoverRadius: 4, fill: false, hidden: true },
                     { label: 'PV Charge Planned', data: [], type: 'line', borderColor: 'transparent', backgroundColor: 'transparent', borderWidth: 0, fill: false, yAxisID: 'y3', pointRadius: 0, pointHoverRadius: 0, stepped: true, hidden: true }
                 ]
@@ -340,7 +340,7 @@ class ChartManager {
                 maintainAspectRatio: false,
                 scales: {
                     y: { beginAtZero: true, title: { display: true, text: 'Energy (kWh)', color: 'lightgray' }, grid: { color: 'rgb(54, 54, 54)' }, ticks: { color: 'lightgray' } },
-                    y1: { beginAtZero: true, position: 'right', title: { display: true, text: `Price (${localization.currency_symbol}/kWh)`, color: 'lightgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'lightgray', callback: value => value.toFixed(2) } },
+                    y1: { beginAtZero: true, position: 'right', title: { display: true, text: `Price (${localization.currency_minor_unit}/kWh)`, color: 'lightgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'lightgray', callback: value => value.toFixed(1) } },
                     y2: { beginAtZero: true, position: 'right', title: { display: true, text: 'Battery SOC (%)', color: 'darkgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'darkgray', callback: value => value.toFixed(0) } },
                     y3: { beginAtZero: true, position: 'right', display: false, title: { display: true, text: 'AC Charge', color: 'darkgray' }, grid: { drawOnChartArea: false }, ticks: { color: 'darkgray', callback: value => value.toFixed(2) } },
                     x: { grid: { color: 'rgb(54, 54, 54)' }, ticks: { color: 'lightgray', font: { size: 10 } } }
@@ -393,7 +393,7 @@ class ChartManager {
                                 else if (label === 'Income')
                                     return `${label}: ${value} ${localization.currency_symbol}`;
                                 else if (label.startsWith('Electricity Price'))
-                                    return `${label}: ${value.toFixed(3)} ${localization.currency_symbol}/kWh`;
+                                    return `${label}: ${value.toFixed(2)} ${localization.currency_minor_unit}/kWh`;
                                 else if (label === 'Discharge Allowed')
                                     return `${label}: ${value}`;
                                 else if (label === 'PV Charge Planned')

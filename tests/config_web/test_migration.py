@@ -8,6 +8,7 @@ from src.config_web.store import ConfigStore
 from src.config_web.schema import ConfigSchema
 from src.config_web.migration import (
     migrate_yaml_to_store,
+    migrate_battery_price_unit_to_ct_kwh,
     _flatten_config,
     _has_user_configured_values,
     _coerce_migrated_value,
@@ -77,7 +78,7 @@ def _sample_config():
             "max_soc_percentage": 100,
             "charging_curve_enabled": True,
             "sensor_battery_temperature": "",
-            "price_euro_per_wh_accu": 0.0,
+            "price_ct_kwh_accu": 0.0,
             "price_euro_per_wh_sensor": "",
             "price_calculation_enabled": False,
             "price_update_interval": 900,
@@ -720,3 +721,53 @@ class TestAtomicMigration:
         assert result is True
         assert not store.is_empty()
         assert store.get("_wizard_completed") is True
+
+
+class TestBatteryPriceUnitMigration:
+    """Tests for the one-time battery.price_euro_per_wh_accu -> price_ct_kwh_accu migration."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = ConfigStore(str(tmp_path / "test.db"))
+        s.open()
+        yield s
+        s.close()
+
+    def test_fresh_install_no_value_sets_marker_only(self, store):
+        """No existing value: nothing to move, marker still gets set."""
+        ran = migrate_battery_price_unit_to_ct_kwh(store)
+
+        assert ran is True
+        assert store.get("_migrated_battery_price_unit_v2") is True
+        assert store.get("battery.price_ct_kwh_accu") is None
+        assert store.get("battery.price_euro_per_wh_accu") is None
+
+    def test_zero_value_left_unchanged(self, store):
+        """A stored 0.0 (the default/'unused') leaves the new key unset (schema default applies)."""
+        store.set("battery.price_euro_per_wh_accu", 0.0)
+        migrate_battery_price_unit_to_ct_kwh(store)
+
+        assert store.get("battery.price_ct_kwh_accu") is None
+        assert store.get("battery.price_euro_per_wh_accu") is None
+
+    def test_nonzero_value_rescaled_and_moved_to_new_key(self, store):
+        """An existing €/Wh value is rescaled ×100000 and moved to the ct/kWh key."""
+        store.set("battery.price_euro_per_wh_accu", 0.00004)  # 4 ct/kWh
+        ran = migrate_battery_price_unit_to_ct_kwh(store)
+
+        assert ran is True
+        assert store.get("battery.price_ct_kwh_accu") == pytest.approx(4.0)
+        assert store.get("battery.price_euro_per_wh_accu") is None
+
+    def test_runs_only_once(self, store):
+        """A second call is a no-op even if the new key already has a value."""
+        store.set("battery.price_euro_per_wh_accu", 0.00004)
+        migrate_battery_price_unit_to_ct_kwh(store)
+
+        # Simulate a value someone set AFTER migration already ran once —
+        # a second invocation must not touch it again.
+        store.set("battery.price_ct_kwh_accu", 8.0)
+        ran_again = migrate_battery_price_unit_to_ct_kwh(store)
+
+        assert ran_again is False
+        assert store.get("battery.price_ct_kwh_accu") == 8.0

@@ -1169,12 +1169,12 @@
       "display_group": "Sensors"
     },
     {
-      "key": "battery.price_euro_per_wh_accu",
+      "key": "battery.price_ct_kwh_accu",
       "type": "float",
       "default": 0.0,
       "section": "battery",
       "level": "standard",
-      "description": "Static battery price in €/Wh (0 = use dynamic or ignore)",
+      "description": "Static battery price in ct/kWh (0 = use dynamic or ignore)",
       "labels": [
         "restart_required"
       ],

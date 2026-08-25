@@ -39,7 +39,7 @@ def _sample_config():
             "charge_efficiency": 0.88, "discharge_efficiency": 0.88,
             "max_charge_power_w": 5000, "min_soc_percentage": 5,
             "max_soc_percentage": 100, "charging_curve_enabled": True,
-            "sensor_battery_temperature": "", "price_euro_per_wh_accu": 0.0,
+            "sensor_battery_temperature": "", "price_ct_kwh_accu": 0.0,
             "price_euro_per_wh_sensor": "", "price_calculation_enabled": False,
             "price_update_interval": 900, "price_history_lookback_hours": 96,
             "battery_power_sensor": "", "pv_power_sensor": "", "grid_power_sensor": "",
