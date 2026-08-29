@@ -40,7 +40,7 @@ C2.3, C2.4 and C2.5.
 
 ## C1 — The wizard shows nothing, or the wrong things
 
-**1.1 · The Inverter step is blank.** *(open)*
+**1.1 · The Inverter step is blank.** *(fixed)*
 Measured: **4 fields rendered, 0 visible**, and no empty state.
 [schema.py:1592](src/config_web/schema.py#L1592) gives `inverter.type`
 `depends_on={"data_source.type": ["homeassistant"]}`. `data_source.type` defaults to

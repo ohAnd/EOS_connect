@@ -1603,7 +1603,11 @@ _ALL_FIELDS: list[FieldDef] = [
             "fronius_gen24", "fronius_gen24_legacy", "victron", "evcc",
             "homeassistant", "default"
         ]},
-        depends_on={"data_source.type": ["homeassistant"]},
+        # No depends_on: only one of these six choices has anything to do with the
+        # Home Assistant data source.  Gating the whole select on
+        # data_source.type == "homeassistant" hid it from everyone else, which on a
+        # fresh install (type "default") meant the wizard's Inverter step rendered
+        # nothing at all.  The HA-specific fields below carry the dependency instead.
         display_group="Hardware",
     ),
     FieldDef(

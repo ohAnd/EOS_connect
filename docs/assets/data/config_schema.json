@@ -2112,11 +2112,7 @@
           "default"
         ]
       },
-      "depends_on": {
-        "data_source.type": [
-          "homeassistant"
-        ]
-      },
+      "depends_on": null,
       "hot_reload": false,
       "display_group": "Hardware"
     },
