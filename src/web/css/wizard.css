@@ -66,6 +66,17 @@
     line-height: 1.5;
 }
 
+/* Shown in place of the fields when every one of them is collapsed by an unmet
+   dependency — otherwise the step is a title above blank space. */
+.wizard-step-empty {
+    font-size: 0.9em;
+    color: #888;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+    padding: 16px 18px;
+    line-height: 1.5;
+}
+
 /* ── Welcome step ─────────────────────────────────────────────── */
 
 .wizard-welcome {

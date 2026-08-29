@@ -21,7 +21,11 @@ class SetupWizard {
         /**
          * Each step maps to one or more schema sections.
          * Only getting_started-level fields are shown.
-         * Order reflects recommended setup flow: Optimizer → EVCC → Inverter → Data Source → Battery → Load → Price → PV → Review
+         * Order reflects recommended setup flow: Optimizer → EVCC → Data Source → Inverter → Battery → Load → Price → PV → Review
+         *
+         * Data Source comes before Inverter because the Home Assistant inverter type
+         * needs the connection that step establishes; asking about the inverter first
+         * meant the answer could not be acted on yet.
          */
         this.steps = [
             {
@@ -47,18 +51,18 @@ class SetupWizard {
                 isOptional: true,
             },
             {
-                id: "inverter",
-                title: "Inverter",
-                icon: "fa-microchip",
-                sections: ["inverter"],
-                description: "Select your inverter type for battery charge control (display-only if not using hardware control).",
-            },
-            {
                 id: "data_source",
                 title: "Data Source",
                 icon: "fa-plug",
                 sections: ["data_source"],
                 description: "Connect to Home Assistant or OpenHAB to read sensor data.",
+            },
+            {
+                id: "inverter",
+                title: "Inverter",
+                icon: "fa-microchip",
+                sections: ["inverter"],
+                description: "Select your inverter type for battery charge control (display-only if not using hardware control).",
             },
             {
                 id: "battery",
@@ -245,8 +249,8 @@ class SetupWizard {
                 <div class="wizard-welcome-features">
                     <div class="wizard-feature"><i class="fas fa-server"></i><span>Optimizer</span></div>
                     <div class="wizard-feature"><i class="fas fa-car"></i><span>EVCC</span></div>
-                    <div class="wizard-feature"><i class="fas fa-microchip"></i><span>Inverter</span></div>
                     <div class="wizard-feature"><i class="fas fa-plug"></i><span>Data Source</span></div>
+                    <div class="wizard-feature"><i class="fas fa-microchip"></i><span>Inverter</span></div>
                     <div class="wizard-feature"><i class="fas fa-battery-full"></i><span>Battery</span></div>
                     <div class="wizard-feature"><i class="fas fa-bolt"></i><span>Load</span></div>
                     <div class="wizard-feature"><i class="fas fa-coins"></i><span>Pricing</span></div>
@@ -263,14 +267,24 @@ class SetupWizard {
      */
     _renderFields(step) {
         const fields = this._getStepFields(step);
-        if (fields.length === 0) {
-            return `<p style="color:#888;">No fields to configure for this step.</p>`;
-        }
 
         let html = `
             <div class="wizard-step-title">${this._escapeHtml(step.title)}</div>
             <div class="wizard-step-description">${this._escapeHtml(step.description)}</div>
         `;
+
+        // A field whose dependency is unmet is still rendered — just collapsed — so
+        // that answering another field *in this step* can reveal it. But when nothing
+        // is visible there is no such control to answer, so the step is genuinely
+        // empty and rendering the collapsed fields would leave the user staring at a
+        // title above blank space.
+        if (this._getVisibleStepFields(step).length === 0) {
+            return html + `
+                <p class="wizard-step-empty">
+                    Nothing to configure here for the choices you have made — continue
+                    to the next step.
+                </p>`;
+        }
 
         for (const f of fields) {
             html += this._renderField(f);
@@ -457,7 +471,10 @@ class SetupWizard {
 
         for (let i = 1; i < this.steps.length - 1; i++) {
             const step = this.steps[i];
-            const fields = this._getStepFields(step);
+            // Count what the step actually showed, not what it emitted: a section
+            // whose fields were all collapsed used to render as a heading with no
+            // rows under it.
+            const fields = this._getVisibleStepFields(step);
             if (fields.length === 0) {
                 continue;
             }
@@ -469,9 +486,6 @@ class SetupWizard {
                 <h4><i class="fas ${icon}"></i> ${this._escapeHtml(step.title)}</h4>`;
 
             for (const f of fields) {
-                if (f.depends_on && !this._isDependencyMet(f)) {
-                    continue;
-                }
                 const val = this.values[f.key];
                 const display = f.type === "password"
                     ? (val ? "••••••••" : "<em>not set</em>")
@@ -926,6 +940,15 @@ class SetupWizard {
         }
         
         return fields;
+    }
+
+    /**
+     * The step's fields that the user can actually see right now.
+     * @param {object} step - Step definition
+     * @returns {Array} Array of field definitions whose dependencies are met
+     */
+    _getVisibleStepFields(step) {
+        return this._getStepFields(step).filter(f => this._isDependencyMet(f));
     }
 
     /**

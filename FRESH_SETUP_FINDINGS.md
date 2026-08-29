@@ -50,12 +50,12 @@ Measured: **4 fields rendered, 0 visible**, and no empty state.
 permanently. The dependency is a copy-paste — `inverter.charge_from_grid` correctly
 keys off `inverter.type`. **Drop it.**
 
-**1.2 · Step order is unsatisfiable.** *(open)*
+**1.2 · Step order is unsatisfiable.** *(fixed)*
 Optimizer → EVCC → **Inverter → Data Source**
 ([wizard.js:26-98](src/web/js/wizard.js#L26-L98)). Even a genuine HA user has not
 answered Data Source when Inverter is shown. Data Source must come first.
 
-**1.3 · No empty state, and a hollow review section.** *(open)*
+**1.3 · No empty state, and a hollow review section.** *(fixed)*
 `_getStepFields` ([wizard.js:907](src/web/js/wizard.js#L907)) filters by section and
 level but not `_isDependencyMet`, so the `length === 0` guard at
 [:266](src/web/js/wizard.js#L266) never fires — the user gets a title, a description
