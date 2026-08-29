@@ -559,3 +559,82 @@ def test_an_optional_empty_field_is_not_treated_as_malformed(fresh_page):
     wz.next_step(fresh_page)
 
     assert wz.current_step_id(fresh_page) == "inverter"
+
+
+# ----------------------------------------------------------------------
+# Changing the PV source mid-step
+# ----------------------------------------------------------------------
+
+
+def _go_to_pv_with_evcc_configured(page):
+    while wz.current_step_id(page) != "evcc":
+        wz.next_step(page)
+    wz.set_field(page, "evcc.url", "http://evcc.local:7070")
+    while wz.current_step_id(page) != "pv":
+        wz.next_step(page)
+
+
+def test_switching_away_from_a_location_source_hides_the_installation(fresh_page):
+    """EVCC brings its own forecast; coordinates would be noise."""
+    _go_to_pv_with_evcc_configured(fresh_page)
+    wz.set_field(fresh_page, "pv_forecast_source.source", "evcc")
+
+    assert wz.visible_fields(fresh_page) == ["pv_forecast_source.source"]
+
+
+def test_switching_back_brings_the_installation_fields_back(fresh_page):
+    """
+    The PV step does not merely collapse the installation fields for a source that has
+    no use for them — it leaves them out of the page. So on re-entering the step with
+    evcc already chosen, switching to akkudoktor gave the user nowhere to type
+    coordinates, and the save was then refused because there were none.
+
+    The re-render meant to handle this read a property the class does not have, so it
+    never ran.
+    """
+    _go_to_pv_with_evcc_configured(fresh_page)
+    wz.set_field(fresh_page, "pv_forecast_source.source", "evcc")
+    # Leave and return, so the step renders afresh with evcc already selected.
+    wz.next_step(fresh_page)
+    wz.back_step(fresh_page)
+    assert "pv_forecast.lat" not in wz.rendered_fields(fresh_page)
+
+    wz.set_field(fresh_page, "pv_forecast_source.source", "akkudoktor")
+
+    visible = wz.visible_fields(fresh_page)
+    assert "pv_forecast.lat" in visible
+    assert "pv_forecast.lon" in visible
+    assert "pv_forecast.power" in visible
+
+
+def test_the_re_rendered_fields_are_still_live(fresh_page, fresh_server):
+    """A re-render that loses its listeners would silently drop what is typed next."""
+    _go_to_pv_with_evcc_configured(fresh_page)
+    wz.set_field(fresh_page, "pv_forecast_source.source", "evcc")
+    wz.next_step(fresh_page)
+    wz.back_step(fresh_page)
+    wz.set_field(fresh_page, "pv_forecast_source.source", "forecast_solar")
+    wz.set_field(fresh_page, "pv_forecast.lat", 52.5)
+    wz.set_field(fresh_page, "pv_forecast.lon", 13.4)
+    wz.next_step(fresh_page)
+    wz.finish(fresh_page)
+
+    assert wz.finished_successfully(fresh_page), wz.save_error_text(fresh_page)
+    assert fresh_server.store.get("pv_forecast.0.lat") == 52.5
+    assert fresh_server.store.get("pv_forecast.0.lon") == 13.4
+
+
+def test_a_password_field_can_still_be_revealed_after_a_re_render(fresh_page):
+    """The eye toggle is bound per node, so a re-render has to rebind it."""
+    _go_to_pv_with_evcc_configured(fresh_page)
+    wz.set_field(fresh_page, "pv_forecast_source.source", "solcast")
+
+    assert fresh_page.eval_on_selector(
+        "#wiz-pv_forecast_source-api_key", "e => e.type"
+    ) == "password"
+    fresh_page.click(
+        '.wizard-password-toggle[data-target="wiz-pv_forecast_source-api_key"]'
+    )
+    assert fresh_page.eval_on_selector(
+        "#wiz-pv_forecast_source-api_key", "e => e.type"
+    ) == "text"

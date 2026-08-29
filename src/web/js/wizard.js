@@ -580,7 +580,58 @@ class SetupWizard {
             skipBtn.addEventListener("click", () => this._skip());
         }
 
-        // Password toggles
+        this._attachFieldListeners();
+
+        // Select/input change → update local values + conditional visibility
+        const container = document.getElementById("wizard-step-content");
+        if (container) {
+            container.addEventListener("change", (e) => {
+                const el = e.target;
+                const key = el.getAttribute("data-key");
+                if (!key) {
+                    return;
+                }
+                this._collectFieldValue(el, key);
+                this._updateConditionalFields();
+                
+                // The PV step drops the installation fields entirely for sources
+                // that do not use them, so toggling visibility is not enough: coming
+                // back to the step on evcc and switching to akkudoktor left nowhere to
+                // enter coordinates, and the save was then refused for want of them.
+                // Re-render so the fields exist again.
+                //
+                // (This read this.currentStepIndex, which is not a property of this
+                // class, so the branch never ran at all.)
+                const step = this.steps[this.currentStep];
+                if (key === "pv_forecast_source.source" && step && step.id === "pv") {
+                    const contentEl = document.getElementById("wizard-step-content");
+                    if (contentEl) {
+                        // The change/input listeners are on this container rather than
+                        // its children, so replacing the contents keeps them.
+                        contentEl.innerHTML = this._renderFields(step);
+                        this._attachFieldListeners();
+                    }
+                }
+            });
+            container.addEventListener("input", (e) => {
+                const el = e.target;
+                const key = el.getAttribute("data-key");
+                if (!key) {
+                    return;
+                }
+                this._collectFieldValue(el, key);
+            });
+        }
+    }
+
+    /**
+     * Bind the listeners that belong to individual fields.
+     *
+     * Separate from _bindStepEvents because the PV step re-renders its own contents
+     * when the source changes and the new nodes need these again. The change/input
+     * handlers are not here: those are delegated to the container, which survives.
+     */
+    _attachFieldListeners() {
         document.querySelectorAll(".wizard-password-toggle").forEach(btn => {
             btn.addEventListener("click", () => {
                 const inputId = btn.getAttribute("data-target");
@@ -599,7 +650,6 @@ class SetupWizard {
             });
         });
 
-        // Checkbox label update
         document.querySelectorAll('.wizard-field input[type="checkbox"]').forEach(cb => {
             cb.addEventListener("change", () => {
                 const span = cb.parentElement.querySelector("span");
@@ -608,40 +658,6 @@ class SetupWizard {
                 }
             });
         });
-
-        // Select/input change → update local values + conditional visibility
-        const container = document.getElementById("wizard-step-content");
-        if (container) {
-            container.addEventListener("change", (e) => {
-                const el = e.target;
-                const key = el.getAttribute("data-key");
-                if (!key) {
-                    return;
-                }
-                this._collectFieldValue(el, key);
-                this._updateConditionalFields();
-                
-                // If pv_forecast_source.source changed, re-render the PV step
-                if (key === "pv_forecast_source.source") {
-                    const currentStep = this.steps[this.currentStepIndex];
-                    if (currentStep && currentStep.id === "pv") {
-                        const contentEl = document.getElementById("wizard-step-content");
-                        if (contentEl) {
-                            contentEl.innerHTML = this._renderFields(currentStep);
-                            this._attachFieldListeners();
-                        }
-                    }
-                }
-            });
-            container.addEventListener("input", (e) => {
-                const el = e.target;
-                const key = el.getAttribute("data-key");
-                if (!key) {
-                    return;
-                }
-                this._collectFieldValue(el, key);
-            });
-        }
     }
 
     /**

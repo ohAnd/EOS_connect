@@ -70,13 +70,16 @@ in the API key, reaches Finish, and gets `unmet_dependencies` naming a field the
 wizard never offered. Reproduced: P5 returns `200 {"success": false}` with
 `"Solcast selected as PV source but Resource ID/Installation ID is not configured"`.
 
-**1.5 · Dead code in the live re-render.** *(open, latent)*
-[wizard.js:604](src/web/js/wizard.js#L604) reads `this.currentStepIndex`; the property
-is `this.currentStep` ([:18](src/web/js/wizard.js#L18)). The branch also calls
-`this._attachFieldListeners()`, which **is not defined in the file**. Not currently
-user-visible — the generic `_updateConditionalFields()` already hides and shows the
-installation fields correctly on a source switch (verified: switching to `solcast`
-leaves `source` + `api_key` visible). It is a latent throw, so remove or implement it.
+**1.5 · The dead re-render was hiding a real bug.** *(fixed)*
+[wizard.js:604](src/web/js/wizard.js#L604) read `this.currentStepIndex`; the property
+is `this.currentStep`, so the branch never ran, and `_attachFieldListeners()` was not
+defined either. It looked harmless because `_updateConditionalFields()` handles a
+source switch *within* one rendering — but `_getStepFields` leaves `pv_forecast`
+fields out of the page entirely for a non-location source. Reproduced: choose evcc on
+the PV step, leave, come back, switch to akkudoktor → the coordinate fields are not in
+the DOM, there is nowhere to enter them, and the save is then refused because no
+installation is configured. The re-render now happens, and the per-field listeners are
+reattached with it.
 
 **1.6 · "Invalid format" is not an error message.** *(partly fixed — an empty required field now says so; a malformed one still says "Invalid format")*
 An empty `data_source.url` correctly blocks Next, but says only `Invalid format`
