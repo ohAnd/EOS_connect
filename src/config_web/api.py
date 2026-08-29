@@ -14,6 +14,7 @@ from flask import Blueprint, jsonify, request as flask_request, Response
 
 from .hot_reload import _coerce_bool
 from .migration import _flatten_config
+from .schema import LOCATION_BASED_PV_SOURCES
 from .timeseries_probe import probe
 
 logger = logging.getLogger("__main__")
@@ -139,7 +140,8 @@ def update_config():
 
     Returns:
     - If validation errors: status 422 with "errors"
-    - If unmet dependencies: status 200 with "unmet_dependencies" + no save
+    - If unmet dependencies: status 200 with ``success: false`` and
+      "unmet_dependencies"; nothing is written
     - If success: status 200 with "updated", "restart_required", "hot_reloaded"
     """
     data = flask_request.get_json(silent=True)
@@ -161,6 +163,19 @@ def update_config():
     if array_errors:
         return jsonify({"errors": array_errors}), 422
 
+    # Cross-field dependencies are checked before anything is written. They used to be
+    # checked afterwards, so a request refused with success:false had already stored
+    # every value in it — the caller was told the save did not happen while the database
+    # said otherwise. _check_dependencies reads the incoming values in preference to the
+    # stored ones, so it sees the same picture either way.
+    unmet_deps = _check_dependencies(data)
+    if unmet_deps:
+        return jsonify({
+            "success": False,
+            "unmet_dependencies": unmet_deps,
+            "message": "Cannot save: required dependencies not configured"
+        }), 200
+
     changed_keys = []
     restart_required = []
     hot_reloaded = []
@@ -181,16 +196,6 @@ def update_config():
 
     # Rebuild merged config so get_config() reflects changes
     _module.rebuild_config()
-
-    # Check cross-field dependencies after the new config has been merged.
-    # This ensures array updates like pv_forecast.0.* are visible to dependency logic.
-    unmet_deps = _check_dependencies(data)
-    if unmet_deps:
-        return jsonify({
-            "success": False,
-            "unmet_dependencies": unmet_deps,
-            "message": "Cannot save: required dependencies not configured"
-        }), 200
 
     # Persist restart-required fields for banner across reloads
     if restart_required:
@@ -534,26 +539,69 @@ def _resolve_schema_key(key: str):
     return None
 
 
+# The URL the schema ships as a hint. It is not a configured EVCC instance, so every
+# check that requires one has to reject it.
+_EVCC_PLACEHOLDER_URL = "http://yourEVCCserver:7070"
+
+
+def _evcc_url_unconfigured(url) -> bool:
+    """Whether *url* is empty, blank, or still the schema's placeholder."""
+    if not url or not isinstance(url, str):
+        return True
+    stripped = url.strip()
+    return not stripped or stripped == _EVCC_PLACEHOLDER_URL
+
+
+def _pending_pv_installation_count(data: dict, current_config: dict) -> int:
+    """
+    How many PV installations there will be once *data* is applied.
+
+    Installations are stored as indexed keys (``pv_forecast.0.lat``) and only become a
+    list once the merger rebuilds the config. This counts them without that rebuild, so
+    the dependency check can run before anything is written rather than after.
+
+    Indices from the request and from the store are unioned: a partial update that only
+    touches installation 0 must not read as "there is one installation" when the store
+    already holds two.
+    """
+    def _indices(keys):
+        found = set()
+        for key in keys:
+            parts = key.split(".")
+            if len(parts) >= 3 and parts[0] == "pv_forecast" and parts[1].isdigit():
+                found.add(parts[1])
+        return found
+
+    indexed = _indices(data) | _indices(_store.get_all())
+    if indexed:
+        return len(indexed)
+
+    # A whole list can also arrive under the bare key, and the merged config always
+    # exposes one.
+    listed = data["pv_forecast"] if "pv_forecast" in data else current_config.get("pv_forecast")
+    return len(listed or [])
+
+
 def _check_dependencies(data: dict) -> list[dict]:
     """
-    Check cross-field dependencies. Returns list of unmet dependency objects.
+    Cross-field dependencies that *this request* would leave unsatisfied.
 
-    Examples:
-    - If pv_forecast_source.source="evcc", then evcc.url must be populated
-    - If mqtt.enabled=True, then mqtt.broker must be populated
+    Each check is gated on the request actually touching one of the fields involved.
+    Judging the whole resulting config instead would refuse an unrelated save whenever
+    the stored configuration was already incomplete — and a fresh install always is,
+    because the default PV source is location-based and has no installations yet. That
+    made every single save through this endpoint impossible until the PV step was done,
+    in whatever order the user happened to work.
 
-    Each dependency object has: {"field": "...", "reason": "...", "requires": "..."
+    Each entry is ``{"field", "reason", "requires", "blocking"}``.
     """
     dependencies = []
-
-    # Get current config for fields not in the update
     current_config = _module.get_config()
 
-    # Helper: get effective value (from update data or current config)
     def get_value(key):
+        """The value this request would end up with: its own, else what is stored."""
         if key in data:
             return data[key]
-        # Navigate nested key in current config
         parts = key.split(".")
         val = current_config
         for part in parts:
@@ -563,47 +611,42 @@ def _check_dependencies(data: dict) -> list[dict]:
                 return None
         return val
 
-    # PV Source: if "evcc" selected, EVCC URL must be configured
+    def touches(*keys):
+        """Whether the request sets any of *keys* — including indexed pv_forecast."""
+        for key in keys:
+            if key in data:
+                return True
+            if key == "pv_forecast" and any(
+                k.startswith("pv_forecast.") for k in data
+            ):
+                return True
+        return False
+
+    # EVCC is the data source for three different things, and each needs a real URL.
+    # The placeholder counts as unconfigured for all of them — it used to pass for the
+    # PV source only, so that one save went through and then failed at runtime.
+    for field, label in (
+        ("pv_forecast_source.source", "PV source"),
+        ("inverter.type", "inverter controller"),
+        ("price.source", "price source"),
+    ):
+        if get_value(field) == "evcc" and touches(field, "evcc.url"):
+            if _evcc_url_unconfigured(get_value("evcc.url")):
+                dependencies.append({
+                    "field": field,
+                    "reason": f"EVCC selected as {label} but EVCC URL is not configured",
+                    "requires": "evcc.url",
+                    "blocking": True,
+                })
+
     pv_source = get_value("pv_forecast_source.source")
-    if pv_source == "evcc":
-        evcc_url = get_value("evcc.url")
-        if not evcc_url or evcc_url.strip() == "":
-            dependencies.append({
-                "field": "pv_forecast_source.source",
-                "reason": "EVCC selected as PV source but EVCC URL is not configured",
-                "requires": "evcc.url",
-                "blocking": True,
-            })
 
-    # Inverter: if "evcc" selected, EVCC URL must be configured
-    inverter_type = get_value("inverter.type")
-    if inverter_type == "evcc":
-        evcc_url = get_value("evcc.url")
-        if not evcc_url or evcc_url.strip() == "" or evcc_url == "http://yourEVCCserver:7070":
-            dependencies.append({
-                "field": "inverter.type",
-                "reason": "EVCC selected as inverter controller but EVCC URL is not configured",
-                "requires": "evcc.url",
-                "blocking": True,
-            })
-
-    # Price Source: if "evcc" selected, EVCC URL must be configured
-    price_source = get_value("price.source")
-    if price_source == "evcc":
-        evcc_url = get_value("evcc.url")
-        if not evcc_url or evcc_url.strip() == "" or evcc_url == "http://yourEVCCserver:7070":
-            dependencies.append({
-                "field": "price.source",
-                "reason": "EVCC selected as price source but EVCC URL is not configured",
-                "requires": "evcc.url",
-                "blocking": True,
-            })
-
-    # PV Source: validation for Solcast and Victron
-    pv_source = get_value("pv_forecast_source.source")
-    if pv_source in ["solcast", "victron"]:
+    # Solcast and Victron identify the installation by id rather than coordinates.
+    if pv_source in ("solcast", "victron") and touches(
+        "pv_forecast_source.source", "pv_forecast_source.resource_id"
+    ):
         resource_id = get_value("pv_forecast_source.resource_id")
-        if not resource_id or (isinstance(resource_id, str) and resource_id.strip() == ""):
+        if not resource_id or (isinstance(resource_id, str) and not resource_id.strip()):
             dependencies.append({
                 "field": "pv_forecast_source.resource_id",
                 "reason": (
@@ -614,16 +657,11 @@ def _check_dependencies(data: dict) -> list[dict]:
                 "blocking": True,
             })
 
-    # PV Source: validation for location-based sources (must have at least 1 installation)
-    location_based_sources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]
-    if pv_source in location_based_sources:
-        # Get PV installations from current config
-        pv_forecast_data = (
-            data.get("pv_forecast")
-            if "pv_forecast" in data
-            else current_config.get("pv_forecast", [])
-        )
-        if not pv_forecast_data or len(pv_forecast_data) == 0:
+    # Location-based sources forecast from coordinates, so they need an installation.
+    if pv_source in LOCATION_BASED_PV_SOURCES and touches(
+        "pv_forecast_source.source", "pv_forecast"
+    ):
+        if _pending_pv_installation_count(data, current_config) == 0:
             dependencies.append({
                 "field": "pv_forecast",
                 "reason": "Location-based PV source selected but no PV installations configured",

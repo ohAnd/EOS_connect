@@ -858,9 +858,15 @@ class SetupWizard {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
             });
+            const saveBody = await saveRes.json().catch(() => ({}));
             if (!saveRes.ok) {
-                const err = await saveRes.json().catch(() => ({}));
-                throw new Error(err.error || `Save failed: ${saveRes.status}`);
+                throw new Error(this._describeSaveFailure(saveRes, saveBody));
+            }
+            // A refused save comes back as 200 with success:false — checking res.ok
+            // alone reported "Setup Complete!" for a configuration the server never
+            // stored.
+            if (saveBody.success === false) {
+                throw new Error(this._describeSaveFailure(saveRes, saveBody));
             }
 
             // Mark wizard complete
@@ -909,6 +915,28 @@ class SetupWizard {
                 errArea.appendChild(errDiv);
             }
         }
+    }
+
+    /**
+     * Turn a failed save response into something the user can act on.
+     * @param {Response} res - The fetch response
+     * @param {object} body - Parsed response body
+     * @returns {string} A message naming the fields at fault
+     */
+    _describeSaveFailure(res, body) {
+        if (Array.isArray(body.unmet_dependencies) && body.unmet_dependencies.length) {
+            const reasons = body.unmet_dependencies
+                .map(d => d.reason || `${d.field} requires ${d.requires}`)
+                .join("; ");
+            return `Cannot save yet — ${reasons}`;
+        }
+        if (Array.isArray(body.errors) && body.errors.length) {
+            const reasons = body.errors
+                .map(e => `${this._prettyLabel(e.key)}: ${e.error}`)
+                .join("; ");
+            return `Cannot save — ${reasons}`;
+        }
+        return body.error || body.message || `Save failed: ${res.status}`;
     }
 
     // ── Helper methods ──────────────────────────────────────────

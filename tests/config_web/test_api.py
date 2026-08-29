@@ -534,6 +534,10 @@ def fresh_client_fixture(tmp_path):
     app.register_blueprint(config_bp)
 
     with app.test_client() as c:
+        # Same handles the configured ``client`` exposes, so tests can check what the
+        # API actually did to the store.
+        c.store = store
+        c.module = module
         yield c
 
     store.close()
@@ -900,3 +904,202 @@ class TestApplySettingsReplaceMode:
         assert result["removed"] == []
         assert result["invalid"] == []
         assert client.get("/api/config/export").get_json() == exported
+
+
+class TestRefusedSavesWriteNothing:
+    """
+    A save the API refuses must leave the database alone.
+
+    ``PUT /api/config/`` answers an unmet cross-field dependency with HTTP 200 and
+    ``success: false`` — "cannot save". It used to write every value in the request
+    first and check afterwards, so the caller was told the save had not happened while
+    the database said it had. On a fresh install that meant a wizard run could half-land
+    a configuration nobody had approved.
+    """
+
+    def test_a_refused_save_stores_none_of_the_request(self, fresh_client):
+        """Not the field at fault, and not the unrelated ones alongside it."""
+        before = dict(fresh_client.store.get_all())
+
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({
+                "pv_forecast_source.source": "solcast",  # needs a resource_id
+                "battery.capacity_wh": 99999,            # innocent bystander
+            }),
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 200
+        assert resp.get_json()["success"] is False
+        assert fresh_client.store.get_all() == before
+
+    def test_the_refusal_names_the_field(self, fresh_client):
+        """The caller has to be able to say what is missing."""
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"pv_forecast_source.source": "solcast"}),
+            content_type="application/json",
+        )
+
+        unmet = resp.get_json()["unmet_dependencies"]
+        assert [d["requires"] for d in unmet] == ["pv_forecast_source.resource_id"]
+
+    def test_a_location_source_needs_an_installation(self, fresh_client):
+        """A fresh install has none, so akkudoktor alone cannot be saved."""
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"pv_forecast_source.source": "akkudoktor"}),
+            content_type="application/json",
+        )
+
+        assert resp.get_json()["success"] is False
+        assert [d["field"] for d in resp.get_json()["unmet_dependencies"]] == ["pv_forecast"]
+
+    def test_an_installation_supplied_in_the_same_request_satisfies_it(self, fresh_client):
+        """
+        This is the case that forced the check to run after the write: installations
+        arrive as indexed keys and only become a list once the merger rebuilds. The
+        count is now derived from the request directly.
+        """
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({
+                "pv_forecast_source.source": "akkudoktor",
+                "pv_forecast.0.name": "roof",
+                "pv_forecast.0.lat": 47.5,
+                "pv_forecast.0.lon": 8.5,
+                "pv_forecast.0.azimuth": 0,
+                "pv_forecast.0.tilt": 30,
+                "pv_forecast.0.power": 4600,
+            }),
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 200
+        assert resp.get_json()["success"] is True
+        assert fresh_client.store.get("pv_forecast.0.lat") == 47.5
+
+    def test_an_already_stored_installation_still_counts(self, fresh_client):
+        """A later request that does not mention installations must not read as zero."""
+        fresh_client.put(
+            "/api/config/",
+            data=json.dumps({
+                "pv_forecast_source.source": "akkudoktor",
+                "pv_forecast.0.lat": 47.5, "pv_forecast.0.lon": 8.5,
+                "pv_forecast.0.azimuth": 0, "pv_forecast.0.tilt": 30,
+                "pv_forecast.0.power": 4600, "pv_forecast.0.name": "roof",
+            }),
+            content_type="application/json",
+        )
+
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"pv_forecast_source.source": "openmeteo"}),
+            content_type="application/json",
+        )
+
+        assert resp.get_json()["success"] is True
+
+    def test_an_accepted_save_still_writes(self, fresh_client):
+        """The guard must not have made every save a no-op."""
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"battery.capacity_wh": 12345}),
+            content_type="application/json",
+        )
+
+        assert resp.get_json()["success"] is True
+        assert fresh_client.store.get("battery.capacity_wh") == 12345
+
+
+class TestDependenciesOnlyBlockWhatTheRequestCaused:
+    """
+    A cross-field check judges the request, not the stored configuration.
+
+    Judging the whole resulting config sounds stricter but is unusable on a fresh
+    install: the default PV source is location-based and starts with no installations,
+    so *every* save was refused — including the ones that would have configured the PV
+    step. The user had to guess an order the UI never suggested.
+    """
+
+    def test_an_unrelated_save_is_not_blocked_by_incomplete_pv(self, fresh_client):
+        """The state that blocked it is real, but this request did not cause it."""
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"battery.capacity_wh": 12345}),
+            content_type="application/json",
+        )
+
+        assert resp.get_json()["success"] is True
+        assert fresh_client.store.get("battery.capacity_wh") == 12345
+
+    def test_choosing_the_incomplete_source_is_still_blocked(self, fresh_client):
+        """Touching the field is what makes the request answerable for it."""
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"pv_forecast_source.source": "akkudoktor"}),
+            content_type="application/json",
+        )
+
+        assert resp.get_json()["success"] is False
+
+    def test_editing_an_installation_is_answerable_too(self, fresh_client):
+        """Changing pv_forecast is as much a cause as changing the source."""
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"pv_forecast_source.source": "akkudoktor",
+                             "pv_forecast.0.lat": 47.5, "pv_forecast.0.lon": 8.5,
+                             "pv_forecast.0.azimuth": 0, "pv_forecast.0.tilt": 30,
+                             "pv_forecast.0.power": 4600, "pv_forecast.0.name": "roof"}),
+            content_type="application/json",
+        )
+
+        assert resp.get_json()["success"] is True
+
+
+class TestEvccPlaceholderIsNeverAConfiguredUrl:
+    """
+    ``http://yourEVCCserver:7070`` is the hint the schema ships, not an EVCC instance.
+
+    The inverter and price checks rejected it; the PV source check only tested for
+    empty. So selecting EVCC as the PV source with the placeholder still in place saved
+    cleanly and then failed at runtime, with nothing in the UI to explain why.
+    """
+
+    PLACEHOLDER = "http://yourEVCCserver:7070"
+
+    @pytest.mark.parametrize(
+        "field", ["pv_forecast_source.source", "inverter.type", "price.source"]
+    )
+    def test_the_placeholder_blocks_every_evcc_selection(self, fresh_client, field):
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({field: "evcc", "evcc.url": self.PLACEHOLDER}),
+            content_type="application/json",
+        )
+
+        assert resp.get_json()["success"] is False
+        assert [d["requires"] for d in resp.get_json()["unmet_dependencies"]] == ["evcc.url"]
+
+    @pytest.mark.parametrize(
+        "field", ["pv_forecast_source.source", "inverter.type", "price.source"]
+    )
+    def test_a_real_url_is_accepted_everywhere(self, fresh_client, field):
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({field: "evcc", "evcc.url": "http://evcc.local:7070"}),
+            content_type="application/json",
+        )
+
+        assert resp.get_json()["success"] is True
+
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_blank_urls_are_rejected_too(self, fresh_client, blank):
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"price.source": "evcc", "evcc.url": blank}),
+            content_type="application/json",
+        )
+
+        assert resp.get_json()["success"] is False

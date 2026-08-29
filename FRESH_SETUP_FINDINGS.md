@@ -117,12 +117,12 @@ when the field was never shown.
 
 ## C3 — Failures reported as success
 
-**3.1 · "Setup Complete!" for a refused save.** *(open)*
+**3.1 · "Setup Complete!" for a refused save.** *(fixed)*
 `PUT /api/config/` returns **HTTP 200** with `{"success": false,
 "unmet_dependencies": [...]}`, but `_finish` only checks `saveRes.ok`
 ([wizard.js:847](src/web/js/wizard.js#L847)).
 
-**3.2 · A refused save is really a partial write.** *(open)*
+**3.2 · A refused save is really a partial write.** *(fixed)*
 Values are stored before the dependency check runs. Verified: a PUT rejected with
 `success: false` still left `battery.capacity_wh = 99999` and
 `pv_forecast_source.source = "solcast"` in the database. The docstring claims
@@ -133,6 +133,15 @@ Values are stored before the dependency check runs. Verified: a PUT rejected wit
 and pattern, never `validation.required`. In practice pattern-backed fields still
 block (verified), so the only field affected is the one from C0 — but the asymmetry is
 what let C0 through. An empty HA `access_token` also carries no `*` and passes.
+
+**3.5 · On a fresh install, *every* save was refused.** *(fixed — found while fixing 3.2)*
+`_check_dependencies` judged the whole resulting config rather than the request. A
+fresh install defaults `pv_forecast_source.source` to `akkudoktor` with zero
+installations, so that dependency is unmet from the first boot — and it blocked
+unrelated saves, including the ones that would have configured the PV step. It was
+invisible before only because the write happened first and the refusal was ignored
+by both callers. Each check is now gated on the request touching one of the fields
+involved.
 
 **3.4 · `GET /api/config/export` returns unmasked secrets.** *(open)*
 It is what the wizard loads ([wizard.js:143](src/web/js/wizard.js#L143)), while
@@ -179,7 +188,7 @@ Stale at [:113](src/interfaces/pv_interface.py#L113),
 divergence in C2.4. The schema is already served to the frontend — same treatment
 `BOOTSTRAP_KEYS` and `SECTION_META` got in `c124db6`.
 
-**5.2 · EVCC placeholder asymmetry.** *(open)*
+**5.2 · EVCC placeholder asymmetry.** *(fixed)*
 Verified against the API with `evcc.url` left at `http://yourEVCCserver:7070`:
 
 ```
