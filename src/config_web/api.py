@@ -84,6 +84,11 @@ def get_schema():
         "fields": fields,
         "sections": sections_dict,
         "section_order": list(sections_dict.keys()),  # Explicit order as array
+        # Which PV sources need a pv_forecast installation. The frontend decides on
+        # this in two places and used to keep its own copies, which drifted — one of
+        # them listed "default" and the other did not, so the wizard rendered the
+        # installation fields for a source it then refused to save them for.
+        "location_based_pv_sources": list(LOCATION_BASED_PV_SOURCES),
     }
     # Use json.dumps with sort_keys=False to preserve SECTION_META insertion order
     response = Response(
@@ -1025,13 +1030,55 @@ def _validate_price_arrays(data: dict) -> list[dict]:
     return errors
 
 
+def _dependency_met(field_def, data: dict, current_config: dict) -> bool:
+    """
+    Whether *field_def* applies at all, given the values this request would leave.
+
+    Mirrors ``_isDependencyMet`` in the frontend: a ``depends_on`` entry is satisfied
+    when the governing key holds one of the listed values, or — for ``"!empty"`` — any
+    value at all.
+    """
+    if not field_def.depends_on:
+        return True
+
+    for dep_key, allowed in field_def.depends_on.items():
+        if dep_key in data:
+            current = data[dep_key]
+        else:
+            current = current_config
+            for part in dep_key.split("."):
+                current = current.get(part) if isinstance(current, dict) else None
+
+        if allowed == "!empty":
+            if not current:
+                return False
+        elif isinstance(allowed, list):
+            if not any(str(a) == str(current) for a in allowed):
+                return False
+        elif str(allowed) != str(current):
+            return False
+
+    return True
+
+
 def _validate_updates(data: dict) -> list[dict]:
     """Validate a dict of {key: value} against the schema. Returns list of error dicts."""
     errors = []
+    current_config = _module.get_config()
+
     for key, value in data.items():
         field_def = _resolve_schema_key(key)
         if field_def is None:
             errors.append({"key": key, "error": "Unknown configuration key"})
+            continue
+
+        # A field the configuration does not reach cannot be missing a value. Marking
+        # one required, or giving it a pattern no empty string matches, otherwise
+        # rejects the whole request over a field the user was never shown — which is
+        # how a fresh install could not complete the setup wizard: an empty
+        # data_source.url that only applies to Home Assistant and OpenHAB, and
+        # pv_autoscaling.sensor_entity_id, required but only when auto-scaling is on.
+        if _is_empty(value) and not _dependency_met(field_def, data, current_config):
             continue
 
         err = _validate_single(field_def, value)
@@ -1039,6 +1086,11 @@ def _validate_updates(data: dict) -> list[dict]:
             errors.append({"key": key, "error": err})
 
     return errors
+
+
+def _is_empty(value) -> bool:
+    """Whether *value* carries no content — ``None``, or a blank string."""
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _validate_single(field_def, value) -> str:

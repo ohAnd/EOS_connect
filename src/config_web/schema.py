@@ -1183,14 +1183,18 @@ _ALL_FIELDS: list[FieldDef] = [
         field_type="str",
         default="",
         section="pv_forecast_source",
-        level="standard",
+        # getting_started, so the setup wizard shows it: a Solcast or Victron install
+        # cannot be saved without one (_check_dependencies refuses it), and while this
+        # was "standard" the wizard never offered the field, so those users reached the
+        # end and were told to fill in something they had not been asked for.
+        level="getting_started",
         description="Resource ID / Installation ID (Solcast: comma-separated list; "
         "Victron: single VRM ID)",
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         depends_on={"pv_forecast_source.source": ["solcast", "victron"]},
         display_group="Provider",
-        validation={"max_length": 1000},
+        validation={"max_length": 1000, "required": True},
     ),
 
     # Use real data correction for EVCC PV forecast (source-level)

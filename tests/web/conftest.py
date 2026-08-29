@@ -178,6 +178,22 @@ def fresh_server_fixture(tmp_path):
     yield from _serve(tmp_path, "fresh.db", dict(BOOTSTRAP_ONLY_CONFIG), migrate=True)
 
 
+@pytest.fixture(name="offline_timeseries")
+def offline_timeseries_fixture(monkeypatch):
+    """
+    Let a timeseries endpoint validate without one existing.
+
+    Saving a timeseries source runs a real pre-flight fetch against the URL
+    (``_check_timeseries_preflight``), which is the right thing for a user — an
+    unreachable endpoint is worth hearing about before it is stored — but it makes a
+    test that configures one depend on the network.  Tests that are about the wizard
+    rather than the probe ask for this.
+    """
+    from src.config_web import api as config_api  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setattr(config_api, "probe", lambda *a, **kw: {"ok": True, "warnings": []})
+
+
 def _launch_browser(playwright):
     """Chromium, or a skip if this host cannot start it."""
     try:

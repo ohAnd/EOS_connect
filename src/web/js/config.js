@@ -13,6 +13,10 @@
 // Fallback values used only when schema hasn't loaded yet.
 let CONFIG_SECTIONS = {};
 let SECTION_ORDER = [];  // Track explicit section order from API
+// PV sources that forecast from an installation's coordinates, and therefore need
+// pv_forecast entries. Served by /api/config/schema (SPOT from schema.py); the
+// literal below is only the fallback for a backend that does not send it.
+let LOCATION_BASED_PV_SOURCES = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"];
 
 const LEVEL_ORDER = { getting_started: 0, standard: 1, expert: 2 };
 
@@ -110,6 +114,9 @@ class ConfigurationManager {
         if (schemaData.section_order) {
             SECTION_ORDER = schemaData.section_order;
             console.log("[ConfigManager] Explicit section order from API:", SECTION_ORDER);
+        }
+        if (Array.isArray(schemaData.location_based_pv_sources)) {
+            LOCATION_BASED_PV_SOURCES = schemaData.location_based_pv_sources;
         }
         const raw = await valuesRes.json();
 
@@ -692,9 +699,8 @@ class ConfigurationManager {
     _renderPvForecastSection() {
         // Check if PV Forecast section should be hidden based on source
         const pvSource = this.values["pv_forecast_source.source"] ?? this._getSchemaDefault("pv_forecast_source.source");
-        const locationBasedSources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"];
 
-        if (!locationBasedSources.includes(pvSource)) {
+        if (!LOCATION_BASED_PV_SOURCES.includes(pvSource)) {
             // For non-location-based sources (solcast, victron, evcc, timeseries),
             // the pv_forecast section is not needed
             let html = `<div class="config-restart-banner" id="cfg-restart-banner">

@@ -17,6 +17,11 @@ class SetupWizard {
         this.values = {};
         this.currentStep = 0;
         this.skippedSteps = new Set();
+        // Replaced by the list the schema endpoint serves; this is only what to fall
+        // back on if an older backend does not send one.
+        this.locationBasedPvSources = [
+            "akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar",
+        ];
 
         /**
          * Each step maps to one or more schema sections.
@@ -158,6 +163,9 @@ class SetupWizard {
         // Update section metadata from schema (SPOT)
         if (schemaData.sections) {
             CONFIG_SECTIONS = schemaData.sections;
+        }
+        if (Array.isArray(schemaData.location_based_pv_sources)) {
+            this.locationBasedPvSources = schemaData.location_based_pv_sources;
         }
         const raw = await valuesRes.json();
         this.values = {};
@@ -710,6 +718,9 @@ class SetupWizard {
 
         // Validate current step fields
         const step = this.steps[this.currentStep];
+        // Answering a step the user skipped earlier means they no longer skip it —
+        // otherwise going Back to fill in EVCC would have the answer dropped.
+        this.skippedSteps.delete(step.id);
         if (step.id !== "welcome" && step.id !== "review") {
             if (!this._validateStep(step)) {
                 return;
@@ -747,13 +758,9 @@ class SetupWizard {
      * @returns {boolean} True if valid
      */
     _validateStep(step) {
-        const fields = this._getStepFields(step);
         let valid = true;
 
-        for (const f of fields) {
-            if (f.depends_on && !this._isDependencyMet(f)) {
-                continue;
-            }
+        for (const f of this._getVisibleStepFields(step)) {
             const cssKey = f.key.replace(/\./g, "-");
             const fieldDiv = document.getElementById(`wiz-field-${cssKey}`);
             const errDiv = document.getElementById(`wiz-err-${cssKey}`);
@@ -785,6 +792,20 @@ class SetupWizard {
     _validateField(f, value) {
         const v = f.validation || {};
 
+        // Checked first: an empty required field is not "invalid format", it is
+        // missing. Only the API enforced this before, so the wizard let the user walk
+        // past a field it had marked with an asterisk and then failed at the very end.
+        const isBlank = value === undefined || value === null
+            || (typeof value === "string" && value.trim() === "");
+        if (v.required && isBlank) {
+            return "This field is required";
+        }
+        if (isBlank) {
+            // Nothing else has anything to check, and a pattern would report an empty
+            // optional field as malformed.
+            return "";
+        }
+
         if (v.choices && v.choices.length > 0) {
             if (!v.choices.map(String).includes(String(value))) {
                 return `Must be one of: ${v.choices.join(", ")}`;
@@ -815,6 +836,55 @@ class SetupWizard {
     // ── Finish / Save ───────────────────────────────────────────
 
     /**
+     * Build the PUT body: the answers the user was actually asked for.
+     *
+     * It used to be every ``getting_started`` field in the schema, which is not the
+     * same set. Three sorts of thing rode along that no step ever displayed:
+     *
+     * - Fields of sections the wizard does not cover — ``pv_autoscaling.*`` and
+     *   ``time_zone``. ``pv_autoscaling.sensor_entity_id`` is marked required and
+     *   defaults to empty, so the server rejected the whole save with 422. On a
+     *   fresh install that happened every single time: the wizard could not be
+     *   completed by anyone.
+     * - Fields collapsed by an unmet dependency, carrying schema placeholders —
+     *   ``price.token`` as "tibberBearerToken", ``inverter.password`` as "abc123",
+     *   and an empty ``data_source.url`` that fails its own URL pattern, which was
+     *   the second half of that 422.
+     * - ``pv_forecast.*`` for sources that do not use installations, which the
+     *   merger then turned into a phantom installation at the default coordinates.
+     *
+     * @returns {object} Flat dot-notation payload
+     */
+    _buildPayload() {
+        const payload = {};
+        const locationBased = this._isLocationBasedPvSource();
+
+        for (let i = 1; i < this.steps.length - 1; i++) {
+            const step = this.steps[i];
+            if (this.skippedSteps.has(step.id)) {
+                continue;
+            }
+            for (const f of this._getVisibleStepFields(step)) {
+                const val = this.values[f.key];
+                if (val === undefined) {
+                    continue;
+                }
+                // Installations are stored indexed; the wizard collects one, so it
+                // is index 0. Only location-based sources have any to store.
+                const template = f.key.match(/^pv_forecast\.([^.]+)$/);
+                if (template) {
+                    if (locationBased) {
+                        payload[`pv_forecast.0.${template[1]}`] = val;
+                    }
+                    continue;
+                }
+                payload[f.key] = val;
+            }
+        }
+        return payload;
+    }
+
+    /**
      * Save all wizard values and mark the wizard as completed.
      */
     async _finish() {
@@ -825,32 +895,7 @@ class SetupWizard {
         }
 
         try {
-            // Build payload — only getting_started fields that differ from defaults
-            let payload = {};
-            for (const f of this.schema) {
-                if (f.level !== "getting_started") {
-                    continue;
-                }
-                const val = this.values[f.key];
-                if (val !== undefined) {
-                    payload[f.key] = val;
-                }
-            }
-
-            const pvSource = payload["pv_forecast_source.source"] ?? this.values["pv_forecast_source.source"];
-            const locationBasedSources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"];
-            if (locationBasedSources.includes(pvSource)) {
-                const transformed = {};
-                for (const [key, value] of Object.entries(payload)) {
-                    const templateMatch = key.match(/^pv_forecast\.([^\.]+)$/);
-                    if (templateMatch) {
-                        transformed[`pv_forecast.0.${templateMatch[1]}`] = value;
-                    } else {
-                        transformed[key] = value;
-                    }
-                }
-                payload = transformed;
-            }
+            const payload = this._buildPayload();
 
             // Save config
             const saveRes = await fetch("api/config/", {
@@ -954,20 +999,27 @@ class SetupWizard {
             f => step.sections.includes(f.section) && f.level === "getting_started"
         );
         
-        // For PV step, hide pv_forecast fields if source is not location-based
-        if (step.id === "pv") {
-            const pvSource = this.values["pv_forecast_source.source"] ?? 
-                            this.schema.find(f => f.key === "pv_forecast_source.source")?.default ?? 
-                            "akkudoktor";
-            const locationBasedSources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar", "default"];
-            
-            if (!locationBasedSources.includes(pvSource)) {
-                // For non-location-based sources, exclude pv_forecast section fields
-                fields = fields.filter(f => f.section !== "pv_forecast");
-            }
+        // For PV step, hide pv_forecast fields if source is not location-based.
+        // This list used to be written out here as well as in _finish, and the two
+        // disagreed: this one also contained "default", so a "default" install saw
+        // the installation fields, filled them in, and then had them saved unindexed
+        // — which the merger turned into a phantom installation at 47.5/8.5.
+        if (step.id === "pv" && !this._isLocationBasedPvSource()) {
+            fields = fields.filter(f => f.section !== "pv_forecast");
         }
         
         return fields;
+    }
+
+    /**
+     * Whether the chosen PV source forecasts from an installation's coordinates.
+     * @returns {boolean} True when pv_forecast entries are required
+     */
+    _isLocationBasedPvSource() {
+        const source = this.values["pv_forecast_source.source"]
+            ?? this.schema.find(f => f.key === "pv_forecast_source.source")?.default
+            ?? "akkudoktor";
+        return this.locationBasedPvSources.includes(source);
     }
 
     /**

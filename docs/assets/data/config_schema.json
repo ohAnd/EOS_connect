@@ -1496,12 +1496,13 @@
       "type": "str",
       "default": "",
       "section": "pv_forecast_source",
-      "level": "standard",
+      "level": "getting_started",
       "description": "Resource ID / Installation ID (Solcast: comma-separated list; Victron: single VRM ID)",
       "labels": [],
       "help_url": "configuration.html#pv-forecast",
       "validation": {
-        "max_length": 1000
+        "max_length": 1000,
+        "required": true
       },
       "depends_on": {
         "pv_forecast_source.source": [
