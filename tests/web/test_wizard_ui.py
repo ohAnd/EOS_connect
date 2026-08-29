@@ -685,3 +685,73 @@ def test_a_complete_setup_has_nothing_outstanding(fresh_page):
         wz.next_step(fresh_page)
 
     assert not fresh_page.is_visible(".wizard-followups")
+
+
+# ----------------------------------------------------------------------
+# Leaving and coming back
+# ----------------------------------------------------------------------
+
+
+def test_closing_the_wizard_leaves_the_setup_pending(fresh_page):
+    """Dismissing it is not the same as declining to configure the install."""
+    while wz.current_step_id(fresh_page) != "battery":
+        wz.next_step(fresh_page)
+    fresh_page.evaluate("() => closeFullScreenOverlay()")
+
+    status = fresh_page.evaluate(
+        "() => fetch('api/config/wizard-status').then(r => r.json())"
+    )
+    assert status["pending"] is True
+
+
+def test_it_comes_back_on_the_next_load(fresh_page):
+    """
+    ``checkWizardStatus`` is guarded to fire once per page load so the one-second
+    dashboard poll cannot reopen the wizard under someone who has just closed it. A
+    reload is what brings it back.
+    """
+    fresh_page.evaluate("() => closeFullScreenOverlay()")
+    assert not fresh_page.is_visible(".wizard-container")
+
+    fresh_page.reload(wait_until="domcontentloaded")
+    fresh_page.wait_for_selector(".wizard-container")
+
+    assert wz.current_step_id(fresh_page) == "welcome"
+
+
+def test_the_poll_does_not_reopen_it_while_you_work(fresh_page):
+    """A wizard that reappeared every second would be unusable."""
+    fresh_page.evaluate("() => closeFullScreenOverlay()")
+    fresh_page.wait_for_timeout(2500)  # several dashboard poll cycles
+
+    assert not fresh_page.is_visible(".wizard-container")
+
+
+def test_it_can_be_reopened_from_the_configuration_page(fresh_page):
+    """
+    The only route back in once it has been completed — the main menu has no wizard
+    entry, so a user who finished it and wants to redo the guided setup has to find
+    this button.
+    """
+    fresh_page.evaluate("() => closeFullScreenOverlay()")
+    fresh_page.evaluate("() => showConfigurationMenu()")
+    fresh_page.wait_for_selector("#cfg-layout")
+
+    fresh_page.click("button[title='Run Setup Wizard']")
+    fresh_page.wait_for_selector(".wizard-container")
+
+    assert wz.current_step_id(fresh_page) == "welcome"
+
+
+def test_answers_are_not_carried_over_from_an_abandoned_run(fresh_page, fresh_server):
+    """
+    Nothing is stored until Finish, so a run that was closed half-way must leave the
+    database untouched rather than half-configured.
+    """
+    before = dict(fresh_server.store.get_all())
+    while wz.current_step_id(fresh_page) != "battery":
+        wz.next_step(fresh_page)
+    wz.set_field(fresh_page, "battery.capacity_wh", 99999)
+    fresh_page.evaluate("() => closeFullScreenOverlay()")
+
+    assert fresh_server.store.get_all() == before
