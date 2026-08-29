@@ -142,7 +142,7 @@ It is what the wizard loads ([wizard.js:143](src/web/js/wizard.js#L143)), while
 
 ## C4 — Healthy config, degraded startup
 
-**4.1 · Every PV source degrades on a fresh install.** *(open)*
+**4.1 · Every PV source degrades on a fresh install.** *(fixed)*
 Verified — with `pv_forecast: []`, `configuration_valid` is `False` and
 `configuration_state` is `incomplete` for **all six** sources:
 
@@ -159,11 +159,11 @@ dispatching on source, duplicating `__validate_pv_source_requirements`
 ([:387-400](src/interfaces/pv_interface.py#L387-L400)), which already scopes the check
 correctly and has an explicit `elif source == "evcc"` no-op.
 
-**4.2 · Hot-reload into evcc is refused.** *(open)*
+**4.2 · Hot-reload into evcc is refused.** *(fixed)*
 The same check runs with `strict=True` ([:206](src/interfaces/pv_interface.py#L206))
 and rolls back — a user switching to evcc from the UI cannot fix it there.
 
-**4.3 · The error points at a section that does not exist.** *(open)*
+**4.3 · The error points at a section that does not exist.** *(fixed)*
 "Settings ▸ PV Forecast"; `SECTION_META` has "PV Source" and "PV Installations".
 Stale at [:113](src/interfaces/pv_interface.py#L113),
 [:262](src/interfaces/pv_interface.py#L262),

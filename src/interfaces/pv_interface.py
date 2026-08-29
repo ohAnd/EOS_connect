@@ -36,6 +36,15 @@ import pandas as pd
 import numpy as np
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
 
+# PV sources that derive the forecast from a physical installation's coordinates, and
+# therefore need at least one entry in ``pv_forecast``.  Every other source carries its
+# own configuration (a resource id, a URL, an EVCC instance) and works with an empty
+# list.  Canonical copy lives in ``config_web/schema.py``; ``interfaces`` does not import
+# ``config_web`` (they are sibling top-level packages at runtime), so the two are pinned
+# equal by ``tests/interfaces/test_pv_interface_location_sources.py`` instead.
+LOCATION_BASED_PV_SOURCES = ("akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar")
+
+
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_ANCHOR,
     TimeseriesFormatError,
@@ -121,7 +130,7 @@ class PvInterface:
                 "[PV-IF] Starting in DEGRADED mode - PV data unavailable until config is fixed"
             )
             logger.warning(
-                "[PV-IF] Use Settings > PV Forecast to complete the configuration"
+                "[PV-IF] Use Settings > PV Source to complete the configuration"
             )
             self.configuration_state = "incomplete"
             self.configuration_valid = False
@@ -269,13 +278,12 @@ class PvInterface:
                 "[PV-IF] pv_forecast must be a list (with '-' in YAML), not a single object"
             )
 
-        if not len(self.config) > 0:
-            logger.debug("[PV-IF] Initialize - No pv entries found (not yet configured)")
-            raise ValueError(
-                "[PV-IF] pv_forecast not yet configured - please configure"
-                + " via Settings > PV Forecast"
-            )
-
+        # An empty list is only a problem for location-based sources, and
+        # __validate_pv_source_requirements below already says so with the right
+        # wording.  Raising here instead would degrade evcc, solcast, victron,
+        # timeseries and default installs that never need an entry — and because
+        # reload_config() runs this with strict=True and rolls back, it would also
+        # refuse a switch to those sources from the web UI, leaving no way to fix it.
         logger.debug("[PV-IF] Initialize - pv entries found: %s", len(self.config))
 
         # VALIDATION PATH 1: Source-specific PV requirements
@@ -401,7 +409,7 @@ class PvInterface:
             # Default source uses fixed default values - no external configuration needed
             logger.debug("[PV-IF] Default source-specific requirements validated")
 
-        elif source in ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]:
+        elif source in LOCATION_BASED_PV_SOURCES:
             # Location-based sources - require at least one pv_forecast entry
             if not self.config or len(self.config) == 0:
                 log_func = logger.error if strict else logger.warning
@@ -2950,7 +2958,7 @@ class PvInterface:
         if failures >= self.max_failures:
             logger.error(
                 "[PV-IF] Maximum %s failures reached (%d) - "
-                "please check configuration in Settings > PV Forecast",
+                "please check configuration in Settings > PV Source",
                 target,
                 failures,
             )
