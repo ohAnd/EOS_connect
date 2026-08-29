@@ -255,6 +255,24 @@ in workflow YAML.
 
 ---
 
+## Out of scope — your call *(open, deliberately not fixed)*
+
+**The dashboard needs the internet to render, even though the app does not.**
+Chart.js, FontAwesome and a font come from CDNs (`cdn.jsdelivr.net`,
+`cdnjs.cloudflare.com`, `fonts.cdnfonts.com`). With them blocked, `init()` throws
+`ReferenceError: Chart is not defined` at `chart.js:318` and the startup overlay never
+clears — the dashboard shows "Connection Error" indefinitely. Observed in the real run
+against a network that blocks them; an air-gapped install would see the same.
+
+Not a regression and not caused by the setup work — `tests/web/conftest.py` already
+blocks these CDNs and force-hides the overlay for exactly this reason. **The wizard
+itself still works**, so a first install can be configured; it is the dashboard behind
+it that stays blank.
+
+Left open because fixing it means vendoring three third-party libraries into `src/web/`,
+which is a size, licensing and update-policy decision rather than a bug fix. Worth its
+own issue.
+
 ## Confirmed working — do not "fix"
 
 - The `evcc` option is correctly **disabled** in both `pv_forecast_source.source` and
