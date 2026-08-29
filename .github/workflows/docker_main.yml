@@ -39,7 +39,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
+          pip install -r requirements-dev.txt
+
+      - name: Install Chromium for the browser tests
+        # Without a browser, tests/web is skipped silently by the collect_ignore_glob
+        # in its conftest — so the setup wizard, the config page and the backup panel
+        # had no CI coverage at all despite having tests.
+        run: python -m playwright install --with-deps chromium
 
       - name: Run unit and regression tests
         run: python -m pytest -v tests/

@@ -146,9 +146,14 @@ invisible before only because the write happened first and the refusal was ignor
 by both callers. Each check is now gated on the request touching one of the fields
 involved.
 
-**3.4 · `GET /api/config/export` returns unmasked secrets.** *(open)*
-It is what the wizard loads ([wizard.js:143](src/web/js/wizard.js#L143)), while
-`GET /api/config/` masks them.
+**3.4 · `GET /api/config/export` returns unmasked secrets.** *(no change — by design;
+docs updated)* It is what both the wizard and the config page load values from, and the
+config page puts the real value into the password input so the reveal toggle works and
+an untouched field round-trips on save. Masking it would store the literal `********`.
+The masking on `GET /api/config/` is for API consumers, not the UI. There is no
+authentication on any endpoint, so masking one while another serves plaintext is not a
+boundary — and the same plaintext is already documented for the backup file. Left as
+is; the export endpoint is now documented as carrying secrets, like the backup is.
 
 ---
 
@@ -220,15 +225,15 @@ price.source=evcc               ->  blocked: True
 
 ## C6 — Test & CI gaps
 
-**6.1 · `tests/web/` never runs in CI.** *(open)* No browser, no `playwright install`
+**6.1 · `tests/web/` never runs in CI.** *(fixed)* No browser, no `playwright install`
 step; `collect_ignore_glob` skips it silently, so the browser suite guards nothing.
 
-**6.2 · The documented test command is broken.** *(open)* `pytest tests/` fails
+**6.2 · The documented test command is broken.** *(fixed)* `pytest tests/` fails
 collection with **14 errors**; only `python -m pytest tests/` works. CONTRIBUTING.md
 and the developer docs tell contributors to run the broken form. `pytest.ini` is in
 `.gitignore`.
 
-**6.3 · Test tooling is declared nowhere machine-readable.** *(open)*
+**6.3 · Test tooling is declared nowhere machine-readable.** *(fixed)*
 `pytest` / `pylint` / `black` / `playwright` exist only as ad-hoc `pip install` lines
 in workflow YAML.
 
