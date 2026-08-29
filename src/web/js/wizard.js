@@ -508,7 +508,44 @@ class SetupWizard {
             html += `</div>`;
         }
 
-        return html;
+        return html + this._renderFollowUps();
+    }
+
+    /**
+     * Warn about answers that leave something essential still to configure.
+     *
+     * A few choices need settings the wizard deliberately does not ask for, because
+     * they are not getting-started material — the Home Assistant inverter is driven by
+     * JSON service-call sequences, for instance. Without a word here the setup looks
+     * finished while the inverter controls nothing at all.
+     *
+     * @returns {string} HTML string, empty when nothing is outstanding
+     */
+    _renderFollowUps() {
+        const outstanding = [];
+
+        if (this.values["inverter.type"] === "homeassistant") {
+            outstanding.push(
+                "<strong>Inverter</strong> — the Home Assistant inverter is driven by "
+                + "service calls you define per mode. Until those are set under "
+                + "Settings \u25b8 Inverter, the battery is monitored but not controlled."
+            );
+        }
+        if (this.values["price.source"] === "fixed_24h") {
+            outstanding.push(
+                "<strong>Price</strong> — a fixed 24-hour tariff needs your own hourly "
+                + "prices. Set them under Settings \u25b8 Price; the defaults are "
+                + "placeholders."
+            );
+        }
+
+        if (outstanding.length === 0) {
+            return "";
+        }
+        return `<div class="wizard-followups">
+            <h4><i class="fas fa-circle-info"></i> Still to do after setup</h4>
+            <ul>${outstanding.map(t => `<li>${t}</li>`).join("")}</ul>
+        </div>`;
     }
 
     // ── Navigation ──────────────────────────────────────────────

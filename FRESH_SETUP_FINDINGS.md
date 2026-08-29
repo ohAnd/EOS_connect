@@ -183,6 +183,22 @@ Stale at [:113](src/interfaces/pv_interface.py#L113),
 
 ---
 
+**4.4 · A disabled feature warns on every fresh install.** *(fixed — found in the real
+run)* `pv_autoscaling.use_ha_central_data_source` defaults to `True` while `enabled`
+defaults to `False`, and the startup diagnostic block only checked the former. So every
+first boot raised `PvAutoscaler: access_token is EMPTY! Requests to  will fail with
+401.` onto the alerts panel — for a feature that is not running, naming an empty URL.
+Gated on `enabled`.
+
+**4.5 · The Home Assistant inverter is chosen and then never configured.** *(fixed —
+found in the real run)* `inverter.type = homeassistant` is offered in the wizard, but
+the three service-call sequences that actually drive it (`charge_from_grid`,
+`avoid_discharge`, `discharge_allowed`) are `standard` level and are never asked for.
+The user finishes the wizard with all three empty and a battery that is monitored but
+never controlled. Same shape for `price.source = fixed_24h`, whose hourly array keeps
+the schema's example values. These are not getting-started material, so the review step
+now names what is still outstanding rather than the wizard asking for JSON.
+
 ## C5 — Duplicated source of truth
 
 **5.1 · `LOCATION_BASED_PV_SOURCES` exists five times.** *(fixed)*

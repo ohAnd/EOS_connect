@@ -10,6 +10,10 @@ success for a save the server had refused.
 These run against ``fresh_page`` — a real first install, wizard already open.
 """
 
+# ``offline_timeseries`` is requested for its effect, not its value: it stops the
+# timeseries pre-flight from making a real request for the personas that configure one.
+# pylint: disable=unused-argument
+
 import json
 
 import pytest
@@ -302,7 +306,9 @@ def test_finishing_marks_the_wizard_done(fresh_page, offline_timeseries, persona
 
 
 @pytest.mark.parametrize("persona", list(PERSONAS))
-def test_it_stores_nothing_the_user_never_saw(fresh_page, offline_timeseries, fresh_server, persona):
+def test_it_stores_nothing_the_user_never_saw(
+    fresh_page, offline_timeseries, fresh_server, persona
+):
     """
     The payload was every ``getting_started`` field in the schema, not the ones the
     steps had shown.  Sections the wizard does not cover rode along, and so did the
@@ -638,3 +644,44 @@ def test_a_password_field_can_still_be_revealed_after_a_re_render(fresh_page):
     assert fresh_page.eval_on_selector(
         "#wiz-pv_forecast_source-api_key", "e => e.type"
     ) == "text"
+
+
+# ----------------------------------------------------------------------
+# What the wizard deliberately does not ask
+# ----------------------------------------------------------------------
+
+
+def test_the_home_assistant_inverter_says_what_is_still_missing(fresh_page):
+    """
+    It is driven by JSON service-call sequences, one per mode, which are not
+    getting-started material and are not asked for. Left unsaid, the setup reads as
+    finished while the battery is monitored and never controlled.
+    """
+    while wz.current_step_id(fresh_page) != "inverter":
+        wz.next_step(fresh_page)
+    wz.set_field(fresh_page, "inverter.type", "homeassistant")
+    while wz.current_step_id(fresh_page) != "review":
+        wz.next_step(fresh_page)
+
+    note = fresh_page.inner_text(".wizard-followups")
+    assert "Inverter" in note
+    assert "not controlled" in note
+
+
+def test_a_fixed_tariff_says_the_prices_are_placeholders(fresh_page):
+    """The hourly array is standard-level, so it keeps the schema's example values."""
+    while wz.current_step_id(fresh_page) != "price":
+        wz.next_step(fresh_page)
+    wz.set_field(fresh_page, "price.source", "fixed_24h")
+    while wz.current_step_id(fresh_page) != "review":
+        wz.next_step(fresh_page)
+
+    assert "placeholders" in fresh_page.inner_text(".wizard-followups")
+
+
+def test_a_complete_setup_has_nothing_outstanding(fresh_page):
+    """The note must not become wallpaper — it appears only when it applies."""
+    while wz.current_step_id(fresh_page) != "review":
+        wz.next_step(fresh_page)
+
+    assert not fresh_page.is_visible(".wizard-followups")

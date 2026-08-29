@@ -194,14 +194,15 @@ def offline_timeseries_fixture(monkeypatch):
     monkeypatch.setattr(config_api, "probe", lambda *a, **kw: {"ok": True, "warnings": []})
 
 
-def _launch_browser(playwright):
+def _launch_browser(driver):
     """Chromium, or a skip if this host cannot start it."""
     try:
-        return playwright.chromium.launch()
+        browser = driver.chromium.launch()
     # Playwright raises a variety of errors for a browser that will not start
     # (missing libraries, no sandbox, out of memory); all of them mean "skip".
     except Exception as exc:  # pylint: disable=broad-exception-caught
         pytest.skip(f"Chromium could not be launched: {exc}")
+    return browser
 
 
 def _open_page(browser, url):

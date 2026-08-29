@@ -398,3 +398,26 @@
         text-align: left;
     }
 }
+
+/* ── Review: things the wizard deliberately did not ask for ───── */
+.wizard-followups {
+    margin-top: 20px;
+    padding: 14px 18px;
+    border-radius: 8px;
+    background: rgba(255, 193, 7, 0.08);
+    border-left: 3px solid rgba(255, 193, 7, 0.6);
+}
+
+.wizard-followups h4 {
+    margin: 0 0 8px;
+    font-size: 0.95em;
+    color: #ffc107;
+}
+
+.wizard-followups ul {
+    margin: 0;
+    padding-left: 20px;
+    font-size: 0.88em;
+    color: #ccc;
+    line-height: 1.6;
+}

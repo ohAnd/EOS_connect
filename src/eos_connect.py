@@ -290,7 +290,14 @@ try:
 
     # Central data source values are already applied by the merger (config_web.start_db)
     # when use_ha_central_data_source=True. Log for diagnostics.
-    if pv_autoscaler_cfg.get("use_ha_central_data_source"):
+    #
+    # Only when auto-scaling is actually on. use_ha_central_data_source defaults to
+    # True while enabled defaults to False, so every fresh install used to raise a
+    # warning on the alerts panel about a missing token for a feature that was not
+    # running — and named an empty URL while doing it.
+    if not pv_autoscaler_cfg.get("enabled"):
+        logger.info("[Main] PvAutoscaler is disabled — skipping data source checks")
+    elif pv_autoscaler_cfg.get("use_ha_central_data_source"):
         token_status = "SET" if pv_autoscaler_cfg.get("access_token") else "NOT SET"
         logger.info(
             "[Main] PvAutoscaler using CENTRAL data source: url=%s, src=%s, token=%s",

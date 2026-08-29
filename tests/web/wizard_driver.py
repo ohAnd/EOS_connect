@@ -49,6 +49,7 @@ def step_title(page):
 
 
 def step_description(page):
+    """The sentence under the heading explaining what the step is for."""
     el = page.query_selector(".wizard-step-description")
     return el.inner_text().strip() if el else ""
 
@@ -157,6 +158,7 @@ def next_step_expecting_block(page):
 
 
 def skip_step(page):
+    """Click Skip on an optional step and wait for the next one."""
     before = current_step_id(page)
     page.click("#wiz-skip")
     page.wait_for_function(
@@ -166,6 +168,7 @@ def skip_step(page):
 
 
 def back_step(page):
+    """Click Back and wait for the previous step to render."""
     before = current_step_id(page)
     page.click("#wiz-back")
     page.wait_for_function(
@@ -188,5 +191,6 @@ def finished_successfully(page):
 
 
 def save_error_text(page):
+    """The message shown when the save was refused, or ''."""
     el = page.query_selector(".wizard-save-error")
     return el.inner_text().strip() if el else ""
