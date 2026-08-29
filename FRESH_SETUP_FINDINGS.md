@@ -239,12 +239,19 @@ in workflow YAML.
 
 ---
 
-## C7 — Docs drift *(open)*
+## C7 — Docs drift *(fixed)*
 
-- `docs/user-guide/index.html` still says an EOS or EVopt server must already be
-  running; `local_evopt` is the default and needs nothing.
-- `configuration.html` documents `pv_forecast[].resource_id`; the schema moved it to
-  `pv_forecast_source.resource_id`.
+- `docs/user-guide/index.html` said an EOS or EVopt server must already be running;
+  `local_evopt` is the default and needs nothing. Corrected.
+- `configuration.html` documented `pv_forecast[].resource_id`; the schema moved it to
+  `pv_forecast_source.resource_id`. Corrected.
+- README and the user guide documented the old wizard order (Inverter before Data
+  Source) and did not say that the wizard saves only what it asked for, or that a few
+  choices leave something outstanding. Both updated.
+- `GET /api/config/export` returning secrets in plain text was undocumented while the
+  identical behaviour of the backup file was. Documented in `docs/advanced`.
+- CONTRIBUTING.md now gives a test command that works, and says what the browser tests
+  need.
 
 ---
 
