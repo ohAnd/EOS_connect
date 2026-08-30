@@ -42,7 +42,7 @@ import time
 from datetime import datetime
 import requests
 from .battery_price_handler import BatteryPriceHandler
-from .state_source import fetch_remote_state
+from .state_source import SUPPORTED_SOURCES, fetch_remote_state
 
 logger = logging.getLogger("__main__")
 logger.info("[BATTERY-IF] loading module ")
@@ -133,6 +133,12 @@ class BatteryInterface:
 
         self.soc_fail_count = 0
 
+        self.configuration_state = "unknown"  # 'valid', 'incomplete', or 'invalid'
+        self.configuration_valid = False
+        self.configuration_message = ""
+        self.soc_source_usable = False
+        self.__check_soc_config()
+
         # Initialize dynamic price handler
         self.price_handler = BatteryPriceHandler(
             config, load_interface=load_interface, timezone=timezone
@@ -143,6 +149,60 @@ class BatteryInterface:
         self._stop_event = threading.Event()
         self.start_update_service()
 
+    def __check_soc_config(self):
+        """
+        Decide whether the SOC sensor can actually be read, before anything tries.
+
+        Deliberately scoped to the SOC sensor rather than to ``self.src``: the same
+        source also serves the battery temperature and battery price sensors, which are
+        configured independently, so downgrading the source here would silently disable
+        two unrelated features that are perfectly well configured.
+
+        A placeholder entity name used to reach this point intact — the setup wizard
+        stored ``battery_SOC`` as though the user had chosen it — which turned into a
+        404 against Home Assistant every 30 seconds, forever, with nothing in the UI
+        connecting it to a config field. Those names are blanked at the config layer
+        now, so an unconfigured sensor arrives here as "" and is caught below.
+        """
+        if self.src == "default":
+            self.configuration_state = "valid"
+            self.configuration_valid = True
+            self.soc_source_usable = False
+            logger.debug("[BATTERY-IF] Using default source - no SOC sensor needed.")
+            return
+
+        if self.src not in SUPPORTED_SOURCES:
+            self.configuration_state = "invalid"
+            self.configuration_message = (
+                f"Battery source '{self.src}' is not supported. "
+                "Using the default start SOC of 5%."
+            )
+            logger.error("[BATTERY-IF] %s", self.configuration_message)
+            return
+
+        missing, where = None, "Data Source"
+        if self.url == "":
+            missing = "the data source URL is not configured"
+        elif self.access_token == "" and self.src == "homeassistant":
+            missing = "the Home Assistant access token is not configured"
+        elif self.soc_sensor == "":
+            missing, where = "no battery SOC sensor is set", "Battery"
+
+        if missing:
+            self.configuration_state = "incomplete"
+            self.configuration_message = (
+                f"Battery source '{self.src}' is selected, but {missing}. "
+                "The battery SOC stays at the default 5% until you set it under "
+                f"Settings > {where}."
+            )
+            logger.warning("[BATTERY-IF] %s", self.configuration_message)
+            return
+
+        self.configuration_state = "valid"
+        self.configuration_valid = True
+        self.soc_source_usable = True
+        logger.debug("[BATTERY-IF] SOC config check successful using '%s'", self.src)
+
     # source-specific SOC fetchers removed — use __fetch_soc_data_unified
 
     def __battery_request_current_soc(self):
@@ -151,7 +211,9 @@ class BatteryInterface:
         """
         # default value for start SOC = 5
         default = False
-        if self.src == "default":
+        if self.src == "default" or not self.soc_source_usable:
+            # Not attempting the request is the point: an unreadable SOC sensor used to
+            # 404 on every cycle forever. __check_soc_config has already logged why.
             self.current_soc = 5
             default = True
             logger.debug("[BATTERY-IF] source set to default with start SOC = 5%")

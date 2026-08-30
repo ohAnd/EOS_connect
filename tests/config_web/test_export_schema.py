@@ -143,3 +143,40 @@ class TestExportSchema:
         assert isinstance(data["sections"], dict)
         assert "data_source" in data["sections"]
         assert data["sections"]["data_source"]["icon"] == "fa-plug"
+
+
+def test_the_committed_export_matches_the_schema():
+    """
+    ``docs/assets/data/config_schema.json`` is generated, but nothing regenerates it —
+    ``scripts/export_config_schema.py`` is run by hand.  So a schema edit silently
+    leaves the documentation describing the old field, which is how the docs came to
+    show ``inverter.type`` gated on the Home Assistant data source after that
+    dependency was removed.
+
+    Run ``python scripts/export_config_schema.py`` when this fails.
+    """
+    project_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    committed_path = os.path.join(
+        project_root, "docs", "assets", "data", "config_schema.json"
+    )
+    with open(committed_path, encoding="utf-8") as fh:
+        committed = json.load(fh)
+
+    schema = ConfigSchema()
+    expected = {"fields": schema.to_json(), "sections": schema.section_meta()}
+
+    committed_by_key = {f["key"]: f for f in committed["fields"]}
+    expected_by_key = {f["key"]: f for f in expected["fields"]}
+
+    assert set(committed_by_key) == set(expected_by_key), (
+        "docs export is missing or has extra fields — "
+        "run python scripts/export_config_schema.py"
+    )
+    drifted = [k for k in expected_by_key if committed_by_key[k] != expected_by_key[k]]
+    assert not drifted, (
+        f"docs export is stale for {drifted} — "
+        "run python scripts/export_config_schema.py"
+    )
+    assert committed["sections"] == expected["sections"]

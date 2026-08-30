@@ -35,6 +35,7 @@ from .migration import (
     migrate_yaml_to_store,
     migrate_ha_options_to_store,
     migrate_battery_price_unit_to_ct_kwh,
+    migrate_sensor_placeholders_to_empty,
 )
 from .merger import build_merged_config
 from .api import config_bp, init_api
@@ -130,6 +131,10 @@ class ConfigWebModule:
 
         # One-time migration: battery.price_euro_per_wh_accu (€/Wh) -> battery.price_ct_kwh_accu (ct/kWh)
         migrate_battery_price_unit_to_ct_kwh(self._store)
+
+        # One-time migration: blank sensor names that were only ever schema hints,
+        # so the interfaces' "not configured" handling can take over.
+        migrate_sensor_placeholders_to_empty(self._store)
 
         # Build the merged config dict
         self.rebuild_config()

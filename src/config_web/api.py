@@ -14,6 +14,13 @@ from flask import Blueprint, jsonify, request as flask_request, Response
 
 from .hot_reload import _coerce_bool
 from .migration import _flatten_config
+from .schema import (
+    DATA_SOURCE_REQUIRED_SENSORS,
+    LEGACY_SENSOR_PLACEHOLDERS,
+    LOCATION_BASED_PV_SOURCES,
+    REMOTE_DATA_SOURCE_TYPES,
+)
+from .entity_probe import probe_entity
 from .timeseries_probe import probe
 
 logger = logging.getLogger("__main__")
@@ -83,6 +90,11 @@ def get_schema():
         "fields": fields,
         "sections": sections_dict,
         "section_order": list(sections_dict.keys()),  # Explicit order as array
+        # Which PV sources need a pv_forecast installation. The frontend decides on
+        # this in two places and used to keep its own copies, which drifted — one of
+        # them listed "default" and the other did not, so the wizard rendered the
+        # installation fields for a source it then refused to save them for.
+        "location_based_pv_sources": list(LOCATION_BASED_PV_SOURCES),
     }
     # Use json.dumps with sort_keys=False to preserve SECTION_META insertion order
     response = Response(
@@ -139,8 +151,11 @@ def update_config():
 
     Returns:
     - If validation errors: status 422 with "errors"
-    - If unmet dependencies: status 200 with "unmet_dependencies" + no save
-    - If success: status 200 with "updated", "restart_required", "hot_reloaded"
+    - If unmet *blocking* dependencies: status 200 with ``success: false`` and
+      "unmet_dependencies"; nothing is written
+    - If success: status 200 with "updated", "restart_required", "hot_reloaded", and
+      "warnings" — advisory dependencies describing a configuration that saved fine
+      but will run degraded
     """
     data = flask_request.get_json(silent=True)
     if not data or not isinstance(data, dict):
@@ -160,6 +175,24 @@ def update_config():
     array_errors = _validate_price_arrays(data)
     if array_errors:
         return jsonify({"errors": array_errors}), 422
+
+    # Cross-field dependencies are checked before anything is written. They used to be
+    # checked afterwards, so a request refused with success:false had already stored
+    # every value in it — the caller was told the save did not happen while the database
+    # said otherwise. _check_dependencies reads the incoming values in preference to the
+    # stored ones, so it sees the same picture either way.
+    # Only the blocking ones refuse the write. Advisory entries describe a
+    # configuration that runs in a degraded mode worth mentioning, and ride along with
+    # the successful response instead.
+    unmet_deps = _check_dependencies(data)
+    blocking_deps = [d for d in unmet_deps if d.get("blocking", True)]
+    advisories = [d for d in unmet_deps if not d.get("blocking", True)]
+    if blocking_deps:
+        return jsonify({
+            "success": False,
+            "unmet_dependencies": blocking_deps,
+            "message": "Cannot save: required dependencies not configured"
+        }), 200
 
     changed_keys = []
     restart_required = []
@@ -182,16 +215,6 @@ def update_config():
     # Rebuild merged config so get_config() reflects changes
     _module.rebuild_config()
 
-    # Check cross-field dependencies after the new config has been merged.
-    # This ensures array updates like pv_forecast.0.* are visible to dependency logic.
-    unmet_deps = _check_dependencies(data)
-    if unmet_deps:
-        return jsonify({
-            "success": False,
-            "unmet_dependencies": unmet_deps,
-            "message": "Cannot save: required dependencies not configured"
-        }), 200
-
     # Persist restart-required fields for banner across reloads
     if restart_required:
         existing = _store.get("_restart_pending", []) or []
@@ -204,6 +227,7 @@ def update_config():
             "updated": changed_keys,
             "restart_required": restart_required,
             "hot_reloaded": hot_reloaded,
+            "warnings": advisories,
         }
     )
 
@@ -534,26 +558,79 @@ def _resolve_schema_key(key: str):
     return None
 
 
+# The URL the schema ships as a hint. It is not a configured EVCC instance, so every
+# check that requires one has to reject it.
+_EVCC_PLACEHOLDER_URL = "http://yourEVCCserver:7070"
+
+
+def _evcc_url_unconfigured(url) -> bool:
+    """Whether *url* is empty, blank, or still the schema's placeholder."""
+    if not url or not isinstance(url, str):
+        return True
+    stripped = url.strip()
+    return not stripped or stripped == _EVCC_PLACEHOLDER_URL
+
+
+def _sensor_unconfigured(value) -> bool:
+    """Whether *value* is empty, blank, or still one of the schema's old placeholders."""
+    if not value or not isinstance(value, str):
+        return True
+    stripped = value.strip()
+    return not stripped or stripped in LEGACY_SENSOR_PLACEHOLDERS
+
+
+def _pending_pv_installation_count(data: dict, current_config: dict) -> int:
+    """
+    How many PV installations there will be once *data* is applied.
+
+    Installations are stored as indexed keys (``pv_forecast.0.lat``) and only become a
+    list once the merger rebuilds the config. This counts them without that rebuild, so
+    the dependency check can run before anything is written rather than after.
+
+    Indices from the request and from the store are unioned: a partial update that only
+    touches installation 0 must not read as "there is one installation" when the store
+    already holds two.
+    """
+    def _indices(keys):
+        found = set()
+        for key in keys:
+            parts = key.split(".")
+            if len(parts) >= 3 and parts[0] == "pv_forecast" and parts[1].isdigit():
+                found.add(parts[1])
+        return found
+
+    indexed = _indices(data) | _indices(_store.get_all())
+    if indexed:
+        return len(indexed)
+
+    # A whole list can also arrive under the bare key, and the merged config always
+    # exposes one.
+    listed = data["pv_forecast"] if "pv_forecast" in data else current_config.get("pv_forecast")
+    return len(listed or [])
+
+
 def _check_dependencies(data: dict) -> list[dict]:
     """
-    Check cross-field dependencies. Returns list of unmet dependency objects.
+    Cross-field dependencies that *this request* would leave unsatisfied.
 
-    Examples:
-    - If pv_forecast_source.source="evcc", then evcc.url must be populated
-    - If mqtt.enabled=True, then mqtt.broker must be populated
+    Each check is gated on the request actually touching one of the fields involved.
+    Judging the whole resulting config instead would refuse an unrelated save whenever
+    the stored configuration was already incomplete — and a fresh install always is,
+    because the default PV source is location-based and has no installations yet. That
+    made every single save through this endpoint impossible until the PV step was done,
+    in whatever order the user happened to work.
 
-    Each dependency object has: {"field": "...", "reason": "...", "requires": "..."
+    Each entry is ``{"field", "reason", "requires", "blocking"}``. ``blocking`` false
+    means "save it, but tell the user" — a configuration that runs, in a degraded mode
+    they should know about, rather than one that cannot be written.
     """
     dependencies = []
-
-    # Get current config for fields not in the update
     current_config = _module.get_config()
 
-    # Helper: get effective value (from update data or current config)
     def get_value(key):
+        """The value this request would end up with: its own, else what is stored."""
         if key in data:
             return data[key]
-        # Navigate nested key in current config
         parts = key.split(".")
         val = current_config
         for part in parts:
@@ -563,47 +640,42 @@ def _check_dependencies(data: dict) -> list[dict]:
                 return None
         return val
 
-    # PV Source: if "evcc" selected, EVCC URL must be configured
+    def touches(*keys):
+        """Whether the request sets any of *keys* — including indexed pv_forecast."""
+        for key in keys:
+            if key in data:
+                return True
+            if key == "pv_forecast" and any(
+                k.startswith("pv_forecast.") for k in data
+            ):
+                return True
+        return False
+
+    # EVCC is the data source for three different things, and each needs a real URL.
+    # The placeholder counts as unconfigured for all of them — it used to pass for the
+    # PV source only, so that one save went through and then failed at runtime.
+    for field, label in (
+        ("pv_forecast_source.source", "PV source"),
+        ("inverter.type", "inverter controller"),
+        ("price.source", "price source"),
+    ):
+        if get_value(field) == "evcc" and touches(field, "evcc.url"):
+            if _evcc_url_unconfigured(get_value("evcc.url")):
+                dependencies.append({
+                    "field": field,
+                    "reason": f"EVCC selected as {label} but EVCC URL is not configured",
+                    "requires": "evcc.url",
+                    "blocking": True,
+                })
+
     pv_source = get_value("pv_forecast_source.source")
-    if pv_source == "evcc":
-        evcc_url = get_value("evcc.url")
-        if not evcc_url or evcc_url.strip() == "":
-            dependencies.append({
-                "field": "pv_forecast_source.source",
-                "reason": "EVCC selected as PV source but EVCC URL is not configured",
-                "requires": "evcc.url",
-                "blocking": True,
-            })
 
-    # Inverter: if "evcc" selected, EVCC URL must be configured
-    inverter_type = get_value("inverter.type")
-    if inverter_type == "evcc":
-        evcc_url = get_value("evcc.url")
-        if not evcc_url or evcc_url.strip() == "" or evcc_url == "http://yourEVCCserver:7070":
-            dependencies.append({
-                "field": "inverter.type",
-                "reason": "EVCC selected as inverter controller but EVCC URL is not configured",
-                "requires": "evcc.url",
-                "blocking": True,
-            })
-
-    # Price Source: if "evcc" selected, EVCC URL must be configured
-    price_source = get_value("price.source")
-    if price_source == "evcc":
-        evcc_url = get_value("evcc.url")
-        if not evcc_url or evcc_url.strip() == "" or evcc_url == "http://yourEVCCserver:7070":
-            dependencies.append({
-                "field": "price.source",
-                "reason": "EVCC selected as price source but EVCC URL is not configured",
-                "requires": "evcc.url",
-                "blocking": True,
-            })
-
-    # PV Source: validation for Solcast and Victron
-    pv_source = get_value("pv_forecast_source.source")
-    if pv_source in ["solcast", "victron"]:
+    # Solcast and Victron identify the installation by id rather than coordinates.
+    if pv_source in ("solcast", "victron") and touches(
+        "pv_forecast_source.source", "pv_forecast_source.resource_id"
+    ):
         resource_id = get_value("pv_forecast_source.resource_id")
-        if not resource_id or (isinstance(resource_id, str) and resource_id.strip() == ""):
+        if not resource_id or (isinstance(resource_id, str) and not resource_id.strip()):
             dependencies.append({
                 "field": "pv_forecast_source.resource_id",
                 "reason": (
@@ -614,22 +686,43 @@ def _check_dependencies(data: dict) -> list[dict]:
                 "blocking": True,
             })
 
-    # PV Source: validation for location-based sources (must have at least 1 installation)
-    location_based_sources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]
-    if pv_source in location_based_sources:
-        # Get PV installations from current config
-        pv_forecast_data = (
-            data.get("pv_forecast")
-            if "pv_forecast" in data
-            else current_config.get("pv_forecast", [])
-        )
-        if not pv_forecast_data or len(pv_forecast_data) == 0:
+    # Location-based sources forecast from coordinates, so they need an installation.
+    if pv_source in LOCATION_BASED_PV_SOURCES and touches(
+        "pv_forecast_source.source", "pv_forecast"
+    ):
+        if _pending_pv_installation_count(data, current_config) == 0:
             dependencies.append({
                 "field": "pv_forecast",
                 "reason": "Location-based PV source selected but no PV installations configured",
                 "requires": "pv_forecast.0.lat",  # Indicate at least one entry needed
                 "blocking": True,
             })
+
+    # A remote data source with nothing to read from it. Deliberately advisory: an
+    # empty sensor is a *supported* state — the interfaces fall back to the built-in
+    # profile — so refusing the write would be wrong on the merits. It would also
+    # deadlock the user, because these sensor fields only become visible once
+    # data_source.type is set to a remote source, which is the very save being judged.
+    if get_value("data_source.type") in REMOTE_DATA_SOURCE_TYPES and touches(
+        "data_source.type", "data_source.url", "data_source.access_token"
+    ):
+        for key, label in DATA_SOURCE_REQUIRED_SENSORS.items():
+            # A key the request answers is an answer, whatever it says. The wizard
+            # posts both sensors alongside data_source.type, and warning about one it
+            # just set would be noise the user cannot act on.
+            if key in data:
+                continue
+            if _sensor_unconfigured(get_value(key)):
+                dependencies.append({
+                    "field": key,
+                    "reason": (
+                        f"{get_value('data_source.type')} selected as data source, but "
+                        f"the {label.lower()} sensor is not set — that data stays on "
+                        f"the built-in fallback until you set it under Settings > {label}"
+                    ),
+                    "requires": key,
+                    "blocking": False,
+                })
 
     return dependencies
 
@@ -915,6 +1008,69 @@ def test_timeseries():
     return jsonify(_probe_timeseries_domain(domain, data, get_value)), 200
 
 
+@config_bp.route("/test-entity", methods=["POST"])
+def test_entity():
+    """
+    Read one sensor entity/item and report whether it is usable.
+
+    Body: optional flat dot-notation keys (as for PUT /), so the UI can test a name
+    the user has typed but not yet saved, plus ``key`` naming the sensor field to
+    test. Anything absent falls back to the stored config.
+
+    Returns 200 in both the success and the failure case — an entity that does not
+    answer is a finding to show the user, not a server error.
+    """
+    data = flask_request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+
+    key = data.pop("key", "")
+    if not key or _resolve_schema_key(key) is None:
+        return jsonify({"error": "key must name a sensor field"}), 400
+
+    get_value = _effective_value_getter(data)
+    source, url, token, ssl_ignore = _entity_probe_connection(key, get_value)
+    result = probe_entity(
+        source,
+        get_value(key),
+        url,
+        access_token=token,
+        ssl_ignore=ssl_ignore,
+    )
+    return jsonify(result), 200
+
+
+def _entity_probe_connection(key: str, get_value):
+    """
+    The connection the interface behind *key* actually reads through.
+
+    Load and battery always inherit the central data source (``merger.
+    _apply_data_source_inheritance``), but ``pv_autoscaling`` can opt out of it and
+    carry its own host and token. Probing ``data_source.*`` for that one would test a
+    connection it never uses, and report a working entity as missing — or the reverse.
+
+    Returns ``(source, url, access_token, ssl_ignore)``.
+    """
+    section = key.split(".")[0]
+
+    if section == "pv_autoscaling" and not get_value(
+        "pv_autoscaling.use_ha_central_data_source"
+    ):
+        return (
+            get_value("pv_autoscaling.src"),
+            get_value("pv_autoscaling.url"),
+            get_value("pv_autoscaling.access_token"),
+            bool(get_value("pv_autoscaling.ssl_ignore")),
+        )
+
+    return (
+        get_value("data_source.type"),
+        get_value("data_source.url"),
+        get_value("data_source.access_token"),
+        bool(get_value("data_source.ssl_ignore")),
+    )
+
+
 def _validate_price_arrays(data: dict) -> list[dict]:
     """
     Validate price array configurations at save time.
@@ -987,13 +1143,55 @@ def _validate_price_arrays(data: dict) -> list[dict]:
     return errors
 
 
+def _dependency_met(field_def, data: dict, current_config: dict) -> bool:
+    """
+    Whether *field_def* applies at all, given the values this request would leave.
+
+    Mirrors ``_isDependencyMet`` in the frontend: a ``depends_on`` entry is satisfied
+    when the governing key holds one of the listed values, or — for ``"!empty"`` — any
+    value at all.
+    """
+    if not field_def.depends_on:
+        return True
+
+    for dep_key, allowed in field_def.depends_on.items():
+        if dep_key in data:
+            current = data[dep_key]
+        else:
+            current = current_config
+            for part in dep_key.split("."):
+                current = current.get(part) if isinstance(current, dict) else None
+
+        if allowed == "!empty":
+            if not current:
+                return False
+        elif isinstance(allowed, list):
+            if not any(str(a) == str(current) for a in allowed):
+                return False
+        elif str(allowed) != str(current):
+            return False
+
+    return True
+
+
 def _validate_updates(data: dict) -> list[dict]:
     """Validate a dict of {key: value} against the schema. Returns list of error dicts."""
     errors = []
+    current_config = _module.get_config()
+
     for key, value in data.items():
         field_def = _resolve_schema_key(key)
         if field_def is None:
             errors.append({"key": key, "error": "Unknown configuration key"})
+            continue
+
+        # A field the configuration does not reach cannot be missing a value. Marking
+        # one required, or giving it a pattern no empty string matches, otherwise
+        # rejects the whole request over a field the user was never shown — which is
+        # how a fresh install could not complete the setup wizard: an empty
+        # data_source.url that only applies to Home Assistant and OpenHAB, and
+        # pv_autoscaling.sensor_entity_id, required but only when auto-scaling is on.
+        if _is_empty(value) and not _dependency_met(field_def, data, current_config):
             continue
 
         err = _validate_single(field_def, value)
@@ -1001,6 +1199,11 @@ def _validate_updates(data: dict) -> list[dict]:
             errors.append({"key": key, "error": err})
 
     return errors
+
+
+def _is_empty(value) -> bool:
+    """Whether *value* carries no content — ``None``, or a blank string."""
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _validate_single(field_def, value) -> str:

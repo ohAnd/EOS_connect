@@ -110,7 +110,7 @@
                 <li><strong>Home Assistant</strong> (recommended for most users) OR</li>
                 <li><strong>Docker</strong> with Docker Compose OR</li>
                 <li><strong>Python 3.11+</strong> for local installation</li>
-                <li><strong>Running EOS Server:</strong> You must have an instance of <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">Akkudoktor EOS</a> or <a href="https://github.com/thecem/hassio-evopt" target="_blank">EVopt</a> already running and reachable</li>
+                <li><strong>An optimizer:</strong> none needed &mdash; the built-in <code>local_evopt</code> is the default and runs in-process. Only if you would rather use an external backend do you need an instance of <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">Akkudoktor EOS</a> or <a href="https://github.com/thecem/hassio-evopt" target="_blank">EVopt</a> running and reachable.</li>
             </ul>
 
             <h3>Step 2: Install</h3>
@@ -143,6 +143,19 @@ python src/eos_connect.py</code></pre>
 
             <h3>Step 3: Configure</h3>
             <p>On first start, EOS Connect launches a <strong>Setup Wizard</strong> that guides you through the essential configuration. All settings are managed through the built-in web UI — no manual file editing required.</p>
+            <p>It asks, in order: <strong>Optimizer</strong>, <strong>EVCC</strong> (optional, skippable),
+            <strong>Data Source</strong>, <strong>Inverter</strong>, <strong>Battery</strong>,
+            <strong>Load</strong>, <strong>Price</strong>, <strong>PV Installations</strong>, then a
+            <strong>Review &amp; Finish</strong> summary. EVCC and Data Source come before Inverter because
+            either can act as the inverter controller.</p>
+            <p>The wizard saves only the answers it asked you for; everything else keeps its default until you
+            change it in Settings. Where a choice needs a setting the wizard does not cover — the Home Assistant
+            inverter's service-call sequences, or the hourly prices behind a fixed 24-hour tariff — the review
+            step says so before you finish.</p>
+            <p>The PV step arrives preset to the <strong>Default</strong> forecast source, which needs no setup
+            at all, so a first run finishes without asking where you live. It is a fixed demo curve for an
+            assumed 4&nbsp;kW array rather than a forecast of your roof — enough to see EOS Connect working,
+            and worth replacing with a real provider under Settings &#9656; PV Source once you are running.</p>
             <p>The only file you may optionally create is <code>src/config.yaml</code> with bootstrap settings:</p>
             <pre><code># config.yaml — bootstrap settings only (optional)
 eos_connect_web_port: 8081  # Web server port

@@ -1213,6 +1213,26 @@
                                 section separately.</strong> This is your only connection configuration.</p>
                     </div>
 
+                    <div class="alert alert-info">
+                        <strong><i class="fas fa-plug"></i> Sensor fields follow this setting:</strong>
+                        the sensor fields in <strong>Load</strong> and <strong>Battery</strong> only appear once
+                        <code>data_source.type</code> is Home Assistant or openHAB &mdash; with nothing connected there
+                        is nothing for them to read.
+                        <ul style="margin-top: 10px; margin-bottom: 0;">
+                            <li><strong>Connecting a data source is never blocked</strong> by a sensor you have not set
+                                yet, so you can work through the sections in any order. The save reports which sensors
+                                are still outstanding.</li>
+                            <li><strong>An unset sensor is not an error.</strong> Load falls back to its built-in
+                                profile and the battery to a 5&nbsp;% start SOC, and both log a message naming the
+                                setting to fix. They are never left polling a name you did not choose.</li>
+                            <li><strong>Use the Test button.</strong> Every sensor field in Settings has one: it reads
+                                the entity and shows its current value, so a typo is caught before you restart. This
+                                matters most for the load sensor &mdash; Home Assistant answers an unknown entity on
+                                the history endpoint with an empty result rather than an error, so a wrong name
+                                otherwise looks like a system that simply has no history yet.</li>
+                        </ul>
+                    </div>
+
                     <h3>data_source.type</h3>
                     <table>
                         <tr>
@@ -3345,13 +3365,13 @@ price:
                                 <code>victron</code> - Victron VRM API<br>
                                 <code>timeseries</code> - HTTP endpoint returning timeseries data (Home Assistant,
                                 custom API, etc.)<br>
-                                <code>default</code> - Built-in default forecast with fixed values (no external
-                                configuration needed)
+                                <code>default</code> - Built-in demo forecast, no setup of any kind
+                                (see below)
                             </td>
                         </tr>
                         <tr>
                             <th>Default</th>
-                            <td><code>akkudoktor</code></td>
+                            <td><code>default</code></td>
                         </tr>
                     </table>
 
@@ -3367,8 +3387,17 @@ price:
                                 <code>victron</code>, <code>evcc</code>, <code>timeseries</code> — these configure their
                                 data elsewhere:
                                 <ul>
-                                    <li><code>default</code>: Uses built-in fixed forecast values (no external data
-                                        source)</li>
+                                    <li><code>default</code>: Uses built-in fixed forecast values (no external
+                                        data source). This is what a new install starts on, so the setup wizard
+                                        can finish without asking for your location. Be clear on what it is: a
+                                        fixed bell curve for an <em>assumed</em> 4&nbsp;kW array, peaking at
+                                        70&nbsp;% of that (2800&nbsp;W) at midday and zero before 06:00 and
+                                        after 19:00. It is sized to your time frame base (24 hourly or 96
+                                        quarter-hourly slots, repeated over 48&nbsp;h) and never changes — it
+                                        is not a forecast of your roof, your weather, or the season. Switch to
+                                        a real provider once you are up and running. A PV installation is
+                                        optional here; if you add one, the curve scales to the total power you
+                                        give it instead of the assumed 4&nbsp;kW</li>
                                     <li><code>solcast</code>, <code>victron</code>: Configure resource IDs in the PV
                                         Source section</li>
                                     <li><code>evcc</code>: Retrieves data from your configured EVCC instance</li>
@@ -3580,7 +3609,7 @@ price:
                         hours when using Solcast (9.6 calls/day).
                     </div>
 
-                    <h3>pv_forecast[].resource_id</h3>
+                    <h3>pv_forecast_source.resource_id</h3>
                     <table>
                         <tr>
                             <th>Parameter</th>

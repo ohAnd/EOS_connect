@@ -1,0 +1,18 @@
+# Development and test dependencies. Runtime dependencies are in requirements.txt.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# Browser tests additionally need a Chromium build:
+#
+#   playwright install chromium
+#   playwright install-deps chromium         # or, without root:
+#   scripts/install_playwright_deps_userspace.sh
+#
+# Install playwright alone — NOT pytest-playwright. Its pytest-base-url dependency
+# provides a session-scoped ``base_url`` fixture that collides with the function-scoped
+# one in tests/interfaces/optimization_backends/test_optimization_backend_eos.py and
+# errors out 44 unrelated tests. Nothing here needs that plugin.
+pytest>=8.0
+pylint>=3.0
+black>=24.0
+playwright>=1.40

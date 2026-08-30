@@ -20,6 +20,13 @@ Chromium also needs a few shared libraries.  With root that is
 
 The rest of the suite exercises the REST layer; this exercises what the browser actually
 does with it.
+
+Two harnesses live here.  ``server``/``page`` open a *configured* install — the store has
+been migrated from a real config, so the dashboard is what a returning user sees.
+``fresh_server``/``fresh_page`` open a *first* install: the bootstrap config holds only the
+three ``config.yaml`` keys, so migration writes seven defaults and marks neither
+``_wizard_completed`` nor ``_migrated_from_yaml`` — which is exactly what makes
+``/api/config/wizard-status`` report ``pending`` and the Setup Wizard appear.
 """
 
 import logging
@@ -58,6 +65,15 @@ if os.path.isdir(_USER_LIBS):
 WEB_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "src", "web"
 )
+
+# What ``ConfigManager`` holds on a first run: config.yaml is bootstrap-only since
+# ``fd56222``, so these three keys are the whole of it.  Everything else comes from the
+# schema defaults by way of the merger.
+BOOTSTRAP_ONLY_CONFIG = {
+    "eos_connect_web_port": 8081,
+    "time_zone": "Europe/Berlin",
+    "log_level": "info",
+}
 
 
 def _free_port():
@@ -99,15 +115,31 @@ def _build_app(store, schema, module):
     return app
 
 
-@pytest.fixture(name="server")
-def server_fixture(tmp_path):
-    """A real HTTP server on a throwaway database, serving the real UI assets."""
-    schema = ConfigSchema()
-    store = ConfigStore(str(tmp_path / "ui.db"))
-    store.open()
-    migrate_yaml_to_store(_sample_config(), store, schema)
+class _Server:  # pylint: disable=too-few-public-methods
+    """Handle to a running app: its URL and the stores behind it."""
 
-    module = _FakeModule(_sample_config(), store, schema)
+    def __init__(self, url, store, pv_store):
+        self.url = url
+        self.store = store
+        self.pv_store = pv_store
+
+
+def _serve(tmp_path, db_name, bootstrap_config, *, migrate):
+    """
+    Start the app on a throwaway database and yield a handle to it.
+
+    ``migrate`` decides which install the tests get.  With a real config it produces a
+    configured one; with the bootstrap-only config it produces a first install, because
+    ``migrate_yaml_to_store`` then finds no user-configured value and deliberately leaves
+    the wizard flags unset (``migration.py:73-97``).
+    """
+    schema = ConfigSchema()
+    store = ConfigStore(str(tmp_path / db_name))
+    store.open()
+    if migrate:
+        migrate_yaml_to_store(bootstrap_config, store, schema)
+
+    module = _FakeModule(bootstrap_config, store, schema)
     pv_store = PvYieldStore(store)
     pv_store.ensure_schema()
     module.pv_yield_store = pv_store
@@ -123,17 +155,70 @@ def server_fixture(tmp_path):
     )
     thread.start()
 
-    class Server:  # pylint: disable=too-few-public-methods
-        """Handle to the running app: its URL and the stores behind it."""
-
-        url = f"http://127.0.0.1:{port}"
-
-    Server.store = store
-    Server.pv_store = pv_store
     try:
-        yield Server
+        yield _Server(f"http://127.0.0.1:{port}", store, pv_store)
     finally:
         store.close()
+
+
+@pytest.fixture(name="server")
+def server_fixture(tmp_path):
+    """A real HTTP server on a throwaway database, serving the real UI assets."""
+    yield from _serve(tmp_path, "ui.db", _sample_config(), migrate=True)
+
+
+@pytest.fixture(name="fresh_server")
+def fresh_server_fixture(tmp_path):
+    """
+    The same server, on a database that has never seen a configuration.
+
+    This is the first-install state: seven seeded defaults, no wizard flags, an empty
+    ``pv_forecast`` list.
+    """
+    yield from _serve(tmp_path, "fresh.db", dict(BOOTSTRAP_ONLY_CONFIG), migrate=True)
+
+
+@pytest.fixture(name="offline_timeseries")
+def offline_timeseries_fixture(monkeypatch):
+    """
+    Let a timeseries endpoint validate without one existing.
+
+    Saving a timeseries source runs a real pre-flight fetch against the URL
+    (``_check_timeseries_preflight``), which is the right thing for a user — an
+    unreachable endpoint is worth hearing about before it is stored — but it makes a
+    test that configures one depend on the network.  Tests that are about the wizard
+    rather than the probe ask for this.
+    """
+    from src.config_web import api as config_api  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setattr(config_api, "probe", lambda *a, **kw: {"ok": True, "warnings": []})
+
+
+def _launch_browser(driver):
+    """Chromium, or a skip if this host cannot start it."""
+    try:
+        browser = driver.chromium.launch()
+    # Playwright raises a variety of errors for a browser that will not start
+    # (missing libraries, no sandbox, out of memory); all of them mean "skip".
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        pytest.skip(f"Chromium could not be launched: {exc}")
+    return browser
+
+
+def _open_page(browser, url):
+    """A page on *url* with the dashboard's CDN traffic blocked."""
+    page = browser.new_page()
+    # The page pulls FontAwesome, Chart.js and a font from CDNs. Blocking them keeps
+    # the tests offline and fast; none of them affect the behaviour under test.
+    page.route("**://cdnjs.cloudflare.com/**", lambda route: route.abort())
+    page.route("**://cdn.jsdelivr.net/**", lambda route: route.abort())
+    page.route("**://fonts.cdnfonts.com/**", lambda route: route.abort())
+
+    # Fail fast: without this a broken selector costs the Playwright default of 30s.
+    page.set_default_timeout(8000)
+
+    page.goto(url, wait_until="domcontentloaded")
+    return page
 
 
 @pytest.fixture(name="page")
@@ -144,24 +229,8 @@ def page_fixture(server):
     from playwright.sync_api import sync_playwright  # pylint: disable=import-outside-toplevel
 
     with sync_playwright() as p:
-        try:
-            browser = p.chromium.launch()
-        # Playwright raises a variety of errors for a browser that will not start
-        # (missing libraries, no sandbox, out of memory); all of them mean "skip".
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            pytest.skip(f"Chromium could not be launched: {exc}")
-
-        page = browser.new_page()
-        # The page pulls FontAwesome, Chart.js and a font from CDNs. Blocking them keeps
-        # the tests offline and fast; none of them affect the behaviour under test.
-        page.route("**://cdnjs.cloudflare.com/**", lambda route: route.abort())
-        page.route("**://cdn.jsdelivr.net/**", lambda route: route.abort())
-        page.route("**://fonts.cdnfonts.com/**", lambda route: route.abort())
-
-        # Fail fast: without this a broken selector costs the Playwright default of 30s.
-        page.set_default_timeout(8000)
-
-        page.goto(server.url, wait_until="domcontentloaded")
+        browser = _launch_browser(p)
+        page = _open_page(browser, server.url)
         page.wait_for_function("typeof showBackupMenu === 'function'")
 
         # The startup overlay only clears once the dashboard has rendered its chart from
@@ -171,6 +240,29 @@ def page_fixture(server):
             "() => { const o = document.getElementById('overlay');"
             " if (o) { o.style.display = 'none'; } }"
         )
+        try:
+            yield page
+        finally:
+            browser.close()
+
+
+@pytest.fixture(name="fresh_page")
+def fresh_page_fixture(fresh_server):
+    """
+    A browser page on a first install, with the Setup Wizard already open.
+
+    The startup overlay is left alone here: the wizard hides it itself
+    (``wizard.js:107-111``), and whether it does is part of what these tests check.
+    ``init()`` polls once a second and calls ``checkWizardStatus()`` on every path, so
+    the wizard arrives on its own — no test needs to summon it.
+    """
+    from playwright.sync_api import sync_playwright  # pylint: disable=import-outside-toplevel
+
+    with sync_playwright() as p:
+        browser = _launch_browser(p)
+        page = _open_page(browser, fresh_server.url)
+        page.wait_for_function("typeof showSetupWizard === 'function'")
+        page.wait_for_selector(".wizard-container")
         try:
             yield page
         finally:

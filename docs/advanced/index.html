@@ -366,7 +366,11 @@
                         Endpoints behind <strong>Menu → Backup &amp; Restore</strong>, covering the whole install:
                         the configuration and the measured PV yield history. The configuration-only pair
                         (<code>GET /api/config/export</code>, <code>POST /api/config/import</code>) is unchanged and
-                        still writes the flat settings file earlier versions produced.
+                        still writes the flat settings file earlier versions produced. Note that
+                        <code>GET /api/config/export</code> returns tokens and passwords <strong>unmasked</strong>,
+                        exactly as a backup file does &mdash; the config page loads its values from it, so a masked
+                        response would be saved back as the mask. <code>GET /api/config/</code> masks them, and is
+                        the endpoint for anything that only needs to read the configuration.
                     </p>
 
                     <div class="alert alert-warning">

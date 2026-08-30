@@ -13,6 +13,10 @@
 // Fallback values used only when schema hasn't loaded yet.
 let CONFIG_SECTIONS = {};
 let SECTION_ORDER = [];  // Track explicit section order from API
+// PV sources that forecast from an installation's coordinates, and therefore need
+// pv_forecast entries. Served by /api/config/schema (SPOT from schema.py); the
+// literal below is only the fallback for a backend that does not send it.
+let LOCATION_BASED_PV_SOURCES = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"];
 
 const LEVEL_ORDER = { getting_started: 0, standard: 1, expert: 2 };
 
@@ -110,6 +114,9 @@ class ConfigurationManager {
         if (schemaData.section_order) {
             SECTION_ORDER = schemaData.section_order;
             console.log("[ConfigManager] Explicit section order from API:", SECTION_ORDER);
+        }
+        if (Array.isArray(schemaData.location_based_pv_sources)) {
+            LOCATION_BASED_PV_SOURCES = schemaData.location_based_pv_sources;
         }
         const raw = await valuesRes.json();
 
@@ -510,7 +517,113 @@ class ConfigurationManager {
                 </div>
                 ${helpText}
                 <div class="config-field-error" id="cfg-err-${this._cssKey(f.key)}"></div>
+            </div>${this._renderEntityTester(f)}`;
+    }
+
+    /**
+     * Render the connection test for a sensor field, as its own row beneath it.
+     *
+     * Sensor names are free text and a typo is invisible at runtime — Home Assistant
+     * answers an unknown entity on the history endpoint with 200 and an empty list,
+     * so the load profile silently becomes the built-in default. Asking before saving
+     * is the only way for the user to tell the two apart.
+     *
+     * Laid out exactly like the timeseries tester (``_renderTimeseriesTester``): a
+     * labelled row of its own, not a button squeezed alongside the input. Every input
+     * in this panel is width:100%, so an inline button wraps underneath and reads as
+     * a stray control rather than part of the field.
+     *
+     * @param {Object} f - Field definition
+     * @returns {string} Row HTML, or "" for anything that is not a sensor field
+     */
+    _renderEntityTester(f) {
+        if (f.type !== "sensor") {
+            return "";
+        }
+        const cssKey = this._cssKey(f.key);
+        // The test belongs to its field: when the field is not applicable, neither is
+        // the button. _updateDependencies keeps the two in step after a change.
+        const hidden = this._isDependencyHidden(f) ? " hidden" : "";
+
+        return `
+            <div class="config-field config-entity-tester${hidden}" data-entity-tester="${f.key}">
+                <div class="config-field-label"><span>Connection test</span></div>
+                <div class="config-field-input">
+                    <button type="button" class="config-btn"
+                            id="cfg-entity-test-${cssKey}"
+                            onclick="configurationManager.testEntity('${f.key}')">
+                        <i class="fas fa-plug"></i> Test entity
+                    </button>
+                </div>
+                <div class="config-entity-result" id="cfg-entity-result-${cssKey}"></div>
             </div>`;
+    }
+
+    /**
+     * Probe one sensor entity and render the outcome next to its field.
+     *
+     * Sends the values currently in the form, not just the saved ones, so the user can
+     * test before committing — same contract as testTimeseries().
+     *
+     * @param {string} key - Dot-notation key of the sensor field to test
+     */
+    async testEntity(key) {
+        const cssKey = this._cssKey(key);
+        const resultEl = document.getElementById(`cfg-entity-result-${cssKey}`);
+        const btnEl = document.getElementById(`cfg-entity-test-${cssKey}`);
+        if (!resultEl) {
+            return;
+        }
+
+        // Send the values currently in the form, not just the saved ones, so the user
+        // can test before committing — same contract as testTimeseries(). The section
+        // decides which connection applies: pv_autoscaling can carry its own.
+        const section = key.split(".")[0];
+        const body = { key };
+        const relevant = [
+            key,
+            "data_source.type", "data_source.url",
+            "data_source.access_token", "data_source.ssl_ignore",
+            `${section}.use_ha_central_data_source`,
+            `${section}.src`, `${section}.source`, `${section}.url`,
+            `${section}.access_token`, `${section}.ssl_ignore`,
+        ];
+        for (const k of relevant) {
+            if (this.values[k] !== undefined) {
+                body[k] = this.values[k];
+            }
+        }
+
+        resultEl.className = "config-entity-result visible";
+        resultEl.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Testing…`;
+        if (btnEl) {
+            btnEl.disabled = true;
+        }
+
+        try {
+            const res = await fetch("api/config/test-entity", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            const data = await res.json();
+            if (data.ok) {
+                resultEl.innerHTML = `<i class="fas fa-circle-check"></i> Found — `
+                    + `currently reports <strong>${this._escapeHtml(String(data.value))}</strong>`;
+            } else {
+                resultEl.innerHTML = `<i class="fas fa-times-circle"></i> `
+                    + `${this._escapeHtml(data.error || "Test failed.")}`;
+            }
+            resultEl.className = `config-entity-result visible ${data.ok ? "ok" : "error"}`;
+        } catch (err) {
+            console.error("[ConfigurationManager] Entity test failed:", err);
+            resultEl.className = "config-entity-result visible error";
+            resultEl.innerHTML = `<i class="fas fa-times-circle"></i> Test request failed.`;
+        } finally {
+            if (btnEl) {
+                btnEl.disabled = false;
+            }
+        }
     }
 
     /**
@@ -692,9 +805,8 @@ class ConfigurationManager {
     _renderPvForecastSection() {
         // Check if PV Forecast section should be hidden based on source
         const pvSource = this.values["pv_forecast_source.source"] ?? this._getSchemaDefault("pv_forecast_source.source");
-        const locationBasedSources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"];
 
-        if (!locationBasedSources.includes(pvSource)) {
+        if (!LOCATION_BASED_PV_SOURCES.includes(pvSource)) {
             // For non-location-based sources (solcast, victron, evcc, timeseries),
             // the pv_forecast section is not needed
             let html = `<div class="config-restart-banner" id="cfg-restart-banner">
@@ -1066,12 +1178,17 @@ class ConfigurationManager {
         }
         for (const f of this.schema) {
             if (f.depends_on && changedKey in f.depends_on) {
-                const fieldEl = document.getElementById(`cfg-field-${this._cssKey(f.key)}`);
-                if (fieldEl) {
-                    if (this._isDependencyHidden(f)) {
-                        fieldEl.classList.add("hidden");
-                    } else {
-                        fieldEl.classList.remove("hidden");
+                const hidden = this._isDependencyHidden(f);
+                // The field and its connection-test row travel together — a Test
+                // button for a field that is not applicable is a control that cannot
+                // do anything.
+                const els = [
+                    document.getElementById(`cfg-field-${this._cssKey(f.key)}`),
+                    document.querySelector(`[data-entity-tester="${f.key}"]`),
+                ];
+                for (const el of els) {
+                    if (el) {
+                        el.classList.toggle("hidden", hidden);
                     }
                 }
             }
@@ -1358,6 +1475,12 @@ class ConfigurationManager {
                 this._showToast(`Saved & applied live (${result.hot_reloaded.length} field(s)). No restart needed.`, "success");
             } else {
                 this._showToast("Configuration saved successfully.", "success");
+            }
+
+            // Advisories describe a configuration that saved fine but will run
+            // degraded — shown after the save bookkeeping, so it still reads as saved.
+            if (result.warnings && result.warnings.length > 0) {
+                this._showConfigAdvisories(result.warnings);
             }
         } catch (err) {
             console.error("[ConfigurationManager] Save error:", err);
@@ -1720,6 +1843,36 @@ class ConfigurationManager {
             content.innerHTML = html;
             banner.classList.add("visible");
             this._showToast("Cannot save: required dependencies not configured", "error");
+        }
+    }
+
+    /**
+     * Display advisories for a save that succeeded but leaves something degraded.
+     *
+     * Shares the unmet-dependency banner: the two can never be on screen together,
+     * because a blocking dependency refuses the write while an advisory follows one.
+     * @param {Array} advisories - List of {field, reason, requires} objects
+     */
+    _showConfigAdvisories(advisories) {
+        const banner = document.getElementById("cfg-unmet-deps-banner");
+        const content = document.getElementById("cfg-unmet-deps-content");
+
+        if (banner && content) {
+            let html = `
+                <div style="color: #ffc107; font-weight: bold; margin-bottom: 12px;">
+                    <i class="fas fa-circle-info"></i> Saved &mdash; but something still needs your attention
+                </div>
+                <ul style="margin: 0; padding-left: 20px; font-size: 0.9em;">
+            `;
+            for (const item of advisories) {
+                html += `<li style="margin-bottom: 8px;">
+                    <strong>${item.field}</strong>: ${item.reason}
+                </li>`;
+            }
+            html += `</ul>`;
+
+            content.innerHTML = html;
+            banner.classList.add("visible");
         }
     }
 

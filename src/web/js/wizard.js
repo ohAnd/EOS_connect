@@ -8,6 +8,27 @@
 
 /* global showFullScreenOverlay, closeFullScreenOverlay, CONFIG_SECTIONS */
 
+/**
+ * Friendlier option text for the PV source dropdown.
+ *
+ * The raw choice values are what the config stores, and most of them read as brand
+ * names — but "default" reads as "nothing chosen yet", which is exactly wrong now
+ * that it is the preselected answer and a deliberate one. Saying what each option
+ * costs the user up front stops the first-run step from looking like a decision they
+ * have to research. Any choice missing from this map falls back to its raw value.
+ */
+const PV_SOURCE_OPTION_LABELS = {
+    default: "default — built-in demo forecast, no setup needed",
+    akkudoktor: "akkudoktor — free, needs your location",
+    openmeteo: "openmeteo — free, needs your location",
+    openmeteo_local: "openmeteo_local — free, needs your location and horizon",
+    forecast_solar: "forecast_solar — free tier, needs your location",
+    evcc: "evcc — from your EVCC instance",
+    solcast: "solcast — API key and resource ID",
+    victron: "victron — VRM API key and installation ID",
+    timeseries: "timeseries — your own HTTP or Home Assistant sensor",
+};
+
 class SetupWizard {
     /**
      * Define the wizard steps and their associated schema sections/fields.
@@ -17,11 +38,20 @@ class SetupWizard {
         this.values = {};
         this.currentStep = 0;
         this.skippedSteps = new Set();
+        // Replaced by the list the schema endpoint serves; this is only what to fall
+        // back on if an older backend does not send one.
+        this.locationBasedPvSources = [
+            "akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar",
+        ];
 
         /**
          * Each step maps to one or more schema sections.
          * Only getting_started-level fields are shown.
-         * Order reflects recommended setup flow: Optimizer → EVCC → Inverter → Data Source → Battery → Load → Price → PV → Review
+         * Order reflects recommended setup flow: Optimizer → EVCC → Data Source → Inverter → Battery → Load → Price → PV → Review
+         *
+         * Data Source comes before Inverter because the Home Assistant inverter type
+         * needs the connection that step establishes; asking about the inverter first
+         * meant the answer could not be acted on yet.
          */
         this.steps = [
             {
@@ -47,18 +77,18 @@ class SetupWizard {
                 isOptional: true,
             },
             {
-                id: "inverter",
-                title: "Inverter",
-                icon: "fa-microchip",
-                sections: ["inverter"],
-                description: "Select your inverter type for battery charge control (display-only if not using hardware control).",
-            },
-            {
                 id: "data_source",
                 title: "Data Source",
                 icon: "fa-plug",
                 sections: ["data_source"],
                 description: "Connect to Home Assistant or OpenHAB to read sensor data.",
+            },
+            {
+                id: "inverter",
+                title: "Inverter",
+                icon: "fa-microchip",
+                sections: ["inverter"],
+                description: "Select your inverter type for battery charge control (display-only if not using hardware control).",
             },
             {
                 id: "battery",
@@ -72,7 +102,7 @@ class SetupWizard {
                 title: "Load",
                 icon: "fa-bolt",
                 sections: ["load"],
-                description: "Set the sensor entity for household load data.",
+                description: "Tell EOS Connect which sensor reports your household load. Only needed when a data source is connected.",
             },
             {
                 id: "price",
@@ -154,6 +184,9 @@ class SetupWizard {
         // Update section metadata from schema (SPOT)
         if (schemaData.sections) {
             CONFIG_SECTIONS = schemaData.sections;
+        }
+        if (Array.isArray(schemaData.location_based_pv_sources)) {
+            this.locationBasedPvSources = schemaData.location_based_pv_sources;
         }
         const raw = await valuesRes.json();
         this.values = {};
@@ -245,8 +278,8 @@ class SetupWizard {
                 <div class="wizard-welcome-features">
                     <div class="wizard-feature"><i class="fas fa-server"></i><span>Optimizer</span></div>
                     <div class="wizard-feature"><i class="fas fa-car"></i><span>EVCC</span></div>
-                    <div class="wizard-feature"><i class="fas fa-microchip"></i><span>Inverter</span></div>
                     <div class="wizard-feature"><i class="fas fa-plug"></i><span>Data Source</span></div>
+                    <div class="wizard-feature"><i class="fas fa-microchip"></i><span>Inverter</span></div>
                     <div class="wizard-feature"><i class="fas fa-battery-full"></i><span>Battery</span></div>
                     <div class="wizard-feature"><i class="fas fa-bolt"></i><span>Load</span></div>
                     <div class="wizard-feature"><i class="fas fa-coins"></i><span>Pricing</span></div>
@@ -263,14 +296,24 @@ class SetupWizard {
      */
     _renderFields(step) {
         const fields = this._getStepFields(step);
-        if (fields.length === 0) {
-            return `<p style="color:#888;">No fields to configure for this step.</p>`;
-        }
 
         let html = `
             <div class="wizard-step-title">${this._escapeHtml(step.title)}</div>
             <div class="wizard-step-description">${this._escapeHtml(step.description)}</div>
         `;
+
+        // A field whose dependency is unmet is still rendered — just collapsed — so
+        // that answering another field *in this step* can reveal it. But when nothing
+        // is visible there is no such control to answer, so the step is genuinely
+        // empty and rendering the collapsed fields would leave the user staring at a
+        // title above blank space.
+        if (this._getVisibleStepFields(step).length === 0) {
+            return html + `
+                <p class="wizard-step-empty">
+                    Nothing to configure here for the choices you have made — continue
+                    to the next step.
+                </p>`;
+        }
 
         for (const f of fields) {
             html += this._renderField(f);
@@ -336,7 +379,9 @@ class SetupWizard {
             // Conditional disabling for specific fields
             let disabled = "";
             let title = "";
-            let displayLabel = c;
+            let displayLabel = f.key === "pv_forecast_source.source"
+                ? (PV_SOURCE_OPTION_LABELS[c] ?? c)
+                : c;
             
             // Disable "evcc" option in pv_forecast_source.source if evcc.url is not configured
             if (f.key === "pv_forecast_source.source" && String(c) === "evcc") {
@@ -345,7 +390,7 @@ class SetupWizard {
                 if (isDefault) {
                     disabled = "disabled";
                     title = "title='Configure EVCC URL first'";
-                    displayLabel = `${c} (not available)`;
+                    displayLabel = `${displayLabel} (not available)`;
                 }
             }
             
@@ -356,7 +401,7 @@ class SetupWizard {
                 if (isDefault) {
                     disabled = "disabled";
                     title = "title='Configure EVCC URL first'";
-                    displayLabel = `${c} (not available)`;
+                    displayLabel = `${displayLabel} (not available)`;
                 }
             }
             
@@ -367,7 +412,7 @@ class SetupWizard {
                 if (isDefault) {
                     disabled = "disabled";
                     title = "title='Configure EVCC URL first'";
-                    displayLabel = `${c} (not available)`;
+                    displayLabel = `${displayLabel} (not available)`;
                 }
             }
             
@@ -457,7 +502,10 @@ class SetupWizard {
 
         for (let i = 1; i < this.steps.length - 1; i++) {
             const step = this.steps[i];
-            const fields = this._getStepFields(step);
+            // Count what the step actually showed, not what it emitted: a section
+            // whose fields were all collapsed used to render as a heading with no
+            // rows under it.
+            const fields = this._getVisibleStepFields(step);
             if (fields.length === 0) {
                 continue;
             }
@@ -469,9 +517,6 @@ class SetupWizard {
                 <h4><i class="fas ${icon}"></i> ${this._escapeHtml(step.title)}</h4>`;
 
             for (const f of fields) {
-                if (f.depends_on && !this._isDependencyMet(f)) {
-                    continue;
-                }
                 const val = this.values[f.key];
                 const display = f.type === "password"
                     ? (val ? "••••••••" : "<em>not set</em>")
@@ -486,7 +531,70 @@ class SetupWizard {
             html += `</div>`;
         }
 
-        return html;
+        return html + this._renderFollowUps();
+    }
+
+    /**
+     * Warn about answers that leave something essential still to configure.
+     *
+     * A few choices need settings the wizard deliberately does not ask for, because
+     * they are not getting-started material — the Home Assistant inverter is driven by
+     * JSON service-call sequences, for instance. Without a word here the setup looks
+     * finished while the inverter controls nothing at all.
+     *
+     * @returns {string} HTML string, empty when nothing is outstanding
+     */
+    _renderFollowUps() {
+        const outstanding = [];
+
+        if (this.values["inverter.type"] === "homeassistant") {
+            outstanding.push(
+                "<strong>Inverter</strong> — the Home Assistant inverter is driven by "
+                + "service calls you define per mode. Until those are set under "
+                + "Settings \u25b8 Inverter, the battery is monitored but not controlled."
+            );
+        }
+        if (this.values["price.source"] === "fixed_24h") {
+            outstanding.push(
+                "<strong>Price</strong> — a fixed 24-hour tariff needs your own hourly "
+                + "prices. Set them under Settings \u25b8 Price; the defaults are "
+                + "placeholders."
+            );
+        }
+        const remoteSource = ["homeassistant", "openhab"].includes(
+            this.values["data_source.type"]
+        );
+        const unsetSensors = remoteSource
+            ? [["load.load_sensor", "Load"], ["battery.soc_sensor", "Battery"]]
+                .filter(([key]) => !String(this.values[key] || "").trim())
+                .map(([, label]) => label)
+            : [];
+        if (unsetSensors.length > 0) {
+            outstanding.push(
+                `<strong>${unsetSensors.join(" and ")}</strong> \u2014 connected to `
+                + `${this.values["data_source.type"]}, but the `
+                + `${unsetSensors.length > 1 ? "sensors are" : "sensor is"} not set yet. `
+                + "Until then that data falls back to built-in defaults. Set "
+                + `${unsetSensors.length > 1 ? "them" : "it"} under Settings \u25b8 `
+                + `${unsetSensors.join(" and Settings \u25b8 ")}.`
+            );
+        }
+        if (this.values["pv_forecast_source.source"] === "default") {
+            outstanding.push(
+                "<strong>PV</strong> — the built-in forecast is a fixed demo curve for "
+                + "a typical 4 kW array, not a forecast for your roof. It lets you see "
+                + "EOS Connect running today; pick a real provider under "
+                + "Settings \u25b8 PV Source when you are ready."
+            );
+        }
+
+        if (outstanding.length === 0) {
+            return "";
+        }
+        return `<div class="wizard-followups">
+            <h4><i class="fas fa-circle-info"></i> Still to do after setup</h4>
+            <ul>${outstanding.map(t => `<li>${t}</li>`).join("")}</ul>
+        </div>`;
     }
 
     // ── Navigation ──────────────────────────────────────────────
@@ -558,7 +666,58 @@ class SetupWizard {
             skipBtn.addEventListener("click", () => this._skip());
         }
 
-        // Password toggles
+        this._attachFieldListeners();
+
+        // Select/input change → update local values + conditional visibility
+        const container = document.getElementById("wizard-step-content");
+        if (container) {
+            container.addEventListener("change", (e) => {
+                const el = e.target;
+                const key = el.getAttribute("data-key");
+                if (!key) {
+                    return;
+                }
+                this._collectFieldValue(el, key);
+                this._updateConditionalFields();
+                
+                // The PV step drops the installation fields entirely for sources
+                // that do not use them, so toggling visibility is not enough: coming
+                // back to the step on evcc and switching to akkudoktor left nowhere to
+                // enter coordinates, and the save was then refused for want of them.
+                // Re-render so the fields exist again.
+                //
+                // (This read this.currentStepIndex, which is not a property of this
+                // class, so the branch never ran at all.)
+                const step = this.steps[this.currentStep];
+                if (key === "pv_forecast_source.source" && step && step.id === "pv") {
+                    const contentEl = document.getElementById("wizard-step-content");
+                    if (contentEl) {
+                        // The change/input listeners are on this container rather than
+                        // its children, so replacing the contents keeps them.
+                        contentEl.innerHTML = this._renderFields(step);
+                        this._attachFieldListeners();
+                    }
+                }
+            });
+            container.addEventListener("input", (e) => {
+                const el = e.target;
+                const key = el.getAttribute("data-key");
+                if (!key) {
+                    return;
+                }
+                this._collectFieldValue(el, key);
+            });
+        }
+    }
+
+    /**
+     * Bind the listeners that belong to individual fields.
+     *
+     * Separate from _bindStepEvents because the PV step re-renders its own contents
+     * when the source changes and the new nodes need these again. The change/input
+     * handlers are not here: those are delegated to the container, which survives.
+     */
+    _attachFieldListeners() {
         document.querySelectorAll(".wizard-password-toggle").forEach(btn => {
             btn.addEventListener("click", () => {
                 const inputId = btn.getAttribute("data-target");
@@ -577,7 +736,6 @@ class SetupWizard {
             });
         });
 
-        // Checkbox label update
         document.querySelectorAll('.wizard-field input[type="checkbox"]').forEach(cb => {
             cb.addEventListener("change", () => {
                 const span = cb.parentElement.querySelector("span");
@@ -586,40 +744,6 @@ class SetupWizard {
                 }
             });
         });
-
-        // Select/input change → update local values + conditional visibility
-        const container = document.getElementById("wizard-step-content");
-        if (container) {
-            container.addEventListener("change", (e) => {
-                const el = e.target;
-                const key = el.getAttribute("data-key");
-                if (!key) {
-                    return;
-                }
-                this._collectFieldValue(el, key);
-                this._updateConditionalFields();
-                
-                // If pv_forecast_source.source changed, re-render the PV step
-                if (key === "pv_forecast_source.source") {
-                    const currentStep = this.steps[this.currentStepIndex];
-                    if (currentStep && currentStep.id === "pv") {
-                        const contentEl = document.getElementById("wizard-step-content");
-                        if (contentEl) {
-                            contentEl.innerHTML = this._renderFields(currentStep);
-                            this._attachFieldListeners();
-                        }
-                    }
-                }
-            });
-            container.addEventListener("input", (e) => {
-                const el = e.target;
-                const key = el.getAttribute("data-key");
-                if (!key) {
-                    return;
-                }
-                this._collectFieldValue(el, key);
-            });
-        }
     }
 
     /**
@@ -696,6 +820,9 @@ class SetupWizard {
 
         // Validate current step fields
         const step = this.steps[this.currentStep];
+        // Answering a step the user skipped earlier means they no longer skip it —
+        // otherwise going Back to fill in EVCC would have the answer dropped.
+        this.skippedSteps.delete(step.id);
         if (step.id !== "welcome" && step.id !== "review") {
             if (!this._validateStep(step)) {
                 return;
@@ -733,13 +860,9 @@ class SetupWizard {
      * @returns {boolean} True if valid
      */
     _validateStep(step) {
-        const fields = this._getStepFields(step);
         let valid = true;
 
-        for (const f of fields) {
-            if (f.depends_on && !this._isDependencyMet(f)) {
-                continue;
-            }
+        for (const f of this._getVisibleStepFields(step)) {
             const cssKey = f.key.replace(/\./g, "-");
             const fieldDiv = document.getElementById(`wiz-field-${cssKey}`);
             const errDiv = document.getElementById(`wiz-err-${cssKey}`);
@@ -771,6 +894,20 @@ class SetupWizard {
     _validateField(f, value) {
         const v = f.validation || {};
 
+        // Checked first: an empty required field is not "invalid format", it is
+        // missing. Only the API enforced this before, so the wizard let the user walk
+        // past a field it had marked with an asterisk and then failed at the very end.
+        const isBlank = value === undefined || value === null
+            || (typeof value === "string" && value.trim() === "");
+        if (v.required && isBlank) {
+            return "This field is required";
+        }
+        if (isBlank) {
+            // Nothing else has anything to check, and a pattern would report an empty
+            // optional field as malformed.
+            return "";
+        }
+
         if (v.choices && v.choices.length > 0) {
             if (!v.choices.map(String).includes(String(value))) {
                 return `Must be one of: ${v.choices.join(", ")}`;
@@ -801,6 +938,55 @@ class SetupWizard {
     // ── Finish / Save ───────────────────────────────────────────
 
     /**
+     * Build the PUT body: the answers the user was actually asked for.
+     *
+     * It used to be every ``getting_started`` field in the schema, which is not the
+     * same set. Three sorts of thing rode along that no step ever displayed:
+     *
+     * - Fields of sections the wizard does not cover — ``pv_autoscaling.*`` and
+     *   ``time_zone``. ``pv_autoscaling.sensor_entity_id`` is marked required and
+     *   defaults to empty, so the server rejected the whole save with 422. On a
+     *   fresh install that happened every single time: the wizard could not be
+     *   completed by anyone.
+     * - Fields collapsed by an unmet dependency, carrying schema placeholders —
+     *   ``price.token`` as "tibberBearerToken", ``inverter.password`` as "abc123",
+     *   and an empty ``data_source.url`` that fails its own URL pattern, which was
+     *   the second half of that 422.
+     * - ``pv_forecast.*`` for sources that do not use installations, which the
+     *   merger then turned into a phantom installation at the default coordinates.
+     *
+     * @returns {object} Flat dot-notation payload
+     */
+    _buildPayload() {
+        const payload = {};
+        const locationBased = this._isLocationBasedPvSource();
+
+        for (let i = 1; i < this.steps.length - 1; i++) {
+            const step = this.steps[i];
+            if (this.skippedSteps.has(step.id)) {
+                continue;
+            }
+            for (const f of this._getVisibleStepFields(step)) {
+                const val = this.values[f.key];
+                if (val === undefined) {
+                    continue;
+                }
+                // Installations are stored indexed; the wizard collects one, so it
+                // is index 0. Only location-based sources have any to store.
+                const template = f.key.match(/^pv_forecast\.([^.]+)$/);
+                if (template) {
+                    if (locationBased) {
+                        payload[`pv_forecast.0.${template[1]}`] = val;
+                    }
+                    continue;
+                }
+                payload[f.key] = val;
+            }
+        }
+        return payload;
+    }
+
+    /**
      * Save all wizard values and mark the wizard as completed.
      */
     async _finish() {
@@ -811,32 +997,7 @@ class SetupWizard {
         }
 
         try {
-            // Build payload — only getting_started fields that differ from defaults
-            let payload = {};
-            for (const f of this.schema) {
-                if (f.level !== "getting_started") {
-                    continue;
-                }
-                const val = this.values[f.key];
-                if (val !== undefined) {
-                    payload[f.key] = val;
-                }
-            }
-
-            const pvSource = payload["pv_forecast_source.source"] ?? this.values["pv_forecast_source.source"];
-            const locationBasedSources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"];
-            if (locationBasedSources.includes(pvSource)) {
-                const transformed = {};
-                for (const [key, value] of Object.entries(payload)) {
-                    const templateMatch = key.match(/^pv_forecast\.([^\.]+)$/);
-                    if (templateMatch) {
-                        transformed[`pv_forecast.0.${templateMatch[1]}`] = value;
-                    } else {
-                        transformed[key] = value;
-                    }
-                }
-                payload = transformed;
-            }
+            const payload = this._buildPayload();
 
             // Save config
             const saveRes = await fetch("api/config/", {
@@ -844,9 +1005,15 @@ class SetupWizard {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
             });
+            const saveBody = await saveRes.json().catch(() => ({}));
             if (!saveRes.ok) {
-                const err = await saveRes.json().catch(() => ({}));
-                throw new Error(err.error || `Save failed: ${saveRes.status}`);
+                throw new Error(this._describeSaveFailure(saveRes, saveBody));
+            }
+            // A refused save comes back as 200 with success:false — checking res.ok
+            // alone reported "Setup Complete!" for a configuration the server never
+            // stored.
+            if (saveBody.success === false) {
+                throw new Error(this._describeSaveFailure(saveRes, saveBody));
             }
 
             // Mark wizard complete
@@ -897,6 +1064,28 @@ class SetupWizard {
         }
     }
 
+    /**
+     * Turn a failed save response into something the user can act on.
+     * @param {Response} res - The fetch response
+     * @param {object} body - Parsed response body
+     * @returns {string} A message naming the fields at fault
+     */
+    _describeSaveFailure(res, body) {
+        if (Array.isArray(body.unmet_dependencies) && body.unmet_dependencies.length) {
+            const reasons = body.unmet_dependencies
+                .map(d => d.reason || `${d.field} requires ${d.requires}`)
+                .join("; ");
+            return `Cannot save yet — ${reasons}`;
+        }
+        if (Array.isArray(body.errors) && body.errors.length) {
+            const reasons = body.errors
+                .map(e => `${this._prettyLabel(e.key)}: ${e.error}`)
+                .join("; ");
+            return `Cannot save — ${reasons}`;
+        }
+        return body.error || body.message || `Save failed: ${res.status}`;
+    }
+
     // ── Helper methods ──────────────────────────────────────────
 
     /**
@@ -912,20 +1101,36 @@ class SetupWizard {
             f => step.sections.includes(f.section) && f.level === "getting_started"
         );
         
-        // For PV step, hide pv_forecast fields if source is not location-based
-        if (step.id === "pv") {
-            const pvSource = this.values["pv_forecast_source.source"] ?? 
-                            this.schema.find(f => f.key === "pv_forecast_source.source")?.default ?? 
-                            "akkudoktor";
-            const locationBasedSources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar", "default"];
-            
-            if (!locationBasedSources.includes(pvSource)) {
-                // For non-location-based sources, exclude pv_forecast section fields
-                fields = fields.filter(f => f.section !== "pv_forecast");
-            }
+        // For PV step, hide pv_forecast fields if source is not location-based.
+        // This list used to be written out here as well as in _finish, and the two
+        // disagreed: this one also contained "default", so a "default" install saw
+        // the installation fields, filled them in, and then had them saved unindexed
+        // — which the merger turned into a phantom installation at 47.5/8.5.
+        if (step.id === "pv" && !this._isLocationBasedPvSource()) {
+            fields = fields.filter(f => f.section !== "pv_forecast");
         }
         
         return fields;
+    }
+
+    /**
+     * Whether the chosen PV source forecasts from an installation's coordinates.
+     * @returns {boolean} True when pv_forecast entries are required
+     */
+    _isLocationBasedPvSource() {
+        const source = this.values["pv_forecast_source.source"]
+            ?? this.schema.find(f => f.key === "pv_forecast_source.source")?.default
+            ?? "default";
+        return this.locationBasedPvSources.includes(source);
+    }
+
+    /**
+     * The step's fields that the user can actually see right now.
+     * @param {object} step - Step definition
+     * @returns {Array} Array of field definitions whose dependencies are met
+     */
+    _getVisibleStepFields(step) {
+        return this._getStepFields(step).filter(f => this._isDependencyMet(f));
     }
 
     /**

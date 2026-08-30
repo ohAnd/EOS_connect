@@ -11,7 +11,11 @@ import logging
 from typing import Optional, Dict, Any
 from datetime import tzinfo
 
-logger = logging.getLogger(__name__)
+# eos_connect.py attaches its handlers to the "__main__" logger, not to root, so
+# a logging.getLogger(__name__) here propagates to a handler-less root and every
+# message is silently discarded — including the ones this module exists to
+# surface in /logs/alerts and the startup-errors panel.
+logger = logging.getLogger("__main__")
 
 
 class InterfaceFactory:
@@ -491,6 +495,9 @@ class InterfaceFactory:
 
             self.created_interfaces[component_name] = interface
             logger.info("[Factory] Successfully created %s", component_name)
+            self._report_degraded_configuration(
+                interface, component_name, config_link
+            )
             return interface
 
         except Exception as e:
@@ -525,6 +532,40 @@ class InterfaceFactory:
                 component_name,
             )
             return None
+
+    def _report_degraded_configuration(self, interface, component_name, config_link):
+        """
+        Surface an interface that constructed successfully but cannot do its job.
+
+        The error path below only fires when a constructor *raises*. An interface that
+        is merely misconfigured does not raise — by design, so the user can fix it in
+        the web UI instead of the container crash-looping — and so it used to reach the
+        user as nothing at all. Anything that sets ``configuration_state`` to a
+        degraded value and says why gets an entry in /logs/alerts and the
+        startup-errors panel.
+
+        A message is required, not just a state, so an interface that tracks
+        ``configuration_state`` without explaining it keeps its existing behaviour.
+        """
+        if interface is None:
+            return
+
+        state = getattr(interface, "configuration_state", None)
+        detail = getattr(interface, "configuration_message", "")
+        if state not in ("incomplete", "invalid") or not detail:
+            return
+
+        # Not the caller's failure title: "Battery sensor unreachable" describes a
+        # connection that broke, and this is a setting that was never made.
+        self.validator.add_error(
+            category="configuration",
+            component=component_name,
+            severity="warning",
+            title="Incomplete configuration",
+            message=detail,
+            action_required=True,
+            config_link=config_link,
+        )
 
     @staticmethod
     def _import_and_create(module_name: str, class_name: str, *args, **kwargs):

@@ -9,6 +9,7 @@ from src.config_web.schema import ConfigSchema
 from src.config_web.migration import (
     migrate_yaml_to_store,
     migrate_battery_price_unit_to_ct_kwh,
+    migrate_sensor_placeholders_to_empty,
     _flatten_config,
     _has_user_configured_values,
     _coerce_migrated_value,
@@ -771,3 +772,82 @@ class TestBatteryPriceUnitMigration:
 
         assert ran_again is False
         assert store.get("battery.price_ct_kwh_accu") == 8.0
+
+
+class TestSensorPlaceholderCleanup:
+    """
+    Installs that already stored a placeholder have to be got out of it.
+
+    The wizard used to write "Load_Power" and "battery_SOC" as though the user had
+    chosen them. Connecting Home Assistant afterwards turned those into a 404 on every
+    poll. Blanking them lets the interfaces' "not configured" handling take over.
+    """
+
+    @pytest.fixture(name="store")
+    def store_fixture(self, tmp_path):
+        store = ConfigStore(str(tmp_path / "placeholders.db"))
+        store.open()
+        yield store
+        store.close()
+
+    def test_it_blanks_every_placeholder(self, store):
+        store.set_batch({
+            "load.load_sensor": "Load_Power",
+            "load.car_charge_load_sensor": "Wallbox_Power",
+            "load.additional_load_1_sensor": "additional_load_1_sensor",
+            "battery.soc_sensor": "battery_SOC",
+        })
+
+        assert migrate_sensor_placeholders_to_empty(store) is True
+
+        for key in (
+            "load.load_sensor", "load.car_charge_load_sensor",
+            "load.additional_load_1_sensor", "battery.soc_sensor",
+        ):
+            assert store.get(key) == "", key
+
+    def test_it_writes_empty_rather_than_deleting(self, store):
+        """
+        A deleted key falls back to config.yaml — which _build_section consults before
+        the schema default — so a legacy file would resurrect the placeholder on the
+        next start. The empty string has to win outright.
+        """
+        store.set("load.load_sensor", "Load_Power")
+
+        migrate_sensor_placeholders_to_empty(store)
+
+        assert store.has_key("load.load_sensor")
+        assert store.get("load.load_sensor") == ""
+
+    def test_a_real_sensor_name_is_never_touched(self, store):
+        store.set("load.load_sensor", "sensor.house_power")
+
+        migrate_sensor_placeholders_to_empty(store)
+
+        assert store.get("load.load_sensor") == "sensor.house_power"
+
+    def test_it_runs_once(self, store):
+        store.set("load.load_sensor", "Load_Power")
+        assert migrate_sensor_placeholders_to_empty(store) is True
+
+        # A user who deliberately types the old name back keeps it.
+        store.set("load.load_sensor", "Load_Power")
+        assert migrate_sensor_placeholders_to_empty(store) is False
+        assert store.get("load.load_sensor") == "Load_Power"
+
+    def test_openhab_is_skipped_entirely(self, store):
+        """
+        openHAB item names are CamelCase, so "Load_Power" and "battery_SOC" are
+        plausible real items — unlike Home Assistant entity ids. Guessing wrong here
+        would silently disconnect a working installation.
+        """
+        store.set_batch({
+            "data_source.type": "openhab",
+            "load.load_sensor": "Load_Power",
+            "battery.soc_sensor": "battery_SOC",
+        })
+
+        migrate_sensor_placeholders_to_empty(store)
+
+        assert store.get("load.load_sensor") == "Load_Power"
+        assert store.get("battery.soc_sensor") == "battery_SOC"

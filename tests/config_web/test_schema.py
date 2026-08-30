@@ -106,13 +106,28 @@ class TestConfigSchema:
         # Restart-required fields should NOT be hot_reload
         assert self.schema.get("mqtt.broker").hot_reload is False
 
-    def test_inverter_type_has_data_source_dependency(self):
-        """inverter.type should have depends_on for data_source.type."""
+    def test_inverter_type_is_offered_regardless_of_data_source(self):
+        """
+        inverter.type must not depend on the data source.
+
+        Only one of its six choices is Home Assistant; gating the whole select on
+        data_source.type == "homeassistant" hid it from everyone else. On a fresh
+        install that value is "default", so the setup wizard's Inverter step had
+        nothing left to render.
+        """
         field = self.schema.get("inverter.type")
         assert field is not None
-        assert field.depends_on is not None
-        assert "data_source.type" in field.depends_on
-        assert field.depends_on["data_source.type"] == ["homeassistant"]
+        assert field.depends_on is None
+
+    def test_home_assistant_inverter_fields_still_depend_on_the_type(self):
+        """The dependency belongs on the fields that really are HA-specific."""
+        for key in (
+            "inverter.charge_from_grid",
+            "inverter.avoid_discharge",
+            "inverter.discharge_allowed",
+        ):
+            field = self.schema.get(key)
+            assert field.depends_on == {"inverter.type": ["homeassistant"]}, key
 
     def test_inverter_url_token_removed(self):
         """Old inverter.url and inverter.token fields should not exist."""

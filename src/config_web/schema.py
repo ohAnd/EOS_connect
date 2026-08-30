@@ -21,6 +21,37 @@ BOOTSTRAP_KEYS = frozenset({
 })
 
 
+# Sensor names the schema used to ship as defaults. They were hints, never entities —
+# "Load_Power" is not even a syntactically valid Home Assistant entity id — but the
+# wizard stored them as if they were answers, so switching the data source to Home
+# Assistant later turned them into /api/states/Load_Power: a 404 on every poll, with
+# nothing in the UI connecting it to a config field. Every check that asks "has the
+# user configured this sensor" has to reject them. Mirrors _EVCC_PLACEHOLDER_URL in
+# api.py.
+#
+# config_web only. ``interfaces`` is a *sibling* top-level package at runtime (see
+# tests/config_web/test_runtime_import_layout.py), so it cannot import this — and it
+# does not need to: by the time a value reaches an interface it is either empty or a
+# real entity name.
+LEGACY_SENSOR_PLACEHOLDERS = frozenset({
+    "Load_Power",
+    "battery_SOC",
+    "Wallbox_Power",
+    "additional_load_1_sensor",
+})
+
+# data_source.type values that actually poll a remote instance. A plain list because
+# it is serialized into ``depends_on`` and shipped to the browser.
+REMOTE_DATA_SOURCE_TYPES = ["homeassistant", "openhab"]
+
+# The sensors load and battery cannot read anything without, once a remote data source
+# is connected. Maps the config key to the Settings section that sets it.
+DATA_SOURCE_REQUIRED_SENSORS = {
+    "load.load_sensor": "Load",
+    "battery.soc_sensor": "Battery",
+}
+
+
 # Section display metadata — single source of truth for icons and labels.
 # Consumed by the web UI (config.js), the docs (configuration.html),
 # and the JSON export script.
@@ -284,29 +315,37 @@ _ALL_FIELDS: list[FieldDef] = [
     FieldDef(
         key="load.load_sensor",
         field_type="sensor",
-        default="Load_Power",
+        default="",
         section="load",
         level="getting_started",
-        description="Entity/item for load power data in watts",
+        description=(
+            "Entity/item reporting household load power in watts — e.g. "
+            "sensor.house_power (Home Assistant) or Load_Power (openHAB)"
+        ),
         labels=["restart_required"],
         help_url="configuration.html#load",
+        depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
     ),
     FieldDef(
         key="load.car_charge_load_sensor",
         field_type="sensor",
-        default="Wallbox_Power",
+        default="",
         section="load",
         level="standard",
-        description="Entity/item for wallbox power data in watts (leave empty if not used)",
+        description=(
+            "Entity/item for wallbox power data in watts — e.g. sensor.wallbox_power "
+            "(leave empty if not used)"
+        ),
         labels=["restart_required"],
         help_url="configuration.html#load",
+        depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
     ),
     FieldDef(
         key="load.additional_load_1_sensor",
         field_type="sensor",
-        default="additional_load_1_sensor",
+        default="",
         section="load",
         level="standard",
         description="Entity/item for additional load power in watts (leave empty if not used)",
@@ -889,12 +928,16 @@ _ALL_FIELDS: list[FieldDef] = [
     FieldDef(
         key="battery.soc_sensor",
         field_type="sensor",
-        default="battery_SOC",
+        default="",
         section="battery",
         level="getting_started",
-        description="Entity/item for battery state of charge",
+        description=(
+            "Entity/item for battery state of charge — e.g. sensor.battery_soc "
+            "(Home Assistant) or battery_SOC (openHAB)"
+        ),
         labels=["restart_required"],
         help_url="configuration.html#battery",
+        depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Core",
     ),
     FieldDef(
@@ -989,6 +1032,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Sensor for battery temperature in °C (leave empty if not available)",
         labels=["restart_required"],
         help_url="configuration.html#battery",
+        depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
     ),
     FieldDef(
@@ -1154,10 +1198,14 @@ _ALL_FIELDS: list[FieldDef] = [
     FieldDef(
         key="pv_forecast_source.source",
         field_type="select",
-        default="akkudoktor",
+        default="default",
         section="pv_forecast_source",
         level="getting_started",
-        description="Solar forecast data provider",
+        description=(
+            "Solar forecast data provider. 'default' needs no setup at all - it "
+            "serves a fixed demo curve for a typical 4 kW array so a new install "
+            "runs straight away. Switch to a real provider when you are ready."
+        ),
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"choices": [
@@ -1183,14 +1231,18 @@ _ALL_FIELDS: list[FieldDef] = [
         field_type="str",
         default="",
         section="pv_forecast_source",
-        level="standard",
+        # getting_started, so the setup wizard shows it: a Solcast or Victron install
+        # cannot be saved without one (_check_dependencies refuses it), and while this
+        # was "standard" the wizard never offered the field, so those users reached the
+        # end and were told to fill in something they had not been asked for.
+        level="getting_started",
         description="Resource ID / Installation ID (Solcast: comma-separated list; "
         "Victron: single VRM ID)",
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         depends_on={"pv_forecast_source.source": ["solcast", "victron"]},
         display_group="Provider",
-        validation={"max_length": 1000},
+        validation={"max_length": 1000, "required": True},
     ),
 
     # Use real data correction for EVCC PV forecast (source-level)
@@ -1603,7 +1655,11 @@ _ALL_FIELDS: list[FieldDef] = [
             "fronius_gen24", "fronius_gen24_legacy", "victron", "evcc",
             "homeassistant", "default"
         ]},
-        depends_on={"data_source.type": ["homeassistant"]},
+        # No depends_on: only one of these six choices has anything to do with the
+        # Home Assistant data source.  Gating the whole select on
+        # data_source.type == "homeassistant" hid it from everyone else, which on a
+        # fresh install (type "default") meant the wizard's Inverter step rendered
+        # nothing at all.  The HA-specific fields below carry the dependency instead.
         display_group="Hardware",
     ),
     FieldDef(

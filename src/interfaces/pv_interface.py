@@ -36,6 +36,21 @@ import pandas as pd
 import numpy as np
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
 
+# PV sources that derive the forecast from a physical installation's coordinates, and
+# therefore need at least one entry in ``pv_forecast``.  Every other source carries its
+# own configuration (a resource id, a URL, an EVCC instance) and works with an empty
+# list.  Canonical copy lives in ``config_web/schema.py``; ``interfaces`` does not import
+# ``config_web`` (they are sibling top-level packages at runtime), so the two are pinned
+# equal by ``tests/interfaces/test_pv_interface_location_sources.py`` instead.
+LOCATION_BASED_PV_SOURCES = ("akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar")
+
+# Nominal array size assumed wherever the code has to invent a power out of nothing:
+# the configuration-free "default" source, which by design has no installation to read
+# one from, and the fallbacks that stand in for a provider that failed.  A typical
+# domestic roof, so the demo curve looks like a home rather than a garden shed.
+DEFAULT_PV_NOMINAL_POWER_W = 4000
+
+
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_ANCHOR,
     TimeseriesFormatError,
@@ -121,7 +136,7 @@ class PvInterface:
                 "[PV-IF] Starting in DEGRADED mode - PV data unavailable until config is fixed"
             )
             logger.warning(
-                "[PV-IF] Use Settings > PV Forecast to complete the configuration"
+                "[PV-IF] Use Settings > PV Source to complete the configuration"
             )
             self.configuration_state = "incomplete"
             self.configuration_valid = False
@@ -269,13 +284,12 @@ class PvInterface:
                 "[PV-IF] pv_forecast must be a list (with '-' in YAML), not a single object"
             )
 
-        if not len(self.config) > 0:
-            logger.debug("[PV-IF] Initialize - No pv entries found (not yet configured)")
-            raise ValueError(
-                "[PV-IF] pv_forecast not yet configured - please configure"
-                + " via Settings > PV Forecast"
-            )
-
+        # An empty list is only a problem for location-based sources, and
+        # __validate_pv_source_requirements below already says so with the right
+        # wording.  Raising here instead would degrade evcc, solcast, victron,
+        # timeseries and default installs that never need an entry — and because
+        # reload_config() runs this with strict=True and rolls back, it would also
+        # refuse a switch to those sources from the web UI, leaving no way to fix it.
         logger.debug("[PV-IF] Initialize - pv entries found: %s", len(self.config))
 
         # VALIDATION PATH 1: Source-specific PV requirements
@@ -401,7 +415,7 @@ class PvInterface:
             # Default source uses fixed default values - no external configuration needed
             logger.debug("[PV-IF] Default source-specific requirements validated")
 
-        elif source in ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]:
+        elif source in LOCATION_BASED_PV_SOURCES:
             # Location-based sources - require at least one pv_forecast entry
             if not self.config or len(self.config) == 0:
                 log_func = logger.error if strict else logger.warning
@@ -444,9 +458,11 @@ class PvInterface:
                 # If NO resource_id, they would be needed (but Solcast requires resource_id)
                 has_resource_id = config_entry.get("resource_id", "").strip()
                 needs_lat_lon = not has_resource_id
-            elif source in ("timeseries", "evcc"):
-                # Timeseries/EVCC: only need lat/lon for temperature forecast
-                # PV data comes from external source, not location-based API
+            elif source in ("timeseries", "evcc", "default"):
+                # Timeseries/EVCC take the PV data from an external source, and
+                # "default" synthesizes it from a fixed curve - none of the three
+                # forecasts from coordinates, so lat/lon is only ever needed to ask
+                # the Akkudoktor temperature API.
                 needs_lat_lon = self.temperature_forecast_enabled
             else:
                 # All other sources need lat/lon for their location-based API calls
@@ -466,11 +482,12 @@ class PvInterface:
 
             # OPTIMIZATION: For sources that DON'T require full PV config
             # (Victron, Solcast, Timeseries, etc.), set sensible defaults that also work for temperature API
-            if source in ("victron", "solcast", "timeseries", "evcc"):
+            if source in ("victron", "solcast", "timeseries", "evcc", "default"):
                 # These sources don't need detailed panel orientation for PV forecasting.
                 # However, defaults must be valid for Akkudoktor temperature API
-                # which validates them.
-                # Using conservative values proven to work with Akkudoktor API.
+                # which validates them - the returned temperature does not depend on
+                # the array size, so the nominal home figure is as good as any here.
+                # It also sizes the fallback curve when a provider is unreachable.
                 defaults_set = []
 
                 if config_entry.get("azimuth") is None:
@@ -484,11 +501,11 @@ class PvInterface:
                     defaults_set.append("tilt")
 
                 if config_entry.get("power") is None:
-                    config_entry["power"] = 1000.0  # Conservative 1kW estimate
+                    config_entry["power"] = float(DEFAULT_PV_NOMINAL_POWER_W)
                     defaults_set.append("power")
 
                 if config_entry.get("powerInverter") is None:
-                    config_entry["powerInverter"] = 1000.0  # Conservative 1kW estimate
+                    config_entry["powerInverter"] = float(DEFAULT_PV_NOMINAL_POWER_W)
                     defaults_set.append("powerInverter")
 
                 if config_entry.get("inverterEfficiency") is None:
@@ -581,7 +598,14 @@ class PvInterface:
 
         # Check if we have at least one config entry with lat/lon
         if not self.config or len(self.config) == 0:
-            logger.warning(
+            # "default" is meant to run without an installation, so having none is the
+            # expected state there rather than something the user forgot to finish.
+            log_func = (
+                logger.info
+                if self.config_source.get("source") == "default"
+                else logger.warning
+            )
+            log_func(
                 "[PV-IF] No PV forecast entries found - temperature forecast will use defaults"
             )
             return
@@ -663,8 +687,12 @@ class PvInterface:
                         self.config[0]["power"]
                     )
                 else:
-                    self.pv_forcast_array = self.__get_default_pv_forcast(1000)
-                    self.pv_forcast_array_raw = self.__get_default_pv_forcast(1000)
+                    self.pv_forcast_array = self.__get_default_pv_forcast(
+                        DEFAULT_PV_NOMINAL_POWER_W
+                    )
+                    self.pv_forcast_array_raw = self.__get_default_pv_forcast(
+                        DEFAULT_PV_NOMINAL_POWER_W
+                    )
             else:
                 # If there was an error but we have a previous forecast, log it
                 logger.warning(
@@ -802,7 +830,21 @@ class PvInterface:
 
     def __get_default_pv_forcast(self, pv_power):
         """
-        Creates a default PV forecast with fixed values based on max power.
+        Build the built-in PV forecast: a fixed bell curve scaled to *pv_power*.
+
+        This is what the "default" source serves, and what every other source falls
+        back to when its provider is unreachable. It contacts nothing.
+
+        The shape of the returned array is the contract the rest of the system relies
+        on, and matches what the real providers deliver:
+
+        - index 0 is 00:00 local time, not "now" - the EOS request builder slices from
+          ``seconds_since_midnight``, so a now-anchored array would be read as the
+          wrong time of day;
+        - one value per ``time_frame_base`` slot: 24 at 3600 s, 96 at 900 s;
+        - doubled to cover 48 h, since the optimizer looks a day ahead.
+
+        Peak is 70 % of *pv_power* at midday, zero before 06:00 and after 19:00.
         """
         # Create a 24-hour default forecast
         # Create a default 24-hour PV forecast.
@@ -1018,10 +1060,14 @@ class PvInterface:
             return self.__get_pv_forecast_victron_api(config_entry)
         elif self.config_source.get("source") == "default":
             logger.warning("[PV-IF] Using default PV forecast source")
-            return self.__get_default_pv_forcast(config_entry["power"])
+            return self.__get_default_pv_forcast(
+                config_entry.get("power") or DEFAULT_PV_NOMINAL_POWER_W
+            )
         else:
             logger.error("[PV-IF] No valid source configured for PV forecast")
-            return self.__get_default_pv_forcast(config_entry["power"])
+            return self.__get_default_pv_forcast(
+                config_entry.get("power") or DEFAULT_PV_NOMINAL_POWER_W
+            )
 
     def get_summarized_pv_forecast(self, scale: bool = True):
         """
@@ -1053,6 +1099,18 @@ class PvInterface:
             logger.debug("[PV-IF] fetching forecast for timeseries config")
             forecast = self.__get_pv_forecast_timeseries()
             forecast_values = forecast
+        elif self.config_source.get("source") == "default" and not self.config:
+            # "default" is configuration-free by design: the setup wizard asks for no
+            # installation at all, so there is usually nothing here to read a power
+            # from and the loop below would summarize an empty list into no forecast.
+            # Assume a typical home array instead. With installations present the loop
+            # still runs and the curve is summed per entry, at the user's real sizes.
+            logger.debug(
+                "[PV-IF] building the built-in forecast for a nominal %s W array"
+                " (no installation configured)",
+                DEFAULT_PV_NOMINAL_POWER_W,
+            )
+            forecast_values = self.__get_default_pv_forcast(DEFAULT_PV_NOMINAL_POWER_W)
         else:
             for config_entry in self.config:
                 logger.debug("[PV-IF] fetching forecast for '%s'", config_entry["name"])
@@ -2950,7 +3008,7 @@ class PvInterface:
         if failures >= self.max_failures:
             logger.error(
                 "[PV-IF] Maximum %s failures reached (%d) - "
-                "please check configuration in Settings > PV Forecast",
+                "please check configuration in Settings > PV Source",
                 target,
                 failures,
             )

@@ -15,7 +15,7 @@ import os
 from typing import Any
 
 from .store import ConfigStore
-from .schema import ConfigSchema, BOOTSTRAP_KEYS
+from .schema import ConfigSchema, BOOTSTRAP_KEYS, LEGACY_SENSOR_PLACEHOLDERS
 
 logger = logging.getLogger("__main__")
 
@@ -194,6 +194,69 @@ def migrate_ha_options_to_store(
     return True
 
 
+_SENSOR_PLACEHOLDER_MIGRATION_KEY = "_migrated_sensor_placeholders_v1"
+
+# Stored sensor keys that may still hold a value the wizard filled in for the user,
+# paired with the placeholder that would have been stored.
+_PLACEHOLDER_SENSOR_KEYS = {
+    "load.load_sensor": "Load_Power",
+    "load.car_charge_load_sensor": "Wallbox_Power",
+    "load.additional_load_1_sensor": "additional_load_1_sensor",
+    "battery.soc_sensor": "battery_SOC",
+}
+
+
+def migrate_sensor_placeholders_to_empty(store: ConfigStore) -> bool:
+    """
+    One-time migration: blank the sensor names that were only ever schema hints.
+
+    A click-through wizard run stored ``Load_Power`` and ``battery_SOC`` as though
+    they were answers. Connecting Home Assistant afterwards turned them into
+    ``/api/states/Load_Power`` — a 404 on every poll, forever, with nothing in the UI
+    tying it to a config field. Blanking them lets the interfaces' existing
+    "sensor not configured" handling take over, which degrades to the built-in
+    profile and says so.
+
+    Overwriting with ``""`` rather than deleting is deliberate: ``_build_section``
+    falls back to config.yaml *before* the schema default, and a legacy config.yaml
+    may still carry ``load: {load_sensor: Load_Power}`` — a deleted key would come
+    straight back on the next start.
+
+    Skipped entirely for openHAB installations: unlike Home Assistant entity ids
+    (lowercase ``domain.object_id``), ``Load_Power`` and ``battery_SOC`` are
+    plausible real openHAB item names, so they cannot be assumed to be placeholders.
+
+    Args:
+        store: An opened ConfigStore instance.
+
+    Returns:
+        True if the migration ran (first time), False if it was already done.
+    """
+    if store.get(_SENSOR_PLACEHOLDER_MIGRATION_KEY, False):
+        return False
+
+    if store.get("data_source.type") == "openhab":
+        logger.info(
+            "[Migration] Skipping sensor placeholder cleanup — openHAB item names "
+            "are indistinguishable from the old placeholders"
+        )
+        store.set(_SENSOR_PLACEHOLDER_MIGRATION_KEY, True)
+        return True
+
+    for key, placeholder in _PLACEHOLDER_SENSOR_KEYS.items():
+        if store.get(key) == placeholder:
+            store.set(key, "")
+            logger.info(
+                "[Migration] Cleared placeholder %s for %s — it was never a real "
+                "entity. Set your own under Settings if you need it.",
+                placeholder,
+                key,
+            )
+
+    store.set(_SENSOR_PLACEHOLDER_MIGRATION_KEY, True)
+    return True
+
+
 _BATTERY_PRICE_UNIT_MIGRATION_KEY = "_migrated_battery_price_unit_v2"
 
 
@@ -257,7 +320,7 @@ def _has_user_configured_values(config_dict: dict) -> bool:
         config_dict.get("load", {}).get("load_sensor", ""),
         config_dict.get("battery", {}).get("soc_sensor", ""),
     ]
-    placeholders = {"", "Load_Power", "battery_SOC", None}
+    placeholders = {"", None} | LEGACY_SENSOR_PLACEHOLDERS
     if any(s not in placeholders for s in sensor_checks):
         return True
 

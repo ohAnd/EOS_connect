@@ -9,7 +9,8 @@ name: Develop - build image and push
 # The workflow uses the GITHUB_TOKEN secret for authentication with GitHub Container Registry.
 
 # Jobs:
-# - pytest: Runs unit and regression tests using pytest.
+# - pytest: Runs unit and regression tests using pytest, including the browser
+#   tests under tests/web, which need a Chromium build.
 # - build_image: Builds the Docker image, tags it, and uploads it as an artifact for PRs.
 # - publish_image: Downloads the image artifact and pushes it to GitHub Container Registry (on push events).
 # - cleanup_old_develops: Cleans up old "develop" tagged images and orphaned SHA manifests (on push events).
@@ -41,7 +42,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
+          pip install -r requirements-dev.txt
+
+      - name: Install Chromium for the browser tests
+        # Without a browser, tests/web is skipped silently by the collect_ignore_glob
+        # in its conftest — so the setup wizard, the config page and the backup panel
+        # had no CI coverage at all despite having tests.
+        run: python -m playwright install --with-deps chromium
 
       - name: Run unit and regression tests
         run: python -m pytest -v tests/

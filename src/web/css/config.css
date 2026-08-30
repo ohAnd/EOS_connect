@@ -807,3 +807,56 @@
     background-color: rgba(74, 158, 255, 0.1);
     border-color: #4a9eff;
 }
+
+/* --- Per-sensor entity test ---
+   Same shape as the timeseries connection test above: its own labelled row under the
+   field, not a button alongside the input. Every input in this panel is width:100%,
+   so an inline button wraps underneath and reads as a stray control. */
+.config-entity-tester .config-btn {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #ccc;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.config-entity-tester .config-btn:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.config-entity-tester .config-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.config-entity-result {
+    display: none;
+    width: 100%;
+    font-size: 0.82em;
+    line-height: 1.5;
+    color: #ccc;
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border-left: 3px solid rgba(255, 255, 255, 0.2);
+    background-color: rgba(0, 0, 0, 0.18);
+}
+
+.config-entity-result.visible {
+    display: block;
+}
+
+.config-entity-result.ok {
+    border-left-color: #4caf50;
+}
+
+.config-entity-result.ok .fa-circle-check {
+    color: #4caf50;
+}
+
+.config-entity-result.error {
+    border-left-color: #ff6b6b;
+    color: #ffb3b3;
+}
+
+.config-entity-result.error .fa-times-circle {
+    color: #ff6b6b;
+}
