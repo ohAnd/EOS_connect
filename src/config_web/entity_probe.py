@@ -83,11 +83,26 @@ def probe_entity(source, sensor, url, access_token="", ssl_ignore=False):
                     "token."
                 ),
             }
-        return {"ok": False, "error": f"Request failed ({status}): {exc}"}
+        # Curated message only — the exception text can carry internal detail.
+        logger.warning(
+            "[EntityProbe] Request for %r failed with HTTP %s", sensor, status,
+            exc_info=True,
+        )
+        return {"ok": False, "error": f"The data source returned HTTP {status}."}
     except requests.exceptions.RequestException as exc:
-        return {"ok": False, "error": f"Could not reach {url}: {exc}"}
+        # A requests exception names the resolved host, port and any proxy in the
+        # chain. That belongs in the log, not in a response served over HTTP.
+        logger.warning(
+            "[EntityProbe] Could not reach the data source for %r: %s", sensor, exc,
+            exc_info=True,
+        )
+        return {
+            "ok": False,
+            "error": "Could not reach the data source. Check the URL, port and TLS settings.",
+        }
     except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
+        logger.warning("[EntityProbe] Cannot probe %r: %s", sensor, exc)
+        return {"ok": False, "error": "Cannot read this entity with the current data source."}
 
     if state == "":
         return {

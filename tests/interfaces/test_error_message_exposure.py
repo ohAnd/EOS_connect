@@ -7,7 +7,9 @@ Every message asserted here reaches an unauthenticated endpoint:
   ``OptimizationScheduler`` stores and ``GET /json/optimize_response.json`` returns
   verbatim;
 - the autoscaler's recorded failure is returned as ``last_error`` by
-  ``GET /api/pv_autoscaling/status``.
+  ``GET /api/pv_autoscaling/status``;
+- the entity probe's ``{"error": ...}`` is the body of ``POST
+  /api/config/test-entity`` and is rendered straight into the config panel.
 
 A ``requests`` exception names the resolved host, port and any proxy in the chain; the
 CBC message names absolute binary paths and OSError text; the local optimizer's broad
@@ -35,6 +37,7 @@ from src.interfaces.optimization_backends.optimization_backend_local_evopt impor
 from src.interfaces.optimization_backends.local_evopt.optimizer import (
     CbcSolverUnavailableError,
 )
+from src.config_web.entity_probe import probe_entity
 from src.interfaces.pv_autoscaler import PvAutoscaler
 
 # Distinctive stand-ins for what a real exception would carry.
@@ -179,3 +182,73 @@ def test_autoscaler_status_does_not_echo_the_fetch_exception():
     assert "HTTPSConnectionPool" not in last_error
     assert "ProxyError" not in last_error
     assert "sensor.pv_total_yield" in last_error
+
+
+# ----------------------------------------------------------------------
+# Entity probe (POST /api/config/test-entity)
+# ----------------------------------------------------------------------
+
+
+PROBE_ARGS = dict(
+    source="homeassistant", url="http://ha.local:8123", access_token="tok"
+)
+
+
+def _probe_error(exc):
+    """The message the probe would serve for *exc*."""
+    with patch(
+        "src.config_web.entity_probe.fetch_remote_state", side_effect=exc
+    ):
+        result = probe_entity(sensor="sensor.house_power", **PROBE_ARGS)
+    assert result["ok"] is False
+    return result["error"]
+
+
+def test_entity_probe_does_not_echo_a_transport_exception():
+    """
+    The probe exists to tell the user their entity name is wrong. A resolved host,
+    port and proxy chain neither helps them nor belongs in a served response.
+    """
+    error = _probe_error(requests.exceptions.ConnectionError(NETWORK_LEAK))
+
+    assert LEAKY_HOST not in error
+    assert "HTTPSConnectionPool" not in error
+    assert "ProxyError" not in error
+    assert "Could not reach the data source" in error
+
+
+def test_entity_probe_does_not_echo_an_unhandled_http_error():
+    """
+    404/401/403 get their own curated advice; anything else must still not fall
+    through to the exception's text.
+    """
+    response = SimpleNamespace(status_code=500)
+    error = _probe_error(
+        requests.exceptions.HTTPError(NETWORK_LEAK, response=response)
+    )
+
+    assert LEAKY_HOST not in error
+    assert "HTTPSConnectionPool" not in error
+    assert "HTTP 500" in error
+
+
+def test_entity_probe_does_not_echo_a_value_error():
+    error = _probe_error(ValueError(NETWORK_LEAK))
+
+    assert LEAKY_HOST not in error
+    assert "HTTPSConnectionPool" not in error
+
+
+def test_the_curated_404_still_names_the_entity():
+    """
+    Suppressing exception text must not cost the user the one detail they need: the
+    name they typed, and what a valid one looks like.
+    """
+    response = SimpleNamespace(status_code=404)
+    error = _probe_error(
+        requests.exceptions.HTTPError(NETWORK_LEAK, response=response)
+    )
+
+    assert "sensor.house_power" in error
+    assert "not found" in error
+    assert LEAKY_HOST not in error
