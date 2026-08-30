@@ -14,7 +14,13 @@ from flask import Blueprint, jsonify, request as flask_request, Response
 
 from .hot_reload import _coerce_bool
 from .migration import _flatten_config
-from .schema import LOCATION_BASED_PV_SOURCES
+from .schema import (
+    DATA_SOURCE_REQUIRED_SENSORS,
+    LEGACY_SENSOR_PLACEHOLDERS,
+    LOCATION_BASED_PV_SOURCES,
+    REMOTE_DATA_SOURCE_TYPES,
+)
+from .entity_probe import probe_entity
 from .timeseries_probe import probe
 
 logger = logging.getLogger("__main__")
@@ -145,9 +151,11 @@ def update_config():
 
     Returns:
     - If validation errors: status 422 with "errors"
-    - If unmet dependencies: status 200 with ``success: false`` and
+    - If unmet *blocking* dependencies: status 200 with ``success: false`` and
       "unmet_dependencies"; nothing is written
-    - If success: status 200 with "updated", "restart_required", "hot_reloaded"
+    - If success: status 200 with "updated", "restart_required", "hot_reloaded", and
+      "warnings" — advisory dependencies describing a configuration that saved fine
+      but will run degraded
     """
     data = flask_request.get_json(silent=True)
     if not data or not isinstance(data, dict):
@@ -173,11 +181,16 @@ def update_config():
     # every value in it — the caller was told the save did not happen while the database
     # said otherwise. _check_dependencies reads the incoming values in preference to the
     # stored ones, so it sees the same picture either way.
+    # Only the blocking ones refuse the write. Advisory entries describe a
+    # configuration that runs in a degraded mode worth mentioning, and ride along with
+    # the successful response instead.
     unmet_deps = _check_dependencies(data)
-    if unmet_deps:
+    blocking_deps = [d for d in unmet_deps if d.get("blocking", True)]
+    advisories = [d for d in unmet_deps if not d.get("blocking", True)]
+    if blocking_deps:
         return jsonify({
             "success": False,
-            "unmet_dependencies": unmet_deps,
+            "unmet_dependencies": blocking_deps,
             "message": "Cannot save: required dependencies not configured"
         }), 200
 
@@ -214,6 +227,7 @@ def update_config():
             "updated": changed_keys,
             "restart_required": restart_required,
             "hot_reloaded": hot_reloaded,
+            "warnings": advisories,
         }
     )
 
@@ -557,6 +571,14 @@ def _evcc_url_unconfigured(url) -> bool:
     return not stripped or stripped == _EVCC_PLACEHOLDER_URL
 
 
+def _sensor_unconfigured(value) -> bool:
+    """Whether *value* is empty, blank, or still one of the schema's old placeholders."""
+    if not value or not isinstance(value, str):
+        return True
+    stripped = value.strip()
+    return not stripped or stripped in LEGACY_SENSOR_PLACEHOLDERS
+
+
 def _pending_pv_installation_count(data: dict, current_config: dict) -> int:
     """
     How many PV installations there will be once *data* is applied.
@@ -598,7 +620,9 @@ def _check_dependencies(data: dict) -> list[dict]:
     made every single save through this endpoint impossible until the PV step was done,
     in whatever order the user happened to work.
 
-    Each entry is ``{"field", "reason", "requires", "blocking"}``.
+    Each entry is ``{"field", "reason", "requires", "blocking"}``. ``blocking`` false
+    means "save it, but tell the user" — a configuration that runs, in a degraded mode
+    they should know about, rather than one that cannot be written.
     """
     dependencies = []
     current_config = _module.get_config()
@@ -673,6 +697,32 @@ def _check_dependencies(data: dict) -> list[dict]:
                 "requires": "pv_forecast.0.lat",  # Indicate at least one entry needed
                 "blocking": True,
             })
+
+    # A remote data source with nothing to read from it. Deliberately advisory: an
+    # empty sensor is a *supported* state — the interfaces fall back to the built-in
+    # profile — so refusing the write would be wrong on the merits. It would also
+    # deadlock the user, because these sensor fields only become visible once
+    # data_source.type is set to a remote source, which is the very save being judged.
+    if get_value("data_source.type") in REMOTE_DATA_SOURCE_TYPES and touches(
+        "data_source.type", "data_source.url", "data_source.access_token"
+    ):
+        for key, label in DATA_SOURCE_REQUIRED_SENSORS.items():
+            # A key the request answers is an answer, whatever it says. The wizard
+            # posts both sensors alongside data_source.type, and warning about one it
+            # just set would be noise the user cannot act on.
+            if key in data:
+                continue
+            if _sensor_unconfigured(get_value(key)):
+                dependencies.append({
+                    "field": key,
+                    "reason": (
+                        f"{get_value('data_source.type')} selected as data source, but "
+                        f"the {label.lower()} sensor is not set — that data stays on "
+                        f"the built-in fallback until you set it under Settings > {label}"
+                    ),
+                    "requires": key,
+                    "blocking": False,
+                })
 
     return dependencies
 
@@ -956,6 +1006,37 @@ def test_timeseries():
 
     get_value = _effective_value_getter(data)
     return jsonify(_probe_timeseries_domain(domain, data, get_value)), 200
+
+
+@config_bp.route("/test-entity", methods=["POST"])
+def test_entity():
+    """
+    Read one sensor entity/item and report whether it is usable.
+
+    Body: optional flat dot-notation keys (as for PUT /), so the UI can test a name
+    the user has typed but not yet saved, plus ``key`` naming the sensor field to
+    test. Anything absent falls back to the stored config.
+
+    Returns 200 in both the success and the failure case — an entity that does not
+    answer is a finding to show the user, not a server error.
+    """
+    data = flask_request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+
+    key = data.pop("key", "")
+    if not key or _resolve_schema_key(key) is None:
+        return jsonify({"error": "key must name a sensor field"}), 400
+
+    get_value = _effective_value_getter(data)
+    result = probe_entity(
+        get_value("data_source.type"),
+        get_value(key),
+        get_value("data_source.url"),
+        access_token=get_value("data_source.access_token"),
+        ssl_ignore=bool(get_value("data_source.ssl_ignore")),
+    )
+    return jsonify(result), 200
 
 
 def _validate_price_arrays(data: dict) -> list[dict]:

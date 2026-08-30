@@ -102,7 +102,7 @@ class SetupWizard {
                 title: "Load",
                 icon: "fa-bolt",
                 sections: ["load"],
-                description: "Set the sensor entity for household load data.",
+                description: "Tell EOS Connect which sensor reports your household load. Only needed when a data source is connected.",
             },
             {
                 id: "price",
@@ -559,6 +559,24 @@ class SetupWizard {
                 "<strong>Price</strong> — a fixed 24-hour tariff needs your own hourly "
                 + "prices. Set them under Settings \u25b8 Price; the defaults are "
                 + "placeholders."
+            );
+        }
+        const remoteSource = ["homeassistant", "openhab"].includes(
+            this.values["data_source.type"]
+        );
+        const unsetSensors = remoteSource
+            ? [["load.load_sensor", "Load"], ["battery.soc_sensor", "Battery"]]
+                .filter(([key]) => !String(this.values[key] || "").trim())
+                .map(([, label]) => label)
+            : [];
+        if (unsetSensors.length > 0) {
+            outstanding.push(
+                `<strong>${unsetSensors.join(" and ")}</strong> \u2014 connected to `
+                + `${this.values["data_source.type"]}, but the `
+                + `${unsetSensors.length > 1 ? "sensors are" : "sensor is"} not set yet. `
+                + "Until then that data falls back to built-in defaults. Set "
+                + `${unsetSensors.length > 1 ? "them" : "it"} under Settings \u25b8 `
+                + `${unsetSensors.join(" and Settings \u25b8 ")}.`
             );
         }
         if (this.values["pv_forecast_source.source"] === "default") {

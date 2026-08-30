@@ -514,10 +514,98 @@ class ConfigurationManager {
                 </div>
                 <div class="config-field-input">
                     ${inputHtml}
+                    ${this._renderEntityTester(f)}
                 </div>
                 ${helpText}
                 <div class="config-field-error" id="cfg-err-${this._cssKey(f.key)}"></div>
+                <div class="config-entity-result" id="cfg-entity-result-${this._cssKey(f.key)}"></div>
             </div>`;
+    }
+
+    /**
+     * Render the "Test" button beside a sensor field.
+     *
+     * Sensor names are free text and a typo is invisible at runtime — Home Assistant
+     * answers an unknown entity on the history endpoint with 200 and an empty list,
+     * so the load profile silently becomes the built-in default. Asking before saving
+     * is the only way for the user to tell the two apart.
+     *
+     * @param {Object} f - Field definition
+     * @returns {string} Button HTML, or "" for anything that is not a sensor field
+     */
+    _renderEntityTester(f) {
+        if (f.type !== "sensor") {
+            return "";
+        }
+        return `
+            <button type="button" class="config-btn config-entity-test"
+                    id="cfg-entity-test-${this._cssKey(f.key)}"
+                    onclick="configurationManager.testEntity('${f.key}')">
+                <i class="fas fa-plug"></i> Test
+            </button>`;
+    }
+
+    /**
+     * Probe one sensor entity and render the outcome next to its field.
+     *
+     * Sends the values currently in the form, not just the saved ones, so the user can
+     * test before committing — same contract as testTimeseries().
+     *
+     * @param {string} key - Dot-notation key of the sensor field to test
+     */
+    async testEntity(key) {
+        const resultEl = document.getElementById(
+            `cfg-entity-result-${this._cssKey(key)}`
+        );
+        const btnEl = document.getElementById(`cfg-entity-test-${this._cssKey(key)}`);
+        if (!resultEl) {
+            return;
+        }
+
+        const body = { key };
+        for (const dsKey of [
+            "data_source.type", "data_source.url",
+            "data_source.access_token", "data_source.ssl_ignore",
+        ]) {
+            if (this.values[dsKey] !== undefined) {
+                body[dsKey] = this.values[dsKey];
+            }
+        }
+        if (this.values[key] !== undefined) {
+            body[key] = this.values[key];
+        }
+
+        if (btnEl) {
+            btnEl.disabled = true;
+        }
+        resultEl.innerHTML = `<span class="config-entity-testing">
+            <i class="fas fa-spinner fa-spin"></i> Testing…</span>`;
+
+        try {
+            const res = await fetch("api/config/test-entity", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            const result = await res.json();
+            if (result.ok) {
+                resultEl.innerHTML = `<span class="config-entity-ok">
+                    <i class="fas fa-circle-check"></i>
+                    Found — currently reports ${this._escapeHtml(String(result.value))}</span>`;
+            } else {
+                resultEl.innerHTML = `<span class="config-entity-fail">
+                    <i class="fas fa-circle-exclamation"></i>
+                    ${this._escapeHtml(result.error || "Test failed.")}</span>`;
+            }
+        } catch (err) {
+            resultEl.innerHTML = `<span class="config-entity-fail">
+                <i class="fas fa-circle-exclamation"></i>
+                ${this._escapeHtml(err.message || String(err))}</span>`;
+        } finally {
+            if (btnEl) {
+                btnEl.disabled = false;
+            }
+        }
     }
 
     /**
@@ -1365,6 +1453,12 @@ class ConfigurationManager {
             } else {
                 this._showToast("Configuration saved successfully.", "success");
             }
+
+            // Advisories describe a configuration that saved fine but will run
+            // degraded — shown after the save bookkeeping, so it still reads as saved.
+            if (result.warnings && result.warnings.length > 0) {
+                this._showConfigAdvisories(result.warnings);
+            }
         } catch (err) {
             console.error("[ConfigurationManager] Save error:", err);
             this._showToast("Save failed: " + (err.message || err), "error");
@@ -1726,6 +1820,36 @@ class ConfigurationManager {
             content.innerHTML = html;
             banner.classList.add("visible");
             this._showToast("Cannot save: required dependencies not configured", "error");
+        }
+    }
+
+    /**
+     * Display advisories for a save that succeeded but leaves something degraded.
+     *
+     * Shares the unmet-dependency banner: the two can never be on screen together,
+     * because a blocking dependency refuses the write while an advisory follows one.
+     * @param {Array} advisories - List of {field, reason, requires} objects
+     */
+    _showConfigAdvisories(advisories) {
+        const banner = document.getElementById("cfg-unmet-deps-banner");
+        const content = document.getElementById("cfg-unmet-deps-content");
+
+        if (banner && content) {
+            let html = `
+                <div style="color: #ffc107; font-weight: bold; margin-bottom: 12px;">
+                    <i class="fas fa-circle-info"></i> Saved &mdash; but something still needs your attention
+                </div>
+                <ul style="margin: 0; padding-left: 20px; font-size: 0.9em;">
+            `;
+            for (const item of advisories) {
+                html += `<li style="margin-bottom: 8px;">
+                    <strong>${item.field}</strong>: ${item.reason}
+                </li>`;
+            }
+            html += `</ul>`;
+
+            content.innerHTML = html;
+            banner.classList.add("visible");
         }
     }
 

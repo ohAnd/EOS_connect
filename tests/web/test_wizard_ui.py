@@ -107,9 +107,9 @@ def test_the_inverter_step_survives_openhab(fresh_page):
 
 def test_a_step_with_nothing_visible_says_so(fresh_page):
     """
-    No shipped step can currently empty out — every one of them leads with a field
-    that has no dependency.  This drives the state directly to keep the notice honest,
-    because the way it failed before was silence, not an error.
+    The Load step empties out for real (see below); this drives the state directly on
+    a different step so the notice stays covered wherever it is reached from, because
+    the way it failed before was silence, not an error.
     """
     while wz.current_step_id(fresh_page) != "inverter":
         wz.next_step(fresh_page)
@@ -834,3 +834,58 @@ def test_answers_are_not_carried_over_from_an_abandoned_run(fresh_page, fresh_se
     fresh_page.evaluate("() => closeFullScreenOverlay()")
 
     assert fresh_server.store.get_all() == before
+
+
+# ----------------------------------------------------------------------
+# Sensors follow the data source
+# ----------------------------------------------------------------------
+
+
+def test_the_load_step_is_empty_without_a_data_source(fresh_page):
+    """
+    Nothing reads a sensor when nothing is connected, so asking for one is asking the
+    user to invent an answer — which is exactly what they did: the wizard stored its
+    own placeholder, and connecting Home Assistant later turned it into a 404 on
+    every poll.
+    """
+    while wz.current_step_id(fresh_page) != "load":
+        wz.next_step(fresh_page)
+
+    assert wz.visible_fields(fresh_page) == []
+    assert fresh_page.is_visible(".wizard-step-empty")
+    assert wz.step_title(fresh_page) == "Load"
+
+
+def test_choosing_home_assistant_reveals_the_sensors(fresh_page):
+    """The fields appear on the steps that follow the data source, in wizard order."""
+    while wz.current_step_id(fresh_page) != "data_source":
+        wz.next_step(fresh_page)
+    wz.set_field(fresh_page, "data_source.type", "homeassistant")
+    wz.set_field(fresh_page, "data_source.url", "http://homeassistant.local:8123")
+    wz.set_field(fresh_page, "data_source.access_token", "ha-token")
+
+    while wz.current_step_id(fresh_page) != "battery":
+        wz.next_step(fresh_page)
+    assert "battery.soc_sensor" in wz.visible_fields(fresh_page)
+
+    while wz.current_step_id(fresh_page) != "load":
+        wz.next_step(fresh_page)
+    assert "load.load_sensor" in wz.visible_fields(fresh_page)
+
+
+def test_a_click_through_install_stores_no_placeholder_sensor(fresh_page, fresh_server):
+    """
+    The regression at the heart of this: a default run used to store "Load_Power" and
+    "battery_SOC" as though they were answers.
+    """
+    while wz.current_step_id(fresh_page) != "review":
+        wz.next_step(fresh_page)
+    wz.finish(fresh_page)
+
+    assert wz.finished_successfully(fresh_page), wz.save_error_text(fresh_page)
+    stored = fresh_server.store.get_all()
+
+    assert "Load_Power" not in stored.values()
+    assert "battery_SOC" not in stored.values()
+    assert "load.load_sensor" not in stored
+    assert "battery.soc_sensor" not in stored

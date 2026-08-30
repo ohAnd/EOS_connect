@@ -933,3 +933,93 @@ def test_temp_compensation_10_5_celsius_specific(fast_battery_interface):
     assert (
         2130 < fast_battery_interface.max_charge_power_dyn < 2160
     ), f"At 10.5°C expected ~2136W, got {fast_battery_interface.max_charge_power_dyn}W"
+
+
+class TestSocConfigGuard:
+    """
+    An unreadable SOC sensor must be caught before anything tries to read it.
+
+    It used to 404 every 30 seconds, forever, with nothing in the UI connecting it to
+    a config field — the wizard had stored ``battery_SOC`` as though the user picked
+    it. The guard is deliberately scoped to the SOC sensor: ``source`` also serves the
+    temperature and battery-price sensors, which are configured independently.
+    """
+
+    def test_a_missing_sensor_is_incomplete_and_never_polls(self, default_config):
+        cfg = {**default_config, "source": "homeassistant",
+               "url": "http://ha.local:8123", "access_token": "tok", "soc_sensor": ""}
+
+        with patch.object(BatteryInterface, "start_update_service", return_value=None), \
+                patch("requests.get") as mock_get:
+            bi = BatteryInterface(cfg)
+
+            assert bi.configuration_state == "incomplete"
+            assert "no battery SOC sensor is set" in bi.configuration_message
+            assert bi.soc_source_usable is False
+            assert bi._BatteryInterface__battery_request_current_soc() == 5
+            assert not mock_get.called
+
+    def test_a_missing_token_is_incomplete(self, default_config):
+        cfg = {**default_config, "source": "homeassistant",
+               "url": "http://ha.local:8123", "access_token": "",
+               "soc_sensor": "sensor.battery_soc"}
+
+        with patch.object(BatteryInterface, "start_update_service", return_value=None):
+            bi = BatteryInterface(cfg)
+
+            assert bi.configuration_state == "incomplete"
+            assert "access token" in bi.configuration_message
+
+    def test_a_missing_url_is_incomplete(self, default_config):
+        cfg = {**default_config, "source": "openhab", "url": "",
+               "soc_sensor": "BatterySOC"}
+
+        with patch.object(BatteryInterface, "start_update_service", return_value=None):
+            bi = BatteryInterface(cfg)
+
+            assert bi.configuration_state == "incomplete"
+            assert "URL" in bi.configuration_message
+
+    def test_an_unsupported_source_is_invalid(self, default_config):
+        cfg = {**default_config, "source": "carrier_pigeon",
+               "url": "http://x", "soc_sensor": "s"}
+
+        with patch.object(BatteryInterface, "start_update_service", return_value=None):
+            bi = BatteryInterface(cfg)
+
+            assert bi.configuration_state == "invalid"
+
+    def test_a_complete_config_is_valid_and_usable(self, default_config):
+        cfg = {**default_config, "source": "homeassistant",
+               "url": "http://ha.local:8123", "access_token": "tok",
+               "soc_sensor": "sensor.battery_soc"}
+
+        with patch.object(BatteryInterface, "start_update_service", return_value=None):
+            bi = BatteryInterface(cfg)
+
+            assert bi.configuration_state == "valid"
+            assert bi.soc_source_usable is True
+
+    def test_the_default_source_is_valid_without_a_sensor(self, default_config):
+        """Nothing to read means nothing to complain about."""
+        with patch.object(BatteryInterface, "start_update_service", return_value=None):
+            bi = BatteryInterface(default_config)
+
+            assert bi.configuration_state == "valid"
+            assert bi.soc_source_usable is False
+            assert bi.configuration_message == ""
+
+    def test_the_guard_leaves_the_price_sensor_alone(self, default_config):
+        """
+        The regression this scoping exists to prevent: a remote source with a price
+        sensor and no SOC sensor is a supported setup, and must keep fetching prices.
+        """
+        cfg = {**default_config, "source": "homeassistant",
+               "url": "http://ha.local:8123", "access_token": "tok",
+               "soc_sensor": "", "price_euro_per_wh_sensor": "sensor.accu_price"}
+
+        with patch.object(BatteryInterface, "start_update_service", return_value=None):
+            bi = BatteryInterface(cfg)
+
+            assert bi.src == "homeassistant", "the source must not be downgraded"
+            assert bi.price_sensor == "sensor.accu_price"

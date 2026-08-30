@@ -4,6 +4,7 @@ Unit tests for the LoadInterface class in load_interface.py
 
 # pylint: disable=duplicate-code
 
+import logging
 import profile
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
@@ -710,3 +711,43 @@ def test_weekday_profile_bug_with_zero_arrays(monkeypatch):
     assert profile[24:] == [200.0] * 24, (
         "BUG: Averaged with zero, got %s instead of [200.0]*24" % profile[24:]
     )
+
+
+class TestAConnectedSourceThatReturnsNothing:
+    """
+    The silent case, which is the one that actually bit users.
+
+    Home Assistant answers an unknown entity on the history endpoint with 200 and an
+    empty list — no exception, no 404. The all-zero profile then fell through to the
+    built-in curve behind three INFO messages saying "this is normal for new
+    installations", so a permanently wrong sensor name was indistinguishable from a
+    healthy first day and the optimizer ran on fiction.
+    """
+
+    def _profile_with_no_data(self, config_fixture, caplog):
+        iface = LoadInterface(config_fixture, 3600, "UTC")
+        with patch.object(iface, "get_load_profile_for_day", return_value=[0] * 24), \
+                caplog.at_level(logging.WARNING, logger="__main__"):
+            profile = iface._LoadInterface__create_load_profile_weekdays()
+        return iface, profile
+
+    def test_it_warns_and_names_the_sensor(self, config_fixture, caplog):
+        iface, profile = self._profile_with_no_data(config_fixture, caplog)
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings, "a connected source returning nothing must not pass silently"
+        message = warnings[0].getMessage()
+        assert "sensor.test" in message
+        # The suffixes parseAlertMeta() in web/js/main.js turns into the panel's badge
+        # and deep link.
+        assert "| Config: #load" in message
+        assert "ACTION REQUIRED" in message
+        # It still degrades rather than failing — it just says so now.
+        assert profile == iface._get_default_profile()
+
+    def test_the_default_source_keeps_the_reassuring_wording(self, config_fixture, caplog):
+        """With nothing connected, "normal for a new installation" is simply true."""
+        config_fixture["source"] = "default"
+        _, _ = self._profile_with_no_data(config_fixture, caplog)
+
+        assert [r for r in caplog.records if r.levelno == logging.WARNING] == []

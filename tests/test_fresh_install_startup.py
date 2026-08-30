@@ -11,12 +11,16 @@ The personas mirror ``tests/web/test_wizard_ui.py``; the dicts here are what the
 was observed to store for each.
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from src.config_web.merger import build_merged_config
 from src.config_web.schema import ConfigSchema
 from src.config_web.store import ConfigStore
 from src.interfaces.inverters.inverter_factory import create_inverter
+from src.interfaces.battery_interface import BatteryInterface
+from src.interfaces.load_interface import LoadInterface
 from src.interfaces.pv_interface import PvInterface
 
 # config.yaml holds only these on a first run.
@@ -49,8 +53,10 @@ INSTALLATION = {
 BASE_ANSWERS = {
     "eos.source": "local_evopt",
     "inverter.type": "default",
-    "load.load_sensor": "Load_Power",
-    "battery.soc_sensor": "battery_SOC",
+    # Empty, not "Load_Power"/"battery_SOC": the sensor fields are gated on a remote
+    # data source, so a click-through run never shows them and never stores a value.
+    "load.load_sensor": "",
+    "battery.soc_sensor": "",
     "battery.capacity_wh": 11059,
     "battery.min_soc_percentage": 5,
     "battery.max_soc_percentage": 100,
@@ -273,3 +279,61 @@ def test_the_data_source_reaches_the_sections_that_read_sensors(merged, persona)
     for section in ("load", "battery"):
         assert config[section]["source"] == answers["data_source.type"]
         assert config[section]["url"] == answers["data_source.url"]
+
+
+def test_connecting_home_assistant_after_a_default_wizard_run_does_not_poll_placeholders(
+    tmp_path,
+):
+    """
+    The bug this whole change exists for.
+
+    A click-through wizard run leaves data_source.type at "default", so nothing talks
+    to Home Assistant and everything looks fine. The user then configures step by step,
+    starting with the data source — and after the restart, load and battery inherit
+    "homeassistant" and start reading the sensor names the wizard had filled in for
+    them. Those names were only ever schema hints, so every poll 404s: forever for the
+    battery, and invisibly for load, whose history endpoint answers an unknown entity
+    with 200 and an empty list.
+
+    Both interfaces must come up degraded and say so, without making a single request.
+    """
+    schema = ConfigSchema()
+    store = ConfigStore(str(tmp_path / "later_ha.db"))
+    store.open()
+    try:
+        store.set_batch({**SEEDED, **PERSONAS["defaults"]})
+        # The second visit to Settings: Data Source only.
+        store.set_batch({
+            "data_source.type": "homeassistant",
+            "data_source.url": "http://homeassistant.local:8123",
+            "data_source.access_token": "ha-token",
+        })
+        config = build_merged_config(dict(BOOTSTRAP), store, schema)
+
+        # Inheritance still happens — that part was never broken.
+        assert config["load"]["source"] == "homeassistant"
+        assert config["battery"]["source"] == "homeassistant"
+
+        with patch.object(BatteryInterface, "start_update_service", return_value=None), \
+                patch("requests.get") as mock_get:
+            load = LoadInterface(
+                config["load"], config["eos"]["time_frame"], config["time_zone"]
+            )
+            battery = BatteryInterface(config["battery"], load_interface=load)
+
+            assert load.configuration_state == "incomplete", load.configuration_state
+            assert "no load sensor is set" in load.configuration_message
+            assert load.src == "default"
+
+            assert battery.configuration_state == "incomplete", (
+                battery.configuration_state
+            )
+            assert "no battery SOC sensor is set" in battery.configuration_message
+            assert battery.soc_source_usable is False
+            assert battery._BatteryInterface__battery_request_current_soc() == 5
+
+            assert not mock_get.called, (
+                f"a placeholder sensor was polled: {mock_get.call_args_list}"
+            )
+    finally:
+        store.close()

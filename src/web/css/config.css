@@ -807,3 +807,51 @@
     background-color: rgba(74, 158, 255, 0.1);
     border-color: #4a9eff;
 }
+
+/* ── Per-sensor entity test ──────────────────────────────────────────────
+   The Test button sits inline with the sensor input; its verdict goes on the row
+   below so a long "not found" message does not squeeze the field. */
+.config-entity-test {
+    flex: 0 0 auto;
+    margin-left: 8px;
+    white-space: nowrap;
+}
+
+.config-entity-test:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.config-entity-result:empty {
+    display: none;
+}
+
+.config-entity-result {
+    font-size: 0.82em;
+    line-height: 1.5;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border-left: 3px solid rgba(255, 255, 255, 0.2);
+    background-color: rgba(0, 0, 0, 0.18);
+}
+
+.config-entity-ok {
+    color: #b7e2b9;
+}
+
+.config-entity-ok .fa-circle-check {
+    color: #4caf50;
+}
+
+.config-entity-fail {
+    color: #ffb3b3;
+}
+
+.config-entity-fail .fa-circle-exclamation {
+    color: #ff6b6b;
+}
+
+.config-entity-testing {
+    color: #ccc;
+}

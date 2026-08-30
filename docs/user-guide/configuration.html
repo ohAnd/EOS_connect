@@ -1213,6 +1213,26 @@
                                 section separately.</strong> This is your only connection configuration.</p>
                     </div>
 
+                    <div class="alert alert-info">
+                        <strong><i class="fas fa-plug"></i> Sensor fields follow this setting:</strong>
+                        the sensor fields in <strong>Load</strong> and <strong>Battery</strong> only appear once
+                        <code>data_source.type</code> is Home Assistant or openHAB &mdash; with nothing connected there
+                        is nothing for them to read.
+                        <ul style="margin-top: 10px; margin-bottom: 0;">
+                            <li><strong>Connecting a data source is never blocked</strong> by a sensor you have not set
+                                yet, so you can work through the sections in any order. The save reports which sensors
+                                are still outstanding.</li>
+                            <li><strong>An unset sensor is not an error.</strong> Load falls back to its built-in
+                                profile and the battery to a 5&nbsp;% start SOC, and both log a message naming the
+                                setting to fix. They are never left polling a name you did not choose.</li>
+                            <li><strong>Use the Test button.</strong> Every sensor field in Settings has one: it reads
+                                the entity and shows its current value, so a typo is caught before you restart. This
+                                matters most for the load sensor &mdash; Home Assistant answers an unknown entity on
+                                the history endpoint with an empty result rather than an error, so a wrong name
+                                otherwise looks like a system that simply has no history yet.</li>
+                        </ul>
+                    </div>
+
                     <h3>data_source.type</h3>
                     <table>
                         <tr>

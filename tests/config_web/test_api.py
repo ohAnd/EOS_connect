@@ -1121,3 +1121,105 @@ class TestEvccPlaceholderIsNeverAConfiguredUrl:
         )
 
         assert resp.get_json()["success"] is False
+
+
+class TestConnectingADataSourceWithoutSensors:
+    """
+    Connecting Home Assistant is allowed with the sensors still unset — but it says so.
+
+    Blocking would be wrong twice over. An empty sensor is a supported state (the
+    interfaces fall back to the built-in profile), and the sensor fields only become
+    visible once ``data_source.type`` names a remote source — so refusing that save
+    would leave the user unable to reach the fields the refusal demands.
+    """
+
+    CONNECT = {
+        "data_source.type": "homeassistant",
+        "data_source.url": "http://homeassistant.local:8123",
+        "data_source.access_token": "ha-token",
+    }
+
+    @pytest.fixture(autouse=True)
+    def _no_sensors(self, fresh_client):
+        """
+        A real fresh install has no load/battery sections in config.yaml at all, so
+        both sensors resolve to the schema's empty default. The shared sample config
+        is a legacy full config and ships real names, which would mask the whole case.
+        """
+        fresh_client.module._config.get("load", {}).pop("load_sensor", None)
+        fresh_client.module._config.get("battery", {}).pop("soc_sensor", None)
+
+    def _advisories(self, resp):
+        return {w["field"] for w in resp.get_json().get("warnings", [])}
+
+    def test_the_save_goes_through_and_warns_about_both_sensors(self, fresh_client):
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps(self.CONNECT),
+            content_type="application/json",
+        )
+        body = resp.get_json()
+
+        assert body["success"] is True
+        assert self._advisories(resp) == {"load.load_sensor", "battery.soc_sensor"}
+        # Advisory means advisory: the values really were written.
+        assert fresh_client.store.get("data_source.type") == "homeassistant"
+
+    def test_a_sensor_the_request_sets_is_not_warned_about(self, fresh_client):
+        """An answer is an answer — the wizard posts both in the same request."""
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({**self.CONNECT, "load.load_sensor": "sensor.house_power"}),
+            content_type="application/json",
+        )
+
+        assert self._advisories(resp) == {"battery.soc_sensor"}
+
+    def test_a_legacy_placeholder_still_counts_as_unconfigured(self, fresh_client):
+        """``Load_Power`` was a hint the wizard stored, never an entity."""
+        fresh_client.store.set("load.load_sensor", "Load_Power")
+        fresh_client.store.set("battery.soc_sensor", "sensor.battery_soc")
+
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps(self.CONNECT),
+            content_type="application/json",
+        )
+
+        assert self._advisories(resp) == {"load.load_sensor"}
+
+    def test_a_configured_pair_produces_no_advisory(self, fresh_client):
+        fresh_client.store.set("load.load_sensor", "sensor.house_power")
+        fresh_client.store.set("battery.soc_sensor", "sensor.battery_soc")
+
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps(self.CONNECT),
+            content_type="application/json",
+        )
+
+        assert self._advisories(resp) == set()
+
+    def test_an_unrelated_save_is_never_decorated(self, fresh_client):
+        """The touches() gate — the state is real, but this request did not cause it."""
+        fresh_client.store.set("data_source.type", "homeassistant")
+        fresh_client.store.set("data_source.url", "http://ha.local:8123")
+
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"battery.capacity_wh": 12345}),
+            content_type="application/json",
+        )
+
+        assert resp.get_json()["success"] is True
+        assert self._advisories(resp) == set()
+
+    def test_a_default_data_source_needs_no_sensors(self, fresh_client):
+        """Nothing reads a sensor when nothing is connected."""
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"data_source.type": "default"}),
+            content_type="application/json",
+        )
+
+        assert self._advisories(resp) == set()

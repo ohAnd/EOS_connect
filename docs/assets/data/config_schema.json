@@ -147,39 +147,49 @@
     {
       "key": "load.load_sensor",
       "type": "sensor",
-      "default": "Load_Power",
+      "default": "",
       "section": "load",
       "level": "getting_started",
-      "description": "Entity/item for load power data in watts",
+      "description": "Entity/item reporting household load power in watts — e.g. sensor.house_power (Home Assistant) or Load_Power (openHAB)",
       "labels": [
         "restart_required"
       ],
       "help_url": "configuration.html#load",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Sensors"
     },
     {
       "key": "load.car_charge_load_sensor",
       "type": "sensor",
-      "default": "Wallbox_Power",
+      "default": "",
       "section": "load",
       "level": "standard",
-      "description": "Entity/item for wallbox power data in watts (leave empty if not used)",
+      "description": "Entity/item for wallbox power data in watts — e.g. sensor.wallbox_power (leave empty if not used)",
       "labels": [
         "restart_required"
       ],
       "help_url": "configuration.html#load",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Sensors"
     },
     {
       "key": "load.additional_load_1_sensor",
       "type": "sensor",
-      "default": "additional_load_1_sensor",
+      "default": "",
       "section": "load",
       "level": "standard",
       "description": "Entity/item for additional load power in watts (leave empty if not used)",
@@ -1037,16 +1047,21 @@
     {
       "key": "battery.soc_sensor",
       "type": "sensor",
-      "default": "battery_SOC",
+      "default": "",
       "section": "battery",
       "level": "getting_started",
-      "description": "Entity/item for battery state of charge",
+      "description": "Entity/item for battery state of charge — e.g. sensor.battery_soc (Home Assistant) or battery_SOC (openHAB)",
       "labels": [
         "restart_required"
       ],
       "help_url": "configuration.html#battery",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Core"
     },
@@ -1188,7 +1203,12 @@
       ],
       "help_url": "configuration.html#battery",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Sensors"
     },
