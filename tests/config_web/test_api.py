@@ -956,6 +956,24 @@ class TestRefusedSavesWriteNothing:
         assert resp.get_json()["success"] is False
         assert [d["field"] for d in resp.get_json()["unmet_dependencies"]] == ["pv_forecast"]
 
+    def test_the_built_in_source_needs_no_installation(self, fresh_client):
+        """
+        The counterpart, and the path a click-through install takes: "default" is
+        configuration-free by design, so it must save on its own. Blocking it here
+        would leave the wizard's own preselected answer unsaveable.
+        """
+        resp = fresh_client.put(
+            "/api/config/",
+            data=json.dumps({"pv_forecast_source.source": "default"}),
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 200
+        assert resp.get_json()["success"] is True
+        assert not [
+            k for k in fresh_client.store.get_all() if k.startswith("pv_forecast.")
+        ]
+
     def test_an_installation_supplied_in_the_same_request_satisfies_it(self, fresh_client):
         """
         This is the case that forced the check to run after the write: installations

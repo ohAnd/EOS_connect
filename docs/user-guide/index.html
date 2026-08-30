@@ -152,6 +152,10 @@ python src/eos_connect.py</code></pre>
             change it in Settings. Where a choice needs a setting the wizard does not cover — the Home Assistant
             inverter's service-call sequences, or the hourly prices behind a fixed 24-hour tariff — the review
             step says so before you finish.</p>
+            <p>The PV step arrives preset to the <strong>Default</strong> forecast source, which needs no setup
+            at all, so a first run finishes without asking where you live. It is a fixed demo curve for an
+            assumed 4&nbsp;kW array rather than a forecast of your roof — enough to see EOS Connect working,
+            and worth replacing with a real provider under Settings &#9656; PV Source once you are running.</p>
             <p>The only file you may optionally create is <code>src/config.yaml</code> with bootstrap settings:</p>
             <pre><code># config.yaml — bootstrap settings only (optional)
 eos_connect_web_port: 8081  # Web server port

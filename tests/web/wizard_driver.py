@@ -98,6 +98,19 @@ def choices(page, key):
     )
 
 
+def option_labels(page, key):
+    """The visible text of a select's options, in order."""
+    return page.eval_on_selector_all(
+        f"#wiz-{css_key(key)} option",
+        "els => els.map(e => e.textContent.trim())",
+    )
+
+
+def field_value(page, key):
+    """What a field currently holds, as the browser sees it."""
+    return page.eval_on_selector(f"#wiz-{css_key(key)}", "el => el.value")
+
+
 def review_rows(page):
     """The review step's summary as ``{section title: {label: value}}``."""
     return page.evaluate(

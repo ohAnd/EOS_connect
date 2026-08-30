@@ -1154,10 +1154,14 @@ _ALL_FIELDS: list[FieldDef] = [
     FieldDef(
         key="pv_forecast_source.source",
         field_type="select",
-        default="akkudoktor",
+        default="default",
         section="pv_forecast_source",
         level="getting_started",
-        description="Solar forecast data provider",
+        description=(
+            "Solar forecast data provider. 'default' needs no setup at all - it "
+            "serves a fixed demo curve for a typical 4 kW array so a new install "
+            "runs straight away. Switch to a real provider when you are ready."
+        ),
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"choices": [

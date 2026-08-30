@@ -59,11 +59,12 @@ BASE_ANSWERS = {
 }
 
 PERSONAS = {
+    # Everything left as it arrives: the PV step is preselected to the built-in
+    # source, so a user who only clicks Next stores no installation at all.
     "defaults": {
         **BASE_ANSWERS,
         "evcc.url": "http://yourEVCCserver:7070",
-        "pv_forecast_source.source": "akkudoktor",
-        **INSTALLATION,
+        "pv_forecast_source.source": "default",
     },
     "home_assistant_fronius_tibber": {
         **BASE_ANSWERS,
@@ -171,6 +172,30 @@ def test_the_pv_interface_is_not_degraded(merged, persona):
     )
 
     assert pv.configuration_valid is True, pv.configuration_state
+
+
+def test_a_click_through_install_gets_a_forecast(merged):
+    """
+    Not being degraded is not the same as producing something. The built-in source
+    validated as *valid* while summarizing an empty installation list into an empty
+    forecast, so the least-configured install — the most common one — handed the
+    optimizer no solar at all and said nothing about it.
+    """
+    config = merged("defaults")
+
+    pv = PvInterface(
+        config["pv_forecast_source"],
+        config["pv_forecast"],
+        config["eos"]["time_frame"],
+        {"url": config["evcc"]["url"], "data_source": {}},
+        config["eos"]["source"] == "eos_server",
+        config["time_zone"],
+    )
+    forecast = pv.get_summarized_pv_forecast()
+
+    assert config["pv_forecast"] == []
+    assert forecast
+    assert max(forecast) > 0
 
 
 @pytest.mark.parametrize("persona", list(PERSONAS))

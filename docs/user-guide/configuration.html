@@ -3345,13 +3345,13 @@ price:
                                 <code>victron</code> - Victron VRM API<br>
                                 <code>timeseries</code> - HTTP endpoint returning timeseries data (Home Assistant,
                                 custom API, etc.)<br>
-                                <code>default</code> - Built-in default forecast with fixed values (no external
-                                configuration needed)
+                                <code>default</code> - Built-in demo forecast, no setup of any kind
+                                (see below)
                             </td>
                         </tr>
                         <tr>
                             <th>Default</th>
-                            <td><code>akkudoktor</code></td>
+                            <td><code>default</code></td>
                         </tr>
                     </table>
 
@@ -3367,8 +3367,17 @@ price:
                                 <code>victron</code>, <code>evcc</code>, <code>timeseries</code> — these configure their
                                 data elsewhere:
                                 <ul>
-                                    <li><code>default</code>: Uses built-in fixed forecast values (no external data
-                                        source)</li>
+                                    <li><code>default</code>: Uses built-in fixed forecast values (no external
+                                        data source). This is what a new install starts on, so the setup wizard
+                                        can finish without asking for your location. Be clear on what it is: a
+                                        fixed bell curve for an <em>assumed</em> 4&nbsp;kW array, peaking at
+                                        70&nbsp;% of that (2800&nbsp;W) at midday and zero before 06:00 and
+                                        after 19:00. It is sized to your time frame base (24 hourly or 96
+                                        quarter-hourly slots, repeated over 48&nbsp;h) and never changes — it
+                                        is not a forecast of your roof, your weather, or the season. Switch to
+                                        a real provider once you are up and running. A PV installation is
+                                        optional here; if you add one, the curve scales to the total power you
+                                        give it instead of the assumed 4&nbsp;kW</li>
                                     <li><code>solcast</code>, <code>victron</code>: Configure resource IDs in the PV
                                         Source section</li>
                                     <li><code>evcc</code>: Retrieves data from your configured EVCC instance</li>

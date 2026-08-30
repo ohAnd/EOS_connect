@@ -1449,10 +1449,10 @@
     {
       "key": "pv_forecast_source.source",
       "type": "select",
-      "default": "akkudoktor",
+      "default": "default",
       "section": "pv_forecast_source",
       "level": "getting_started",
-      "description": "Solar forecast data provider",
+      "description": "Solar forecast data provider. 'default' needs no setup at all - it serves a fixed demo curve for a typical 4 kW array so a new install runs straight away. Switch to a real provider when you are ready.",
       "labels": [],
       "help_url": "configuration.html#pv-forecast",
       "validation": {

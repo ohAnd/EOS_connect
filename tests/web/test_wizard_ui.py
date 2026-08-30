@@ -580,6 +580,63 @@ def _go_to_pv_with_evcc_configured(page):
         wz.next_step(page)
 
 
+def test_the_pv_step_asks_for_nothing_by_default(fresh_page):
+    """
+    The first-run on-ramp. The step used to arrive on akkudoktor, which put latitude,
+    longitude, azimuth, tilt and power in front of someone who has not yet seen the
+    application do anything. The built-in source needs none of it, so an untouched
+    step shows the provider and nothing else.
+    """
+    while wz.current_step_id(fresh_page) != "pv":
+        wz.next_step(fresh_page)
+
+    assert wz.field_value(fresh_page, "pv_forecast_source.source") == "default"
+    assert wz.visible_fields(fresh_page) == ["pv_forecast_source.source"]
+
+
+def test_the_provider_options_say_what_they_cost(fresh_page):
+    """
+    Raw choice values read as brand names, except "default", which reads as "nothing
+    chosen yet" — the one option where that is wrong, now that it is the preselected
+    answer and a deliberate one.
+    """
+    while wz.current_step_id(fresh_page) != "pv":
+        wz.next_step(fresh_page)
+
+    labels = wz.option_labels(fresh_page, "pv_forecast_source.source")
+
+    assert "default — built-in demo forecast, no setup needed" in labels
+    assert "akkudoktor — free, needs your location" in labels
+
+
+def test_an_unavailable_provider_keeps_its_description(fresh_page):
+    """
+    The greying-out of evcc without a URL replaced the option text wholesale, so
+    adding descriptions would have silently dropped this one back to a bare value.
+    """
+    while wz.current_step_id(fresh_page) != "pv":
+        wz.next_step(fresh_page)
+
+    labels = wz.option_labels(fresh_page, "pv_forecast_source.source")
+
+    assert "evcc — from your EVCC instance (not available)" in labels
+
+
+def test_a_click_through_install_stores_no_installation(fresh_page, fresh_server):
+    """
+    The wizard has to be finishable without answering a single PV question — that is
+    what the preselected source buys — and must not leave a phantom roof behind.
+    """
+    while wz.current_step_id(fresh_page) != "review":
+        wz.next_step(fresh_page)
+    wz.finish(fresh_page)
+
+    assert wz.finished_successfully(fresh_page), wz.save_error_text(fresh_page)
+    stored = fresh_server.store.get_all()
+    assert stored["pv_forecast_source.source"] == "default"
+    assert not [k for k in stored if k.startswith("pv_forecast.")]
+
+
 def test_switching_away_from_a_location_source_hides_the_installation(fresh_page):
     """EVCC brings its own forecast; coordinates would be noise."""
     _go_to_pv_with_evcc_configured(fresh_page)
@@ -679,8 +736,30 @@ def test_a_fixed_tariff_says_the_prices_are_placeholders(fresh_page):
     assert "placeholders" in fresh_page.inner_text(".wizard-followups")
 
 
+def test_the_built_in_forecast_says_it_is_demo_data(fresh_page):
+    """
+    A click-through install now lands on the built-in PV source, which is deliberate —
+    it is what lets the wizard finish without asking for a roof. But it forecasts
+    nothing: it is a fixed curve for an assumed 4 kW array. Left unsaid, the user reads
+    the solar line on the dashboard as their own production.
+    """
+    while wz.current_step_id(fresh_page) != "review":
+        wz.next_step(fresh_page)
+
+    note = fresh_page.inner_text(".wizard-followups")
+    assert "PV" in note
+    assert "demo curve" in note
+
+
 def test_a_complete_setup_has_nothing_outstanding(fresh_page):
-    """The note must not become wallpaper — it appears only when it applies."""
+    """
+    The note must not become wallpaper — it appears only when it applies. Answering
+    the PV step with a real provider is a setup with nothing left over, so the panel
+    has to disappear entirely rather than shrink.
+    """
+    while wz.current_step_id(fresh_page) != "pv":
+        wz.next_step(fresh_page)
+    wz.set_field(fresh_page, "pv_forecast_source.source", "akkudoktor")
     while wz.current_step_id(fresh_page) != "review":
         wz.next_step(fresh_page)
 

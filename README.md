@@ -144,7 +144,7 @@ On first launch, a **Setup Wizard** guides you through the essential configurati
 5. **Battery** — Set capacity and SOC limits
 6. **Load** — Connect your load sensor
 7. **Price** — Choose your electricity pricing provider
-8. **PV Installations** — Configure your solar forecast provider and PV systems (location-based sources only)
+8. **PV Installations** — Configure your solar forecast provider and PV systems (location-based sources only). Preset to **Default**, a built-in demo forecast that needs no setup, so a first run finishes without asking for your location.
 
 The wizard saves only the answers it asked you for. Everything else keeps its default until you change it in Settings.
 
@@ -152,6 +152,7 @@ After the wizard completes, restart EOS Connect to apply the settings.
 
 **Note:**
 - EVCC and Data Source both come before Inverter, because either can act as the inverter controller. If the EVCC URL is not configured, that option is greyed out in the Inverter and PV Source fields.
+- The **Default** PV source is a fixed demo curve for an assumed 4 kW array, not a forecast for your roof. It exists so you can see EOS Connect running immediately; swap it for a real provider under Settings ▸ PV Source afterwards. The **Review & Finish** step reminds you.
 - PV Installations configuration is only required for location-based forecast sources (Akkudoktor, OpenMeteo, Forecast.Solar). Other sources (Default, Solcast, Victron, EVCC, Timeseries) configure their data elsewhere and do not need PV Installations defined. For `Timeseries`, see the [Home Assistant template snippets](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#timeseries-templates).
 - A few choices need a setting the wizard does not ask for, because it is not a getting-started field — the Home Assistant inverter is driven by service-call sequences, and a fixed 24-hour tariff needs your own hourly prices. The **Review & Finish** step lists anything still outstanding, so you know to visit Settings afterwards.
 

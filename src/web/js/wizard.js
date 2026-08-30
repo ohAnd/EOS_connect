@@ -8,6 +8,27 @@
 
 /* global showFullScreenOverlay, closeFullScreenOverlay, CONFIG_SECTIONS */
 
+/**
+ * Friendlier option text for the PV source dropdown.
+ *
+ * The raw choice values are what the config stores, and most of them read as brand
+ * names — but "default" reads as "nothing chosen yet", which is exactly wrong now
+ * that it is the preselected answer and a deliberate one. Saying what each option
+ * costs the user up front stops the first-run step from looking like a decision they
+ * have to research. Any choice missing from this map falls back to its raw value.
+ */
+const PV_SOURCE_OPTION_LABELS = {
+    default: "default — built-in demo forecast, no setup needed",
+    akkudoktor: "akkudoktor — free, needs your location",
+    openmeteo: "openmeteo — free, needs your location",
+    openmeteo_local: "openmeteo_local — free, needs your location and horizon",
+    forecast_solar: "forecast_solar — free tier, needs your location",
+    evcc: "evcc — from your EVCC instance",
+    solcast: "solcast — API key and resource ID",
+    victron: "victron — VRM API key and installation ID",
+    timeseries: "timeseries — your own HTTP or Home Assistant sensor",
+};
+
 class SetupWizard {
     /**
      * Define the wizard steps and their associated schema sections/fields.
@@ -358,7 +379,9 @@ class SetupWizard {
             // Conditional disabling for specific fields
             let disabled = "";
             let title = "";
-            let displayLabel = c;
+            let displayLabel = f.key === "pv_forecast_source.source"
+                ? (PV_SOURCE_OPTION_LABELS[c] ?? c)
+                : c;
             
             // Disable "evcc" option in pv_forecast_source.source if evcc.url is not configured
             if (f.key === "pv_forecast_source.source" && String(c) === "evcc") {
@@ -367,7 +390,7 @@ class SetupWizard {
                 if (isDefault) {
                     disabled = "disabled";
                     title = "title='Configure EVCC URL first'";
-                    displayLabel = `${c} (not available)`;
+                    displayLabel = `${displayLabel} (not available)`;
                 }
             }
             
@@ -378,7 +401,7 @@ class SetupWizard {
                 if (isDefault) {
                     disabled = "disabled";
                     title = "title='Configure EVCC URL first'";
-                    displayLabel = `${c} (not available)`;
+                    displayLabel = `${displayLabel} (not available)`;
                 }
             }
             
@@ -389,7 +412,7 @@ class SetupWizard {
                 if (isDefault) {
                     disabled = "disabled";
                     title = "title='Configure EVCC URL first'";
-                    displayLabel = `${c} (not available)`;
+                    displayLabel = `${displayLabel} (not available)`;
                 }
             }
             
@@ -536,6 +559,14 @@ class SetupWizard {
                 "<strong>Price</strong> — a fixed 24-hour tariff needs your own hourly "
                 + "prices. Set them under Settings \u25b8 Price; the defaults are "
                 + "placeholders."
+            );
+        }
+        if (this.values["pv_forecast_source.source"] === "default") {
+            outstanding.push(
+                "<strong>PV</strong> — the built-in forecast is a fixed demo curve for "
+                + "a typical 4 kW array, not a forecast for your roof. It lets you see "
+                + "EOS Connect running today; pick a real provider under "
+                + "Settings \u25b8 PV Source when you are ready."
             );
         }
 
@@ -1071,7 +1102,7 @@ class SetupWizard {
     _isLocationBasedPvSource() {
         const source = this.values["pv_forecast_source.source"]
             ?? this.schema.find(f => f.key === "pv_forecast_source.source")?.default
-            ?? "akkudoktor";
+            ?? "default";
         return this.locationBasedPvSources.includes(source);
     }
 
