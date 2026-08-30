@@ -808,50 +808,55 @@
     border-color: #4a9eff;
 }
 
-/* ── Per-sensor entity test ──────────────────────────────────────────────
-   The Test button sits inline with the sensor input; its verdict goes on the row
-   below so a long "not found" message does not squeeze the field. */
-.config-entity-test {
-    flex: 0 0 auto;
-    margin-left: 8px;
-    white-space: nowrap;
+/* --- Per-sensor entity test ---
+   Same shape as the timeseries connection test above: its own labelled row under the
+   field, not a button alongside the input. Every input in this panel is width:100%,
+   so an inline button wraps underneath and reads as a stray control. */
+.config-entity-tester .config-btn {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #ccc;
+    border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
-.config-entity-test:disabled {
+.config-entity-tester .config-btn:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.config-entity-tester .config-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }
 
-.config-entity-result:empty {
-    display: none;
-}
-
 .config-entity-result {
+    display: none;
+    width: 100%;
     font-size: 0.82em;
     line-height: 1.5;
+    color: #ccc;
     margin-top: 8px;
-    padding: 8px 10px;
+    padding: 10px 12px;
     border-radius: 6px;
     border-left: 3px solid rgba(255, 255, 255, 0.2);
     background-color: rgba(0, 0, 0, 0.18);
 }
 
-.config-entity-ok {
-    color: #b7e2b9;
+.config-entity-result.visible {
+    display: block;
 }
 
-.config-entity-ok .fa-circle-check {
+.config-entity-result.ok {
+    border-left-color: #4caf50;
+}
+
+.config-entity-result.ok .fa-circle-check {
     color: #4caf50;
 }
 
-.config-entity-fail {
+.config-entity-result.error {
+    border-left-color: #ff6b6b;
     color: #ffb3b3;
 }
 
-.config-entity-fail .fa-circle-exclamation {
+.config-entity-result.error .fa-times-circle {
     color: #ff6b6b;
-}
-
-.config-entity-testing {
-    color: #ccc;
 }

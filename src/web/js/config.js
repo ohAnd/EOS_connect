@@ -514,35 +514,49 @@ class ConfigurationManager {
                 </div>
                 <div class="config-field-input">
                     ${inputHtml}
-                    ${this._renderEntityTester(f)}
                 </div>
                 ${helpText}
                 <div class="config-field-error" id="cfg-err-${this._cssKey(f.key)}"></div>
-                <div class="config-entity-result" id="cfg-entity-result-${this._cssKey(f.key)}"></div>
-            </div>`;
+            </div>${this._renderEntityTester(f)}`;
     }
 
     /**
-     * Render the "Test" button beside a sensor field.
+     * Render the connection test for a sensor field, as its own row beneath it.
      *
      * Sensor names are free text and a typo is invisible at runtime — Home Assistant
      * answers an unknown entity on the history endpoint with 200 and an empty list,
      * so the load profile silently becomes the built-in default. Asking before saving
      * is the only way for the user to tell the two apart.
      *
+     * Laid out exactly like the timeseries tester (``_renderTimeseriesTester``): a
+     * labelled row of its own, not a button squeezed alongside the input. Every input
+     * in this panel is width:100%, so an inline button wraps underneath and reads as
+     * a stray control rather than part of the field.
+     *
      * @param {Object} f - Field definition
-     * @returns {string} Button HTML, or "" for anything that is not a sensor field
+     * @returns {string} Row HTML, or "" for anything that is not a sensor field
      */
     _renderEntityTester(f) {
         if (f.type !== "sensor") {
             return "";
         }
+        const cssKey = this._cssKey(f.key);
+        // The test belongs to its field: when the field is not applicable, neither is
+        // the button. _updateDependencies keeps the two in step after a change.
+        const hidden = this._isDependencyHidden(f) ? " hidden" : "";
+
         return `
-            <button type="button" class="config-btn config-entity-test"
-                    id="cfg-entity-test-${this._cssKey(f.key)}"
-                    onclick="configurationManager.testEntity('${f.key}')">
-                <i class="fas fa-plug"></i> Test
-            </button>`;
+            <div class="config-field config-entity-tester${hidden}" data-entity-tester="${f.key}">
+                <div class="config-field-label"><span>Connection test</span></div>
+                <div class="config-field-input">
+                    <button type="button" class="config-btn"
+                            id="cfg-entity-test-${cssKey}"
+                            onclick="configurationManager.testEntity('${f.key}')">
+                        <i class="fas fa-plug"></i> Test entity
+                    </button>
+                </div>
+                <div class="config-entity-result" id="cfg-entity-result-${cssKey}"></div>
+            </div>`;
     }
 
     /**
@@ -554,32 +568,37 @@ class ConfigurationManager {
      * @param {string} key - Dot-notation key of the sensor field to test
      */
     async testEntity(key) {
-        const resultEl = document.getElementById(
-            `cfg-entity-result-${this._cssKey(key)}`
-        );
-        const btnEl = document.getElementById(`cfg-entity-test-${this._cssKey(key)}`);
+        const cssKey = this._cssKey(key);
+        const resultEl = document.getElementById(`cfg-entity-result-${cssKey}`);
+        const btnEl = document.getElementById(`cfg-entity-test-${cssKey}`);
         if (!resultEl) {
             return;
         }
 
+        // Send the values currently in the form, not just the saved ones, so the user
+        // can test before committing — same contract as testTimeseries(). The section
+        // decides which connection applies: pv_autoscaling can carry its own.
+        const section = key.split(".")[0];
         const body = { key };
-        for (const dsKey of [
+        const relevant = [
+            key,
             "data_source.type", "data_source.url",
             "data_source.access_token", "data_source.ssl_ignore",
-        ]) {
-            if (this.values[dsKey] !== undefined) {
-                body[dsKey] = this.values[dsKey];
+            `${section}.use_ha_central_data_source`,
+            `${section}.src`, `${section}.source`, `${section}.url`,
+            `${section}.access_token`, `${section}.ssl_ignore`,
+        ];
+        for (const k of relevant) {
+            if (this.values[k] !== undefined) {
+                body[k] = this.values[k];
             }
         }
-        if (this.values[key] !== undefined) {
-            body[key] = this.values[key];
-        }
 
+        resultEl.className = "config-entity-result visible";
+        resultEl.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Testing…`;
         if (btnEl) {
             btnEl.disabled = true;
         }
-        resultEl.innerHTML = `<span class="config-entity-testing">
-            <i class="fas fa-spinner fa-spin"></i> Testing…</span>`;
 
         try {
             const res = await fetch("api/config/test-entity", {
@@ -587,20 +606,19 @@ class ConfigurationManager {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
             });
-            const result = await res.json();
-            if (result.ok) {
-                resultEl.innerHTML = `<span class="config-entity-ok">
-                    <i class="fas fa-circle-check"></i>
-                    Found — currently reports ${this._escapeHtml(String(result.value))}</span>`;
+            const data = await res.json();
+            if (data.ok) {
+                resultEl.innerHTML = `<i class="fas fa-circle-check"></i> Found — `
+                    + `currently reports <strong>${this._escapeHtml(String(data.value))}</strong>`;
             } else {
-                resultEl.innerHTML = `<span class="config-entity-fail">
-                    <i class="fas fa-circle-exclamation"></i>
-                    ${this._escapeHtml(result.error || "Test failed.")}</span>`;
+                resultEl.innerHTML = `<i class="fas fa-times-circle"></i> `
+                    + `${this._escapeHtml(data.error || "Test failed.")}`;
             }
+            resultEl.className = `config-entity-result visible ${data.ok ? "ok" : "error"}`;
         } catch (err) {
-            resultEl.innerHTML = `<span class="config-entity-fail">
-                <i class="fas fa-circle-exclamation"></i>
-                ${this._escapeHtml(err.message || String(err))}</span>`;
+            console.error("[ConfigurationManager] Entity test failed:", err);
+            resultEl.className = "config-entity-result visible error";
+            resultEl.innerHTML = `<i class="fas fa-times-circle"></i> Test request failed.`;
         } finally {
             if (btnEl) {
                 btnEl.disabled = false;
@@ -1160,12 +1178,17 @@ class ConfigurationManager {
         }
         for (const f of this.schema) {
             if (f.depends_on && changedKey in f.depends_on) {
-                const fieldEl = document.getElementById(`cfg-field-${this._cssKey(f.key)}`);
-                if (fieldEl) {
-                    if (this._isDependencyHidden(f)) {
-                        fieldEl.classList.add("hidden");
-                    } else {
-                        fieldEl.classList.remove("hidden");
+                const hidden = this._isDependencyHidden(f);
+                // The field and its connection-test row travel together — a Test
+                // button for a field that is not applicable is a control that cannot
+                // do anything.
+                const els = [
+                    document.getElementById(`cfg-field-${this._cssKey(f.key)}`),
+                    document.querySelector(`[data-entity-tester="${f.key}"]`),
+                ];
+                for (const el of els) {
+                    if (el) {
+                        el.classList.toggle("hidden", hidden);
                     }
                 }
             }

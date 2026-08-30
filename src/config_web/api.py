@@ -1029,14 +1029,46 @@ def test_entity():
         return jsonify({"error": "key must name a sensor field"}), 400
 
     get_value = _effective_value_getter(data)
+    source, url, token, ssl_ignore = _entity_probe_connection(key, get_value)
     result = probe_entity(
-        get_value("data_source.type"),
+        source,
         get_value(key),
-        get_value("data_source.url"),
-        access_token=get_value("data_source.access_token"),
-        ssl_ignore=bool(get_value("data_source.ssl_ignore")),
+        url,
+        access_token=token,
+        ssl_ignore=ssl_ignore,
     )
     return jsonify(result), 200
+
+
+def _entity_probe_connection(key: str, get_value):
+    """
+    The connection the interface behind *key* actually reads through.
+
+    Load and battery always inherit the central data source (``merger.
+    _apply_data_source_inheritance``), but ``pv_autoscaling`` can opt out of it and
+    carry its own host and token. Probing ``data_source.*`` for that one would test a
+    connection it never uses, and report a working entity as missing — or the reverse.
+
+    Returns ``(source, url, access_token, ssl_ignore)``.
+    """
+    section = key.split(".")[0]
+
+    if section == "pv_autoscaling" and not get_value(
+        "pv_autoscaling.use_ha_central_data_source"
+    ):
+        return (
+            get_value("pv_autoscaling.src"),
+            get_value("pv_autoscaling.url"),
+            get_value("pv_autoscaling.access_token"),
+            bool(get_value("pv_autoscaling.ssl_ignore")),
+        )
+
+    return (
+        get_value("data_source.type"),
+        get_value("data_source.url"),
+        get_value("data_source.access_token"),
+        bool(get_value("data_source.ssl_ignore")),
+    )
 
 
 def _validate_price_arrays(data: dict) -> list[dict]:

@@ -147,3 +147,63 @@ class TestTestEntityEndpoint:
         )
 
         assert resp.status_code == 400
+
+
+class TestItProbesTheConnectionTheSectionActuallyUses:
+    """
+    Load and battery always inherit the central data source, but pv_autoscaling can
+    opt out and carry its own host. Probing the wrong one would report a working
+    entity as missing — or, worse, a missing one as fine.
+    """
+
+    CENTRAL = {
+        "data_source.type": "homeassistant",
+        "data_source.url": "http://central.local:8123",
+        "data_source.access_token": "central-token",
+    }
+    OWN = {
+        "pv_autoscaling.src": "openhab",
+        "pv_autoscaling.url": "http://its-own.local:8080",
+        "pv_autoscaling.access_token": "its-own-token",
+    }
+
+    def _probe_args(self, client, body):
+        with patch("src.config_web.api.probe_entity",
+                   return_value={"ok": True, "error": "", "value": "1"}) as probe:
+            client.post(
+                "/api/config/test-entity",
+                data=json.dumps(body),
+                content_type="application/json",
+            )
+        return probe.call_args
+
+    @pytest.mark.parametrize("key", ["load.load_sensor", "battery.soc_sensor"])
+    def test_load_and_battery_use_the_central_data_source(self, client, key):
+        args = self._probe_args(client, {"key": key, **self.CENTRAL})
+
+        assert args.args[0] == "homeassistant"
+        assert args.args[2] == "http://central.local:8123"
+        assert args.kwargs["access_token"] == "central-token"
+
+    def test_pv_autoscaling_uses_its_own_when_it_opts_out(self, client):
+        args = self._probe_args(client, {
+            "key": "pv_autoscaling.sensor_entity_id",
+            "pv_autoscaling.use_ha_central_data_source": False,
+            **self.CENTRAL,
+            **self.OWN,
+        })
+
+        assert args.args[0] == "openhab"
+        assert args.args[2] == "http://its-own.local:8080"
+        assert args.kwargs["access_token"] == "its-own-token"
+
+    def test_pv_autoscaling_uses_the_central_one_when_it_opts_in(self, client):
+        args = self._probe_args(client, {
+            "key": "pv_autoscaling.sensor_entity_id",
+            "pv_autoscaling.use_ha_central_data_source": True,
+            **self.CENTRAL,
+            **self.OWN,
+        })
+
+        assert args.args[0] == "homeassistant"
+        assert args.args[2] == "http://central.local:8123"
