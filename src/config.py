@@ -15,6 +15,158 @@ logger = logging.getLogger("__main__")
 logger.info("[Config] loading module ")
 
 
+# ---------------------------------------------------------------------------
+# Data directory persistence
+#
+# Standalone Docker users who run without a volume on /app/data lose
+# eos_connect.db every time the container is recreated, which is what an image
+# update does.  config.yaml is usually bind-mounted and therefore survives, so
+# the next start finds an empty database, re-runs migrate_yaml_to_store() and
+# resurrects pre-database settings — the user sees their web-UI configuration
+# revert on its own, with nothing in the logs connecting the two (#287).
+#
+# Nothing can detect this after the fact, so it is checked at startup.
+# Everything here fails closed: an environment that cannot be classified is
+# reported as "not a container" or "undetermined", never as "not persistent".
+# A false alarm on a bare-metal install costs more than a missed warning in
+# Docker.
+# ---------------------------------------------------------------------------
+
+# Module-level so tests can point it at a fixture file.
+_MOUNTINFO_PATH = "/proc/self/mountinfo"
+
+# Root filesystem types that mean "this is a container image layer".
+_CONTAINER_ROOT_FSTYPES = frozenset({"overlay", "overlayfs"})
+
+# RAM-backed. Noted in the message but deliberately NOT part of the verdict: from
+# inside a container, `--tmpfs /app/data` and a bind mount of a host directory that
+# happens to sit on tmpfs (systemd puts /tmp there on many distros) are
+# indistinguishable. The bind mount does survive a container recreate, so vetoing on
+# fstype would raise a false alarm on an ordinary `-v /tmp/eos:/app/data`.
+_RAM_BACKED_FSTYPES = frozenset({"tmpfs", "ramfs"})
+
+# mountinfo escapes these four characters in mount points as octal.
+_MOUNTINFO_ESCAPES = (("\\040", " "), ("\\011", "\t"), ("\\012", "\n"), ("\\134", "\\"))
+
+
+def _fstype_for_path(path):
+    """Filesystem type of the mount *path* resolves onto, or None if unknowable.
+
+    Longest-prefix match over ``/proc/self/mountinfo``.  Returns None on any
+    platform without /proc and on any line that cannot be parsed; every caller
+    treats None as "no opinion", so a parse failure can never produce a verdict.
+    """
+    try:
+        target = os.path.realpath(path)
+    except OSError:
+        return None
+
+    best_len, best_type = -1, None
+    try:
+        with open(_MOUNTINFO_PATH, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                fields = line.split()
+                if len(fields) < 8:
+                    continue
+                # The optional-fields block ("shared:1", ...) is variable length and
+                # ends at a lone "-"; the fs type is the token after it. Searching
+                # from index 6 keeps a mount point from being read as the separator.
+                try:
+                    separator = fields.index("-", 6)
+                except ValueError:
+                    continue
+                if separator + 1 >= len(fields):
+                    continue
+                mount_point = fields[4]
+                for escape, literal in _MOUNTINFO_ESCAPES:
+                    mount_point = mount_point.replace(escape, literal)
+                if mount_point == target or target.startswith(
+                    mount_point.rstrip("/") + "/"
+                ):
+                    # >= rather than >: mountinfo lists shadowed mounts in order,
+                    # so the last entry for a mount point is the effective one.
+                    if len(mount_point) >= best_len:
+                        best_len, best_type = len(mount_point), fields[separator + 1]
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    return best_type
+
+
+def _in_container():
+    """True when running inside an OCI container (Docker, Podman, containerd).
+
+    Deliberately does not consult /proc/1/cgroup: under cgroup v2 a container's is
+    typically just ``0::/``, indistinguishable from a host PID 1.
+    """
+    try:
+        if os.path.exists("/.dockerenv"):  # Docker, including compose
+            return True
+        if os.environ.get("container"):  # podman, systemd-nspawn
+            return True
+        return _fstype_for_path("/") in _CONTAINER_ROOT_FSTYPES
+    except OSError:
+        return False
+
+
+def _nearest_existing(path):
+    """Walk up from *path* to the first component that exists, or None.
+
+    The check runs before ConfigStore.open() creates the data directory, so on a
+    first start the directory itself is usually absent.  A missing directory
+    inherits its device from the parent mount, so the verdict is identical.
+    """
+    current = os.path.abspath(path)
+    while True:
+        if os.path.exists(current):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+
+def check_data_dir_persistent(data_dir):
+    """Report whether *data_dir* survives a container recreate.
+
+    Returns a ``(verdict, detail)`` tuple where verdict is:
+
+    - ``True``  — on a mount of its own (bind mount, named or anonymous volume);
+    - ``False`` — on the container's writable layer, or memory-backed;
+    - ``None``  — undetermined; the caller must stay silent.
+
+    The verdict is a device-id comparison, nothing more.  Two syscalls cannot
+    mis-parse anything, and overlay2 reports the merged mount's own device for a
+    file that exists only in the upper layer, so "different device from /" is
+    exactly "survives a container recreate" for a bind mount, a named volume and
+    an anonymous volume alike.  mountinfo only names the filesystem in the
+    message; it never changes the answer.
+    """
+    probe = _nearest_existing(data_dir)
+    if probe is None:
+        return None, f"no existing path component for {data_dir}"
+
+    try:
+        data_dev = os.stat(probe).st_dev
+        root_dev = os.stat("/").st_dev
+    except OSError as exc:
+        return None, f"cannot stat {probe}: {exc}"
+
+    fstype = _fstype_for_path(probe)
+
+    if data_dev == root_dev:
+        return False, (
+            f"{data_dir} shares a device with / ({fstype or 'unknown fs'}), "
+            "so it is part of the container image layer"
+        )
+
+    detail = f"{data_dir} is on its own mount ({fstype or 'unknown fs'})"
+    if fstype in _RAM_BACKED_FSTYPES:
+        # Survives a container recreate, so the verdict stands - but say so, because
+        # it will not survive a host reboot.
+        detail += " - note: RAM-backed, so it is lost when the host reboots"
+    return True, detail
+
+
 class ConfigManager:
     """
     Manages the configuration settings for the application.
@@ -57,6 +209,27 @@ class ConfigManager:
             return str(custom)
 
         return os.path.join(self.current_dir, "data")
+
+    def data_dir_persistence(self):
+        """Classify the data directory as ``"persistent"``/``"ephemeral"``/``"unknown"``.
+
+        Only ``"ephemeral"`` is actionable.  ``"unknown"`` must be treated exactly
+        like ``"persistent"`` by callers: declining to act on a wrong "unknown"
+        costs a log line, acting on a wrong "ephemeral" costs a user's settings.
+
+        Returns:
+            Tuple of (state, detail) where detail is a short human-readable reason.
+        """
+        if self.is_ha_addon:
+            return "persistent", "/data is persisted by the Home Assistant Supervisor"
+
+        if not _in_container():
+            return "unknown", "not running in a container"
+
+        verdict, detail = check_data_dir_persistent(self.data_dir)
+        if verdict is None:
+            return "unknown", detail
+        return ("persistent" if verdict else "ephemeral"), detail
 
     @property
     def is_ha_addon(self) -> bool:
