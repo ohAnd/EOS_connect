@@ -1053,6 +1053,10 @@ class TestPruneMigratedYaml:
         assert "super_secret" in backup.read_text(encoding="utf-8")
         assert (os.stat(backup).st_mode & 0o777) == 0o600
 
+    @pytest.mark.skipif(
+        getattr(os, "geteuid", lambda: -1)() == 0,
+        reason="root bypasses directory permissions, so chmod cannot make this unwritable",
+    )
     def test_unwritable_file_does_not_raise(self, store, tmp_path, monkeypatch):
         """A read-only bind mount must degrade to a log line, not an exception."""
         cm = self._cm(tmp_path, monkeypatch=monkeypatch)

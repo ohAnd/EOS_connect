@@ -163,6 +163,10 @@ class TestUnusableConfigYaml:
         assert cm.config["eos_connect_web_port"] == 9099
         assert cm.config["time_zone"] == "UTC"
 
+    @pytest.mark.skipif(
+        getattr(os, "geteuid", lambda: -1)() == 0,
+        reason="root bypasses directory permissions, so chmod cannot make this unwritable",
+    )
     def test_unwritable_dir_does_not_crash(self, monkeypatch, tmp_path):
         """A read-only mount cannot be written to; that must be survivable."""
         self._clear_env(monkeypatch)
