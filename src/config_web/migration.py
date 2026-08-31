@@ -263,6 +263,20 @@ def migrate_sensor_placeholders_to_empty(store: ConfigStore) -> bool:
 PRUNE_BACKUP_SUFFIX = ".migrated.bak"
 
 
+def _prune_backup_path(config_manager) -> str:
+    """Where to keep the pre-prune copy of config.yaml.
+
+    Deliberately the data directory, not next to config.yaml. Under Docker
+    config.yaml is bind-mounted as a single *file*, so a sibling path resolves
+    inside the container layer and dies with the container — the backup would be
+    written, logged, and silently lost. The data directory is guaranteed to
+    survive here, because the prune only runs when it is not ephemeral, and it
+    already holds the same secrets in the database.
+    """
+    name = os.path.basename(config_manager.config_file) + PRUNE_BACKUP_SUFFIX
+    return os.path.join(config_manager.data_dir, name)
+
+
 def prune_migrated_yaml(config_manager, store, persistence_state: str) -> bool:
     """
     Reduce a fully-migrated legacy config.yaml to its bootstrap keys.
@@ -325,8 +339,9 @@ def prune_migrated_yaml(config_manager, store, persistence_state: str) -> bool:
         )
         return False
 
-    backup_path = config_file + PRUNE_BACKUP_SUFFIX
+    backup_path = _prune_backup_path(config_manager)
     try:
+        os.makedirs(os.path.dirname(backup_path), exist_ok=True)
         shutil.copy2(config_file, backup_path)
     except OSError as exc:
         logger.warning(
@@ -361,7 +376,7 @@ def prune_migrated_yaml(config_manager, store, persistence_state: str) -> bool:
 
     logger.info(
         "[Migration] Reduced %s to bootstrap keys; %d migrated setting(s) now live "
-        "only in the database. Original saved as %s.",
+        "only in the database. Original saved next to the database as %s.",
         config_file,
         len(legacy_keys),
         backup_path,

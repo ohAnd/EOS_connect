@@ -938,9 +938,30 @@ class TestPruneMigratedYaml:
 
         prune_migrated_yaml(cm, store, "persistent")
 
-        backup = tmp_path / ("config.yaml" + PRUNE_BACKUP_SUFFIX)
+        backup = tmp_path / "data" / ("config.yaml" + PRUNE_BACKUP_SUFFIX)
         assert backup.is_file()
         assert "Wallbox_Power" in backup.read_text(encoding="utf-8")
+
+    def test_backup_goes_to_the_data_dir_not_beside_config_yaml(
+        self, store, tmp_path, monkeypatch
+    ):
+        """Under Docker config.yaml is bind-mounted as a single *file*.
+
+        A sibling backup path therefore resolves inside the container layer and
+        dies with the container — written, logged, and silently lost. The data dir
+        is the one place guaranteed to survive, since the prune only runs when it
+        is not ephemeral.
+        """
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is True
+
+        beside = tmp_path / ("config.yaml" + PRUNE_BACKUP_SUFFIX)
+        in_data = tmp_path / "data" / ("config.yaml" + PRUNE_BACKUP_SUFFIX)
+        assert not beside.exists(), "backup must not be written next to config.yaml"
+        assert in_data.is_file(), "backup belongs in the data directory"
+        assert "Wallbox_Power" in in_data.read_text(encoding="utf-8")
 
     def test_ephemeral_leaves_the_file_alone(self, store, tmp_path, monkeypatch):
         """Pruning here would trade stale-but-working values for an empty wizard."""
@@ -951,7 +972,7 @@ class TestPruneMigratedYaml:
 
         text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
         assert "Wallbox_Power" in text
-        assert not (tmp_path / ("config.yaml" + PRUNE_BACKUP_SUFFIX)).exists()
+        assert not (tmp_path / "data" / ("config.yaml" + PRUNE_BACKUP_SUFFIX)).exists()
 
     def test_ephemeral_warns_with_the_fix(self, store, tmp_path, monkeypatch, caplog):
         """The user cannot act on this unless the message names the volume."""
@@ -999,21 +1020,27 @@ class TestPruneMigratedYaml:
         self._migrated(store)
 
         assert prune_migrated_yaml(cm, store, "persistent") is False
-        assert not (tmp_path / ("config.yaml" + PRUNE_BACKUP_SUFFIX)).exists()
+        assert not (tmp_path / "data" / ("config.yaml" + PRUNE_BACKUP_SUFFIX)).exists()
 
     def test_data_path_is_kept_as_a_bootstrap_key(self, store, tmp_path, monkeypatch):
-        """data_path is bootstrap, so a hand-authored one must survive the prune."""
+        """data_path is bootstrap, so a hand-authored one must survive the prune.
+
+        It also relocates the backup, since that is written into the data dir.
+        """
+        custom = tmp_path / "elsewhere"
+        custom.mkdir()
         cm = self._cm(
             tmp_path,
-            contents=LEGACY_YAML + "data_path: /mnt/eos_data\n",
+            contents=LEGACY_YAML + f"data_path: {custom}\n",
             monkeypatch=monkeypatch,
         )
         self._migrated(store)
-        prune_migrated_yaml(cm, store, "persistent")
+        assert prune_migrated_yaml(cm, store, "persistent") is True
 
         text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
-        assert "/mnt/eos_data" in text
+        assert str(custom) in text
         assert "load:" not in text
+        assert (custom / ("config.yaml" + PRUNE_BACKUP_SUFFIX)).is_file()
 
     def test_missing_config_yaml_is_a_noop(self, store, tmp_path, monkeypatch):
         """Nothing to prune, and certainly nothing to create."""
@@ -1048,7 +1075,7 @@ class TestPruneMigratedYaml:
 
         assert prune_migrated_yaml(cm, store, "persistent") is True
 
-        backup = tmp_path / ("config.yaml" + PRUNE_BACKUP_SUFFIX)
+        backup = tmp_path / "data" / ("config.yaml" + PRUNE_BACKUP_SUFFIX)
         assert "super_secret" not in config_file.read_text(encoding="utf-8")
         assert "super_secret" in backup.read_text(encoding="utf-8")
         assert (os.stat(backup).st_mode & 0o777) == 0o600

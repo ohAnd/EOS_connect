@@ -1118,9 +1118,12 @@ Runtime (user saves via web UI):
                         bootstrap keys, but only when the state is not <code>"ephemeral"</code> &mdash; pruning a
                         user whose database is discarded anyway would trade stale-but-working values for an empty
                         wizard on every update. The original is kept as <code>config.yaml.migrated.bak</code> with
-                        its permissions preserved; note it still contains any access tokens the legacy file held,
-                        which is why <code>src/*.bak</code> is in both <code>.gitignore</code> and
-                        <code>.dockerignore</code>.</p>
+                        its permissions preserved, written into <code>data_dir</code> rather than beside
+                        <code>config.yaml</code>: under Docker that file is bind-mounted on its own, so a sibling
+                        path lands in the container layer and is lost on the next recreate. The data directory is
+                        guaranteed to survive because the prune only runs when it is not ephemeral. Note the backup
+                        still contains any access tokens the legacy file held, which is why <code>src/*.bak</code>
+                        is in both <code>.gitignore</code> and <code>.dockerignore</code>.</p>
 
                     <h3>Bootstrap from <code>options.json</code></h3>
                     <p>Bootstrap values (<code>web_port</code>, <code>time_zone</code>, <code>log_level</code>) are read
