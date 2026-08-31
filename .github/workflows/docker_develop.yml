@@ -111,13 +111,6 @@ jobs:
             ghcr.io/${{ env.owner }}/eos_connect:${{ env.VERSION }}
           push: ${{ github.event_name == 'push' }}
 
-      - name: Upload Docker image as artifact
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: eos_connect_image-${{ env.VERSION }}
-          path: eos_connect_${{ env.VERSION }}.tar.gz
-
   cleanup_old_develops:
     needs: publish_image
     runs-on: ubuntu-latest

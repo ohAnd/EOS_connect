@@ -1069,6 +1069,62 @@ Runtime (user saves via web UI):
                     <p>When detected, <code>data_dir</code> resolves to <code>/data</code> and the SQLite DB is created
                         at <code>/data/eos_connect.db</code>.</p>
 
+                    <p><code>ConfigManager.data_dir</code> resolves in this order:</p>
+                    <ol>
+                        <li>HA addon detected &rarr; <code>/data</code>. Nothing overrides this; the Supervisor owns
+                            that volume and persists it across addon updates.</li>
+                        <li><code>EOS_DATA_PATH</code> environment variable.</li>
+                        <li><code>data_path</code> at the top level of <code>config.yaml</code>. It is in
+                            <code>BOOTSTRAP_KEYS</code>, so it never reaches SQLite &mdash; the path has to be known
+                            before the store it points at can be opened, and it therefore cannot be a web-UI field.</li>
+                        <li>Default: <code>&lt;current_dir&gt;/data</code>, i.e. <code>/app/data</code> in the
+                            standalone image and <code>src/data</code> for a local Python run.
+                            <code>current_dir</code> itself can be overridden by <code>sys.argv[1]</code>, the only
+                            command-line argument the application takes.</li>
+                    </ol>
+                    <p><code>write_config()</code> deliberately omits a <code>data_path</code> that came from
+                        <code>EOS_DATA_PATH</code>: a fresh install writes <code>config.yaml</code> after env
+                        bootstrap has run, so persisting it would outlive the variable and keep the application
+                        writing to a directory nobody mounts any more.</p>
+
+                    <h3>Data Directory Persistence Check</h3>
+                    <p><code>ConfigManager.data_dir_persistence()</code> returns
+                        <code>("persistent"|"ephemeral"|"unknown", detail)</code>. A container with no volume on
+                        <code>/app/data</code> loses <code>eos_connect.db</code> on every recreate while the
+                        bind-mounted <code>config.yaml</code> survives, so the next start re-migrates it and
+                        resurrects pre-database values &mdash; undetectable after the fact (issue #287).</p>
+                    <p>The verdict is one device-id comparison,
+                        <code>os.stat(data_dir).st_dev != os.stat("/").st_dev</code>: overlay2 reports the merged
+                        mount's own device for a file living only in the upper layer, so "different device from
+                        <code>/</code>" is exactly "survives a recreate" for a bind mount, a named volume and an
+                        anonymous volume alike. <code>/proc/self/mountinfo</code> is parsed only to name the
+                        filesystem in the message and never changes the answer.</p>
+                    <p>Everything fails closed &mdash; unclassifiable means <code>"unknown"</code>, never
+                        <code>"ephemeral"</code>, because a false alarm costs more than a missed warning. Two
+                        deliberate choices not to undo:</p>
+                    <ul>
+                        <li>Container detection is <code>/.dockerenv</code> <em>or</em> the <code>container</code>
+                            environment variable <em>or</em> an <code>overlay</code> root. Not
+                            <code>/proc/1/cgroup</code>: under cgroup v2 a container's is typically just
+                            <code>0::/</code>, indistinguishable from a host PID&nbsp;1.</li>
+                        <li><code>tmpfs</code> does <em>not</em> force <code>"ephemeral"</code>. From inside a
+                            container <code>--tmpfs /app/data</code> and <code>-v /tmp/eos:/app/data</code> are
+                            indistinguishable, and systemd puts <code>/tmp</code> on tmpfs on many distros &mdash;
+                            the bind mount does survive a recreate, so a veto would false-alarm. RAM backing is
+                            reported in the detail string instead.</li>
+                    </ul>
+                    <p><code>prune_migrated_yaml()</code> in <code>config_web/migration.py</code> consumes the state:
+                        after a real legacy config has been migrated it reduces <code>config.yaml</code> to its
+                        bootstrap keys, but only when the state is not <code>"ephemeral"</code> &mdash; pruning a
+                        user whose database is discarded anyway would trade stale-but-working values for an empty
+                        wizard on every update. The original is kept as <code>config.yaml.migrated.bak</code> with
+                        its permissions preserved, written into <code>data_dir</code> rather than beside
+                        <code>config.yaml</code>: under Docker that file is bind-mounted on its own, so a sibling
+                        path lands in the container layer and is lost on the next recreate. The data directory is
+                        guaranteed to survive because the prune only runs when it is not ephemeral. Note the backup
+                        still contains any access tokens the legacy file held, which is why <code>src/*.bak</code>
+                        is in both <code>.gitignore</code> and <code>.dockerignore</code>.</p>
+
                     <h3>Bootstrap from <code>options.json</code></h3>
                     <p>Bootstrap values (<code>web_port</code>, <code>time_zone</code>, <code>log_level</code>) are read
                         from <code>/data/options.json</code> and override <code>config.yaml</code> defaults. These are
@@ -1099,9 +1155,11 @@ schema:
   time_zone: str
   log_level: list(DEBUG|INFO|WARNING|ERROR)
 
-# Add persistent data mapping
+# Optional extra mapping. NOT where the database lives: /data is the addon's own
+# Supervisor-managed volume and needs no map entry. Nothing in src/ reads
+# addon_config today.
 map:
-  - addon_config:rw   # persistent /data/ for SQLite DB
+  - addon_config:rw
 
 # Point to EOS Connect web UI
 webui: http://[HOST]:[PORT:8081]</code></pre>

@@ -24,6 +24,8 @@ COPY src/ .
 ENV EOS_WEB_PORT=""
 ENV EOS_TIMEZONE=""
 ENV EOS_LOG_LEVEL=""
+# Moves the data directory off /app/data. Whatever path is set needs a volume on it.
+ENV EOS_DATA_PATH=""
 
 # Expose the server port
 EXPOSE 8081

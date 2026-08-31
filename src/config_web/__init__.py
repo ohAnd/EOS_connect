@@ -36,6 +36,7 @@ from .migration import (
     migrate_ha_options_to_store,
     migrate_battery_price_unit_to_ct_kwh,
     migrate_sensor_placeholders_to_empty,
+    prune_migrated_yaml,
 )
 from .merger import build_merged_config
 from .api import config_bp, init_api
@@ -135,6 +136,12 @@ class ConfigWebModule:
         # One-time migration: blank sensor names that were only ever schema hints,
         # so the interfaces' "not configured" handling can take over.
         migrate_sensor_placeholders_to_empty(self._store)
+
+        # Drop the migrated values from a legacy config.yaml so an empty store cannot
+        # resurrect them — but only once the database is known to survive (#287).
+        state, detail = self._config_manager.data_dir_persistence()
+        logger.debug("[ConfigWeb] Data directory is %s — %s", state, detail)
+        prune_migrated_yaml(self._config_manager, self._store, state)
 
         # Build the merged config dict
         self.rebuild_config()
