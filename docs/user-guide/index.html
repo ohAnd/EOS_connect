@@ -183,7 +183,12 @@ python src/eos_connect.py</code></pre>
             at all, so a first run finishes without asking where you live. It is a fixed demo curve for an
             assumed 4&nbsp;kW array rather than a forecast of your roof — enough to see EOS Connect working,
             and worth replacing with a real provider under Settings &#9656; PV Source once you are running.</p>
-            <p>The only file you may optionally create is <code>src/config.yaml</code> with bootstrap settings:</p>
+            <p>The only file you may optionally create is <code>src/config.yaml</code> with bootstrap settings. These
+            three keys are deliberately not stored in the database &mdash; the port has to be known before the web
+            server starts &mdash; so this file (or the matching environment variables) is their only home. Under
+            Docker it is bind-mounted by the shipped <code>docker-compose.yml</code>; on a clean clone the file does
+            not exist yet, so Docker creates an empty directory there and EOS Connect starts on the defaults below
+            and logs that it ignored the path.</p>
             <pre><code># config.yaml — bootstrap settings only (optional)
 eos_connect_web_port: 8081  # Web server port
 time_zone: Europe/Berlin    # System time zone

@@ -15,11 +15,17 @@ services:
       # update. EOS Connect then falls back to config.yaml and your settings
       # appear to have reverted on their own.
       - ./data:/app/data
-      # Optional file-based bootstrap. Commented out on purpose: src/config.yaml
-      # is gitignored, so on a clean clone Docker would create a *directory*
-      # here. The three env vars below cover the same keys. Uncomment only if
-      # the file already exists.
-      # - ./src/config.yaml:/app/config.yaml
+      # File-based bootstrap for the three keys below. Kept mounted because it is
+      # their only persistent home: time_zone, eos_connect_web_port and log_level
+      # are bootstrap keys and are never stored in the database, so without this
+      # mount they fall back to defaults on every container recreate.
+      #
+      # On a clean clone src/config.yaml does not exist (it is gitignored), so
+      # Docker creates an empty *directory* here. That is harmless - EOS Connect
+      # logs which keys it ignored and starts on defaults - but to be rid of it:
+      #   rmdir src/config.yaml && printf 'time_zone: Europe/Berlin\n' > src/config.yaml
+      # Or drop this line and use the env vars below instead.
+      - ./src/config.yaml:/app/config.yaml
     environment:
       - PYTHONUNBUFFERED=1
       # Optional bootstrap overrides (take precedence over config.yaml):
