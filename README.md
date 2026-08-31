@@ -128,6 +128,7 @@ By default, EOS Connect validates SSL certificates when connecting to Home Assis
 
 **Other Installation Options:**
 - Docker, manual, and advanced setups are supported. See the [docs](https://ohAnd.github.io/EOS_connect/user-guide/index.html) for details.
+- **Docker users:** keep `- ./data:/app/data` in your `docker-compose.yml`. Every setting and the PV yield history live in that volume, and without it they are lost each time the container is recreated. The bundled compose file mounts it; compose files written before v0.3.34 do not.
 
 ---
 
