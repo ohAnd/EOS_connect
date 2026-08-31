@@ -1,15 +1,9 @@
-# Build context exclusions.
+# Build context exclusions. The Dockerfile needs only requirements.txt and src/.
 #
-# The Dockerfile needs exactly two things: requirements.txt and src/.  Everything
-# else here is either dead weight sent to the daemon or, worse, local state that
-# COPY would bake into the image.
-#
-# The dangerous entries are the SQLite ones.  src/data/eos_connect.db is gitignored
-# but gitignore has no bearing on the build context, so a local `docker compose
-# build` used to copy the developer's own database to /app/data/eos_connect.db in
-# the image.  The ./data bind mount normally hides it, but a `docker run` without
-# -v would start on someone else's configuration.  Dockerfile's `mkdir -p /app/data`
-# recreates the empty directory, so excluding it costs nothing.
+# The SQLite entries are the important ones: gitignore has no bearing on the build
+# context, so `COPY src/ .` used to bake the developer's own database into
+# /app/data/eos_connect.db. The ./data bind mount normally hid it, but a
+# `docker run` without -v would start on someone else's configuration.
 
 # Version control and IDE state
 .git/
@@ -32,11 +26,12 @@ __pycache__/
 *.db-shm
 src/data/
 
-# Local bootstrap config and runtime dumps.  src/json/readme.md is deliberately
-# kept so the directory still exists in the image: eos_connect.py writes
-# optimize_request.json / optimize_response.json into it at runtime.
+# Local bootstrap config and runtime dumps. *.bak covers config.yaml.migrated.bak,
+# which the migration prune leaves behind and which still holds access tokens.
+# src/json/readme.md is deliberately kept so the directory exists in the image:
+# eos_connect.py writes optimize_request.json into it at runtime.
 src/config.yaml
-src/config.yaml.bak
+src/*.bak
 src/config.bak.yaml
 src/json/*.json
 
@@ -47,7 +42,6 @@ scripts/
 pytest.ini
 requirements-dev.txt
 *.md
-CLAUDE.md
 
 # Compose file itself
 docker-compose.yml

@@ -137,20 +137,11 @@ class ConfigWebModule:
         # so the interfaces' "not configured" handling can take over.
         migrate_sensor_placeholders_to_empty(self._store)
 
-        # A legacy config.yaml that has been imported is no longer the source of
-        # truth, but it is still re-imported whenever the store comes up empty — on
-        # every container recreate, for a Docker user with no volume on the data
-        # directory. Reducing it to bootstrap keys removes what resurrects the old
-        # values, but only once the database is known to survive (#287).
-        persistence_state, persistence_detail = (
-            self._config_manager.data_dir_persistence()
-        )
-        logger.debug(
-            "[ConfigWeb] Data directory persistence: %s (%s)",
-            persistence_state,
-            persistence_detail,
-        )
-        prune_migrated_yaml(self._config_manager, self._store, persistence_state)
+        # Drop the migrated values from a legacy config.yaml so an empty store cannot
+        # resurrect them — but only once the database is known to survive (#287).
+        state, detail = self._config_manager.data_dir_persistence()
+        logger.debug("[ConfigWeb] Data directory is %s — %s", state, detail)
+        prune_migrated_yaml(self._config_manager, self._store, state)
 
         # Build the merged config dict
         self.rebuild_config()

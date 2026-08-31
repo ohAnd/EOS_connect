@@ -311,8 +311,8 @@ class TestEnvDataPath:
         data = {"time_zone": "UTC"}
         if yaml_extra:
             data.update(yaml_extra)
-        yaml = YAML()
-        yaml.dump(data, (tmp_path / "config.yaml").open("w"))
+        with (tmp_path / "config.yaml").open("w", encoding="utf-8") as handle:
+            YAML().dump(data, handle)
         from src.config import ConfigManager
         return ConfigManager(str(tmp_path))
 

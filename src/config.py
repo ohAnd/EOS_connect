@@ -15,46 +15,27 @@ logger = logging.getLogger("__main__")
 logger.info("[Config] loading module ")
 
 
-# ---------------------------------------------------------------------------
-# Data directory persistence
+# Data directory persistence (#287).
 #
-# Standalone Docker users who run without a volume on /app/data lose
-# eos_connect.db every time the container is recreated, which is what an image
-# update does.  config.yaml is usually bind-mounted and therefore survives, so
-# the next start finds an empty database, re-runs migrate_yaml_to_store() and
-# resurrects pre-database settings — the user sees their web-UI configuration
-# revert on its own, with nothing in the logs connecting the two (#287).
-#
-# Nothing can detect this after the fact, so it is checked at startup.
-# Everything here fails closed: an environment that cannot be classified is
-# reported as "not a container" or "undetermined", never as "not persistent".
-# A false alarm on a bare-metal install costs more than a missed warning in
-# Docker.
-# ---------------------------------------------------------------------------
+# A container without a volume on /app/data loses eos_connect.db on every recreate,
+# while the bind-mounted config.yaml survives — so the next start re-migrates it and
+# resurrects pre-database settings. Undetectable after the fact, hence this check.
+# Everything below fails closed: unclassifiable means "unknown", never "ephemeral",
+# because a false alarm costs more than a missed warning.
 
-# Module-level so tests can point it at a fixture file.
-_MOUNTINFO_PATH = "/proc/self/mountinfo"
-
-# Root filesystem types that mean "this is a container image layer".
+_MOUNTINFO_PATH = "/proc/self/mountinfo"  # module-level so tests can repoint it
 _CONTAINER_ROOT_FSTYPES = frozenset({"overlay", "overlayfs"})
-
-# RAM-backed. Noted in the message but deliberately NOT part of the verdict: from
-# inside a container, `--tmpfs /app/data` and a bind mount of a host directory that
-# happens to sit on tmpfs (systemd puts /tmp there on many distros) are
-# indistinguishable. The bind mount does survive a container recreate, so vetoing on
-# fstype would raise a false alarm on an ordinary `-v /tmp/eos:/app/data`.
 _RAM_BACKED_FSTYPES = frozenset({"tmpfs", "ramfs"})
 
-# mountinfo escapes these four characters in mount points as octal.
+# mountinfo octal-escapes these characters in mount points.
 _MOUNTINFO_ESCAPES = (("\\040", " "), ("\\011", "\t"), ("\\012", "\n"), ("\\134", "\\"))
 
 
 def _fstype_for_path(path):
     """Filesystem type of the mount *path* resolves onto, or None if unknowable.
 
-    Longest-prefix match over ``/proc/self/mountinfo``.  Returns None on any
-    platform without /proc and on any line that cannot be parsed; every caller
-    treats None as "no opinion", so a parse failure can never produce a verdict.
+    Longest-prefix match over ``/proc/self/mountinfo``. Diagnostic only — callers
+    treat None as "no opinion", so a parse failure never changes a verdict.
     """
     try:
         target = os.path.realpath(path)
@@ -68,9 +49,9 @@ def _fstype_for_path(path):
                 fields = line.split()
                 if len(fields) < 8:
                     continue
-                # The optional-fields block ("shared:1", ...) is variable length and
-                # ends at a lone "-"; the fs type is the token after it. Searching
-                # from index 6 keeps a mount point from being read as the separator.
+                # Optional fields ("shared:1", ...) are variable length and end at a
+                # lone "-"; fs type is the token after it. Searching from index 6
+                # keeps a mount point from being read as the separator.
                 try:
                     separator = fields.index("-", 6)
                 except ValueError:
@@ -83,8 +64,7 @@ def _fstype_for_path(path):
                 if mount_point == target or target.startswith(
                     mount_point.rstrip("/") + "/"
                 ):
-                    # >= rather than >: mountinfo lists shadowed mounts in order,
-                    # so the last entry for a mount point is the effective one.
+                    # >= not >: shadowed mounts are listed in order, last one wins.
                     if len(mount_point) >= best_len:
                         best_len, best_type = len(mount_point), fields[separator + 1]
     except (OSError, UnicodeDecodeError, ValueError):
@@ -95,8 +75,8 @@ def _fstype_for_path(path):
 def _in_container():
     """True when running inside an OCI container (Docker, Podman, containerd).
 
-    Deliberately does not consult /proc/1/cgroup: under cgroup v2 a container's is
-    typically just ``0::/``, indistinguishable from a host PID 1.
+    Not /proc/1/cgroup: under cgroup v2 a container's is typically just ``0::/``,
+    indistinguishable from a host PID 1.
     """
     try:
         if os.path.exists("/.dockerenv"):  # Docker, including compose
@@ -108,50 +88,23 @@ def _in_container():
         return False
 
 
-def _nearest_existing(path):
-    """Walk up from *path* to the first component that exists, or None.
-
-    The check runs before ConfigStore.open() creates the data directory, so on a
-    first start the directory itself is usually absent.  A missing directory
-    inherits its device from the parent mount, so the verdict is identical.
-    """
-    current = os.path.abspath(path)
-    while True:
-        if os.path.exists(current):
-            return current
-        parent = os.path.dirname(current)
-        if parent == current:
-            return None
-        current = parent
-
-
 def check_data_dir_persistent(data_dir):
     """Report whether *data_dir* survives a container recreate.
 
-    Returns a ``(verdict, detail)`` tuple where verdict is:
+    Returns ``(verdict, detail)``: True on a mount of its own (bind mount, named or
+    anonymous volume), False on the container's writable layer, None if undetermined.
 
-    - ``True``  — on a mount of its own (bind mount, named or anonymous volume);
-    - ``False`` — on the container's writable layer, or memory-backed;
-    - ``None``  — undetermined; the caller must stay silent.
-
-    The verdict is a device-id comparison, nothing more.  Two syscalls cannot
-    mis-parse anything, and overlay2 reports the merged mount's own device for a
-    file that exists only in the upper layer, so "different device from /" is
-    exactly "survives a container recreate" for a bind mount, a named volume and
-    an anonymous volume alike.  mountinfo only names the filesystem in the
-    message; it never changes the answer.
+    The verdict is a device-id comparison and nothing else. overlay2 reports the
+    merged mount's own device for a file living only in the upper layer, so
+    "different device from /" is exactly "survives a recreate" for every mount kind.
     """
-    probe = _nearest_existing(data_dir)
-    if probe is None:
-        return None, f"no existing path component for {data_dir}"
-
     try:
-        data_dev = os.stat(probe).st_dev
+        data_dev = os.stat(data_dir).st_dev
         root_dev = os.stat("/").st_dev
     except OSError as exc:
-        return None, f"cannot stat {probe}: {exc}"
+        return None, f"cannot stat {data_dir}: {exc}"
 
-    fstype = _fstype_for_path(probe)
+    fstype = _fstype_for_path(data_dir)
 
     if data_dev == root_dev:
         return False, (
@@ -161,8 +114,9 @@ def check_data_dir_persistent(data_dir):
 
     detail = f"{data_dir} is on its own mount ({fstype or 'unknown fs'})"
     if fstype in _RAM_BACKED_FSTYPES:
-        # Survives a container recreate, so the verdict stands - but say so, because
-        # it will not survive a host reboot.
+        # Deliberately not a veto: from inside a container `--tmpfs /app/data` and a
+        # bind mount of a host tmpfs path (systemd puts /tmp there on many distros)
+        # are indistinguishable, and the bind mount does survive a recreate.
         detail += " - note: RAM-backed, so it is lost when the host reboots"
     return True, detail
 
@@ -192,14 +146,13 @@ class ConfigManager:
         """Resolve the persistent data directory for SQLite DB and other data files.
 
         Resolution order:
-        1. HA addon environment -> /data/ (Supervisor persists it; nothing else applies)
-        2. ``EOS_DATA_PATH`` environment variable -> custom path
+        1. HA addon environment -> /data/ (Supervisor owns it; nothing overrides)
+        2. ``EOS_DATA_PATH`` -> custom path
         3. ``data_path`` in config.yaml -> custom path
         4. Default -> ./data/ relative to application directory
 
-        Steps 2 and 3 share the ``data_path`` config key — ``load_env_bootstrap``
-        has already written the environment value over the config.yaml one by the
-        time this property is read.
+        Steps 2 and 3 share the ``data_path`` key: ``load_env_bootstrap`` has already
+        written the environment value over the config.yaml one by the time this runs.
         """
         if self.is_ha_addon:
             return "/data"
@@ -211,11 +164,11 @@ class ConfigManager:
         return os.path.join(self.current_dir, "data")
 
     def data_dir_persistence(self):
-        """Classify the data directory as ``"persistent"``/``"ephemeral"``/``"unknown"``.
+        """Classify the data directory: ``"persistent"``/``"ephemeral"``/``"unknown"``.
 
-        Only ``"ephemeral"`` is actionable.  ``"unknown"`` must be treated exactly
-        like ``"persistent"`` by callers: declining to act on a wrong "unknown"
-        costs a log line, acting on a wrong "ephemeral" costs a user's settings.
+        Only ``"ephemeral"`` is actionable. Callers must treat ``"unknown"`` exactly
+        like ``"persistent"``: a wrong "unknown" costs a log line, a wrong
+        "ephemeral" costs a user's settings.
 
         Returns:
             Tuple of (state, detail) where detail is a short human-readable reason.
@@ -253,8 +206,8 @@ class ConfigManager:
         "EOS_WEB_PORT": "eos_connect_web_port",
         "EOS_TIMEZONE": "time_zone",
         "EOS_LOG_LEVEL": "log_level",
-        # data_path is already in BOOTSTRAP_KEYS, so it stays out of SQLite and out of
-        # the web UI — it has to be known before the store it points at can be opened.
+        # data_path is in BOOTSTRAP_KEYS, so it never reaches SQLite — the path must be
+        # known before the store it points at can be opened.
         "EOS_DATA_PATH": "data_path",
     }
 
@@ -366,11 +319,10 @@ class ConfigManager:
         (``EOS_WEB_PORT``, ``EOS_TIMEZONE``, ``EOS_LOG_LEVEL``) take highest
         precedence.
         """
-        # isfile, not exists: docker-compose used to bind-mount ./src/config.yaml, which
-        # is gitignored, so a clean clone made Docker create a *directory* at this path.
-        # exists() said True and open() then raised IsADirectoryError at import time,
-        # before logging was useful. Nothing in a bootstrap file is worth a hard crash —
-        # all three keys have defaults and the database is authoritative anyway.
+        # isfile, not exists: the compose file used to bind-mount the gitignored
+        # ./src/config.yaml, so a clean clone made Docker create a *directory* here and
+        # open() raised IsADirectoryError at import time. Nothing in a bootstrap file is
+        # worth a hard crash — every key has a default and the database is authoritative.
         if os.path.isfile(self.config_file):
             try:
                 with open(self.config_file, "r", encoding="utf-8") as f:
@@ -410,8 +362,8 @@ class ConfigManager:
 
         # If config.yaml doesn't exist, create it with defaults
         # (for fresh install only, not for HA addon mode).
-        # exists(), not isfile(), on purpose: when something non-file occupies the path
-        # there is nothing useful to write and open(..., "w") would raise.
+        # exists(), not isfile(): if a directory occupies the path there is nothing
+        # useful to write and open(..., "w") would raise.
         if not os.path.exists(self.config_file) and not self.is_ha_addon:
             logger.info(
                 "[Config] Creating new config.yaml with bootstrap defaults at %s",
@@ -423,14 +375,12 @@ class ConfigManager:
         """
         Writes the configuration to 'config.yaml' file located in the current directory.
 
-        Never fatal: config.yaml holds bootstrap values only, and a read-only bind mount
-        or an unwritable path must not stop the application from starting.
+        Never fatal: config.yaml holds bootstrap values only, so a read-only bind mount
+        must not stop startup.
 
-        A ``data_path`` that came from ``EOS_DATA_PATH`` is not written out. It
-        describes how the container was started, not a stored preference, and
-        persisting it would outlive the variable — drop EOS_DATA_PATH later and the
-        application would keep writing to a directory nobody mounts any more. A
-        ``data_path`` the user put in config.yaml themselves is preserved.
+        A ``data_path`` from ``EOS_DATA_PATH`` is not written out — it describes how the
+        container was started, and persisting it would outlive the variable. One put in
+        config.yaml by hand is preserved.
         """
         logger.info("[Config] writing config file")
         to_dump = self.config

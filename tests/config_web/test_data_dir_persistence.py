@@ -1,11 +1,17 @@
+# pylint: disable=redefined-outer-name,protected-access,unused-argument
+# pylint: disable=too-few-public-methods
 """
 Tests for the data-directory persistence check.
 
 A standalone Docker container without a volume on /app/data loses the settings
-database on every recreate, then resurrects pre-database values from the
-config.yaml that *did* survive (#287).  These tests pin the classifier that
-detects it, and in particular pin that it fails closed: anything it cannot
-classify comes back "unknown", never "ephemeral".
+database on every recreate, then resurrects pre-database values from the config.yaml
+that *did* survive (#287).  These tests pin the classifier that detects it, and in
+particular that it fails closed: anything it cannot classify comes back "unknown",
+never "ephemeral".
+
+Note: redefined-outer-name is disabled because pytest fixtures with the same names
+are a standard pattern, protected-access because the parsing helpers are private, and
+unused-argument because several fixtures are requested purely for their side effect.
 """
 
 import os
@@ -18,7 +24,6 @@ from src.config import (
     check_data_dir_persistent,
     _fstype_for_path,
     _in_container,
-    _nearest_existing,
 )
 
 
@@ -89,14 +94,17 @@ class TestFstypeForPath:
     """Longest-prefix matching over mountinfo."""
 
     def test_exact_mount_point(self, mountinfo):
+        """A directory that is itself a mount point."""
         mountinfo(MOUNTINFO_CONTAINER)
         assert _fstype_for_path("/app/data") == "ext4"
 
     def test_tmpfs_mount_point(self, mountinfo):
+        """Reports the real fs type, whatever it is."""
         mountinfo(MOUNTINFO_CONTAINER)
         assert _fstype_for_path("/app/cache") == "tmpfs"
 
     def test_root_is_overlay(self, mountinfo):
+        """The container image layer."""
         mountinfo(MOUNTINFO_CONTAINER)
         assert _fstype_for_path("/") == "overlay"
 
@@ -116,6 +124,7 @@ class TestFstypeForPath:
         assert _fstype_for_path("/app/database") == "overlay"
 
     def test_octal_escapes_in_mount_point(self, mountinfo):
+        """mountinfo writes a space as \\040."""
         mountinfo(
             MOUNTINFO_CONTAINER
             + "1270 1234 259:1 / /app/my\\040data rw - xfs /dev/sdb rw\n"
@@ -141,10 +150,12 @@ class TestFstypeForPath:
         assert _fstype_for_path("/app/data") == "ext4"
 
     def test_separator_as_last_field_is_skipped(self, mountinfo):
+        """A line with no fs type after the separator."""
         mountinfo("1250 1234 259:1 / /app/data rw,relatime shared:1 -\n")
         assert _fstype_for_path("/app/data") is None
 
     def test_returns_none_without_proc(self, no_mountinfo):
+        """No /proc means no opinion, not a crash."""
         assert _fstype_for_path("/app/data") is None
 
 
@@ -160,6 +171,7 @@ class TestInContainer:
         monkeypatch.setattr(config_module.os.path, "exists", lambda p: False)
 
     def test_detected_via_dockerenv(self, monkeypatch, no_mountinfo):
+        """The signal Docker and compose always set."""
         monkeypatch.delenv("container", raising=False)
         monkeypatch.setattr(
             config_module.os.path, "exists", lambda p: p == "/.dockerenv"
@@ -167,6 +179,7 @@ class TestInContainer:
         assert _in_container() is True
 
     def test_detected_via_container_env(self, monkeypatch, no_mountinfo):
+        """Podman and systemd-nspawn set this instead."""
         monkeypatch.setattr(config_module.os.path, "exists", lambda p: False)
         monkeypatch.setenv("container", "podman")
         assert _in_container() is True
@@ -178,6 +191,7 @@ class TestInContainer:
         assert _in_container() is True
 
     def test_not_detected_on_bare_host(self, monkeypatch, mountinfo):
+        """An ext4 root with no markers is a plain host."""
         mountinfo(MOUNTINFO_HOST)
         self._no_markers(monkeypatch)
         assert _in_container() is False
@@ -215,6 +229,7 @@ class TestCheckDataDirPersistent:
         return data, cache
 
     def test_same_device_as_root_is_not_persistent(self, monkeypatch, container_fs):
+        """The volume-less container from #287."""
         data, _ = container_fs
         _fake_stat(monkeypatch, same_device=True)
         verdict, detail = check_data_dir_persistent(str(data))
@@ -247,6 +262,7 @@ class TestCheckDataDirPersistent:
         assert "host reboots" in detail
 
     def test_unknown_when_stat_fails(self, monkeypatch, container_fs):
+        """An unreadable directory must not become a verdict."""
         data, _ = container_fs
 
         def boom(*_args, **_kwargs):
@@ -265,18 +281,12 @@ class TestCheckDataDirPersistent:
         assert verdict is False
         assert "unknown fs" in detail
 
-    def test_missing_dir_uses_nearest_existing_ancestor(self, tmp_path):
-        """The check runs before ConfigStore.open() creates the directory."""
-        missing = tmp_path / "not" / "created" / "yet"
-        verdict, _ = check_data_dir_persistent(str(missing))
-        # tmp_path is real, so this resolves rather than returning None
-        assert verdict is not None
-
-    def test_nearest_existing_walks_up(self, tmp_path):
-        assert _nearest_existing(str(tmp_path / "a" / "b" / "c")) == str(tmp_path)
-
-    def test_nearest_existing_returns_the_path_itself(self, tmp_path):
-        assert _nearest_existing(str(tmp_path)) == str(tmp_path)
+    def test_missing_dir_is_unknown_not_ephemeral(self, tmp_path):
+        """Fails closed. ConfigStore.open() creates the directory before this runs,
+        so a missing one means something unexpected — never assume the worst."""
+        verdict, detail = check_data_dir_persistent(str(tmp_path / "nope"))
+        assert verdict is None
+        assert "cannot stat" in detail
 
 
 # -----------------------------------------------------------------------
@@ -287,12 +297,19 @@ class TestConfigManagerPersistenceState:
     """The tri-state wrapper the rest of the app consumes."""
 
     def _make_cm(self, tmp_path, monkeypatch):
+        """ConfigManager whose data dir exists, as ConfigStore.open() leaves it.
+
+        start_db() calls ConfigStore.open() — which does os.makedirs — well before
+        the persistence check, so a present directory is the real precondition.
+        """
         for var in ("HASSIO", "HASSIO_TOKEN", "EOS_DATA_PATH"):
             monkeypatch.delenv(var, raising=False)
         (tmp_path / "config.yaml").write_text("time_zone: UTC\n", encoding="utf-8")
+        (tmp_path / "data").mkdir(exist_ok=True)
         return ConfigManager(str(tmp_path))
 
     def test_ha_addon_is_always_persistent(self, tmp_path, monkeypatch):
+        """Supervisor owns /data; never second-guess it."""
         (tmp_path / "config.yaml").write_text("time_zone: UTC\n", encoding="utf-8")
         monkeypatch.setenv("HASSIO", "1")
         cm = ConfigManager(str(tmp_path))
@@ -313,6 +330,7 @@ class TestConfigManagerPersistenceState:
     def test_ephemeral_in_container_without_a_volume(
         self, tmp_path, monkeypatch, mountinfo
     ):
+        """The one actionable state."""
         mountinfo(MOUNTINFO_CONTAINER)
         cm = self._make_cm(tmp_path, monkeypatch)
         monkeypatch.setenv("container", "docker")
@@ -323,6 +341,7 @@ class TestConfigManagerPersistenceState:
     def test_persistent_in_container_with_a_volume(
         self, tmp_path, monkeypatch, mountinfo
     ):
+        """A mounted volume is the fixed state."""
         mountinfo(MOUNTINFO_CONTAINER)
         cm = self._make_cm(tmp_path, monkeypatch)
         monkeypatch.setenv("container", "docker")
@@ -333,6 +352,7 @@ class TestConfigManagerPersistenceState:
     def test_unknown_when_undeterminable_in_container(
         self, tmp_path, monkeypatch, mountinfo
     ):
+        """Undeterminable is never ephemeral."""
         mountinfo(MOUNTINFO_CONTAINER)
         cm = self._make_cm(tmp_path, monkeypatch)
         monkeypatch.setenv("container", "docker")

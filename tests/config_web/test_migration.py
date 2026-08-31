@@ -1029,6 +1029,30 @@ class TestPruneMigratedYaml:
 
         assert prune_migrated_yaml(cm, store, "persistent") is False
 
+    def test_secrets_leave_config_yaml_and_the_backup_keeps_its_mode(
+        self, store, tmp_path, monkeypatch
+    ):
+        """A legacy config.yaml holds access tokens. The prune removes them from the
+        live file, and copy2 must not widen the backup's permissions."""
+        cm = self._cm(
+            tmp_path,
+            contents=LEGACY_YAML.replace(
+                "  source: homeassistant\n  load_sensor:",
+                "  source: homeassistant\n  access_token: super_secret\n  load_sensor:",
+            ),
+            monkeypatch=monkeypatch,
+        )
+        config_file = tmp_path / "config.yaml"
+        os.chmod(config_file, 0o600)
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is True
+
+        backup = tmp_path / ("config.yaml" + PRUNE_BACKUP_SUFFIX)
+        assert "super_secret" not in config_file.read_text(encoding="utf-8")
+        assert "super_secret" in backup.read_text(encoding="utf-8")
+        assert (os.stat(backup).st_mode & 0o777) == 0o600
+
     def test_unwritable_file_does_not_raise(self, store, tmp_path, monkeypatch):
         """A read-only bind mount must degrade to a log line, not an exception."""
         cm = self._cm(tmp_path, monkeypatch=monkeypatch)

@@ -1089,37 +1089,38 @@ Runtime (user saves via web UI):
 
                     <h3>Data Directory Persistence Check</h3>
                     <p><code>ConfigManager.data_dir_persistence()</code> returns
-                        <code>("persistent"|"ephemeral"|"unknown", detail)</code>. It exists because a standalone
-                        container with no volume on <code>/app/data</code> loses <code>eos_connect.db</code> on every
-                        recreate, while the bind-mounted <code>config.yaml</code> survives &mdash; so the next start
-                        finds an empty store, re-runs <code>migrate_yaml_to_store()</code> and resurrects pre-database
-                        values. Nothing can detect that after the fact (issue #287).</p>
-                    <p>The verdict is a single device-id comparison,
-                        <code>os.stat(data_dir).st_dev != os.stat("/").st_dev</code>. overlay2 reports the merged
-                        mount's own device for a file that exists only in the upper layer, so "different device from
-                        <code>/</code>" is exactly "survives a container recreate" for a bind mount, a named volume
-                        and an anonymous volume alike. <code>/proc/self/mountinfo</code> is parsed only to name the
-                        filesystem in the message; it never changes the answer.</p>
-                    <p>Everything fails closed &mdash; anything unclassifiable is <code>"unknown"</code>, never
+                        <code>("persistent"|"ephemeral"|"unknown", detail)</code>. A container with no volume on
+                        <code>/app/data</code> loses <code>eos_connect.db</code> on every recreate while the
+                        bind-mounted <code>config.yaml</code> survives, so the next start re-migrates it and
+                        resurrects pre-database values &mdash; undetectable after the fact (issue #287).</p>
+                    <p>The verdict is one device-id comparison,
+                        <code>os.stat(data_dir).st_dev != os.stat("/").st_dev</code>: overlay2 reports the merged
+                        mount's own device for a file living only in the upper layer, so "different device from
+                        <code>/</code>" is exactly "survives a recreate" for a bind mount, a named volume and an
+                        anonymous volume alike. <code>/proc/self/mountinfo</code> is parsed only to name the
+                        filesystem in the message and never changes the answer.</p>
+                    <p>Everything fails closed &mdash; unclassifiable means <code>"unknown"</code>, never
                         <code>"ephemeral"</code>, because a false alarm costs more than a missed warning. Two
-                        consequences worth knowing:</p>
+                        deliberate choices not to undo:</p>
                     <ul>
                         <li>Container detection is <code>/.dockerenv</code> <em>or</em> the <code>container</code>
-                            environment variable <em>or</em> an <code>overlay</code> root filesystem. Not
+                            environment variable <em>or</em> an <code>overlay</code> root. Not
                             <code>/proc/1/cgroup</code>: under cgroup v2 a container's is typically just
-                            <code>0::/</code>, indistinguishable from a host PID&nbsp;1. Outside a container the
-                            check returns <code>"unknown"</code> and stays silent.</li>
+                            <code>0::/</code>, indistinguishable from a host PID&nbsp;1.</li>
                         <li><code>tmpfs</code> does <em>not</em> force <code>"ephemeral"</code>. From inside a
-                            container, <code>--tmpfs /app/data</code> and <code>-v /tmp/eos:/app/data</code> are
-                            indistinguishable, and systemd puts <code>/tmp</code> on tmpfs on many distros. The bind
-                            mount does survive a recreate, so a veto would false-alarm; RAM backing is reported in
-                            the detail string instead.</li>
+                            container <code>--tmpfs /app/data</code> and <code>-v /tmp/eos:/app/data</code> are
+                            indistinguishable, and systemd puts <code>/tmp</code> on tmpfs on many distros &mdash;
+                            the bind mount does survive a recreate, so a veto would false-alarm. RAM backing is
+                            reported in the detail string instead.</li>
                     </ul>
-                    <p><code>prune_migrated_yaml()</code> in <code>config_web/migration.py</code> consumes the state.
-                        Once a real legacy config has been migrated it reduces <code>config.yaml</code> to its
-                        bootstrap keys, keeping the original as <code>config.yaml.migrated.bak</code> &mdash; but only
-                        when the state is not <code>"ephemeral"</code>. Pruning a user whose database is discarded
-                        anyway would trade stale-but-working values for an empty wizard on every update.</p>
+                    <p><code>prune_migrated_yaml()</code> in <code>config_web/migration.py</code> consumes the state:
+                        after a real legacy config has been migrated it reduces <code>config.yaml</code> to its
+                        bootstrap keys, but only when the state is not <code>"ephemeral"</code> &mdash; pruning a
+                        user whose database is discarded anyway would trade stale-but-working values for an empty
+                        wizard on every update. The original is kept as <code>config.yaml.migrated.bak</code> with
+                        its permissions preserved; note it still contains any access tokens the legacy file held,
+                        which is why <code>src/*.bak</code> is in both <code>.gitignore</code> and
+                        <code>.dockerignore</code>.</p>
 
                     <h3>Bootstrap from <code>options.json</code></h3>
                     <p>Bootstrap values (<code>web_port</code>, <code>time_zone</code>, <code>log_level</code>) are read
