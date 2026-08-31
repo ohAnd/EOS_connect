@@ -3,6 +3,7 @@ This module provides the ConfigManager class for managing configuration settings
 of the application. The configuration settings are stored in a 'config.yaml' file.
 """
 
+import copy
 import json
 import os
 import logging
@@ -39,9 +40,14 @@ class ConfigManager:
         """Resolve the persistent data directory for SQLite DB and other data files.
 
         Resolution order:
-        1. HA addon environment -> /data/
-        2. ``data_path`` in config.yaml -> custom path
-        3. Default -> ./data/ relative to application directory
+        1. HA addon environment -> /data/ (Supervisor persists it; nothing else applies)
+        2. ``EOS_DATA_PATH`` environment variable -> custom path
+        3. ``data_path`` in config.yaml -> custom path
+        4. Default -> ./data/ relative to application directory
+
+        Steps 2 and 3 share the ``data_path`` config key — ``load_env_bootstrap``
+        has already written the environment value over the config.yaml one by the
+        time this property is read.
         """
         if self.is_ha_addon:
             return "/data"
@@ -74,6 +80,9 @@ class ConfigManager:
         "EOS_WEB_PORT": "eos_connect_web_port",
         "EOS_TIMEZONE": "time_zone",
         "EOS_LOG_LEVEL": "log_level",
+        # data_path is already in BOOTSTRAP_KEYS, so it stays out of SQLite and out of
+        # the web UI — it has to be known before the store it points at can be opened.
+        "EOS_DATA_PATH": "data_path",
     }
 
     def load_ha_bootstrap(self) -> dict:
@@ -107,8 +116,9 @@ class ConfigManager:
     def load_env_bootstrap(self) -> dict:
         """Read bootstrap values from environment variables.
 
-        Supports ``EOS_WEB_PORT``, ``EOS_TIMEZONE``, and ``EOS_LOG_LEVEL``.
-        These take precedence over config.yaml and options.json values.
+        Supports ``EOS_WEB_PORT``, ``EOS_TIMEZONE``, ``EOS_LOG_LEVEL`` and
+        ``EOS_DATA_PATH``. These take precedence over config.yaml and options.json
+        values.
 
         Returns:
             Dict of bootstrap key/value pairs that were applied.
@@ -124,6 +134,18 @@ class ConfigManager:
                     except ValueError:
                         logger.warning("[Config] Invalid %s value: %s", env_key, value)
                         continue
+                elif cfg_key == "data_path":
+                    # A path, never a number — must not reach the int() branch above.
+                    value = value.strip()
+                    if not value:
+                        continue
+                    if not os.path.isabs(value):
+                        logger.warning(
+                            "[Config] %s=%s is relative and resolves against the "
+                            "working directory - use an absolute path",
+                            env_key,
+                            value,
+                        )
                 self.config[cfg_key] = value
                 applied[cfg_key] = value
 
@@ -230,11 +252,21 @@ class ConfigManager:
 
         Never fatal: config.yaml holds bootstrap values only, and a read-only bind mount
         or an unwritable path must not stop the application from starting.
+
+        A ``data_path`` that came from ``EOS_DATA_PATH`` is not written out. It
+        describes how the container was started, not a stored preference, and
+        persisting it would outlive the variable — drop EOS_DATA_PATH later and the
+        application would keep writing to a directory nobody mounts any more. A
+        ``data_path`` the user put in config.yaml themselves is preserved.
         """
         logger.info("[Config] writing config file")
+        to_dump = self.config
+        if os.environ.get("EOS_DATA_PATH") and "data_path" in to_dump:
+            to_dump = copy.deepcopy(self.config)  # deepcopy keeps CommentedMap comments
+            to_dump.pop("data_path", None)
         try:
             with open(self.config_file, "w", encoding="utf-8") as config_file_handle:
-                self.yaml.dump(self.config, config_file_handle)
+                self.yaml.dump(to_dump, config_file_handle)
         except OSError as exc:
             logger.warning(
                 "[Config] Could not write %s (%s) - continuing with the values "

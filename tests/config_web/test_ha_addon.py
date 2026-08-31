@@ -295,6 +295,128 @@ class TestEnvBootstrap:
 
 
 # -----------------------------------------------------------------------
+# EOS_DATA_PATH
+# -----------------------------------------------------------------------
+
+class TestEnvDataPath:
+    """EOS_DATA_PATH moves the SQLite database off the default ./data.
+
+    Docker users who cannot bind-mount /app/data need a way to point the
+    database at a path they already persist (see #287).
+    """
+
+    def _make_cm(self, tmp_path, yaml_extra=None):
+        """ConfigManager with a config.yaml, optionally carrying extra keys."""
+        from ruamel.yaml import YAML
+        data = {"time_zone": "UTC"}
+        if yaml_extra:
+            data.update(yaml_extra)
+        yaml = YAML()
+        yaml.dump(data, (tmp_path / "config.yaml").open("w"))
+        from src.config import ConfigManager
+        return ConfigManager(str(tmp_path))
+
+    def _not_ha(self, monkeypatch):
+        monkeypatch.delenv("HASSIO", raising=False)
+        monkeypatch.delenv("HASSIO_TOKEN", raising=False)
+
+    def test_env_data_path_sets_data_dir(self, monkeypatch, tmp_path):
+        """The variable should reach data_dir, not just the config dict."""
+        self._not_ha(monkeypatch)
+        monkeypatch.setenv("EOS_DATA_PATH", "/mnt/eos_data")
+        cm = self._make_cm(tmp_path)
+        assert cm.config["data_path"] == "/mnt/eos_data"
+        if not os.path.exists("/data/options.json"):
+            assert cm.data_dir == "/mnt/eos_data"
+
+    def test_env_data_path_is_not_int_coerced(self, monkeypatch, tmp_path):
+        """Only the port key is coerced; a numeric-looking path stays a string."""
+        self._not_ha(monkeypatch)
+        monkeypatch.setenv("EOS_DATA_PATH", "/mnt/12345")
+        cm = self._make_cm(tmp_path)
+        assert cm.config["data_path"] == "/mnt/12345"
+        assert isinstance(cm.config["data_path"], str)
+
+    def test_env_data_path_is_stripped(self, monkeypatch, tmp_path):
+        """Stray whitespace from a compose file must not become part of the path."""
+        self._not_ha(monkeypatch)
+        monkeypatch.setenv("EOS_DATA_PATH", "  /mnt/eos_data  ")
+        cm = self._make_cm(tmp_path)
+        assert cm.config["data_path"] == "/mnt/eos_data"
+
+    def test_env_data_path_empty_is_ignored(self, monkeypatch, tmp_path):
+        """The Dockerfile ships ENV EOS_DATA_PATH="" — it must override nothing."""
+        self._not_ha(monkeypatch)
+        monkeypatch.setenv("EOS_DATA_PATH", "")
+        cm = self._make_cm(tmp_path)
+        assert "data_path" not in cm.load_env_bootstrap()
+        if not os.path.exists("/data/options.json"):
+            assert cm.data_dir == os.path.join(str(tmp_path), "data")
+
+    def test_env_data_path_whitespace_only_is_ignored(self, monkeypatch, tmp_path):
+        """Whitespace stripped to nothing must not set an empty data_path."""
+        self._not_ha(monkeypatch)
+        monkeypatch.setenv("EOS_DATA_PATH", "   ")
+        cm = self._make_cm(tmp_path)
+        assert "data_path" not in cm.load_env_bootstrap()
+
+    def test_env_data_path_overrides_yaml(self, monkeypatch, tmp_path):
+        """Environment beats config.yaml, as documented for every bootstrap key."""
+        self._not_ha(monkeypatch)
+        monkeypatch.setenv("EOS_DATA_PATH", "/mnt/from_env")
+        cm = self._make_cm(tmp_path, {"data_path": "/mnt/from_yaml"})
+        if not os.path.exists("/data/options.json"):
+            assert cm.data_dir == "/mnt/from_env"
+
+    def test_yaml_data_path_used_when_env_absent(self, monkeypatch, tmp_path):
+        """The pre-existing config.yaml route must keep working."""
+        self._not_ha(monkeypatch)
+        monkeypatch.delenv("EOS_DATA_PATH", raising=False)
+        cm = self._make_cm(tmp_path, {"data_path": "/mnt/from_yaml"})
+        if not os.path.exists("/data/options.json"):
+            assert cm.data_dir == "/mnt/from_yaml"
+
+    def test_ha_addon_ignores_env_data_path(self, monkeypatch, tmp_path):
+        """Supervisor owns /data; nothing may redirect the add-on away from it."""
+        monkeypatch.setenv("HASSIO", "1")
+        monkeypatch.setenv("EOS_DATA_PATH", "/mnt/eos_data")
+        cm = self._make_cm(tmp_path)
+        assert cm.data_dir == "/data"
+
+    def test_env_data_path_not_written_to_fresh_yaml(self, monkeypatch, tmp_path):
+        """A generated config.yaml must not bake in an env-supplied data_path.
+
+        Otherwise the path outlives the variable: drop EOS_DATA_PATH and the app
+        keeps writing to a directory that is no longer mounted.
+        """
+        self._not_ha(monkeypatch)
+        monkeypatch.setenv("EOS_DATA_PATH", "/mnt/eos_data")
+        from src.config import ConfigManager
+        cm = ConfigManager(str(tmp_path))  # no config.yaml -> write_config() runs
+        written = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "data_path" not in written
+        # still honoured for this process
+        if not os.path.exists("/data/options.json"):
+            assert cm.data_dir == "/mnt/eos_data"
+
+    def test_yaml_data_path_survives_a_rewrite(self, monkeypatch, tmp_path):
+        """A hand-authored data_path is a real setting and must be preserved."""
+        self._not_ha(monkeypatch)
+        monkeypatch.delenv("EOS_DATA_PATH", raising=False)
+        cm = self._make_cm(tmp_path, {"data_path": "/mnt/from_yaml"})
+        cm.write_config()
+        written = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "/mnt/from_yaml" in written
+
+    def test_relative_env_data_path_still_applies(self, monkeypatch, tmp_path):
+        """A relative path is warned about but honoured — not silently dropped."""
+        self._not_ha(monkeypatch)
+        monkeypatch.setenv("EOS_DATA_PATH", "relative/data")
+        cm = self._make_cm(tmp_path)
+        assert cm.config["data_path"] == "relative/data"
+
+
+# -----------------------------------------------------------------------
 # Legacy options.json migration
 # -----------------------------------------------------------------------
 

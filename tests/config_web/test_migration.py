@@ -173,6 +173,26 @@ class TestMigration:
         assert store.get("time_zone") is None
         assert store.get("log_level") is None
 
+    def test_top_level_data_path_not_migrated(self, store, schema):
+        """data_path is bootstrap: data_dir must be known before the store opens."""
+        config = _sample_config()
+        config["data_path"] = "/mnt/eos_data"
+        migrate_yaml_to_store(config, store, schema)
+
+        assert store.get("data_path") is None
+
+    def test_nested_data_path_fields_still_migrate(self, store, schema):
+        """BOOTSTRAP_KEYS is flat, so price.data_path must not be swept up with it.
+
+        Correct today via the ``top_key in ... or key in ...`` test in migration.py,
+        but one careless edit from silently dropping two real user fields.
+        """
+        config = _sample_config()
+        config["price"]["data_path"] = "attributes.data"
+        migrate_yaml_to_store(config, store, schema)
+
+        assert store.get("price.data_path") == "attributes.data"
+
     def test_sections_migrated(self, store, schema):
         """Load, EOS, price etc. fields should be migrated."""
         config = _sample_config()

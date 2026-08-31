@@ -24,6 +24,10 @@ COPY src/ .
 ENV EOS_WEB_PORT=""
 ENV EOS_TIMEZONE=""
 ENV EOS_LOG_LEVEL=""
+# Moves the SQLite database and other persistent data off /app/data. Whatever
+# path is set here needs a volume mounted on it, or the data is lost on every
+# container recreate.
+ENV EOS_DATA_PATH=""
 
 # Expose the server port
 EXPOSE 8081
