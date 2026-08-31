@@ -7,12 +7,26 @@ services:
     ports:
       - "8081:8081"
     volumes:
-      - ./data:/app/data                    # Persistent config DB + data
-      - ./src/config.yaml:/app/config.yaml   # Bootstrap config (optional)
+      # REQUIRED. Every setting you make in the web UI lives in
+      # data/eos_connect.db, along with the PV yield history the forecast
+      # auto-scaler learns from. Without this line that database sits on the
+      # container's writable layer and is destroyed every time the container is
+      # recreated — which is what `docker compose pull && up -d` does on each
+      # update. EOS Connect then falls back to config.yaml and your settings
+      # appear to have reverted on their own.
+      - ./data:/app/data
+      # Optional file-based bootstrap. Commented out on purpose: src/config.yaml
+      # is gitignored, so on a clean clone Docker would create a *directory*
+      # here. The three env vars below cover the same keys. Uncomment only if
+      # the file already exists.
+      # - ./src/config.yaml:/app/config.yaml
     environment:
       - PYTHONUNBUFFERED=1
       # Optional bootstrap overrides (take precedence over config.yaml):
       # - EOS_WEB_PORT=8081
       # - EOS_TIMEZONE=Europe/Berlin
       # - EOS_LOG_LEVEL=INFO
+      # Moves the data directory inside the container. Point the volume above at
+      # whatever path you set here.
+      # - EOS_DATA_PATH=/app/data
     restart: unless-stopped
