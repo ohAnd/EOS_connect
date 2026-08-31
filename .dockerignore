@@ -1,0 +1,53 @@
+# Build context exclusions.
+#
+# The Dockerfile needs exactly two things: requirements.txt and src/.  Everything
+# else here is either dead weight sent to the daemon or, worse, local state that
+# COPY would bake into the image.
+#
+# The dangerous entries are the SQLite ones.  src/data/eos_connect.db is gitignored
+# but gitignore has no bearing on the build context, so a local `docker compose
+# build` used to copy the developer's own database to /app/data/eos_connect.db in
+# the image.  The ./data bind mount normally hides it, but a `docker run` without
+# -v would start on someone else's configuration.  Dockerfile's `mkdir -p /app/data`
+# recreates the empty directory, so excluding it costs nothing.
+
+# Version control and IDE state
+.git/
+.gitignore
+.github/
+.vscode/
+.mypy_cache/
+.pytest_cache/
+
+# Virtualenvs and bytecode
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Local SQLite state — must never reach the image (see note above)
+*.db
+*.db-wal
+*.db-shm
+src/data/
+
+# Local bootstrap config and runtime dumps.  src/json/readme.md is deliberately
+# kept so the directory still exists in the image: eos_connect.py writes
+# optimize_request.json / optimize_response.json into it at runtime.
+src/config.yaml
+src/config.yaml.bak
+src/config.bak.yaml
+src/json/*.json
+
+# Tests, docs and tooling — not shipped
+tests/
+docs/
+scripts/
+pytest.ini
+requirements-dev.txt
+*.md
+CLAUDE.md
+
+# Compose file itself
+docker-compose.yml
