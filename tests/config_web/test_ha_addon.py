@@ -100,6 +100,83 @@ class TestHaAddonDetection:
 
 
 # -----------------------------------------------------------------------
+# Unreadable / non-file config.yaml
+# -----------------------------------------------------------------------
+
+class TestUnusableConfigYaml:
+    """A bootstrap file that cannot be read must never stop startup.
+
+    docker-compose bind-mounted ./src/config.yaml, which is gitignored, so a clean
+    clone made Docker create a *directory* at that path. os.path.exists() said True
+    and the open() that followed raised IsADirectoryError at import time.
+    """
+
+    def _make_cm(self, tmp_path):
+        from src.config import ConfigManager
+        return ConfigManager(str(tmp_path))
+
+    def _clear_env(self, monkeypatch):
+        for var in ("HASSIO", "HASSIO_TOKEN", "EOS_WEB_PORT", "EOS_TIMEZONE",
+                    "EOS_LOG_LEVEL"):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_directory_at_config_path_does_not_crash(self, monkeypatch, tmp_path):
+        """A directory named config.yaml falls back to defaults instead of raising."""
+        self._clear_env(monkeypatch)
+        (tmp_path / "config.yaml").mkdir()
+        cm = self._make_cm(tmp_path)
+        assert cm.config["eos_connect_web_port"] == 8081
+        assert cm.config["time_zone"] == "Europe/Berlin"
+        assert cm.config["log_level"] == "info"
+
+    def test_directory_at_config_path_is_not_overwritten(self, monkeypatch, tmp_path):
+        """The create-if-missing branch must not try to write over the directory."""
+        self._clear_env(monkeypatch)
+        cfg_dir = tmp_path / "config.yaml"
+        cfg_dir.mkdir()
+        self._make_cm(tmp_path)
+        assert cfg_dir.is_dir(), "config.yaml must still be the untouched directory"
+
+    def test_malformed_yaml_falls_back_to_defaults(self, monkeypatch, tmp_path):
+        """Unparseable YAML is a warning, not a crash."""
+        self._clear_env(monkeypatch)
+        (tmp_path / "config.yaml").write_text(
+            "eos_connect_web_port: [1, 2\ntime_zone: ]]]\n", encoding="utf-8"
+        )
+        cm = self._make_cm(tmp_path)
+        assert cm.config["time_zone"] == "Europe/Berlin"
+
+    def test_empty_yaml_falls_back_to_defaults(self, monkeypatch, tmp_path):
+        """An empty file loads as None — that must not blow up config.update()."""
+        self._clear_env(monkeypatch)
+        (tmp_path / "config.yaml").write_text("", encoding="utf-8")
+        cm = self._make_cm(tmp_path)
+        assert cm.config["eos_connect_web_port"] == 8081
+
+    def test_valid_yaml_still_wins(self, monkeypatch, tmp_path):
+        """The guard must not break the normal path."""
+        self._clear_env(monkeypatch)
+        (tmp_path / "config.yaml").write_text(
+            "eos_connect_web_port: 9099\ntime_zone: UTC\n", encoding="utf-8"
+        )
+        cm = self._make_cm(tmp_path)
+        assert cm.config["eos_connect_web_port"] == 9099
+        assert cm.config["time_zone"] == "UTC"
+
+    def test_unwritable_dir_does_not_crash(self, monkeypatch, tmp_path):
+        """A read-only mount cannot be written to; that must be survivable."""
+        self._clear_env(monkeypatch)
+        target = tmp_path / "ro"
+        target.mkdir()
+        os.chmod(target, 0o500)
+        try:
+            cm = self._make_cm(target)
+            assert cm.config["eos_connect_web_port"] == 8081
+        finally:
+            os.chmod(target, 0o700)
+
+
+# -----------------------------------------------------------------------
 # Bootstrap loading
 # -----------------------------------------------------------------------
 

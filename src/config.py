@@ -8,6 +8,7 @@ import os
 import logging
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.error import YAMLError
 
 logger = logging.getLogger("__main__")
 logger.info("[Config] loading module ")
@@ -170,10 +171,33 @@ class ConfigManager:
         (``EOS_WEB_PORT``, ``EOS_TIMEZONE``, ``EOS_LOG_LEVEL``) take highest
         precedence.
         """
-        if os.path.exists(self.config_file):
-            with open(self.config_file, "r", encoding="utf-8") as f:
-                self.config.update(self.yaml.load(f))
+        # isfile, not exists: docker-compose used to bind-mount ./src/config.yaml, which
+        # is gitignored, so a clean clone made Docker create a *directory* at this path.
+        # exists() said True and open() then raised IsADirectoryError at import time,
+        # before logging was useful. Nothing in a bootstrap file is worth a hard crash —
+        # all three keys have defaults and the database is authoritative anyway.
+        if os.path.isfile(self.config_file):
+            try:
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    loaded = self.yaml.load(f)
+                if loaded:
+                    self.config.update(loaded)
+            except (OSError, YAMLError) as exc:
+                logger.warning(
+                    "[Config] Could not read %s (%s) - using defaults, "
+                    "settings from the database still apply",
+                    self.config_file,
+                    exc,
+                )
         else:
+            if os.path.exists(self.config_file):
+                logger.warning(
+                    "[Config] %s exists but is not a file - ignoring it. If this is a "
+                    "directory, a docker volume mount created it; remove the "
+                    "config.yaml bind mount and use EOS_WEB_PORT / EOS_TIMEZONE / "
+                    "EOS_LOG_LEVEL instead.",
+                    self.config_file,
+                )
             if self.is_ha_addon:
                 logger.info(
                     "[Config] No config.yaml found (HA addon mode) - using defaults"
@@ -190,7 +214,9 @@ class ConfigManager:
         self.load_env_bootstrap()
 
         # If config.yaml doesn't exist, create it with defaults
-        # (for fresh install only, not for HA addon mode)
+        # (for fresh install only, not for HA addon mode).
+        # exists(), not isfile(), on purpose: when something non-file occupies the path
+        # there is nothing useful to write and open(..., "w") would raise.
         if not os.path.exists(self.config_file) and not self.is_ha_addon:
             logger.info(
                 "[Config] Creating new config.yaml with bootstrap defaults at %s",
@@ -201,7 +227,18 @@ class ConfigManager:
     def write_config(self):
         """
         Writes the configuration to 'config.yaml' file located in the current directory.
+
+        Never fatal: config.yaml holds bootstrap values only, and a read-only bind mount
+        or an unwritable path must not stop the application from starting.
         """
         logger.info("[Config] writing config file")
-        with open(self.config_file, "w", encoding="utf-8") as config_file_handle:
-            self.yaml.dump(self.config, config_file_handle)
+        try:
+            with open(self.config_file, "w", encoding="utf-8") as config_file_handle:
+                self.yaml.dump(self.config, config_file_handle)
+        except OSError as exc:
+            logger.warning(
+                "[Config] Could not write %s (%s) - continuing with the values "
+                "already loaded",
+                self.config_file,
+                exc,
+            )
