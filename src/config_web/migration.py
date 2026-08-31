@@ -12,7 +12,10 @@ than bootstrap keys is also auto-migrated to SQLite.
 import json
 import logging
 import os
+import shutil
 from typing import Any
+
+from ruamel.yaml.error import YAMLError
 
 from .store import ConfigStore
 from .schema import ConfigSchema, BOOTSTRAP_KEYS, LEGACY_SENSOR_PLACEHOLDERS
@@ -254,6 +257,128 @@ def migrate_sensor_placeholders_to_empty(store: ConfigStore) -> bool:
             )
 
     store.set(_SENSOR_PLACEHOLDER_MIGRATION_KEY, True)
+    return True
+
+
+# Suffix for the copy kept when a legacy config.yaml is reduced to bootstrap keys.
+PRUNE_BACKUP_SUFFIX = ".migrated.bak"
+
+
+def prune_migrated_yaml(config_manager, store, persistence_state: str) -> bool:
+    """
+    Reduce a fully-migrated legacy config.yaml to its bootstrap keys.
+
+    A pre-database config.yaml carries the whole configuration.  Once it has been
+    imported into SQLite it is no longer the source of truth, but it is still read
+    on every start and ``migrate_yaml_to_store`` re-imports it verbatim whenever it
+    finds an empty store.  For a Docker user whose database is not on a volume that
+    happens on every image update, so settings changed in the web UI revert to their
+    pre-database values again and again (#287).  Removing the migrated values from
+    the file removes the thing that resurrects them.
+
+    Refuses to act unless the settings are demonstrably safe elsewhere:
+
+    - the migration must have imported a *real* user config, not bare defaults;
+    - the data directory must not be classified ``"ephemeral"`` — pruning a user
+      whose database will be discarded anyway would swap "stale but working values"
+      for "empty wizard on every update", which is strictly worse;
+    - there must actually be non-bootstrap keys in the file.
+
+    The original is copied to ``config.yaml.migrated.bak`` first, and any OSError is
+    logged rather than raised: a read-only bind mount must not stop startup.
+
+    Args:
+        config_manager: The ConfigManager owning config.yaml.
+        store: An opened ConfigStore, consulted for the migration marker.
+        persistence_state: ``"persistent"``, ``"ephemeral"`` or ``"unknown"`` from
+            ``ConfigManager.data_dir_persistence()``.
+
+    Returns:
+        True if config.yaml was rewritten, False in every other case.
+    """
+    if config_manager.is_ha_addon:
+        return False  # no config.yaml in addon mode; options.json is Supervisor's
+
+    if not store.get("_migrated_from_yaml", False):
+        return False
+
+    config_file = config_manager.config_file
+    if not os.path.isfile(config_file):
+        return False
+
+    try:
+        with open(config_file, "r", encoding="utf-8") as handle:
+            existing = config_manager.yaml.load(handle)
+    except (OSError, YAMLError) as exc:
+        logger.debug("[Migration] Cannot inspect %s for pruning: %s", config_file, exc)
+        return False
+
+    if not existing:
+        return False
+
+    legacy_keys = [key for key in existing if key not in BOOTSTRAP_KEYS]
+    if not legacy_keys:
+        return False  # already bootstrap-only
+
+    if persistence_state == "ephemeral":
+        logger.warning(
+            "[Migration] %s still holds %d pre-database setting(s) (%s%s) and they "
+            "will be re-imported on every container recreate, because the data "
+            "directory is not on a volume. Leaving the file alone so those values "
+            "remain as a fallback. Mount a volume on %s - in docker-compose.yml add "
+            '"- ./data:/app/data" under volumes: - or set EOS_DATA_PATH to a path you '
+            "already persist. Until then use Settings > Backup to export your "
+            "configuration before each update.",
+            config_file,
+            len(legacy_keys),
+            ", ".join(sorted(legacy_keys)[:5]),
+            ", ..." if len(legacy_keys) > 5 else "",
+            config_manager.data_dir,
+        )
+        return False
+
+    backup_path = config_file + PRUNE_BACKUP_SUFFIX
+    try:
+        shutil.copy2(config_file, backup_path)
+    except OSError as exc:
+        logger.warning(
+            "[Migration] Could not back up %s (%s) - leaving it unchanged",
+            config_file,
+            exc,
+        )
+        return False
+
+    # Start from the commented defaults so the rewritten file keeps its explanations,
+    # then carry over every bootstrap key the file actually had. Iterating
+    # BOOTSTRAP_KEYS as well as the defaults matters: data_path is bootstrap but
+    # deliberately absent from create_default_config() (its absence is what makes
+    # data_dir fall back to ./data), so keying off the defaults alone would delete a
+    # hand-authored one.
+    bootstrap_only = config_manager.create_default_config()
+    for key in list(bootstrap_only) + sorted(BOOTSTRAP_KEYS):
+        if key in existing and key not in ("web_port",):
+            bootstrap_only[key] = existing[key]
+
+    try:
+        with open(config_file, "w", encoding="utf-8") as handle:
+            config_manager.yaml.dump(bootstrap_only, handle)
+    except OSError as exc:
+        logger.warning(
+            "[Migration] Could not rewrite %s (%s) - the backup at %s still holds "
+            "the original",
+            config_file,
+            exc,
+            backup_path,
+        )
+        return False
+
+    logger.info(
+        "[Migration] Reduced %s to bootstrap keys; %d migrated setting(s) now live "
+        "only in the database. Original saved as %s.",
+        config_file,
+        len(legacy_keys),
+        backup_path,
+    )
     return True
 
 

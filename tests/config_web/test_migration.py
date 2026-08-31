@@ -2,6 +2,8 @@
 Unit tests for the config.yaml to SQLite migration.
 """
 
+import os
+
 import pytest
 from unittest.mock import patch, MagicMock
 from src.config_web.store import ConfigStore
@@ -10,6 +12,8 @@ from src.config_web.migration import (
     migrate_yaml_to_store,
     migrate_battery_price_unit_to_ct_kwh,
     migrate_sensor_placeholders_to_empty,
+    prune_migrated_yaml,
+    PRUNE_BACKUP_SUFFIX,
     _flatten_config,
     _has_user_configured_values,
     _coerce_migrated_value,
@@ -871,3 +875,169 @@ class TestSensorPlaceholderCleanup:
 
         assert store.get("load.load_sensor") == "Load_Power"
         assert store.get("battery.soc_sensor") == "battery_SOC"
+
+
+# -----------------------------------------------------------------------
+# Pruning a migrated legacy config.yaml
+# -----------------------------------------------------------------------
+
+LEGACY_YAML = """\
+eos_connect_web_port: 9099
+time_zone: Europe/Vienna
+log_level: debug
+load:
+  source: homeassistant
+  load_sensor: sensor.power
+  car_charge_load_sensor: Wallbox_Power
+battery:
+  source: homeassistant
+  soc_sensor: sensor.soc
+"""
+
+
+class TestPruneMigratedYaml:
+    """
+    A migrated config.yaml stops being the source of truth but keeps being
+    re-imported whenever the store comes up empty — every container recreate for a
+    Docker user with no volume on the data directory. Reducing it to bootstrap keys
+    removes what resurrects the old values, but only when the database will survive
+    to hold them (#287).
+    """
+
+    def _cm(self, tmp_path, contents=LEGACY_YAML, monkeypatch=None):
+        if monkeypatch is not None:
+            for var in ("HASSIO", "HASSIO_TOKEN", "EOS_DATA_PATH"):
+                monkeypatch.delenv(var, raising=False)
+        if contents is not None:
+            (tmp_path / "config.yaml").write_text(contents, encoding="utf-8")
+        from src.config import ConfigManager
+        return ConfigManager(str(tmp_path))
+
+    def _migrated(self, store):
+        store.set("_migrated_from_yaml", True)
+
+    def test_prunes_when_persistent(self, store, tmp_path, monkeypatch):
+        """The legacy sections go; the bootstrap keys and their values stay."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is True
+
+        text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "load:" not in text
+        assert "battery:" not in text
+        assert "Wallbox_Power" not in text
+        assert "9099" in text
+        assert "Europe/Vienna" in text
+        assert "debug" in text
+
+    def test_original_is_backed_up(self, store, tmp_path, monkeypatch):
+        """Nothing is destroyed: the pre-prune file is kept alongside."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+
+        prune_migrated_yaml(cm, store, "persistent")
+
+        backup = tmp_path / ("config.yaml" + PRUNE_BACKUP_SUFFIX)
+        assert backup.is_file()
+        assert "Wallbox_Power" in backup.read_text(encoding="utf-8")
+
+    def test_ephemeral_leaves_the_file_alone(self, store, tmp_path, monkeypatch):
+        """Pruning here would trade stale-but-working values for an empty wizard."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "ephemeral") is False
+
+        text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "Wallbox_Power" in text
+        assert not (tmp_path / ("config.yaml" + PRUNE_BACKUP_SUFFIX)).exists()
+
+    def test_ephemeral_warns_with_the_fix(self, store, tmp_path, monkeypatch, caplog):
+        """The user cannot act on this unless the message names the volume."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+
+        with caplog.at_level("WARNING", logger="__main__"):
+            prune_migrated_yaml(cm, store, "ephemeral")
+
+        rendered = " ".join(r.getMessage() for r in caplog.records)
+        assert "./data:/app/data" in rendered
+        assert "EOS_DATA_PATH" in rendered
+        assert "Backup" in rendered
+
+    def test_unknown_is_treated_as_persistent(self, store, tmp_path, monkeypatch):
+        """A bare Python install reports "unknown" and has no volume problem."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "unknown") is True
+
+    def test_skipped_without_the_migration_marker(self, store, tmp_path, monkeypatch):
+        """A fresh install writes defaults but sets no marker — nothing to prune."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is False
+        assert "Wallbox_Power" in (tmp_path / "config.yaml").read_text(encoding="utf-8")
+
+    def test_skipped_in_ha_addon_mode(self, store, tmp_path, monkeypatch):
+        """Addon config lives in options.json; config.yaml is not ours to rewrite."""
+        monkeypatch.setenv("HASSIO", "1")
+        cm = self._cm(tmp_path)
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is False
+        assert "Wallbox_Power" in (tmp_path / "config.yaml").read_text(encoding="utf-8")
+
+    def test_noop_when_already_bootstrap_only(self, store, tmp_path, monkeypatch):
+        """Idempotent: a second start must not rewrite or re-back-up the file."""
+        cm = self._cm(
+            tmp_path,
+            contents="eos_connect_web_port: 8081\ntime_zone: UTC\nlog_level: info\n",
+            monkeypatch=monkeypatch,
+        )
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is False
+        assert not (tmp_path / ("config.yaml" + PRUNE_BACKUP_SUFFIX)).exists()
+
+    def test_data_path_is_kept_as_a_bootstrap_key(self, store, tmp_path, monkeypatch):
+        """data_path is bootstrap, so a hand-authored one must survive the prune."""
+        cm = self._cm(
+            tmp_path,
+            contents=LEGACY_YAML + "data_path: /mnt/eos_data\n",
+            monkeypatch=monkeypatch,
+        )
+        self._migrated(store)
+        prune_migrated_yaml(cm, store, "persistent")
+
+        text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "/mnt/eos_data" in text
+        assert "load:" not in text
+
+    def test_missing_config_yaml_is_a_noop(self, store, tmp_path, monkeypatch):
+        """Nothing to prune, and certainly nothing to create."""
+        for var in ("HASSIO", "HASSIO_TOKEN", "EOS_DATA_PATH"):
+            monkeypatch.delenv(var, raising=False)
+        target = tmp_path / "empty"
+        target.mkdir()
+        from src.config import ConfigManager
+        cm = ConfigManager(str(target))
+        # ConfigManager creates a bootstrap-only file; remove it to test the branch
+        (target / "config.yaml").unlink()
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is False
+
+    def test_unwritable_file_does_not_raise(self, store, tmp_path, monkeypatch):
+        """A read-only bind mount must degrade to a log line, not an exception."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+        os.chmod(tmp_path, 0o500)
+        try:
+            assert prune_migrated_yaml(cm, store, "persistent") is False
+            assert "Wallbox_Power" in (
+                tmp_path / "config.yaml"
+            ).read_text(encoding="utf-8")
+        finally:
+            os.chmod(tmp_path, 0o700)

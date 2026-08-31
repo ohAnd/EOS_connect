@@ -36,6 +36,7 @@ from .migration import (
     migrate_ha_options_to_store,
     migrate_battery_price_unit_to_ct_kwh,
     migrate_sensor_placeholders_to_empty,
+    prune_migrated_yaml,
 )
 from .merger import build_merged_config
 from .api import config_bp, init_api
@@ -135,6 +136,21 @@ class ConfigWebModule:
         # One-time migration: blank sensor names that were only ever schema hints,
         # so the interfaces' "not configured" handling can take over.
         migrate_sensor_placeholders_to_empty(self._store)
+
+        # A legacy config.yaml that has been imported is no longer the source of
+        # truth, but it is still re-imported whenever the store comes up empty — on
+        # every container recreate, for a Docker user with no volume on the data
+        # directory. Reducing it to bootstrap keys removes what resurrects the old
+        # values, but only once the database is known to survive (#287).
+        persistence_state, persistence_detail = (
+            self._config_manager.data_dir_persistence()
+        )
+        logger.debug(
+            "[ConfigWeb] Data directory persistence: %s (%s)",
+            persistence_state,
+            persistence_detail,
+        )
+        prune_migrated_yaml(self._config_manager, self._store, persistence_state)
 
         # Build the merged config dict
         self.rebuild_config()
