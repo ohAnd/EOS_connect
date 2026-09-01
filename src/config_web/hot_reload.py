@@ -143,6 +143,28 @@ _PV_KEY_PREFIXES = (
     "pv_forecast.",
 )
 
+# Lives in the eos section but is applied by reloading the PV interface, which owns the
+# temperature forecast.
+_PV_TEMPERATURE_KEYS = {
+    "eos.temperature_forecast_enabled",
+}
+
+
+def _wants_temperature_forecast(eos_config):
+    """
+    Whether an outside-temperature forecast should be fetched for the optimizer.
+
+    Inline copy of ``interfaces.pv_interface.wants_temperature_forecast`` - this module
+    imports nothing cross-package on purpose.  The two are pinned equal by
+    ``tests/interfaces/test_pv_interface_temperature_gating.py``.
+    """
+    if not isinstance(eos_config, dict):
+        return False
+    if eos_config.get("source", "eos_server") != "eos_server":
+        return False
+    return _coerce_bool(eos_config.get("temperature_forecast_enabled", True))
+
+
 def _coerce_bool(value):
     """
     Coerce a stored value to bool.
@@ -255,7 +277,7 @@ class HotReloadAdapter:
             self._apply_local_evopt(key, new_value)
         elif key in _PV_AUTOSCALER_FIELD_MAP:
             self._apply_pv_autoscaler(key, new_value)
-        elif key.startswith(_PV_KEY_PREFIXES):
+        elif key.startswith(_PV_KEY_PREFIXES) or key in _PV_TEMPERATURE_KEYS:
             self._schedule_pv_reload(key, new_value)
         else:
             return  # Not a hot-reloadable key — skip silently
@@ -879,8 +901,8 @@ class HotReloadAdapter:
                 config_source=config_source,
                 config=config.get("pv_forecast", []),
                 config_special=config.get("evcc", {}),
-                temperature_forecast_enabled=(
-                    config.get("eos", {}).get("source", "eos_server") == "eos_server"
+                temperature_forecast_enabled=_wants_temperature_forecast(
+                    config.get("eos", {})
                 ),
                 timezone=config.get("time_zone", "UTC"),
             )

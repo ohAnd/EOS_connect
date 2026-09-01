@@ -94,8 +94,17 @@ class TestTimeseriesValidation:
         assert pv.configuration_state == "valid"
         assert pv.configuration_valid is True
 
-    def test_timeseries_requires_lat_lon_when_temp_enabled(self):
-        """Timeseries requires lat/lon when temperature forecast is enabled."""
+    def test_timeseries_stays_valid_without_lat_lon_when_temp_enabled(self):
+        """
+        Missing coordinates must not degrade a timeseries configuration (issue #289).
+
+        Timeseries reads its PV data from an external endpoint, so lat/lon are only ever
+        used to ask for the outside temperature - an optional extra input for EOS.  This
+        used to fail validation, which took the whole interface into DEGRADED mode ("PV
+        data unavailable until config is fixed") and made hot-reload refuse the change,
+        even though the PV forecast itself was perfectly configured.  The temperature
+        forecast falls back to its static default instead.
+        """
         source_config = {
             "source": "timeseries",
             "data_url": "http://example.com/pv/forecast"
@@ -110,8 +119,13 @@ class TestTimeseriesValidation:
             temperature_forecast_enabled=True,
             timezone="UTC"
         )
-        assert pv.configuration_state == "incomplete"
-        assert pv.configuration_valid is False
+        assert pv.configuration_state == "valid"
+        assert pv.configuration_valid is True
+        # And nothing to ask the provider with, so the default curve is what EOS gets.
+        assert pv._PvInterface__get_temperature_config_entry() is None
+        assert pv.get_current_temp_forecast() == (
+            pv._PvInterface__get_default_temperature_forecast()
+        )
 
     def test_timeseries_with_complete_config_and_temp_enabled(self):
         """Timeseries with data_url and lat/lon should be valid when temp is enabled."""

@@ -50,6 +50,17 @@ LOCATION_BASED_PV_SOURCES = ("akkudoktor", "openmeteo", "openmeteo_local", "fore
 # domestic roof, so the demo curve looks like a home rather than a garden shed.
 DEFAULT_PV_NOMINAL_POWER_W = 4000
 
+# The outside-temperature curve is hourly at the source and barely moves between two
+# 15-minute PV cycles, so refetching it on every one of them was four requests an hour
+# for one new data point.  A successful forecast is reused until it is this old.
+TEMP_REFRESH_INTERVAL_S = 3600
+
+# Retry policy for the temperature request.  Deliberately shorter than the PV one: the
+# cache is the real recovery strategy here (a held forecast is a good answer, a held PV
+# array is not), and every retry blocks the shared update loop.
+TEMP_MAX_RETRIES = 2
+TEMP_RETRY_DELAY_S = 2
+
 
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_ANCHOR,
@@ -64,6 +75,30 @@ logger = logging.getLogger("__main__")
 logger.info("[PV-IF] loading module ")
 
 EOS_API_GET_PV_FORECAST = "https://api.akkudoktor.net/forecast"
+
+
+def wants_temperature_forecast(eos_config):
+    """
+    True when an outside-temperature curve should be fetched for the optimizer.
+
+    EOS asks for one and models the house more precisely with it, so it is on by default
+    there.  EVopt - local or external - does not use temperature at all, so nothing is
+    fetched for it.  ``eos.temperature_forecast_enabled`` lets an EOS user opt out
+    anyway, which is the only way to stop EOS Connect talking to the forecast provider;
+    the static 15 degree default is sent instead.
+
+    ``config_web.hot_reload`` holds an inline copy of this rule (it imports nothing from
+    ``interfaces`` by design).  The two are pinned equal by
+    ``tests/interfaces/test_pv_interface_temperature_gating.py``.
+    """
+    if not isinstance(eos_config, dict):
+        return False
+    if eos_config.get("source", "eos_server") != "eos_server":
+        return False
+    value = eos_config.get("temperature_forecast_enabled", True)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
 
 
 class PvInterface:
@@ -105,6 +140,17 @@ class PvInterface:
             "config_entry": None,
             "source": None,
         }
+        # The temperature forecast keeps its own error slot. It is a separate provider
+        # call with its own cache, and the update loop reads pv_forcast_request_error to
+        # decide whether the *PV* fetch failed - a temperature error landing there made
+        # a healthy PV cycle report itself as degraded.
+        self.temp_forecast_request_error = {
+            "error": None,
+            "timestamp": None,
+            "message": None,
+            "config_entry": None,
+            "source": None,
+        }
         self.temp_forecast_array = self.__get_default_temperature_forecast()
 
         # Cache mechanism for fallback on API failures (similar to PriceInterface)
@@ -114,6 +160,8 @@ class PvInterface:
         self.consecutive_failures = 0
         self.consecutive_temp_failures = 0
         self.max_failures = 24  # Max consecutive failures before using defaults
+        # Monotonic timestamp of the last successful temperature fetch (None = never).
+        self._last_temp_fetch = None
 
         self._update_thread = None
         self._stop_event = threading.Event()
@@ -223,11 +271,19 @@ class PvInterface:
                 "config_entry": None,
                 "source": None,
             }
+            self.temp_forecast_request_error = {
+                "error": None,
+                "timestamp": None,
+                "message": None,
+                "config_entry": None,
+                "source": None,
+            }
             # Reset cache when configuration changes (source switch, etc.)
             self.last_successful_pv_forecast = []
             self.last_successful_temp_forecast = []
             self.consecutive_failures = 0
             self.consecutive_temp_failures = 0
+            self._last_temp_fetch = None
 
             try:
                 self.__configure_update_interval()
@@ -445,25 +501,21 @@ class PvInterface:
             entry_name = config_entry.get("name", "unnamed")
 
             # lat/lon - Required parameters depend on source and use case
-            # - Victron: only needed if temperature forecast enabled
+            # - Victron / Timeseries / EVCC / default: never required.  These take the PV
+            #   data from elsewhere, so coordinates are only ever used to ask for the
+            #   outside temperature - and a missing temperature is not a broken PV
+            #   configuration.  Without them the static default curve is served instead;
+            #   failing validation here took the whole interface into DEGRADED mode and
+            #   made hot-reload refuse the change, over an optional extra.
             # - Solcast: only needed if NO resource_id provided (rare case)
             # - Other sources: needed for location-based forecasting
-            needs_lat_lon = False
-
-            if source == "victron":
-                # Victron only needs lat/lon for temperature forecast
-                needs_lat_lon = self.temperature_forecast_enabled
+            if source in ("victron", "timeseries", "evcc", "default"):
+                needs_lat_lon = False
             elif source == "solcast":
                 # Solcast: if resource_id provided, lat/lon not needed
                 # If NO resource_id, they would be needed (but Solcast requires resource_id)
                 has_resource_id = config_entry.get("resource_id", "").strip()
                 needs_lat_lon = not has_resource_id
-            elif source in ("timeseries", "evcc", "default"):
-                # Timeseries/EVCC take the PV data from an external source, and
-                # "default" synthesizes it from a fixed curve - none of the three
-                # forecasts from coordinates, so lat/lon is only ever needed to ask
-                # the Akkudoktor temperature API.
-                needs_lat_lon = self.temperature_forecast_enabled
             else:
                 # All other sources need lat/lon for their location-based API calls
                 needs_lat_lon = True
@@ -481,13 +533,12 @@ class PvInterface:
                     )
 
             # OPTIMIZATION: For sources that DON'T require full PV config
-            # (Victron, Solcast, Timeseries, etc.), set sensible defaults that also work for temperature API
+            # (Victron, Solcast, Timeseries, etc.), set sensible defaults
             if source in ("victron", "solcast", "timeseries", "evcc", "default"):
                 # These sources don't need detailed panel orientation for PV forecasting.
-                # However, defaults must be valid for Akkudoktor temperature API
-                # which validates them - the returned temperature does not depend on
-                # the array size, so the nominal home figure is as good as any here.
-                # It also sizes the fallback curve when a provider is unreachable.
+                # The defaults still matter for the fallback curve that stands in when the
+                # provider is unreachable, which is sized from them. The temperature
+                # request no longer reads any of this - it sends its own fixed array.
                 defaults_set = []
 
                 if config_entry.get("azimuth") is None:
@@ -598,14 +649,10 @@ class PvInterface:
 
         # Check if we have at least one config entry with lat/lon
         if not self.config or len(self.config) == 0:
-            # "default" is meant to run without an installation, so having none is the
-            # expected state there rather than something the user forgot to finish.
-            log_func = (
-                logger.info
-                if self.config_source.get("source") == "default"
-                else logger.warning
-            )
-            log_func(
+            # Informational for every source: sources that need an installation for their
+            # own forecast are already reported by __validate_pv_source_requirements, and
+            # for the rest running without one is the expected state.
+            logger.info(
                 "[PV-IF] No PV forecast entries found - temperature forecast will use defaults"
             )
             return
@@ -616,9 +663,12 @@ class PvInterface:
         entry_name_str = str(entry_name) if entry_name else "unnamed"
 
         if first_entry.get("lat") is None or first_entry.get("lon") is None:
-            logger.warning(
-                "[PV-IF] Temperature forecast requires lat/lon in first PV entry '%s'"
-                + " - will use static temperature forecast defaults (15°C)",
+            # Informational, not a warning: the temperature forecast is an optional input
+            # to EOS and the static default is a valid answer.  Sources that do need
+            # coordinates for their own forecast still fail validation above.
+            logger.info(
+                "[PV-IF] No lat/lon in first PV entry '%s'"
+                + " - using static temperature forecast defaults (15°C)",
                 entry_name_str,
             )
             return
@@ -701,9 +751,12 @@ class PvInterface:
                 )
             # Temperature forecast with minimal configuration (only needs lat/lon)
             # Works for all PV sources: Victron, Solcast, Akkudoktor, etc.
+            # Not gated on configuration_valid: the temperature forecast has its own,
+            # sufficient precondition - coordinates in the first entry - and an otherwise
+            # incomplete PV configuration is no reason to drop a working one.
             if self.temperature_forecast_enabled:
                 temp_config = self.__get_temperature_config_entry()
-                if temp_config:
+                if temp_config and not self.__temperature_forecast_is_fresh():
                     temp_result = self.__get_pv_forecast_akkudoktor_api(
                         tgt_value="temperature", pv_config_entry=temp_config
                     )
@@ -720,8 +773,15 @@ class PvInterface:
                         )
                     else:
                         self.temp_forecast_array = temp_result
+                elif temp_config:
+                    logger.debug(
+                        "[PV-IF] Temperature forecast still fresh - keeping the cached"
+                        " curve (refresh every %d s)",
+                        TEMP_REFRESH_INTERVAL_S,
+                    )
+                    self.temp_forecast_array = list(self.last_successful_temp_forecast)
                 else:
-                    # lat/lon missing - already warned during config validation
+                    # lat/lon missing - already reported during config validation
                     self.temp_forecast_array = self.__get_default_temperature_forecast()
             else:
                 logger.debug(
@@ -759,6 +819,18 @@ class PvInterface:
         if scale:
             return list(self.pv_forcast_array)
         return list(self.pv_forcast_array_raw)
+
+    def __temperature_forecast_is_fresh(self):
+        """
+        True while the cached temperature forecast is young enough to reuse.
+
+        Only ever True with a non-empty cache, so a failing provider is still retried on
+        every update cycle - the throttle saves requests when things work, it does not
+        delay recovery when they do not.
+        """
+        if not self.last_successful_temp_forecast or self._last_temp_fetch is None:
+            return False
+        return (time.monotonic() - self._last_temp_fetch) < TEMP_REFRESH_INTERVAL_S
 
     def get_current_temp_forecast(self):
         """
@@ -803,6 +875,28 @@ class PvInterface:
                 params["horizont"] = str(horizon)
 
         return params
+
+    def __create_temperature_request(self, pv_config_entry):
+        """
+        Build the parameters for an outside-temperature request.
+
+        The endpoint is the PV forecast one, so it insists on a plausible installation -
+        but the temperature it returns depends on the location and nothing else. Sending
+        the user's panel geometry and horizon along made the request fail for reasons that
+        cannot change the answer: a horizon list the API dislikes, or an azimuth of 0.0 it
+        rejects outright. A fixed canonical array keeps the query identical for everyone at
+        a given location, which also means the provider can serve it from cache.
+        """
+        return {
+            "lat": pv_config_entry["lat"],
+            "lon": pv_config_entry["lon"],
+            "azimuth": 0.1,  # South (0.0 is rejected as a wrong parameter)
+            "tilt": 30.0,
+            "power": float(DEFAULT_PV_NOMINAL_POWER_W),
+            "powerInverter": float(DEFAULT_PV_NOMINAL_POWER_W),
+            "inverterEfficiency": 0.95,
+            "timezone": self.time_zone,
+        }
 
     def __get_temperature_config_entry(self):
         """
@@ -1617,9 +1711,12 @@ class PvInterface:
                 target=tgt_value,
             )
 
-        # Use standard request format for both PV and temperature
-        # (config_entry already has all required parameters with defaults set)
-        forecast_params = self.__create_forecast_request(pv_config_entry)
+        # Temperature is a location-only query; PV needs the real installation.
+        forecast_params = (
+            self.__create_temperature_request(pv_config_entry)
+            if tgt_value == "temperature"
+            else self.__create_forecast_request(pv_config_entry)
+        )
 
         def request_func():
             response = requests.get(
@@ -1645,7 +1742,12 @@ class PvInterface:
                 target=tgt_value,
             )
 
-        day_values = self._retry_request(request_func, error_handler, 5, 3)
+        retries, delay = (
+            (TEMP_MAX_RETRIES, TEMP_RETRY_DELAY_S)
+            if tgt_value == "temperature"
+            else (5, 3)
+        )
+        day_values = self._retry_request(request_func, error_handler, retries, delay)
         if failure["occurred"] and day_values:
             # day_values is a non-empty cache _handle_interface_error chose as
             # fallback; feeding it into the raw-JSON processing below would
@@ -1680,11 +1782,17 @@ class PvInterface:
                             value = 0
                         forecast_values.append(value)
 
-            # workaround for wrong time points in the forecast from akkudoktor
-            # remove first entry and append 0 to the end
+            # workaround for wrong time points in the forecast from akkudoktor:
+            # the series starts one slot early, so drop the first entry and pad the end.
+            # A dropped Watt slot is night-time, so 0 is right there - but a temperature
+            # of 0 degrees is a real reading, and padding one in put a bogus cold hour at
+            # the end of every curve. Repeat the last value instead, which is what the
+            # length correction below already does.
             if forecast_values:
                 forecast_values.pop(0)
-                forecast_values.append(0)
+                forecast_values.append(
+                    forecast_values[-1] if tgt_value == "temperature" else 0
+                )
 
             # fix for time changes e.g. western europe then fill or reduce
             # the array to target duration
@@ -1708,8 +1816,12 @@ class PvInterface:
                     pv_config_entry.get("name", "unknown"),
                 )
 
-            # Clear any previous errors on success
-            self.pv_forcast_request_error["error"] = None
+            # Clear any previous errors on success - only for the target that just
+            # succeeded, so a good temperature fetch never masks a failing PV fetch.
+            if tgt_value == "temperature":
+                self.temp_forecast_request_error["error"] = None
+            else:
+                self.pv_forcast_request_error["error"] = None
 
             request_type = (
                 "PV forecast" if tgt_value == "power" else "Temperature forecast"
@@ -1736,6 +1848,7 @@ class PvInterface:
             if tgt_value == "temperature" and result:
                 self.last_successful_temp_forecast = list(result)
                 self.consecutive_temp_failures = 0
+                self._last_temp_fetch = time.monotonic()
 
             return result
 
@@ -2937,8 +3050,21 @@ class PvInterface:
         "temperature") so a failed temperature request never falls back to
         the PV power cache (and vice versa).
         """
-        logger.error("[PV-IF] %s", message)
-        self.pv_forcast_request_error.update(
+        # A temperature failure that the cache absorbs is noise, not an incident: the
+        # forecast handed to the optimizer is still real degrees.  Escalate only once the
+        # cache cannot cover it any more.
+        cache_covers_it = (
+            target == "temperature"
+            and self.consecutive_temp_failures + 1 <= self.max_failures
+            and len(self.last_successful_temp_forecast) > 0
+        )
+        (logger.warning if cache_covers_it else logger.error)("[PV-IF] %s", message)
+        error_slot = (
+            self.temp_forecast_request_error
+            if target == "temperature"
+            else self.pv_forcast_request_error
+        )
+        error_slot.update(
             {
                 "error": error_type,
                 "timestamp": datetime.now().isoformat(),

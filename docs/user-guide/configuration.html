@@ -513,6 +513,56 @@
                         </tr>
                     </table>
 
+                    <h3>eos.temperature_forecast_enabled</h3>
+                    <table>
+                        <tr>
+                            <th>Parameter</th>
+                            <td><code>eos.temperature_forecast_enabled</code></td>
+                        </tr>
+                        <tr>
+                            <th>Description</th>
+                            <td>Fetch the outside temperature forecast and send it to EOS</td>
+                        </tr>
+                        <tr>
+                            <th>Type</th>
+                            <td>Boolean</td>
+                        </tr>
+                        <tr>
+                            <th>Default</th>
+                            <td><code>true</code></td>
+                        </tr>
+                        <tr>
+                            <th>Applies only when</th>
+                            <td><code>eos.source = eos_server</code>. EVopt — local or external — does not use
+                                temperature, so nothing is fetched for it either way.</td>
+                        </tr>
+                        <tr>
+                            <th>Notes</th>
+                            <td>
+                                EOS models your house more precisely with an outside-temperature curve, which is why
+                                this is on by default. The curve comes from the Akkudoktor forecast API, using the
+                                latitude and longitude of your <strong>first</strong> PV installation — that is the only
+                                thing it needs, so your panel orientation, size and horizon are not part of the request.
+                                <br><br>
+                                It is fetched <strong>once per hour</strong> (the source data is hourly), and the last
+                                successful curve is reused while the provider is unavailable, so a temporary outage does
+                                not disturb the optimization.
+                                <br><br>
+                                Set this to <code>false</code> if you want EOS Connect to make
+                                <strong>no</strong> requests to <code>api.akkudoktor.net</code> for temperature. A
+                                static 15 °C curve is sent to EOS instead — the optimization keeps running, with a
+                                slightly less precise house model.
+                                <br><br>
+                                <i class="fas fa-info-circle"></i> This is unrelated to where EOS itself runs: a local
+                                EOS server is still an EOS server, and the temperature forecast has its own provider.
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Hot reload</th>
+                            <td>Yes — takes effect without a restart</td>
+                        </tr>
+                    </table>
+
                     <h3 id="external-evopt" style="margin-top: 2rem;">External EVopt Optimizer Settings
                         (<code>external_evopt</code>)</h3>
                     <p><strong>Applies only when:</strong> <code>eos.source = evopt</code> (External EVopt backend
@@ -3338,9 +3388,16 @@ price:
                     <div class="alert alert-info">
                         <strong><i class="fas fa-info-circle"></i> Note:</strong> Temperature forecasts (outside
                         temperature from Akkudoktor) are <b>only retrieved and sent to the optimizer when
-                            <code>eos.source</code> is set to <code>eos_server</code></b>. For <code>evopt</code>,
-                        temperature is not used in optimization. <code>lat</code> and <code>lon</code> remain mandatory
-                        for PV forecast accuracy.
+                            <code>eos.source</code> is set to <code>eos_server</code></b>, and can be switched off there
+                        with <a href="#eos"><code>eos.temperature_forecast_enabled</code></a>. For <code>evopt</code>,
+                        temperature is not used in optimization.
+                        <br><br>
+                        The temperature request needs nothing but the <code>lat</code> and <code>lon</code> of your first
+                        installation. If those are not set — which is normal for <code>timeseries</code>,
+                        <code>evcc</code>, <code>victron</code> and <code>default</code>, none of which forecast from
+                        coordinates — a static 15 °C curve is used and <b>your PV configuration stays valid</b>.
+                        Location-based PV sources still require <code>lat</code> and <code>lon</code> for the forecast
+                        itself.
                     </div>
 
                     <h3>pv_forecast_source.source</h3>
