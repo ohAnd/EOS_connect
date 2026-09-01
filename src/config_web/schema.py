@@ -444,6 +444,20 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
     ),
     FieldDef(
+        key="eos.temperature_forecast_enabled",
+        field_type="bool",
+        default=True,
+        section="eos",
+        level="standard",
+        description="Fetch the outside temperature forecast (Akkudoktor) and send it to"
+        + " EOS - improves model accuracy; when off a static 15 °C curve is sent",
+        labels=[],
+        help_url="configuration.html#eos",
+        depends_on={"eos.source": "eos_server"},
+        display_group="Optimization",
+        hot_reload=True,
+    ),
+    FieldDef(
         key="eos.dyn_override_discharge_allowed_pv_greater_load",
         field_type="bool",
         default=False,

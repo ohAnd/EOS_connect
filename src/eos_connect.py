@@ -36,7 +36,7 @@ from interfaces.evcc_interface import EvccInterface
 from interfaces.price_interface import PriceInterface
 from interfaces.feed_in_price_interface import FeedInPriceInterface
 from interfaces.mqtt_interface import MqttInterface
-from interfaces.pv_interface import PvInterface
+from interfaces.pv_interface import PvInterface, wants_temperature_forecast
 from interfaces.port_interface import PortInterface
 from interfaces.update_checker import UpdateChecker
 from interfaces.inverters import create_inverter
@@ -262,13 +262,17 @@ feed_in_price_interface = interface_factory.create_feed_in_price_interface(
     feed_in_config, time_frame_base, time_zone, evcc_interface, critical=False
 ) or FeedInPriceInterface(feed_in_config, time_frame_base, time_zone, evcc_interface)
 
+temperature_forecast_enabled = wants_temperature_forecast(
+    config_manager.config.get("eos", {})
+)
+
 pv_interface = interface_factory.create_pv_interface(
     config_manager.config["pv_forecast_source"],
     config_manager.config["pv_forecast"],
     time_frame_base,
     config_manager.config.get("evcc", {}),
     config_manager.config.get("data_source", {}),
-    eos_source,
+    temperature_forecast_enabled,
     config_manager.config.get("time_zone", "UTC"),
     critical=False,
 ) or PvInterface(
@@ -279,7 +283,7 @@ pv_interface = interface_factory.create_pv_interface(
         "url": config_manager.config.get("evcc", {}).get("url", ""),
         "data_source": config_manager.config.get("data_source", {}),
     },
-    eos_source == "eos_server",
+    temperature_forecast_enabled,
     config_manager.config.get("time_zone", "UTC"),
 )
 
