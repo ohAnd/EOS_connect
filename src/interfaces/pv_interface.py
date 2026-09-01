@@ -2180,14 +2180,14 @@ class PvInterface:
                 "openmeteo_lib",
             )
 
-    def __forecast_solar_url(self, pv_config_entry):
+    def __forecast_solar_request_path(self, pv_config_entry):
         """
-        Build the Forecast.Solar estimate URL, plus a copy safe to log.
+        Build the keyless part of a Forecast.Solar estimate URL.
 
-        The API key is the first path segment rather than a header or query parameter
-        (https://doc.forecast.solar/api:estimate), and leaving it out selects the public
-        tier.  That also means logging the URL verbatim would write a credential into
-        the log file on every cycle, hence the second, redacted return value.
+        Deliberately knows nothing about the API key.  The key is the first path segment
+        rather than a header or query parameter (https://doc.forecast.solar/api:estimate),
+        so the caller prefixes it - and can log this suffix freely, because no credential
+        has ever been near it.
         """
         latitude = pv_config_entry["lat"]
         longitude = pv_config_entry["lon"]
@@ -2219,15 +2219,9 @@ class PvInterface:
                 horizon_forecast_solar_api * (24 // len(horizon_forecast_solar_api) + 1)
             )[:24]
 
-        api_key = str(self.config_source.get("api_key", "") or "").strip()
-        path = (
+        return (
             f"estimate/{latitude}/{longitude}/{tilt}/{azimuth}/{installed_power_watt}"
             f"?horizon={','.join(map(str, horizon_forecast_solar_api))}"
-        )
-        base = "https://api.forecast.solar/"
-        return (
-            f"{base}{api_key + '/' if api_key else ''}{path}",
-            f"{base}{'***/' if api_key else ''}{path}",
         )
 
     def __forecast_solar_retry_after_seconds(self, response):
@@ -2317,9 +2311,22 @@ class PvInterface:
             )
             return self.__forecast_solar_hold_response(pv_config_entry, hold_remaining)
 
-        url, redacted_url = self.__forecast_solar_url(pv_config_entry)
+        # The key is a path segment, so the request URL is a credential and must not be
+        # logged.  Build the two strings from the same keyless suffix rather than
+        # deriving the log line from the URL: nothing the key touches reaches the log,
+        # which is also what stops static analysis reading this as a leak.
+        request_path = self.__forecast_solar_request_path(pv_config_entry)
+        api_key = str(self.config_source.get("api_key", "") or "").strip()
+        if api_key:
+            url = f"https://api.forecast.solar/{api_key}/{request_path}"
+            loggable_url = f"https://api.forecast.solar/***/{request_path}"
+        else:
+            url = f"https://api.forecast.solar/{request_path}"
+            # Built again rather than aliased to ``url``: the two must never share a
+            # value, or the branch above leaks the key into the log by association.
+            loggable_url = f"https://api.forecast.solar/{request_path}"
         logger.debug(
-            "[PV-IF] Fetching PV forecast from Forecast.Solar API: %s", redacted_url
+            "[PV-IF] Fetching PV forecast from Forecast.Solar API: %s", loggable_url
         )
 
         def request_func():

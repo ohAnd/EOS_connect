@@ -152,15 +152,35 @@ def test_api_key_is_read_from_the_source_config_not_the_installation(monkeypatch
 
 
 def test_api_key_is_never_logged(monkeypatch, caplog):
-    """The key sits in the path, so the debug URL must be redacted."""
+    """
+    The key sits in the URL path, so the request carries it and the log must not.
+    Both halves are asserted together: that divergence is the whole point.
+    """
     pv = _make_pv(api_key="SECRETKEY123")
-    _capture_urls(monkeypatch, _MockResponse(payload=_success_payload()))
+    urls = _capture_urls(monkeypatch, _MockResponse(payload=_success_payload()))
 
     with caplog.at_level(logging.DEBUG, logger="__main__"):
         pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
 
+    assert "SECRETKEY123" in urls[0]
     assert "SECRETKEY123" not in caplog.text
     assert "https://api.forecast.solar/***/estimate/" in caplog.text
+
+
+def test_nothing_logged_at_all_carries_the_key(monkeypatch, caplog):
+    """
+    Belt and braces across every log level, including the error paths: no record
+    emitted by a Forecast.Solar cycle may contain the credential.
+    """
+    pv = _make_pv(api_key="SECRETKEY123")
+    _capture_urls(monkeypatch, _MockResponse(status_code=429))
+
+    with caplog.at_level(logging.DEBUG, logger="__main__"):
+        pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
+        pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
+
+    assert "SECRETKEY123" not in caplog.text
+    assert "SECRETKEY123" not in str(pv.pv_forcast_request_error)
 
 
 def test_blank_api_key_is_treated_as_absent(monkeypatch):
