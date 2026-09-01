@@ -1514,18 +1514,26 @@
       "default": "",
       "section": "pv_forecast_source",
       "level": "getting_started",
-      "description": "API key for Solcast or Victron (required when using those providers)",
+      "description": "API key for the forecast provider",
       "labels": [],
       "help_url": "configuration.html#pv-forecast",
       "validation": {},
       "depends_on": {
         "pv_forecast_source.source": [
           "solcast",
-          "victron"
+          "victron",
+          "forecast_solar"
         ]
       },
       "hot_reload": true,
-      "display_group": "Provider"
+      "display_group": "Provider",
+      "description_map": {
+        "pv_forecast_source.source": {
+          "solcast": "Solcast API key (required)",
+          "victron": "Victron VRM API token (required)",
+          "forecast_solar": "Forecast.Solar API key (optional) - the public tier allows 12 requests/hour per IP address; a Personal or Professional key raises that quota and meters it against the key instead"
+        }
+      }
     },
     {
       "key": "pv_forecast_source.resource_id",

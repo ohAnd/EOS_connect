@@ -174,3 +174,40 @@ class TestConfigSchema:
         for field in [charge_from_grid, avoid_discharge, discharge_allowed]:
             assert "restart_required" in field.labels
 
+
+
+class TestPvForecastApiKey:
+    """The shared api_key field also serves Forecast.Solar (issue #288)."""
+
+    def setup_method(self):
+        """Create a fresh schema instance for each test."""
+        self.schema = ConfigSchema()
+
+    def test_api_key_is_offered_for_forecast_solar(self):
+        """Forecast.Solar takes a key as its first URL path segment, so expose it."""
+        field = self.schema.get("pv_forecast_source.api_key")
+        sources = field.depends_on["pv_forecast_source.source"]
+        assert set(sources) == {"solcast", "victron", "forecast_solar"}
+
+    def test_api_key_stays_a_password_field(self):
+        """It is a credential for every source that uses it."""
+        assert self.schema.get("pv_forecast_source.api_key").field_type == "password"
+
+    def test_api_key_is_not_required_for_forecast_solar(self):
+        """The public tier works without one, so the field must stay optional."""
+        field = self.schema.get("pv_forecast_source.api_key")
+        assert not (field.validation or {}).get("required")
+
+    def test_description_is_resolved_per_source(self):
+        """Each provider gets wording that says whether the key is required."""
+        resolve = self.schema.get_resolved_description
+        solcast = resolve(
+            "pv_forecast_source.api_key", {"pv_forecast_source.source": "solcast"}
+        )
+        forecast_solar = resolve(
+            "pv_forecast_source.api_key",
+            {"pv_forecast_source.source": "forecast_solar"},
+        )
+        assert "required" in solcast.lower()
+        assert "optional" in forecast_solar.lower()
+        assert forecast_solar != solcast

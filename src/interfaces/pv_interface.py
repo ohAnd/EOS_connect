@@ -61,6 +61,30 @@ TEMP_REFRESH_INTERVAL_S = 3600
 TEMP_MAX_RETRIES = 2
 TEMP_RETRY_DELAY_S = 2
 
+# Forecast.Solar meters requests per "zone" - the caller's IP address, or the API key
+# once one is configured - and the public tier allows 12 per hour.  Their own guidance
+# is blunt about the failure mode: "If you ignore the 'retry at' timestamp and call over
+# and over again, you get an infinite 429 loop."  These bound the pause we take after a
+# 429 when the response does not tell us how long to wait, or tells us something absurd.
+FORECAST_SOLAR_DEFAULT_HOLD_S = 3600  # the public tier's own period
+FORECAST_SOLAR_MIN_HOLD_S = 60
+FORECAST_SOLAR_MAX_HOLD_S = 2 * 3600
+
+
+class _ForecastSolarRateLimit(Exception):
+    """
+    A 429 from Forecast.Solar, raised so it escapes ``_retry_request`` untouched.
+
+    Deliberately not a ``RequestException``: that is one of the families
+    ``_retry_request`` catches and retries three times, which is precisely how a single
+    rate-limited cycle used to turn into three more requests against a quota that was
+    already exhausted.  A plain ``Exception`` propagates on the first attempt.
+    """
+
+    def __init__(self, hold_seconds):
+        super().__init__(f"rate limited, holding off for {hold_seconds}s")
+        self.hold_seconds = hold_seconds
+
 
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_ANCHOR,
@@ -162,6 +186,9 @@ class PvInterface:
         self.max_failures = 24  # Max consecutive failures before using defaults
         # Monotonic timestamp of the last successful temperature fetch (None = never).
         self._last_temp_fetch = None
+        # When Forecast.Solar last said "429, come back later" - no request is made
+        # before it passes.  See ``_ForecastSolarRateLimit``.
+        self._forecast_solar_hold_until = None
 
         self._update_thread = None
         self._stop_event = threading.Event()
@@ -227,6 +254,19 @@ class PvInterface:
         elif source == "victron":
             self.update_interval = 15 * 60
             logger.info("[PV-IF] Using standard update interval for Victron: 15 minutes")
+        elif source == "forecast_solar":
+            # One request per plane per cycle, against a public tier that allows 12 per
+            # hour for the whole zone.  A flat 15 minutes meant three planes sat exactly
+            # on the ceiling before a single retry, so scale with the plane count and
+            # total traffic stays at four requests an hour whatever the array looks like.
+            installations = max(1, len(self.config) if self.config else 1)
+            self.update_interval = 15 * 60 * installations
+            logger.info(
+                "[PV-IF] Using update interval for Forecast.Solar: %d minutes"
+                " (%d installation(s), 4 requests/hour total)",
+                self.update_interval // 60,
+                installations,
+            )
         else:
             self.update_interval = 15 * 60
 
@@ -284,6 +324,10 @@ class PvInterface:
             self.consecutive_failures = 0
             self.consecutive_temp_failures = 0
             self._last_temp_fetch = None
+            # A reload is a deliberate user action, and adding or removing the API key
+            # moves us to a different quota zone, so an old hold no longer describes
+            # anything real.  It re-arms on the next 429 if we are still blocked.
+            self._forecast_solar_hold_until = None
 
             try:
                 self.__configure_update_interval()
@@ -2136,9 +2180,20 @@ class PvInterface:
                 "openmeteo_lib",
             )
 
-    def __get_pv_forecast_forecast_solar_api(self, pv_config_entry):
+    def __forecast_solar_request_path(self, pv_config_entry):
         """
-        Fetches PV forecast from Forecast.Solar API.
+        Build the keyless part of a Forecast.Solar estimate URL, and a loggable twin.
+
+        Two things must never reach the log here.  The API key, because it is the first
+        path segment rather than a header or query parameter
+        (https://doc.forecast.solar/api:estimate) - that one the caller prefixes, so it
+        is not this function's problem.  And the coordinates, which are the user's home
+        address to within metres: the bug reporter offers to paste recent log lines into
+        a public GitHub issue, so a debug line carrying them is a real disclosure.
+
+        Returns ``(path, loggable_path)``.  The second is built from the same parameters
+        minus latitude and longitude, so everything that helps diagnose a malformed
+        request survives and nothing private does.
         """
         latitude = pv_config_entry["lat"]
         longitude = pv_config_entry["lon"]
@@ -2170,27 +2225,167 @@ class PvInterface:
                 horizon_forecast_solar_api * (24 // len(horizon_forecast_solar_api) + 1)
             )[:24]
 
-        url = (
-            f"https://api.forecast.solar/estimate/"
-            f"{latitude}/{longitude}/{tilt}/{azimuth}/{installed_power_watt}"
+        parameters = (
+            f"{tilt}/{azimuth}/{installed_power_watt}"
             f"?horizon={','.join(map(str, horizon_forecast_solar_api))}"
         )
-        logger.debug("[PV-IF] Fetching PV forecast from Forecast.Solar API: %s", url)
+        return (
+            f"estimate/{latitude}/{longitude}/{parameters}",
+            f"estimate/<lat>/<lon>/{parameters}",
+        )
+
+    def __forecast_solar_retry_after_seconds(self, response):
+        """
+        How long to stay off Forecast.Solar after the 429 it just returned.
+
+        Reads the most specific answer the response offers and falls back to the public
+        tier's own period.  Everything is defensive: a malformed 429 body must not raise
+        out of the error path, because the whole point is to stop calling.
+        """
+        candidates = []
+
+        headers = getattr(response, "headers", None) or {}
+        for header in ("Retry-After", "X-Ratelimit-Reset"):
+            try:
+                candidates.append(int(float(headers.get(header))))
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            ratelimit = response.json().get("message", {}).get("ratelimit", {})
+        except (ValueError, TypeError, AttributeError):
+            ratelimit = {}
+
+        retry_at = ratelimit.get("retry-at") if isinstance(ratelimit, dict) else None
+        if retry_at:
+            try:
+                target = datetime.fromisoformat(str(retry_at).replace("Z", "+00:00"))
+                now = datetime.now(target.tzinfo) if target.tzinfo else datetime.now()
+                candidates.append(int((target - now).total_seconds()))
+            except (ValueError, TypeError):
+                pass
+
+        if isinstance(ratelimit, dict):
+            try:
+                candidates.append(int(float(ratelimit.get("reset"))))
+            except (TypeError, ValueError):
+                pass
+
+        usable = [c for c in candidates if c > 0]
+        hold = usable[0] if usable else FORECAST_SOLAR_DEFAULT_HOLD_S
+        return max(FORECAST_SOLAR_MIN_HOLD_S, min(FORECAST_SOLAR_MAX_HOLD_S, hold))
+
+    def __forecast_solar_hold_remaining(self):
+        """Seconds left on an active Forecast.Solar rate-limit hold; 0 when clear."""
+        if self._forecast_solar_hold_until is None:
+            return 0
+        remaining = (self._forecast_solar_hold_until - datetime.now()).total_seconds()
+        if remaining <= 0:
+            self._forecast_solar_hold_until = None
+            return 0
+        return int(remaining)
+
+    def __forecast_solar_hold_response(self, pv_config_entry, hold_seconds):
+        """
+        Report the rate-limit hold and hand back the cached forecast.
+
+        Deliberately does not touch ``consecutive_failures``: waiting out a quota we
+        were told to wait out is not a failed fetch, and counting it as one would burn
+        through ``max_failures`` and discard the very cache the hold exists to protect.
+        """
+        self.pv_forcast_request_error.update(
+            {
+                "error": "rate_limit",
+                "timestamp": datetime.now().isoformat(),
+                "message": (
+                    "Forecast.Solar rate limit reached - no further requests for "
+                    f"{hold_seconds}s. The public tier allows 12 requests/hour per IP; "
+                    "an API key (Settings -> PV Source) raises that quota."
+                ),
+                "config_entry": pv_config_entry,
+                "source": "forecast_solar",
+            }
+        )
+        return list(self.last_successful_pv_forecast)
+
+    def __get_pv_forecast_forecast_solar_api(self, pv_config_entry):
+        """
+        Fetches PV forecast from Forecast.Solar API.
+        """
+        hold_remaining = self.__forecast_solar_hold_remaining()
+        if hold_remaining > 0:
+            logger.warning(
+                "[PV-IF] Forecast.Solar rate limit still active - skipping this request"
+                " for another %d s. Calling again earlier only renews the block.",
+                hold_remaining,
+            )
+            return self.__forecast_solar_hold_response(pv_config_entry, hold_remaining)
+
+        # The request URL carries both the API key (first path segment) and the user's
+        # coordinates, so it is never logged as-is.  ``loggable_path`` is built without
+        # the coordinates, and the key is masked here; the two strings are kept separate
+        # all the way to the sink so nothing private has a route into the log.
+        request_path, loggable_path = self.__forecast_solar_request_path(pv_config_entry)
+        api_key = str(self.config_source.get("api_key", "") or "").strip()
+        if api_key:
+            url = f"https://api.forecast.solar/{api_key}/{request_path}"
+            loggable_url = f"https://api.forecast.solar/***/{loggable_path}"
+        else:
+            url = f"https://api.forecast.solar/{request_path}"
+            loggable_url = f"https://api.forecast.solar/{loggable_path}"
+        logger.debug(
+            "[PV-IF] Fetching PV forecast from Forecast.Solar API for '%s': %s",
+            pv_config_entry.get("name", "unnamed"),
+            loggable_url,
+        )
 
         def request_func():
             response = requests.get(url, timeout=5)
+            if response.status_code == 429:
+                raise _ForecastSolarRateLimit(
+                    self.__forecast_solar_retry_after_seconds(response)
+                )
+            if response.status_code in (401, 403):
+                raise requests.exceptions.RequestException("auth_error")
             response.raise_for_status()
             return response
 
         def error_handler(error_type, exception):
+            if str(exception) == "auth_error":
+                message = (
+                    "Forecast.Solar rejected the API key - check api_key in"
+                    " Settings -> PV Source, or clear it to use the public tier"
+                )
+            else:
+                message = f"Forecast.Solar API error: {exception}"
             return self._handle_interface_error(
                 error_type,
-                f"Forecast.Solar API error: {exception}",
+                message,
                 pv_config_entry,
                 "forecast_solar",
             )
 
-        response = self._retry_request(request_func, error_handler)
+        try:
+            response = self._retry_request(request_func, error_handler)
+        except _ForecastSolarRateLimit as exc:
+            self._forecast_solar_hold_until = datetime.now() + timedelta(
+                seconds=exc.hold_seconds
+            )
+            logger.error(
+                "[PV-IF] Forecast.Solar returned 429 - pausing requests for %d s.",
+                exc.hold_seconds,
+            )
+            # Once, as the hold is armed.  The skip path below is silent about the
+            # background because it runs every cycle until the hold expires.
+            self._log_error_diagnostics("rate_limit", "forecast_solar")
+            return self.__forecast_solar_hold_response(pv_config_entry, exc.hold_seconds)
+
+        # _retry_request hands back the error handler's fallback - a forecast list -
+        # when every attempt failed.  Without this the list fell through to .json()
+        # below, raised AttributeError, and ran the error handler a second time,
+        # counting one failed cycle twice against max_failures.
+        if isinstance(response, list):
+            return response
 
         def json_func():
             data = response.json()
@@ -3159,6 +3354,16 @@ class PvInterface:
                     "[PV-IF] Timeseries endpoint returned unexpected data - "
                     "verify data_url and data_path in Settings > PV Source"
                 )
+
+        if source == "forecast_solar" and error_type == "rate_limit":
+            logger.error(
+                "[PV-IF] Forecast.Solar quota is metered per IP address, or per API key"
+                " once one is set. The public tier allows 12 requests/hour and EOS"
+                " Connect spends one per PV installation per cycle. Add an API key in"
+                " Settings > PV Source to raise the quota, or reduce the number of"
+                " installations. Requests stay paused until the reported retry time"
+                " passes - retrying sooner only restarts the block."
+            )
 
         logger.debug(
             "[PV-IF] Available PV sources: %s (current: %s, consecutive_failures: %d/%d)",

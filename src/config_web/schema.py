@@ -1234,10 +1234,26 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="pv_forecast_source",
         level="getting_started",
-        description="API key for Solcast or Victron (required when using those providers)",
+        description="API key for the forecast provider",
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
-        depends_on={"pv_forecast_source.source": ["solcast", "victron"]},
+        # Forecast.Solar is the odd one out: it works without a key on the public tier,
+        # so the key is offered but never required.  Solcast and Victron cannot fetch
+        # anything without one.
+        description_map={
+            "pv_forecast_source.source": {
+                "solcast": "Solcast API key (required)",
+                "victron": "Victron VRM API token (required)",
+                "forecast_solar": (
+                    "Forecast.Solar API key (optional) - the public tier allows 12 "
+                    "requests/hour per IP address; a Personal or Professional key "
+                    "raises that quota and meters it against the key instead"
+                ),
+            }
+        },
+        depends_on={
+            "pv_forecast_source.source": ["solcast", "victron", "forecast_solar"]
+        },
         display_group="Provider",
     ),
     FieldDef(

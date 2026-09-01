@@ -3416,7 +3416,7 @@ price:
                                 <code>akkudoktor</code> - Akkudoktor API<br>
                                 <code>openmeteo</code> - Open-Meteo<br>
                                 <code>openmeteo_local</code> - Open-Meteo with local shading<br>
-                                <code>forecast_solar</code> - Forecast.Solar<br>
+                                <code>forecast_solar</code> - Forecast.Solar (see the rate-limit note below)<br>
                                 <code>evcc</code> - EVCC integration<br>
                                 <code>solcast</code> - Solcast<br>
                                 <code>victron</code> - Victron VRM API<br>
@@ -3431,6 +3431,22 @@ price:
                             <td><code>default</code></td>
                         </tr>
                     </table>
+
+                    <div class="alert alert-warning" style="margin-top: 1rem;">
+                        <strong><i class="fas fa-exclamation-triangle"></i> Forecast.Solar request
+                        budget:</strong> Forecast.Solar meters requests per <em>zone</em> &mdash; your IP
+                        address, or your API key once one is configured &mdash; and the public tier allows
+                        <strong>12 requests per hour</strong>. EOS Connect spends one request per PV
+                        installation per update cycle, so the update interval scales with the number of
+                        installations: 15 minutes for one, 30 for two, 45 for three, and so on. That holds
+                        total traffic at four requests per hour whatever your array looks like.
+                        <br><br>
+                        If the API does return <code>429 Too Many Requests</code>, EOS Connect stops calling
+                        until the retry time it reports has passed, and serves the cached forecast meanwhile.
+                        Retrying sooner only restarts the block, which is why a rate-limited setup used to
+                        appear permanently stuck. Set <code>pv_forecast_source.api_key</code> below to raise
+                        the quota.
+                    </div>
 
                     <div class="alert alert-info" style="margin-top: 1rem;">
                         <strong><i class="fas fa-info-circle"></i> PV Installations Configuration:</strong> Only
@@ -3529,11 +3545,13 @@ price:
                         </tr>
                         <tr>
                             <th>Description</th>
-                            <td>API key for authentication (used by Solcast and Victron VRM)</td>
+                            <td>API key for authentication (used by Solcast, Victron VRM and Forecast.Solar)</td>
                         </tr>
                         <tr>
                             <th>Required</th>
-                            <td>Yes, when source is <code>solcast</code> or <code>victron</code></td>
+                            <td>Yes, when source is <code>solcast</code> or <code>victron</code>.
+                                Optional for <code>forecast_solar</code> &mdash; that source works without
+                                a key on the public tier.</td>
                         </tr>
                         <tr>
                             <th>Notes</th>
@@ -3541,7 +3559,17 @@ price:
                                 <strong>Solcast:</strong> Obtain from <a href="https://solcast.com/"
                                     target="_blank">solcast.com</a>. Free accounts limited to 10 calls/day.<br>
                                 <strong>Victron:</strong> Generate in VRM portal (Preferences → API tokens). Requires
-                                "Dynamic ESS" configured in VRM portal.
+                                "Dynamic ESS" configured in VRM portal.<br>
+                                <strong>Forecast.Solar:</strong> Optional. Obtain from
+                                <a href="https://forecast.solar/" target="_blank">forecast.solar</a>. Without a key
+                                the public tier applies: <strong>12 requests per hour, counted per IP address</strong>.
+                                With a key the quota is counted against the key instead, and Personal
+                                (2 planes) or Professional (3&ndash;4 planes) accounts allow more.
+                                The key is sent as the first path segment of the request URL.
+                                Neither the key nor your coordinates appear in the debug log &mdash;
+                                it shows <code>.../***/estimate/&lt;lat&gt;/&lt;lon&gt;/...</code>, so a log
+                                excerpt attached to a bug report carries neither your credential nor
+                                your address.
                             </td>
                         </tr>
                     </table>
