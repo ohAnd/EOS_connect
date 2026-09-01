@@ -167,6 +167,27 @@ def test_api_key_is_never_logged(monkeypatch, caplog):
     assert "https://api.forecast.solar/***/estimate/" in caplog.text
 
 
+def test_coordinates_are_never_logged(monkeypatch, caplog):
+    """
+    The coordinates are the user's home address to within metres, and the bug reporter
+    offers to paste recent log lines into a public GitHub issue. The request must carry
+    them; the log must not.
+    """
+    pv = _make_pv()
+    urls = _capture_urls(monkeypatch, _MockResponse(payload=_success_payload()))
+
+    with caplog.at_level(logging.DEBUG, logger="__main__"):
+        pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
+
+    assert "50.0/8.0" in urls[0]
+    assert "50.0" not in caplog.text
+    assert "8.0" not in caplog.text
+    assert "estimate/<lat>/<lon>/" in caplog.text
+    # The parameters that actually help diagnose a bad request still survive.
+    assert "/30/0/5.0?horizon=" in caplog.text
+    assert "roof0" in caplog.text
+
+
 def test_nothing_logged_at_all_carries_the_key(monkeypatch, caplog):
     """
     Belt and braces across every log level, including the error paths: no record
@@ -181,6 +202,8 @@ def test_nothing_logged_at_all_carries_the_key(monkeypatch, caplog):
 
     assert "SECRETKEY123" not in caplog.text
     assert "SECRETKEY123" not in str(pv.pv_forcast_request_error)
+    assert "50.0" not in caplog.text
+    assert "8.0" not in caplog.text
 
 
 def test_blank_api_key_is_treated_as_absent(monkeypatch):
