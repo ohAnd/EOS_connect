@@ -1,7 +1,13 @@
 import pytest
 from datetime import datetime, timedelta
 
-from src.interfaces.pv_autoscaler import PvAutoscaler
+from src.interfaces.pv_autoscaler import (
+    PvAutoscaler,
+    TIMEFRAME_IDS,
+    TIMEFRAME_START_HOURS,
+    timeframe_end_hour,
+    timeframe_for_hour,
+)
 
 
 class InMemoryPvYieldStore:
@@ -12,12 +18,11 @@ class InMemoryPvYieldStore:
     def get_latest_record(self):
         return self.rows[-1] if self.rows else None
 
-    def insert_hourly_record(self, timestamp, date, hour, timeframe_id, real_counter_kwh, real_delta_kwh, forecast_kwh):
+    def insert_hourly_record(self, timestamp, date, hour, real_counter_kwh, real_delta_kwh, forecast_kwh):
         self.rows.append({
             "timestamp": timestamp,
             "date": date,
             "hour": hour,
-            "timeframe_id": timeframe_id,
             "real_counter_kwh": real_counter_kwh,
             "real_delta_kwh": real_delta_kwh,
             "forecast_kwh": forecast_kwh,
@@ -38,7 +43,7 @@ def make_rows_for_days(start_date: datetime, days: int):
         date_str = day.strftime("%Y-%m-%d")
         # timeframe 1: hours 0-5 -> no PV (0)
         for h in range(0, 24):
-            tf = (h // 6) + 1
+            tf = timeframe_for_hour(h)
             # simulate PV: only TF 2 and 3 have production
             if tf in (2, 3):
                 # let's set real_delta_kwh = 4.8 and forecast_kwh = 6 kWh
@@ -46,7 +51,6 @@ def make_rows_for_days(start_date: datetime, days: int):
                     "timestamp": f"{date_str}T{h:02d}:00:00",
                     "date": date_str,
                     "hour": h,
-                    "timeframe_id": tf,
                     "real_counter_kwh": None,
                     "real_delta_kwh": 4.8,
                     "forecast_kwh": 6.0,
@@ -56,7 +60,6 @@ def make_rows_for_days(start_date: datetime, days: int):
                     "timestamp": f"{date_str}T{h:02d}:00:00",
                     "date": date_str,
                     "hour": h,
-                    "timeframe_id": tf,
                     "real_counter_kwh": None,
                     "real_delta_kwh": 0.0,
                     "forecast_kwh": 0,
@@ -89,19 +92,19 @@ def test_compute_timeframe_scaling_factors_and_apply_scaling():
 
     # Apply scaling to a simple forecast array of 24 hourly values (kWh)
     forecast = [0.0] * 24
-    # Set some values for TF2 hours (6-11) and TF3 hours (12-17)
-    for h in range(6, 12):
+    tf2, tf3 = TIMEFRAME_START_HOURS[1], TIMEFRAME_START_HOURS[2]
+    for h in range(tf2, timeframe_end_hour(2)):
         forecast[h] = 6.0
-    for h in range(12, 18):
+    for h in range(tf3, timeframe_end_hour(3)):
         forecast[h] = 6.0
 
     scaled = autoscaler.apply_scaling(forecast, time_frame_base=3600)
     # TF2 hours should be scaled to 6 * 0.8 = 4.8 -> rounded to 4.8 (one decimal)
-    assert scaled[6] == 4.8
-    assert scaled[11] == 4.8
+    assert scaled[tf2] == 4.8
+    assert scaled[timeframe_end_hour(2) - 1] == 4.8
     # TF3 hours likewise
-    assert scaled[12] == 4.8
-    assert scaled[17] == 4.8
+    assert scaled[tf3] == 4.8
+    assert scaled[timeframe_end_hour(3) - 1] == 4.8
 
     # Status reflects enabled and total hours recorded
     status = autoscaler.get_status()
@@ -119,20 +122,20 @@ def test_compute_with_insufficient_data_uses_neutral():
 
 
 def _day_rows(date_str, tf2_actual, tf2_forecast):
-    """One day of rows with production only in timeframe 2 (hours 6-11)."""
+    """One day of rows with production only in timeframe 2."""
     rows = []
+    width = timeframe_end_hour(2) - TIMEFRAME_START_HOURS[1]
     for hour in range(24):
-        in_tf2 = 6 <= hour < 12
+        in_tf2 = timeframe_for_hour(hour) == 2
         rows.append(
             {
                 "timestamp": f"{date_str}T{hour:02d}:00:00+00:00",
                 "date": date_str,
                 "hour": hour,
-                "timeframe_id": (hour // 6) + 1,
                 "real_counter_kwh": None,
-                "real_delta_kwh": (tf2_actual / 6.0) if in_tf2 else 0.0,
+                "real_delta_kwh": (tf2_actual / width) if in_tf2 else 0.0,
                 "forecast_kwh": (
-                    (tf2_forecast / 6.0) if in_tf2 and tf2_forecast is not None else
+                    (tf2_forecast / width) if in_tf2 and tf2_forecast is not None else
                     (None if in_tf2 else 0.0)
                 ),
                 "local_date": date_str,
@@ -259,9 +262,67 @@ def test_apply_scaling_maps_slots_to_timeframes_at_15min_resolution():
     scaled = autoscaler.apply_scaling([10.0] * 96, time_frame_base=900)
 
     assert scaled[0] == 10.0        # 00:00 -> timeframe 1
-    assert scaled[24] == 20.0       # 06:00 -> timeframe 2
+    assert scaled[32] == 20.0       # 08:00 -> timeframe 2
     assert scaled[48] == 30.0       # 12:00 -> timeframe 3
-    assert scaled[72] == 40.0       # 18:00 -> timeframe 4
+    assert scaled[64] == 40.0       # 16:00 -> timeframe 4
+    # The last slot of each block still carries that block's factor.
+    assert scaled[31] == 10.0       # 07:45
+    assert scaled[95] == 40.0       # 23:45
+
+
+def test_timeframe_boundaries_partition_the_whole_day():
+    """
+    The boundaries follow PV delivery, not a flat grid - pin them explicitly.
+
+    A silent re-cut would rescale every forecast against factors learnt for different
+    hours, which no other assertion here would catch.
+    """
+    assert TIMEFRAME_START_HOURS == (0, 8, 12, 16)
+    assert [timeframe_for_hour(h) for h in (0, 7)] == [1, 1]
+    assert [timeframe_for_hour(h) for h in (8, 11)] == [2, 2]
+    assert [timeframe_for_hour(h) for h in (12, 15)] == [3, 3]
+    assert [timeframe_for_hour(h) for h in (16, 23)] == [4, 4]
+
+    # Every hour lands in exactly one block, and the blocks cover the day end to end.
+    assert sorted({timeframe_for_hour(h) for h in range(24)}) == list(TIMEFRAME_IDS)
+    assert timeframe_end_hour(TIMEFRAME_IDS[-1]) == 24
+    for tf in TIMEFRAME_IDS[:-1]:
+        assert timeframe_end_hour(tf) == TIMEFRAME_START_HOURS[tf]
+
+
+def test_timeframe_ids_derive_from_the_boundaries():
+    """The count is not hardcoded, so a future re-partition needs one edit, not five."""
+    assert TIMEFRAME_IDS == tuple(range(1, len(TIMEFRAME_START_HOURS) + 1))
+
+
+def test_normalize_row_buckets_by_hour_not_by_a_stored_timeframe():
+    """
+    A stale ``timeframe_id`` from a pre-change database must not survive.
+
+    It was persisted under the old 6-hour grid; honouring it would score measured yield
+    against a block it never belonged to, and nothing would report an error.
+    """
+    row = {
+        "local_date": "2026-08-19",
+        "local_hour": 9,
+        "timeframe_id": 2,       # under the old grid hour 9 was still block 2 - but
+        "real_delta_kwh": 1.0,   # hour 14 below was block 3, and is now block 3 too,
+        "forecast_kwh": 1.0,     # so use an hour where the two schemes disagree.
+    }
+    assert PvAutoscaler._normalize_row(row)["timeframe"] == 2
+
+    row = {**row, "local_hour": 7, "timeframe_id": 2}   # old grid said 2, new says 1
+    assert PvAutoscaler._normalize_row(row)["timeframe"] == 1
+
+    row = {**row, "local_hour": 16, "timeframe_id": 3}  # old grid said 3, new says 4
+    assert PvAutoscaler._normalize_row(row)["timeframe"] == 4
+
+
+def test_normalize_row_drops_a_row_with_no_usable_hour():
+    """Scoring an unplaceable row under an arbitrary block would corrupt that factor."""
+    assert PvAutoscaler._normalize_row(
+        {"local_date": "2026-08-19", "local_hour": None, "hour": None}
+    ) is None
 
 
 def test_update_config_recomputes_and_toggles_collection():
@@ -454,21 +515,24 @@ def test_dropping_below_min_hours_refreshes_the_scaled_forecast():
     autoscaler = _autoscaler(store, today="2026-08-20", min_data_hours_required=1)
     assert autoscaler.get_scale_factors()[2] == 0.8
 
+    # All the yield sits inside timeframe 2, so only its factor moves the total.
+    tf2_hours = range(TIMEFRAME_START_HOURS[1], timeframe_end_hour(2))
     raw = [0.0] * 24
-    for hour in range(6, 12):
+    for hour in tf2_hours:
         raw[hour] = 1000.0
+    unscaled = 1000.0 * len(tf2_hours)
     pv = FakePvInterfaceForRefresh(autoscaler, raw)
     autoscaler.set_pv_interface(pv)
-    assert sum(pv.pv_forcast_array) == pytest.approx(4800.0)
+    assert sum(pv.pv_forcast_array) == pytest.approx(unscaled * 0.8)
 
     # Now the same store no longer clears the bar, so the factors go neutral.
     autoscaler.min_data_hours_required = 999
     autoscaler.compute_timeframe_scaling_factors()
 
-    assert autoscaler.get_scale_factors() == {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0}
+    assert autoscaler.get_scale_factors() == {tf: 1.0 for tf in TIMEFRAME_IDS}
     assert pv.refresh_calls == 1
     # The served array must match the factors the UI reports, not the old 0.8.
-    assert sum(pv.pv_forcast_array) == pytest.approx(6000.0)
+    assert sum(pv.pv_forcast_array) == pytest.approx(unscaled)
 
 
 def test_unchanged_factors_do_not_refresh_the_forecast():

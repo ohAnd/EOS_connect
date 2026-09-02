@@ -11,12 +11,11 @@ class InMemoryPvYieldStore:
     def get_latest_record(self):
         return self.rows[-1] if self.rows else None
 
-    def insert_hourly_record(self, timestamp, date, hour, timeframe_id, real_counter_kwh, real_delta_kwh, forecast_kwh, local_date=None, local_hour=None, local_offset_minutes=None):
+    def insert_hourly_record(self, timestamp, date, hour, real_counter_kwh, real_delta_kwh, forecast_kwh, local_date=None, local_hour=None, local_offset_minutes=None):
         self.rows.append({
             "timestamp": timestamp,
             "date": date,
             "hour": hour,
-            "timeframe_id": timeframe_id,
             "real_counter_kwh": real_counter_kwh,
             "real_delta_kwh": real_delta_kwh,
             "forecast_kwh": forecast_kwh,
@@ -63,7 +62,6 @@ def _seed(store, hours_ago=1, counter=100.0, now=FIXED_NOW):
         "timestamp": when.isoformat(),
         "date": when.strftime("%Y-%m-%d"),
         "hour": when.hour,
-        "timeframe_id": (when.hour // 6) + 1,
         "real_counter_kwh": counter,
         "real_delta_kwh": None,
         "forecast_kwh": None,

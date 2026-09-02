@@ -42,7 +42,7 @@ from interfaces.update_checker import UpdateChecker
 from interfaces.inverters import create_inverter
 from interfaces.inverters.null_inverter import NullInverter
 from interfaces.inverters.evcc_inverter import EvccInverter
-from interfaces.pv_autoscaler import PvAutoscaler
+from interfaces.pv_autoscaler import PvAutoscaler, TIMEFRAME_IDS, timeframe_bounds
 from config_web import ConfigWebModule
 
 # Check Python version early
@@ -2285,7 +2285,7 @@ def get_pv_autoscaling_status():
         # Every field has a usable default so a failure in any one section degrades to a
         # partial response instead of taking the whole statistics overlay down with a 500.
         status = {"enabled": False}
-        computed_factors = {"1": 1.0, "2": 1.0, "3": 1.0, "4": 1.0}
+        computed_factors = {str(tf): 1.0 for tf in TIMEFRAME_IDS}
         aggregated = {"days": [], "summary_by_timeframe": {}}
         todays_partial = {}
 
@@ -2347,6 +2347,9 @@ def get_pv_autoscaling_status():
                 "computed_scale_factors": computed_factors,
                 "todays_partial_data": todays_partial,
                 "aggregated_history": aggregated,
+                # The partitioning is defined once, in the autoscaler. Serving it here
+                # keeps the UI from hardcoding a second copy of the block boundaries.
+                "timeframe_bounds": timeframe_bounds(),
                 "current_forecast_array_scaled": current_forecast_array,
                 "current_forecast_array_raw": current_forecast_array_raw,
                 "current_forecast_array_unit": "Wh per forecast slot",

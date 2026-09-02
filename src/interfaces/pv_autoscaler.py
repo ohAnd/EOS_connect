@@ -25,10 +25,20 @@ from .state_source import fetch_remote_state
 
 logger = logging.getLogger("__main__")
 
-# The day is partitioned into four equal timeframes (00-05, 06-11, 12-17, 18-23),
-# each of which gets its own scale factor.
-TIMEFRAME_HOURS = 6
-TIMEFRAME_IDS = (1, 2, 3, 4)
+# The day is partitioned into timeframes by the hour they start at, each of which gets
+# its own scale factor. The boundaries follow average PV delivery rather than a flat
+# 6-hour grid: the two 4-hour blocks straddle solar noon, isolating the errors that
+# dominate there (inverter AC clipping, midday over-forecast), while the 8-hour shoulders
+# each absorb one complete sun ramp, where horizon, shading and roof asymmetry bite. On a
+# flat grid 00-06 was night year-round and 18-24 only produced May-August, so half the
+# factors stayed neutral. Night hours cost nothing here: a scale factor is
+# sum(actual)/sum(forecast) over the block, and a dark hour adds 0 to both sides.
+#
+# This tuple is the only place the partitioning is defined. Nothing is persisted per
+# timeframe - `local_hour` is stored and the timeframe derived on read - so changing
+# these boundaries, or their number, needs no migration.
+TIMEFRAME_START_HOURS = (0, 8, 12, 16)
+TIMEFRAME_IDS = tuple(range(1, len(TIMEFRAME_START_HOURS) + 1))
 
 # Upper bound on gap reconstruction. A longer outage than this is not worth
 # back-filling: the evenly-distributed delta carries no real per-hour information
@@ -50,8 +60,31 @@ def _day_origin(origins: set) -> str:
 
 
 def timeframe_for_hour(hour: int) -> int:
-    """Return the timeframe id (1..4) that a local hour-of-day belongs to."""
-    return (int(hour) // TIMEFRAME_HOURS) + 1
+    """Return the timeframe id (1-based) that a local hour-of-day belongs to."""
+    return sum(1 for start in TIMEFRAME_START_HOURS if int(hour) % 24 >= start)
+
+
+def timeframe_end_hour(tf: int) -> int:
+    """Return the exclusive end hour of a timeframe: the next block's start, or 24."""
+    return TIMEFRAME_START_HOURS[tf] if tf < len(TIMEFRAME_START_HOURS) else 24
+
+
+def timeframe_label(tf: int) -> str:
+    """Render a timeframe as the wall-clock range it covers, e.g. "00:00 - 07:59"."""
+    return f"{TIMEFRAME_START_HOURS[tf - 1]:02d}:00 - {timeframe_end_hour(tf) - 1:02d}:59"
+
+
+def timeframe_bounds() -> List[Dict[str, Any]]:
+    """Describe every timeframe for the API, so the UI never hardcodes the partitioning."""
+    return [
+        {
+            "id": tf,
+            "start": TIMEFRAME_START_HOURS[tf - 1],
+            "end": timeframe_end_hour(tf),
+            "label": timeframe_label(tf),
+        }
+        for tf in TIMEFRAME_IDS
+    ]
 
 
 class PvAutoscaler:
@@ -102,7 +135,7 @@ class PvAutoscaler:
         self._last_error_ts: Optional[str] = None
         self._consecutive_failures: int = 0
 
-        # Cached scale factors (1..4)
+        # Cached scale factors, one per timeframe
         self._scale_factors: Dict[int, float] = {tf: 1.0 for tf in TIMEFRAME_IDS}
 
         # Background thread control
@@ -451,6 +484,9 @@ class PvAutoscaler:
                 # Reject an implausible 0.0 forecast for a daytime hour: it means the
                 # provider returned incomplete data rather than that no sun was
                 # predicted. Storing NULL keeps the day out of the ratio entirely.
+                # 6/18 is a "could the sun be up?" bracket, deliberately wider than any
+                # real sunrise/sunset - unrelated to TIMEFRAME_START_HOURS, which it
+                # merely used to coincide with. Do not sync the two.
                 if total_kwh > 0 or prev_hour_local < 6 or prev_hour_local >= 18:
                     forecast_kwh = float(total_kwh)
         except (TypeError, ValueError, IndexError, AttributeError):
@@ -471,14 +507,12 @@ class PvAutoscaler:
             self._previous_counter_kwh = current_counter
             # Record for PREVIOUS hour (delta represents generation during that
             # hour)
-            timeframe_id = timeframe_for_hour(prev_hour_local)
             try:
                 self._pv_yield_store.insert_hourly_record(
                     # Period start timestamp (e.g., 8:00:00 UTC for 8-9 period)
                     timestamp=utc_period_start.isoformat(),
                     date=prev_date_local,  # Local date for previous hour
                     hour=prev_hour_local,  # Local hour (when delta occurred)
-                    timeframe_id=timeframe_id,
                     real_counter_kwh=self._previous_counter_kwh,
                     real_delta_kwh=real_delta_kwh,
                     forecast_kwh=forecast_kwh,
@@ -530,8 +564,6 @@ class PvAutoscaler:
             )
             missed_hours = 1
 
-        timeframe_id = timeframe_for_hour(prev_hour_local)
-
         # Insert record(s) and purge old rows. If we missed multiple hours, create
         # historical rows distributing the measured delta evenly across the hours.
         try:
@@ -542,7 +574,6 @@ class PvAutoscaler:
                     timestamp=utc_period_start.isoformat(),
                     date=prev_date_local,  # Local date for previous hour
                     hour=prev_hour_local,  # Local hour (when delta occurred)
-                    timeframe_id=timeframe_id,
                     real_counter_kwh=current_counter,
                     real_delta_kwh=real_delta_kwh,
                     forecast_kwh=forecast_kwh,
@@ -578,7 +609,6 @@ class PvAutoscaler:
 
                     local_hour_i = local_ts_i.hour
                     local_date_i = local_ts_i.strftime("%Y-%m-%d")
-                    tf = timeframe_for_hour(local_hour_i)
 
                     # Calculate UTC offset for this hour (DST-aware)
                     try:
@@ -601,7 +631,6 @@ class PvAutoscaler:
                         timestamp=utc_ts_i.isoformat(),
                         date=local_date_i,  # Local date
                         hour=local_hour_i,  # Local hour
-                        timeframe_id=tf,
                         real_counter_kwh=real_counter_kwh_i,
                         real_delta_kwh=real_delta_kwh_i,
                         forecast_kwh=forecast_kwh_i,
@@ -696,30 +725,30 @@ class PvAutoscaler:
             hour = row.get("local_hour")
             if hour is None:
                 hour = row.get("hour")
-            timeframe = row.get("timeframe_id")
             real_delta = row.get("real_delta_kwh")
             forecast_kwh = row.get("forecast_kwh")
             origin = row.get("origin")
         else:
-            # row tuple: id, timestamp, date, hour, timeframe_id, real_counter_kwh,
-            # real_delta_kwh, forecast_kwh, created_at, local_date, local_hour,
-            # local_offset_minutes, origin
-            date = row[9] if len(row) > 9 and row[9] else row[2]
-            hour = row[10] if len(row) > 10 and row[10] is not None else row[3]
-            timeframe = row[4]
-            real_delta = row[6]
-            forecast_kwh = row[7]
-            origin = row[12] if len(row) > 12 else None
+            # row tuple: id, timestamp, date, hour, real_counter_kwh, real_delta_kwh,
+            # forecast_kwh, created_at, local_date, local_hour, local_offset_minutes,
+            # origin
+            date = row[8] if len(row) > 8 and row[8] else row[2]
+            hour = row[9] if len(row) > 9 and row[9] is not None else row[3]
+            real_delta = row[5]
+            forecast_kwh = row[6]
+            origin = row[11] if len(row) > 11 else None
 
         if date is None:
             return None
 
+        # The timeframe is always derived, never stored: that keeps the partitioning a
+        # runtime concern, so re-cutting the boundaries needs no data migration. A row
+        # whose hour is unusable cannot be placed in any block, and scoring it under an
+        # arbitrary one would corrupt that block's factor - drop it instead.
         try:
-            tf = int(timeframe) if timeframe is not None else timeframe_for_hour(hour)
+            tf = timeframe_for_hour(hour)
         except (TypeError, ValueError):
-            tf = 1
-        if tf not in TIMEFRAME_IDS:
-            tf = 1
+            return None
 
         return {
             "date": date,
@@ -792,7 +821,7 @@ class PvAutoscaler:
             logger.exception("[PV-AUTO] Could not refresh scaled forecast after factor change")
 
     def compute_timeframe_scaling_factors(self) -> Dict[int, float]:
-        """Compute scale factors for each timeframe (1..4) based on historical data."""
+        """Compute a scale factor per timeframe from the retained history."""
         rows = self._pv_yield_store.get_history_last_n_days(self.retention_days)
         if not rows:
             return self._scale_factors.copy()
