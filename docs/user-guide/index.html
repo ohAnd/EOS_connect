@@ -972,6 +972,20 @@ docker-compose up -d</code></pre>
                         <td>Sensor not in watts</td>
                         <td>Verify sensor unit is <strong>W</strong> (watts), not kW or other units</td>
                     </tr>
+                    <tr>
+                        <td><code>Akkudoktor API error for temperature: 500 Server Error</code></td>
+                        <td>The weather service behind <code>api.akkudoktor.net</code> is rate limiting it.
+                        The API does not pass the upstream status through &mdash; it reports every upstream
+                        fault as an HTTP 500 whose body reads
+                        <code>Request failed with status code 429</code>. The request itself is correct.</td>
+                        <td><strong>Nothing to fix.</strong> EOS Connect pauses its requests for 15 minutes
+                        and keeps serving the last good temperature curve, or a 15&nbsp;&deg;C default if it
+                        has none yet. The temperature forecast is an optional refinement for the EOS model,
+                        so the optimization keeps running either way. Set
+                        <code>eos.temperature_forecast_enabled: false</code> to opt out of the request
+                        entirely. The log names the upstream cause after <code>| upstream:</code> &mdash;
+                        a <code>429</code> there is transient, any other code is worth reporting.</td>
+                    </tr>
                 </tbody>
             </table>
 

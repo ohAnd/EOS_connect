@@ -457,7 +457,11 @@ def test_summarized_pv_forecast_scale_false_returns_unscaled_values():
 
 def test_api_error_triggers_fallback(monkeypatch):
     """
-    Test that an API error triggers fallback to default PV forecast.
+    Test that an API error with no cache yields nothing to serve.
+
+    The empty list is what makes the update loop reach its own default: a
+    zero-filled array of full length is truthy, so it used to be picked up by the
+    "cached forecast available" branch and served as a flat 0 W day.
     """
     pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     pv._retry_request = lambda req, err, *args, **kwargs: err(
@@ -475,7 +479,7 @@ def test_api_error_triggers_fallback(monkeypatch):
             "horizon": "0",
         }
     )
-    assert result == [0] * 48
+    assert result == []
     assert pv.pv_forcast_request_error["error"] in (None, "api_error")
 
 
@@ -505,9 +509,10 @@ def test_temperature_api_error_never_returns_pv_watts(monkeypatch):
         },
     )
 
-    # No temperature cache exists yet, so this falls through to the same
-    # zero-padding default the power path uses (see test_api_error_triggers_fallback).
-    assert result == [0] * 48
+    # No temperature cache exists yet, so there is nothing to serve.  Padding the
+    # empty result to full length instead produced 48 h of 0 degC - not PV Watts,
+    # but just as fabricated, and inside the +-60 degC plausibility guard.
+    assert result == []
     assert 2090.0 not in result
 
 

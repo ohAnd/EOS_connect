@@ -23,6 +23,7 @@ Logging:
 """
 
 from datetime import datetime, timedelta, timezone
+import re
 import threading
 import logging
 import time
@@ -84,6 +85,93 @@ class _ForecastSolarRateLimit(Exception):
     def __init__(self, hold_seconds):
         super().__init__(f"rate limited, holding off for {hold_seconds}s")
         self.hold_seconds = hold_seconds
+
+
+# api.akkudoktor.net proxies an upstream weather service and does not pass its status
+# through: every upstream fault arrives as a 500 whose *body* names the real code, e.g.
+# "Request failed with status code 429".  ``raise_for_status()`` reports only "500 Server
+# Error" plus the URL, so the one fact that separates a transient quota exhaustion from a
+# request the upstream rejects outright never reached the log.  Without it a rate-limited
+# provider is indistinguishable from a misconfiguration, and the reports that came in
+# described weeks of intermittent 500s against a request that was correct throughout.
+AKKUDOKTOR_UPSTREAM_STATUS_RE = re.compile(r"status code (\d{3})")
+AKKUDOKTOR_BODY_EXCERPT_CHARS = 200
+
+# An upstream 429 is a quota window lasting minutes to hours, so the normal retry policy
+# (for temperature: two attempts two seconds apart) cannot outlast it - it only spends the
+# retries.  Hold off instead, as the Forecast.Solar path does.  Akkudoktor sends no
+# Retry-After and documents no quota, so the wait is a fixed, deliberately modest guess:
+# too short only wastes one request, while too long strands a recovered API.
+AKKUDOKTOR_RATE_LIMIT_HOLD_S = 900
+
+
+class _AkkudoktorRateLimit(Exception):
+    """
+    An upstream 429 relayed by akkudoktor, raised so it escapes ``_retry_request``.
+
+    Not a ``RequestException`` for the same reason as ``_ForecastSolarRateLimit``: that
+    family is caught and retried, which is exactly how one rate-limited cycle turns into
+    further requests against a quota that is already exhausted.
+    """
+
+    def __init__(self, hold_seconds):
+        super().__init__(f"upstream rate limit, holding off for {hold_seconds}s")
+        self.hold_seconds = hold_seconds
+
+
+def _akkudoktor_body_excerpt(response):
+    """
+    The error body of an akkudoktor response, whitespace-collapsed and trimmed.
+
+    Returns "" when there is no readable body, so callers can treat a missing
+    explanation the same as an empty one.
+    """
+    if response is None:
+        return ""
+    try:
+        body = (response.text or "").strip()
+    except (ValueError, UnicodeDecodeError):
+        return ""
+    if not body:
+        return ""
+    body = " ".join(body.split())
+    if len(body) > AKKUDOKTOR_BODY_EXCERPT_CHARS:
+        body = body[:AKKUDOKTOR_BODY_EXCERPT_CHARS] + "..."
+    return body
+
+
+def _akkudoktor_upstream_status(body):
+    """
+    The upstream status code named in an akkudoktor error body, or None.
+    """
+    match = AKKUDOKTOR_UPSTREAM_STATUS_RE.search(body)
+    return int(match.group(1)) if match else None
+
+
+def _describe_akkudoktor_error(tgt_value, exception):
+    """
+    Build the log message for a failed akkudoktor request, upstream cause included.
+
+    The proxy's own "500 Server Error" is identical for every fault it relays, so the
+    body is the whole diagnosis - and naming who is at fault keeps the next bug report
+    from starting at zero.
+    """
+    message = f"Akkudoktor API error for {tgt_value}: {exception}"
+    body = _akkudoktor_body_excerpt(getattr(exception, "response", None))
+    if not body:
+        return message
+
+    upstream = _akkudoktor_upstream_status(body)
+    if upstream == 429:
+        hint = (
+            " - the weather provider is rate limiting akkudoktor.net;"
+            " the request itself is fine and this clears on its own"
+        )
+    elif upstream is not None:
+        hint = f" - the weather provider rejected the request with {upstream}"
+    else:
+        hint = ""
+    return f"{message} | upstream: {body}{hint}"
 
 
 from .timeseries_normalizer import (
@@ -189,6 +277,10 @@ class PvInterface:
         # When Forecast.Solar last said "429, come back later" - no request is made
         # before it passes.  See ``_ForecastSolarRateLimit``.
         self._forecast_solar_hold_until = None
+        # The same, for an upstream 429 relayed by akkudoktor as a 500.  Shared by the
+        # PV and temperature requests because the quota is the provider's, not ours:
+        # holding one back while the other keeps hammering would not honour it.
+        self._akkudoktor_hold_until = None
 
         self._update_thread = None
         self._stop_event = threading.Event()
@@ -328,6 +420,7 @@ class PvInterface:
             # moves us to a different quota zone, so an old hold no longer describes
             # anything real.  It re-arms on the next 429 if we are still blocked.
             self._forecast_solar_hold_until = None
+            self._akkudoktor_hold_until = None
 
             try:
                 self.__configure_update_interval()
@@ -1739,6 +1832,49 @@ class PvInterface:
         )
         return hourly
 
+    def __akkudoktor_hold_remaining(self):
+        """Seconds left on an active akkudoktor rate-limit hold; 0 when clear."""
+        if self._akkudoktor_hold_until is None:
+            return 0
+        remaining = (self._akkudoktor_hold_until - datetime.now()).total_seconds()
+        if remaining <= 0:
+            self._akkudoktor_hold_until = None
+            return 0
+        return int(remaining)
+
+    def __akkudoktor_hold_response(self, tgt_value, pv_config_entry, hold_seconds):
+        """
+        Report the rate-limit hold and hand back the cached forecast for *tgt_value*.
+
+        Like the Forecast.Solar equivalent this leaves the failure counters untouched:
+        waiting out a quota is not a failed fetch, and counting it as one would burn
+        through ``max_failures`` and discard the very cache the hold protects.  An empty
+        return means there is no cache yet, which is the caller's cue to fall back to its
+        own default - for temperature the 15 degC curve, never a fabricated 0 degC one.
+        """
+        error_slot = (
+            self.temp_forecast_request_error
+            if tgt_value == "temperature"
+            else self.pv_forcast_request_error
+        )
+        error_slot.update(
+            {
+                "error": "rate_limit",
+                "timestamp": datetime.now().isoformat(),
+                "message": (
+                    "akkudoktor.net is being rate limited by the weather provider it"
+                    f" queries - no further {tgt_value} requests for {hold_seconds}s."
+                    " Nothing is wrong with the configuration; the API returns this as"
+                    " an HTTP 500 whose body reads 'Request failed with status code 429'."
+                ),
+                "config_entry": pv_config_entry,
+                "source": "akkudoktor",
+            }
+        )
+        if tgt_value == "temperature":
+            return list(self.last_successful_temp_forecast)
+        return list(self.last_successful_pv_forecast)
+
     def __get_pv_forecast_akkudoktor_api(
         self, tgt_value="power", pv_config_entry=None, tgt_duration=48
     ):
@@ -1755,6 +1891,19 @@ class PvInterface:
                 target=tgt_value,
             )
 
+        hold_remaining = self.__akkudoktor_hold_remaining()
+        if hold_remaining > 0:
+            logger.warning(
+                "[PV-IF] akkudoktor.net rate limit still active - skipping the %s"
+                " request for another %d s. Calling again earlier only spends requests"
+                " against a quota that is already exhausted.",
+                tgt_value,
+                hold_remaining,
+            )
+            return self.__akkudoktor_hold_response(
+                tgt_value, pv_config_entry, hold_remaining
+            )
+
         # Temperature is a location-only query; PV needs the real installation.
         forecast_params = (
             self.__create_temperature_request(pv_config_entry)
@@ -1766,6 +1915,12 @@ class PvInterface:
             response = requests.get(
                 EOS_API_GET_PV_FORECAST, params=forecast_params, timeout=5
             )
+            # A relayed 429 has to be recognised before raise_for_status() turns it into
+            # an ordinary 500: retrying it is what the provider is asking us not to do.
+            if response.status_code >= 400:
+                body = _akkudoktor_body_excerpt(response)
+                if _akkudoktor_upstream_status(body) == 429:
+                    raise _AkkudoktorRateLimit(AKKUDOKTOR_RATE_LIMIT_HOLD_S)
             response.raise_for_status()
             day_values = response.json()
             return day_values["values"]
@@ -1780,7 +1935,7 @@ class PvInterface:
             failure["occurred"] = True
             return self._handle_interface_error(
                 error_type,
-                f"Akkudoktor API error for {tgt_value}: {exception}",
+                _describe_akkudoktor_error(tgt_value, exception),
                 pv_config_entry,
                 "akkudoktor",
                 target=tgt_value,
@@ -1791,12 +1946,33 @@ class PvInterface:
             if tgt_value == "temperature"
             else (5, 3)
         )
-        day_values = self._retry_request(request_func, error_handler, retries, delay)
-        if failure["occurred"] and day_values:
-            # day_values is a non-empty cache _handle_interface_error chose as
-            # fallback; feeding it into the raw-JSON processing below would
-            # corrupt it. An empty fallback ([] - no cache available) is safe
-            # to fall through: the processing below pads it to tgt_duration.
+        try:
+            day_values = self._retry_request(
+                request_func, error_handler, retries, delay
+            )
+        except _AkkudoktorRateLimit as exc:
+            self._akkudoktor_hold_until = datetime.now() + timedelta(
+                seconds=exc.hold_seconds
+            )
+            logger.warning(
+                "[PV-IF] akkudoktor.net relayed an upstream 429 (as HTTP 500) -"
+                " pausing requests for %d s. The request is not at fault; the weather"
+                " provider behind the API is rate limiting it.",
+                exc.hold_seconds,
+            )
+            self._log_error_diagnostics("rate_limit", "akkudoktor", target=tgt_value)
+            return self.__akkudoktor_hold_response(
+                tgt_value, pv_config_entry, exc.hold_seconds
+            )
+
+        if failure["occurred"]:
+            # day_values is whatever _handle_interface_error picked as the fallback: a
+            # cached forecast, or [] when there is no cache yet.  Neither is raw API
+            # JSON, so neither may reach the processing below.  Letting the empty one
+            # through used to pad it out to a full-length array of zeros and then log
+            # "fetched successfully" - for temperature that is 48 h of 0 degC, cold
+            # enough to be wrong by 20 K yet plausible enough to clear every downstream
+            # guard, stored as the last *successful* forecast and re-served for an hour.
             return day_values
 
         # Data processing
@@ -1852,6 +2028,17 @@ class PvInterface:
                     forecast_values.extend(
                         [forecast_values[-1]] * (tgt_duration - len(forecast_values))
                     )
+                elif tgt_value == "temperature":
+                    # Nothing to extend from.  A zero-filled Watt array is merely a
+                    # pessimistic forecast, but a zero-filled temperature array is a
+                    # fabricated reading - and one the +-60 degC plausibility guard
+                    # cannot reject.  Report the emptiness and let the caller use its
+                    # 15 degC default instead.
+                    logger.warning(
+                        "[PV-IF] Akkudoktor returned no temperature values in the"
+                        " forecast window - no curve to serve"
+                    )
+                    return []
                 else:
                     forecast_values = [0] * tgt_duration
                 logger.debug(
