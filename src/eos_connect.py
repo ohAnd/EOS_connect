@@ -1800,6 +1800,14 @@ def get_controls():
     currency_symbol = CURRENCY_SYMBOL_MAP.get(currency, currency)
     currency_minor_unit = CURRENCY_MINOR_UNIT_MAP.get(currency, f"{currency}")
 
+    # Degrades to nulls rather than a 500: the header falls back to its own sum, and the
+    # rest of the dashboard does not go dark over a forecast summary.
+    try:
+        pv_forecast_totals = pv_interface.get_forecast_day_totals()
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("[Web] Could not summarize the PV forecast for the header")
+        pv_forecast_totals = {"today_wh": None, "tomorrow_wh": None}
+
     response_data = {
         "current_states": {
             "current_ac_charge_demand": current_ac_charge_demand,
@@ -1857,13 +1865,16 @@ def get_controls():
             "currency_minor_unit": currency_minor_unit,
         },
         "state": optimization_scheduler.get_current_state(),
+        # Live day totals, so the header agrees with the PV auto-scaling overlay instead
+        # of trailing it by up to one optimizer run.
+        "pv_forecast": pv_forecast_totals,
         "used_optimization_source": config_manager.config.get("eos", {}).get(
             "source", "eos_server"
         ),
         "used_time_frame_base": time_frame_base,
         "eos_connect_version": __version__,
         "timestamp": datetime.now(time_zone).isoformat(),
-        "api_version": "0.0.4",
+        "api_version": "0.0.5",
     }
     return Response(
         json.dumps(response_data, indent=4), content_type="application/json"

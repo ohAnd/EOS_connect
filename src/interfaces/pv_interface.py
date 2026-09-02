@@ -957,6 +957,36 @@ class PvInterface:
             return list(self.pv_forcast_array)
         return list(self.pv_forcast_array_raw)
 
+    def get_forecast_day_totals(self, scale=True):
+        """
+        Total forecast energy in Wh for today and tomorrow.
+
+        The dashboard header used to sum the array stored in `optimize_request.json`
+        instead. That file is only rewritten once per optimizer run, so an autoscaler
+        factor recomputed since then left the header disagreeing with the PV
+        auto-scaling overlay, which always reads live. That array also carries the evopt
+        partial-slot discount, which belongs to the optimizer's input rather than to a
+        day's forecast total.
+
+        Slot 0 is local midnight today, the same alignment `apply_scaling` relies on.
+        A day with no slots reports None rather than 0.0, so a short or missing forecast
+        is not published as "no sun".
+
+        Returns:
+            dict: `{"today_wh": float|None, "tomorrow_wh": float|None}`.
+        """
+        forecast = self.get_current_pv_forecast(scale=scale)
+        slots_per_day = 24 * max(1, 3600 // int(self.time_frame_base or 3600))
+        totals = {}
+        for key, day in (("today_wh", 0), ("tomorrow_wh", 1)):
+            slots = forecast[day * slots_per_day : (day + 1) * slots_per_day]
+            try:
+                totals[key] = round(sum(float(v) for v in slots), 1) if slots else None
+            except (TypeError, ValueError):
+                logger.warning("[PV-IF] Unusable forecast slot while summing %s", key)
+                totals[key] = None
+        return totals
+
     def __temperature_forecast_is_fresh(self):
         """
         True while the cached temperature forecast is young enough to reuse.

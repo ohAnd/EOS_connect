@@ -63,6 +63,22 @@ class StatisticsManager {
             feed_in_today = feed_in_data.reduce((acc, value) => acc + value, 0) / 1000;
         }
 
+        // Prefer the live totals the server derives from the same scaled array the PV
+        // auto-scaling overlay renders. data_request is a snapshot of the last optimizer
+        // run: an autoscaler factor recomputed since then leaves it disagreeing with the
+        // overlay, and on evopt it also carries the partial-slot discount, which is an
+        // optimizer input rather than part of a day's forecast. The sums above stay as
+        // the fallback for a payload without the field.
+        const pvTotals = (data_controls && data_controls["pv_forecast"]) || {};
+        const liveToday = Number(pvTotals["today_wh"]);
+        const liveTomorrow = Number(pvTotals["tomorrow_wh"]);
+        if (pvTotals["today_wh"] !== null && isFinite(liveToday)) {
+            yield_today = liveToday / 1000;
+        }
+        if (pvTotals["tomorrow_wh"] !== null && isFinite(liveTomorrow)) {
+            yield_tomorrow = liveTomorrow / 1000;
+        }
+
         document.getElementById('statistics_header_left').innerHTML = '<i class="fa-solid fa-solar-panel"></i> ' + yield_today.toFixed(1) + ' <span style="font-size: 0.6em;">kWh</span>';
         document.getElementById('statistics_header_left').title = "Solar yield for today";
         document.getElementById('statistics_header_right').innerHTML = yield_tomorrow.toFixed(1) + ' <span style="font-size: 0.6em;">kWh</span>' + ' <i class="fa-solid fa-solar-panel"></i> ';

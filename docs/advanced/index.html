@@ -265,12 +265,25 @@
     "last_response_timestamp": "2024-11-14T22:30:01.194684+02:00",
     "next_run": "2024-11-14T22:35:01.196502+02:00"
   },
+  "pv_forecast": {
+    "today_wh": 17209.0,
+    "tomorrow_wh": 12459.0
+  },
   "used_optimization_source": "eos_server",
   "used_time_frame_base": 3600,
   "eos_connect_version": "0.2.01.138-develop",
   "timestamp": "2024-06-01T12:00:00+02:00",
-  "api_version": "0.0.3"
+  "api_version": "0.0.5"
 }</code></pre>
+
+                    <div class="alert alert-info">
+                        <strong><i class="fas fa-info-circle"></i> PV forecast totals:</strong>
+                        <code>pv_forecast</code> holds today's and tomorrow's total forecast energy, taken live from
+                        the same auto-scaled array the optimizer receives and the PV auto-scaling overlay displays.
+                        It is deliberately not read from <code>optimize_request.json</code>, which is only rewritten
+                        once per optimization run and additionally carries EVopt's partial-slot discount. Either
+                        value is <code>null</code> when no forecast covers that day.
+                    </div>
 
                     <div class="alert alert-info">
                         <strong><i class="fas fa-info-circle"></i> State Consistency:</strong>
