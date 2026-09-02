@@ -63,6 +63,22 @@ class StatisticsManager {
             feed_in_today = feed_in_data.reduce((acc, value) => acc + value, 0) / 1000;
         }
 
+        // Prefer the live totals the server derives from the same scaled array the PV
+        // auto-scaling overlay renders. data_request is a snapshot of the last optimizer
+        // run: an autoscaler factor recomputed since then leaves it disagreeing with the
+        // overlay, and on evopt it also carries the partial-slot discount, which is an
+        // optimizer input rather than part of a day's forecast. The sums above stay as
+        // the fallback for a payload without the field.
+        const pvTotals = (data_controls && data_controls["pv_forecast"]) || {};
+        const liveToday = Number(pvTotals["today_wh"]);
+        const liveTomorrow = Number(pvTotals["tomorrow_wh"]);
+        if (pvTotals["today_wh"] !== null && isFinite(liveToday)) {
+            yield_today = liveToday / 1000;
+        }
+        if (pvTotals["tomorrow_wh"] !== null && isFinite(liveTomorrow)) {
+            yield_tomorrow = liveTomorrow / 1000;
+        }
+
         document.getElementById('statistics_header_left').innerHTML = '<i class="fa-solid fa-solar-panel"></i> ' + yield_today.toFixed(1) + ' <span style="font-size: 0.6em;">kWh</span>';
         document.getElementById('statistics_header_left').title = "Solar yield for today";
         document.getElementById('statistics_header_right').innerHTML = yield_tomorrow.toFixed(1) + ' <span style="font-size: 0.6em;">kWh</span>' + ' <i class="fa-solid fa-solar-panel"></i> ';
@@ -100,6 +116,28 @@ class StatisticsManager {
             const forecastArray = pa.current_forecast_array_raw || [];
             const forecastArrayScaled = pa.current_forecast_array_scaled || [];
 
+            // The day's partitioning is defined once, in the backend, and served here so
+            // this page never carries a second copy of the boundaries. The fallback only
+            // covers a cached page talking to an older build - it renders the current
+            // scheme rather than nothing.
+            const timeframes = (Array.isArray(pa.timeframe_bounds) && pa.timeframe_bounds.length
+                ? pa.timeframe_bounds
+                : [{ id: 1, start: 0, end: 8 }, { id: 2, start: 8, end: 12 },
+                   { id: 3, start: 12, end: 16 }, { id: 4, start: 16, end: 24 }]
+            ).map(t => ({
+                ...t,
+                label: t.label || `${String(t.start).padStart(2, '0')}:00 - ${String(t.end - 1).padStart(2, '0')}:59`,
+            }));
+            // Cool through warm across the day, so the midday blocks stand out. Clamped
+            // rather than cycled, so a fifth block would not read as another morning.
+            const TF_COLORS = [
+                { accent: '#4caf50', soft: '#7ccc7c', rgb: '76,175,80' },
+                { accent: '#4caf50', soft: '#7ccc7c', rgb: '76,175,80' },
+                { accent: '#ffc107', soft: '#ffd860', rgb: '255,193,7' },
+                { accent: '#f44336', soft: '#f77777', rgb: '244,67,54' },
+            ];
+            const tfColor = i => TF_COLORS[Math.min(i, TF_COLORS.length - 1)];
+
             // Scale factors: a missing or unparseable multiplier means "no scaling".
             const toNum = v => Number(String(v || 1).replace(',', '.')) || 1.0;
             // Forecast slots: a missing or zero slot is zero energy, not 1 Wh. Reusing
@@ -119,8 +157,10 @@ class StatisticsManager {
             /** Sum one timeframe of one day from a Wh-per-slot array, returning kWh. */
             const sumTimeframe = (arr, dayIndex, timeframeId) => {
                 if (!arr || !arr.length) return 0;
-                const slotStart = dayIndex * slotsPerDay + (timeframeId - 1) * 6 * slotsPerHour;
-                const slotEnd = slotStart + 6 * slotsPerHour;
+                const tf = timeframes.find(t => t.id === timeframeId);
+                if (!tf) return 0;
+                const slotStart = dayIndex * slotsPerDay + tf.start * slotsPerHour;
+                const slotEnd = dayIndex * slotsPerDay + tf.end * slotsPerHour;
                 let sum = 0;
                 for (let i = slotStart; i < slotEnd && i < arr.length; i++) {
                     sum += slotWh(arr[i]);
@@ -142,10 +182,7 @@ class StatisticsManager {
                 return num.toFixed(2) + ' kWh';
             };
 
-            const s1 = toNum(sf['1'] || sf[1]);
-            const s2 = toNum(sf['2'] || sf[2]);
-            const s3 = toNum(sf['3'] || sf[3]);
-            const s4 = toNum(sf['4'] || sf[4]);
+            const factorFor = id => toNum(sf[String(id)] || sf[id]);
 
             // Check data collection state
             const totalHoursRecorded = pa.total_hours_recorded || 0;
@@ -236,12 +273,6 @@ class StatisticsManager {
                 `;
             }
 
-            // Build scale factors section
-            const s1Str = s1.toFixed(3);
-            const s2Str = s2.toFixed(3);
-            const s3Str = s3.toFixed(3);
-            const s4Str = s4.toFixed(3);
-
             // Build forecast comparison
             let forecastComparison = '';
             if (forecastArray && forecastArray.length > 0) {
@@ -256,8 +287,8 @@ class StatisticsManager {
                 // every slot to one decimal.
                 const haveScaled = forecastArrayScaled && forecastArrayScaled.length > 0;
 
-                for (let tf = 1; tf <= 4; tf++) {
-                    const scale = toNum(sf[tf.toString()] || sf[tf]);
+                for (const { id: tf } of timeframes) {
+                    const scale = factorFor(tf);
                     const todayTf = sumForecastTimeframe(0, tf);
                     const tomorrowTf = sumForecastTimeframe(1, tf);
 
@@ -310,7 +341,7 @@ class StatisticsManager {
                 // Calculate today's forecast from forecastArray (both original and scaled)
                 let todayForecastByTimeframeOriginal = {};
                 let todayForecastByTimeframe = {};
-                for (let tf = 1; tf <= 4; tf++) {
+                for (const { id: tf } of timeframes) {
                     todayForecastByTimeframeOriginal[tf] = sumTimeframe(forecastArray, 0, tf);
                     todayForecastByTimeframe[tf] = sumTimeframe(forecastArrayScaled, 0, tf);
                 }
@@ -325,27 +356,13 @@ class StatisticsManager {
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                                 <span style="font-weight: 500; color: #bbb;">Partial data being collected (${todaysHours}h) — Will be saved and used tomorrow</span>
                             </div>
-                            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; font-size: 0.8em;">
-                                <div style="text-align: center; padding: 6px; background-color: rgba(76,175,80,0.15); border-radius: 4px;">
-                                    <div style="color: #999; font-size: 0.75em;">T1</div>
-                                    <div style="color: #7ccc7c;">R: ${formatKwh(todaysActual['1'])}</div>
-                                    <div style="color: #aaa;">F: ${todayForecastByTimeframeOriginal[1]?.toFixed(2) || '--'} → ${todayForecastByTimeframe[1]?.toFixed(2) || '--'} kWh</div>
-                                </div>
-                                <div style="text-align: center; padding: 6px; background-color: rgba(76,175,80,0.15); border-radius: 4px;">
-                                    <div style="color: #999; font-size: 0.75em;">T2</div>
-                                    <div style="color: #7ccc7c;">R: ${formatKwh(todaysActual['2'])}</div>
-                                    <div style="color: #aaa;">F: ${todayForecastByTimeframeOriginal[2]?.toFixed(2) || '--'} → ${todayForecastByTimeframe[2]?.toFixed(2) || '--'} kWh</div>
-                                </div>
-                                <div style="text-align: center; padding: 6px; background-color: rgba(255,193,7,0.15); border-radius: 4px;">
-                                    <div style="color: #999; font-size: 0.75em;">T3</div>
-                                    <div style="color: #ffd860;">R: ${formatKwh(todaysActual['3'])}</div>
-                                    <div style="color: #aaa;">F: ${todayForecastByTimeframeOriginal[3]?.toFixed(2) || '--'} → ${todayForecastByTimeframe[3]?.toFixed(2) || '--'} kWh</div>
-                                </div>
-                                <div style="text-align: center; padding: 6px; background-color: rgba(244,67,54,0.15); border-radius: 4px;">
-                                    <div style="color: #999; font-size: 0.75em;">T4</div>
-                                    <div style="color: #f77777;">R: ${formatKwh(todaysActual['4'])}</div>
-                                    <div style="color: #aaa;">F: ${todayForecastByTimeframeOriginal[4]?.toFixed(2) || '--'} → ${todayForecastByTimeframe[4]?.toFixed(2) || '--'} kWh</div>
-                                </div>
+                            <div style="display: grid; grid-template-columns: repeat(${timeframes.length}, 1fr); gap: 6px; font-size: 0.8em;">
+                                ${timeframes.map((tf, i) => `
+                                <div style="text-align: center; padding: 6px; background-color: rgba(${tfColor(i).rgb},0.15); border-radius: 4px;" title="${tf.label}">
+                                    <div style="color: #999; font-size: 0.75em;">T${tf.id}</div>
+                                    <div style="color: ${tfColor(i).soft};">R: ${formatKwh(todaysActual[String(tf.id)])}</div>
+                                    <div style="color: #aaa;">F: ${todayForecastByTimeframeOriginal[tf.id]?.toFixed(2) || '--'} → ${todayForecastByTimeframe[tf.id]?.toFixed(2) || '--'} kWh</div>
+                                </div>`).join('')}
                             </div>
                         </div>
                     </div>
@@ -410,27 +427,13 @@ class StatisticsManager {
                                 <span style="font-weight: 600; color: #ddd;">${dateStr}${originBadge}</span>
                                 <span style="font-size: 0.8em; color: #888;">${hours} hours recorded</span>
                             </div>
-                            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; font-size: 0.8em;">
-                                <div style="text-align: center; padding: 6px; background-color: rgba(76,175,80,0.1); border-radius: 4px;">
-                                    <div style="color: #888; font-size: 0.75em;">T1</div>
-                                    <div style="color: #4caf50;">R: ${formatKwh(actual['1'])}</div>
-                                    <div style="color: #aaa;">F: ${formatKwh(forecast['1'])}</div>
-                                </div>
-                                <div style="text-align: center; padding: 6px; background-color: rgba(76,175,80,0.1); border-radius: 4px;">
-                                    <div style="color: #888; font-size: 0.75em;">T2</div>
-                                    <div style="color: #4caf50;">R: ${formatKwh(actual['2'])}</div>
-                                    <div style="color: #aaa;">F: ${formatKwh(forecast['2'])}</div>
-                                </div>
-                                <div style="text-align: center; padding: 6px; background-color: rgba(255,193,7,0.1); border-radius: 4px;">
-                                    <div style="color: #888; font-size: 0.75em;">T3</div>
-                                    <div style="color: #ffc107;">R: ${formatKwh(actual['3'])}</div>
-                                    <div style="color: #aaa;">F: ${formatKwh(forecast['3'])}</div>
-                                </div>
-                                <div style="text-align: center; padding: 6px; background-color: rgba(244,67,54,0.1); border-radius: 4px;">
-                                    <div style="color: #888; font-size: 0.75em;">T4</div>
-                                    <div style="color: #f44336;">R: ${formatKwh(actual['4'])}</div>
-                                    <div style="color: #aaa;">F: ${formatKwh(forecast['4'])}</div>
-                                </div>
+                            <div style="display: grid; grid-template-columns: repeat(${timeframes.length}, 1fr); gap: 6px; font-size: 0.8em;">
+                                ${timeframes.map((tf, i) => `
+                                <div style="text-align: center; padding: 6px; background-color: rgba(${tfColor(i).rgb},0.1); border-radius: 4px;" title="${tf.label}">
+                                    <div style="color: #888; font-size: 0.75em;">T${tf.id}</div>
+                                    <div style="color: ${tfColor(i).accent};">R: ${formatKwh(actual[String(tf.id)])}</div>
+                                    <div style="color: #aaa;">F: ${formatKwh(forecast[String(tf.id)])}</div>
+                                </div>`).join('')}
                             </div>
                         </div>
                     `;
@@ -477,21 +480,17 @@ class StatisticsManager {
             const statusText = enabled ? '<span style="color: #4caf50;">Enabled</span>' : '<span style="color: #f44336;">Disabled</span>';
 
             // Calculate daily average - weighted by forecast distribution
-            const s1f = toNum(sf['1'] || sf[1]);
-            const s2f = toNum(sf['2'] || sf[2]);
-            const s3f = toNum(sf['3'] || sf[3]);
-            const s4f = toNum(sf['4'] || sf[4]);
             
             // Compute weighted average based on current forecast distribution
             let dailyAvg, percentChange, isWeighted = false;
-            const arithmeticAvg = (s1f + s2f + s3f + s4f) / 4;
+            const arithmeticAvg = timeframes.reduce((a, t) => a + factorFor(t.id), 0) / timeframes.length;
             
             if (forecastArray && forecastArray.length > 0) {
                 let totalForecast = 0;
                 let weightedSum = 0;
-                for (let tf = 1; tf <= 4; tf++) {
+                for (const { id: tf } of timeframes) {
                     const tfForecast = sumTimeframe(forecastArray, 0, tf);
-                    const factor = toNum(sf[tf.toString()] || sf[tf]);
+                    const factor = factorFor(tf);
                     totalForecast += tfForecast;
                     weightedSum += tfForecast * factor;
                 }
@@ -537,29 +536,12 @@ class StatisticsManager {
                             </div>
 
                             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px;">
+                                ${timeframes.map((tf, i) => `
                                 <div style="background-color: rgba(76, 175, 80, 0.1); border: 1px solid rgba(76, 175, 80, 0.3); border-radius: 6px; padding: 12px; text-align: center;">
-                                    <div style="font-size: 0.85em; color: #888; margin-bottom: 6px;">Timeframe 1</div>
-                                    <div style="font-size: 0.8em; color: #aaa; margin-bottom: 8px;">00:00 - 05:59</div>
-                                    <div style="font-size: 1.8em; font-weight: bold; color: #4caf50; font-family: monospace;">${s1Str}×</div>
-                                </div>
-
-                                <div style="background-color: rgba(76, 175, 80, 0.1); border: 1px solid rgba(76, 175, 80, 0.3); border-radius: 6px; padding: 12px; text-align: center;">
-                                    <div style="font-size: 0.85em; color: #888; margin-bottom: 6px;">Timeframe 2</div>
-                                    <div style="font-size: 0.8em; color: #aaa; margin-bottom: 8px;">06:00 - 11:59</div>
-                                    <div style="font-size: 1.8em; font-weight: bold; color: #4caf50; font-family: monospace;">${s2Str}×</div>
-                                </div>
-
-                                <div style="background-color: rgba(76, 175, 80, 0.1); border: 1px solid rgba(76, 175, 80, 0.3); border-radius: 6px; padding: 12px; text-align: center;">
-                                    <div style="font-size: 0.85em; color: #888; margin-bottom: 6px;">Timeframe 3</div>
-                                    <div style="font-size: 0.8em; color: #aaa; margin-bottom: 8px;">12:00 - 17:59</div>
-                                    <div style="font-size: 1.8em; font-weight: bold; color: #ffc107; font-family: monospace;">${s3Str}×</div>
-                                </div>
-
-                                <div style="background-color: rgba(76, 175, 80, 0.1); border: 1px solid rgba(76, 175, 80, 0.3); border-radius: 6px; padding: 12px; text-align: center;">
-                                    <div style="font-size: 0.85em; color: #888; margin-bottom: 6px;">Timeframe 4</div>
-                                    <div style="font-size: 0.8em; color: #aaa; margin-bottom: 8px;">18:00 - 23:59</div>
-                                    <div style="font-size: 1.8em; font-weight: bold; color: #f44336; font-family: monospace;">${s4Str}×</div>
-                                </div>
+                                    <div style="font-size: 0.85em; color: #888; margin-bottom: 6px;">Timeframe ${tf.id}</div>
+                                    <div style="font-size: 0.8em; color: #aaa; margin-bottom: 8px;">${tf.label}</div>
+                                    <div style="font-size: 1.8em; font-weight: bold; color: ${tfColor(i).accent}; font-family: monospace;">${factorFor(tf.id).toFixed(3)}×</div>
+                                </div>`).join('')}
 
                                 <div style="background-color: rgba(65, 105, 225, 0.15); border: 2px solid rgba(100, 149, 237, 0.4); border-radius: 6px; padding: 12px; text-align: center;">
                                     <div style="font-size: 0.85em; color: #6495ed; margin-bottom: 4px; font-weight: 600;">WHOLE DAY${isWeighted ? '<br><span style="font-size: 0.7em; font-weight: normal;">(forecast weighted)</span>' : ''}</div>

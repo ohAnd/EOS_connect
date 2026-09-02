@@ -13,11 +13,31 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger("__main__")
 
-# Columns selected by every read, in the tuple order the callers unpack.
+# Columns selected by every read, in the tuple order the callers unpack. Also the full
+# column list, which the schema rebuild below relies on to copy a table forward.
 _COLUMNS = (
-    "id, timestamp, date, hour, timeframe_id, real_counter_kwh, real_delta_kwh, "
+    "id, timestamp, date, hour, real_counter_kwh, real_delta_kwh, "
     "forecast_kwh, created_at, local_date, local_hour, local_offset_minutes, origin"
 )
+
+# The table shape, parameterised by name so that `CREATE TABLE` and the rebuild that
+# drops a retired column cannot drift apart.
+_TABLE_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS {name} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL,
+        date TEXT NOT NULL,
+        hour INTEGER NOT NULL,
+        real_counter_kwh REAL,
+        real_delta_kwh REAL,
+        forecast_kwh REAL,
+        created_at TEXT NOT NULL,
+        local_date TEXT,
+        local_hour INTEGER,
+        local_offset_minutes INTEGER,
+        origin TEXT
+    )
+"""
 
 # The shape every plan returns, so callers can read the same keys whether or not there
 # was anything to plan.
@@ -55,19 +75,6 @@ _CUTOFF = "strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)"
 # Rows arrive from a user-supplied backup file, so every field is treated as untrusted.
 # Only this many rejection reasons are kept for the response - the counts stay exact.
 _MAX_INVALID_DETAILS = 20
-
-
-def _timeframe_for_hour(hour: int) -> int:
-    """
-    Map a local hour to its timeframe 1-4.
-
-    Deliberately duplicates ``interfaces.pv_autoscaler.timeframe_for_hour`` rather than
-    importing it: at runtime the app starts as ``python eos_connect.py`` with ``src/``
-    as the root, so ``persistence`` and ``interfaces`` are sibling top-level packages
-    and a relative import across them raises ImportError. Two lines beat that hazard,
-    and ``timeframe_id`` is a column of this table anyway.
-    """
-    return (hour // 6) + 1
 
 
 def _zone(tz_name: Optional[str]):
@@ -208,10 +215,6 @@ def _coerce_row(raw) -> tuple[Optional[dict], str]:
         if local_date is None:
             local_date = derived.date().isoformat()
 
-    timeframe_id = _parse_int(raw.get("timeframe_id"), 1, 4)
-    if timeframe_id is None:
-        timeframe_id = _timeframe_for_hour(local_hour)
-
     real_ok, real_delta_kwh = _parse_kwh(raw.get("real_delta_kwh"))
     if not real_ok:
         return None, "real_delta_kwh is negative, non-finite or not a number"
@@ -223,7 +226,6 @@ def _coerce_row(raw) -> tuple[Optional[dict], str]:
         "timestamp": utc_ts.isoformat(),
         "date": local_date,
         "hour": local_hour,
-        "timeframe_id": timeframe_id,
         "real_delta_kwh": real_delta_kwh,
         "forecast_kwh": forecast_kwh,
         "local_date": local_date,
@@ -243,24 +245,7 @@ class PvYieldStore:
 
     def ensure_schema(self) -> None:
         """Create the table and indexes, and migrate databases from earlier versions."""
-        self._store.execute(
-            """
-            CREATE TABLE IF NOT EXISTS pv_yield_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                date TEXT NOT NULL,
-                hour INTEGER NOT NULL,
-                timeframe_id INTEGER NOT NULL,
-                real_counter_kwh REAL,
-                real_delta_kwh REAL,
-                forecast_kwh REAL,
-                created_at TEXT NOT NULL,
-                local_date TEXT,
-                local_hour INTEGER,
-                local_offset_minutes INTEGER
-            )
-            """
-        )
+        self._store.execute(_TABLE_SCHEMA.format(name="pv_yield_history"))
 
         columns = self._columns()
 
@@ -304,6 +289,8 @@ class PvYieldStore:
             "UPDATE pv_yield_history SET local_hour = hour WHERE local_hour IS NULL"
         )
 
+        self._drop_timeframe_id(columns)
+
         # indices
         self._store.execute(
             "CREATE INDEX IF NOT EXISTS idx_pv_yield_date ON pv_yield_history(date)"
@@ -312,6 +299,39 @@ class PvYieldStore:
             "CREATE INDEX IF NOT EXISTS idx_pv_yield_local_date ON pv_yield_history(local_date)"
         )
         self._ensure_timestamp_unique()
+
+    def _drop_timeframe_id(self, columns: set) -> None:
+        """
+        Retire the `timeframe_id` column, which stored derived data.
+
+        The timeframe a row belongs to is a pure function of its local hour, and the
+        autoscaler now computes it on read. Keeping a stored copy meant the day's
+        partitioning was frozen into every row: re-cutting the timeframe boundaries would
+        have left retained history bucketed under the old scheme while freshly scaled
+        forecasts used the new one - a disagreement that raises no error anywhere.
+
+        Rebuilt rather than dropped in place: `ALTER TABLE ... DROP COLUMN` needs SQLite
+        3.35, which is not guaranteed on older container bases, and the table is bounded
+        by the retention window (a few hundred rows) so a copy costs nothing. Dropping
+        the old table takes its indexes with it; the caller recreates them straight after.
+        """
+        if "timeframe_id" not in columns:
+            return
+
+        logger.info("[PV-STORE] Dropping the derived timeframe_id column")
+        # A rebuild interrupted mid-way (power loss, container kill) would leave the
+        # scratch table behind, and CREATE ... IF NOT EXISTS would then quietly reuse it
+        # and insert every row a second time. Start from a clean one.
+        self._store.execute("DROP TABLE IF EXISTS pv_yield_history_new")
+        self._store.execute(_TABLE_SCHEMA.format(name="pv_yield_history_new"))
+        self._store.execute(
+            f"INSERT INTO pv_yield_history_new ({_COLUMNS}) "
+            f"SELECT {_COLUMNS} FROM pv_yield_history"
+        )
+        self._store.execute("DROP TABLE pv_yield_history")
+        self._store.execute(
+            "ALTER TABLE pv_yield_history_new RENAME TO pv_yield_history"
+        )
 
     def _ensure_timestamp_unique(self) -> None:
         """
@@ -345,7 +365,6 @@ class PvYieldStore:
         timestamp: str,
         date: str,
         hour: int,
-        timeframe_id: int,
         real_counter_kwh: Optional[float],
         real_delta_kwh: Optional[float],
         forecast_kwh: Optional[float],
@@ -368,7 +387,6 @@ class PvYieldStore:
             timestamp: UTC ISO datetime of the period start; the de-duplication key.
             date: Local date of the period (YYYY-MM-DD). Legacy name, local value.
             hour: Local hour 0-23 of the period. Legacy name, local value.
-            timeframe_id: Timeframe 1-4 the hour falls into.
             real_counter_kwh: Meter counter reading in kWh.
             real_delta_kwh: Yield during this hour in kWh.
             forecast_kwh: Forecast for this hour in kWh, or None when unknown.
@@ -395,7 +413,6 @@ class PvYieldStore:
                 SET
                     date = COALESCE(?, date),
                     hour = COALESCE(?, hour),
-                    timeframe_id = COALESCE(?, timeframe_id),
                     real_counter_kwh = COALESCE(?, real_counter_kwh),
                     real_delta_kwh = COALESCE(?, real_delta_kwh),
                     forecast_kwh = COALESCE(?, forecast_kwh),
@@ -407,7 +424,6 @@ class PvYieldStore:
                 (
                     date,
                     hour,
-                    timeframe_id,
                     real_counter_kwh,
                     real_delta_kwh,
                     forecast_kwh,
@@ -421,16 +437,15 @@ class PvYieldStore:
             self._store.execute(
                 """
                 INSERT INTO pv_yield_history
-                    (timestamp, date, hour, timeframe_id, real_counter_kwh,
-                     real_delta_kwh, forecast_kwh, created_at, local_date, local_hour,
+                    (timestamp, date, hour, real_counter_kwh, real_delta_kwh,
+                     forecast_kwh, created_at, local_date, local_hour,
                      local_offset_minutes, origin)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     timestamp,
                     date,
                     hour,
-                    timeframe_id,
                     real_counter_kwh,
                     real_delta_kwh,
                     forecast_kwh,
@@ -539,12 +554,12 @@ class PvYieldStore:
         hour's measured/forecast ratio - which is what the factors are made of - while
         placing it where the autoscaler still reads it.
 
-        Whole days only, so hour-of-day and therefore ``timeframe_id`` are preserved
-        exactly. Rows that still land outside the window after the shift are dropped
-        rather than written for immediate purging, and a row that would land on a
-        timestamp already present is skipped: the stored row is either a real
-        measurement or an earlier restore, and neither should be overwritten by a
-        synthetic one.
+        Whole days only, so hour-of-day - and therefore the timeframe every consumer
+        derives from it - is preserved exactly. Rows that still land outside the window
+        after the shift are dropped rather than written for immediate purging, and a row
+        that would land on a timestamp already present is skipped: the stored row is
+        either a real measurement or an earlier restore, and neither should be
+        overwritten by a synthetic one.
         """
         shift_days = (today_local - timedelta(days=1)) - date_cls.fromisoformat(
             plan["newest_local_date"]
@@ -644,15 +659,14 @@ class PvYieldStore:
             "timestamp": row[1],
             "date": row[2],
             "hour": row[3],
-            "timeframe_id": row[4],
-            "real_counter_kwh": row[5],
-            "real_delta_kwh": row[6],
-            "forecast_kwh": row[7],
-            "created_at": row[8],
-            "local_date": row[9],
-            "local_hour": row[10],
-            "local_offset_minutes": row[11],
-            "origin": row[12],
+            "real_counter_kwh": row[4],
+            "real_delta_kwh": row[5],
+            "forecast_kwh": row[6],
+            "created_at": row[7],
+            "local_date": row[8],
+            "local_hour": row[9],
+            "local_offset_minutes": row[10],
+            "origin": row[11],
         }
 
     def get_latest_record(self) -> Optional[dict]:

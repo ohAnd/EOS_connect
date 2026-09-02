@@ -3209,11 +3209,16 @@ price:
                             <code>sensor.pv_total_yield_kwh</code>).
                         </li>
                         <li>The hourly measured delta is compared with the forecast for the same hour.</li>
-                        <li>For each of the four daily timeframes (00–05, 06–11, 12–17, 18–23) a rolling scale
+                        <li>For each of the four daily timeframes (00–07, 08–11, 12–15, 16–23) a rolling scale
                             factor is computed over the last <code>retention_days</code> days (7 by default):<br>
                             <code>scale = average measured kWh / average forecast kWh</code><br>
                             Only days that recorded <em>both</em> a measured yield and a forecast are averaged, so a
-                            gap in collection cannot inflate the factor.
+                            gap in collection cannot inflate the factor.<br>
+                            The blocks are deliberately unequal. The two four-hour blocks sit either side of solar
+                            noon, where inverter clipping and midday over-forecast dominate, while the wide morning
+                            and evening blocks each cover one full sun ramp, where a horizon, shading or an
+                            east/west split roof shows up. Dark hours cost nothing: they add zero to both the
+                            measured and the forecast side of the ratio.
                         </li>
                         <li>The factor is clamped between <code>min_scale_factor</code> and
                             <code>max_scale_factor</code>.

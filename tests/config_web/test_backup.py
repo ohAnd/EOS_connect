@@ -77,7 +77,6 @@ def _seed_hours(client, days_ago=1, hours=(8, 12)):
             timestamp=when.isoformat(),
             date=when.strftime("%Y-%m-%d"),
             hour=hour,
-            timeframe_id=(hour // 6) + 1,
             real_counter_kwh=1042.5,
             real_delta_kwh=0.83,
             forecast_kwh=0.91,

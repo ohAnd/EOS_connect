@@ -42,7 +42,7 @@ from interfaces.update_checker import UpdateChecker
 from interfaces.inverters import create_inverter
 from interfaces.inverters.null_inverter import NullInverter
 from interfaces.inverters.evcc_inverter import EvccInverter
-from interfaces.pv_autoscaler import PvAutoscaler
+from interfaces.pv_autoscaler import PvAutoscaler, TIMEFRAME_IDS, timeframe_bounds
 from config_web import ConfigWebModule
 
 # Check Python version early
@@ -1800,6 +1800,14 @@ def get_controls():
     currency_symbol = CURRENCY_SYMBOL_MAP.get(currency, currency)
     currency_minor_unit = CURRENCY_MINOR_UNIT_MAP.get(currency, f"{currency}")
 
+    # Degrades to nulls rather than a 500: the header falls back to its own sum, and the
+    # rest of the dashboard does not go dark over a forecast summary.
+    try:
+        pv_forecast_totals = pv_interface.get_forecast_day_totals()
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("[Web] Could not summarize the PV forecast for the header")
+        pv_forecast_totals = {"today_wh": None, "tomorrow_wh": None}
+
     response_data = {
         "current_states": {
             "current_ac_charge_demand": current_ac_charge_demand,
@@ -1857,13 +1865,16 @@ def get_controls():
             "currency_minor_unit": currency_minor_unit,
         },
         "state": optimization_scheduler.get_current_state(),
+        # Live day totals, so the header agrees with the PV auto-scaling overlay instead
+        # of trailing it by up to one optimizer run.
+        "pv_forecast": pv_forecast_totals,
         "used_optimization_source": config_manager.config.get("eos", {}).get(
             "source", "eos_server"
         ),
         "used_time_frame_base": time_frame_base,
         "eos_connect_version": __version__,
         "timestamp": datetime.now(time_zone).isoformat(),
-        "api_version": "0.0.4",
+        "api_version": "0.0.5",
     }
     return Response(
         json.dumps(response_data, indent=4), content_type="application/json"
@@ -2285,7 +2296,7 @@ def get_pv_autoscaling_status():
         # Every field has a usable default so a failure in any one section degrades to a
         # partial response instead of taking the whole statistics overlay down with a 500.
         status = {"enabled": False}
-        computed_factors = {"1": 1.0, "2": 1.0, "3": 1.0, "4": 1.0}
+        computed_factors = {str(tf): 1.0 for tf in TIMEFRAME_IDS}
         aggregated = {"days": [], "summary_by_timeframe": {}}
         todays_partial = {}
 
@@ -2347,6 +2358,9 @@ def get_pv_autoscaling_status():
                 "computed_scale_factors": computed_factors,
                 "todays_partial_data": todays_partial,
                 "aggregated_history": aggregated,
+                # The partitioning is defined once, in the autoscaler. Serving it here
+                # keeps the UI from hardcoding a second copy of the block boundaries.
+                "timeframe_bounds": timeframe_bounds(),
                 "current_forecast_array_scaled": current_forecast_array,
                 "current_forecast_array_raw": current_forecast_array_raw,
                 "current_forecast_array_unit": "Wh per forecast slot",

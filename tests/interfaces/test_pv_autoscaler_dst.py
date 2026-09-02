@@ -31,14 +31,13 @@ class InMemoryPvYieldStore:
             return None
         return max(self.rows, key=lambda r: r["timestamp"])
 
-    def insert_hourly_record(self, timestamp, date, hour, timeframe_id, real_counter_kwh,
+    def insert_hourly_record(self, timestamp, date, hour, real_counter_kwh,
                              real_delta_kwh, forecast_kwh, local_date=None,
                              local_hour=None, local_offset_minutes=None):
         new = {
             "timestamp": timestamp,
             "date": date,
             "hour": hour,
-            "timeframe_id": timeframe_id,
             "real_counter_kwh": real_counter_kwh,
             "real_delta_kwh": real_delta_kwh,
             "forecast_kwh": forecast_kwh,
@@ -93,7 +92,6 @@ def seed(store, local_dt, counter, delta=None, forecast=None):
         timestamp=utc.isoformat(),
         date=local_dt.strftime("%Y-%m-%d"),
         hour=local_dt.hour,
-        timeframe_id=(local_dt.hour // 6) + 1,
         real_counter_kwh=counter,
         real_delta_kwh=delta,
         forecast_kwh=forecast,

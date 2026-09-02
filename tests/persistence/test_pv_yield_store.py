@@ -6,6 +6,7 @@ import pytest
 from src.persistence import PvYieldStore
 from src.persistence.pv_yield_store import _shift_row
 from src.config_web.store import ConfigStore
+from src.interfaces.pv_autoscaler import PvAutoscaler
 
 
 @pytest.fixture(name="pv_store")
@@ -27,7 +28,6 @@ def _record(pv_store, local_dt, **overrides):
         "timestamp": local_dt.astimezone(timezone.utc).isoformat(),
         "date": local_dt.strftime("%Y-%m-%d"),
         "hour": local_dt.hour,
-        "timeframe_id": (local_dt.hour // 6) + 1,
         "real_counter_kwh": 100.0,
         "real_delta_kwh": 1.0,
         "forecast_kwh": 1.2,
@@ -125,6 +125,104 @@ def test_backfills_local_columns_for_pre_migration_rows(tmp_path):
         store.close()
 
 
+def _legacy_schema(store):
+    """The table as it stood while `timeframe_id` was still persisted."""
+    store.execute(
+        """
+        CREATE TABLE pv_yield_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            date TEXT NOT NULL,
+            hour INTEGER NOT NULL,
+            timeframe_id INTEGER NOT NULL,
+            real_counter_kwh REAL,
+            real_delta_kwh REAL,
+            forecast_kwh REAL,
+            created_at TEXT NOT NULL,
+            local_date TEXT,
+            local_hour INTEGER,
+            local_offset_minutes INTEGER
+        )
+        """
+    )
+
+
+def test_drops_the_persisted_timeframe_id_column(tmp_path):
+    """
+    The timeframe is derived from the local hour, so storing it froze the partitioning.
+
+    A stored id written under the old 6-hour grid would keep retained history bucketed
+    the old way while fresh forecasts are scaled the new way - a disagreement that
+    raises no error. Dropping the column makes the boundaries a runtime concern.
+    """
+    store = ConfigStore(str(tmp_path / "config.db"))
+    store.open()
+    try:
+        _legacy_schema(store)
+        store.execute(
+            "INSERT INTO pv_yield_history "
+            "(timestamp, date, hour, timeframe_id, real_counter_kwh, real_delta_kwh, "
+            " forecast_kwh, created_at, local_date, local_hour, local_offset_minutes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("2026-08-15T12:00:00+00:00", "2026-08-15", 14, 3, 120.5, 3.5,
+             4.0, "now", "2026-08-15", 14, 120),
+        )
+
+        pv_store = PvYieldStore(store)
+        pv_store.ensure_schema()
+
+        columns = {row[1] for row in store.query("PRAGMA table_info(pv_yield_history)")}
+        assert "timeframe_id" not in columns
+
+        # Every other value must survive the table rebuild untouched.
+        row = pv_store.get_latest_record()
+        assert row["local_hour"] == 14
+        assert row["local_date"] == "2026-08-15"
+        assert row["real_delta_kwh"] == pytest.approx(3.5)
+        assert row["forecast_kwh"] == pytest.approx(4.0)
+        assert row["real_counter_kwh"] == pytest.approx(120.5)
+        assert row["local_offset_minutes"] == 120
+
+        # The rebuild drops the table, so the indexes must come back with it.
+        indexes = {r[1] for r in store.query("PRAGMA index_list(pv_yield_history)")}
+        assert {"idx_pv_yield_ts", "idx_pv_yield_date", "idx_pv_yield_local_date"} <= indexes
+
+        # Idempotent: a second start must be a no-op, not a second rebuild.
+        pv_store.ensure_schema()
+        assert len(pv_store.get_all_history()) == 1
+        assert pv_store.get_latest_record()["local_hour"] == 14
+    finally:
+        store.close()
+
+
+def test_legacy_rows_are_scored_by_hour_after_the_column_is_dropped(tmp_path):
+    """
+    The regression the column removal exists to prevent.
+
+    Hour 16 was block 3 under the old grid and is block 4 now. If anything still
+    honoured the stored id, this row's yield would be scored against the wrong block.
+    """
+    store = ConfigStore(str(tmp_path / "config.db"))
+    store.open()
+    try:
+        _legacy_schema(store)
+        store.execute(
+            "INSERT INTO pv_yield_history "
+            "(timestamp, date, hour, timeframe_id, real_delta_kwh, forecast_kwh, "
+            " created_at, local_date, local_hour) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("2026-08-15T14:00:00+00:00", "2026-08-15", 16, 3, 2.0, 4.0, "now",
+             "2026-08-15", 16),
+        )
+
+        pv_store = PvYieldStore(store)
+        pv_store.ensure_schema()
+
+        normalized = PvAutoscaler._normalize_row(pv_store.get_latest_record())
+        assert normalized["timeframe"] == 4
+    finally:
+        store.close()
+
+
 def test_ensure_schema_is_idempotent(pv_store):
     """Re-running migration on an already-current database must be a no-op."""
     _record(pv_store, datetime(2026, 8, 20, 10, 0, tzinfo=timezone.utc))
@@ -212,9 +310,9 @@ def test_duplicate_timestamps_are_repaired_on_migration(tmp_path):
         for delta in (1.0, 9.0):
             store.execute(
                 "INSERT INTO pv_yield_history "
-                "(timestamp, date, hour, timeframe_id, real_delta_kwh, created_at, "
-                " local_date, local_hour) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                ("2026-08-20T10:00:00+00:00", "2026-08-20", 10, 2, delta, "now",
+                "(timestamp, date, hour, real_delta_kwh, created_at, "
+                " local_date, local_hour) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("2026-08-20T10:00:00+00:00", "2026-08-20", 10, delta, "now",
                  "2026-08-20", 10),
             )
         assert len(pv_store.get_history_last_n_days(3650)) == 2
@@ -239,7 +337,6 @@ def _exported(local_dt, **overrides):
         "timestamp": local_dt.astimezone(timezone.utc).isoformat(),
         "date": local_dt.strftime("%Y-%m-%d"),
         "hour": local_dt.hour,
-        "timeframe_id": (local_dt.hour // 6) + 1,
         "real_delta_kwh": 1.0,
         "forecast_kwh": 1.2,
         "local_date": local_dt.strftime("%Y-%m-%d"),
@@ -336,13 +433,23 @@ def test_import_skips_malformed_rows_and_counts_them(pv_store):
     assert len(pv_store.get_all_history()) == 1
 
 
-def test_import_derives_timeframe_from_hour(pv_store):
-    """A row without timeframe_id still buckets correctly."""
-    row = _exported(_yesterday(14))
-    del row["timeframe_id"]
-    pv_store.import_rows([row])
+def test_import_ignores_a_legacy_timeframe_id(pv_store):
+    """
+    A backup taken before the column was retired must still import.
 
-    assert pv_store.get_all_history()[0]["timeframe_id"] == 3
+    Its ``timeframe_id`` was computed under the old 6-hour grid, so honouring it would
+    reintroduce exactly the stale bucketing that dropping the column removed. The hour
+    is what survives, and every consumer derives the timeframe from it.
+    """
+    row = _exported(_yesterday(14))
+    row["timeframe_id"] = 3  # what the old grid stored for hour 14
+
+    result = pv_store.import_rows([row])
+
+    assert result["imported"] == 1
+    stored = pv_store.get_all_history()[0]
+    assert "timeframe_id" not in stored
+    assert stored["local_hour"] == 14
 
 
 def test_import_reconstructs_local_fields_from_timestamp(pv_store):
@@ -432,8 +539,9 @@ def test_seed_preserves_hour_and_timeframe(pv_store):
     pv_store.import_rows(_stale_day(21, hours=(5, 13, 20)), retention_days=7, mode="seed")
 
     stored = pv_store.get_all_history()
+    # The hour is what the timeframe is derived from, so preserving it preserves the
+    # block each row is scored in.
     assert sorted(row["local_hour"] for row in stored) == [5, 13, 20]
-    assert sorted(row["timeframe_id"] for row in stored) == [1, 3, 4]
 
 
 def test_seed_marks_rows_as_seeded(pv_store):
@@ -504,7 +612,6 @@ def test_shift_recomputes_the_utc_offset_for_the_new_date():
         "timestamp": "2026-01-15T09:00:00+00:00",
         "date": "2026-01-15",
         "hour": 10,
-        "timeframe_id": 2,
         "real_delta_kwh": 1.0,
         "forecast_kwh": 1.2,
         "local_date": "2026-01-15",
@@ -525,7 +632,6 @@ def test_shift_keeps_local_hour_across_the_spring_transition():
         "timestamp": "2026-03-28T09:00:00+00:00",
         "date": "2026-03-28",
         "hour": 10,
-        "timeframe_id": 2,
         "real_delta_kwh": 1.0,
         "forecast_kwh": 1.2,
         "local_date": "2026-03-28",

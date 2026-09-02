@@ -2027,3 +2027,64 @@ def test_scaled_and_raw_forecasts_are_never_the_same_object(autoscaler):
 
     scaled[1] *= 0.5
     assert raw == [718.8] * 4
+
+
+# ----------------------------------------------------------------------
+# Day totals for the dashboard header
+# ----------------------------------------------------------------------
+
+
+def _pv_with_forecast(scaled, raw=None, tfb=3600):
+    """A PvInterface holding a fixed forecast, with no provider or thread behind it."""
+    pv = PvInterface({}, [], tfb, {}, timezone="UTC")
+    pv.pv_forcast_array = list(scaled)
+    pv.pv_forcast_array_raw = list(raw if raw is not None else scaled)
+    return pv
+
+
+def test_day_totals_split_the_horizon_at_local_midnight():
+    """Slot 0 is local midnight today, the alignment apply_scaling also relies on."""
+    pv = _pv_with_forecast([100.0] * 24 + [50.0] * 24)
+
+    assert pv.get_forecast_day_totals() == {"today_wh": 2400.0, "tomorrow_wh": 1200.0}
+
+
+def test_day_totals_follow_the_configured_resolution():
+    """A 15-minute install publishes 96 slots per day, not 24."""
+    pv = _pv_with_forecast([100.0] * 96 + [50.0] * 96, tfb=900)
+
+    assert pv.get_forecast_day_totals() == {"today_wh": 9600.0, "tomorrow_wh": 4800.0}
+
+
+def test_day_totals_report_the_scaled_array_by_default():
+    """
+    The header must show what the optimizer and the autoscaling overlay show.
+
+    Summing the raw array here would put the header back out of step with the overlay,
+    which is the disagreement this method exists to remove.
+    """
+    pv = _pv_with_forecast([80.0] * 48, raw=[100.0] * 48)
+
+    assert pv.get_forecast_day_totals()["today_wh"] == 1920.0
+    assert pv.get_forecast_day_totals(scale=False)["today_wh"] == 2400.0
+
+
+def test_day_totals_report_none_for_a_day_with_no_slots():
+    """A short forecast must not publish 0.0, which reads as "no sun tomorrow"."""
+    pv = _pv_with_forecast([100.0] * 24)
+
+    assert pv.get_forecast_day_totals() == {"today_wh": 2400.0, "tomorrow_wh": None}
+
+
+def test_day_totals_survive_an_empty_forecast():
+    """A fresh install has no forecast yet; the endpoint must still answer."""
+    pv = _pv_with_forecast([])
+
+    assert pv.get_forecast_day_totals() == {"today_wh": None, "tomorrow_wh": None}
+
+
+def test_day_totals_report_none_for_an_unusable_slot():
+    """One bad slot must not be summed as zero, silently understating the day."""
+    pv = _pv_with_forecast([100.0] * 23 + ["not a number"])
+
+    assert pv.get_forecast_day_totals()["today_wh"] is None

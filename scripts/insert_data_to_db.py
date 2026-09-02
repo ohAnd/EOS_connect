@@ -19,6 +19,13 @@ sys.path.insert(0, project_root)
 
 from src.persistence import PvYieldStore
 from src.config_web.store import ConfigStore
+from src.interfaces.pv_autoscaler import (
+    TIMEFRAME_IDS,
+    TIMEFRAME_START_HOURS,
+    timeframe_end_hour,
+    timeframe_for_hour,
+    timeframe_label,
+)
 
 logging.basicConfig(level=logging.INFO, format="[PV-INSERT] %(message)s")
 logger = logging.getLogger(__name__)
@@ -67,37 +74,25 @@ def insert_pv_yields(
     step_hours = max(1, hour_interval_minutes // 60)
     rows = []
 
-    # Calculate hourly values for each timeframe
-    t1_hours = 6  # 0-6 hours
-    t2_hours = 6  # 6-12 hours
-    t3_hours = 6  # 12-18 hours
-    t4_hours = 6  # 18-24 hours
-
-    t1_r_hourly = t1_r / t1_hours if t1_hours > 0 else 0.0
-    t1_f_hourly = t1_f / t1_hours if t1_hours > 0 and t1_f is not None else None
-
-    t2_r_hourly = t2_r / t2_hours if t2_hours > 0 else 0.0
-    t2_f_hourly = t2_f / t2_hours if t2_hours > 0 and t2_f is not None else None
-
-    t3_r_hourly = t3_r / t3_hours if t3_hours > 0 else 0.0
-    t3_f_hourly = t3_f / t3_hours if t3_hours > 0 and t3_f is not None else None
-
-    t4_r_hourly = t4_r / t4_hours if t4_hours > 0 else 0.0
-    t4_f_hourly = t4_f / t4_hours if t4_hours > 0 and t4_f is not None else None
+    # Spread each timeframe total evenly over the hours it covers. Widths come from the
+    # autoscaler's own partitioning, so re-cutting the boundaries there needs no edit
+    # here - and the timeframes are no longer all the same width.
+    per_hour = {}
+    for tf, (real_total, forecast_total) in zip(
+        TIMEFRAME_IDS, ((t1_r, t1_f), (t2_r, t2_f), (t3_r, t3_f), (t4_r, t4_f))
+    ):
+        width = timeframe_end_hour(tf) - TIMEFRAME_START_HOURS[tf - 1]
+        per_hour[tf] = (
+            (real_total or 0.0) / width,
+            forecast_total / width if forecast_total is not None else None,
+        )
 
     for hour in range(0, 24, step_hours):
         local_dt = tz.localize(
             datetime(target_local.year, target_local.month, target_local.day, hour)
         )
 
-        if hour < 6:
-            current_delta_kwh, forecast_kwh = t1_r_hourly, t1_f_hourly
-        elif hour < 12:
-            current_delta_kwh, forecast_kwh = t2_r_hourly, t2_f_hourly
-        elif hour < 18:
-            current_delta_kwh, forecast_kwh = t3_r_hourly, t3_f_hourly
-        else:
-            current_delta_kwh, forecast_kwh = t4_r_hourly, t4_f_hourly
+        current_delta_kwh, forecast_kwh = per_hour[timeframe_for_hour(hour)]
 
         current_delta_kwh = float(current_delta_kwh or 0.0)
         forecast_kwh = float(forecast_kwh) if forecast_kwh is not None else None
@@ -107,7 +102,6 @@ def insert_pv_yields(
                 "timestamp": local_dt.astimezone(timezone.utc).isoformat(),
                 "date": target_local.isoformat(),
                 "hour": hour,
-                "timeframe_id": (hour // 6) + 1,
                 "real_counter_kwh": previous_counter_kwh,
                 "real_delta_kwh": current_delta_kwh,
                 "forecast_kwh": forecast_kwh,
@@ -136,14 +130,14 @@ def main() -> None:
     parser.add_argument("--delete", action="store_true", help="Delete all entries for the specified date")
 
     # Add command-line arguments for timeframe values (optional if --delete is specified)
-    parser.add_argument("--t1_r", type=float, help="Real value for timeframe 1 (0-6 hours)")
-    parser.add_argument("--t1_f", type=float, help="Forecast value for timeframe 1 (0-6 hours)")
-    parser.add_argument("--t2_r", type=float, help="Real value for timeframe 2 (6-12 hours)")
-    parser.add_argument("--t2_f", type=float, help="Forecast value for timeframe 2 (6-12 hours)")
-    parser.add_argument("--t3_r", type=float, help="Real value for timeframe 3 (12-18 hours)")
-    parser.add_argument("--t3_f", type=float, help="Forecast value for timeframe 3 (12-18 hours)")
-    parser.add_argument("--t4_r", type=float, help="Real value for timeframe 4 (18-24 hours)")
-    parser.add_argument("--t4_f", type=float, help="Forecast value for timeframe 4 (18-24 hours)")
+    for tf in TIMEFRAME_IDS:
+        span = timeframe_label(tf)
+        parser.add_argument(
+            f"--t{tf}_r", type=float, help=f"Real value for timeframe {tf} ({span})"
+        )
+        parser.add_argument(
+            f"--t{tf}_f", type=float, help=f"Forecast value for timeframe {tf} ({span})"
+        )
 
     args = parser.parse_args()
 

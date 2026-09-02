@@ -265,12 +265,25 @@
     "last_response_timestamp": "2024-11-14T22:30:01.194684+02:00",
     "next_run": "2024-11-14T22:35:01.196502+02:00"
   },
+  "pv_forecast": {
+    "today_wh": 17209.0,
+    "tomorrow_wh": 12459.0
+  },
   "used_optimization_source": "eos_server",
   "used_time_frame_base": 3600,
   "eos_connect_version": "0.2.01.138-develop",
   "timestamp": "2024-06-01T12:00:00+02:00",
-  "api_version": "0.0.3"
+  "api_version": "0.0.5"
 }</code></pre>
+
+                    <div class="alert alert-info">
+                        <strong><i class="fas fa-info-circle"></i> PV forecast totals:</strong>
+                        <code>pv_forecast</code> holds today's and tomorrow's total forecast energy, taken live from
+                        the same auto-scaled array the optimizer receives and the PV auto-scaling overlay displays.
+                        It is deliberately not read from <code>optimize_request.json</code>, which is only rewritten
+                        once per optimization run and additionally carries EVopt's partial-slot discount. Either
+                        value is <code>null</code> when no forecast covers that day.
+                    </div>
 
                     <div class="alert alert-info">
                         <strong><i class="fas fa-info-circle"></i> State Consistency:</strong>
@@ -315,6 +328,12 @@
     },
     "current_forecast_array_raw": [ ... ],
     "current_forecast_array_scaled": [ ... ],
+    "timeframe_bounds": [
+      {"id": 1, "start": 0, "end": 8, "label": "00:00 - 07:59"},
+      {"id": 2, "start": 8, "end": 12, "label": "08:00 - 11:59"},
+      {"id": 3, "start": 12, "end": 16, "label": "12:00 - 15:59"},
+      {"id": 4, "start": 16, "end": 24, "label": "16:00 - 23:59"}
+    ],
     "current_forecast_array_unit": "Wh per forecast slot",
     "used_time_frame_base": 3600
   },
@@ -324,8 +343,9 @@
                     <p>
                         <code>scale_factors</code> are the values currently applied to forecasts;
                         <code>computed_scale_factors</code>
-                        reflect the latest calculation from the database. Timeframes are 1 = 00–05 h, 2 = 06–11 h,
-                        3 = 12–17 h, 4 = 18–23 h (local time).
+                        reflect the latest calculation from the database. Timeframes are 1 = 00–07 h, 2 = 08–11 h,
+                        3 = 12–15 h, 4 = 16–23 h (local time), also served as
+                        <code>timeframe_bounds</code> in the response so a client never has to hardcode them.
                     </p>
                     <p>
                         <code>running</code> reports whether the background collection thread is alive.
@@ -458,7 +478,7 @@
   "_datasets": ["settings", "pv_yield_history"],
   "pv_yield_history": [
     {"timestamp": "2026-08-19T06:00:00+00:00", "date": "2026-08-19", "hour": 8,
-     "timeframe_id": 2, "real_delta_kwh": 0.83, "forecast_kwh": 0.91,
+     "real_delta_kwh": 0.83, "forecast_kwh": 0.91,
      "local_date": "2026-08-19", "local_hour": 8, "local_offset_minutes": 120,
      "origin": null}
   ]
