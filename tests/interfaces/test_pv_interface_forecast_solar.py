@@ -398,3 +398,251 @@ def test_other_sources_keep_the_flat_interval():
     )
 
     assert pv.update_interval == 15 * 60
+
+
+# --------------------------------------------------------------- period bucketing
+
+
+def _make_pv_at(time_frame_base, api_key=""):
+    """A PvInterface pinned to a given slot resolution."""
+    config_source = {"source": "forecast_solar"}
+    if api_key:
+        config_source["api_key"] = api_key
+    return PvInterface(
+        config_source, [_installation()], time_frame_base, {}, timezone="UTC"
+    )
+
+
+# Shape taken from a live public-tier response (estimate/50.0/8.0/30/0/5): a sunrise
+# entry of 0, hourly grid points, and a partial sunset sliver.  Every value is the
+# energy of the period *ending* at its timestamp.
+_HOURLY_DAY = {
+    "2026-09-03 06:46:08": 0,
+    "2026-09-03 07:00:00": 15,
+    "2026-09-03 08:00:00": 240,
+    "2026-09-03 09:00:00": 474,
+    "2026-09-03 10:00:00": 703,
+    "2026-09-03 11:00:00": 889,
+    "2026-09-03 12:00:00": 1022,
+    "2026-09-03 13:00:00": 1101,
+    "2026-09-03 14:00:00": 1115,
+    "2026-09-03 15:00:00": 1062,
+    "2026-09-03 16:00:00": 944,
+    "2026-09-03 17:00:00": 770,
+    "2026-09-03 18:00:00": 556,
+    "2026-09-03 19:00:00": 324,
+    "2026-09-03 20:00:00": 137,
+    "2026-09-03 20:08:35": 5,
+}
+
+# The reporter's own 30-minute data from issue #295, one plane, verbatim.
+_HALF_HOURLY_DAY = {
+    "2026-09-02 06:32:06": 0,
+    "2026-09-02 07:00:00": 29,
+    "2026-09-02 07:30:00": 85,
+    "2026-09-02 08:00:00": 128,
+    "2026-09-02 08:30:00": 164,
+    "2026-09-02 09:00:00": 195,
+    "2026-09-02 09:30:00": 223,
+    "2026-09-02 10:00:00": 249,
+    "2026-09-02 10:30:00": 274,
+    "2026-09-02 11:00:00": 299,
+    "2026-09-02 11:30:00": 318,
+    "2026-09-02 12:00:00": 332,
+    "2026-09-02 12:30:00": 345,
+    "2026-09-02 13:00:00": 357,
+    "2026-09-02 13:30:00": 372,
+    "2026-09-02 14:00:00": 409,
+    "2026-09-02 14:30:00": 468,
+    "2026-09-02 15:00:00": 494,
+    "2026-09-02 15:30:00": 433,
+    "2026-09-02 16:00:00": 341,
+    "2026-09-02 16:30:00": 289,
+    "2026-09-02 17:00:00": 258,
+    "2026-09-02 17:30:00": 226,
+    "2026-09-02 18:00:00": 188,
+    "2026-09-02 18:30:00": 146,
+    "2026-09-02 19:00:00": 102,
+    "2026-09-02 19:30:00": 58,
+    "2026-09-02 19:53:05": 14,
+}
+
+
+def _quarter_hourly_day():
+    """A 15-minute grid, the resolution a Professional Plus account returns."""
+    payload = {"2026-09-03 06:40:00": 0}
+    start = datetime(2026, 9, 3, 7, 0, 0)
+    for i in range(1, 41):  # 07:00 .. 17:00
+        payload[(start + timedelta(minutes=15 * i)).strftime("%Y-%m-%d %H:%M:%S")] = (
+            10 * i
+        )
+    payload["2026-09-03 07:00:00"] = 7  # 06:40-07:00 sliver
+    return payload
+
+
+def test_hourly_value_lands_in_the_hour_it_was_produced_in():
+    """
+    Forecast.Solar labels a period with its *end*, so the value keyed 08:00 is the
+    energy of 07:00-08:00 and belongs in slot 7.  Reading it as slot 8 put the whole
+    curve an hour late.
+    """
+    slots = _make_pv_at(3600)._forecast_solar_periods_to_slots(_HOURLY_DAY)
+
+    assert slots[7] == 240  # keyed 08:00
+    assert slots[8] == 474  # keyed 09:00
+    assert slots[6] == 15  # the 06:46-07:00 sunrise sliver
+    assert slots[19] == 137  # keyed 20:00
+    assert slots[20] == 5  # the 20:00-20:08 sunset sliver
+
+
+def test_half_hourly_periods_are_summed_not_sampled():
+    """
+    Issue #295: with an API key the source resolution is 30 min, and an exact hourly
+    key lookup kept only the HH:00 half.  Hour 7 is 85 + 128, not 128.
+    """
+    slots = _make_pv_at(3600)._forecast_solar_periods_to_slots(_HALF_HOURLY_DAY)
+
+    assert slots[7] == 85 + 128 == 213
+    assert slots[8] == 164 + 195 == 359
+    assert slots[14] == 468 + 494 == 962
+    assert slots[19] == 58 + 14 == 72  # last half hour plus the sunset sliver
+    assert slots[6] == 29  # 06:32-07:00, on no hour boundary
+
+
+def test_quarter_hourly_periods_are_summed():
+    """A 15-minute account must contribute all four sub-periods of each hour."""
+    payload = _quarter_hourly_day()
+    slots = _make_pv_at(3600)._forecast_solar_periods_to_slots(payload)
+
+    assert slots[7] == sum(
+        payload[f"2026-09-03 0{h}:{m}:00"]
+        for h, m in ((7, "15"), (7, "30"), (7, "45"), (8, "00"))
+    )
+    assert slots[6] == 7  # 06:40-07:00 sliver
+
+
+@pytest.mark.parametrize(
+    "payload", [_HOURLY_DAY, _HALF_HOURLY_DAY], ids=["hourly", "half-hourly"]
+)
+def test_no_energy_is_lost(payload):
+    """
+    Every Wh the API reports has to end up in some slot - including the sunrise and
+    sunset slivers, which land on no grid boundary and used to be dropped.
+    """
+    slots = _make_pv_at(3600)._forecast_solar_periods_to_slots(payload)
+
+    assert sum(slots) == pytest.approx(sum(payload.values()), abs=0.5)
+
+
+def test_the_overnight_gap_stays_empty():
+    """
+    The pair (yesterday's sunset, today's sunrise) spans the whole night.  Spreading
+    it would invent production in the dark; a sunrise entry is always 0, so nothing
+    may be attributed to the night slots.
+    """
+    payload = dict(_HOURLY_DAY)
+    payload["2026-09-04 06:47:38"] = 0
+    payload["2026-09-04 07:00:00"] = 13
+    payload["2026-09-04 08:00:00"] = 244
+
+    slots = _make_pv_at(3600)._forecast_solar_periods_to_slots(payload)
+
+    assert slots[21:30] == [0.0] * 9  # 21:00 through 05:00 the next morning
+    assert slots[30] == 13  # day two's 06:47-07:00 sliver
+    assert slots[31] == 244  # day two's 07:00-08:00
+
+
+def test_a_non_zero_period_after_a_long_gap_is_clamped_to_one_hour():
+    """
+    Defensive: if the API ever reports energy after a multi-hour gap, credit it to the
+    hour before the timestamp rather than smearing it over hours it cannot belong to.
+    """
+    payload = {
+        "2026-09-03 06:00:00": 0,
+        "2026-09-03 12:00:00": 600,
+    }
+
+    slots = _make_pv_at(3600)._forecast_solar_periods_to_slots(payload)
+
+    assert slots[11] == 600
+    assert sum(slots) == 600
+
+
+def test_15min_base_keeps_the_intra_hour_shape():
+    """
+    At a 900 s base the two halves of an hour must stay distinguishable.  The old
+    path parsed hourly and divided by four, which flattened them.
+    """
+    slots = _make_pv_at(900)._forecast_solar_periods_to_slots(_HALF_HOURLY_DAY, 900, 192)
+
+    assert len(slots) == 192
+    # Hour 7 is slots 28-31: 85 Wh over 07:00-07:30, then 128 Wh over 07:30-08:00.
+    assert slots[28:32] == [42.5, 42.5, 64.0, 64.0]
+    assert sum(slots[28:32]) == 213
+    assert sum(slots) == pytest.approx(sum(_HALF_HOURLY_DAY.values()), abs=0.5)
+
+
+def test_a_period_straddling_a_slot_boundary_is_split_proportionally():
+    """
+    The sunrise sliver 06:32:06-07:00 crosses a 15-minute boundary.  Splitting it by
+    overlap keeps the total exact instead of dropping or double-counting it.
+    """
+    slots = _make_pv_at(900)._forecast_solar_periods_to_slots(_HALF_HOURLY_DAY, 900, 192)
+
+    # 06:32:06-06:45 is 774 s of a 1674 s period; 06:45-07:00 is the other 900 s.
+    assert slots[26] == pytest.approx(29 * 774 / 1674, abs=0.05)
+    assert slots[27] == pytest.approx(29 * 900 / 1674, abs=0.05)
+    assert slots[26] + slots[27] == pytest.approx(29, abs=0.1)
+
+
+@pytest.mark.parametrize(
+    "time_frame_base,expected", [(3600, 48), (900, 192)], ids=["hourly", "15min"]
+)
+def test_the_slot_count_is_fixed_whatever_the_payload_covers(
+    monkeypatch, time_frame_base, expected
+):
+    """
+    A single-day payload still yields a full array, so a short response can never
+    hand a downstream consumer fewer slots than it expects.
+    """
+    pv = _make_pv_at(time_frame_base)
+    _capture_urls(
+        monkeypatch, _MockResponse(payload={"result": {"watt_hours_period": _HOURLY_DAY}})
+    )
+
+    result = pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
+
+    assert len(result) == expected
+    assert pv.pv_forcast_request_error["error"] is None
+
+
+def test_the_interface_returns_bucketed_values_end_to_end(monkeypatch):
+    """The wiring, not just the helper: a 30-min payload must arrive summed."""
+    pv = _make_pv_at(3600, api_key="KEY")
+    _capture_urls(
+        monkeypatch,
+        _MockResponse(payload={"result": {"watt_hours_period": _HALF_HOURLY_DAY}}),
+    )
+
+    result = pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
+
+    assert result[7] == 213
+    assert sum(result) == pytest.approx(sum(_HALF_HOURLY_DAY.values()), abs=0.5)
+
+
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        (_HOURLY_DAY, 3600),
+        (_HALF_HOURLY_DAY, 1800),
+    ],
+    ids=["hourly", "half-hourly"],
+)
+def test_source_resolution_is_detected_for_the_log(payload, expected):
+    """
+    The debug line has to name the resolution so a wrong curve is diagnosable from a
+    log excerpt - the slivers and the overnight gap must not skew it.
+    """
+    pv = _make_pv_at(3600)
+
+    assert pv._forecast_solar_source_resolution_s(payload) == expected

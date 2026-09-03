@@ -2611,6 +2611,12 @@ class PvInterface:
 
         watt_hours_period = self._retry_request(json_func, error_handler)
 
+        # Same reason as above: a failed parse already ran the error handler and what
+        # came back is its fallback forecast, not a period block.  Handing it on
+        # unchanged keeps one failed cycle counting once against max_failures.
+        if isinstance(watt_hours_period, list):
+            return watt_hours_period
+
         # Data validation
         if not watt_hours_period:
             return self._handle_interface_error(
@@ -2622,29 +2628,34 @@ class PvInterface:
 
         # Data processing
         try:
-            parsed = [
-                (datetime.strptime(ts, "%Y-%m-%d %H:%M:%S"), v)
-                for ts, v in watt_hours_period.items()
-            ]
-            min_time = min(dt for dt, _ in parsed)
-            # Align to midnight of the first day
-            midnight = min_time.replace(hour=0, minute=0, second=0, microsecond=0)
-            # Build list of 48 hourly timestamps
-            hours_list = [midnight + timedelta(hours=i) for i in range(48)]
-            # Build a lookup dict for fast access
-            lookup = {dt: v for dt, v in parsed}
-            # Fill the forecast array
-            forecast_values = []
-            for h in hours_list:
-                # Use value if exact hour exists, else 0
-                forecast_values.append(lookup.get(h, 0))
+            # Bucket straight into the system's own resolution rather than parsing
+            # hourly and splitting afterwards: a Personal (30 min) or Professional Plus
+            # (15 min) account then contributes its real intra-hour shape instead of a
+            # flat quarter of the hour.
+            slot_seconds, slot_count = (
+                (900, 192) if self.time_frame_base == 900 else (3600, 48)
+            )
+            pv_forecast = self._forecast_solar_periods_to_slots(
+                watt_hours_period, slot_seconds, slot_count
+            )
+
+            # Resolution and totals only - no coordinates, no key.  A log excerpt
+            # attached to a bug report has to be enough to diagnose a wrong curve
+            # without disclosing where the plant is (see __forecast_solar_request_path).
+            logger.debug(
+                "[PV-IF] Forecast.Solar '%s': %d periods at ~%d s resolution ->"
+                " %d slots of %d s, total %.0f Wh",
+                pv_config_entry.get("name", "unnamed"),
+                len(watt_hours_period),
+                self._forecast_solar_source_resolution_s(watt_hours_period),
+                slot_count,
+                slot_seconds,
+                sum(pv_forecast),
+            )
 
             # Clear any previous errors on success
             self.pv_forcast_request_error["error"] = None
 
-            pv_forecast = forecast_values
-            if self.time_frame_base == 900:
-                return self._convert_hourly_to_15min(pv_forecast)
             return pv_forecast
 
         except (ValueError, TypeError, AttributeError) as e:
@@ -3589,6 +3600,119 @@ class PvInterface:
             self.consecutive_failures,
             self.max_failures,
         )
+
+    def _forecast_solar_periods_to_slots(
+        self, watt_hours_period, slot_seconds=3600, slot_count=48
+    ):
+        """
+        Map a Forecast.Solar ``watt_hours_period`` block onto our own energy slots.
+
+        Forecast.Solar labels every entry with the **end** of the period it describes:
+        "the value is always for the period from last timestamp to the timestamp in the
+        key" (https://doc.forecast.solar/api:estimate).  The first entry of a day is
+        sunrise and has no predecessor, so it is always 0; the last is sunset and
+        carries the partial period since the previous grid point.  Resolution follows
+        the account level - 60 min on the public tier, 30 min with a Personal key,
+        15 min on Professional Plus - and the timestamps are not necessarily aligned to
+        our slot grid.
+
+        So every period is spread over the slots it overlaps, weighted by how much of
+        it falls in each.  That is correct at any source resolution, keeps the
+        sunrise/sunset slivers that fall on no grid boundary, and puts the energy in
+        the slot it was actually produced in.  Slot ``i`` ends up holding the energy
+        generated *during* slot ``i`` - the same convention every other PV source in
+        this module follows.
+
+        Args:
+            watt_hours_period (dict): ``{"YYYY-MM-DD HH:MM:SS": Wh}`` as returned by
+                the API.
+            slot_seconds (int): Length of one target slot in seconds (3600 or 900).
+            slot_count (int): How many slots to return (48 hourly, 192 quarter-hourly).
+
+        Returns:
+            list: Exactly ``slot_count`` Wh values, starting at midnight of the first
+            day in the payload.
+        """
+        parsed = sorted(
+            (datetime.strptime(ts, "%Y-%m-%d %H:%M:%S"), float(wh))
+            for ts, wh in watt_hours_period.items()
+        )
+        if not parsed:
+            return [0.0] * slot_count
+        # Anchor on midnight of the first day, so slot 0 is always 00:00-00:xx today.
+        midnight = parsed[0][0].replace(hour=0, minute=0, second=0, microsecond=0)
+        slots = [0.0] * slot_count
+
+        for index, (end, watt_hours) in enumerate(parsed):
+            # A zero period carries nothing to distribute.  Skipping it is also what
+            # makes the overnight gap harmless: the pair (yesterday's sunset,
+            # today's sunrise) spans the whole night, but a sunrise entry is always 0,
+            # so no energy is ever smeared across the dark hours.
+            if watt_hours <= 0:
+                continue
+            # The first entry has no predecessor to measure a period against.  In
+            # practice it is sunrise and therefore 0, so we never get here; if the API
+            # ever sends a non-zero first value, a zero-length period keeps it rather
+            # than dropping it.
+            start = parsed[index - 1][0] if index else end
+            # Defensive: a non-zero value after a long gap must not be smeared over
+            # hours it cannot have been produced in.  Attribute it to the last hour.
+            if (end - start).total_seconds() > 3600:
+                start = end - timedelta(hours=1)
+            self._spread_over_slots(
+                slots,
+                slot_seconds,
+                (start - midnight).total_seconds(),
+                (end - midnight).total_seconds(),
+                watt_hours,
+            )
+
+        return [round(value, 1) for value in slots]
+
+    @staticmethod
+    def _spread_over_slots(slots, slot_seconds, start_s, end_s, watt_hours):
+        """
+        Add ``watt_hours`` to ``slots`` in place, split across the slots that the
+        period ``[start_s, end_s)`` overlaps in proportion to how much of it falls in
+        each.  Offsets are seconds from the start of slot 0; anything outside the
+        array is discarded.  A zero-length period lands whole in the slot it sits in.
+        """
+        horizon = slot_seconds * len(slots)
+
+        def credit(offset_s, amount):
+            """Credit ``amount`` Wh to the slot containing ``offset_s``."""
+            if 0 <= offset_s < horizon:
+                slots[int(offset_s // slot_seconds)] += amount
+
+        period_s = end_s - start_s
+        if period_s <= 0:
+            credit(start_s, watt_hours)
+            return
+        cursor = start_s
+        while cursor < end_s:
+            slot_end = (int(cursor // slot_seconds) + 1) * float(slot_seconds)
+            chunk_end = min(slot_end, end_s)
+            credit(cursor, watt_hours * (chunk_end - cursor) / period_s)
+            cursor = chunk_end
+
+    def _forecast_solar_source_resolution_s(self, watt_hours_period):
+        """
+        Best guess at the source resolution of a ``watt_hours_period`` block, in
+        seconds, for the debug log.
+
+        Uses the most common gap between consecutive timestamps, which ignores the
+        sunrise/sunset slivers and the overnight gap without having to identify them.
+        Returns 0 when there is not enough data to tell.
+        """
+        stamps = sorted(
+            datetime.strptime(ts, "%Y-%m-%d %H:%M:%S") for ts in watt_hours_period
+        )
+        gaps = [
+            int((b - a).total_seconds()) for a, b in zip(stamps, stamps[1:])
+        ]
+        if not gaps:
+            return 0
+        return max(set(gaps), key=gaps.count)
 
     def _convert_hourly_to_15min(self, hourly_values):
         """
