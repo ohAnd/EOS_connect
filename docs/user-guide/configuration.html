@@ -3570,6 +3570,10 @@ price:
                                 the public tier applies: <strong>12 requests per hour, counted per IP address</strong>.
                                 With a key the quota is counted against the key instead, and Personal
                                 (2 planes) or Professional (3&ndash;4 planes) accounts allow more.
+                                A key also raises the forecast resolution &mdash; 30 minutes on Personal,
+                                15 minutes on Professional Plus, against 60 minutes on the public tier &mdash;
+                                and EOS&nbsp;Connect uses whatever it is given in full, mapping the finer
+                                periods onto its own time slots.
                                 The key is sent as the first path segment of the request URL.
                                 Neither the key nor your coordinates appear in the debug log &mdash;
                                 it shows <code>.../***/estimate/&lt;lat&gt;/&lt;lon&gt;/...</code>, so a log
