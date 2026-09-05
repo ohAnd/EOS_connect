@@ -205,7 +205,7 @@ class StatisticsManager {
                 statusBanner = `
                     <div style="background: linear-gradient(135deg, rgba(220, 53, 69, 0.18) 0%, rgba(220, 53, 69, 0.08) 100%); border: 1px solid rgba(220, 53, 69, 0.45); border-radius: 8px; padding: 15px;">
                         <div style="display: flex; align-items: flex-start; gap: 12px;">
-                            <div style="font-size: 1.4em; margin-top: 2px;">⚠️</div>
+                            <div style="font-size: 1.4em; margin-top: 2px; color: #ef5350;"><i class="fa-solid fa-triangle-exclamation"></i></div>
                             <div>
                                 <div style="font-weight: 600; color: #ef5350; margin-bottom: 6px;">
                                     PV Autoscaler cannot read the yield counter${failures > 1 ? ` (${failures} attempts in a row)` : ''}
@@ -234,7 +234,7 @@ class StatisticsManager {
                 statusBanner = `
                     <div style="background: linear-gradient(135deg, rgba(33, 150, 243, 0.15) 0%, rgba(100, 149, 237, 0.1) 100%); border: 1px solid rgba(100, 149, 237, 0.3); border-radius: 8px; padding: 15px;">
                         <div style="display: flex; align-items: flex-start; gap: 12px;">
-                            <div style="font-size: 1.4em; margin-top: 2px;">🔄</div>
+                            <div style="font-size: 1.4em; margin-top: 2px; color: #64b5f6;"><i class="fa-solid fa-rotate"></i></div>
                             <div>
                                 <div style="font-weight: 600; color: #64b5f6; margin-bottom: 6px;">Initializing PV Autoscaler</div>
                                 <div style="font-size: 0.9em; color: #90caf9; line-height: 1.4;">
@@ -258,7 +258,7 @@ class StatisticsManager {
                 statusBanner = `
                     <div style="background: linear-gradient(135deg, rgba(255, 152, 0, 0.15) 0%, rgba(255, 193, 7, 0.1) 100%); border: 1px solid rgba(255, 152, 0, 0.3); border-radius: 8px; padding: 15px;">
                         <div style="display: flex; align-items: flex-start; gap: 12px;">
-                            <div style="font-size: 1.4em; margin-top: 2px;">⏳</div>
+                            <div style="font-size: 1.4em; margin-top: 2px; color: #ffb74d;"><i class="fa-solid fa-hourglass-half"></i></div>
                             <div style="flex: 1;">
                                 <div style="font-weight: 600; color: #ffb74d; margin-bottom: 6px;">Collecting Historical Data (${totalHoursRecorded}/${hoursRequired} hours)</div>
                                 <div style="background-color: rgba(0,0,0,0.2); height: 6px; border-radius: 3px; overflow: hidden; margin-bottom: 8px;">
@@ -304,25 +304,25 @@ class StatisticsManager {
                             <i class="fa-solid fa-chart-line" style="margin-right: 6px;"></i>
                             Forecast Comparison (Daily Total)
                         </div>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div class="pv-scale-forecast-grid">
                             <div style="background-color: rgba(255,255,255,0.05); border-radius: 6px; padding: 12px; border-left: 3px solid #4a9eff;">
                                 <div style="font-weight: 600; color: #ddd; margin-bottom: 10px;">Today</div>
-                                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <div class="pv-scale-kv" style="margin-bottom: 8px;">
                                     <span style="color: #aaa;">Original:</span>
                                     <span style="color: #fff; font-weight: 500;">${todayOriginal.toFixed(2)} kWh</span>
                                 </div>
-                                <div style="display: flex; justify-content: space-between;">
+                                <div class="pv-scale-kv">
                                     <span style="color: #aaa;">Corrected:</span>
                                     <span><span style="color: #888; font-size: 0.85em;">(${todayScaled >= todayOriginal ? '+' : ''}${(todayScaled - todayOriginal).toFixed(2)} kWh)</span> <span style="color: #4caf50; font-weight: 500; font-size: 1.1em;">${todayScaled.toFixed(2)} kWh</span></span>
                                 </div>
                             </div>
                             <div style="background-color: rgba(255,255,255,0.05); border-radius: 6px; padding: 12px; border-left: 3px solid #4a9eff;">
                                 <div style="font-weight: 600; color: #ddd; margin-bottom: 10px;">Tomorrow</div>
-                                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <div class="pv-scale-kv" style="margin-bottom: 8px;">
                                     <span style="color: #aaa;">Original:</span>
                                     <span style="color: #fff; font-weight: 500;">${tomorrowOriginal.toFixed(2)} kWh</span>
                                 </div>
-                                <div style="display: flex; justify-content: space-between;">
+                                <div class="pv-scale-kv">
                                     <span style="color: #aaa;">Corrected:</span>
                                     <span><span style="color: #888; font-size: 0.85em;">(${tomorrowScaled >= tomorrowOriginal ? '+' : ''}${(tomorrowScaled - tomorrowOriginal).toFixed(2)} kWh)</span> <span style="color: #4caf50; font-weight: 500; font-size: 1.1em;">${tomorrowScaled.toFixed(2)} kWh</span></span>
                                 </div>
@@ -353,10 +353,10 @@ class StatisticsManager {
                             Today (Partial) — Not Used for Scaling
                         </div>
                         <div style="background-color: rgba(255,255,255,0.06); border-radius: 6px; padding: 10px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <div class="pv-scale-kv" style="margin-bottom: 8px;">
                                 <span style="font-weight: 500; color: #bbb;">Partial data being collected (${todaysHours}h) — Will be saved and used tomorrow</span>
                             </div>
-                            <div style="display: grid; grid-template-columns: repeat(${timeframes.length}, 1fr); gap: 6px; font-size: 0.8em;">
+                            <div class="pv-scale-tf-grid" style="grid-template-columns: repeat(${timeframes.length}, 1fr);">
                                 ${timeframes.map((tf, i) => `
                                 <div style="text-align: center; padding: 6px; background-color: rgba(${tfColor(i).rgb},0.15); border-radius: 4px;" title="${tf.label}">
                                     <div style="color: #999; font-size: 0.75em;">T${tf.id}</div>
@@ -375,7 +375,7 @@ class StatisticsManager {
                             Today (Partial) — Not Used for Scaling
                         </div>
                         <div style="text-align: center; padding: 20px 15px; color: #888;">
-                            <div style="font-size: 1.2em; margin-bottom: 8px;">⏳</div>
+                            <div style="font-size: 1.2em; margin-bottom: 8px; color: #888;"><i class="fa-solid fa-hourglass-half"></i></div>
                             <div style="color: #aaa; font-size: 0.9em;">Waiting for first hourly reading... Data will appear here as it's collected.</div>
                         </div>
                     </div>
@@ -391,7 +391,7 @@ class StatisticsManager {
                             <i class="fa-solid fa-history" style="margin-right: 6px;"></i>
                             Historical Data Used for Scaling (Yesterday & Before)
                         </div>
-                        <div style="display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto;">
+                        <div class="pv-scale-history">
                 `;
 
                 // Drop rows with no usable date rather than rendering them as "Jan 1":
@@ -423,11 +423,11 @@ class StatisticsManager {
 
                     historicalHtml += `
                         <div style="background-color: rgba(255,255,255,0.05); border-radius: 6px; padding: 10px; border-left: 3px solid ${restored ? '#ffc107' : '#4a9eff'};">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <div class="pv-scale-kv" style="margin-bottom: 8px;">
                                 <span style="font-weight: 600; color: #ddd;">${dateStr}${originBadge}</span>
                                 <span style="font-size: 0.8em; color: #888;">${hours} hours recorded</span>
                             </div>
-                            <div style="display: grid; grid-template-columns: repeat(${timeframes.length}, 1fr); gap: 6px; font-size: 0.8em;">
+                            <div class="pv-scale-tf-grid" style="grid-template-columns: repeat(${timeframes.length}, 1fr);">
                                 ${timeframes.map((tf, i) => `
                                 <div style="text-align: center; padding: 6px; background-color: rgba(${tfColor(i).rgb},0.1); border-radius: 4px;" title="${tf.label}">
                                     <div style="color: #888; font-size: 0.75em;">T${tf.id}</div>
@@ -457,7 +457,7 @@ class StatisticsManager {
                             Historical Data Used for Scaling (Yesterday & Before)
                         </div>
                         <div style="text-align: center; padding: 30px 15px; color: #888;">
-                            <div style="font-size: 1.4em; margin-bottom: 10px;">⏳</div>
+                            <div style="font-size: 1.4em; margin-bottom: 10px; color: #888;"><i class="fa-solid fa-hourglass-half"></i></div>
                             <div style="color: #aaa;">
                                 <strong>Waiting for historical data...</strong><br>
                                 <span style="font-size: 0.9em;">Once a complete day passes, it will appear here for scale factor calculation.</span>
@@ -515,7 +515,7 @@ class StatisticsManager {
 
             // Build final content
             const content = `
-                <div style="height: 100%; overflow: hidden; padding: 10px; display: flex; flex-direction: column; gap: 15px; box-sizing: border-box;">
+                <div class="pv-scale-root">
                     ${statusBanner}
 
                     <div style="background-color: rgba(0,0,0,0.2); border-radius: 8px; padding: 15px; border-left: 4px solid ${enabled ? '#4caf50' : '#f44336'};">
@@ -528,24 +528,24 @@ class StatisticsManager {
                         </div>
                     </div>
 
-                    <div style="background-color: rgba(0,0,0,0.2); border-radius: 8px; padding: 15px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 15px;">
+                    <div class="pv-scale-panel" style="background-color: rgba(0,0,0,0.2); border-radius: 8px; padding: 15px;">
                         <div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <div class="pv-scale-section-head">
                                 <div style="font-weight: bold; color: #ccc;">Timeframe Scale Factors</div>
                                 <div style="font-size: 0.85em; color: #888;">Today's forecast multipliers</div>
                             </div>
 
-                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px;">
+                            <div class="pv-scale-tiles">
                                 ${timeframes.map((tf, i) => `
                                 <div style="background-color: rgba(76, 175, 80, 0.1); border: 1px solid rgba(76, 175, 80, 0.3); border-radius: 6px; padding: 12px; text-align: center;">
                                     <div style="font-size: 0.85em; color: #888; margin-bottom: 6px;">Timeframe ${tf.id}</div>
                                     <div style="font-size: 0.8em; color: #aaa; margin-bottom: 8px;">${tf.label}</div>
-                                    <div style="font-size: 1.8em; font-weight: bold; color: ${tfColor(i).accent}; font-family: monospace;">${factorFor(tf.id).toFixed(3)}×</div>
+                                    <div class="pv-scale-total-value" style="color: ${tfColor(i).accent};">${factorFor(tf.id).toFixed(3)}×</div>
                                 </div>`).join('')}
 
-                                <div style="background-color: rgba(65, 105, 225, 0.15); border: 2px solid rgba(100, 149, 237, 0.4); border-radius: 6px; padding: 12px; text-align: center;">
+                                <div class="pv-scale-tile-total" style="background-color: rgba(65, 105, 225, 0.15); border: 2px solid rgba(100, 149, 237, 0.4); border-radius: 6px; padding: 12px; text-align: center;">
                                     <div style="font-size: 0.85em; color: #6495ed; margin-bottom: 4px; font-weight: 600;">WHOLE DAY${isWeighted ? '<br><span style="font-size: 0.7em; font-weight: normal;">(forecast weighted)</span>' : ''}</div>
-                                    <div style="font-size: 1.8em; font-weight: bold; color: #6495ed; font-family: monospace;">${dailyAvg.toFixed(3)}× (${percentChange >= 0 ? '+' : ''}${percentChange.toFixed(1)}%)</div>
+                                    <div class="pv-scale-total-value" style="color: #6495ed;">${dailyAvg.toFixed(3)}×<span class="pv-scale-total-pct">(${percentChange >= 0 ? '+' : ''}${percentChange.toFixed(1)}%)</span></div>
                                 </div>
                             </div>
                         </div>

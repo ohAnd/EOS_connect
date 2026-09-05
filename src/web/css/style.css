@@ -728,3 +728,265 @@ input[type="number"] {
         display: none;
     }
 }
+/* ===================================
+   Full-screen overlay shell
+
+   These used to be inline styles built from isMobile() in showFullScreenOverlay().
+   That helper is sampled once, when the overlay is rendered, so an overlay opened in
+   portrait kept its phone paddings and font size after the device was rotated. A media
+   query re-evaluates on rotation; the JS did not.
+   =================================== */
+
+#full_screen_overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.6);
+    z-index: 1000;
+    padding: 60px;
+    box-sizing: border-box;
+}
+
+.fs-overlay-card {
+    background-color: rgb(78, 78, 78);
+    border-radius: 10px;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+#full_screen_header {
+    padding: 15px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px 10px 0 0;
+    background-color: rgb(58, 58, 58);
+    color: lightgray;
+    font-weight: bold;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 1em;
+}
+
+#full_screen_content {
+    flex: 1;
+    padding: 20px;
+    overflow: auto;
+    color: lightgray;
+    font-size: 1em;
+}
+
+.fs-overlay-close {
+    background: none;
+    border: none;
+    color: lightgray;
+    font-size: 1.5em;
+    cursor: pointer;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: background-color 0.2s;
+    flex-shrink: 0;
+}
+
+.fs-overlay-close:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+@media (max-width: 768px) {
+    #full_screen_overlay {
+        padding: 8px;
+    }
+
+    .fs-overlay-card {
+        border-radius: 6px;
+    }
+
+    #full_screen_header {
+        padding: 12px 15px;
+        border-radius: 6px 6px 0 0;
+        font-size: 1.1em;
+    }
+
+    #full_screen_content {
+        padding: 15px;
+        font-size: 0.85em;
+    }
+
+    .fs-overlay-close {
+        width: 28px;
+        height: 28px;
+    }
+}
+
+/* ===================================
+   PV Autoscaling overlay
+
+   Built as a template string in statistics.js, so only the layout properties live here —
+   colours and borders stay inline next to the data that picks them.
+   =================================== */
+
+.pv-scale-root {
+    height: 100%;
+    overflow: hidden;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    box-sizing: border-box;
+}
+
+.pv-scale-panel {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.pv-scale-section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+
+/* 140px, not 120px: the widest tile holds a 1.8em monospace factor, which does not fit a
+   120px track once its padding is taken off. */
+.pv-scale-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+}
+
+.pv-scale-tiles>div {
+    min-width: 0;
+}
+
+.pv-scale-total-value {
+    font-size: 1.8em;
+    font-weight: bold;
+    font-family: monospace;
+}
+
+/* On its own line rather than trailing the factor: "0.561× (-43.9%)" at 1.8em is wider
+   than any tile the auto-fit grid produces, at every viewport. */
+.pv-scale-total-pct {
+    display: block;
+    font-size: 0.5em;
+    font-weight: 600;
+}
+
+.pv-scale-forecast-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.pv-scale-forecast-grid>div {
+    min-width: 0;
+}
+
+/* Label on the left, value on the right — with a gap, so a value that grows past its half
+   of the row wraps under the label instead of butting against it. */
+.pv-scale-kv {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 4px 10px;
+    min-width: 0;
+}
+
+.pv-scale-tf-grid {
+    display: grid;
+    gap: 6px;
+    font-size: 0.8em;
+}
+
+.pv-scale-tf-grid>div {
+    min-width: 0;
+}
+
+.pv-scale-history {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+/* Narrow: the fixed column counts have to collapse. Four timeframe cells across a phone
+   leave ~47px each, which wraps "R: 5.15 kWh" onto four lines. */
+@media (max-width: 768px) {
+    .pv-scale-tiles {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .pv-scale-tile-total {
+        grid-column: 1 / -1;
+    }
+
+    .pv-scale-total-value {
+        font-size: 1.35em;
+    }
+
+    /* Relative to a value that just shrank by a quarter, 0.5em is unreadable. */
+    .pv-scale-total-pct {
+        font-size: 0.65em;
+    }
+
+    .pv-scale-forecast-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .pv-scale-tf-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+    }
+
+    .pv-scale-section-head {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+    }
+}
+
+/* Narrow OR short — a phone in landscape is 874x402, which the width query above misses.
+   One scroll context: the overlay's own #full_screen_content. Nesting a 300px day list
+   inside a flex:1 scroller inside that gives a touch three places to land, and the outer
+   two clip whatever the banner pushes past 100%. */
+@media (max-width: 768px), (max-height: 700px) {
+    .pv-scale-root {
+        height: auto;
+        overflow: visible;
+        padding: 0;
+    }
+
+    .pv-scale-panel {
+        flex: 0 0 auto;
+        overflow-y: visible;
+        padding: 10px !important;
+    }
+
+    .pv-scale-history {
+        max-height: none;
+        overflow-y: visible;
+    }
+
+    .pv-scale-kv {
+        flex-wrap: wrap;
+    }
+
+    .pv-scale-root code {
+        word-break: break-word;
+        overflow-wrap: anywhere;
+    }
+}

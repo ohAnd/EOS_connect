@@ -244,13 +244,11 @@ class ConfigurationManager {
      * @returns {string} Close button HTML
      */
     _buildCloseBtn() {
-        const size = isMobile() ? "28px" : "30px";
-        return `<button onclick="closeFullScreenOverlay()" style="
-            background:none;border:none;color:lightgray;font-size:1.5em;cursor:pointer;
-            padding:0;width:${size};height:${size};display:flex;align-items:center;
-            justify-content:center;border-radius:50%;transition:background-color 0.2s;"
-            onmouseover="this.style.backgroundColor='rgba(255,255,255,0.1)'"
-            onmouseout="this.style.backgroundColor='transparent'">×</button>`;
+        // The same .fs-overlay-close the overlay host uses. It carried its own copy,
+        // sized from isMobile(), which froze at render time - and this header is
+        // rebuilt often enough that the two drifted apart on a rotated device.
+        return `<button class="fs-overlay-close" onclick="closeFullScreenOverlay()"
+            aria-label="Close">\u00d7</button>`;
     }
 
     // ── Navigation ──────────────────────────────────────────────
