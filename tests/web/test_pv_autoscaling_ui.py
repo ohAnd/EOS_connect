@@ -236,3 +236,75 @@ def test_the_panel_reflows_when_the_device_is_turned(page):
     page.set_viewport_size(PHONE)
     page.wait_for_timeout(150)
     assert _overflowing(page) == []
+
+# ----------------------------------------------------------------------
+# Status banners
+# ----------------------------------------------------------------------
+
+# Three states the live install never reaches once it is collecting, each with its own
+# banner: a stalled collector, a fresh install, and one part-way to its first factors.
+_BANNERS = {
+    "error": {
+        "last_error": "HTTPError: 401 Unauthorized",
+        "consecutive_failures": 3,
+    },
+    "initializing": {
+        "total_hours_recorded": 0,
+        "todays_partial_data": {},
+        "aggregated_history": {"days": []},
+    },
+    "collecting": {
+        "total_hours_recorded": 9,
+        "aggregated_history": {"days": []},
+    },
+}
+
+
+def _open_with(page, viewport, overrides):
+    """The overlay against a status payload patched into one of the banner states."""
+    payload = json.loads(json.dumps(_STATUS))
+    payload["pv_autoscaling"].update(overrides)
+    page.route(
+        "**/api/pv_autoscaling/status*",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps(payload)
+        ),
+    )
+    page.set_viewport_size(viewport)
+    page.wait_for_function("typeof statisticsManager !== 'undefined' && statisticsManager")
+    page.evaluate("() => statisticsManager.showPvAutoscalingOverlay()")
+    page.wait_for_selector(".pv-scale-tiles")
+
+
+@pytest.mark.parametrize("state", sorted(_BANNERS), ids=sorted(_BANNERS))
+def test_banners_use_fontawesome_not_emoji(page, state):
+    """
+    ``.github/copilot-instructions.md``: FontAwesome everywhere, never emoji.
+
+    An emoji also renders at whatever size and colour the platform picks, which is why
+    the warning triangle came out yellow inside a red banner on some phones.
+    """
+    _open_with(page, PHONE, _BANNERS[state])
+
+    body = page.inner_text("#full_screen_content")
+    assert not set(body) & set("\u26a0\U0001f504\u23f3"), f"emoji left in the {state} banner"
+    assert page.eval_on_selector_all(
+        ".pv-scale-root i[class*='fa-']", "els => els.length"
+    ) > 0
+
+
+@pytest.mark.parametrize("state", sorted(_BANNERS), ids=sorted(_BANNERS))
+def test_banners_fit_a_phone(page, state):
+    """The error banner carries a sensor entity id in a <code>, 45 characters with no spaces."""
+    _open_with(page, PHONE, _BANNERS[state])
+
+    assert _overflowing(page) == []
+
+
+def test_the_error_banner_breaks_a_long_entity_id(page):
+    """Without an explicit break it is one unbreakable 45-character word."""
+    _open_with(page, PHONE, _BANNERS["error"])
+
+    assert page.eval_on_selector_all(
+        ".pv-scale-root code", "els => els.every(e => e.scrollWidth <= e.clientWidth + 1)"
+    )

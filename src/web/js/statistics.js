@@ -205,7 +205,7 @@ class StatisticsManager {
                 statusBanner = `
                     <div style="background: linear-gradient(135deg, rgba(220, 53, 69, 0.18) 0%, rgba(220, 53, 69, 0.08) 100%); border: 1px solid rgba(220, 53, 69, 0.45); border-radius: 8px; padding: 15px;">
                         <div style="display: flex; align-items: flex-start; gap: 12px;">
-                            <div style="font-size: 1.4em; margin-top: 2px;">⚠️</div>
+                            <div style="font-size: 1.4em; margin-top: 2px; color: #ef5350;"><i class="fa-solid fa-triangle-exclamation"></i></div>
                             <div>
                                 <div style="font-weight: 600; color: #ef5350; margin-bottom: 6px;">
                                     PV Autoscaler cannot read the yield counter${failures > 1 ? ` (${failures} attempts in a row)` : ''}
@@ -234,7 +234,7 @@ class StatisticsManager {
                 statusBanner = `
                     <div style="background: linear-gradient(135deg, rgba(33, 150, 243, 0.15) 0%, rgba(100, 149, 237, 0.1) 100%); border: 1px solid rgba(100, 149, 237, 0.3); border-radius: 8px; padding: 15px;">
                         <div style="display: flex; align-items: flex-start; gap: 12px;">
-                            <div style="font-size: 1.4em; margin-top: 2px;">🔄</div>
+                            <div style="font-size: 1.4em; margin-top: 2px; color: #64b5f6;"><i class="fa-solid fa-rotate"></i></div>
                             <div>
                                 <div style="font-weight: 600; color: #64b5f6; margin-bottom: 6px;">Initializing PV Autoscaler</div>
                                 <div style="font-size: 0.9em; color: #90caf9; line-height: 1.4;">
@@ -258,7 +258,7 @@ class StatisticsManager {
                 statusBanner = `
                     <div style="background: linear-gradient(135deg, rgba(255, 152, 0, 0.15) 0%, rgba(255, 193, 7, 0.1) 100%); border: 1px solid rgba(255, 152, 0, 0.3); border-radius: 8px; padding: 15px;">
                         <div style="display: flex; align-items: flex-start; gap: 12px;">
-                            <div style="font-size: 1.4em; margin-top: 2px;">⏳</div>
+                            <div style="font-size: 1.4em; margin-top: 2px; color: #ffb74d;"><i class="fa-solid fa-hourglass-half"></i></div>
                             <div style="flex: 1;">
                                 <div style="font-weight: 600; color: #ffb74d; margin-bottom: 6px;">Collecting Historical Data (${totalHoursRecorded}/${hoursRequired} hours)</div>
                                 <div style="background-color: rgba(0,0,0,0.2); height: 6px; border-radius: 3px; overflow: hidden; margin-bottom: 8px;">
@@ -375,7 +375,7 @@ class StatisticsManager {
                             Today (Partial) — Not Used for Scaling
                         </div>
                         <div style="text-align: center; padding: 20px 15px; color: #888;">
-                            <div style="font-size: 1.2em; margin-bottom: 8px;">⏳</div>
+                            <div style="font-size: 1.2em; margin-bottom: 8px; color: #888;"><i class="fa-solid fa-hourglass-half"></i></div>
                             <div style="color: #aaa; font-size: 0.9em;">Waiting for first hourly reading... Data will appear here as it's collected.</div>
                         </div>
                     </div>
@@ -457,7 +457,7 @@ class StatisticsManager {
                             Historical Data Used for Scaling (Yesterday & Before)
                         </div>
                         <div style="text-align: center; padding: 30px 15px; color: #888;">
-                            <div style="font-size: 1.4em; margin-bottom: 10px;">⏳</div>
+                            <div style="font-size: 1.4em; margin-bottom: 10px; color: #888;"><i class="fa-solid fa-hourglass-half"></i></div>
                             <div style="color: #aaa;">
                                 <strong>Waiting for historical data...</strong><br>
                                 <span style="font-size: 0.9em;">Once a complete day passes, it will appear here for scale factor calculation.</span>
