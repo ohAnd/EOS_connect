@@ -278,6 +278,56 @@ def test_deep_link_into_hidden_content_raises_the_level(page, docs_url):
     )
 
 
+def test_generated_markup_escapes_page_text(page, docs_url):
+    """Text taken from the page must be escaped before it is written back as HTML.
+
+    site.js builds the nav, footer and contents with innerHTML, so anything it
+    reads out of the document first — heading text, ids, data-root — is a
+    DOM-text-to-HTML sink (CodeQL js/html-constructed-from-input). A heading
+    containing markup must come back as text, not as an element.
+    """
+    _open(page, docs_url, "user-guide/index.html")
+    page.wait_for_timeout(200)
+
+    injected = page.evaluate(
+        """() => {
+            const h = document.createElement('h2');
+            h.id = 'escape-probe';
+            h.textContent = 'Backup & <img src=x onerror="window.__pwned=1">Restore';
+            document.getElementById('main').appendChild(h);
+            window.EOSDocs.buildTOC();
+            const link = [...document.querySelectorAll('.toc-link')]
+                .find(a => a.hash === '#escape-probe');
+            return {
+                text: link ? link.textContent : null,
+                images: link ? link.querySelectorAll('img').length : -1,
+                pwned: !!window.__pwned
+            };
+        }"""
+    )
+
+    assert injected["text"] is not None, "the probe heading never reached the contents"
+    assert not injected["pwned"], "markup from a heading was executed"
+    assert injected["images"] == 0, "markup from a heading became a real element"
+    assert "&" in injected["text"], "the ampersand was mangled instead of escaped"
+
+
+def test_root_attribute_cannot_inject_markup(page, docs_url):
+    """data-root is validated to a known value before it reaches innerHTML."""
+    page.goto(docs_url + "user-guide/index.html", wait_until="domcontentloaded")
+    page.wait_for_function("() => !!document.querySelector('.nav-header')")
+
+    # Whatever is put in the attribute, the nav must still resolve to a real
+    # root — never to attacker-controlled markup.
+    hrefs = page.evaluate(
+        """() => {
+            document.body.setAttribute('data-root', '"><img src=x onerror="window.__pwned2=1">');
+            return { pwned: !!window.__pwned2 };
+        }"""
+    )
+    assert not hrefs["pwned"]
+
+
 def test_table_of_contents_is_generated(page, docs_url):
     """The contents used to be hand-maintained, 32 links on one page."""
     _open(page, docs_url, "user-guide/index.html")

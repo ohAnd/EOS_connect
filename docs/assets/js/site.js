@@ -43,8 +43,24 @@
     var DEFAULT_LEVEL = "standard";
 
     var body = document.body;
-    var root = body.getAttribute("data-root") || "";
+
+    /* data-root is one of exactly two values across the whole site. Comparing it
+     * and assigning a literal keeps DOM text from reaching the innerHTML calls
+     * below — the flow CodeQL reports as js/html-constructed-from-input — and
+     * makes a mistyped attribute fall back to a working root instead of
+     * producing a broken path. */
+    var root = body.getAttribute("data-root") === "../" ? "../" : "";
+
+    /* Only ever compared against NAV keys, never written into markup. */
     var page = body.getAttribute("data-page") || "";
+
+    function escapeHtml(text) {
+        return String(text === null || text === undefined ? "" : text)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
 
     function el(tag, attrs, html) {
         var node = document.createElement(tag);
@@ -222,8 +238,11 @@
 
         var links = headings.map(function (h) {
             var sub = h.tagName === "H3" ? " toc-sub" : "";
-            return "<a class=\"toc-link" + sub + "\" href=\"#" + h.id + "\">" +
-                (h.textContent || "").trim() + "</a>";
+            // Heading text and ids are page-authored, so they reach innerHTML as
+            // DOM text; a heading like "Backup &amp; Restore" would otherwise
+            // render wrong here, and the pattern is the same sink CodeQL flags.
+            return "<a class=\"toc-link" + sub + "\" href=\"#" + escapeHtml(h.id) + "\">" +
+                escapeHtml((h.textContent || "").trim()) + "</a>";
         }).join("");
 
         // A disclosure on phones so the page opens on content; CSS forces it
