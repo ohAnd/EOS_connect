@@ -492,8 +492,17 @@ class ConfigurationManager {
             : "";
 
         // Help text
+        // The docs site cannot read this origin's localStorage, so carry the current
+        // disclosure level across in the query string. help_url is "page.html#anchor",
+        // and the query has to go before the fragment.
+        const [helpPage, helpAnchor] = f.help_url ? f.help_url.split("#") : [];
+        const docsUrl = f.help_url
+            ? `https://ohand.github.io/EOS_connect/user-guide/${helpPage}`
+              + `?level=${encodeURIComponent(this.level)}`
+              + (helpAnchor ? `#${helpAnchor}` : "")
+            : "";
         const docsLink = f.help_url
-            ? ` <a href="https://ohand.github.io/EOS_connect/user-guide/${f.help_url}" target="_blank" rel="noopener">
+            ? ` <a href="${docsUrl}" target="_blank" rel="noopener">
                  Learn more <i class="fas fa-external-link-alt" style="font-size:0.8em;"></i></a>`
             : "";
         const helpText = `<div class="config-help-text" id="cfg-help-${this._cssKey(f.key)}">

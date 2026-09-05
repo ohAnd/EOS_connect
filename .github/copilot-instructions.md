@@ -102,11 +102,15 @@ This is now documented explicitly so it cannot be missed.
 
 ### Project Role Clarity
 
-- **EOS Connect is an integration and control platform**, NOT an optimizer
-- The optimization calculations are performed by external servers:
-  - Akkudoktor EOS Server (https://github.com/Akkudoktor-EOS/EOS)
-  - EVopt (https://github.com/thecem/hassio-evopt)
-- Always clarify this distinction in documentation and code comments
+- **EOS Connect is a full energy management platform**: it collects data, runs the
+  optimization, and controls the hardware from the result
+- **Optimization runs locally by default.** The built-in `local_evopt` MILP optimizer
+  (`src/interfaces/optimization_interface.py`) needs no external server
+- External backends remain **optional** alternatives, selected via `eos.source`:
+  - Akkudoktor EOS Server (https://github.com/Akkudoktor-EOS/EOS) — `eos_server`
+  - EVopt (https://github.com/thecem/hassio-evopt) — `evopt`
+- Never describe an external optimizer server as a prerequisite for installing or
+  running EOS Connect — it has not been one since `local_evopt` became the default
 
 ### Code Style
 

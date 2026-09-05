@@ -1967,14 +1967,18 @@ def handle_mode_override():
     """
     Handles a POST request to override the inverter mode.
 
-    Expects a JSON payload with the following structure:
+    Expects a JSON payload with all three keys present:
     {
-        "mode": <int>,  # The mode to override (0, 1, 2, etc.)
-        "duration": <int>  # Duration in minutes for the override
+        "mode": <int>,             # -2 clears the override and returns control to the
+                                   # optimizer; 0 = charge from grid, 1 = avoid
+                                   # discharge, 2 = discharge allowed
+        "duration": "<HH:MM>",     # how long the override holds, max 12:00
+        "grid_charge_power": <float>  # kW, capped at inverter.max_grid_charge_rate
     }
 
     Returns:
-        A JSON response indicating success or failure.
+        {"status": "success", "message": "Mode override applied"} on success,
+        {"error": <reason>} with status 400 otherwise.
     """
     try:
         data = request.get_json()

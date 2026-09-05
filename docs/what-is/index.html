@@ -1,661 +1,371 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>What is EOS Connect? - Documentation</title>
+    <title>What is EOS Connect? - EOS Connect</title>
+    <meta name="description"
+        content="EOS Connect forecasts your day, plans the cheapest way through it, and drives your battery to match. What it does, what it needs, and what it talks to.">
+    <meta property="og:title" content="What is EOS Connect?">
+    <meta property="og:description"
+        content="What EOS Connect does, what it needs from you, and whether it fits your setup.">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="https://ohAnd.github.io/EOS_connect/assets/images/logo.png">
+    <link rel="icon" href="../assets/images/icon.png">
     <link rel="stylesheet" href="../assets/css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
 </head>
-<body>
-    <!-- DRAFT BANNER - REMOVE WHEN FINALIZED -->
-    <div class="draft-banner">
-        <i class="fas fa-exclamation-triangle"></i> DRAFT DOCUMENTATION - UNDER REVIEW <i class="fas fa-exclamation-triangle"></i>
-    </div>
-    <!-- END DRAFT BANNER -->
 
-    <!-- Navigation -->
-    <nav class="nav-header">
-        <div class="nav-container">
-            <a href="../index.html" class="nav-logo">
-                <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
-                <span>EOS Connect</span>
-                <span class="version-badge">v0.3.39</span>
-            </a>
-            <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
-                <i class="fas fa-bars"></i>
-            </button>
-            <ul class="nav-menu">
-                <li><a href="../index.html">Home</a></li>
-                <li><a href="index.html" class="active">What Is</a></li>
-                <li><a href="../user-guide/index.html">User Guide</a></li>
-                <li><a href="../user-guide/configuration.html">Configuration</a></li>
-                <li><a href="../advanced/index.html">Advanced</a></li>
-                <li><a href="../developer/index.html">Developer</a></li>
-                <li><a href="https://github.com/ohAnd/EOS_connect" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
-                <li><a href="https://github.com/sponsors/ohAnd" target="_blank" title="Sponsor the project"><i class="fas fa-mug-hot"></i></a></li>
-            </ul>
+<body data-page="what-is" data-root="../">
+    <div id="site-nav"></div>
+    <noscript>
+        <div class="nav-fallback">
+            <a href="../index.html">Home</a>
+            <a href="index.html">What Is</a>
+            <a href="../user-guide/index.html">User Guide</a>
+            <a href="../user-guide/configuration.html">Configuration</a>
+            <a href="../advanced/index.html">Advanced</a>
+            <a href="../developer/index.html">Developer</a>
         </div>
-    </nav>
+    </noscript>
 
     <div class="container">
-        <!-- Page wrapper with sidebar -->
         <div class="page-wrapper">
-            <!-- Table of Contents Sidebar -->
             <aside class="toc-sidebar">
-                <h3>On This Page</h3>
-                <nav class="toc-nav">
-                    <a href="#introduction" class="toc-link">Introduction</a>
-                    <a href="#how-it-works" class="toc-link">How It Works</a>
-                    <a href="#features" class="toc-link">Core Features</a>
-                    <a href="#forecasting" class="toc-link">Solar Forecasting</a>
-                    <a href="#cost" class="toc-link">Cost Optimization</a>
-                    <a href="#integrations" class="toc-link">Integrations</a>
-                    <a href="#updates" class="toc-link">Update Notifications</a>
-                    <a href="#benefits" class="toc-link">Benefits</a>                    <a href="#web-dashboard" class="toc-link">Web Dashboard</a>                    <a href="#next-steps" class="toc-link">Next Steps</a>
-                </nav>
+                <div id="site-toc"></div>
             </aside>
 
-            <!-- Main content -->
-            <main class="main-content">
-        <!-- Header -->
-        <div class="hero">
-            <h1>What is EOS Connect?</h1>
-            <p>A comprehensive energy management platform — from data collection to intelligent control</p>
-        </div>
+            <main class="main-content" id="main">
 
-        <!-- Introduction -->
-        <div class="content-section" id="introduction">
-            <h2><i class="fas fa-book"></i> The Evolution: From Gateway to Full Solution</h2>
-            <p><strong>EOS Connect</strong> has evolved. Originally designed as a "data gateway" to bridge hardware with external optimizers, it is now a <strong>complete energy management system (EMS)</strong>. While it retains its open architecture and support for external backends, its core strength now lies in its <strong>fully integrated MILP optimizer</strong> (local_evopt) which provides a high-performance, self-contained solution for energy optimization.</p>
-
-            <div class="alert alert-info">
-                <strong><i class="fas fa-microchip"></i> Why a full solution?</strong>
-                <ul style="margin-top: 0.5rem;">
-                    <li><i class="fas fa-check"></i> <strong>Zero Dependency:</strong> No need for external servers, containers, or network connectivity beyond your local environment.</li>
-                    <li><i class="fas fa-check"></i> <strong>Performance:</strong> Tighter integration between data fetching and optimization means faster cycles and more reactive control.</li>
-                    <li><i class="fas fa-check"></i> <strong>Ease of Use:</strong> One setup, one configuration, one interface. The Setup Wizard handles everything from hardware connection to optimization tuning.</li>
-                    <li><i class="fas fa-check"></i> <strong>Privacy:</strong> All your energy data and optimization logic stays local on your system.</li>
-                </ul>
-            </div>
-
-            <p><strong>Optimization options:</strong></p>
-            <ul>
-                <li><strong>Local EVopt</strong> (Recommended Default) — Built-in Linear Programming (MILP) optimizer. Based on the proven <a href="https://github.com/evcc-io/optimizer" target="_blank"><i class="fab fa-github"></i> evcc-io/optimizer</a> engine. Optimized specifically for the EOS Connect ecosystem.</li>
-                <li><strong>Akkudoktor EOS</strong> — Full-featured external optimization engine - <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
-                <li><strong>EVopt</strong> — Lightweight external alternative - <a href="https://github.com/thecem/hassio-evopt" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
-            </ul>
-        </div>
-
-        <!-- How It Works -->
-        <div class="content-section" id="how-it-works">
-            <h2><i class="fas fa-cog"></i> How It Works</h2>
-            
-            <h3>The Intelligent Control Cycle</h3>
-            <p>EOS Connect acts as the central brain of your energy installation, operating in a continuous loop:</p>
-            
-            <ol>
-                <li><strong>Data Collection:</strong> Real-time monitoring of battery SOC, PV production, and household load.</li>
-                <li><strong>Forecast Integration:</strong> Aggregating PV generation forecasts and dynamic electricity prices for the next 24-48 hours.</li>
-                <li><strong>Integrated Optimization:</strong> Processing all variables locally (or delegating to a chosen server) to calculate the most cost-effective power strategy for every moment.</li>
-                <li><strong>Device Control:</strong> Executing the strategy by sending precise power commands to your inverters, batteries, and wallboxes.</li>
-                <li><strong>Monitoring:</strong> Visualizing the process and results in real-time through the web dashboard and MQTT.</li>
-            </ol>
-
-            <div style="text-align: center; margin: 2rem 0;">
-                <img src="../assets/images/eos_connect_flow.png" alt="EOS Connect Process Flow" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
-                <p style="color: #888; font-size: 0.9rem; margin-top: 0.5rem;"><em>Figure: EOS Connect process flow diagram</em></p>
-            </div>
-
-            <div class="alert alert-warning">
-                <strong><i class="fas fa-clock"></i> Timing:</strong> The optimization cycle runs every <code>refresh_time</code> minutes (default: 3 minutes) with configurable time frame granularity (15 minutes or hourly).
-            </div>
-        </div>
-
-        <!-- Core Features -->
-        <div class="content-section" id="features">
-            <h2><i class="fas fa-star"></i> Core Features</h2>
-
-            <h3><i class="fas fa-battery-full"></i> Battery Management</h3>
-            <div class="feature-grid">
-                <div class="feature-item">
-                    <h4>SOC Monitoring</h4>
-                    <p>Real-time State of Charge tracking with remaining energy calculation</p>
+                <div class="hero">
+                    <h1>What is EOS Connect?</h1>
+                    <p>Software you run at home that decides, hour by hour, when your battery should
+                        charge, hold or discharge &mdash; and then makes it happen.</p>
                 </div>
-                <div class="feature-item">
-                    <h4>Charge/Discharge Control</h4>
-                    <p>Automated modes: grid charging, PV-only, discharge allowed, idle</p>
+
+                <div class="content-section">
+                    <h2 id="how-it-works"><i class="fas fa-arrows-rotate" aria-hidden="true"></i> How it works</h2>
+                    <p>EOS Connect sits between the things that measure your house and the things that
+                        control it. Every few minutes it runs the same four steps.</p>
+
+                    <ol>
+                        <li><strong>Collect.</strong> It builds a load profile from your
+                            <em>historical</em> consumption &mdash; days of it, not a single reading
+                            &mdash; and reads the things that only matter right now, such as battery
+                            charge level and whether a car is charging. Sources are Home Assistant,
+                            openHAB, EVCC or the inverter itself.</li>
+                        <li><strong>Forecast.</strong> It fetches the next 48 hours of solar yield and
+                            electricity prices.</li>
+                        <li><strong>Optimise.</strong> It works out, slot by slot, the cheapest way
+                            through those 48 hours &mdash; when grid electricity is worth buying, when
+                            solar should be stored rather than exported, and when the battery should
+                            carry the house.</li>
+                        <li><strong>Control.</strong> It writes that decision to your battery inverter
+                            &mdash; directly, or through EVCC acting as the gateway &mdash; and shows you
+                            the plan it is following. It never commands your wallbox; what the car is
+                            doing is an input it works around, not something it takes over.</li>
+                    </ol>
+
+                    <p>A new plan is worked out on the quarter hour, and the plan in force is applied
+                        continuously in between. Plans are built in hourly slots; 15-minute slots are
+                        available with either EVopt backend.</p>
+
+                    <figure class="diagram-figure">
+                        <div class="scroll-x">
+                            <svg class="diagram" viewBox="0 0 620 510" role="img"
+                                aria-label="EOS Connect runs a closed loop. It reads your consumption history together with live battery charge and EV charging state, and fetches solar yield and electricity price forecasts. Both feed an optimizer that runs inside EOS Connect, which sets your battery inverter to charge, hold or discharge — directly, or through EVCC. That changes what the house is doing, which the next run reads back. An external Akkudoktor EOS or EVopt server can replace the built-in optimizer, but is not required.">
+                                <defs>
+                                    <marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                                        markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                                        <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+                                    </marker>
+                                </defs>
+
+                                <g fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <rect x="30" y="26" width="180" height="86" rx="8" />
+                                    <rect x="250" y="26" width="180" height="86" rx="8" />
+                                    <rect x="30" y="168" width="400" height="182" rx="10" />
+                                    <rect x="130" y="404" width="200" height="52" rx="8" />
+                                </g>
+
+                                <rect x="52" y="208" width="356" height="92" rx="8" fill="none"
+                                    stroke="#4a9eff" stroke-width="2" />
+                                <rect x="460" y="216" width="150" height="80" rx="8" fill="none"
+                                    stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4"
+                                    opacity="0.6" />
+
+                                <g fill="currentColor" text-anchor="middle">
+                                    <text x="120" y="52" font-size="16" font-weight="600">Your house</text>
+                                    <text x="120" y="74" font-size="12.5" opacity="0.75">consumption history</text>
+                                    <text x="120" y="94" font-size="12.5" opacity="0.75">live SOC · EV state</text>
+
+                                    <text x="340" y="52" font-size="16" font-weight="600">Forecasts</text>
+                                    <text x="340" y="74" font-size="12.5" opacity="0.75">solar yield</text>
+                                    <text x="340" y="94" font-size="12.5" opacity="0.75">electricity prices</text>
+
+                                    <text x="230" y="236" font-size="16" font-weight="600">optimizer — built in</text>
+                                    <text x="230" y="260" font-size="13" opacity="0.8">works out the cheapest path</text>
+                                    <text x="230" y="280" font-size="13" opacity="0.8">through the next 24–48 hours</text>
+
+                                    <text x="535" y="208" font-size="12.5" opacity="0.7">optional alternative</text>
+                                    <text x="535" y="246" font-size="13.5">external server</text>
+                                    <text x="535" y="266" font-size="12" opacity="0.7">Akkudoktor EOS</text>
+                                    <text x="535" y="284" font-size="12" opacity="0.7">or EVopt</text>
+                                    <text x="535" y="316" font-size="11" opacity="0.6">temperature forecast:</text>
+                                    <text x="535" y="330" font-size="11" opacity="0.6">EOS server only</text>
+
+                                    <text x="230" y="436" font-size="15" font-weight="600">Your battery inverter</text>
+                                </g>
+
+                                <text x="46" y="194" fill="currentColor" font-size="15"
+                                    font-weight="600">EOS Connect</text>
+
+                                <g stroke="currentColor" stroke-width="1.5" fill="none"
+                                    marker-end="url(#flow-arrow)">
+                                    <line x1="120" y1="112" x2="120" y2="164" />
+                                    <line x1="340" y1="112" x2="340" y2="164" />
+                                    <line x1="230" y1="350" x2="230" y2="400" />
+                                    <path d="M 230 456 V 490 H 14 V 60 H 26" />
+                                </g>
+
+                                <line x1="456" y1="254" x2="414" y2="254" stroke="currentColor"
+                                    stroke-width="1.5" stroke-dasharray="5 4" opacity="0.6"
+                                    marker-end="url(#flow-arrow)" />
+
+                                <g fill="currentColor" font-size="12.5" opacity="0.85">
+                                    <text x="128" y="144">history, plus live state</text>
+                                    <text x="348" y="144">next 48 hours</text>
+                                    <text x="240" y="370">charge · hold · discharge</text>
+                                    <text x="240" y="388" font-size="11.5" opacity="0.8">directly, or through EVCC</text>
+                                    <text x="240" y="486">the house changes, and the next run reads it back</text>
+                                    <text x="230" y="324" text-anchor="middle" opacity="0.7">re-runs on the quarter hour</text>
+                                </g>
+                            </svg>
+                        </div>
+                        <figcaption>The optimizer sits inside EOS Connect. An external server can take
+                            its place, but nothing needs one.</figcaption>
+                    </figure>
                 </div>
-                <div class="feature-item">
-                    <h4>Dynamic Charging Curve</h4>
-                    <p>SOC-based power reduction (100% → 5% as battery fills)</p>
+
+                <div class="content-section">
+                    <h2 id="optimizers"><i class="fas fa-brain" aria-hidden="true"></i> The optimizer</h2>
+                    <p>The part that actually decides is the optimizer, and EOS Connect ships with one.
+                        <strong>No external server is required.</strong> The setting is
+                        <code>eos.source</code>, and its default needs nothing installed.</p>
+
+                    <div class="feature-grid">
+                        <div class="feature-item">
+                            <h4><i class="fas fa-microchip" aria-hidden="true"></i> Local EVopt &mdash; the default</h4>
+                            <p><code>local_evopt</code> runs inside EOS Connect. It solves the whole
+                                48-hour plan at once rather than deciding hour by hour, using a technique
+                                called mixed-integer linear programming. Nothing leaves your network, and
+                                it handles both hourly and 15-minute slots. Built on
+                                <a href="https://github.com/evcc-io/optimizer" target="_blank"
+                                    rel="noopener">evcc-io/optimizer</a>.</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-server" aria-hidden="true"></i> Akkudoktor EOS</h4>
+                            <p><code>eos_server</code> talks to
+                                <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank"
+                                    rel="noopener">Akkudoktor EOS</a>, which you install and run yourself
+                                (port 8503 by default). Hourly slots only. This is the one backend that
+                                uses the outside-temperature forecast.</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-bolt" aria-hidden="true"></i> EVopt</h4>
+                            <p><code>evopt</code> talks to a separate
+                                <a href="https://github.com/thecem/hassio-evopt" target="_blank"
+                                    rel="noopener">EVopt server</a> (port 7050 by default). Lighter than
+                                Akkudoktor EOS, and it handles 15-minute slots.</p>
+                        </div>
+                    </div>
+
+                    <div class="alert alert-info">
+                        <p>Both external backends are entirely optional. You can start on the built-in
+                            one and switch later &mdash; it is a single setting, not a reinstall.
+                            <a href="../user-guide/configuration.html#optimizer-choice">Optimizer settings</a></p>
+                    </div>
                 </div>
-                <div class="feature-item">
-                    <h4>Temperature Protection</h4>
-                    <p>Automatic power reduction in extreme cold/heat (-30°C to +70°C)</p>
-                </div>
-                <div class="feature-item">
-                    <h4>Dynamic Price Calculation</h4>
-                    <p>Analyzes charging history to determine real cost of stored energy</p>
-                </div>
-                <div class="feature-item">
-                    <h4><i class="fas fa-wand-magic-sparkles"></i> Smart Sensor Detection</h4>
-                    <p>Automatically detects battery/grid sensor polarity to ensure correct PV vs Grid attribution</p>
-                </div>
-                <div class="feature-item">
-                    <h4>Efficiency Settings</h4>
-                    <p>Configurable charge/discharge efficiency for accurate calculations</p>
-                </div>
-            </div>
 
-            <h4><i class="fas fa-thermometer-half"></i> Temperature-Based Protection Details</h4>
-            <p>When a battery temperature sensor is configured, EOS Connect applies a generic temperature derating curve <strong>derived from BYD HVM battery thermal specifications</strong>. This manufacturer-validated approach ensures safe charging across all temperature ranges for any battery system:</p>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Temperature Range</th>
-                        <th>Charging Power</th>
-                        <th>Purpose</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>&lt; -10°C</td>
-                        <td>0% (Locked)</td>
-                        <td>Cell damage protection - no charging allowed</td>
-                    </tr>
-                    <tr>
-                        <td>-10°C to 0°C</td>
-                        <td>7.5% → 50%</td>
-                        <td>Lithium-plating protection in extreme cold</td>
-                    </tr>
-                    <tr>
-                        <td>0°C to 5°C</td>
-                        <td>50%</td>
-                        <td>Moderate cold derating</td>
-                    </tr>
-                    <tr>
-                        <td>5°C to 12°C</td>
-                        <td>50% → 77%</td>
-                        <td>Light derating - battery warming gradually</td>
-                    </tr>
-                    <tr>
-                        <td>12°C to 40°C</td>
-                        <td>100% (SOC-based only)</td>
-                        <td>Optimal operating range - full charging capacity</td>
-                    </tr>
-                    <tr>
-                        <td>40°C to 50°C</td>
-                        <td>100% → 50%</td>
-                        <td>Thermal derating - heat protection begins</td>
-                    </tr>
-                    <tr>
-                        <td>50°C to 60°C</td>
-                        <td>50% → 0%</td>
-                        <td>Severe derating - critical heat protection</td>
-                    </tr>
-                    <tr>
-                        <td>&gt; 60°C</td>
-                        <td>0% (Locked)</td>
-                        <td>Overheat protection - no charging allowed</td>
-                    </tr>
-                </tbody>
-            </table>
+                <div class="content-section">
+                    <h2 id="what-you-need"><i class="fas fa-clipboard-check" aria-hidden="true"></i> What you need</h2>
+                    <p>Less than you might expect. A fresh install starts and runs with nothing
+                        configured: it falls back to a built-in load profile, a demo solar curve for a
+                        typical 4&nbsp;kW array, and market prices from Akkudoktor. That gets you a
+                        working dashboard in minutes. It does not get you savings &mdash; for that, the
+                        list is:</p>
 
-            <div class="alert alert-success">
-                <strong><i class="fas fa-check-circle"></i> Example:</strong> At 10.5°C with 30% SOC, a 3 kWh battery charges at ~71% power (2,136 W) according to BYD HVM specifications. Temperature derating and SOC curves work together to optimize both safety and charging speed.
-            </div>
-        </div>
-
-        <!-- Solar & Forecasting -->
-        <div class="content-section" id="forecasting">
-            <h2><i class="fas fa-sun"></i> Solar Forecasting</h2>
-            <p>Multiple provider support for accurate PV generation predictions:</p>
-
-            <table>
-                <thead>
-                    <tr>
-                        <th>Provider</th>
-                        <th>Description</th>
-                        <th>Requirements</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>Akkudoktor</td>
-                        <td>Default, free, comprehensive forecasts</td>
-                        <td>Location, tilt, azimuth, power</td>
-                    </tr>
-                    <tr>
-                        <td>Solcast</td>
-                        <td>High accuracy, commercial provider</td>
-                        <td>API key, resource ID (10 calls/day limit)</td>
-                    </tr>
-                    <tr>
-                        <td>OpenMeteo</td>
-                        <td>Weather-based forecasting</td>
-                        <td>Location, system specs</td>
-                    </tr>
-                    <tr>
-                        <td>Forecast.Solar</td>
-                        <td>Free solar forecasting</td>
-                        <td>Location, basic system info</td>
-                    </tr>
-                    <tr>
-                        <td>EVCC</td>
-                        <td>Use existing EVCC forecasts</td>
-                        <td>Running EVCC instance</td>
-                    </tr>
-                </tbody>
-            </table>
-
-            <h4>Multi-Installation Support</h4>
-            <p>Configure multiple PV installations with different orientations:</p>
-            <ul>
-                <li>South-facing roof (180°, 25° tilt, 5 kW)</li>
-                <li>East garage (90°, 15° tilt, 2.5 kW)</li>
-                <li>West carport (270°, 10° tilt, 3 kW)</li>
-            </ul>
-            <p>EOS Connect aggregates all forecasts for total system prediction.</p>
-        </div>
-
-        <!-- Cost Optimization -->
-        <div class="content-section" id="cost">
-            <h2><i class="fas fa-dollar-sign"></i> Cost Optimization</h2>
-            
-            <h4>Dynamic Electricity Pricing</h4>
-            <p>Supports multiple price providers for real-time market rates:</p>
-            <ul>
-                <li><strong>Tibber:</strong> Scandinavian/European dynamic pricing</li>
-                <li><strong>smartenergy.at:</strong> Austrian market prices</li>
-                <li><strong>Stromligning.dk:</strong> Danish electricity pricing</li>
-                <li><strong>Fixed 24h:</strong> Custom hourly price array</li>
-                <li><strong>Default:</strong> Uses Akkudoktor pricing data</li>
-            </ul>
-
-            <h4>Price Modifiers</h4>
-            <ul>
-                <li><strong>Fixed Adder:</strong> Add fixed costs (grid fees, taxes) in ct/kWh</li>
-                <li><strong>Relative Multiplier:</strong> Apply percentage markup (e.g., 5%)</li>
-            </ul>
-
-            <h4>Dynamic Feed-In Pricing</h4>
-            <p><strong>New:</strong> Optimize battery discharge timing based on dynamic export prices, not just purchase prices:</p>
-            <ul>
-                <li><strong>Fixed Feed-In:</strong> Configure a static export rate (simplest option)</li>
-                <li><strong>Elpris DK:</strong> Real-time Danish spot prices for exports (DK1/DK2 zones)</li>
-                <li><strong>EPEX-Spot:</strong> European spot market prices via Akkudoktor API (updated every 15 minutes)</li>
-                <li><strong>Adjustments:</strong> Apply static adder (transport costs) and multiplier (discount/premium strategy)</li>
-            </ul>
-
-            <p>Example: Instead of discharging to save €0.25/kWh purchase cost, EOS Connect now <strong>also considers you earn €0.40/kWh by exporting</strong> — leading to smarter discharge timing that increases your revenue.</p>
-
-            <h4>Battery Price Calculation (LIFO)</h4>
-            <p>EOS Connect can analyze your charging history to determine the <strong>real cost</strong> of energy stored in your battery:</p>
-            <ol>
-                <li>Scans last 48-96 hours of power data</li>
-                <li>Identifies charging events (battery power > threshold)</li>
-                <li>Attributes energy to either:
                     <ul>
-                        <li>Grid charging at market price</li>
-                        <li>PV surplus at €0 (free solar energy) — or optionally at the feed-in tariff rate as opportunity cost (see <code>battery_price_include_feedin</code>)</li>
+                        <li><strong>Somewhere to run it.</strong> The Home Assistant add-on, Docker, or
+                            Python 3.13 from source.</li>
+                        <li><strong>A battery and an inverter it can drive.</strong> Without one, EOS
+                            Connect still forecasts and plans, but the plan is only advice &mdash; the
+                            inverter setting stays at <code>default</code>, which displays and controls
+                            nothing.</li>
+                        <li><strong>Live measurements.</strong> Home Assistant or openHAB supplying your
+                            actual household load and battery charge level. This is the single change
+                            that most improves the results.</li>
+                        <li><strong>A dynamic electricity tariff.</strong> Optimising against a flat rate
+                            has very little to work with.</li>
+                        <li><strong>EVCC, if you charge a car</strong> and want the car and the house
+                            battery to stop bidding for the same cheap hour.</li>
                     </ul>
-                </li>
-                <li>Uses Last-In-First-Out (LIFO) valuation for current SOC</li>
-                <li>Updates optimizer with real battery energy cost</li>
-            </ol>
 
-            <div class="alert alert-info">
-                <strong><i class="fas fa-lightbulb"></i> Smart Decision:</strong> If you charged your battery from the grid at €0.30/kWh, the optimizer knows not to discharge it when prices are only €0.25/kWh.
-            </div>
-        </div>
-
-        <!-- Update Notifications -->
-        <div class="content-section" id="updates">
-            <h2><i class="fas fa-bell"></i> Update Notifications</h2>
-            <p><strong>Docker Image Users:</strong> EOS Connect automatically checks for available updates from GitHub Container Registry (GHCR).</p>
-            
-            <div class="alert alert-info">
-                <strong><i class="fas fa-info-circle"></i> Docker Only:</strong> Update notifications are <strong>only available for Docker image installations</strong>. If you're using the Home Assistant Add-on, updates are managed by Home Assistant itself through the Supervisor.
-            </div>
-
-            <h4>Update System Features</h4>
-            <ul>
-                <li><strong>Automatic Detection:</strong> Checks for updates every 12 hours in the background</li>
-                <li><strong>Branch Awareness:</strong> Detects whether you're on stable or develop branch and only shows matching updates</li>
-                <li><strong>Smart Notifications:</strong>
-                    <ul>
-                        <li>Blue dot notification on web interface menu</li>
-                        <li>Slide-down banner showing version information</li>
-                        <li>Dismissible per version (remembers your choice)</li>
-                    </ul>
-                </li>
-                <li><strong>Zero Configuration:</strong> Works automatically without any setup</li>
-                <li><strong>MQTT Integration:</strong> Publishes update status for Home Assistant automations</li>
-                <li><strong>REST API:</strong> Check update status programmatically</li>
-            </ul>
-
-            <h4>How It Works</h4>
-            <ol>
-                <li>On startup, EOS Connect detects if running as Docker image or HA Add-on</li>
-                <li>For Docker users, it queries GHCR every 12 hours for new releases</li>
-                <li>Compares latest available version with your current version</li>
-                <li>Shows notification banner and blue dot when update is available</li>
-                <li>You can dismiss the notification per version (it won't show again for that version)</li>
-                <li>Access detailed information via the Info page in the web interface</li>
-            </ol>
-
-            <div class="alert alert-success">
-                <strong><i class="fas fa-check-circle"></i> Example:</strong> Running v0.2.30 on stable branch? The system only checks for newer stable versions (0.2.31, 0.2.32, etc.), not develop versions.
-            </div>
-        </div>
-
-        <!-- Integration Capabilities -->
-        <div class="content-section" id="integrations">
-            <h2><i class="fas fa-plug"></i> Integration Capabilities</h2>
-
-            <h4>Smart Home Platforms</h4>
-            <div class="feature-grid">
-                <div class="feature-item">
-                    <h4>Home Assistant</h4>
-                    <ul>
-                        <li>MQTT Auto Discovery</li>
-                        <li>Sensor integration</li>
-                        <li>Control via entities</li>
-                        <li>Native add-on available</li>
-                    </ul>
+                    <p>On first start a setup wizard walks through these in order, asking only what your
+                        earlier answers make relevant &mdash; say you have no data source and it stops
+                        asking about sensors. It saves only the answers it asked for; everything else
+                        keeps its default until you change it. There is no configuration file to edit.</p>
                 </div>
-                <div class="feature-item">
-                    <h4>OpenHAB</h4>
-                    <ul>
-                        <li>Item-based integration</li>
-                        <li>MQTT publishing</li>
-                        <li>MQTT Auto Discovery (via MQTT binding)</li>
-                        <li>REST API access</li>
-                        <li>Full sensor support</li>
-                    </ul>
+
+                <div class="content-section">
+                    <h2 id="handled-for-you"><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i>
+                        Handled for you</h2>
+                    <p>A few things EOS Connect does on its own, or behind a single switch.</p>
+
+                    <div class="feature-grid">
+                        <div class="feature-item">
+                            <h4><i class="fas fa-chart-line" aria-hidden="true"></i> PV forecast auto-scaling</h4>
+                            <p>Compares the forecast against your metered yield and corrects the next one,
+                                separately for four blocks of the day. Needs a cumulative PV generation
+                                sensor. <a href="../user-guide/configuration.html#pv-autoscaling">Details</a></p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-coins" aria-hidden="true"></i> Smart Price Prediction</h4>
+                            <p>When your tariff has not published tomorrow yet, it learns how your prices
+                                relate to the spot market and projects that forward, instead of repeating
+                                today. <a href="../user-guide/configuration.html#energyforecast">Details</a></p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-sun" aria-hidden="true"></i> Dynamic PV override</h4>
+                            <p>In any slot where the solar forecast exceeds your load, it can release the
+                                battery to discharge even though the plan said hold.
+                                <a href="../user-guide/configuration.html#dyn-override">Details</a></p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-temperature-half" aria-hidden="true"></i> Temperature forecast</h4>
+                            <p>The outside-temperature curve is fetched hourly and handed to the
+                                optimizer, which models the house more accurately with it. Akkudoktor EOS
+                                backend only.</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-box-archive" aria-hidden="true"></i> Backup and restore</h4>
+                            <p>One file holding the whole install &mdash; settings plus the measured PV
+                                history, which is kept on a rolling window and stored nowhere else. A
+                                restore always previews before it applies.
+                                <a href="../user-guide/configuration.html#backup-restore">Details</a></p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-euro-sign" aria-hidden="true"></i> Battery energy costing</h4>
+                            <p>It tracks what the energy already in your battery cost to put there, so it
+                                will not sell cheaply what it bought expensively.
+                                <a href="../user-guide/configuration.html#battery-price">Details</a></p>
+                        </div>
+                    </div>
                 </div>
-            </div>
 
-            <h4>Inverter Control</h4>
-            <p><strong>Fronius GEN24 Support:</strong></p>
-            <ul>
-                <li><strong>Enhanced Interface (Default):</strong> Automatic firmware detection, universal compatibility</li>
-                <li><strong>Legacy Interface:</strong> Available for corner cases</li>
-                <li><strong>Supported Actions:</strong>
-                    <ul>
-                        <li>Grid charge power setting</li>
-                        <li>Discharge control</li>
-                        <li>SOC monitoring</li>
-                        <li>Real-time status</li>
-                    </ul>
-                </li>
-            </ul>
+                <div class="content-section">
+                    <h2 id="integrations"><i class="fas fa-plug" aria-hidden="true"></i> What it talks to</h2>
 
-            <p><strong>EVCC External Battery Control:</strong></p>
-            <ul>
-                <li>Universal interface for all EVCC-supported inverters</li>
-                <li>Battery management without direct inverter connection</li>
-                <li>Note: Dynamic max charge power not currently supported by EVCC</li>
-            </ul>
-
-            <p><strong>API-Only Mode:</strong></p>
-            <ul>
-                <li>Disable direct inverter control</li>
-                <li>Get optimization results via MQTT/REST API</li>
-                <li>Implement control in your own automation</li>
-            </ul>
-        </div>
-
-        <!-- EV Charging -->
-        <div class="content-section">
-            <h3><i class="fas fa-car"></i> Electric Vehicle Charging (EVCC)</h3>
-            
-            <h4>Modes & Control</h4>
-            <ul>
-                <li><strong>PV Mode:</strong> Charge only from solar surplus</li>
-                <li><strong>Min+PV Mode:</strong> Minimum grid + solar surplus</li>
-                <li><strong>Fast Charge:</strong> Maximum power from grid</li>
-                <li><strong>Off:</strong> No charging</li>
-            </ul>
-
-            <h4>Multi-EVCC Support</h4>
-            <p>Control multiple EVCC instances:</p>
-            <ul>
-                <li>Home wallbox (main garage)</li>
-                <li>Guest wallbox (driveway)</li>
-                <li>Workshop charger</li>
-            </ul>
-
-            <h4>Integration with Optimization</h4>
-            <p>EOS Connect coordinates battery and EV charging:</p>
-            <ul>
-                <li>Prioritizes PV surplus distribution</li>
-                <li>Avoids simultaneous grid charging</li>
-                <li>Respects battery SOC limits</li>
-                <li>Considers electricity price forecasts</li>
-            </ul>
-        </div>
-
-        <!-- Optimization Backends -->
-        <div class="content-section">
-            <h3><i class="fas fa-brain"></i> Optimization Backends</h3>
-
-            <h4>Local EVopt — Built-in (Default)</h4>
-            <ul>
-                <li><strong>Built-in:</strong> Runs in-process — no external server to install or maintain</li>
-                <li><strong>MILP solver:</strong> Uses PuLP/CBC to find the globally cost-optimal dispatch plan</li>
-                <li><strong>Configurable strategies:</strong> Charging (charge before export, maximise self-consumption, attenuate grid peaks) and discharging (discharge before import, emergency reserve)</li>
-                <li><strong>Hot-reloadable:</strong> Strategy changes take effect immediately and trigger a new optimization run</li>
-                <li><strong>15-minute resolution:</strong> Supports both 3600&thinsp;s (hourly) and 900&thinsp;s (15-minute) time frames</li>
-                <li><strong>Based on:</strong> <a href="https://github.com/evcc-io/optimizer" target="_blank"><i class="fab fa-github"></i> evcc-io/optimizer</a> (MIT license)</li>
-            </ul>
-
-            <h4>Akkudoktor EOS Server</h4>
-            <ul>
-                <li><strong>Full-featured:</strong> Complex optimization algorithms</li>
-                <li><strong>Comprehensive:</strong> Considers all system parameters including temperature forecasts</li>
-                <li><strong>Flexible:</strong> Highly configurable</li>
-                <li><strong>Server:</strong> Runs on port 8503 (external process)</li>
-                <li><strong>GitHub:</strong> <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">Akkudoktor-EOS/EOS</a></li>
-            </ul>
-
-            <h4>EVopt (Lightweight External)</h4>
-            <ul>
-                <li><strong>Fast:</strong> Very quick optimization calculations</li>
-                <li><strong>Lightweight:</strong> Lower resource requirements</li>
-                <li><strong>Simple:</strong> Easier to set up and maintain</li>
-                <li><strong>Server:</strong> Runs on port 7050 (external process)</li>
-                <li><strong>Source:</strong> Available via EVCC discussions</li>
-            </ul>
-
-            <div class="alert alert-info">
-                <strong><i class="fas fa-lightbulb"></i> Choose Your Backend:</strong> Configure via <code>eos.source</code> in the web UI (<i class="fas fa-cog"></i> Settings &rarr; EOS). Options: <code>local_evopt</code> (default, built-in), <code>eos_server</code>, or <code>evopt</code>.
-            </div>
-        </div>
-
-        <!-- Time Frame Configuration -->
-        <div class="content-section">
-            <h3>⏱️ Time Frame & Refresh Configuration</h3>
-
-            <h4>Time Frame (Optimization Granularity)</h4>
-            <p><strong>Backend-Specific Capabilities:</strong></p>
-            <ul>
-                <li><strong>Local EVopt (built-in):</strong> Supports both <code>3600</code> (hourly) and <code>900</code> (15-minute). Runs in-process — no external calls during optimization.</li>
-                <li><strong>EOS Server:</strong> Only supports <code>3600</code> seconds (hourly). 15-minute intervals are not available with this backend.</li>
-                <li><strong>EVopt:</strong> Supports both <code>3600</code> (hourly) and <code>900</code> (15-minute). Use 900 for more precise, dynamic optimization.</li>
-            </ul>
-            <p><strong>Misconfiguration Handling:</strong> If you mistakenly set <code>time_frame: 900</code> with EOS server, it will be automatically corrected to 3600 at startup with a warning message.</p>
-
-            <h4>Refresh Time</h4>
-            <p>How often EOS Connect sends optimization requests:</p>
-            <ul>
-                <li><strong>Default:</strong> 3 minutes</li>
-                <li><strong>Recommended Range:</strong> 1-5 minutes</li>
-                <li><strong>Considerations:</strong> More frequent updates = more solver runs (built-in) or API calls (external backends)</li>
-            </ul>
-
-            <div class="alert alert-warning">
-                <strong><i class="fas fa-exclamation-triangle"></i> Note:</strong> Solcast users should use longer refresh times (15+ minutes) due to API rate limits (10 calls/day). EOS Connect automatically extends intervals to 2.5 hours when Solcast is configured.
-            </div>
-        </div>
-
-        <!-- Benefits Summary -->
-        <div class="content-section" id="benefits">
-            <h2><i class="fas fa-bullseye"></i> Benefits Summary</h2>
-
-            <div class="feature-grid">
-                <div class="feature-item">
-                    <h4><i class="fas fa-money-bill"></i> Cost Savings</h4>
-                    <p>Minimize electricity bills by optimizing when to charge from grid and when to use battery</p>
+                    <div class="feature-grid">
+                        <div class="feature-item">
+                            <h4><i class="fas fa-house-signal" aria-hidden="true"></i> Measurements</h4>
+                            <p>Home Assistant or openHAB for load and battery sensors, EVCC for car and
+                                charger state. Each sensor field has a Test button that reads the entity
+                                and shows its value, so a typo is caught before you restart.</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-microchip" aria-hidden="true"></i> Inverters</h4>
+                            <p>Fronius GEN24 (current and legacy interfaces), Victron, any inverter
+                                reachable through Home Assistant service calls, or EVCC as a gateway.
+                                Leave it at <code>default</code> to watch without controlling.</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-solar-panel" aria-hidden="true"></i> Solar forecasts</h4>
+                            <p>Akkudoktor, Open-Meteo (hosted or local), Forecast.Solar, Solcast, Victron,
+                                EVCC, your own time series, or the built-in demo curve. Several arrays at
+                                different orientations are added together.</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-tags" aria-hidden="true"></i> Prices</h4>
+                            <p>Tibber, smartenergy.at, Stromligning, EVCC, a fixed 24-hour curve or your
+                                own series. Export prices come from a fixed rate, Elpris DK, EPEX Spot or
+                                EVCC.</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-car" aria-hidden="true"></i> EV charging</h4>
+                            <p>EOS Connect reads EVCC &mdash; several instances at once, if you run them
+                                &mdash; so the house battery is planned around what the car is doing.
+                                Charging itself stays EVCC's job.</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-tower-broadcast" aria-hidden="true"></i> Everything else</h4>
+                            <p>MQTT with Home Assistant auto-discovery, the same topics for openHAB
+                                through its MQTT binding, and a REST API if you would rather drive it
+                                yourself. <a href="../advanced/index.html#rest-api">API and MQTT
+                                    reference</a></p>
+                        </div>
+                    </div>
                 </div>
-                <div class="feature-item">
-                    <h4><i class="fas fa-recycle"></i> Self-Sufficiency</h4>
-                    <p>Maximize PV self-consumption, reduce grid dependency</p>
-                </div>
-                <div class="feature-item">
-                    <h4><i class="fas fa-battery-full"></i> Battery Health</h4>
-                    <p>Protect your investment with intelligent charging curves and temperature protection</p>
-                </div>
-                <div class="feature-item">
-                    <h4><i class="fas fa-bolt"></i> Automation</h4>
-                    <p>Set it and forget it - automatic optimization every few minutes</p>
-                </div>
-                <div class="feature-item">
-                    <h4><i class="fas fa-chart-line"></i> Insights</h4>
-                    <p>Understand your energy system with detailed monitoring and analytics</p>
-                </div>
-                <div class="feature-item">
-                    <h4><i class="fas fa-wrench"></i> Flexibility</h4>
-                    <p>Easy integration with existing smart home systems and custom automation</p>
-                </div>
-            </div>
-        </div>
-        <!-- Web Dashboard -->
-        <div class="content-section" id="web-dashboard">
-            <h2><i class="fas fa-desktop"></i> Web Dashboard</h2>
-            <p>EOS Connect provides a comprehensive web interface for real-time monitoring and control:</p>
-            
-            <div style="text-align: center; margin: 2rem 0;">
-                <img src="../assets/images/screenshot_0_1_20.png" alt="EOS Connect Web Dashboard" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
-                <p style="color: #888; font-size: 0.9rem; margin-top: 0.5rem;"><em>Figure: EOS Connect web dashboard showing real-time energy management</em></p>
-            </div>
 
-            <h3>Dashboard Features</h3>
-            <div class="feature-grid">
-                <div class="feature-item">
-                    <h4><i class="fas fa-chart-line"></i> Main Dashboard</h4>
-                    <p>Real-time overview of PV, Load, Battery, and Optimization states with dynamic charts</p>
+                <div class="content-section">
+                    <h2 id="dashboard"><i class="fas fa-desktop" aria-hidden="true"></i> The dashboard</h2>
+                    <p>Everything lives in one web page, served on port 8081. The centre of it is a chart
+                        of the next two days: forecast solar, forecast load, the price curve, and the
+                        mode EOS Connect intends to run in each slot. When it decides to buy grid
+                        electricity at three in the morning, that chart is where you see why.</p>
+
+                    <figure class="shot-figure">
+                        <a href="../assets/images/screenshot_0.3.38.PNG">
+                            <img class="screenshot" src="../assets/images/screenshot_0.3.38.PNG"
+                                width="1899" height="1035" loading="lazy"
+                                alt="The EOS Connect dashboard. Four summary panels across the top show the current control state, battery state with the next planned AC charge, EV charging status and running costs. Below them a chart plots forecast load, solar yield, grid use, price and battery charge level across the next 24 hours, with shaded bands marking the slots where discharge is allowed. A table on the right lists the planned control state, price and battery level for each hour.">
+                        </a>
+                        <figcaption>The plan for the next 24 hours, and the reason behind each slot.
+                            <a href="../assets/images/screenshot_0.3.38.PNG">Open full size</a>.</figcaption>
+                    </figure>
+
+                    <p>The menu adds a battery overview with charge sessions, temperature and cost;
+                        override controls for taking over manually; alarms and a filtered log viewer;
+                        the full settings pages; and backup and restore. Nothing needs a terminal.</p>
+                    <p>Docker installs also check for new images in the background and show a
+                        dismissible banner when one is available. Home Assistant add-on updates are
+                        handled by Home Assistant.
+                        <a href="../user-guide/index.html#update-notifications">Update notifications</a></p>
                 </div>
-                <div class="feature-item">
-                    <h4><i class="fas fa-battery-three-quarters"></i> Battery Overview</h4>
-                    <p>Real-time battery status including charge power, temperature monitoring with thermal protection indicators, historical charging sessions, and cost analysis. Includes mobile-responsive temperature display with color-coded status indicators.</p>
+
+                <div class="content-section">
+                    <h2 id="next-steps"><i class="fas fa-arrow-right" aria-hidden="true"></i> Next steps</h2>
+                    <div class="feature-grid">
+                        <div class="feature-item">
+                            <h4>Install it</h4>
+                            <p>Home Assistant add-on, Docker or source, then the setup wizard.</p>
+                            <a href="../user-guide/index.html#installation" class="btn-primary">User guide</a>
+                        </div>
+                        <div class="feature-item">
+                            <h4>Tune it</h4>
+                            <p>Every setting, with its default and whether it needs a restart.</p>
+                            <a href="../user-guide/configuration.html" class="btn-primary">Configuration</a>
+                        </div>
+                        <div class="feature-item">
+                            <h4>Automate it</h4>
+                            <p>MQTT topics, the REST API and automation recipes.</p>
+                            <a href="../advanced/index.html" class="btn-primary">Advanced</a>
+                        </div>
+                    </div>
+                    <p>Still deciding? EOS Connect is MIT-licensed and developed in the open &mdash; read
+                        the <a href="https://github.com/ohAnd/EOS_connect" target="_blank" rel="noopener">source</a>
+                        or ask in
+                        <a href="https://github.com/ohAnd/EOS_connect/discussions" target="_blank"
+                            rel="noopener">Discussions</a> before you install anything.</p>
                 </div>
-                <div class="feature-item">
-                    <h4><i class="fas fa-list-alt"></i> Log Viewer</h4>
-                    <p>Real-time application logs with component-based filtering</p>
-                </div>
-                <div class="feature-item">
-                    <h4><i class="fas fa-sliders-h"></i> Manual Controls</h4>
-                    <p>Override system modes and set charging parameters directly</p>
-                </div>
-            </div>
-        </div>
-        <!-- Next Steps -->
-        <div class="content-section" id="next-steps">
-            <h2><i class="fas fa-arrow-right"></i> Next Steps</h2>
-            <p>Ready to get started? Choose your path:</p>
-            
-            <div class="feature-grid">
-                <div class="feature-item">
-                    <a href="../user-guide/index.html" class="btn-primary">Installation Guide →</a>
-                    <p>Install EOS Connect on your system</p>
-                </div>
-                <div class="feature-item">
-                    <a href="../user-guide/configuration.html" class="btn-primary">Configuration →</a>
-                    <p>Learn how to configure all features</p>
-                </div>
-                <div class="feature-item">
-                    <a href="../advanced/index.html" class="btn-primary">Advanced Features →</a>
-                    <p>Explore API, MQTT, and automation</p>
-                </div>
-            </div>
-        </div>
+
             </main>
         </div>
     </div>
 
-    <!-- Footer -->
-    <footer class="footer">
-        <p>EOS Connect Documentation | <a href="../index.html">Home</a> | <a href="https://github.com/ohAnd/EOS_connect">GitHub</a> | <a href="https://github.com/sponsors/ohAnd">Sponsor</a></p>
-    </footer>
-
-    <!-- Scroll spy for TOC -->
-    <script>
-        // Highlight active TOC link based on scroll position
-        const sections = document.querySelectorAll('.content-section[id]');
-        const tocLinks = document.querySelectorAll('.toc-link');
-
-        function highlightTOC() {
-            let current = '';
-            sections.forEach(section => {
-                const sectionTop = section.offsetTop;
-                if (pageYOffset >= sectionTop - 100) {
-                    current = section.getAttribute('id');
-                }
-            });
-
-            tocLinks.forEach(link => {
-                link.classList.remove('active');
-                if (link.getAttribute('href') === '#' + current) {
-                    link.classList.add('active');
-                }
-            });
-        }
-
-        window.addEventListener('scroll', highlightTOC);
-        highlightTOC(); // Initial call
-    </script>
-
-    <!-- Back to Top Button -->
-    <button class="back-to-top" onclick="scrollToTop()" aria-label="Back to top">
-        <i class="fas fa-chevron-up"></i>
-    </button>
-
-    <script>
-function toggleMobileMenu() {
-    const menu = document.querySelector('.nav-menu');
-    menu.classList.toggle('mobile-active');
-}
-
-// Close mobile menu when clicking outside
-document.addEventListener('click', function(event) {
-    const menu = document.querySelector('.nav-menu');
-    const toggle = document.querySelector('.mobile-menu-toggle');
-    if (menu.classList.contains('mobile-active') && !menu.contains(event.target) && !toggle.contains(event.target)) {
-        menu.classList.remove('mobile-active');
-    }
-});
-    </script>
-
-    <script>
-// Back to top button functionality
-const backToTopButton = document.querySelector('.back-to-top');
-
-window.addEventListener('scroll', function() {
-    if (window.pageYOffset > 300) {
-        backToTopButton.classList.add('visible');
-    } else {
-        backToTopButton.classList.remove('visible');
-    }
-});
-
-function scrollToTop() {
-    window.scrollTo({
-        top: 0,
-        behavior: 'smooth'
-    });
-}
-    </script>
+    <div id="site-footer"></div>
+    <script src="../assets/js/site.js"></script>
 </body>
+
 </html>
