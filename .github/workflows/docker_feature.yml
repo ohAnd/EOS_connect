@@ -44,7 +44,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
+          pip install -r requirements-dev.txt
+
+      - name: Install Chromium for the browser tests
+        # Without a browser, tests/web is skipped silently by the collect_ignore_glob
+        # in its conftest — so the setup wizard, the config page and the backup panel
+        # had no CI coverage at all despite having tests.
+        run: python -m playwright install --with-deps chromium
 
       - name: Run unit and regression tests
         run: python -m pytest -v tests/
@@ -116,11 +122,21 @@ jobs:
           if [[ "${{ env.PUSH_ENABLED }}" == "true" ]]; then
             echo "### ✅ Image Available in Registry" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Pull and test with:" >> $GITHUB_STEP_SUMMARY
+            echo "Feature packages are private, so log in first with a PAT that has" >> $GITHUB_STEP_SUMMARY
+            echo "\`read:packages\`. The \`-v\` is not optional: without it every setting" >> $GITHUB_STEP_SUMMARY
+            echo "and the PV yield history are discarded when the container is removed." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
             echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo "echo \$GHCR_PAT | docker login ghcr.io -u ${{ github.actor }} --password-stdin" >> $GITHUB_STEP_SUMMARY
             echo "docker pull ghcr.io/${{ env.owner }}/eos_connect:feature-${{ env.clean_ref }}" >> $GITHUB_STEP_SUMMARY
-            echo "docker run -d -p 8503:8503 ghcr.io/${{ env.owner }}/eos_connect:feature-${{ env.clean_ref }}" >> $GITHUB_STEP_SUMMARY
+            echo "mkdir -p ./eos_data" >> $GITHUB_STEP_SUMMARY
+            echo "docker run -d --name eos_connect_test \\" >> $GITHUB_STEP_SUMMARY
+            echo "  -p 8081:8081 \\" >> $GITHUB_STEP_SUMMARY
+            echo "  -v \$(pwd)/eos_data:/app/data \\" >> $GITHUB_STEP_SUMMARY
+            echo "  ghcr.io/${{ env.owner }}/eos_connect:feature-${{ env.clean_ref }}" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Then open <http://localhost:8081>." >> $GITHUB_STEP_SUMMARY
           else
             echo "### ℹ️ Build-Only Mode" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY

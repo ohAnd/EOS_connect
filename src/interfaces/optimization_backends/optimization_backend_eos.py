@@ -272,7 +272,13 @@ class EOSBackend:
                 "[OPT-EOS] OPTIMIZE ERROR - payload for the request was:\n%s",
                 eos_request,
             )
-            return {"error": str(e)}, None
+            # The exception text is logged above but not returned: it carries the
+            # resolved host, port and any proxy in the chain, and this dict is served
+            # verbatim by GET /json/optimize_response.json.
+            return {
+                "error": f"Request to the EOS server at {self.base_url} failed "
+                "- see the log for details, will try again with next cycle"
+            }, None
 
     def __get_config_path(self, path):
         """

@@ -13,6 +13,10 @@
 // Fallback values used only when schema hasn't loaded yet.
 let CONFIG_SECTIONS = {};
 let SECTION_ORDER = [];  // Track explicit section order from API
+// PV sources that forecast from an installation's coordinates, and therefore need
+// pv_forecast entries. Served by /api/config/schema (SPOT from schema.py); the
+// literal below is only the fallback for a backend that does not send it.
+let LOCATION_BASED_PV_SOURCES = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"];
 
 const LEVEL_ORDER = { getting_started: 0, standard: 1, expert: 2 };
 
@@ -110,6 +114,9 @@ class ConfigurationManager {
         if (schemaData.section_order) {
             SECTION_ORDER = schemaData.section_order;
             console.log("[ConfigManager] Explicit section order from API:", SECTION_ORDER);
+        }
+        if (Array.isArray(schemaData.location_based_pv_sources)) {
+            LOCATION_BASED_PV_SOURCES = schemaData.location_based_pv_sources;
         }
         const raw = await valuesRes.json();
 
@@ -210,13 +217,13 @@ class ConfigurationManager {
                     <button onclick="configurationManager._exportConfig()"
                             class="config-btn config-btn-secondary config-header-tool"
                             style="padding:5px 10px;font-size:0.8em;"
-                            title="Export Configuration">
+                            title="Export configuration only — for a full backup including measured PV history, use Menu ▸ Backup &amp; Restore">
                         <i class="fas fa-download"></i>
                     </button>
                     <button onclick="document.getElementById('cfg-import-file').click()"
                             class="config-btn config-btn-secondary config-header-tool"
                             style="padding:5px 10px;font-size:0.8em;"
-                            title="Import Configuration">
+                            title="Import configuration only — for a full restore, use Menu ▸ Backup &amp; Restore">
                         <i class="fas fa-upload"></i>
                     </button>
                     <input type="file" id="cfg-import-file" accept=".json"
@@ -237,13 +244,11 @@ class ConfigurationManager {
      * @returns {string} Close button HTML
      */
     _buildCloseBtn() {
-        const size = isMobile() ? "28px" : "30px";
-        return `<button onclick="closeFullScreenOverlay()" style="
-            background:none;border:none;color:lightgray;font-size:1.5em;cursor:pointer;
-            padding:0;width:${size};height:${size};display:flex;align-items:center;
-            justify-content:center;border-radius:50%;transition:background-color 0.2s;"
-            onmouseover="this.style.backgroundColor='rgba(255,255,255,0.1)'"
-            onmouseout="this.style.backgroundColor='transparent'">×</button>`;
+        // The same .fs-overlay-close the overlay host uses. It carried its own copy,
+        // sized from isMobile(), which froze at render time - and this header is
+        // rebuilt often enough that the two drifted apart on a rotated device.
+        return `<button class="fs-overlay-close" onclick="closeFullScreenOverlay()"
+            aria-label="Close">\u00d7</button>`;
     }
 
     // ── Navigation ──────────────────────────────────────────────
@@ -419,6 +424,7 @@ class ConfigurationManager {
                 html += `<div class="config-group${allHidden ? ' hidden' : ''}" data-group="${groupName}" data-subsection="${subsection}">
                     <div class="config-group-title">${groupName}</div>
                     ${groupFields.map(f => this._renderField(f)).join("")}
+                    ${this._renderTimeseriesTester(groupFields)}
                 </div>`;
             } else {
                 html += groupFields.map(f => this._renderField(f)).join("");
@@ -509,7 +515,113 @@ class ConfigurationManager {
                 </div>
                 ${helpText}
                 <div class="config-field-error" id="cfg-err-${this._cssKey(f.key)}"></div>
+            </div>${this._renderEntityTester(f)}`;
+    }
+
+    /**
+     * Render the connection test for a sensor field, as its own row beneath it.
+     *
+     * Sensor names are free text and a typo is invisible at runtime — Home Assistant
+     * answers an unknown entity on the history endpoint with 200 and an empty list,
+     * so the load profile silently becomes the built-in default. Asking before saving
+     * is the only way for the user to tell the two apart.
+     *
+     * Laid out exactly like the timeseries tester (``_renderTimeseriesTester``): a
+     * labelled row of its own, not a button squeezed alongside the input. Every input
+     * in this panel is width:100%, so an inline button wraps underneath and reads as
+     * a stray control rather than part of the field.
+     *
+     * @param {Object} f - Field definition
+     * @returns {string} Row HTML, or "" for anything that is not a sensor field
+     */
+    _renderEntityTester(f) {
+        if (f.type !== "sensor") {
+            return "";
+        }
+        const cssKey = this._cssKey(f.key);
+        // The test belongs to its field: when the field is not applicable, neither is
+        // the button. _updateDependencies keeps the two in step after a change.
+        const hidden = this._isDependencyHidden(f) ? " hidden" : "";
+
+        return `
+            <div class="config-field config-entity-tester${hidden}" data-entity-tester="${f.key}">
+                <div class="config-field-label"><span>Connection test</span></div>
+                <div class="config-field-input">
+                    <button type="button" class="config-btn"
+                            id="cfg-entity-test-${cssKey}"
+                            onclick="configurationManager.testEntity('${f.key}')">
+                        <i class="fas fa-plug"></i> Test entity
+                    </button>
+                </div>
+                <div class="config-entity-result" id="cfg-entity-result-${cssKey}"></div>
             </div>`;
+    }
+
+    /**
+     * Probe one sensor entity and render the outcome next to its field.
+     *
+     * Sends the values currently in the form, not just the saved ones, so the user can
+     * test before committing — same contract as testTimeseries().
+     *
+     * @param {string} key - Dot-notation key of the sensor field to test
+     */
+    async testEntity(key) {
+        const cssKey = this._cssKey(key);
+        const resultEl = document.getElementById(`cfg-entity-result-${cssKey}`);
+        const btnEl = document.getElementById(`cfg-entity-test-${cssKey}`);
+        if (!resultEl) {
+            return;
+        }
+
+        // Send the values currently in the form, not just the saved ones, so the user
+        // can test before committing — same contract as testTimeseries(). The section
+        // decides which connection applies: pv_autoscaling can carry its own.
+        const section = key.split(".")[0];
+        const body = { key };
+        const relevant = [
+            key,
+            "data_source.type", "data_source.url",
+            "data_source.access_token", "data_source.ssl_ignore",
+            `${section}.use_ha_central_data_source`,
+            `${section}.src`, `${section}.source`, `${section}.url`,
+            `${section}.access_token`, `${section}.ssl_ignore`,
+        ];
+        for (const k of relevant) {
+            if (this.values[k] !== undefined) {
+                body[k] = this.values[k];
+            }
+        }
+
+        resultEl.className = "config-entity-result visible";
+        resultEl.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Testing…`;
+        if (btnEl) {
+            btnEl.disabled = true;
+        }
+
+        try {
+            const res = await fetch("api/config/test-entity", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            const data = await res.json();
+            if (data.ok) {
+                resultEl.innerHTML = `<i class="fas fa-circle-check"></i> Found — `
+                    + `currently reports <strong>${this._escapeHtml(String(data.value))}</strong>`;
+            } else {
+                resultEl.innerHTML = `<i class="fas fa-times-circle"></i> `
+                    + `${this._escapeHtml(data.error || "Test failed.")}`;
+            }
+            resultEl.className = `config-entity-result visible ${data.ok ? "ok" : "error"}`;
+        } catch (err) {
+            console.error("[ConfigurationManager] Entity test failed:", err);
+            resultEl.className = "config-entity-result visible error";
+            resultEl.innerHTML = `<i class="fas fa-times-circle"></i> Test request failed.`;
+        } finally {
+            if (btnEl) {
+                btnEl.disabled = false;
+            }
+        }
     }
 
     /**
@@ -691,9 +803,8 @@ class ConfigurationManager {
     _renderPvForecastSection() {
         // Check if PV Forecast section should be hidden based on source
         const pvSource = this.values["pv_forecast_source.source"] ?? this._getSchemaDefault("pv_forecast_source.source");
-        const locationBasedSources = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"];
 
-        if (!locationBasedSources.includes(pvSource)) {
+        if (!LOCATION_BASED_PV_SOURCES.includes(pvSource)) {
             // For non-location-based sources (solcast, victron, evcc, timeseries),
             // the pv_forecast section is not needed
             let html = `<div class="config-restart-banner" id="cfg-restart-banner">
@@ -920,12 +1031,12 @@ class ConfigurationManager {
             </button>
             <button class="config-btn config-btn-secondary config-actions-tool"
                     onclick="configurationManager._exportConfig()"
-                    title="Export Configuration">
+                    title="Export configuration only — for a full backup including measured PV history, use Menu ▸ Backup &amp; Restore">
                 <i class="fas fa-download"></i>
             </button>
             <button class="config-btn config-btn-secondary config-actions-tool"
                     onclick="document.getElementById('cfg-import-file').click()"
-                    title="Import Configuration">
+                    title="Import configuration only — for a full restore, use Menu ▸ Backup &amp; Restore">
                 <i class="fas fa-upload"></i>
             </button>
         </div>`;
@@ -1065,12 +1176,17 @@ class ConfigurationManager {
         }
         for (const f of this.schema) {
             if (f.depends_on && changedKey in f.depends_on) {
-                const fieldEl = document.getElementById(`cfg-field-${this._cssKey(f.key)}`);
-                if (fieldEl) {
-                    if (this._isDependencyHidden(f)) {
-                        fieldEl.classList.add("hidden");
-                    } else {
-                        fieldEl.classList.remove("hidden");
+                const hidden = this._isDependencyHidden(f);
+                // The field and its connection-test row travel together — a Test
+                // button for a field that is not applicable is a control that cannot
+                // do anything.
+                const els = [
+                    document.getElementById(`cfg-field-${this._cssKey(f.key)}`),
+                    document.querySelector(`[data-entity-tester="${f.key}"]`),
+                ];
+                for (const el of els) {
+                    if (el) {
+                        el.classList.toggle("hidden", hidden);
                     }
                 }
             }
@@ -1094,7 +1210,34 @@ class ConfigurationManager {
             }
         }
 
+        this._updateTimeseriesTesterVisibility();
         this._updateGroupVisibility();
+    }
+
+    /**
+     * Show or hide the "Test connection" panels alongside their timeseries fields.
+     *
+     * The panels are not schema fields, so the depends_on loop above does not reach
+     * them; without this they would keep the visibility they had at render time and
+     * stay behind after a source switch.
+     */
+    _updateTimeseriesTesterVisibility() {
+        if (!this.schema) {
+            return;
+        }
+        for (const el of document.querySelectorAll("[data-timeseries-tester]")) {
+            const domain = el.getAttribute("data-timeseries-tester");
+            const section = domain === "price" ? "price" : "pv_forecast_source";
+            const unitField = this.schema.find(f => f.key === `${section}.value_unit`);
+            if (!unitField) {
+                continue;
+            }
+            if (this._isDependencyHidden(unitField)) {
+                el.classList.add("hidden");
+            } else {
+                el.classList.remove("hidden");
+            }
+        }
     }
 
     /**
@@ -1331,6 +1474,12 @@ class ConfigurationManager {
             } else {
                 this._showToast("Configuration saved successfully.", "success");
             }
+
+            // Advisories describe a configuration that saved fine but will run
+            // degraded — shown after the save bookkeeping, so it still reads as saved.
+            if (result.warnings && result.warnings.length > 0) {
+                this._showConfigAdvisories(result.warnings);
+            }
         } catch (err) {
             console.error("[ConfigurationManager] Save error:", err);
             this._showToast("Save failed: " + (err.message || err), "error");
@@ -1360,7 +1509,10 @@ class ConfigurationManager {
     // ── Import / Export ─────────────────────────────────────────
 
     /**
-     * Export the full configuration as a downloadable JSON file.
+     * Export the configuration as a downloadable JSON file.
+     *
+     * Configuration only. The measured PV yield history lives in the same database but
+     * is not part of this file — Menu ▸ Backup & Restore covers the whole install.
      */
     async _exportConfig() {
         try {
@@ -1379,7 +1531,12 @@ class ConfigurationManager {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            this._showToast("Configuration exported.", "success");
+            this._showToast(
+                "Configuration exported. For a full backup including measured PV "
+                + "history, use Menu ▸ Backup & Restore.",
+                "success",
+                6000
+            );
         } catch (err) {
             this._showToast("Export failed: " + (err.message || err), "error");
         }
@@ -1387,6 +1544,9 @@ class ConfigurationManager {
 
     /**
      * Import configuration from a JSON file.
+     *
+     * Configuration only. A full backup dropped here restores its settings and leaves
+     * the measured PV history alone; the toast says so rather than ignoring it quietly.
      * @param {File} file - The selected JSON file
      */
     async _importConfig(file) {
@@ -1416,15 +1576,37 @@ class ConfigurationManager {
 
             const count = result.imported || 0;
             const skipped = result.skipped || 0;
+            const invalid = (result.invalid || []).length;
+            const restart = result.restart_required || [];
+            const ignored = result.ignored_datasets || [];
+
             let msg = `Imported ${count} setting(s).`;
             if (skipped > 0) {
                 msg += ` Skipped ${skipped} unknown key(s).`;
+            }
+            if (invalid > 0) {
+                msg += ` Skipped ${invalid} value(s) that are no longer valid.`;
+            }
+            if (restart.length > 0) {
+                msg += ` Restart required for ${restart.length} field(s).`;
+                this.restartFields = [...new Set([...this.restartFields, ...restart])];
             }
 
             // Reload data to reflect imported values
             await this._loadData();
             this._selectSection(this.currentSection || this._orderedSections()[0]);
-            this._showToast(msg, "success");
+            this._showToast(msg, invalid > 0 || restart.length > 0 ? "warning" : "success");
+
+            if (ignored.length > 0) {
+                // This is a full backup, not a config export. Say what was left behind
+                // instead of silently dropping it.
+                this._showToast(
+                    "This file also contains measured PV yield history, which was not "
+                    + "restored. Use Menu ▸ Backup & Restore to restore it.",
+                    "info",
+                    9000
+                );
+            }
         } catch (err) {
             this._showToast("Import failed: " + (err.message || err), "error");
         }
@@ -1662,6 +1844,36 @@ class ConfigurationManager {
         }
     }
 
+    /**
+     * Display advisories for a save that succeeded but leaves something degraded.
+     *
+     * Shares the unmet-dependency banner: the two can never be on screen together,
+     * because a blocking dependency refuses the write while an advisory follows one.
+     * @param {Array} advisories - List of {field, reason, requires} objects
+     */
+    _showConfigAdvisories(advisories) {
+        const banner = document.getElementById("cfg-unmet-deps-banner");
+        const content = document.getElementById("cfg-unmet-deps-content");
+
+        if (banner && content) {
+            let html = `
+                <div style="color: #ffc107; font-weight: bold; margin-bottom: 12px;">
+                    <i class="fas fa-circle-info"></i> Saved &mdash; but something still needs your attention
+                </div>
+                <ul style="margin: 0; padding-left: 20px; font-size: 0.9em;">
+            `;
+            for (const item of advisories) {
+                html += `<li style="margin-bottom: 8px;">
+                    <strong>${item.field}</strong>: ${item.reason}
+                </li>`;
+            }
+            html += `</ul>`;
+
+            content.innerHTML = html;
+            banner.classList.add("visible");
+        }
+    }
+
     // ── Toast notifications ─────────────────────────────────────
 
     /**
@@ -1777,6 +1989,129 @@ class ConfigurationManager {
     }
 
     // ── Utility ─────────────────────────────────────────────────
+
+    /**
+     * Render the "Test connection" panel for a group holding timeseries fields.
+     *
+     * The timeseries source accepts exactly one format, so the user needs to see what
+     * their source actually yields: a payload can match the format perfectly and still
+     * be off by a factor of 1000 if the unit is wrong. Showing the first slots in the
+     * unit displayed elsewhere in the UI makes that visible before saving.
+     *
+     * @param {Array<Object>} groupFields - Fields rendered in this group
+     * @returns {string} Panel HTML, or "" when the group has no timeseries fields
+     */
+    _renderTimeseriesTester(groupFields) {
+        const unitField = groupFields.find(f => f.key.endsWith(".value_unit"));
+        if (!unitField) {
+            return "";
+        }
+        const section = unitField.key.split(".")[0];
+        const domain = section === "price" ? "price" : "pv";
+        const hidden = this._isDependencyHidden(unitField) ? " hidden" : "";
+
+        return `
+            <div class="config-field config-timeseries-tester${hidden}" data-timeseries-tester="${domain}">
+                <div class="config-field-label"><span>Connection test</span></div>
+                <div class="config-field-input">
+                    <button type="button" class="config-btn"
+                            id="cfg-ts-test-${domain}"
+                            onclick="configurationManager.testTimeseries('${domain}')">
+                        <i class="fas fa-plug"></i> Test connection
+                    </button>
+                </div>
+                <div class="config-timeseries-result" id="cfg-ts-result-${domain}"></div>
+            </div>`;
+    }
+
+    /**
+     * Probe the configured timeseries source and render the outcome.
+     *
+     * Sends the values currently in the form (not just the saved ones) so the user can
+     * test before committing.
+     *
+     * @param {string} domain - "price" or "pv"
+     */
+    async testTimeseries(domain) {
+        const section = domain === "price" ? "price" : "pv_forecast_source";
+        const resultEl = document.getElementById(`cfg-ts-result-${domain}`);
+        const btnEl = document.getElementById(`cfg-ts-test-${domain}`);
+        if (!resultEl) {
+            return;
+        }
+
+        const body = { domain };
+        for (const suffix of [
+            "source", "data_url", "data_path", "data_token",
+            "value_unit", "use_ha_central_data_source", "ha_sensor_name",
+        ]) {
+            const key = `${section}.${suffix}`;
+            if (this.values[key] !== undefined) {
+                body[key] = this.values[key];
+            }
+        }
+        for (const key of ["data_source.url", "data_source.access_token"]) {
+            if (this.values[key] !== undefined) {
+                body[key] = this.values[key];
+            }
+        }
+
+        resultEl.className = "config-timeseries-result visible";
+        resultEl.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Testing…`;
+        if (btnEl) {
+            btnEl.disabled = true;
+        }
+
+        try {
+            const res = await fetch("api/config/test-timeseries", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            const data = await res.json();
+            resultEl.innerHTML = this._renderTimeseriesResult(data);
+            resultEl.className = `config-timeseries-result visible ${data.ok ? "ok" : "error"}`;
+        } catch (err) {
+            console.error("[ConfigurationManager] Timeseries test failed:", err);
+            resultEl.className = "config-timeseries-result visible error";
+            resultEl.innerHTML = `<i class="fas fa-times-circle"></i> Test request failed.`;
+        } finally {
+            if (btnEl) {
+                btnEl.disabled = false;
+            }
+        }
+    }
+
+    /**
+     * Turn a probe result into readable HTML.
+     * @param {Object} data - Probe response
+     * @returns {string} Result HTML
+     */
+    _renderTimeseriesResult(data) {
+        if (!data.ok) {
+            return `<i class="fas fa-times-circle"></i> ${this._escapeHtml(data.error || "Test failed.")}`;
+        }
+
+        const resolution = data.resolution_seconds === 900 ? "15 min" : "hourly";
+        const slots = (data.slots || []).map(slot => {
+            const time = String(slot.start || "").replace("T", " ").slice(0, 16);
+            return `<tr><td>${this._escapeHtml(time)}</td>
+                        <td style="text-align:right;">${slot.value}</td>
+                        <td>${this._escapeHtml(slot.unit)}</td></tr>`;
+        }).join("");
+
+        const warnings = (data.warnings || []).map(
+            w => `<div class="config-timeseries-warning">
+                    <i class="fas fa-triangle-exclamation"></i> ${this._escapeHtml(w)}
+                  </div>`
+        ).join("");
+
+        return `<div><i class="fas fa-circle-check"></i>
+                    ${data.entry_count} entries, ${resolution} resolution,
+                    read as ${this._escapeHtml(data.value_unit)}</div>
+                <table class="config-timeseries-slots">${slots}</table>
+                ${warnings}`;
+    }
 
     /**
      * Convert a dot-notation key to a CSS-safe id fragment.

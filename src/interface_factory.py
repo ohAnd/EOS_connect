@@ -11,7 +11,11 @@ import logging
 from typing import Optional, Dict, Any
 from datetime import tzinfo
 
-logger = logging.getLogger(__name__)
+# eos_connect.py attaches its handlers to the "__main__" logger, not to root, so
+# a logging.getLogger(__name__) here propagates to a handler-less root and every
+# message is silently discarded — including the ones this module exists to
+# surface in /logs/alerts and the startup-errors panel.
+logger = logging.getLogger("__main__")
 
 
 class InterfaceFactory:
@@ -212,7 +216,7 @@ class InterfaceFactory:
         time_frame_base: int,
         evcc_config: Dict[str, Any],
         data_source_config: Dict[str, Any],
-        eos_source: str,
+        temperature_forecast_enabled: bool,
         time_zone_str: str,
         critical: bool = False,
     ):
@@ -225,7 +229,8 @@ class InterfaceFactory:
             time_frame_base: Base time frame in seconds
             evcc_config: EVCC configuration
             data_source_config: Data source configuration (for HA integration)
-            eos_source: EOS source type
+            temperature_forecast_enabled: Whether to fetch an outside temperature
+                forecast (see ``interfaces.pv_interface.wants_temperature_forecast``)
             time_zone_str: Timezone string
             critical: Whether interface is critical (non-critical by default)
             
@@ -256,8 +261,50 @@ class InterfaceFactory:
                 pv_forecast,
                 time_frame_base,
                 config_special,
-                eos_source == "eos_server",
+                temperature_forecast_enabled,
                 time_zone_str,
+            ),
+        )
+
+    def create_pv_autoscaler(
+        self,
+        config: Dict[str, Any],
+        pv_yield_store,
+        timezone: str = "UTC",
+        request_timeout: int = 10,
+        ssl_ignore: bool = False,
+        critical: bool = False,
+    ):
+        """
+        Create PvAutoscaler with error handling.
+
+        Args:
+            config: pv_autoscaling config dict
+            pv_yield_store: PvYieldStore instance
+            timezone: timezone string
+            request_timeout: request timeout in seconds
+            ssl_ignore: whether to ignore SSL certificate errors
+            critical: whether autoscaler is critical
+
+        Returns:
+            PvAutoscaler instance or None if non-critical and failed
+        """
+        return self._create_interface(
+            component_name="pv_autoscaler",
+            category="connectivity",
+            critical=critical,
+            title="PV Autoscaler unavailable",
+            error_message="Failed to initialize PV autoscaler",
+            config_link="#pv_autoscaling",
+            creator_func=lambda: self._import_and_create(
+                "interfaces.pv_autoscaler",
+                "PvAutoscaler",
+                config,
+                pv_yield_store,
+                timezone=timezone,
+                request_timeout=request_timeout,
+                ssl_ignore=ssl_ignore,
+                auto_start=False,
             ),
         )
 
@@ -449,6 +496,9 @@ class InterfaceFactory:
 
             self.created_interfaces[component_name] = interface
             logger.info("[Factory] Successfully created %s", component_name)
+            self._report_degraded_configuration(
+                interface, component_name, config_link
+            )
             return interface
 
         except Exception as e:
@@ -483,6 +533,40 @@ class InterfaceFactory:
                 component_name,
             )
             return None
+
+    def _report_degraded_configuration(self, interface, component_name, config_link):
+        """
+        Surface an interface that constructed successfully but cannot do its job.
+
+        The error path below only fires when a constructor *raises*. An interface that
+        is merely misconfigured does not raise — by design, so the user can fix it in
+        the web UI instead of the container crash-looping — and so it used to reach the
+        user as nothing at all. Anything that sets ``configuration_state`` to a
+        degraded value and says why gets an entry in /logs/alerts and the
+        startup-errors panel.
+
+        A message is required, not just a state, so an interface that tracks
+        ``configuration_state`` without explaining it keeps its existing behaviour.
+        """
+        if interface is None:
+            return
+
+        state = getattr(interface, "configuration_state", None)
+        detail = getattr(interface, "configuration_message", "")
+        if state not in ("incomplete", "invalid") or not detail:
+            return
+
+        # Not the caller's failure title: "Battery sensor unreachable" describes a
+        # connection that broke, and this is a setting that was never made.
+        self.validator.add_error(
+            category="configuration",
+            component=component_name,
+            severity="warning",
+            title="Incomplete configuration",
+            message=detail,
+            action_required=True,
+            config_link=config_link,
+        )
 
     @staticmethod
     def _import_and_create(module_name: str, class_name: str, *args, **kwargs):

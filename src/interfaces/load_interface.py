@@ -95,43 +95,59 @@ class LoadInterface:
                     )
                     self.time_zone = None
 
+        self.configuration_state = "unknown"  # 'valid', 'incomplete', or 'invalid'
+        self.configuration_valid = False
+        self.configuration_message = ""
         self.__check_config()
 
     def __check_config(self):
         """
         Checks if the configuration is valid.
+
+        Falling back to the default profile is a legitimate outcome, so this never
+        raises. It does record *why* it fell back, because the difference between "no
+        source configured" and "a source is configured but unreadable" is invisible in
+        the resulting load profile — both produce the same synthetic curve.
+
         Returns:
             bool: True if the configuration is valid, False otherwise.
         """
         if self.src not in ["openhab", "homeassistant", "default"]:
+            self.configuration_state = "invalid"
+            self.configuration_message = (
+                f"Load source '{self.src}' is not supported. "
+                "Using the built-in default load profile."
+            )
             logger.error(
                 "[LOAD-IF] Invalid source '%s' configured. Using default.", self.src
             )
             self.src = "default"
             return False
         if self.src != "default":
+            missing, where = None, "Data Source"
             if self.url == "":
-                logger.error(
-                    "[LOAD-IF] Source '%s' selected, but URL not configured. Using default.",
-                    self.src,
+                missing = "the data source URL is not configured"
+            elif self.access_token == "" and self.src == "homeassistant":
+                missing = "the Home Assistant access token is not configured"
+            elif self.load_sensor == "":
+                missing, where = "no load sensor is set", "Load"
+
+            if missing:
+                self.configuration_state = "incomplete"
+                self.configuration_message = (
+                    f"Load source '{self.src}' is selected, but {missing}. "
+                    "The built-in default load profile is used instead — set it under "
+                    f"Settings > {where} to optimize against your real consumption."
                 )
+                logger.warning("[LOAD-IF] %s", self.configuration_message)
                 self.src = "default"
                 return False
-            if self.access_token == "" and self.src == "homeassistant":
-                logger.error(
-                    "[LOAD-IF] Source '%s' selected, but access_token not configured."
-                    + " Using default.",
-                    self.src,
-                )
-                self.src = "default"
-                return False
-            if self.load_sensor == "":
-                logger.error("[LOAD-IF] Load sensor not configured. Using default.")
-                self.src = "default"
-                return False
+
             logger.debug("[LOAD-IF] Config check successful using '%s'", self.src)
         else:
             logger.debug("[LOAD-IF] Using default load profile.")
+        self.configuration_state = "valid"
+        self.configuration_valid = True
         return True
 
     def __log_request_failure(self, url, attempt, max_retries, error, item_label=""):
@@ -969,12 +985,31 @@ class LoadInterface:
                     + " for 48-hour forecast"
                 )
             else:
-                logger.info(
-                    "[LOAD-IF] No recent consumption data available yet. "
-                    + "Using built-in default profile as temporary fallback. "
-                    + "This will automatically switch to real data as your system runs"
-                    + " and collects sensor data."
-                )
+                # Nothing from 7 and 14 days ago is normal on a new install; nothing
+                # from yesterday either, on a source that is actually connected, is
+                # not. Home Assistant answers an unknown entity with 200 and an empty
+                # list rather than a 404, so a wrong sensor name produces no error
+                # anywhere — it just quietly becomes this synthetic curve, and the
+                # dashboard looks plausible while the optimizer runs on fiction.
+                # The "| Config:" and "| ACTION REQUIRED" suffixes are what
+                # parseAlertMeta() in web/js/main.js turns into the startup-errors
+                # panel's badge and deep link.
+                if self.src in ("openhab", "homeassistant"):
+                    logger.warning(
+                        "[LOAD-IF] '%s' returned no consumption data for the last two "
+                        "weeks. If this is not a new installation, check that the "
+                        "sensor name is correct and that it has recorder history. "
+                        "Using the built-in default profile meanwhile. "
+                        "| Config: #load | ACTION REQUIRED",
+                        self.load_sensor,
+                    )
+                else:
+                    logger.info(
+                        "[LOAD-IF] No recent consumption data available yet. "
+                        + "Using built-in default profile as temporary fallback. "
+                        + "This will automatically switch to real data as your system runs"
+                        + " and collects sensor data."
+                    )
                 load_profile = self._get_default_profile()
                 logger.info(
                     "[LOAD-IF] Temporary default profile active -"

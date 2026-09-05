@@ -280,6 +280,63 @@ def test_handle_interface_error_with_empty_config():
     assert pv.pv_forcast_request_error["timestamp"] is not None
 
 
+def test_handle_interface_error_temperature_target_ignores_pv_cache():
+    """
+    Regression test for issue #276: a failed temperature request must not
+    fall back to the PV power cache, even when it holds unrelated Watt
+    values and the temperature cache is still empty.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    pv.last_successful_pv_forecast = [2090.0, 1500.0, 800.0]
+    pv.last_successful_temp_forecast = []
+
+    result = pv._handle_interface_error(
+        "timeout", "temp failed", {}, "akkudoktor", target="temperature"
+    )
+
+    assert result == []
+    assert pv.consecutive_temp_failures == 1
+    assert pv.consecutive_failures == 0
+
+
+def test_handle_interface_error_temperature_target_uses_own_cache():
+    """
+    Test that a failed temperature request falls back to its own cache when
+    available, not the PV power cache.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    pv.last_successful_pv_forecast = [2090.0, 1500.0, 800.0]
+    pv.last_successful_temp_forecast = [15.0, 16.0, 17.0]
+
+    result = pv._handle_interface_error(
+        "timeout", "temp failed", {}, "akkudoktor", target="temperature"
+    )
+
+    assert result == [15.0, 16.0, 17.0]
+
+
+def test_consecutive_temp_failures_independent_of_pv_success():
+    """
+    Temperature failures must accumulate toward max_failures even while PV
+    power keeps succeeding and resetting its own counter every cycle -
+    reproduces the 0/1 oscillation from issue #276 that kept the temperature
+    failure count from ever reaching the threshold.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    for _ in range(30):
+        # PV power fetch succeeds and resets only the power counter.
+        pv.last_successful_pv_forecast = [100.0]
+        pv.consecutive_failures = 0
+        # Temperature fetch fails every cycle.
+        pv._handle_interface_error(
+            "timeout", "temp failed", {}, "akkudoktor", target="temperature"
+        )
+
+    assert pv.consecutive_temp_failures == 30
+    assert pv.consecutive_temp_failures >= pv.max_failures
+    assert pv.consecutive_failures == 0
+
+
 def test_default_pv_forecast_length_and_values():
     """
     Test that the default PV forecast returns 48 values of type int or float.
@@ -375,9 +432,36 @@ def test_summarized_pv_forecast_aggregation():
     assert result == [300] * 24
 
 
+def test_summarized_pv_forecast_scale_false_returns_unscaled_values():
+    """Explicit scale=False should bypass autoscaler output while default behavior stays scaled."""
+    config = [
+        {"name": "A", "lat": 50, "lon": 8, "azimuth": 180, "tilt": 30, "power": 100, "powerInverter": 100, "inverterEfficiency": 1.0},
+        {"name": "B", "lat": 51, "lon": 9, "azimuth": 180, "tilt": 30, "power": 200, "powerInverter": 200, "inverterEfficiency": 1.0},
+    ]
+    pv = PvInterface({}, config, time_frame_base, {}, timezone="UTC")
+    pv._PvInterface__get_pv_forecast = (
+        lambda entry, tgt_duration=24: [entry["power"]] * tgt_duration
+    )
+
+    class DummyAutoscaler:
+        enabled = True
+
+        def apply_scaling(self, values, time_frame_base):
+            return [v * 10 for v in values]
+
+    pv.set_autoscaler(DummyAutoscaler())
+
+    assert pv.get_summarized_pv_forecast(scale=False) == [300] * 24
+    assert pv.get_summarized_pv_forecast() == [3000] * 24
+
+
 def test_api_error_triggers_fallback(monkeypatch):
     """
-    Test that an API error triggers fallback to default PV forecast.
+    Test that an API error with no cache yields nothing to serve.
+
+    The empty list is what makes the update loop reach its own default: a
+    zero-filled array of full length is truthy, so it used to be picked up by the
+    "cached forecast available" branch and served as a flat 0 W day.
     """
     pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
     pv._retry_request = lambda req, err, *args, **kwargs: err(
@@ -395,8 +479,137 @@ def test_api_error_triggers_fallback(monkeypatch):
             "horizon": "0",
         }
     )
-    assert result == [0] * 48
+    assert result == []
     assert pv.pv_forcast_request_error["error"] in (None, "api_error")
+
+
+def test_temperature_api_error_never_returns_pv_watts(monkeypatch):
+    """
+    Regression test for issue #276: a total temperature-fetch failure must
+    never return data derived from the cached PV power (Watts) array, even
+    though both forecasts are fetched through this same shared method.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    pv.last_successful_pv_forecast = [2090.0, 1500.0, 800.0]
+    pv._retry_request = lambda req, err, *args, **kwargs: err(
+        "timeout", Exception("fail")
+    )
+
+    result = pv._PvInterface__get_pv_forecast_akkudoktor_api(
+        tgt_value="temperature",
+        pv_config_entry={
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 100,
+            "powerInverter": 800,
+            "inverterEfficiency": 0.95,
+            "horizon": "0",
+        },
+    )
+
+    # No temperature cache exists yet, so there is nothing to serve.  Padding the
+    # empty result to full length instead produced 48 h of 0 degC - not PV Watts,
+    # but just as fabricated, and inside the +-60 degC plausibility guard.
+    assert result == []
+    assert 2090.0 not in result
+
+
+def test_temperature_api_error_falls_back_to_temp_cache(monkeypatch):
+    """
+    Once a temperature forecast has succeeded at least once, a later
+    failure must reuse the temperature cache, not the PV power cache.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    pv.last_successful_pv_forecast = [2090.0, 1500.0, 800.0]
+    pv.last_successful_temp_forecast = [15.0, 16.0, 17.0]
+    pv._retry_request = lambda req, err, *args, **kwargs: err(
+        "timeout", Exception("fail")
+    )
+
+    result = pv._PvInterface__get_pv_forecast_akkudoktor_api(
+        tgt_value="temperature",
+        pv_config_entry={
+            "lat": 50,
+            "lon": 8,
+            "azimuth": 180,
+            "tilt": 30,
+            "power": 100,
+            "powerInverter": 800,
+            "inverterEfficiency": 0.95,
+            "horizon": "0",
+        },
+    )
+
+    assert result == [15.0, 16.0, 17.0]
+
+
+def _run_one_update_loop_iteration(pv):
+    """
+    Helper to run exactly one iteration of the background update loop.
+    threading.Thread is stubbed by the autouse patch_thread fixture, so the
+    loop was never actually started - it is safe to invoke directly here.
+    """
+    calls = {"n": 0}
+
+    def is_set_once():
+        calls["n"] += 1
+        return calls["n"] > 1
+
+    pv._stop_event.is_set = is_set_once
+    pv._PvInterface__update_pv_state_loop()
+
+
+def test_update_loop_temperature_failure_never_uses_pv_cache(monkeypatch):
+    """
+    End-to-end regression test for issue #276: with PV power succeeding and
+    caching Watt values, and the temperature fetch exhausting its own retries
+    with no temperature cache yet, the update loop must fall back to the
+    default 15C forecast - never to the cached PV power array.
+    """
+    config = [{"name": "roof", "lat": 50, "lon": 8, "power": 5000}]
+    pv = PvInterface(
+        {}, config, time_frame_base, {}, temperature_forecast_enabled=True,
+        timezone="UTC",
+    )
+    pv.last_successful_pv_forecast = [2090.0, 1500.0, 800.0]
+    monkeypatch.setattr(pv, "get_summarized_pv_forecast", lambda scale=False: [100.0])
+    monkeypatch.setattr(pv, "apply_autoscaling", lambda values: values)
+    monkeypatch.setattr(
+        pv,
+        "_PvInterface__get_pv_forecast_akkudoktor_api",
+        lambda tgt_value, pv_config_entry: [],
+    )
+
+    _run_one_update_loop_iteration(pv)
+
+    assert pv.temp_forecast_array == pv._PvInterface__get_default_temperature_forecast()
+    assert pv.temp_forecast_array != pv.last_successful_pv_forecast
+
+
+def test_update_loop_rejects_implausible_temperature_values(monkeypatch):
+    """
+    Defense-in-depth: even if a mislabeled PV-Watts array slipped past the
+    target-aware cache fix, physically implausible values must still be
+    rejected in favor of the default 15C forecast.
+    """
+    config = [{"name": "roof", "lat": 50, "lon": 8, "power": 5000}]
+    pv = PvInterface(
+        {}, config, time_frame_base, {}, temperature_forecast_enabled=True,
+        timezone="UTC",
+    )
+    monkeypatch.setattr(pv, "get_summarized_pv_forecast", lambda scale=False: [100.0])
+    monkeypatch.setattr(pv, "apply_autoscaling", lambda values: values)
+    monkeypatch.setattr(
+        pv,
+        "_PvInterface__get_pv_forecast_akkudoktor_api",
+        lambda tgt_value, pv_config_entry: [2090.0, 1500.0, 800.0],
+    )
+
+    _run_one_update_loop_iteration(pv)
+
+    assert pv.temp_forecast_array == pv._PvInterface__get_default_temperature_forecast()
 
 
 def test_get_current_pv_forecast_returns_array():
@@ -1335,7 +1548,7 @@ def test_evcc_compact_unix_timestamp_forecast_is_supported(monkeypatch):
     ]
 
     def mock_retry_request(request_func, error_handler, **kwargs):
-        return compact_timeseries, "1.0"
+        return compact_timeseries
 
     monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
     pv = PvInterface(config_source, [config_entry], 900, {"url": "http://dummy-evcc"}, timezone="UTC")
@@ -1345,170 +1558,135 @@ def test_evcc_compact_unix_timestamp_forecast_is_supported(monkeypatch):
     assert len(result) == 192
     assert result == [10.0] * 192
 
+
 def test_evcc_scaling_enabled_applies_scale_factor(monkeypatch):
-
-    def test_evcc_scaling_disabled_uses_1(monkeypatch):
-        """
-        Test that EVCC PV forecast does NOT apply the scale factor when use_real_data_correction is False.
-        """
-        # Prepare config
-        config_entry = {
-            "name": "evcc_test",
-            "lat": 50,
-            "lon": 8,
-            "power": 100,
-        }
-        config_source = {"source": "evcc", "use_real_data_correction": False}
-
-        # Dummy forecast: 10 Wh for each hour (simulate 48h, valid timestamps)
-        import pytz
-        base = real_datetime.datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        dummy_times = [(base + real_datetime.timedelta(hours=h), 10.0) for h in range(48)]
-        # Simulate EVCC API returns scale=1.5 (should be ignored)
-        dummy_scale = "1.5"
-
-        # Patch _retry_request to return (forecast, scale)
-        def mock_retry_request(request_func, error_handler, **kwargs):
-            return ([{"ts": t[0].isoformat(), "val": t[1] / 0.25} for t in dummy_times], dummy_scale)
-
-        monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
-
-        # Patch timezone to UTC
-        pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
-        pv.time_frame_base = 3600
-        pv.time_zone = "UTC"
-
-        # Call the EVCC forecast method
-        result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
-        print("EVCC scaling disabled test result:", result)
-
-        # Each value should be 10.0 (no scaling)
-        assert isinstance(result, list)
-        assert len(result) == 48
-        assert all(abs(x - 10.0) < 1e-6 for x in result)
-    """
-    Test that EVCC PV forecast applies the scale factor when use_real_data_correction is True.
-    """
-    # Prepare config
-    config_entry = {
-        "name": "evcc_test",
-        "lat": 50,
-        "lon": 8,
-        "power": 100,
-    }
-    config_source = {"source": "evcc", "use_real_data_correction": True}
-
-    # Dummy forecast: 10 Wh for each hour (simulate 48h, valid timestamps)
-    import pytz
-    base = real_datetime.datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    dummy_times = [(base + real_datetime.timedelta(hours=h), 10.0) for h in range(48)]
-    # Simulate EVCC API returns scale=1.5
-    dummy_scale = "1.5"
-
-    # Patch _retry_request to return (forecast, scale)
-    def mock_retry_request(request_func, error_handler, **kwargs):
-        return ([{"ts": t[0].isoformat(), "val": t[1] / 0.25} for t in dummy_times], dummy_scale)
-
-    monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
-
-    # Patch timezone to UTC
+    """Central PV summary applies autoscaling by default when enabled."""
+    config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
+    config_source = {"source": "evcc"}
     pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
-    # Patch time_frame_base to 3600 (hourly)
-    pv.time_frame_base = 3600
+    pv._PvInterface__get_pv_forecast = lambda entry, tgt_duration=48: [10.0] * 48
 
-    # Patch pytz.timezone to UTC
-    import pytz
-    pv.time_zone = "UTC"
+    class DummyAutoscaler:
+        enabled = True
+        _scale_factors = {1: 1.5}
 
+        def apply_scaling(self, values, time_frame_base):
+            return [value * 1.5 for value in values]
 
-    # Call the EVCC forecast method
-    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
-    print("EVCC scaling test result:", result)
+    pv.set_autoscaler(DummyAutoscaler())
 
-    # Each value should be 10.0 * 1.5 = 15.0
+    result = pv.get_summarized_pv_forecast()
+
     assert isinstance(result, list)
     assert len(result) == 48
-    assert all(abs(x - 15.0) < 1e-6 for x in result)
+    assert all(abs(value - 15.0) < 1e-6 for value in result)
+
 
 def test_evcc_scaling_disabled_uses_1(monkeypatch):
-    """
-    Test that EVCC PV forecast does NOT apply the scale factor when use_real_data_correction is False.
-    """
-    # Prepare config
-    config_entry = {
-        "name": "evcc_test",
-        "lat": 50,
-        "lon": 8,
-        "power": 100,
-    }
-    config_source = {"source": "evcc", "use_real_data_correction": False}
-
-    # Dummy forecast: 10 Wh for each hour (simulate 48h, valid timestamps)
-    import pytz
-    base = real_datetime.datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    dummy_times = [(base + real_datetime.timedelta(hours=h), 10.0) for h in range(48)]
-    # Simulate EVCC API returns scale=1.5 (should be ignored)
-    dummy_scale = "1.5"
-
-    # Patch _retry_request to return (forecast, scale)
-    def mock_retry_request(request_func, error_handler, **kwargs):
-        return ([{"ts": t[0].isoformat(), "val": t[1] / 0.25} for t in dummy_times], dummy_scale)
-
-    monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
-
-    # Patch timezone to UTC
+    """Central PV summary leaves raw values when autoscaler is disabled."""
+    config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
+    config_source = {"source": "evcc"}
     pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
-    pv.time_frame_base = 3600
-    pv.time_zone = "UTC"
+    pv._PvInterface__get_pv_forecast = lambda entry, tgt_duration=48: [10.0] * 48
 
-    # Call the EVCC forecast method
-    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
-    print("EVCC scaling disabled test result:", result)
+    class DummyAutoscaler:
+        enabled = False
+        _scale_factors = {1: 1.5}
 
-    # Each value should be 10.0 (no scaling)
+        def apply_scaling(self, values, time_frame_base):
+            return [value * 1.5 for value in values]
+
+    pv.set_autoscaler(DummyAutoscaler())
+
+    result = pv.get_summarized_pv_forecast()
+
     assert isinstance(result, list)
     assert len(result) == 48
-    assert all(abs(x - 10.0) < 1e-6 for x in result)
+    assert all(abs(value - 10.0) < 1e-6 for value in result)
 
-def test_evcc_scale_below_point_one_uses_half(monkeypatch):
-    """
-    Test that EVCC PV forecast uses scale factor 0.5 if the API returns a value < 0.1.
-    """
-    # Prepare config
-    config_entry = {
-        "name": "evcc_test",
-        "lat": 50,
-        "lon": 8,
-        "power": 100,
-    }
-    config_source = {"source": "evcc", "use_real_data_correction": True}
 
-    # Dummy forecast: 10 Wh for each hour (simulate 48h, valid timestamps)
-    import pytz
-    base = real_datetime.datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    dummy_times = [(base + real_datetime.timedelta(hours=h), 10.0) for h in range(48)]
-    # Simulate EVCC API returns scale=0.05 (should use 0.5 instead)
-    dummy_scale = "0.05"
+def _evcc_interface(use_real_data_correction=None):
+    """Build a PvInterface configured for the EVCC source."""
+    config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
+    config_source = {"source": "evcc"}
+    if use_real_data_correction is not None:
+        config_source["use_real_data_correction"] = use_real_data_correction
+    return PvInterface(
+        config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC"
+    )
 
-    # Patch _retry_request to return (forecast, scale)
-    def mock_retry_request(request_func, error_handler, **kwargs):
-        return ([{"ts": t[0].isoformat(), "val": t[1] / 0.25} for t in dummy_times], dummy_scale)
 
-    monkeypatch.setattr(PvInterface, "_retry_request", staticmethod(mock_retry_request))
+@pytest.mark.parametrize(
+    "published_scale, expected",
+    [
+        (0.8, 0.8),            # normal correction is applied as published
+        (1.0, 1.0),
+        (0.05, 0.5),           # below 0.1 EVCC has too little data: floor at 0.5
+        (0.0, 1.0),            # non-positive is meaningless: fall back to neutral
+        (-1.0, 1.0),
+        ("unknown", 1.0),      # EVCC omitted the field
+        (None, 1.0),
+    ],
+)
+def test_evcc_scale_factor_resolution(published_scale, expected):
+    """The published EVCC correction factor is validated before it is applied."""
+    pv = _evcc_interface()
+    assert pv._resolve_evcc_scale_factor(published_scale) == pytest.approx(expected)
 
-    # Patch timezone to UTC
-    pv = PvInterface(config_source, [config_entry], 3600, {"url": "http://dummy-evcc"}, timezone="UTC")
-    pv.time_frame_base = 3600
-    pv.time_zone = "UTC"
 
-    # Call the EVCC forecast method
+def test_evcc_scale_factor_ignored_when_correction_disabled():
+    """use_real_data_correction=False opts out of EVCC's own correction entirely."""
+    pv = _evcc_interface(use_real_data_correction=False)
+    assert pv._resolve_evcc_scale_factor(0.8) == pytest.approx(1.0)
+    assert pv._resolve_evcc_scale_factor(0.05) == pytest.approx(1.0)
+
+
+def test_evcc_forecast_applies_published_scale(monkeypatch):
+    """EVCC's learned scale is applied to the forecast it publishes."""
+    config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
+    base = real_datetime.datetime.now(real_datetime.timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    timeseries = [
+        [int((base + real_datetime.timedelta(minutes=15 * i)).timestamp()), 40.0]
+        for i in range(192)
+    ]
+
+    monkeypatch.setattr(
+        PvInterface,
+        "_retry_request",
+        staticmethod(lambda request_func, error_handler, **kwargs: (timeseries, 0.5)),
+    )
+    pv = _evcc_interface()
+
     result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
-    print("EVCC scale < 0.1 test result:", result)
 
-    # Each value should be 10.0 * 0.5 = 5.0
-    assert isinstance(result, list)
+    # 40 W over four 15-minute slots is 40 Wh per hour, halved by the 0.5 scale.
     assert len(result) == 48
-    assert all(abs(x - 5.0) < 1e-6 for x in result)
+    assert result == [20.0] * 48
+
+
+def test_evcc_forecast_unscaled_when_correction_disabled(monkeypatch):
+    """With correction disabled the raw EVCC values pass through untouched."""
+    config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
+    base = real_datetime.datetime.now(real_datetime.timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    timeseries = [
+        [int((base + real_datetime.timedelta(minutes=15 * i)).timestamp()), 40.0]
+        for i in range(192)
+    ]
+
+    monkeypatch.setattr(
+        PvInterface,
+        "_retry_request",
+        staticmethod(lambda request_func, error_handler, **kwargs: (timeseries, 0.5)),
+    )
+    pv = _evcc_interface(use_real_data_correction=False)
+
+    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
+
+    assert result == [40.0] * 48
 
 # ---------------------------------------------------------------------------
 # Open-Meteo DST normalisation tests
@@ -1776,3 +1954,137 @@ class TestOpenMeteoLibDSTNormalisation:
         assert (
             len(result) == 48
         ), f"Fall-back: expected 48 elements after trimming, got {len(result)}"
+
+
+def test_get_current_pv_forecast_returns_a_copy():
+    """
+    The accessor must not hand out the cached arrays themselves.
+
+    The EOS request builder discounts the in-progress slot to the fraction of it that
+    is still ahead (src/eos_connect.py, get_ems_data). While this returned the cached
+    list, that discount accumulated into the cache and shrank the current slot again on
+    every optimizer run, so the panel reported a phantom autoscaler correction for a
+    single slot and EOS was handed a forecast that decayed between runs.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    pv.pv_forcast_array = [100.0, 200.0, 300.0]
+    pv.pv_forcast_array_raw = [110.0, 210.0, 310.0]
+
+    scaled = pv.get_current_pv_forecast()
+    raw = pv.get_current_pv_forecast(scale=False)
+
+    assert scaled is not pv.pv_forcast_array
+    assert raw is not pv.pv_forcast_array_raw
+
+    # Exactly what get_ems_data does to the partial slot.
+    scaled[0] *= 0.25
+    raw[0] *= 0.25
+
+    assert pv.pv_forcast_array == [100.0, 200.0, 300.0]
+    assert pv.pv_forcast_array_raw == [110.0, 210.0, 310.0]
+
+
+def test_partial_slot_discount_does_not_accumulate_across_runs():
+    """
+    Repeating the partial-slot discount must not compound into the cached forecast.
+
+    Reproduces the observed decay of one slot (718.8 -> 557.5 -> 291.7 -> 79.4 Wh)
+    while every autoscaler factor was still 1.0.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    pv.pv_forcast_array = [718.8] * 4
+
+    for remaining_fraction in (0.7756, 0.5233, 0.2722):
+        series = pv.get_current_pv_forecast()
+        series[1] *= remaining_fraction
+        # Each run sees the undecayed forecast, discounted only for its own slot.
+        assert series[1] == pytest.approx(718.8 * remaining_fraction)
+
+    assert pv.pv_forcast_array == [718.8] * 4
+
+
+@pytest.mark.parametrize("autoscaler", [None, "disabled"])
+def test_scaled_and_raw_forecasts_are_never_the_same_object(autoscaler):
+    """
+    apply_autoscaling must copy even when it applies nothing.
+
+    Returning its input let the update loop store one list as both pv_forcast_array and
+    pv_forcast_array_raw whenever autoscaling was off, so a single in-place edit would
+    corrupt the raw array too - the one the autoscaler records as forecast_kwh and
+    trains the correction on.
+    """
+    pv = PvInterface({}, [], time_frame_base, {}, timezone="UTC")
+    if autoscaler == "disabled":
+        class _Disabled:
+            enabled = False
+        pv.set_autoscaler(_Disabled())
+
+    raw = [718.8] * 4
+    scaled = pv.apply_autoscaling(raw)
+
+    assert scaled == raw
+    assert scaled is not raw
+
+    scaled[1] *= 0.5
+    assert raw == [718.8] * 4
+
+
+# ----------------------------------------------------------------------
+# Day totals for the dashboard header
+# ----------------------------------------------------------------------
+
+
+def _pv_with_forecast(scaled, raw=None, tfb=3600):
+    """A PvInterface holding a fixed forecast, with no provider or thread behind it."""
+    pv = PvInterface({}, [], tfb, {}, timezone="UTC")
+    pv.pv_forcast_array = list(scaled)
+    pv.pv_forcast_array_raw = list(raw if raw is not None else scaled)
+    return pv
+
+
+def test_day_totals_split_the_horizon_at_local_midnight():
+    """Slot 0 is local midnight today, the alignment apply_scaling also relies on."""
+    pv = _pv_with_forecast([100.0] * 24 + [50.0] * 24)
+
+    assert pv.get_forecast_day_totals() == {"today_wh": 2400.0, "tomorrow_wh": 1200.0}
+
+
+def test_day_totals_follow_the_configured_resolution():
+    """A 15-minute install publishes 96 slots per day, not 24."""
+    pv = _pv_with_forecast([100.0] * 96 + [50.0] * 96, tfb=900)
+
+    assert pv.get_forecast_day_totals() == {"today_wh": 9600.0, "tomorrow_wh": 4800.0}
+
+
+def test_day_totals_report_the_scaled_array_by_default():
+    """
+    The header must show what the optimizer and the autoscaling overlay show.
+
+    Summing the raw array here would put the header back out of step with the overlay,
+    which is the disagreement this method exists to remove.
+    """
+    pv = _pv_with_forecast([80.0] * 48, raw=[100.0] * 48)
+
+    assert pv.get_forecast_day_totals()["today_wh"] == 1920.0
+    assert pv.get_forecast_day_totals(scale=False)["today_wh"] == 2400.0
+
+
+def test_day_totals_report_none_for_a_day_with_no_slots():
+    """A short forecast must not publish 0.0, which reads as "no sun tomorrow"."""
+    pv = _pv_with_forecast([100.0] * 24)
+
+    assert pv.get_forecast_day_totals() == {"today_wh": 2400.0, "tomorrow_wh": None}
+
+
+def test_day_totals_survive_an_empty_forecast():
+    """A fresh install has no forecast yet; the endpoint must still answer."""
+    pv = _pv_with_forecast([])
+
+    assert pv.get_forecast_day_totals() == {"today_wh": None, "tomorrow_wh": None}
+
+
+def test_day_totals_report_none_for_an_unusable_slot():
+    """One bad slot must not be summed as zero, silently understating the day."""
+    pv = _pv_with_forecast([100.0] * 23 + ["not a number"])
+
+    assert pv.get_forecast_day_totals()["today_wh"] is None

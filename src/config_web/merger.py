@@ -19,6 +19,9 @@ logger = logging.getLogger("__main__")
 # Sections that receive data_source inheritance
 _DATA_SOURCE_SECTIONS = ("load", "battery")
 
+# data_source.type values the PV autoscaler can actually read a counter from.
+_AUTOSCALER_SOURCES = frozenset({"homeassistant", "openhab"})
+
 
 def build_merged_config(
     bootstrap_config: dict,
@@ -250,18 +253,21 @@ def _apply_inverter_data_source_injection(result: dict, all_settings: dict[str, 
 
 def _apply_central_ha_data_source(result: dict, all_settings: dict[str, Any]) -> None:
     """
-    Apply central Home Assistant data source to price and pv_forecast_source.
+    Apply central Home Assistant data source to price, pv_forecast_source, and pv_autoscaling.
 
-    When price.use_ha_central_data_source or pv_forecast_source.use_ha_central_data_source
-    is true, construct the data_url and data_token from the centrally configured
-    data_source (url and access_token), avoiding repetition for end users.
+    When price.use_ha_central_data_source, pv_forecast_source.use_ha_central_data_source,
+    or pv_autoscaling.use_ha_central_data_source is true, construct the connection details
+    from the centrally configured data_source (url and access_token), avoiding repetition
+    for end users.
 
     Args:
         result: The merged config dict to modify in-place.
         all_settings: All settings from the store.
     """
+    ds_type = all_settings.get("data_source.type", "default")
     ds_url = all_settings.get("data_source.url", "")
     ds_token = all_settings.get("data_source.access_token", "")
+    ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
 
     # Apply to price section
     if "price" in result:
@@ -280,3 +286,26 @@ def _apply_central_ha_data_source(result: dict, all_settings: dict[str, Any]) ->
             # Construct HA API URL from sensor entity
             pv_source["data_url"] = f"{ds_url}/api/states/{sensor_name}"
             pv_source["data_token"] = ds_token
+
+    # Apply to pv_autoscaling section
+    if "pv_autoscaling" in result:
+        pv_auto = result["pv_autoscaling"]
+        if pv_auto.get("use_ha_central_data_source"):
+            pv_auto["url"] = ds_url
+            pv_auto["access_token"] = ds_token
+            pv_auto["ssl_ignore"] = ds_ssl_ignore
+            # The autoscaler reads its counter from Home Assistant or openHAB only.
+            # data_source.type also allows "default", which is its schema default, so
+            # copying it through unchecked would write a value the pv_autoscaling.src
+            # choices forbid and leave the autoscaler raising on every poll. Keep the
+            # section's own src in that case so the misconfiguration stays visible.
+            if ds_type in _AUTOSCALER_SOURCES:
+                pv_auto["src"] = ds_type
+            elif pv_auto.get("enabled"):
+                logger.warning(
+                    "[ConfigMerger] pv_autoscaling is enabled with central data source "
+                    "type '%s', which cannot provide a PV counter. Set data_source.type "
+                    "to one of %s, or configure pv_autoscaling.src manually.",
+                    ds_type,
+                    ", ".join(sorted(_AUTOSCALER_SOURCES)),
+                )

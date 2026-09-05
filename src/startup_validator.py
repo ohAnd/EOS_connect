@@ -6,7 +6,11 @@ All errors are accessible via the /logs/alerts endpoint and web UI log viewer.
 
 import logging
 
-logger = logging.getLogger(__name__)
+# eos_connect.py attaches its handlers to the "__main__" logger, not to root, so
+# a logging.getLogger(__name__) here propagates to a handler-less root and every
+# message is silently discarded — including the ones this module exists to
+# surface in /logs/alerts and the startup-errors panel.
+logger = logging.getLogger("__main__")
 
 
 class StartupValidator:

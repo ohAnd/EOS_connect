@@ -23,6 +23,7 @@ Logging:
 """
 
 from datetime import datetime, timedelta, timezone
+import re
 import threading
 import logging
 import time
@@ -36,10 +37,180 @@ import pandas as pd
 import numpy as np
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
 
+# PV sources that derive the forecast from a physical installation's coordinates, and
+# therefore need at least one entry in ``pv_forecast``.  Every other source carries its
+# own configuration (a resource id, a URL, an EVCC instance) and works with an empty
+# list.  Canonical copy lives in ``config_web/schema.py``; ``interfaces`` does not import
+# ``config_web`` (they are sibling top-level packages at runtime), so the two are pinned
+# equal by ``tests/interfaces/test_pv_interface_location_sources.py`` instead.
+LOCATION_BASED_PV_SOURCES = ("akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar")
+
+# Nominal array size assumed wherever the code has to invent a power out of nothing:
+# the configuration-free "default" source, which by design has no installation to read
+# one from, and the fallbacks that stand in for a provider that failed.  A typical
+# domestic roof, so the demo curve looks like a home rather than a garden shed.
+DEFAULT_PV_NOMINAL_POWER_W = 4000
+
+# The outside-temperature curve is hourly at the source and barely moves between two
+# 15-minute PV cycles, so refetching it on every one of them was four requests an hour
+# for one new data point.  A successful forecast is reused until it is this old.
+TEMP_REFRESH_INTERVAL_S = 3600
+
+# Retry policy for the temperature request.  Deliberately shorter than the PV one: the
+# cache is the real recovery strategy here (a held forecast is a good answer, a held PV
+# array is not), and every retry blocks the shared update loop.
+TEMP_MAX_RETRIES = 2
+TEMP_RETRY_DELAY_S = 2
+
+# Forecast.Solar meters requests per "zone" - the caller's IP address, or the API key
+# once one is configured - and the public tier allows 12 per hour.  Their own guidance
+# is blunt about the failure mode: "If you ignore the 'retry at' timestamp and call over
+# and over again, you get an infinite 429 loop."  These bound the pause we take after a
+# 429 when the response does not tell us how long to wait, or tells us something absurd.
+FORECAST_SOLAR_DEFAULT_HOLD_S = 3600  # the public tier's own period
+FORECAST_SOLAR_MIN_HOLD_S = 60
+FORECAST_SOLAR_MAX_HOLD_S = 2 * 3600
+
+
+class _ForecastSolarRateLimit(Exception):
+    """
+    A 429 from Forecast.Solar, raised so it escapes ``_retry_request`` untouched.
+
+    Deliberately not a ``RequestException``: that is one of the families
+    ``_retry_request`` catches and retries three times, which is precisely how a single
+    rate-limited cycle used to turn into three more requests against a quota that was
+    already exhausted.  A plain ``Exception`` propagates on the first attempt.
+    """
+
+    def __init__(self, hold_seconds):
+        super().__init__(f"rate limited, holding off for {hold_seconds}s")
+        self.hold_seconds = hold_seconds
+
+
+# api.akkudoktor.net proxies an upstream weather service and does not pass its status
+# through: every upstream fault arrives as a 500 whose *body* names the real code, e.g.
+# "Request failed with status code 429".  ``raise_for_status()`` reports only "500 Server
+# Error" plus the URL, so the one fact that separates a transient quota exhaustion from a
+# request the upstream rejects outright never reached the log.  Without it a rate-limited
+# provider is indistinguishable from a misconfiguration, and the reports that came in
+# described weeks of intermittent 500s against a request that was correct throughout.
+AKKUDOKTOR_UPSTREAM_STATUS_RE = re.compile(r"status code (\d{3})")
+AKKUDOKTOR_BODY_EXCERPT_CHARS = 200
+
+# An upstream 429 is a quota window lasting minutes to hours, so the normal retry policy
+# (for temperature: two attempts two seconds apart) cannot outlast it - it only spends the
+# retries.  Hold off instead, as the Forecast.Solar path does.  Akkudoktor sends no
+# Retry-After and documents no quota, so the wait is a fixed, deliberately modest guess:
+# too short only wastes one request, while too long strands a recovered API.
+AKKUDOKTOR_RATE_LIMIT_HOLD_S = 900
+
+
+class _AkkudoktorRateLimit(Exception):
+    """
+    An upstream 429 relayed by akkudoktor, raised so it escapes ``_retry_request``.
+
+    Not a ``RequestException`` for the same reason as ``_ForecastSolarRateLimit``: that
+    family is caught and retried, which is exactly how one rate-limited cycle turns into
+    further requests against a quota that is already exhausted.
+    """
+
+    def __init__(self, hold_seconds):
+        super().__init__(f"upstream rate limit, holding off for {hold_seconds}s")
+        self.hold_seconds = hold_seconds
+
+
+def _akkudoktor_body_excerpt(response):
+    """
+    The error body of an akkudoktor response, whitespace-collapsed and trimmed.
+
+    Returns "" when there is no readable body, so callers can treat a missing
+    explanation the same as an empty one.
+    """
+    if response is None:
+        return ""
+    try:
+        body = (response.text or "").strip()
+    except (ValueError, UnicodeDecodeError):
+        return ""
+    if not body:
+        return ""
+    body = " ".join(body.split())
+    if len(body) > AKKUDOKTOR_BODY_EXCERPT_CHARS:
+        body = body[:AKKUDOKTOR_BODY_EXCERPT_CHARS] + "..."
+    return body
+
+
+def _akkudoktor_upstream_status(body):
+    """
+    The upstream status code named in an akkudoktor error body, or None.
+    """
+    match = AKKUDOKTOR_UPSTREAM_STATUS_RE.search(body)
+    return int(match.group(1)) if match else None
+
+
+def _describe_akkudoktor_error(tgt_value, exception):
+    """
+    Build the log message for a failed akkudoktor request, upstream cause included.
+
+    The proxy's own "500 Server Error" is identical for every fault it relays, so the
+    body is the whole diagnosis - and naming who is at fault keeps the next bug report
+    from starting at zero.
+    """
+    message = f"Akkudoktor API error for {tgt_value}: {exception}"
+    body = _akkudoktor_body_excerpt(getattr(exception, "response", None))
+    if not body:
+        return message
+
+    upstream = _akkudoktor_upstream_status(body)
+    if upstream == 429:
+        hint = (
+            " - the weather provider is rate limiting akkudoktor.net;"
+            " the request itself is fine and this clears on its own"
+        )
+    elif upstream is not None:
+        hint = f" - the weather provider rejected the request with {upstream}"
+    else:
+        hint = ""
+    return f"{message} | upstream: {body}{hint}"
+
+
+from .timeseries_normalizer import (
+    TEMPLATE_DOCS_ANCHOR,
+    TimeseriesFormatError,
+    convert_pv_values,
+    extract_json_path,
+    normalize_entries,
+    pv_plausibility_message,
+)
+
 logger = logging.getLogger("__main__")
 logger.info("[PV-IF] loading module ")
 
 EOS_API_GET_PV_FORECAST = "https://api.akkudoktor.net/forecast"
+
+
+def wants_temperature_forecast(eos_config):
+    """
+    True when an outside-temperature curve should be fetched for the optimizer.
+
+    EOS asks for one and models the house more precisely with it, so it is on by default
+    there.  EVopt - local or external - does not use temperature at all, so nothing is
+    fetched for it.  ``eos.temperature_forecast_enabled`` lets an EOS user opt out
+    anyway, which is the only way to stop EOS Connect talking to the forecast provider;
+    the static 15 degree default is sent instead.
+
+    ``config_web.hot_reload`` holds an inline copy of this rule (it imports nothing from
+    ``interfaces`` by design).  The two are pinned equal by
+    ``tests/interfaces/test_pv_interface_temperature_gating.py``.
+    """
+    if not isinstance(eos_config, dict):
+        return False
+    if eos_config.get("source", "eos_server") != "eos_server":
+        return False
+    value = eos_config.get("temperature_forecast_enabled", True)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
 
 
 class PvInterface:
@@ -73,7 +244,19 @@ class PvInterface:
         logger.debug("[PV-IF] Initializing with 1st source: %s", source_type)
 
         self.pv_forcast_array = []
+        self.pv_forcast_array_raw = []
         self.pv_forcast_request_error = {
+            "error": None,
+            "timestamp": None,
+            "message": None,
+            "config_entry": None,
+            "source": None,
+        }
+        # The temperature forecast keeps its own error slot. It is a separate provider
+        # call with its own cache, and the update loop reads pv_forcast_request_error to
+        # decide whether the *PV* fetch failed - a temperature error landing there made
+        # a healthy PV cycle report itself as degraded.
+        self.temp_forecast_request_error = {
             "error": None,
             "timestamp": None,
             "message": None,
@@ -85,8 +268,19 @@ class PvInterface:
         # Cache mechanism for fallback on API failures (similar to PriceInterface)
         # When Akkudoktor is unavailable, reuse last successful forecast
         self.last_successful_pv_forecast = []
+        self.last_successful_temp_forecast = []
         self.consecutive_failures = 0
+        self.consecutive_temp_failures = 0
         self.max_failures = 24  # Max consecutive failures before using defaults
+        # Monotonic timestamp of the last successful temperature fetch (None = never).
+        self._last_temp_fetch = None
+        # When Forecast.Solar last said "429, come back later" - no request is made
+        # before it passes.  See ``_ForecastSolarRateLimit``.
+        self._forecast_solar_hold_until = None
+        # The same, for an upstream 429 relayed by akkudoktor as a 500.  Shared by the
+        # PV and temperature requests because the quota is the provider's, not ours:
+        # holding one back while the other keeps hammering would not honour it.
+        self._akkudoktor_hold_until = None
 
         self._update_thread = None
         self._stop_event = threading.Event()
@@ -109,13 +303,35 @@ class PvInterface:
                 "[PV-IF] Starting in DEGRADED mode - PV data unavailable until config is fixed"
             )
             logger.warning(
-                "[PV-IF] Use Settings > PV Forecast to complete the configuration"
+                "[PV-IF] Use Settings > PV Source to complete the configuration"
             )
             self.configuration_state = "incomplete"
             self.configuration_valid = False
 
         logger.info("[PV-IF] Initialized (config_state=%s)", self.configuration_state)
+        # Autoscaler hook (injected later via eos_connect wiring)
+        self._autoscaler = None
+
         self.__start_update_service()  # Start the background thread for periodic updates
+
+    def set_autoscaler(self, autoscaler):
+        """Attach a `PvAutoscaler` instance for runtime scaling of forecasts."""
+        self._autoscaler = autoscaler
+
+    def get_autoscaler(self):
+        """Return the attached `PvAutoscaler`, or None when autoscaling is not wired up."""
+        return self._autoscaler
+
+    def refresh_scaled_forecast(self):
+        """
+        Re-derive the scaled forecast from the raw array already held in memory.
+
+        The update thread starts in __init__, so its first fetch finishes before the
+        autoscaler is attached. Without this the forecast handed to EOS stays unscaled
+        until the next update cycle - up to 15 minutes, or hours on a slow provider.
+        """
+        if self.pv_forcast_array_raw:
+            self.pv_forcast_array = self.apply_autoscaling(self.pv_forcast_array_raw)
 
     def __configure_update_interval(self):
         """Set update interval based on active PV provider and installation count."""
@@ -130,6 +346,19 @@ class PvInterface:
         elif source == "victron":
             self.update_interval = 15 * 60
             logger.info("[PV-IF] Using standard update interval for Victron: 15 minutes")
+        elif source == "forecast_solar":
+            # One request per plane per cycle, against a public tier that allows 12 per
+            # hour for the whole zone.  A flat 15 minutes meant three planes sat exactly
+            # on the ceiling before a single retry, so scale with the plane count and
+            # total traffic stays at four requests an hour whatever the array looks like.
+            installations = max(1, len(self.config) if self.config else 1)
+            self.update_interval = 15 * 60 * installations
+            logger.info(
+                "[PV-IF] Using update interval for Forecast.Solar: %d minutes"
+                " (%d installation(s), 4 requests/hour total)",
+                self.update_interval // 60,
+                installations,
+            )
         else:
             self.update_interval = 15 * 60
 
@@ -174,9 +403,24 @@ class PvInterface:
                 "config_entry": None,
                 "source": None,
             }
+            self.temp_forecast_request_error = {
+                "error": None,
+                "timestamp": None,
+                "message": None,
+                "config_entry": None,
+                "source": None,
+            }
             # Reset cache when configuration changes (source switch, etc.)
             self.last_successful_pv_forecast = []
+            self.last_successful_temp_forecast = []
             self.consecutive_failures = 0
+            self.consecutive_temp_failures = 0
+            self._last_temp_fetch = None
+            # A reload is a deliberate user action, and adding or removing the API key
+            # moves us to a different quota zone, so an old hold no longer describes
+            # anything real.  It re-arms on the next 429 if we are still blocked.
+            self._forecast_solar_hold_until = None
+            self._akkudoktor_hold_until = None
 
             try:
                 self.__configure_update_interval()
@@ -233,13 +477,12 @@ class PvInterface:
                 "[PV-IF] pv_forecast must be a list (with '-' in YAML), not a single object"
             )
 
-        if not len(self.config) > 0:
-            logger.debug("[PV-IF] Initialize - No pv entries found (not yet configured)")
-            raise ValueError(
-                "[PV-IF] pv_forecast not yet configured - please configure"
-                + " via Settings > PV Forecast"
-            )
-
+        # An empty list is only a problem for location-based sources, and
+        # __validate_pv_source_requirements below already says so with the right
+        # wording.  Raising here instead would degrade evcc, solcast, victron,
+        # timeseries and default installs that never need an entry — and because
+        # reload_config() runs this with strict=True and rolls back, it would also
+        # refuse a switch to those sources from the web UI, leaving no way to fix it.
         logger.debug("[PV-IF] Initialize - pv entries found: %s", len(self.config))
 
         # VALIDATION PATH 1: Source-specific PV requirements
@@ -321,7 +564,7 @@ class PvInterface:
             # Timeseries source requires either data_url (for HTTP) or HA sensor integration
             data_url = self.config_source.get("data_url", "").strip()
             use_ha_central = self.config_source.get("use_ha_central_data_source", False)
-            
+
             if not data_url and not use_ha_central:
                 log_func = logger.error if strict else logger.warning
                 log_func("[PV-IF] Timeseries data_url missing in pv_forecast_source section")
@@ -335,7 +578,7 @@ class PvInterface:
                     "[PV-IF] Timeseries requires data_url or use_ha_central_data_source"
                     " - Use Settings → PV Source to fix"
                 )
-            
+
             # If using HTTP URL, validate it's a valid URL format
             if data_url and not (
                 data_url.startswith("http://") or data_url.startswith("https://")
@@ -349,7 +592,7 @@ class PvInterface:
                 raise ValueError(
                     "[PV-IF] Timeseries data_url must start with http:// or https://"
                 )
-            
+
             logger.debug(
                 "[PV-IF] Timeseries source-specific requirements validated"
                 " (data_url=%s, ha_central=%s)",
@@ -365,7 +608,7 @@ class PvInterface:
             # Default source uses fixed default values - no external configuration needed
             logger.debug("[PV-IF] Default source-specific requirements validated")
 
-        elif source in ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]:
+        elif source in LOCATION_BASED_PV_SOURCES:
             # Location-based sources - require at least one pv_forecast entry
             if not self.config or len(self.config) == 0:
                 log_func = logger.error if strict else logger.warning
@@ -395,23 +638,21 @@ class PvInterface:
             entry_name = config_entry.get("name", "unnamed")
 
             # lat/lon - Required parameters depend on source and use case
-            # - Victron: only needed if temperature forecast enabled
+            # - Victron / Timeseries / EVCC / default: never required.  These take the PV
+            #   data from elsewhere, so coordinates are only ever used to ask for the
+            #   outside temperature - and a missing temperature is not a broken PV
+            #   configuration.  Without them the static default curve is served instead;
+            #   failing validation here took the whole interface into DEGRADED mode and
+            #   made hot-reload refuse the change, over an optional extra.
             # - Solcast: only needed if NO resource_id provided (rare case)
             # - Other sources: needed for location-based forecasting
-            needs_lat_lon = False
-
-            if source == "victron":
-                # Victron only needs lat/lon for temperature forecast
-                needs_lat_lon = self.temperature_forecast_enabled
+            if source in ("victron", "timeseries", "evcc", "default"):
+                needs_lat_lon = False
             elif source == "solcast":
                 # Solcast: if resource_id provided, lat/lon not needed
                 # If NO resource_id, they would be needed (but Solcast requires resource_id)
                 has_resource_id = config_entry.get("resource_id", "").strip()
                 needs_lat_lon = not has_resource_id
-            elif source in ("timeseries", "evcc"):
-                # Timeseries/EVCC: only need lat/lon for temperature forecast
-                # PV data comes from external source, not location-based API
-                needs_lat_lon = self.temperature_forecast_enabled
             else:
                 # All other sources need lat/lon for their location-based API calls
                 needs_lat_lon = True
@@ -429,12 +670,12 @@ class PvInterface:
                     )
 
             # OPTIMIZATION: For sources that DON'T require full PV config
-            # (Victron, Solcast, Timeseries, etc.), set sensible defaults that also work for temperature API
-            if source in ("victron", "solcast", "timeseries", "evcc"):
+            # (Victron, Solcast, Timeseries, etc.), set sensible defaults
+            if source in ("victron", "solcast", "timeseries", "evcc", "default"):
                 # These sources don't need detailed panel orientation for PV forecasting.
-                # However, defaults must be valid for Akkudoktor temperature API
-                # which validates them.
-                # Using conservative values proven to work with Akkudoktor API.
+                # The defaults still matter for the fallback curve that stands in when the
+                # provider is unreachable, which is sized from them. The temperature
+                # request no longer reads any of this - it sends its own fixed array.
                 defaults_set = []
 
                 if config_entry.get("azimuth") is None:
@@ -448,11 +689,11 @@ class PvInterface:
                     defaults_set.append("tilt")
 
                 if config_entry.get("power") is None:
-                    config_entry["power"] = 1000.0  # Conservative 1kW estimate
+                    config_entry["power"] = float(DEFAULT_PV_NOMINAL_POWER_W)
                     defaults_set.append("power")
 
                 if config_entry.get("powerInverter") is None:
-                    config_entry["powerInverter"] = 1000.0  # Conservative 1kW estimate
+                    config_entry["powerInverter"] = float(DEFAULT_PV_NOMINAL_POWER_W)
                     defaults_set.append("powerInverter")
 
                 if config_entry.get("inverterEfficiency") is None:
@@ -545,7 +786,10 @@ class PvInterface:
 
         # Check if we have at least one config entry with lat/lon
         if not self.config or len(self.config) == 0:
-            logger.warning(
+            # Informational for every source: sources that need an installation for their
+            # own forecast are already reported by __validate_pv_source_requirements, and
+            # for the rest running without one is the expected state.
+            logger.info(
                 "[PV-IF] No PV forecast entries found - temperature forecast will use defaults"
             )
             return
@@ -556,9 +800,12 @@ class PvInterface:
         entry_name_str = str(entry_name) if entry_name else "unnamed"
 
         if first_entry.get("lat") is None or first_entry.get("lon") is None:
-            logger.warning(
-                "[PV-IF] Temperature forecast requires lat/lon in first PV entry '%s'"
-                + " - will use static temperature forecast defaults (15°C)",
+            # Informational, not a warning: the temperature forecast is an optional input
+            # to EOS and the static default is a valid answer.  Sources that do need
+            # coordinates for their own forecast still fail validation above.
+            logger.info(
+                "[PV-IF] No lat/lon in first PV entry '%s'"
+                + " - using static temperature forecast defaults (15°C)",
                 entry_name_str,
             )
             return
@@ -594,11 +841,17 @@ class PvInterface:
         The loop that runs in the background thread to update the pv state.
         """
         while not self._stop_event.is_set():
-            # Fetch the PV forecast data
-            pv_forcast_array = self.get_summarized_pv_forecast()
+            # Fetch the PV forecast data once per cycle and derive the scaled array
+            # locally. Calling get_summarized_pv_forecast() twice would double the
+            # upstream API traffic for every provider - which breaks the request budget
+            # Solcast and forecast.solar are rate-limited on - and lets a transient
+            # failure on one of the two calls desynchronise the raw/scaled pair.
+            pv_forcast_array_raw = self.get_summarized_pv_forecast(scale=False)
+            pv_forcast_array = self.apply_autoscaling(pv_forcast_array_raw)
             if not self.pv_forcast_request_error["error"]:
                 logger.debug("[PV-IF] PV forecast updated successfully")
                 self.pv_forcast_array = pv_forcast_array
+                self.pv_forcast_array_raw = pv_forcast_array_raw
             elif pv_forcast_array:  # Fallback forecast available from cache
                 # If there was an error but cache provided a forecast, use it
                 logger.warning(
@@ -606,6 +859,7 @@ class PvInterface:
                     self.pv_forcast_request_error["message"],
                 )
                 self.pv_forcast_array = pv_forcast_array
+                self.pv_forcast_array_raw = pv_forcast_array_raw
             elif self.pv_forcast_array == []:
                 # If there was an error and no forecast was cached, use default values
                 logger.warning(
@@ -616,8 +870,16 @@ class PvInterface:
                     self.pv_forcast_array = self.__get_default_pv_forcast(
                         self.config[0]["power"]
                     )
+                    self.pv_forcast_array_raw = self.__get_default_pv_forcast(
+                        self.config[0]["power"]
+                    )
                 else:
-                    self.pv_forcast_array = self.__get_default_pv_forcast(1000)
+                    self.pv_forcast_array = self.__get_default_pv_forcast(
+                        DEFAULT_PV_NOMINAL_POWER_W
+                    )
+                    self.pv_forcast_array_raw = self.__get_default_pv_forcast(
+                        DEFAULT_PV_NOMINAL_POWER_W
+                    )
             else:
                 # If there was an error but we have a previous forecast, log it
                 logger.warning(
@@ -626,13 +888,19 @@ class PvInterface:
                 )
             # Temperature forecast with minimal configuration (only needs lat/lon)
             # Works for all PV sources: Victron, Solcast, Akkudoktor, etc.
+            # Not gated on configuration_valid: the temperature forecast has its own,
+            # sufficient precondition - coordinates in the first entry - and an otherwise
+            # incomplete PV configuration is no reason to drop a working one.
             if self.temperature_forecast_enabled:
                 temp_config = self.__get_temperature_config_entry()
-                if temp_config:
+                if temp_config and not self.__temperature_forecast_is_fresh():
                     temp_result = self.__get_pv_forecast_akkudoktor_api(
                         tgt_value="temperature", pv_config_entry=temp_config
                     )
-                    if not temp_result:  # If empty array or None due to API error
+                    # Reject empty/None results and physically implausible values
+                    # (e.g. PV Watts leaking into the temperature array) as a
+                    # fail-safe on top of the target-aware cache/counter below.
+                    if not temp_result or any(v > 60 or v < -60 for v in temp_result):
                         logger.warning(
                             "[PV-IF] Temperature forecast API failed - using default"
                             + " temperature forecast (15°C)"
@@ -642,8 +910,15 @@ class PvInterface:
                         )
                     else:
                         self.temp_forecast_array = temp_result
+                elif temp_config:
+                    logger.debug(
+                        "[PV-IF] Temperature forecast still fresh - keeping the cached"
+                        " curve (refresh every %d s)",
+                        TEMP_REFRESH_INTERVAL_S,
+                    )
+                    self.temp_forecast_array = list(self.last_successful_temp_forecast)
                 else:
-                    # lat/lon missing - already warned during config validation
+                    # lat/lon missing - already reported during config validation
                     self.temp_forecast_array = self.__get_default_temperature_forecast()
             else:
                 logger.debug(
@@ -661,17 +936,68 @@ class PvInterface:
 
         self.__start_update_service()
 
-    def get_current_pv_forecast(self):
+    def get_current_pv_forecast(self, scale=True):
         """
-        Returns the current photovoltaic (PV) forecast array.
+        Returns a copy of the current photovoltaic (PV) forecast array.
+
+        The copy is deliberate: callers adjust the series they get back - the EOS request
+        builder discounts the in-progress slot to the fraction of it that is still ahead -
+        and handing out the cached list itself let that adjustment accumulate into the
+        cache, shrinking the current slot again on every optimizer run until the next
+        provider fetch replaced the array.
 
         Returns:
-            list or np.ndarray: The current PV forecast values stored in pv_forcast_array.
+            list: The current PV forecast values, scaled by the autoscaler unless
+            `scale` is False.
         """
         # logger.debug(
         #     "[PV-IF] Returning current PV forecast: %s", self.pv_forcast_array
         # )
-        return self.pv_forcast_array
+        if scale:
+            return list(self.pv_forcast_array)
+        return list(self.pv_forcast_array_raw)
+
+    def get_forecast_day_totals(self, scale=True):
+        """
+        Total forecast energy in Wh for today and tomorrow.
+
+        The dashboard header used to sum the array stored in `optimize_request.json`
+        instead. That file is only rewritten once per optimizer run, so an autoscaler
+        factor recomputed since then left the header disagreeing with the PV
+        auto-scaling overlay, which always reads live. That array also carries the evopt
+        partial-slot discount, which belongs to the optimizer's input rather than to a
+        day's forecast total.
+
+        Slot 0 is local midnight today, the same alignment `apply_scaling` relies on.
+        A day with no slots reports None rather than 0.0, so a short or missing forecast
+        is not published as "no sun".
+
+        Returns:
+            dict: `{"today_wh": float|None, "tomorrow_wh": float|None}`.
+        """
+        forecast = self.get_current_pv_forecast(scale=scale)
+        slots_per_day = 24 * max(1, 3600 // int(self.time_frame_base or 3600))
+        totals = {}
+        for key, day in (("today_wh", 0), ("tomorrow_wh", 1)):
+            slots = forecast[day * slots_per_day : (day + 1) * slots_per_day]
+            try:
+                totals[key] = round(sum(float(v) for v in slots), 1) if slots else None
+            except (TypeError, ValueError):
+                logger.warning("[PV-IF] Unusable forecast slot while summing %s", key)
+                totals[key] = None
+        return totals
+
+    def __temperature_forecast_is_fresh(self):
+        """
+        True while the cached temperature forecast is young enough to reuse.
+
+        Only ever True with a non-empty cache, so a failing provider is still retried on
+        every update cycle - the throttle saves requests when things work, it does not
+        delay recovery when they do not.
+        """
+        if not self.last_successful_temp_forecast or self._last_temp_fetch is None:
+            return False
+        return (time.monotonic() - self._last_temp_fetch) < TEMP_REFRESH_INTERVAL_S
 
     def get_current_temp_forecast(self):
         """
@@ -717,6 +1043,28 @@ class PvInterface:
 
         return params
 
+    def __create_temperature_request(self, pv_config_entry):
+        """
+        Build the parameters for an outside-temperature request.
+
+        The endpoint is the PV forecast one, so it insists on a plausible installation -
+        but the temperature it returns depends on the location and nothing else. Sending
+        the user's panel geometry and horizon along made the request fail for reasons that
+        cannot change the answer: a horizon list the API dislikes, or an azimuth of 0.0 it
+        rejects outright. A fixed canonical array keeps the query identical for everyone at
+        a given location, which also means the provider can serve it from cache.
+        """
+        return {
+            "lat": pv_config_entry["lat"],
+            "lon": pv_config_entry["lon"],
+            "azimuth": 0.1,  # South (0.0 is rejected as a wrong parameter)
+            "tilt": 30.0,
+            "power": float(DEFAULT_PV_NOMINAL_POWER_W),
+            "powerInverter": float(DEFAULT_PV_NOMINAL_POWER_W),
+            "inverterEfficiency": 0.95,
+            "timezone": self.time_zone,
+        }
+
     def __get_temperature_config_entry(self):
         """
         Extracts temperature configuration from PV entries.
@@ -743,7 +1091,21 @@ class PvInterface:
 
     def __get_default_pv_forcast(self, pv_power):
         """
-        Creates a default PV forecast with fixed values based on max power.
+        Build the built-in PV forecast: a fixed bell curve scaled to *pv_power*.
+
+        This is what the "default" source serves, and what every other source falls
+        back to when its provider is unreachable. It contacts nothing.
+
+        The shape of the returned array is the contract the rest of the system relies
+        on, and matches what the real providers deliver:
+
+        - index 0 is 00:00 local time, not "now" - the EOS request builder slices from
+          ``seconds_since_midnight``, so a now-anchored array would be read as the
+          wrong time of day;
+        - one value per ``time_frame_base`` slot: 24 at 3600 s, 96 at 900 s;
+        - doubled to cover 48 h, since the optimizer looks a day ahead.
+
+        Peak is 70 % of *pv_power* at midday, zero before 06:00 and after 19:00.
         """
         # Create a 24-hour default forecast
         # Create a default 24-hour PV forecast.
@@ -959,14 +1321,23 @@ class PvInterface:
             return self.__get_pv_forecast_victron_api(config_entry)
         elif self.config_source.get("source") == "default":
             logger.warning("[PV-IF] Using default PV forecast source")
-            return self.__get_default_pv_forcast(config_entry["power"])
+            return self.__get_default_pv_forcast(
+                config_entry.get("power") or DEFAULT_PV_NOMINAL_POWER_W
+            )
         else:
             logger.error("[PV-IF] No valid source configured for PV forecast")
-            return self.__get_default_pv_forcast(config_entry["power"])
+            return self.__get_default_pv_forcast(
+                config_entry.get("power") or DEFAULT_PV_NOMINAL_POWER_W
+            )
 
-    def get_summarized_pv_forecast(self):
+    def get_summarized_pv_forecast(self, scale: bool = True):
         """
-        requesting pv forecast freach config entry and summarize the values
+        Request PV forecast for each config entry and summarize the values.
+
+        Args:
+            scale: If True (default), apply the current autoscaler factors when
+                available and enabled. If False, return the raw aggregated source
+                values without any autoscaling adjustment.
 
         Returns an empty forecast array if configuration is incomplete or invalid.
         On success, caches the result for fallback on future API failures.
@@ -989,6 +1360,18 @@ class PvInterface:
             logger.debug("[PV-IF] fetching forecast for timeseries config")
             forecast = self.__get_pv_forecast_timeseries()
             forecast_values = forecast
+        elif self.config_source.get("source") == "default" and not self.config:
+            # "default" is configuration-free by design: the setup wizard asks for no
+            # installation at all, so there is usually nothing here to read a power
+            # from and the loop below would summarize an empty list into no forecast.
+            # Assume a typical home array instead. With installations present the loop
+            # still runs and the curve is summed per entry, at the user's real sizes.
+            logger.debug(
+                "[PV-IF] building the built-in forecast for a nominal %s W array"
+                " (no installation configured)",
+                DEFAULT_PV_NOMINAL_POWER_W,
+            )
+            forecast_values = self.__get_default_pv_forcast(DEFAULT_PV_NOMINAL_POWER_W)
         else:
             for config_entry in self.config:
                 logger.debug("[PV-IF] fetching forecast for '%s'", config_entry["name"])
@@ -1003,7 +1386,9 @@ class PvInterface:
         forecast_values = [round(value, 1) for value in forecast_values]
         logger.debug("[PV-IF] Summarized PV forecast values: %s", forecast_values)
 
-        # Cache successful forecast for fallback on future failures
+        # Cache successful forecast for fallback on future failures. The cache must hold
+        # unscaled source values: the autoscaler derives its factors from this array, so a
+        # scaled array served from the cache would feed the correction its own output.
         if forecast_values:
             self.last_successful_pv_forecast = forecast_values.copy()
             self.consecutive_failures = 0  # Reset failure counter on success
@@ -1012,7 +1397,38 @@ class PvInterface:
                 len(forecast_values),
             )
 
+        # Keep all autoscaler logic in one place: the final summary boundary.
+        if scale:
+            forecast_values = self.apply_autoscaling(forecast_values)
+
         return forecast_values
+
+    def apply_autoscaling(self, forecast_values):
+        """
+        Apply the autoscaler's timeframe multipliers to an unscaled forecast array.
+
+        Returns an unscaled copy when no autoscaler is attached, it is disabled, or
+        scaling raises - the unscaled forecast is always a valid result. It is a copy so
+        that the caller never ends up storing the scaled and raw arrays as one object:
+        aliasing them would let a single in-place edit corrupt both, including the raw
+        array the autoscaler records as `forecast_kwh` and trains the correction on.
+        """
+        if not forecast_values:
+            return list(forecast_values)
+        if self._autoscaler is None or not getattr(self._autoscaler, "enabled", False):
+            return list(forecast_values)
+        try:
+            scaled = self._autoscaler.apply_scaling(forecast_values, self.time_frame_base)
+        except Exception:
+            logger.exception("[PV-IF] Error applying autoscaler - returning raw forecast")
+            return list(forecast_values)
+        if logger.isEnabledFor(logging.DEBUG):
+            getter = getattr(self._autoscaler, "get_scale_factors", None)
+            logger.debug(
+                "[PV-IF] Auto-scaling applied. Multipliers: %s",
+                getter() if callable(getter) else "n/a",
+            )
+        return scaled
 
     def __get_pv_forecast_timeseries(self, tgt_duration=48):
         """
@@ -1024,17 +1440,23 @@ class PvInterface:
         external source is expected to already provide the combined forecast
         for the whole installation - mirrors how the "evcc" source is handled.
 
-        Standardized format: [{start, end, value}, ...] with value in Wh for
-        that slot (hourly or 15-min resolution, auto-detected).
+        Canonical format: [{start, end, value}, ...] — the format EVCC publishes, so
+        an EVCC-shaped HA template sensor works unchanged. See timeseries_normalizer
+        for the exact contract. Resolution (hourly or 15-min) is auto-detected.
 
         Config fields used (from pv_forecast_source):
         - data_url: Full HTTP endpoint URL (HA or HTTP custom endpoint)
-        - data_path: JSON path to the timeseries array (e.g. "data")
+        - data_path: JSON path to the timeseries array (e.g. "attributes.data")
         - data_token: Optional bearer token for authentication
+        - value_unit: Unit of the "value" field (default W, as EVCC delivers)
         """
         data_url = self.config_source.get("data_url", "").strip()
-        data_path = self.config_source.get("data_path", "data").strip() or "data"
+        data_path = (
+            self.config_source.get("data_path", "attributes.data").strip()
+            or "attributes.data"
+        )
         data_token = self.config_source.get("data_token", "").strip()
+        value_unit = self.config_source.get("value_unit", "W").strip() or "W"
 
         fallback_power = self.config[0]["power"] if self.config else 1000
 
@@ -1051,16 +1473,17 @@ class PvInterface:
             headers["Authorization"] = f"Bearer {data_token}"
 
         logger.debug(
-            "[PV-IF] Fetching PV forecast from timeseries source: %s (path: %s)",
+            "[PV-IF] Fetching PV forecast from timeseries source: %s (path: %s, unit: %s)",
             data_url,
             data_path,
+            value_unit,
         )
 
         def request_and_parse():
             response = requests.get(data_url, headers=headers, timeout=10)
             response.raise_for_status()
             response_data = response.json()
-            timeseries = self.__extract_json_path(response_data, data_path)
+            timeseries = extract_json_path(response_data, data_path, label="PV-IF")
             if not isinstance(timeseries, list):
                 raise ValueError(f"Data at path '{data_path}' is not a list")
             return timeseries
@@ -1093,7 +1516,7 @@ class PvInterface:
                 )
             else:
                 error_msg = f"Timeseries error ({error_type}): {error_detail}"
-            
+
             return self._handle_interface_error(
                 error_type,
                 error_msg,
@@ -1117,7 +1540,9 @@ class PvInterface:
                 "[PV-IF] Timeseries fetched successfully (%d entries) - parsing...",
                 len(timeseries),
             )
-            forecast_values = self.__parse_pv_timeseries(timeseries, tgt_duration)
+            forecast_values = self.__parse_pv_timeseries(
+                timeseries, tgt_duration, value_unit=value_unit
+            )
             if not forecast_values:
                 logger.warning(
                     "[PV-IF] Timeseries parsing returned empty - "
@@ -1129,7 +1554,7 @@ class PvInterface:
                     "timeseries_source",
                     "timeseries",
                 ) or self.__get_default_pv_forcast(fallback_power)
-            
+
             logger.debug(
                 "[PV-IF] Timeseries parsed successfully: %d values, "
                 "range [%.1f - %.1f Wh]",
@@ -1150,19 +1575,27 @@ class PvInterface:
                 "timeseries",
             ) or self.__get_default_pv_forcast(fallback_power)
 
-    def __parse_pv_timeseries(self, timeseries, tgt_duration, resolution_seconds=None):
+    def __parse_pv_timeseries(
+        self, timeseries, tgt_duration, resolution_seconds=None, value_unit=None
+    ):
         """
         Parse and validate a PV forecast timeseries.
 
-        Standardized format: [{start, end, value}, ...]
-        - start/end: ISO8601 string or Unix timestamp (seconds)
-        - value: generated energy in Wh for that slot (non-negative)
+        Canonical format: [{start, end, value}, ...]
+        - start: ISO8601 string or Unix timestamp (seconds)
+        - end: optional, derived from the next entry when absent
+        - value: generated power/energy in *value_unit* (non-negative)
         - Supports hourly (48 values) or 15-minute (192 values) resolution
 
         Mirrors PriceInterface.__parse_price_timeseries, adapted for PV: values
         represent energy-per-slot rather than a rate, so 15-min-to-hourly
         conversion sums instead of averages, and missing trailing slots are
         padded with 0 (no production) rather than the last known value.
+
+        Args:
+            value_unit: Unit of the incoming values (see
+                timeseries_normalizer.PV_UNITS). ``None`` means the caller already
+                supplies canonical Wh-per-slot values and needs no normalization.
         """
         if not timeseries or not isinstance(timeseries, list):
             logger.error("[PV-IF] PV timeseries is not a list")
@@ -1172,13 +1605,70 @@ class PvInterface:
             logger.error("[PV-IF] PV timeseries is empty")
             return []
 
-        first = timeseries[0]
-        required_keys = ["start", "end", "value"]
-        if not isinstance(first, dict) or not all(k in first for k in required_keys):
-            logger.error(
-                "[PV-IF] Invalid PV timeseries format: missing start, end, or value"
+        # self.time_zone is a zone *name* here, not a tzinfo — resolve it once for both
+        # normalization and the slot alignment further down.
+        try:
+            tz = pytz.timezone(self.time_zone)
+        except (pytz.UnknownTimeZoneError, AttributeError):
+            tz = pytz.UTC
+
+        if value_unit is not None:
+            # External source: normalize field/timestamp shape first, then detect the
+            # source resolution, because a power unit only becomes energy once the
+            # slot length is known.
+            try:
+                timeseries = normalize_entries(timeseries, tz, label="PV-IF")
+            except TimeseriesFormatError as exc:
+                logger.error("[PV-IF] Invalid PV timeseries: %s", exc)
+                return []
+
+            if resolution_seconds is None:
+                resolution_seconds = self.__detect_pv_timeseries_resolution(timeseries)
+                if resolution_seconds is None:
+                    logger.error("[PV-IF] Could not detect PV timeseries resolution")
+                    return []
+
+            try:
+                convert_pv_values(timeseries, value_unit, resolution_seconds)
+            except TimeseriesFormatError as exc:
+                logger.error("[PV-IF] Invalid PV timeseries: %s", exc)
+                return []
+
+            installed_power_w = sum(
+                float(entry.get("power", 0) or 0)
+                for entry in (self.config or [])
+                if isinstance(entry, dict)
             )
-            return []
+            warning = pv_plausibility_message(
+                [entry["value"] for entry in timeseries],
+                value_unit,
+                resolution_seconds,
+                installed_power_w,
+            )
+            if warning:
+                logger.warning("[PV-IF] %s", warning)
+
+            # State the unit once per unit change. The canonical unit moved from
+            # Wh-per-slot to W, so a config carried over from an earlier version
+            # silently changes meaning on 15-minute data.
+            if getattr(self, "_logged_value_unit", None) != value_unit:
+                logger.info(
+                    "[PV-IF] Timeseries PV values interpreted as '%s' at %ds "
+                    "resolution (peak %.0f Wh per slot)",
+                    value_unit,
+                    resolution_seconds,
+                    max((entry["value"] for entry in timeseries), default=0.0),
+                )
+                self._logged_value_unit = value_unit
+        else:
+            first = timeseries[0]
+            if not isinstance(first, dict) or not all(
+                k in first for k in ("start", "value")
+            ):
+                logger.error(
+                    "[PV-IF] Invalid PV timeseries format: missing start or value"
+                )
+                return []
 
         if resolution_seconds is None:
             resolution_seconds = self.__detect_pv_timeseries_resolution(timeseries)
@@ -1210,13 +1700,12 @@ class PvInterface:
         # "slots since midnight" (see eos_connect.py's current_slot calculation),
         # the same convention __get_pv_forecast_evcc_api() already follows. A
         # source whose first entry is "now" (like ours) rather than "midnight"
-        # would otherwise land at the wrong array index.
-        try:
-            tz = pytz.timezone(self.time_zone)
-        except (pytz.UnknownTimeZoneError, AttributeError):
-            tz = pytz.UTC
+        # would otherwise land at the wrong array index. (tz resolved above.)
 
         def parse_ts(ts_val):
+            if isinstance(ts_val, datetime):
+                # Already normalized (and localized) by timeseries_normalizer.
+                return ts_val.astimezone(tz)
             if isinstance(ts_val, (int, float)):
                 return datetime.fromtimestamp(ts_val, tz=pytz.UTC).astimezone(tz)
             if isinstance(ts_val, str):
@@ -1240,7 +1729,7 @@ class PvInterface:
                 if value < 0:
                     logger.warning("[PV-IF] Negative PV value %.1f clamped to 0", value)
                     value = 0.0
-                
+
                 # Align timestamp to resolution boundary (robust to arbitrary start times)
                 # E.g., for 3600s resolution: round to nearest hour
                 #       for 900s resolution: round to nearest 15-minute
@@ -1256,10 +1745,34 @@ class PvInterface:
         now_local = datetime.now(tz)
         midnight_today = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
         expected_count = 48 if self.time_frame_base == 3600 else 192
-        values = [
-            round(lookup.get(midnight_today + timedelta(seconds=slot_seconds * i), 0.0), 1)
+        slot_keys = [
+            midnight_today + timedelta(seconds=slot_seconds * i)
             for i in range(expected_count)
         ]
+        values = [round(lookup.get(key, 0.0), 1) for key in slot_keys]
+
+        matched = sum(1 for key in slot_keys if key in lookup)
+        if matched == 0 and lookup:
+            # Every entry parsed but none landed in the window. Returning 48 zeros
+            # here reads as "no sun for two days" and used to pass silently; the most
+            # common cause is a timestamp without UTC offset, so name what we saw.
+            first_source_ts = min(lookup)
+            logger.warning(
+                "[PV-IF] None of %d PV timeseries entries fell into the %d-slot "
+                "window starting %s. First source timestamp is %s — if the source "
+                "renders UTC without an offset, every slot is shifted. See %s",
+                len(lookup),
+                expected_count,
+                midnight_today.isoformat(),
+                first_source_ts.isoformat(),
+                TEMPLATE_DOCS_ANCHOR,
+            )
+        elif matched < expected_count:
+            logger.debug(
+                "[PV-IF] PV timeseries filled %d of %d slots (rest padded with 0)",
+                matched,
+                expected_count,
+            )
 
         return values
 
@@ -1279,6 +1792,9 @@ class PvInterface:
             import pytz
 
             def parse_ts(ts_str):
+                if isinstance(ts_str, dt_class):
+                    # Already normalized by timeseries_normalizer.
+                    return ts_str
                 if isinstance(ts_str, (int, float)):
                     return dt_class.fromtimestamp(ts_str, tz=pytz.UTC)
                 if isinstance(ts_str, str):
@@ -1346,41 +1862,48 @@ class PvInterface:
         )
         return hourly
 
-    def __extract_json_path(self, obj, path):
+    def __akkudoktor_hold_remaining(self):
+        """Seconds left on an active akkudoktor rate-limit hold; 0 when clear."""
+        if self._akkudoktor_hold_until is None:
+            return 0
+        remaining = (self._akkudoktor_hold_until - datetime.now()).total_seconds()
+        if remaining <= 0:
+            self._akkudoktor_hold_until = None
+            return 0
+        return int(remaining)
+
+    def __akkudoktor_hold_response(self, tgt_value, pv_config_entry, hold_seconds):
         """
-        Extract nested value from JSON object using dot notation.
+        Report the rate-limit hold and hand back the cached forecast for *tgt_value*.
 
-        Examples:
-        - 'attributes.data' -> obj['attributes']['data']
-        - 'data' -> obj['data']
-        - 'prices[0].data' -> obj['prices'][0]['data']
-
-        Args:
-            obj: JSON object (dict or list)
-            path: Dot-notation path string
-
-        Returns:
-            Extracted value or None if path not found
+        Like the Forecast.Solar equivalent this leaves the failure counters untouched:
+        waiting out a quota is not a failed fetch, and counting it as one would burn
+        through ``max_failures`` and discard the very cache the hold protects.  An empty
+        return means there is no cache yet, which is the caller's cue to fall back to its
+        own default - for temperature the 15 degC curve, never a fabricated 0 degC one.
         """
-        try:
-            parts = path.split(".")
-            current = obj
-            for part in parts:
-                if "[" in part:
-                    key, index_str = part.split("[")
-                    index = int(index_str.rstrip("]"))
-                    if key:
-                        current = current[key][index]
-                    else:
-                        current = current[index]
-                else:
-                    current = current[part]
-            return current
-        except (KeyError, IndexError, TypeError, ValueError):
-            logger.warning(
-                "[PV-IF] Could not extract path '%s' from JSON response", path
-            )
-            return None
+        error_slot = (
+            self.temp_forecast_request_error
+            if tgt_value == "temperature"
+            else self.pv_forcast_request_error
+        )
+        error_slot.update(
+            {
+                "error": "rate_limit",
+                "timestamp": datetime.now().isoformat(),
+                "message": (
+                    "akkudoktor.net is being rate limited by the weather provider it"
+                    f" queries - no further {tgt_value} requests for {hold_seconds}s."
+                    " Nothing is wrong with the configuration; the API returns this as"
+                    " an HTTP 500 whose body reads 'Request failed with status code 429'."
+                ),
+                "config_entry": pv_config_entry,
+                "source": "akkudoktor",
+            }
+        )
+        if tgt_value == "temperature":
+            return list(self.last_successful_temp_forecast)
+        return list(self.last_successful_pv_forecast)
 
     def __get_pv_forecast_akkudoktor_api(
         self, tgt_value="power", pv_config_entry=None, tgt_duration=48
@@ -1395,29 +1918,92 @@ class PvInterface:
                 f"No PV config entry provided for target: {tgt_value}",
                 {},
                 "akkudoktor",
+                target=tgt_value,
             )
 
-        # Use standard request format for both PV and temperature
-        # (config_entry already has all required parameters with defaults set)
-        forecast_params = self.__create_forecast_request(pv_config_entry)
+        hold_remaining = self.__akkudoktor_hold_remaining()
+        if hold_remaining > 0:
+            logger.warning(
+                "[PV-IF] akkudoktor.net rate limit still active - skipping the %s"
+                " request for another %d s. Calling again earlier only spends requests"
+                " against a quota that is already exhausted.",
+                tgt_value,
+                hold_remaining,
+            )
+            return self.__akkudoktor_hold_response(
+                tgt_value, pv_config_entry, hold_remaining
+            )
+
+        # Temperature is a location-only query; PV needs the real installation.
+        forecast_params = (
+            self.__create_temperature_request(pv_config_entry)
+            if tgt_value == "temperature"
+            else self.__create_forecast_request(pv_config_entry)
+        )
 
         def request_func():
             response = requests.get(
                 EOS_API_GET_PV_FORECAST, params=forecast_params, timeout=5
             )
+            # A relayed 429 has to be recognised before raise_for_status() turns it into
+            # an ordinary 500: retrying it is what the provider is asking us not to do.
+            if response.status_code >= 400:
+                body = _akkudoktor_body_excerpt(response)
+                if _akkudoktor_upstream_status(body) == 429:
+                    raise _AkkudoktorRateLimit(AKKUDOKTOR_RATE_LIMIT_HOLD_S)
             response.raise_for_status()
             day_values = response.json()
             return day_values["values"]
 
+        # Tracked locally (not via self.pv_forcast_request_error, which can
+        # still hold a stale error from an earlier unrelated call) so we know
+        # whether day_values below is raw API JSON or an already-final
+        # fallback array from _handle_interface_error.
+        failure = {"occurred": False}
+
         def error_handler(error_type, exception):
+            failure["occurred"] = True
             return self._handle_interface_error(
                 error_type,
-                f"Akkudoktor API error for {tgt_value}: {exception}",
+                _describe_akkudoktor_error(tgt_value, exception),
                 pv_config_entry,
                 "akkudoktor",
+                target=tgt_value,
             )
 
-        day_values = self._retry_request(request_func, error_handler, 5, 3)
+        retries, delay = (
+            (TEMP_MAX_RETRIES, TEMP_RETRY_DELAY_S)
+            if tgt_value == "temperature"
+            else (5, 3)
+        )
+        try:
+            day_values = self._retry_request(
+                request_func, error_handler, retries, delay
+            )
+        except _AkkudoktorRateLimit as exc:
+            self._akkudoktor_hold_until = datetime.now() + timedelta(
+                seconds=exc.hold_seconds
+            )
+            logger.warning(
+                "[PV-IF] akkudoktor.net relayed an upstream 429 (as HTTP 500) -"
+                " pausing requests for %d s. The request is not at fault; the weather"
+                " provider behind the API is rate limiting it.",
+                exc.hold_seconds,
+            )
+            self._log_error_diagnostics("rate_limit", "akkudoktor", target=tgt_value)
+            return self.__akkudoktor_hold_response(
+                tgt_value, pv_config_entry, exc.hold_seconds
+            )
+
+        if failure["occurred"]:
+            # day_values is whatever _handle_interface_error picked as the fallback: a
+            # cached forecast, or [] when there is no cache yet.  Neither is raw API
+            # JSON, so neither may reach the processing below.  Letting the empty one
+            # through used to pad it out to a full-length array of zeros and then log
+            # "fetched successfully" - for temperature that is 48 h of 0 degC, cold
+            # enough to be wrong by 20 K yet plausible enough to clear every downstream
+            # guard, stored as the last *successful* forecast and re-served for an hour.
+            return day_values
 
         # Data processing
         try:
@@ -1446,11 +2032,17 @@ class PvInterface:
                             value = 0
                         forecast_values.append(value)
 
-            # workaround for wrong time points in the forecast from akkudoktor
-            # remove first entry and append 0 to the end
+            # workaround for wrong time points in the forecast from akkudoktor:
+            # the series starts one slot early, so drop the first entry and pad the end.
+            # A dropped Watt slot is night-time, so 0 is right there - but a temperature
+            # of 0 degrees is a real reading, and padding one in put a bogus cold hour at
+            # the end of every curve. Repeat the last value instead, which is what the
+            # length correction below already does.
             if forecast_values:
                 forecast_values.pop(0)
-                forecast_values.append(0)
+                forecast_values.append(
+                    forecast_values[-1] if tgt_value == "temperature" else 0
+                )
 
             # fix for time changes e.g. western europe then fill or reduce
             # the array to target duration
@@ -1466,6 +2058,17 @@ class PvInterface:
                     forecast_values.extend(
                         [forecast_values[-1]] * (tgt_duration - len(forecast_values))
                     )
+                elif tgt_value == "temperature":
+                    # Nothing to extend from.  A zero-filled Watt array is merely a
+                    # pessimistic forecast, but a zero-filled temperature array is a
+                    # fabricated reading - and one the +-60 degC plausibility guard
+                    # cannot reject.  Report the emptiness and let the caller use its
+                    # 15 degC default instead.
+                    logger.warning(
+                        "[PV-IF] Akkudoktor returned no temperature values in the"
+                        " forecast window - no curve to serve"
+                    )
+                    return []
                 else:
                     forecast_values = [0] * tgt_duration
                 logger.debug(
@@ -1474,8 +2077,12 @@ class PvInterface:
                     pv_config_entry.get("name", "unknown"),
                 )
 
-            # Clear any previous errors on success
-            self.pv_forcast_request_error["error"] = None
+            # Clear any previous errors on success - only for the target that just
+            # succeeded, so a good temperature fetch never masks a failing PV fetch.
+            if tgt_value == "temperature":
+                self.temp_forecast_request_error["error"] = None
+            else:
+                self.pv_forcast_request_error["error"] = None
 
             request_type = (
                 "PV forecast" if tgt_value == "power" else "Temperature forecast"
@@ -1490,14 +2097,21 @@ class PvInterface:
             )
 
             if self.time_frame_base == 900 and tgt_value == "power":
-                return self._convert_hourly_to_15min(forecast_values)
-            # all value have to be repeated 4 times for 15min base for temperature
-            if self.time_frame_base == 900 and tgt_value == "temperature":
-                extended_values = []
+                result = self._convert_hourly_to_15min(forecast_values)
+            elif self.time_frame_base == 900 and tgt_value == "temperature":
+                # all values have to be repeated 4 times for 15min base for temperature
+                result = []
                 for val in forecast_values:
-                    extended_values.extend([val] * 4)
-                return extended_values
-            return forecast_values
+                    result.extend([val] * 4)
+            else:
+                result = forecast_values
+
+            if tgt_value == "temperature" and result:
+                self.last_successful_temp_forecast = list(result)
+                self.consecutive_temp_failures = 0
+                self._last_temp_fetch = time.monotonic()
+
+            return result
 
         except (ValueError, TypeError, AttributeError, KeyError) as e:
             return self._handle_interface_error(
@@ -1505,6 +2119,7 @@ class PvInterface:
                 f"Error processing {tgt_value} forecast data: {e}",
                 pv_config_entry,
                 "akkudoktor",
+                target=tgt_value,
             )
 
     def __get_horizon_elevation(self, sun_azimuth, horizon_for_elev):
@@ -1782,9 +2397,20 @@ class PvInterface:
                 "openmeteo_lib",
             )
 
-    def __get_pv_forecast_forecast_solar_api(self, pv_config_entry):
+    def __forecast_solar_request_path(self, pv_config_entry):
         """
-        Fetches PV forecast from Forecast.Solar API.
+        Build the keyless part of a Forecast.Solar estimate URL, and a loggable twin.
+
+        Two things must never reach the log here.  The API key, because it is the first
+        path segment rather than a header or query parameter
+        (https://doc.forecast.solar/api:estimate) - that one the caller prefixes, so it
+        is not this function's problem.  And the coordinates, which are the user's home
+        address to within metres: the bug reporter offers to paste recent log lines into
+        a public GitHub issue, so a debug line carrying them is a real disclosure.
+
+        Returns ``(path, loggable_path)``.  The second is built from the same parameters
+        minus latitude and longitude, so everything that helps diagnose a malformed
+        request survives and nothing private does.
         """
         latitude = pv_config_entry["lat"]
         longitude = pv_config_entry["lon"]
@@ -1816,27 +2442,167 @@ class PvInterface:
                 horizon_forecast_solar_api * (24 // len(horizon_forecast_solar_api) + 1)
             )[:24]
 
-        url = (
-            f"https://api.forecast.solar/estimate/"
-            f"{latitude}/{longitude}/{tilt}/{azimuth}/{installed_power_watt}"
+        parameters = (
+            f"{tilt}/{azimuth}/{installed_power_watt}"
             f"?horizon={','.join(map(str, horizon_forecast_solar_api))}"
         )
-        logger.debug("[PV-IF] Fetching PV forecast from Forecast.Solar API: %s", url)
+        return (
+            f"estimate/{latitude}/{longitude}/{parameters}",
+            f"estimate/<lat>/<lon>/{parameters}",
+        )
+
+    def __forecast_solar_retry_after_seconds(self, response):
+        """
+        How long to stay off Forecast.Solar after the 429 it just returned.
+
+        Reads the most specific answer the response offers and falls back to the public
+        tier's own period.  Everything is defensive: a malformed 429 body must not raise
+        out of the error path, because the whole point is to stop calling.
+        """
+        candidates = []
+
+        headers = getattr(response, "headers", None) or {}
+        for header in ("Retry-After", "X-Ratelimit-Reset"):
+            try:
+                candidates.append(int(float(headers.get(header))))
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            ratelimit = response.json().get("message", {}).get("ratelimit", {})
+        except (ValueError, TypeError, AttributeError):
+            ratelimit = {}
+
+        retry_at = ratelimit.get("retry-at") if isinstance(ratelimit, dict) else None
+        if retry_at:
+            try:
+                target = datetime.fromisoformat(str(retry_at).replace("Z", "+00:00"))
+                now = datetime.now(target.tzinfo) if target.tzinfo else datetime.now()
+                candidates.append(int((target - now).total_seconds()))
+            except (ValueError, TypeError):
+                pass
+
+        if isinstance(ratelimit, dict):
+            try:
+                candidates.append(int(float(ratelimit.get("reset"))))
+            except (TypeError, ValueError):
+                pass
+
+        usable = [c for c in candidates if c > 0]
+        hold = usable[0] if usable else FORECAST_SOLAR_DEFAULT_HOLD_S
+        return max(FORECAST_SOLAR_MIN_HOLD_S, min(FORECAST_SOLAR_MAX_HOLD_S, hold))
+
+    def __forecast_solar_hold_remaining(self):
+        """Seconds left on an active Forecast.Solar rate-limit hold; 0 when clear."""
+        if self._forecast_solar_hold_until is None:
+            return 0
+        remaining = (self._forecast_solar_hold_until - datetime.now()).total_seconds()
+        if remaining <= 0:
+            self._forecast_solar_hold_until = None
+            return 0
+        return int(remaining)
+
+    def __forecast_solar_hold_response(self, pv_config_entry, hold_seconds):
+        """
+        Report the rate-limit hold and hand back the cached forecast.
+
+        Deliberately does not touch ``consecutive_failures``: waiting out a quota we
+        were told to wait out is not a failed fetch, and counting it as one would burn
+        through ``max_failures`` and discard the very cache the hold exists to protect.
+        """
+        self.pv_forcast_request_error.update(
+            {
+                "error": "rate_limit",
+                "timestamp": datetime.now().isoformat(),
+                "message": (
+                    "Forecast.Solar rate limit reached - no further requests for "
+                    f"{hold_seconds}s. The public tier allows 12 requests/hour per IP; "
+                    "an API key (Settings -> PV Source) raises that quota."
+                ),
+                "config_entry": pv_config_entry,
+                "source": "forecast_solar",
+            }
+        )
+        return list(self.last_successful_pv_forecast)
+
+    def __get_pv_forecast_forecast_solar_api(self, pv_config_entry):
+        """
+        Fetches PV forecast from Forecast.Solar API.
+        """
+        hold_remaining = self.__forecast_solar_hold_remaining()
+        if hold_remaining > 0:
+            logger.warning(
+                "[PV-IF] Forecast.Solar rate limit still active - skipping this request"
+                " for another %d s. Calling again earlier only renews the block.",
+                hold_remaining,
+            )
+            return self.__forecast_solar_hold_response(pv_config_entry, hold_remaining)
+
+        # The request URL carries both the API key (first path segment) and the user's
+        # coordinates, so it is never logged as-is.  ``loggable_path`` is built without
+        # the coordinates, and the key is masked here; the two strings are kept separate
+        # all the way to the sink so nothing private has a route into the log.
+        request_path, loggable_path = self.__forecast_solar_request_path(pv_config_entry)
+        api_key = str(self.config_source.get("api_key", "") or "").strip()
+        if api_key:
+            url = f"https://api.forecast.solar/{api_key}/{request_path}"
+            loggable_url = f"https://api.forecast.solar/***/{loggable_path}"
+        else:
+            url = f"https://api.forecast.solar/{request_path}"
+            loggable_url = f"https://api.forecast.solar/{loggable_path}"
+        logger.debug(
+            "[PV-IF] Fetching PV forecast from Forecast.Solar API for '%s': %s",
+            pv_config_entry.get("name", "unnamed"),
+            loggable_url,
+        )
 
         def request_func():
             response = requests.get(url, timeout=5)
+            if response.status_code == 429:
+                raise _ForecastSolarRateLimit(
+                    self.__forecast_solar_retry_after_seconds(response)
+                )
+            if response.status_code in (401, 403):
+                raise requests.exceptions.RequestException("auth_error")
             response.raise_for_status()
             return response
 
         def error_handler(error_type, exception):
+            if str(exception) == "auth_error":
+                message = (
+                    "Forecast.Solar rejected the API key - check api_key in"
+                    " Settings -> PV Source, or clear it to use the public tier"
+                )
+            else:
+                message = f"Forecast.Solar API error: {exception}"
             return self._handle_interface_error(
                 error_type,
-                f"Forecast.Solar API error: {exception}",
+                message,
                 pv_config_entry,
                 "forecast_solar",
             )
 
-        response = self._retry_request(request_func, error_handler)
+        try:
+            response = self._retry_request(request_func, error_handler)
+        except _ForecastSolarRateLimit as exc:
+            self._forecast_solar_hold_until = datetime.now() + timedelta(
+                seconds=exc.hold_seconds
+            )
+            logger.error(
+                "[PV-IF] Forecast.Solar returned 429 - pausing requests for %d s.",
+                exc.hold_seconds,
+            )
+            # Once, as the hold is armed.  The skip path below is silent about the
+            # background because it runs every cycle until the hold expires.
+            self._log_error_diagnostics("rate_limit", "forecast_solar")
+            return self.__forecast_solar_hold_response(pv_config_entry, exc.hold_seconds)
+
+        # _retry_request hands back the error handler's fallback - a forecast list -
+        # when every attempt failed.  Without this the list fell through to .json()
+        # below, raised AttributeError, and ran the error handler a second time,
+        # counting one failed cycle twice against max_failures.
+        if isinstance(response, list):
+            return response
 
         def json_func():
             data = response.json()
@@ -1844,6 +2610,12 @@ class PvInterface:
             return watt_hours_period
 
         watt_hours_period = self._retry_request(json_func, error_handler)
+
+        # Same reason as above: a failed parse already ran the error handler and what
+        # came back is its fallback forecast, not a period block.  Handing it on
+        # unchanged keeps one failed cycle counting once against max_failures.
+        if isinstance(watt_hours_period, list):
+            return watt_hours_period
 
         # Data validation
         if not watt_hours_period:
@@ -1856,29 +2628,34 @@ class PvInterface:
 
         # Data processing
         try:
-            parsed = [
-                (datetime.strptime(ts, "%Y-%m-%d %H:%M:%S"), v)
-                for ts, v in watt_hours_period.items()
-            ]
-            min_time = min(dt for dt, _ in parsed)
-            # Align to midnight of the first day
-            midnight = min_time.replace(hour=0, minute=0, second=0, microsecond=0)
-            # Build list of 48 hourly timestamps
-            hours_list = [midnight + timedelta(hours=i) for i in range(48)]
-            # Build a lookup dict for fast access
-            lookup = {dt: v for dt, v in parsed}
-            # Fill the forecast array
-            forecast_wh = []
-            for h in hours_list:
-                # Use value if exact hour exists, else 0
-                forecast_wh.append(lookup.get(h, 0))
+            # Bucket straight into the system's own resolution rather than parsing
+            # hourly and splitting afterwards: a Personal (30 min) or Professional Plus
+            # (15 min) account then contributes its real intra-hour shape instead of a
+            # flat quarter of the hour.
+            slot_seconds, slot_count = (
+                (900, 192) if self.time_frame_base == 900 else (3600, 48)
+            )
+            pv_forecast = self._forecast_solar_periods_to_slots(
+                watt_hours_period, slot_seconds, slot_count
+            )
+
+            # Resolution and totals only - no coordinates, no key.  A log excerpt
+            # attached to a bug report has to be enough to diagnose a wrong curve
+            # without disclosing where the plant is (see __forecast_solar_request_path).
+            logger.debug(
+                "[PV-IF] Forecast.Solar '%s': %d periods at ~%d s resolution ->"
+                " %d slots of %d s, total %.0f Wh",
+                pv_config_entry.get("name", "unnamed"),
+                len(watt_hours_period),
+                self._forecast_solar_source_resolution_s(watt_hours_period),
+                slot_count,
+                slot_seconds,
+                sum(pv_forecast),
+            )
 
             # Clear any previous errors on success
             self.pv_forcast_request_error["error"] = None
 
-            pv_forecast = forecast_wh
-            if self.time_frame_base == 900:
-                return self._convert_hourly_to_15min(pv_forecast)
             return pv_forecast
 
         except (ValueError, TypeError, AttributeError) as e:
@@ -1888,6 +2665,43 @@ class PvInterface:
                 pv_config_entry,
                 "forecast_solar",
             )
+
+    def _resolve_evcc_scale_factor(self, solar_forecast_scale):
+        """
+        Resolve the correction factor EVCC publishes with its solar forecast.
+
+        Returns 1.0 when the user has disabled real-data correction or EVCC reported no
+        usable value. A scale below 0.1 means EVCC has barely any measured data yet and
+        would otherwise wipe out the forecast, so it is floored at 0.5.
+        """
+        use_real_data_correction = True
+        if isinstance(getattr(self, "config_source", None), dict):
+            use_real_data_correction = self.config_source.get("use_real_data_correction", True)
+
+        if not use_real_data_correction:
+            logger.debug(
+                "[PV-IF] EVCC PV forecast: real data correction disabled - scale factor 1.0"
+            )
+            return 1.0
+
+        try:
+            scale_factor = float(solar_forecast_scale)
+        except (TypeError, ValueError):
+            return 1.0
+
+        if scale_factor <= 0:
+            logger.debug(
+                "[PV-IF] EVCC PV forecast scale factor invalid (%s) - using 1.0",
+                scale_factor,
+            )
+            return 1.0
+        if scale_factor < 0.1:
+            logger.debug(
+                "[PV-IF] EVCC PV forecast scale factor too low (< 0.1 - %s) - using 0.5",
+                scale_factor,
+            )
+            return 0.5
+        return scale_factor
 
     def __get_pv_forecast_evcc_api(self, pv_config_entry, hours=48):
         """
@@ -1913,10 +2727,11 @@ class PvInterface:
             response.raise_for_status()
             data = response.json()
             solar_forecast_all = data.get("forecast", {}).get("solar", {})
-            solar_forecast_scale = solar_forecast_all.get("scale", "unknown")
             solar_forecast = solar_forecast_all.get("timeseries", [])
+            solar_forecast_scale = solar_forecast_all.get("scale", "unknown")
             logger.debug(
-                "[PV-IF] EVCC API solar forecast received with scale: %s",
+                "[PV-IF] EVCC API solar forecast received (%d entries, scale: %s)",
+                len(solar_forecast),
                 solar_forecast_scale,
             )
             return solar_forecast, solar_forecast_scale
@@ -1938,7 +2753,12 @@ class PvInterface:
                 pv_config_entry,
                 "evcc",
             )
-        solar_forecast, solar_forecast_scale = result
+        # On a handled error the error_handler returns a bare list (cache or []), so
+        # only unpack when the retried closure actually produced its pair.
+        if isinstance(result, tuple):
+            solar_forecast, solar_forecast_scale = result
+        else:
+            solar_forecast, solar_forecast_scale = result, "unknown"
 
         if not solar_forecast or not isinstance(solar_forecast, list):
             return self._handle_interface_error(
@@ -1947,11 +2767,6 @@ class PvInterface:
                 pv_config_entry,
                 "evcc",
             )
-
-        # --- Read use_real_data_correction from pv_forecast_source config ---
-        use_real_data_correction = True
-        if hasattr(self, "config_source") and isinstance(self.config_source, dict):
-            use_real_data_correction = self.config_source.get("use_real_data_correction", True)
 
         try:
             # Get timezone-aware current time
@@ -2025,32 +2840,11 @@ class PvInterface:
                 pv_forecast = forecast_15min
 
 
-            # Apply scaling factor if enabled
-            if use_real_data_correction:
-                try:
-                    scale_factor = float(solar_forecast_scale)
-                    if scale_factor < 0.1:
-                        scale_factor = 0.5
-                        logger.debug(
-                            "[PV-IF] EVCC PV forecast scale factor too low "
-                            "(< 0.1 - %s) - using 0.5",
-                            scale_factor,
-                        )
-                except (TypeError, ValueError):
-                    scale_factor = 1.0
-                if scale_factor <= 0:
-                    logger.debug(
-                        "[PV-IF] EVCC PV forecast scale factor invalid (%s) - using 1.0",
-                        scale_factor,
-                    )
-                    scale_factor = 1.0
-            else:
-                scale_factor = 1.0
-                logger.debug(
-                    "[PV-IF] EVCC PV forecast: Real data correction disabled," +
-                    " forcing scale factor to 1.0"
-                )
-
+            # EVCC learns its own correction factor from measured yield and publishes it
+            # alongside the forecast. Apply it here, per source. The PV autoscaler then
+            # sits on top of the corrected values and learns only the residual bias, so
+            # the two corrections compose instead of double-counting.
+            scale_factor = self._resolve_evcc_scale_factor(solar_forecast_scale)
             pv_forecast = [round(val * scale_factor, 1) for val in pv_forecast]
 
             # Clear any previous errors on success
@@ -2668,15 +3462,32 @@ class PvInterface:
             time.sleep(delay)
 
     def _handle_interface_error(
-        self, error_type, message, pv_config_entry, source="unknown"
+        self, error_type, message, pv_config_entry, source="unknown", target="power"
     ):
         """
         Centralized error handling for all API errors.
         Uses last successful forecast as fallback if available.
         Similar to PriceInterface.last_successful_prices mechanism.
+
+        `target` selects which cache/counter pair to use ("power" or
+        "temperature") so a failed temperature request never falls back to
+        the PV power cache (and vice versa).
         """
-        logger.error("[PV-IF] %s", message)
-        self.pv_forcast_request_error.update(
+        # A temperature failure that the cache absorbs is noise, not an incident: the
+        # forecast handed to the optimizer is still real degrees.  Escalate only once the
+        # cache cannot cover it any more.
+        cache_covers_it = (
+            target == "temperature"
+            and self.consecutive_temp_failures + 1 <= self.max_failures
+            and len(self.last_successful_temp_forecast) > 0
+        )
+        (logger.warning if cache_covers_it else logger.error)("[PV-IF] %s", message)
+        error_slot = (
+            self.temp_forecast_request_error
+            if target == "temperature"
+            else self.pv_forcast_request_error
+        )
+        error_slot.update(
             {
                 "error": error_type,
                 "timestamp": datetime.now().isoformat(),
@@ -2685,34 +3496,42 @@ class PvInterface:
                 "source": source,
             }
         )
-        self.consecutive_failures += 1
+
+        if target == "temperature":
+            self.consecutive_temp_failures += 1
+            failures = self.consecutive_temp_failures
+            last_successful = self.last_successful_temp_forecast
+        else:
+            self.consecutive_failures += 1
+            failures = self.consecutive_failures
+            last_successful = self.last_successful_pv_forecast
 
         # Fallback strategy: Use last successful forecast if available
         # and within failure threshold
-        if (
-            self.consecutive_failures <= self.max_failures
-            and len(self.last_successful_pv_forecast) > 0
-        ):
+        if failures <= self.max_failures and len(last_successful) > 0:
             logger.warning(
-                "[PV-IF] No forecast retrieved (failure %d/%d). Using last successful forecast.",
-                self.consecutive_failures,
+                "[PV-IF] No %s forecast retrieved (failure %d/%d)."
+                " Using last successful forecast.",
+                target,
+                failures,
                 self.max_failures,
             )
-            return self.last_successful_pv_forecast
+            return last_successful
 
         # If max failures exceeded or no cache available, return empty array
         # (let caller handle default generation)
-        if len(self.last_successful_pv_forecast) == 0:
+        if len(last_successful) == 0:
             logger.warning(
-                "[PV-IF] No forecast available and no cache - returning empty array"
+                "[PV-IF] No %s forecast available and no cache - returning empty array",
+                target,
             )
-        
+
         # Log detailed recovery diagnostics for troubleshooting
-        self._log_error_diagnostics(error_type, source)
-        
+        self._log_error_diagnostics(error_type, source, target)
+
         return []
 
-    def _log_error_diagnostics(self, error_type, source):
+    def _log_error_diagnostics(self, error_type, source, target="power"):
         """
         Log detailed error diagnostics including available sources and recovery hints.
         Helps users troubleshoot and fix configuration issues faster.
@@ -2729,18 +3548,24 @@ class PvInterface:
             "default",
         ]
         current_source = self.config_source.get("source", "unknown")
-        
-        if self.consecutive_failures >= self.max_failures:
+
+        failures = (
+            self.consecutive_temp_failures
+            if target == "temperature"
+            else self.consecutive_failures
+        )
+        if failures >= self.max_failures:
             logger.error(
-                "[PV-IF] Maximum failures reached (%d) - "
-                "please check configuration in Settings > PV Forecast",
-                self.consecutive_failures,
+                "[PV-IF] Maximum %s failures reached (%d) - "
+                "please check configuration in Settings > PV Source",
+                target,
+                failures,
             )
-        
+
         if source == "timeseries":
             data_url = self.config_source.get("data_url", "").strip()
             use_ha = self.config_source.get("use_ha_central_data_source", False)
-            
+
             if error_type == "config_error" and not data_url and not use_ha:
                 logger.error(
                     "[PV-IF] Timeseries requires either data_url or use_ha_central_data_source - "
@@ -2757,7 +3582,17 @@ class PvInterface:
                     "[PV-IF] Timeseries endpoint returned unexpected data - "
                     "verify data_url and data_path in Settings > PV Source"
                 )
-        
+
+        if source == "forecast_solar" and error_type == "rate_limit":
+            logger.error(
+                "[PV-IF] Forecast.Solar quota is metered per IP address, or per API key"
+                " once one is set. The public tier allows 12 requests/hour and EOS"
+                " Connect spends one per PV installation per cycle. Add an API key in"
+                " Settings > PV Source to raise the quota, or reduce the number of"
+                " installations. Requests stay paused until the reported retry time"
+                " passes - retrying sooner only restarts the block."
+            )
+
         logger.debug(
             "[PV-IF] Available PV sources: %s (current: %s, consecutive_failures: %d/%d)",
             ", ".join(available_sources),
@@ -2765,6 +3600,119 @@ class PvInterface:
             self.consecutive_failures,
             self.max_failures,
         )
+
+    def _forecast_solar_periods_to_slots(
+        self, watt_hours_period, slot_seconds=3600, slot_count=48
+    ):
+        """
+        Map a Forecast.Solar ``watt_hours_period`` block onto our own energy slots.
+
+        Forecast.Solar labels every entry with the **end** of the period it describes:
+        "the value is always for the period from last timestamp to the timestamp in the
+        key" (https://doc.forecast.solar/api:estimate).  The first entry of a day is
+        sunrise and has no predecessor, so it is always 0; the last is sunset and
+        carries the partial period since the previous grid point.  Resolution follows
+        the account level - 60 min on the public tier, 30 min with a Personal key,
+        15 min on Professional Plus - and the timestamps are not necessarily aligned to
+        our slot grid.
+
+        So every period is spread over the slots it overlaps, weighted by how much of
+        it falls in each.  That is correct at any source resolution, keeps the
+        sunrise/sunset slivers that fall on no grid boundary, and puts the energy in
+        the slot it was actually produced in.  Slot ``i`` ends up holding the energy
+        generated *during* slot ``i`` - the same convention every other PV source in
+        this module follows.
+
+        Args:
+            watt_hours_period (dict): ``{"YYYY-MM-DD HH:MM:SS": Wh}`` as returned by
+                the API.
+            slot_seconds (int): Length of one target slot in seconds (3600 or 900).
+            slot_count (int): How many slots to return (48 hourly, 192 quarter-hourly).
+
+        Returns:
+            list: Exactly ``slot_count`` Wh values, starting at midnight of the first
+            day in the payload.
+        """
+        parsed = sorted(
+            (datetime.strptime(ts, "%Y-%m-%d %H:%M:%S"), float(wh))
+            for ts, wh in watt_hours_period.items()
+        )
+        if not parsed:
+            return [0.0] * slot_count
+        # Anchor on midnight of the first day, so slot 0 is always 00:00-00:xx today.
+        midnight = parsed[0][0].replace(hour=0, minute=0, second=0, microsecond=0)
+        slots = [0.0] * slot_count
+
+        for index, (end, watt_hours) in enumerate(parsed):
+            # A zero period carries nothing to distribute.  Skipping it is also what
+            # makes the overnight gap harmless: the pair (yesterday's sunset,
+            # today's sunrise) spans the whole night, but a sunrise entry is always 0,
+            # so no energy is ever smeared across the dark hours.
+            if watt_hours <= 0:
+                continue
+            # The first entry has no predecessor to measure a period against.  In
+            # practice it is sunrise and therefore 0, so we never get here; if the API
+            # ever sends a non-zero first value, a zero-length period keeps it rather
+            # than dropping it.
+            start = parsed[index - 1][0] if index else end
+            # Defensive: a non-zero value after a long gap must not be smeared over
+            # hours it cannot have been produced in.  Attribute it to the last hour.
+            if (end - start).total_seconds() > 3600:
+                start = end - timedelta(hours=1)
+            self._spread_over_slots(
+                slots,
+                slot_seconds,
+                (start - midnight).total_seconds(),
+                (end - midnight).total_seconds(),
+                watt_hours,
+            )
+
+        return [round(value, 1) for value in slots]
+
+    @staticmethod
+    def _spread_over_slots(slots, slot_seconds, start_s, end_s, watt_hours):
+        """
+        Add ``watt_hours`` to ``slots`` in place, split across the slots that the
+        period ``[start_s, end_s)`` overlaps in proportion to how much of it falls in
+        each.  Offsets are seconds from the start of slot 0; anything outside the
+        array is discarded.  A zero-length period lands whole in the slot it sits in.
+        """
+        horizon = slot_seconds * len(slots)
+
+        def credit(offset_s, amount):
+            """Credit ``amount`` Wh to the slot containing ``offset_s``."""
+            if 0 <= offset_s < horizon:
+                slots[int(offset_s // slot_seconds)] += amount
+
+        period_s = end_s - start_s
+        if period_s <= 0:
+            credit(start_s, watt_hours)
+            return
+        cursor = start_s
+        while cursor < end_s:
+            slot_end = (int(cursor // slot_seconds) + 1) * float(slot_seconds)
+            chunk_end = min(slot_end, end_s)
+            credit(cursor, watt_hours * (chunk_end - cursor) / period_s)
+            cursor = chunk_end
+
+    def _forecast_solar_source_resolution_s(self, watt_hours_period):
+        """
+        Best guess at the source resolution of a ``watt_hours_period`` block, in
+        seconds, for the debug log.
+
+        Uses the most common gap between consecutive timestamps, which ignores the
+        sunrise/sunset slivers and the overnight gap without having to identify them.
+        Returns 0 when there is not enough data to tell.
+        """
+        stamps = sorted(
+            datetime.strptime(ts, "%Y-%m-%d %H:%M:%S") for ts in watt_hours_period
+        )
+        gaps = [
+            int((b - a).total_seconds()) for a, b in zip(stamps, stamps[1:])
+        ]
+        if not gaps:
+            return 0
+        return max(set(gaps), key=gaps.count)
 
     def _convert_hourly_to_15min(self, hourly_values):
         """

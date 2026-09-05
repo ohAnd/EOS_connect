@@ -19,7 +19,7 @@
             <a href="../index.html" class="nav-logo">
                 <img src="../assets/images/icon.png" alt="EOS Connect" style="height: 48px; vertical-align: middle; margin-right: 8px;">
                 <span>EOS Connect</span>
-                <span class="version-badge">v0.3.37</span>
+                <span class="version-badge">v0.3.38</span>
             </a>
             <button class="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
@@ -110,7 +110,7 @@
                 <li><strong>Home Assistant</strong> (recommended for most users) OR</li>
                 <li><strong>Docker</strong> with Docker Compose OR</li>
                 <li><strong>Python 3.11+</strong> for local installation</li>
-                <li><strong>Running EOS Server:</strong> You must have an instance of <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">Akkudoktor EOS</a> or <a href="https://github.com/thecem/hassio-evopt" target="_blank">EVopt</a> already running and reachable</li>
+                <li><strong>An optimizer:</strong> none needed &mdash; the built-in <code>local_evopt</code> is the default and runs in-process. Only if you would rather use an external backend do you need an instance of <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">Akkudoktor EOS</a> or <a href="https://github.com/thecem/hassio-evopt" target="_blank">EVopt</a> running and reachable.</li>
             </ul>
 
             <h3>Step 2: Install</h3>
@@ -133,6 +133,33 @@
 cd EOS_connect
 docker-compose up --pull always -d</code></pre>
 
+                <div class="alert alert-warning">
+                    <strong><i class="fas fa-exclamation-triangle"></i> The data volume is not optional:</strong>
+                    every setting you make in the web UI lives in <code>data/eos_connect.db</code>, together with
+                    the PV yield history the forecast auto-scaler learns from. The bundled
+                    <code>docker-compose.yml</code> mounts it for you:
+                    <pre><code>volumes:
+  - ./data:/app/data</code></pre>
+                    Without that line the database sits on the container's writable layer and is destroyed every
+                    time the container is recreated &mdash; which is exactly what <code>docker-compose pull</code>
+                    followed by <code>up -d</code> does on each update. EOS Connect then falls back to
+                    <code>config.yaml</code>, and your configuration appears to have reverted on its own.
+                    <p><strong>Using your own compose file?</strong> The volume was added during the 0.3.34
+                    cycle, one day after the settings database itself, so any compose file written before then
+                    is missing it. Add the line, then restart the container. EOS Connect warns in its log when
+                    it detects that the data directory will not survive a restart.</p>
+                </div>
+
+                <p>If you cannot mount <code>/app/data</code>, set <code>EOS_DATA_PATH</code> to a path you
+                already persist and mount a volume there instead:</p>
+                <pre><code>environment:
+  - EOS_DATA_PATH=/mnt/eos_data
+volumes:
+  - ./my_data:/mnt/eos_data</code></pre>
+                <p>Mount the <em>directory</em>, never the single <code>.db</code> file: SQLite runs in WAL mode,
+                so the <code>-wal</code> and <code>-shm</code> sidecar files have to live on the same volume as
+                the database.</p>
+
             <h4>Option C: Local Python</h4>
                 <h4>Option C: Local Python</h4>
                 <p>For EOS backend, see <a href="https://github.com/Akkudoktor-EOS/EOS" target="_blank">Akkudoktor EOS</a>. For EVopt backend, see <a href="https://github.com/thecem/hassio-evopt" target="_blank">EVopt</a>.</p>
@@ -143,12 +170,32 @@ python src/eos_connect.py</code></pre>
 
             <h3>Step 3: Configure</h3>
             <p>On first start, EOS Connect launches a <strong>Setup Wizard</strong> that guides you through the essential configuration. All settings are managed through the built-in web UI — no manual file editing required.</p>
-            <p>The only file you may optionally create is <code>src/config.yaml</code> with bootstrap settings:</p>
+            <p>It asks, in order: <strong>Optimizer</strong>, <strong>EVCC</strong> (optional, skippable),
+            <strong>Data Source</strong>, <strong>Inverter</strong>, <strong>Battery</strong>,
+            <strong>Load</strong>, <strong>Price</strong>, <strong>PV Installations</strong>, then a
+            <strong>Review &amp; Finish</strong> summary. EVCC and Data Source come before Inverter because
+            either can act as the inverter controller.</p>
+            <p>The wizard saves only the answers it asked you for; everything else keeps its default until you
+            change it in Settings. Where a choice needs a setting the wizard does not cover — the Home Assistant
+            inverter's service-call sequences, or the hourly prices behind a fixed 24-hour tariff — the review
+            step says so before you finish.</p>
+            <p>The PV step arrives preset to the <strong>Default</strong> forecast source, which needs no setup
+            at all, so a first run finishes without asking where you live. It is a fixed demo curve for an
+            assumed 4&nbsp;kW array rather than a forecast of your roof — enough to see EOS Connect working,
+            and worth replacing with a real provider under Settings &#9656; PV Source once you are running.</p>
+            <p>The only file you may optionally create is <code>src/config.yaml</code> with bootstrap settings. These
+            three keys are deliberately not stored in the database &mdash; the port has to be known before the web
+            server starts &mdash; so this file (or the matching environment variables) is their only home. Under
+            Docker it is bind-mounted by the shipped <code>docker-compose.yml</code>; on a clean clone the file does
+            not exist yet, so Docker creates an empty directory there and EOS Connect starts on the defaults below
+            and logs that it ignored the path.</p>
             <pre><code># config.yaml — bootstrap settings only (optional)
 eos_connect_web_port: 8081  # Web server port
 time_zone: Europe/Berlin    # System time zone
 log_level: info             # Log level: debug, info, warning, error</code></pre>
-            <p><strong>Upgrading from an older version?</strong> EOS Connect automatically migrates your existing <code>config.yaml</code> settings into its database on first start. After migration, you can reduce <code>config.yaml</code> to just the bootstrap keys above.</p>
+            <p><strong>Upgrading from an older version?</strong> EOS Connect automatically migrates your existing <code>config.yaml</code> settings into its database on first start. It then reduces <code>config.yaml</code> to just the bootstrap keys above by itself, keeping the original as <code>config.yaml.migrated.bak</code> in the data directory, next to the database &mdash; not beside <code>config.yaml</code>, which under Docker is a bind-mounted single file whose directory does not survive the container. That matters: a full pre-database <code>config.yaml</code> is re-imported whenever the database is missing, so leaving it in place would keep restoring the old values over anything you changed in the web UI.</p>
+            <p>The cleanup is skipped when EOS Connect detects that the data directory would not survive a restart &mdash; in that situation the old values are the only fallback left, so it keeps them and logs what to mount instead.</p>
+            <p>A fourth bootstrap key, <code>data_path</code>, moves the database and other persistent data somewhere other than <code>./data</code>. It is not shown in the web UI, because the path has to be known before the database it points at can be opened. Set it in <code>config.yaml</code> or, in Docker, via <code>EOS_DATA_PATH</code>, which takes precedence.</p>
 
             <h3>Step 4: Access Web Dashboard</h3>
             <p>Open your browser to:</p>
@@ -476,6 +523,15 @@ docker-compose up -d</code></pre>
                 <li><strong>Verify Update:</strong> Check the Info page to confirm the new version</li>
             </ol>
 
+            <div class="alert alert-warning">
+                <strong><i class="fas fa-exclamation-triangle"></i> Check your data volume before updating:</strong>
+                <code>docker-compose down &amp;&amp; up -d</code> recreates the container, so anything not on a
+                volume is discarded. Confirm your <code>docker-compose.yml</code> contains
+                <code>- ./data:/app/data</code>; without it every web-UI setting and the whole PV yield history
+                are lost on each update. <strong>Settings &#9656; Backup</strong> exports the complete
+                installation and is worth doing before any update either way.
+            </div>
+
             <h4>Branch Detection</h4>
             <p>EOS Connect automatically detects which branch you're using:</p>
             <ul>
@@ -510,9 +566,9 @@ docker-compose up -d</code></pre>
             <h4>Three Battery Pricing Modes</h4>
             <p><strong>Mode 1: Fixed Static Price</strong> (Default)</p>
             <ul>
-                <li>Battery energy cost set to a single fixed value (€/Wh)</li>
+                <li>Battery energy cost set to a single fixed value (ct/kWh)</li>
                 <li>Simple but inaccurate - doesn't reflect actual charging sources</li>
-                <li>Configuration: <code>battery.price_euro_per_wh_accu: 0.00004</code> (default)</li>
+                <li>Configuration: <code>battery.price_ct_kwh_accu: 4</code> (4 ct/kWh; <code>0</code> is the default, meaning "unused")</li>
                 <li>Use case: Quick setup when you don't have sensor data available</li>
             </ul>
 
@@ -671,9 +727,10 @@ docker-compose up -d</code></pre>
   # Thresholds
   charging_threshold_w: 50
   grid_charge_threshold_w: 100
-  
-  # Feed-in price (for valuing PV surplus energy)
-  feed_in_price: 0.04  # €0.04/kWh when not charging from grid</code></pre>
+
+  # To value PV surplus at the feed-in tariff instead of €0, also set:
+  # battery_price_include_feedin: true
+  # and configure price.feed_in_price (in the price: section, in ct/kWh)</code></pre>
         </div>
 
         <!-- Battery Overview -->
@@ -914,6 +971,20 @@ docker-compose up -d</code></pre>
                         <td>Invalid sensor values</td>
                         <td>Sensor not in watts</td>
                         <td>Verify sensor unit is <strong>W</strong> (watts), not kW or other units</td>
+                    </tr>
+                    <tr>
+                        <td><code>Akkudoktor API error for temperature: 500 Server Error</code></td>
+                        <td>The weather service behind <code>api.akkudoktor.net</code> is rate limiting it.
+                        The API does not pass the upstream status through &mdash; it reports every upstream
+                        fault as an HTTP 500 whose body reads
+                        <code>Request failed with status code 429</code>. The request itself is correct.</td>
+                        <td><strong>Nothing to fix.</strong> EOS Connect pauses its requests for 15 minutes
+                        and keeps serving the last good temperature curve, or a 15&nbsp;&deg;C default if it
+                        has none yet. The temperature forecast is an optional refinement for the EOS model,
+                        so the optimization keeps running either way. Set
+                        <code>eos.temperature_forecast_enabled: false</code> to opt out of the request
+                        entirely. The log names the upstream cause after <code>| upstream:</code> &mdash;
+                        a <code>429</code> there is transient, any other code is worth reporting.</td>
                     </tr>
                 </tbody>
             </table>

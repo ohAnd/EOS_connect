@@ -106,13 +106,28 @@ class TestConfigSchema:
         # Restart-required fields should NOT be hot_reload
         assert self.schema.get("mqtt.broker").hot_reload is False
 
-    def test_inverter_type_has_data_source_dependency(self):
-        """inverter.type should have depends_on for data_source.type."""
+    def test_inverter_type_is_offered_regardless_of_data_source(self):
+        """
+        inverter.type must not depend on the data source.
+
+        Only one of its six choices is Home Assistant; gating the whole select on
+        data_source.type == "homeassistant" hid it from everyone else. On a fresh
+        install that value is "default", so the setup wizard's Inverter step had
+        nothing left to render.
+        """
         field = self.schema.get("inverter.type")
         assert field is not None
-        assert field.depends_on is not None
-        assert "data_source.type" in field.depends_on
-        assert field.depends_on["data_source.type"] == ["homeassistant"]
+        assert field.depends_on is None
+
+    def test_home_assistant_inverter_fields_still_depend_on_the_type(self):
+        """The dependency belongs on the fields that really are HA-specific."""
+        for key in (
+            "inverter.charge_from_grid",
+            "inverter.avoid_discharge",
+            "inverter.discharge_allowed",
+        ):
+            field = self.schema.get(key)
+            assert field.depends_on == {"inverter.type": ["homeassistant"]}, key
 
     def test_inverter_url_token_removed(self):
         """Old inverter.url and inverter.token fields should not exist."""
@@ -159,3 +174,40 @@ class TestConfigSchema:
         for field in [charge_from_grid, avoid_discharge, discharge_allowed]:
             assert "restart_required" in field.labels
 
+
+
+class TestPvForecastApiKey:
+    """The shared api_key field also serves Forecast.Solar (issue #288)."""
+
+    def setup_method(self):
+        """Create a fresh schema instance for each test."""
+        self.schema = ConfigSchema()
+
+    def test_api_key_is_offered_for_forecast_solar(self):
+        """Forecast.Solar takes a key as its first URL path segment, so expose it."""
+        field = self.schema.get("pv_forecast_source.api_key")
+        sources = field.depends_on["pv_forecast_source.source"]
+        assert set(sources) == {"solcast", "victron", "forecast_solar"}
+
+    def test_api_key_stays_a_password_field(self):
+        """It is a credential for every source that uses it."""
+        assert self.schema.get("pv_forecast_source.api_key").field_type == "password"
+
+    def test_api_key_is_not_required_for_forecast_solar(self):
+        """The public tier works without one, so the field must stay optional."""
+        field = self.schema.get("pv_forecast_source.api_key")
+        assert not (field.validation or {}).get("required")
+
+    def test_description_is_resolved_per_source(self):
+        """Each provider gets wording that says whether the key is required."""
+        resolve = self.schema.get_resolved_description
+        solcast = resolve(
+            "pv_forecast_source.api_key", {"pv_forecast_source.source": "solcast"}
+        )
+        forecast_solar = resolve(
+            "pv_forecast_source.api_key",
+            {"pv_forecast_source.source": "forecast_solar"},
+        )
+        assert "required" in solcast.lower()
+        assert "optional" in forecast_solar.lower()
+        assert forecast_solar != solcast

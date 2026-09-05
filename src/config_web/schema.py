@@ -21,6 +21,37 @@ BOOTSTRAP_KEYS = frozenset({
 })
 
 
+# Sensor names the schema used to ship as defaults. They were hints, never entities —
+# "Load_Power" is not even a syntactically valid Home Assistant entity id — but the
+# wizard stored them as if they were answers, so switching the data source to Home
+# Assistant later turned them into /api/states/Load_Power: a 404 on every poll, with
+# nothing in the UI connecting it to a config field. Every check that asks "has the
+# user configured this sensor" has to reject them. Mirrors _EVCC_PLACEHOLDER_URL in
+# api.py.
+#
+# config_web only. ``interfaces`` is a *sibling* top-level package at runtime (see
+# tests/config_web/test_runtime_import_layout.py), so it cannot import this — and it
+# does not need to: by the time a value reaches an interface it is either empty or a
+# real entity name.
+LEGACY_SENSOR_PLACEHOLDERS = frozenset({
+    "Load_Power",
+    "battery_SOC",
+    "Wallbox_Power",
+    "additional_load_1_sensor",
+})
+
+# data_source.type values that actually poll a remote instance. A plain list because
+# it is serialized into ``depends_on`` and shipped to the browser.
+REMOTE_DATA_SOURCE_TYPES = ["homeassistant", "openhab"]
+
+# The sensors load and battery cannot read anything without, once a remote data source
+# is connected. Maps the config key to the Settings section that sets it.
+DATA_SOURCE_REQUIRED_SENSORS = {
+    "load.load_sensor": "Load",
+    "battery.soc_sensor": "Battery",
+}
+
+
 # Section display metadata — single source of truth for icons and labels.
 # Consumed by the web UI (config.js), the docs (configuration.html),
 # and the JSON export script.
@@ -35,6 +66,7 @@ SECTION_META = {
     "price":              {"icon": "fa-coins",           "label": "Price"},
     "pv_forecast_source": {"icon": "fa-sun",             "label": "PV Source"},
     "pv_forecast":        {"icon": "fa-solar-panel",     "label": "PV Installations"},
+    "pv_autoscaling":     {"icon": "fa-chart-line",      "label": "PV Auto-Scaling"},
     "mqtt":               {"icon": "fa-tower-broadcast",  "label": "MQTT"},
     "system":             {"icon": "fa-gears",           "label": "System"},
 }
@@ -283,29 +315,37 @@ _ALL_FIELDS: list[FieldDef] = [
     FieldDef(
         key="load.load_sensor",
         field_type="sensor",
-        default="Load_Power",
+        default="",
         section="load",
         level="getting_started",
-        description="Entity/item for load power data in watts",
+        description=(
+            "Entity/item reporting household load power in watts — e.g. "
+            "sensor.house_power (Home Assistant) or Load_Power (openHAB)"
+        ),
         labels=["restart_required"],
         help_url="configuration.html#load",
+        depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
     ),
     FieldDef(
         key="load.car_charge_load_sensor",
         field_type="sensor",
-        default="Wallbox_Power",
+        default="",
         section="load",
         level="standard",
-        description="Entity/item for wallbox power data in watts (leave empty if not used)",
+        description=(
+            "Entity/item for wallbox power data in watts — e.g. sensor.wallbox_power "
+            "(leave empty if not used)"
+        ),
         labels=["restart_required"],
         help_url="configuration.html#load",
+        depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
     ),
     FieldDef(
         key="load.additional_load_1_sensor",
         field_type="sensor",
-        default="additional_load_1_sensor",
+        default="",
         section="load",
         level="standard",
         description="Entity/item for additional load power in watts (leave empty if not used)",
@@ -400,6 +440,20 @@ _ALL_FIELDS: list[FieldDef] = [
         labels=[],
         help_url="configuration.html#eos",
         validation={"min": 10, "max": 600},
+        display_group="Optimization",
+        hot_reload=True,
+    ),
+    FieldDef(
+        key="eos.temperature_forecast_enabled",
+        field_type="bool",
+        default=True,
+        section="eos",
+        level="standard",
+        description="Fetch the outside temperature forecast (Akkudoktor) and send it to"
+        + " EOS - improves model accuracy; when off a static 15 °C curve is sent",
+        labels=[],
+        help_url="configuration.html#eos",
+        depends_on={"eos.source": "eos_server"},
         display_group="Optimization",
         hot_reload=True,
     ),
@@ -719,7 +773,8 @@ _ALL_FIELDS: list[FieldDef] = [
             "Data source URL. For Home Assistant: "
             "http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. "
             "For HTTP servers: endpoint URL returning JSON timeseries. "
-            "Must return JSON array with {start, end, value} format (values in EUR/Wh)."
+            "Must return a JSON array in EVCC's {start, end, value} format; "
+            "'end' is optional. The unit of 'value' is set by price.value_unit."
         ),
         help_url="configuration.html#price-sources",
         depends_on={
@@ -746,6 +801,24 @@ _ALL_FIELDS: list[FieldDef] = [
             "price.source": ["timeseries"],
             "price.use_ha_central_data_source": [False],
         },
+        hot_reload=True,
+        display_group="Grid Price Provider",
+    ),
+    FieldDef(
+        key="price.value_unit",
+        field_type="select",
+        default="EUR/kWh",
+        section="price",
+        level="getting_started",
+        description=(
+            "Unit of the 'value' field in the timeseries. Default matches EVCC's "
+            "/api/tariff/grid and the common Home Assistant price integrations "
+            "(EUR/kWh). Pick EUR/Wh only for a source that already delivers the "
+            "internal unit."
+        ),
+        help_url="configuration.html#price-sources",
+        validation={"choices": ["EUR/kWh", "ct/kWh", "EUR/Wh"]},
+        depends_on={"price.source": ["timeseries"]},
         hot_reload=True,
         display_group="Grid Price Provider",
     ),
@@ -869,12 +942,16 @@ _ALL_FIELDS: list[FieldDef] = [
     FieldDef(
         key="battery.soc_sensor",
         field_type="sensor",
-        default="battery_SOC",
+        default="",
         section="battery",
         level="getting_started",
-        description="Entity/item for battery state of charge",
+        description=(
+            "Entity/item for battery state of charge — e.g. sensor.battery_soc "
+            "(Home Assistant) or battery_SOC (openHAB)"
+        ),
         labels=["restart_required"],
         help_url="configuration.html#battery",
+        depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Core",
     ),
     FieldDef(
@@ -969,15 +1046,16 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Sensor for battery temperature in °C (leave empty if not available)",
         labels=["restart_required"],
         help_url="configuration.html#battery",
+        depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
     ),
     FieldDef(
-        key="battery.price_euro_per_wh_accu",
+        key="battery.price_ct_kwh_accu",
         field_type="float",
         default=0.0,
         section="battery",
         level="standard",
-        description="Static battery price in €/Wh (0 = use dynamic or ignore)",
+        description="Static battery price in ct/kWh (0 = use dynamic or ignore)",
         labels=["restart_required"],
         help_url="configuration.html#battery",
         validation={"min": 0.0},
@@ -1134,10 +1212,14 @@ _ALL_FIELDS: list[FieldDef] = [
     FieldDef(
         key="pv_forecast_source.source",
         field_type="select",
-        default="akkudoktor",
+        default="default",
         section="pv_forecast_source",
         level="getting_started",
-        description="Solar forecast data provider",
+        description=(
+            "Solar forecast data provider. 'default' needs no setup at all - it "
+            "serves a fixed demo curve for a typical 4 kW array so a new install "
+            "runs straight away. Switch to a real provider when you are ready."
+        ),
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         validation={"choices": [
@@ -1152,10 +1234,26 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="pv_forecast_source",
         level="getting_started",
-        description="API key for Solcast or Victron (required when using those providers)",
+        description="API key for the forecast provider",
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
-        depends_on={"pv_forecast_source.source": ["solcast", "victron"]},
+        # Forecast.Solar is the odd one out: it works without a key on the public tier,
+        # so the key is offered but never required.  Solcast and Victron cannot fetch
+        # anything without one.
+        description_map={
+            "pv_forecast_source.source": {
+                "solcast": "Solcast API key (required)",
+                "victron": "Victron VRM API token (required)",
+                "forecast_solar": (
+                    "Forecast.Solar API key (optional) - the public tier allows 12 "
+                    "requests/hour per IP address; a Personal or Professional key "
+                    "raises that quota and meters it against the key instead"
+                ),
+            }
+        },
+        depends_on={
+            "pv_forecast_source.source": ["solcast", "victron", "forecast_solar"]
+        },
         display_group="Provider",
     ),
     FieldDef(
@@ -1163,14 +1261,18 @@ _ALL_FIELDS: list[FieldDef] = [
         field_type="str",
         default="",
         section="pv_forecast_source",
-        level="standard",
+        # getting_started, so the setup wizard shows it: a Solcast or Victron install
+        # cannot be saved without one (_check_dependencies refuses it), and while this
+        # was "standard" the wizard never offered the field, so those users reached the
+        # end and were told to fill in something they had not been asked for.
+        level="getting_started",
         description="Resource ID / Installation ID (Solcast: comma-separated list; "
         "Victron: single VRM ID)",
         hot_reload=True,
         help_url="configuration.html#pv-forecast",
         depends_on={"pv_forecast_source.source": ["solcast", "victron"]},
         display_group="Provider",
-        validation={"max_length": 1000},
+        validation={"max_length": 1000, "required": True},
     ),
 
     # Use real data correction for EVCC PV forecast (source-level)
@@ -1243,7 +1345,9 @@ _ALL_FIELDS: list[FieldDef] = [
             "Data source URL. For Home Assistant: "
             "http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. "
             "For HTTP servers: endpoint URL returning JSON timeseries. "
-            "Must return JSON array with {start, end, value} format."
+            "Must return a JSON array in EVCC's {start, end, value} format; "
+            "'end' is optional. The unit of 'value' is set by "
+            "pv_forecast_source.value_unit."
         ),
         help_url="configuration.html#pv-forecast-sources",
         depends_on={
@@ -1270,6 +1374,24 @@ _ALL_FIELDS: list[FieldDef] = [
             "pv_forecast_source.source": ["timeseries"],
             "pv_forecast_source.use_ha_central_data_source": [False],
         },
+        hot_reload=True,
+        display_group="Provider",
+    ),
+    FieldDef(
+        key="pv_forecast_source.value_unit",
+        field_type="select",
+        default="W",
+        section="pv_forecast_source",
+        level="getting_started",
+        description=(
+            "Unit of the 'value' field in the timeseries. Default matches EVCC's "
+            "solar forecast and the usual Home Assistant PV sensors, which report "
+            "power (W) per slot. Pick Wh/kWh for a source that reports energy per "
+            "slot instead."
+        ),
+        help_url="configuration.html#pv-forecast-sources",
+        validation={"choices": ["W", "kW", "Wh", "kWh"]},
+        depends_on={"pv_forecast_source.source": ["timeseries"]},
         hot_reload=True,
         display_group="Provider",
     ),
@@ -1413,6 +1535,142 @@ _ALL_FIELDS: list[FieldDef] = [
         display_group="Installation",
     ),
 
+    # ===== PV AUTOSCALING =====
+    FieldDef(
+        key="pv_autoscaling.enabled",
+        field_type="bool",
+        default=False,
+        section="pv_autoscaling",
+        level="getting_started",
+        description="Enable automatic scaling of PV forecasts based on historical measured yields",
+        labels=["experimental"],
+        help_url="configuration.html#pv-autoscaling",
+        hot_reload=True,
+        display_group="Auto-Scaling",
+    ),
+    FieldDef(
+        key="pv_autoscaling.use_ha_central_data_source",
+        field_type="bool",
+        default=True,
+        section="pv_autoscaling",
+        level="getting_started",
+        description="Use centrally configured Data Source for sensor access instead of manual URL/token",
+        help_url="configuration.html#pv-autoscaling",
+        depends_on={"pv_autoscaling.enabled": [True]},
+        hot_reload=True,
+        display_group="Auto-Scaling",
+    ),
+    FieldDef(
+        key="pv_autoscaling.sensor_entity_id",
+        field_type="sensor",
+        default="",
+        section="pv_autoscaling",
+        level="getting_started",
+        description="Entity/item for the cumulative PV generation counter (kWh) - REQUIRED for autoscaling to work",
+        help_url="configuration.html#pv-autoscaling",
+        depends_on={"pv_autoscaling.enabled": [True]},
+        validation={"required": True},
+        hot_reload=True,
+        display_group="Sensors",
+    ),
+    FieldDef(
+        key="pv_autoscaling.src",
+        field_type="select",
+        default="homeassistant",
+        section="pv_autoscaling",
+        level="standard",
+        description="Data source type (Home Assistant or OpenHAB) for reading PV sensor",
+        help_url="configuration.html#pv-autoscaling",
+        validation={"choices": ["homeassistant", "openhab"]},
+        depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
+        hot_reload=True,
+        display_group="Connection",
+    ),
+    FieldDef(
+        key="pv_autoscaling.url",
+        field_type="str",
+        default="http://homeassistant:8123",
+        section="pv_autoscaling",
+        level="standard",
+        description="Override URL for data source (used when not reusing central Data Source)",
+        depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
+        hot_reload=True,
+        display_group="Connection",
+    ),
+    FieldDef(
+        key="pv_autoscaling.access_token",
+        field_type="password",
+        default="",
+        section="pv_autoscaling",
+        level="standard",
+        description="Bearer token for manual data source access (only when not using central data source)",
+        depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
+        hot_reload=True,
+        display_group="Connection",
+    ),
+    FieldDef(
+        key="pv_autoscaling.ssl_ignore",
+        field_type="bool",
+        default=False,
+        section="pv_autoscaling",
+        level="expert",
+        description="Skip TLS certificate verification for the manual data source (self-signed certificates)",
+        depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
+        hot_reload=True,
+        display_group="Connection",
+    ),
+    FieldDef(
+        key="pv_autoscaling.retention_days",
+        field_type="int",
+        default=7,
+        section="pv_autoscaling",
+        level="standard",
+        description="How many days of measured PV yield to retain for scaling (1-14 days)",
+        validation={"min": 1, "max": 14},
+        depends_on={"pv_autoscaling.enabled": [True]},
+        hot_reload=True,
+        display_group="Storage",
+    ),
+    FieldDef(
+        key="pv_autoscaling.min_scale_factor",
+        field_type="float",
+        default=0.2,
+        section="pv_autoscaling",
+        level="expert",
+        description="Minimum scaling multiplier to prevent collapse (e.g., 0.2)",
+        help_url="configuration.html#pv-autoscaling",
+        depends_on={"pv_autoscaling.enabled": [True]},
+        hot_reload=True,
+        validation={"min": 0.0, "max": 10.0},
+        display_group="Limits",
+    ),
+    FieldDef(
+        key="pv_autoscaling.max_scale_factor",
+        field_type="float",
+        default=2.5,
+        section="pv_autoscaling",
+        level="expert",
+        description="Maximum scaling multiplier to prevent runaway (e.g., 2.5)",
+        help_url="configuration.html#pv-autoscaling",
+        depends_on={"pv_autoscaling.enabled": [True]},
+        hot_reload=True,
+        validation={"min": 1.0, "max": 20.0},
+        display_group="Limits",
+    ),
+    FieldDef(
+        key="pv_autoscaling.min_data_hours_required",
+        field_type="int",
+        default=24,
+        section="pv_autoscaling",
+        level="expert",
+        description="Minimum recorded hours required before scaling is applied",
+        help_url="configuration.html#pv-autoscaling",
+        depends_on={"pv_autoscaling.enabled": [True]},
+        validation={"min": 1, "max": 168},
+        hot_reload=True,
+        display_group="Limits",
+    ),
+
     # ===== INVERTER =====
     FieldDef(
         key="inverter.type",
@@ -1427,7 +1685,11 @@ _ALL_FIELDS: list[FieldDef] = [
             "fronius_gen24", "fronius_gen24_legacy", "victron", "evcc",
             "homeassistant", "default"
         ]},
-        depends_on={"data_source.type": ["homeassistant"]},
+        # No depends_on: only one of these six choices has anything to do with the
+        # Home Assistant data source.  Gating the whole select on
+        # data_source.type == "homeassistant" hid it from everyone else, which on a
+        # fresh install (type "default") meant the wizard's Inverter step rendered
+        # nothing at all.  The HA-specific fields below carry the dependency instead.
         display_group="Hardware",
     ),
     FieldDef(

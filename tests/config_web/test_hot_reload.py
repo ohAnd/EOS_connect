@@ -389,10 +389,14 @@ class TestHotReloadGeneral:
         price_interface,
         battery_interface,
     ):
-        """Changing feed_in_price should propagate to BatteryPriceHandler live."""
-        adapter.on_config_changed("price.feed_in_price", 0.0, 0.08)
-        assert price_interface.feed_in_tariff_price == 0.08
-        assert battery_interface.price_handler.pv_cost_euro_per_kwh == 0.08
+        """Changing feed_in_price should propagate to BatteryPriceHandler live.
+
+        price.feed_in_price arrives as ct/kWh; pv_cost_euro_per_kwh must be
+        converted to €/kWh (divide by 100) before being applied.
+        """
+        adapter.on_config_changed("price.feed_in_price", 0.0, 8.0)
+        assert price_interface.feed_in_tariff_price == 8.0
+        assert battery_interface.price_handler.pv_cost_euro_per_kwh == pytest.approx(0.08)
         assert battery_interface.price_handler.last_price_calculation is None
 
 
@@ -546,6 +550,48 @@ class TestHotReloadPv:
         # IMMEDIATE reload should be triggered for evcc (user gets instant feedback)
         pv_interface.reload_config.assert_called_once()
         assert "pv_forecast_source.source" in adapter.last_applied
+
+    def test_temperature_switch_reloads_the_pv_interface(self, pv_interface):
+        """
+        ``eos.temperature_forecast_enabled`` sits in the eos section but is applied by the
+        PV interface, which owns the temperature forecast — so it has to be routed there
+        explicitly (issue #289).  Without the route, turning it off did nothing until the
+        next restart.
+        """
+        config = {
+            "pv_forecast_source": {"source": "timeseries"},
+            "pv_forecast": [],
+            "evcc": {},
+            "eos": {"source": "eos_server", "temperature_forecast_enabled": False},
+            "time_zone": "Europe/Berlin",
+        }
+        adapter = HotReloadAdapter(
+            pv_interface=pv_interface,
+            config_provider=lambda: config,
+            pv_reload_debounce_seconds=0,
+        )
+
+        adapter.on_config_changed("eos.temperature_forecast_enabled", True, False)
+
+        assert "eos.temperature_forecast_enabled" in adapter.last_applied
+        _, kwargs = pv_interface.reload_config.call_args
+        assert kwargs["temperature_forecast_enabled"] is False
+
+    def test_temperature_stays_on_for_eos_by_default(self, pv_interface, merged_config_provider):
+        """
+        And an unrelated PV change must not flip it off: EOS models the house more
+        precisely with the curve, so the default is on for ``eos.source: eos_server``.
+        """
+        adapter = HotReloadAdapter(
+            pv_interface=pv_interface,
+            config_provider=merged_config_provider,
+            pv_reload_debounce_seconds=0,
+        )
+
+        adapter.on_config_changed("pv_forecast.0.lat", 47.0, 47.5)
+
+        _, kwargs = pv_interface.reload_config.call_args
+        assert kwargs["temperature_forecast_enabled"] is True
 
     def test_pv_changes_are_debounced_to_single_reload(
         self,

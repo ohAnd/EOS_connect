@@ -12,10 +12,13 @@ than bootstrap keys is also auto-migrated to SQLite.
 import json
 import logging
 import os
+import shutil
 from typing import Any
 
+from ruamel.yaml.error import YAMLError
+
 from .store import ConfigStore
-from .schema import ConfigSchema, BOOTSTRAP_KEYS
+from .schema import ConfigSchema, BOOTSTRAP_KEYS, LEGACY_SENSOR_PLACEHOLDERS
 
 logger = logging.getLogger("__main__")
 
@@ -194,6 +197,232 @@ def migrate_ha_options_to_store(
     return True
 
 
+_SENSOR_PLACEHOLDER_MIGRATION_KEY = "_migrated_sensor_placeholders_v1"
+
+# Stored sensor keys that may still hold a value the wizard filled in for the user,
+# paired with the placeholder that would have been stored.
+_PLACEHOLDER_SENSOR_KEYS = {
+    "load.load_sensor": "Load_Power",
+    "load.car_charge_load_sensor": "Wallbox_Power",
+    "load.additional_load_1_sensor": "additional_load_1_sensor",
+    "battery.soc_sensor": "battery_SOC",
+}
+
+
+def migrate_sensor_placeholders_to_empty(store: ConfigStore) -> bool:
+    """
+    One-time migration: blank the sensor names that were only ever schema hints.
+
+    A click-through wizard run stored ``Load_Power`` and ``battery_SOC`` as though
+    they were answers. Connecting Home Assistant afterwards turned them into
+    ``/api/states/Load_Power`` — a 404 on every poll, forever, with nothing in the UI
+    tying it to a config field. Blanking them lets the interfaces' existing
+    "sensor not configured" handling take over, which degrades to the built-in
+    profile and says so.
+
+    Overwriting with ``""`` rather than deleting is deliberate: ``_build_section``
+    falls back to config.yaml *before* the schema default, and a legacy config.yaml
+    may still carry ``load: {load_sensor: Load_Power}`` — a deleted key would come
+    straight back on the next start.
+
+    Skipped entirely for openHAB installations: unlike Home Assistant entity ids
+    (lowercase ``domain.object_id``), ``Load_Power`` and ``battery_SOC`` are
+    plausible real openHAB item names, so they cannot be assumed to be placeholders.
+
+    Args:
+        store: An opened ConfigStore instance.
+
+    Returns:
+        True if the migration ran (first time), False if it was already done.
+    """
+    if store.get(_SENSOR_PLACEHOLDER_MIGRATION_KEY, False):
+        return False
+
+    if store.get("data_source.type") == "openhab":
+        logger.info(
+            "[Migration] Skipping sensor placeholder cleanup — openHAB item names "
+            "are indistinguishable from the old placeholders"
+        )
+        store.set(_SENSOR_PLACEHOLDER_MIGRATION_KEY, True)
+        return True
+
+    for key, placeholder in _PLACEHOLDER_SENSOR_KEYS.items():
+        if store.get(key) == placeholder:
+            store.set(key, "")
+            logger.info(
+                "[Migration] Cleared placeholder %s for %s — it was never a real "
+                "entity. Set your own under Settings if you need it.",
+                placeholder,
+                key,
+            )
+
+    store.set(_SENSOR_PLACEHOLDER_MIGRATION_KEY, True)
+    return True
+
+
+PRUNE_BACKUP_SUFFIX = ".migrated.bak"
+
+
+def _prune_backup_path(config_manager) -> str:
+    """Where to keep the pre-prune copy of config.yaml.
+
+    Deliberately the data directory, not next to config.yaml. Under Docker
+    config.yaml is bind-mounted as a single *file*, so a sibling path resolves
+    inside the container layer and dies with the container — the backup would be
+    written, logged, and silently lost. The data directory is guaranteed to
+    survive here, because the prune only runs when it is not ephemeral, and it
+    already holds the same secrets in the database.
+    """
+    name = os.path.basename(config_manager.config_file) + PRUNE_BACKUP_SUFFIX
+    return os.path.join(config_manager.data_dir, name)
+
+
+def prune_migrated_yaml(config_manager, store, persistence_state: str) -> bool:
+    """
+    Reduce a fully-migrated legacy config.yaml to its bootstrap keys.
+
+    Once a pre-database config.yaml has been imported it is no longer the source of
+    truth, but ``migrate_yaml_to_store`` re-imports it verbatim whenever it finds an
+    empty store — every image update, for a Docker user whose database is not on a
+    volume. Removing the migrated values removes what resurrects them (#287).
+
+    Refuses to act unless the settings are demonstrably safe elsewhere: the migration
+    must have imported a real user config rather than bare defaults, the file must
+    still hold non-bootstrap keys, and the data directory must not be ``"ephemeral"``
+    — pruning there would swap stale-but-working values for an empty wizard on every
+    update. The original is copied aside first and every OSError is logged rather
+    than raised, so a read-only mount cannot stop startup.
+
+    Args:
+        config_manager: The ConfigManager owning config.yaml.
+        store: An opened ConfigStore, consulted for the migration marker.
+        persistence_state: State from ``ConfigManager.data_dir_persistence()``.
+
+    Returns:
+        True if config.yaml was rewritten, False in every other case.
+    """
+    if config_manager.is_ha_addon:
+        return False  # no config.yaml in addon mode; options.json is Supervisor's
+
+    if not store.get("_migrated_from_yaml", False):
+        return False
+
+    config_file = config_manager.config_file
+    if not os.path.isfile(config_file):
+        return False
+
+    try:
+        with open(config_file, "r", encoding="utf-8") as handle:
+            existing = config_manager.yaml.load(handle)
+    except (OSError, YAMLError) as exc:
+        logger.debug("[Migration] Cannot inspect %s for pruning: %s", config_file, exc)
+        return False
+
+    if not existing:
+        return False
+
+    legacy_keys = [key for key in existing if key not in BOOTSTRAP_KEYS]
+    if not legacy_keys:
+        return False  # already bootstrap-only
+
+    if persistence_state == "ephemeral":
+        logger.warning(
+            "[Migration] %s still holds pre-database settings (%s) and they will be "
+            "re-imported on every container recreate, because %s is not on a volume. "
+            "Leaving the file alone so those values remain as a fallback. In "
+            'docker-compose.yml add "- ./data:/app/data" under volumes:, or set '
+            "EOS_DATA_PATH to a path you already persist. Until then use "
+            "Settings > Backup to export your configuration before each update.",
+            config_file,
+            ", ".join(sorted(legacy_keys)),
+            config_manager.data_dir,
+        )
+        return False
+
+    backup_path = _prune_backup_path(config_manager)
+    try:
+        os.makedirs(os.path.dirname(backup_path), exist_ok=True)
+        shutil.copy2(config_file, backup_path)
+    except OSError as exc:
+        logger.warning(
+            "[Migration] Could not back up %s (%s) - leaving it unchanged",
+            config_file,
+            exc,
+        )
+        return False
+
+    # Start from the commented defaults so the rewritten file keeps its explanations,
+    # then carry over every bootstrap key the file had. Keying off BOOTSTRAP_KEYS and
+    # not just the defaults matters: data_path is bootstrap but deliberately absent
+    # from create_default_config(), so the defaults alone would delete a hand-authored
+    # one. "web_port" is an options.json-only alias and has no place in config.yaml.
+    bootstrap_only = config_manager.create_default_config()
+    for key, value in existing.items():
+        if key in BOOTSTRAP_KEYS and key != "web_port":
+            bootstrap_only[key] = value
+
+    try:
+        with open(config_file, "w", encoding="utf-8") as handle:
+            config_manager.yaml.dump(bootstrap_only, handle)
+    except OSError as exc:
+        logger.warning(
+            "[Migration] Could not rewrite %s (%s) - the backup at %s still holds "
+            "the original",
+            config_file,
+            exc,
+            backup_path,
+        )
+        return False
+
+    logger.info(
+        "[Migration] Reduced %s to bootstrap keys; %d migrated setting(s) now live "
+        "only in the database. Original saved next to the database as %s.",
+        config_file,
+        len(legacy_keys),
+        backup_path,
+    )
+    return True
+
+
+_BATTERY_PRICE_UNIT_MIGRATION_KEY = "_migrated_battery_price_unit_v2"
+
+
+def migrate_battery_price_unit_to_ct_kwh(store: ConfigStore) -> bool:
+    """
+    One-time migration: ``battery.price_euro_per_wh_accu`` (€/Wh) becomes
+    ``battery.price_ct_kwh_accu`` (ct/kWh).
+
+    The old key name no longer matched its unit once the field was switched
+    to ct/kWh, so the field itself is renamed. Existing installations with a
+    nonzero value configured have it rescaled (×100000, €/Wh → ct/kWh) and
+    moved to the new key, so the real-world price they configured is
+    preserved across the change. Runs exactly once, guarded by a marker key.
+
+    Args:
+        store: An opened ConfigStore instance.
+
+    Returns:
+        True if the migration ran (first time), False if it was already done.
+    """
+    if store.get(_BATTERY_PRICE_UNIT_MIGRATION_KEY, False):
+        return False
+
+    old_value = store.get("battery.price_euro_per_wh_accu")
+    if old_value:
+        new_value = old_value * 100000
+        store.set("battery.price_ct_kwh_accu", new_value)
+        logger.info(
+            "[Migration] Moved battery.price_euro_per_wh_accu (%s €/Wh) to "
+            "battery.price_ct_kwh_accu (%s ct/kWh)",
+            old_value,
+            new_value,
+        )
+    store.delete("battery.price_euro_per_wh_accu")
+
+    store.set(_BATTERY_PRICE_UNIT_MIGRATION_KEY, True)
+    return True
+
+
 def _has_user_configured_values(config_dict: dict) -> bool:
     """
     Detect whether a config dict contains real user-configured values or just
@@ -218,7 +447,7 @@ def _has_user_configured_values(config_dict: dict) -> bool:
         config_dict.get("load", {}).get("load_sensor", ""),
         config_dict.get("battery", {}).get("soc_sensor", ""),
     ]
-    placeholders = {"", "Load_Power", "battery_SOC", None}
+    placeholders = {"", None} | LEGACY_SENSOR_PLACEHOLDERS
     if any(s not in placeholders for s in sensor_checks):
         return True
 

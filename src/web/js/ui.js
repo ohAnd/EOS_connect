@@ -212,6 +212,13 @@ function showMainMenu(version, backend, granularity) {
             <i class="fa-solid fa-gear" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
             <span>Configuration</span>
         </div>
+
+        <div onclick="showBackupMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;"
+            onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'"
+            onmouseout="this.style.backgroundColor='transparent'">
+            <i class="fa-solid fa-box-archive" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
+            <span>Backup &amp; Restore</span>
+        </div>
         
         <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 5px 0;">
 
@@ -888,69 +895,25 @@ function showFullScreenOverlay(header, content, close = true) {
     if (!overlay) {
         overlay = document.createElement('div');
         overlay.id = 'full_screen_overlay';
-
-        // Responsive padding: very small on mobile, larger on desktop
-        const paddingValue = isMobile() ? '8px' : '60px';
-
-        overlay.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.6);
-            display: none;
-            z-index: 1000;
-            padding: ${paddingValue};
-            box-sizing: border-box;
-        `;
+        overlay.style.display = 'none';
         document.body.appendChild(overlay);
-    } else {
-        // Update padding if overlay already exists (responsive on resize)
-        const paddingValue = isMobile() ? '8px' : '60px';
-        overlay.style.padding = paddingValue;
     }
 
-    // Create content container with responsive padding
-    const headerPadding = isMobile() ? '12px 15px' : '15px 20px';
-    const contentPadding = isMobile() ? '15px' : '20px';
-    const borderRadius = isMobile() ? '6px' : '10px';
-
+    // Every dimension below is a class in style.css, including the phone breakpoint.
+    // It used to be inline styles built from isMobile(), which is read once - so an
+    // overlay opened in portrait kept its phone paddings and font size after the
+    // device was turned, and nothing re-rendered it. A media query does not have
+    // that problem.
     overlay.innerHTML = `
-        <div style="
-            background-color: rgb(78, 78, 78);
-            border-radius: ${borderRadius};
-            width: 100%;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
-        ">
+        <div class="fs-overlay-card">
             <!-- Header -->
-            <div id="full_screen_header" style="
-                padding: ${headerPadding};
-                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: ${borderRadius} ${borderRadius} 0 0;
-                background-color: rgb(58, 58, 58);
-                color: lightgray;
-                font-weight: bold;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                font-size: ${isMobile() ? '1.1em' : '1em'};
-            ">
+            <div id="full_screen_header">
                 ${header}
-                ${close ? `<button onclick="closeFullScreenOverlay()" style="background: none; border: none; color: lightgray; font-size: 1.5em; cursor: pointer; padding: 0; width: ${isMobile() ? '28px' : '30px'}; height: ${isMobile() ? '28px' : '30px'}; display: flex; align-items: center; justify-content: center; border-radius: 50%; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='rgba(255,255,255,0.1)'" onmouseout="this.style.backgroundColor='transparent'">×</button>` : ''}
+                ${close ? `<button class="fs-overlay-close" onclick="closeFullScreenOverlay()" aria-label="Close">\u00d7</button>` : ''}
             </div>
-            
+
             <!-- Content -->
-            <div id="full_screen_content" style="
-                flex: 1;
-                padding: ${contentPadding};
-                overflow: auto;
-                color: lightgray;
-                font-size: ${isMobile() ? '0.85em' : '1em'};
-            ">
+            <div id="full_screen_content">
                 ${content}
             </div>
         </div>

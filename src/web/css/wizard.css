@@ -66,6 +66,17 @@
     line-height: 1.5;
 }
 
+/* Shown in place of the fields when every one of them is collapsed by an unmet
+   dependency — otherwise the step is a title above blank space. */
+.wizard-step-empty {
+    font-size: 0.9em;
+    color: #888;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+    padding: 16px 18px;
+    line-height: 1.5;
+}
+
 /* ── Welcome step ─────────────────────────────────────────────── */
 
 .wizard-welcome {
@@ -386,4 +397,27 @@
         max-width: 100%;
         text-align: left;
     }
+}
+
+/* ── Review: things the wizard deliberately did not ask for ───── */
+.wizard-followups {
+    margin-top: 20px;
+    padding: 14px 18px;
+    border-radius: 8px;
+    background: rgba(255, 193, 7, 0.08);
+    border-left: 3px solid rgba(255, 193, 7, 0.6);
+}
+
+.wizard-followups h4 {
+    margin: 0 0 8px;
+    font-size: 0.95em;
+    color: #ffc107;
+}
+
+.wizard-followups ul {
+    margin: 0;
+    padding-left: 20px;
+    font-size: 0.88em;
+    color: #ccc;
+    line-height: 1.6;
 }

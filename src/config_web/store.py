@@ -207,6 +207,34 @@ class ConfigStore:
         return self.get_all()
 
     # ------------------------------------------------------------------
+    # Raw SQL helpers (for new feature tables)
+    # ------------------------------------------------------------------
+
+    def execute(self, sql: str, params: tuple = ()):  # pragma: no cover - thin wrapper
+        """
+        Execute a SQL statement (INSERT/UPDATE/DELETE) and commit.
+
+        This is a thin helper intended for use by repository-local
+        helper classes that create their own tables in the same DB file.
+        Calls are guarded by the store lock to preserve thread-safety.
+        """
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute(sql, params)
+            self._conn.commit()
+            return cur
+
+    def query(self, sql: str, params: tuple = ()) -> list[tuple]:  # pragma: no cover - thin wrapper
+        """
+        Execute a SELECT statement and return fetched rows.
+        """
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return rows
+
+    # ------------------------------------------------------------------
     # Change notification
     # ------------------------------------------------------------------
 

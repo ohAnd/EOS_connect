@@ -147,39 +147,49 @@
     {
       "key": "load.load_sensor",
       "type": "sensor",
-      "default": "Load_Power",
+      "default": "",
       "section": "load",
       "level": "getting_started",
-      "description": "Entity/item for load power data in watts",
+      "description": "Entity/item reporting household load power in watts — e.g. sensor.house_power (Home Assistant) or Load_Power (openHAB)",
       "labels": [
         "restart_required"
       ],
       "help_url": "configuration.html#load",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Sensors"
     },
     {
       "key": "load.car_charge_load_sensor",
       "type": "sensor",
-      "default": "Wallbox_Power",
+      "default": "",
       "section": "load",
       "level": "standard",
-      "description": "Entity/item for wallbox power data in watts (leave empty if not used)",
+      "description": "Entity/item for wallbox power data in watts — e.g. sensor.wallbox_power (leave empty if not used)",
       "labels": [
         "restart_required"
       ],
       "help_url": "configuration.html#load",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Sensors"
     },
     {
       "key": "load.additional_load_1_sensor",
       "type": "sensor",
-      "default": "additional_load_1_sensor",
+      "default": "",
       "section": "load",
       "level": "standard",
       "description": "Entity/item for additional load power in watts (leave empty if not used)",
@@ -334,6 +344,22 @@
         "max": 600
       },
       "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Optimization"
+    },
+    {
+      "key": "eos.temperature_forecast_enabled",
+      "type": "bool",
+      "default": true,
+      "section": "eos",
+      "level": "standard",
+      "description": "Fetch the outside temperature forecast (Akkudoktor) and send it to EOS - improves model accuracy; when off a static 15 °C curve is sent",
+      "labels": [],
+      "help_url": "configuration.html#eos",
+      "validation": {},
+      "depends_on": {
+        "eos.source": "eos_server"
+      },
       "hot_reload": true,
       "display_group": "Optimization"
     },
@@ -781,7 +807,7 @@
       "default": "http://homeassistant.local:8123/api/states/sensor.grid_prices",
       "section": "price",
       "level": "getting_started",
-      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: endpoint URL returning JSON timeseries. Must return JSON array with {start, end, value} format (values in EUR/Wh).",
+      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: endpoint URL returning JSON timeseries. Must return a JSON array in EVCC's {start, end, value} format; 'end' is optional. The unit of 'value' is set by price.value_unit.",
       "labels": [],
       "help_url": "configuration.html#price-sources",
       "validation": {
@@ -814,6 +840,30 @@
         ],
         "price.use_ha_central_data_source": [
           false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Grid Price Provider"
+    },
+    {
+      "key": "price.value_unit",
+      "type": "select",
+      "default": "EUR/kWh",
+      "section": "price",
+      "level": "getting_started",
+      "description": "Unit of the 'value' field in the timeseries. Default matches EVCC's /api/tariff/grid and the common Home Assistant price integrations (EUR/kWh). Pick EUR/Wh only for a source that already delivers the internal unit.",
+      "labels": [],
+      "help_url": "configuration.html#price-sources",
+      "validation": {
+        "choices": [
+          "EUR/kWh",
+          "ct/kWh",
+          "EUR/Wh"
+        ]
+      },
+      "depends_on": {
+        "price.source": [
+          "timeseries"
         ]
       },
       "hot_reload": true,
@@ -1013,16 +1063,21 @@
     {
       "key": "battery.soc_sensor",
       "type": "sensor",
-      "default": "battery_SOC",
+      "default": "",
       "section": "battery",
       "level": "getting_started",
-      "description": "Entity/item for battery state of charge",
+      "description": "Entity/item for battery state of charge — e.g. sensor.battery_soc (Home Assistant) or battery_SOC (openHAB)",
       "labels": [
         "restart_required"
       ],
       "help_url": "configuration.html#battery",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Core"
     },
@@ -1164,17 +1219,22 @@
       ],
       "help_url": "configuration.html#battery",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Sensors"
     },
     {
-      "key": "battery.price_euro_per_wh_accu",
+      "key": "battery.price_ct_kwh_accu",
       "type": "float",
       "default": 0.0,
       "section": "battery",
       "level": "standard",
-      "description": "Static battery price in €/Wh (0 = use dynamic or ignore)",
+      "description": "Static battery price in ct/kWh (0 = use dynamic or ignore)",
       "labels": [
         "restart_required"
       ],
@@ -1425,10 +1485,10 @@
     {
       "key": "pv_forecast_source.source",
       "type": "select",
-      "default": "akkudoktor",
+      "default": "default",
       "section": "pv_forecast_source",
       "level": "getting_started",
-      "description": "Solar forecast data provider",
+      "description": "Solar forecast data provider. 'default' needs no setup at all - it serves a fixed demo curve for a typical 4 kW array so a new install runs straight away. Switch to a real provider when you are ready.",
       "labels": [],
       "help_url": "configuration.html#pv-forecast",
       "validation": {
@@ -1454,30 +1514,39 @@
       "default": "",
       "section": "pv_forecast_source",
       "level": "getting_started",
-      "description": "API key for Solcast or Victron (required when using those providers)",
+      "description": "API key for the forecast provider",
       "labels": [],
       "help_url": "configuration.html#pv-forecast",
       "validation": {},
       "depends_on": {
         "pv_forecast_source.source": [
           "solcast",
-          "victron"
+          "victron",
+          "forecast_solar"
         ]
       },
       "hot_reload": true,
-      "display_group": "Provider"
+      "display_group": "Provider",
+      "description_map": {
+        "pv_forecast_source.source": {
+          "solcast": "Solcast API key (required)",
+          "victron": "Victron VRM API token (required)",
+          "forecast_solar": "Forecast.Solar API key (optional) - the public tier allows 12 requests/hour per IP address; a Personal or Professional key raises that quota and meters it against the key instead"
+        }
+      }
     },
     {
       "key": "pv_forecast_source.resource_id",
       "type": "str",
       "default": "",
       "section": "pv_forecast_source",
-      "level": "standard",
+      "level": "getting_started",
       "description": "Resource ID / Installation ID (Solcast: comma-separated list; Victron: single VRM ID)",
       "labels": [],
       "help_url": "configuration.html#pv-forecast",
       "validation": {
-        "max_length": 1000
+        "max_length": 1000,
+        "required": true
       },
       "depends_on": {
         "pv_forecast_source.source": [
@@ -1569,7 +1638,7 @@
       "default": "http://homeassistant.local:8123/api/states/sensor.pv_forecast",
       "section": "pv_forecast_source",
       "level": "getting_started",
-      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: endpoint URL returning JSON timeseries. Must return JSON array with {start, end, value} format.",
+      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: endpoint URL returning JSON timeseries. Must return a JSON array in EVCC's {start, end, value} format; 'end' is optional. The unit of 'value' is set by pv_forecast_source.value_unit.",
       "labels": [],
       "help_url": "configuration.html#pv-forecast-sources",
       "validation": {
@@ -1602,6 +1671,31 @@
         ],
         "pv_forecast_source.use_ha_central_data_source": [
           false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Provider"
+    },
+    {
+      "key": "pv_forecast_source.value_unit",
+      "type": "select",
+      "default": "W",
+      "section": "pv_forecast_source",
+      "level": "getting_started",
+      "description": "Unit of the 'value' field in the timeseries. Default matches EVCC's solar forecast and the usual Home Assistant PV sensors, which report power (W) per slot. Pick Wh/kWh for a source that reports energy per slot instead.",
+      "labels": [],
+      "help_url": "configuration.html#pv-forecast-sources",
+      "validation": {
+        "choices": [
+          "W",
+          "kW",
+          "Wh",
+          "kWh"
+        ]
+      },
+      "depends_on": {
+        "pv_forecast_source.source": [
+          "timeseries"
         ]
       },
       "hot_reload": true,
@@ -1816,6 +1910,233 @@
       "display_group": "Installation"
     },
     {
+      "key": "pv_autoscaling.enabled",
+      "type": "bool",
+      "default": false,
+      "section": "pv_autoscaling",
+      "level": "getting_started",
+      "description": "Enable automatic scaling of PV forecasts based on historical measured yields",
+      "labels": [
+        "experimental"
+      ],
+      "help_url": "configuration.html#pv-autoscaling",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Auto-Scaling"
+    },
+    {
+      "key": "pv_autoscaling.use_ha_central_data_source",
+      "type": "bool",
+      "default": true,
+      "section": "pv_autoscaling",
+      "level": "getting_started",
+      "description": "Use centrally configured Data Source for sensor access instead of manual URL/token",
+      "labels": [],
+      "help_url": "configuration.html#pv-autoscaling",
+      "validation": {},
+      "depends_on": {
+        "pv_autoscaling.enabled": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Auto-Scaling"
+    },
+    {
+      "key": "pv_autoscaling.sensor_entity_id",
+      "type": "sensor",
+      "default": "",
+      "section": "pv_autoscaling",
+      "level": "getting_started",
+      "description": "Entity/item for the cumulative PV generation counter (kWh) - REQUIRED for autoscaling to work",
+      "labels": [],
+      "help_url": "configuration.html#pv-autoscaling",
+      "validation": {
+        "required": true
+      },
+      "depends_on": {
+        "pv_autoscaling.enabled": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Sensors"
+    },
+    {
+      "key": "pv_autoscaling.src",
+      "type": "select",
+      "default": "homeassistant",
+      "section": "pv_autoscaling",
+      "level": "standard",
+      "description": "Data source type (Home Assistant or OpenHAB) for reading PV sensor",
+      "labels": [],
+      "help_url": "configuration.html#pv-autoscaling",
+      "validation": {
+        "choices": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
+      "depends_on": {
+        "pv_autoscaling.enabled": [
+          true
+        ],
+        "pv_autoscaling.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Connection"
+    },
+    {
+      "key": "pv_autoscaling.url",
+      "type": "str",
+      "default": "http://homeassistant:8123",
+      "section": "pv_autoscaling",
+      "level": "standard",
+      "description": "Override URL for data source (used when not reusing central Data Source)",
+      "labels": [],
+      "help_url": "",
+      "validation": {},
+      "depends_on": {
+        "pv_autoscaling.enabled": [
+          true
+        ],
+        "pv_autoscaling.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Connection"
+    },
+    {
+      "key": "pv_autoscaling.access_token",
+      "type": "password",
+      "default": "",
+      "section": "pv_autoscaling",
+      "level": "standard",
+      "description": "Bearer token for manual data source access (only when not using central data source)",
+      "labels": [],
+      "help_url": "",
+      "validation": {},
+      "depends_on": {
+        "pv_autoscaling.enabled": [
+          true
+        ],
+        "pv_autoscaling.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Connection"
+    },
+    {
+      "key": "pv_autoscaling.ssl_ignore",
+      "type": "bool",
+      "default": false,
+      "section": "pv_autoscaling",
+      "level": "expert",
+      "description": "Skip TLS certificate verification for the manual data source (self-signed certificates)",
+      "labels": [],
+      "help_url": "",
+      "validation": {},
+      "depends_on": {
+        "pv_autoscaling.enabled": [
+          true
+        ],
+        "pv_autoscaling.use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Connection"
+    },
+    {
+      "key": "pv_autoscaling.retention_days",
+      "type": "int",
+      "default": 7,
+      "section": "pv_autoscaling",
+      "level": "standard",
+      "description": "How many days of measured PV yield to retain for scaling (1-14 days)",
+      "labels": [],
+      "help_url": "",
+      "validation": {
+        "min": 1,
+        "max": 14
+      },
+      "depends_on": {
+        "pv_autoscaling.enabled": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Storage"
+    },
+    {
+      "key": "pv_autoscaling.min_scale_factor",
+      "type": "float",
+      "default": 0.2,
+      "section": "pv_autoscaling",
+      "level": "expert",
+      "description": "Minimum scaling multiplier to prevent collapse (e.g., 0.2)",
+      "labels": [],
+      "help_url": "configuration.html#pv-autoscaling",
+      "validation": {
+        "min": 0.0,
+        "max": 10.0
+      },
+      "depends_on": {
+        "pv_autoscaling.enabled": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Limits"
+    },
+    {
+      "key": "pv_autoscaling.max_scale_factor",
+      "type": "float",
+      "default": 2.5,
+      "section": "pv_autoscaling",
+      "level": "expert",
+      "description": "Maximum scaling multiplier to prevent runaway (e.g., 2.5)",
+      "labels": [],
+      "help_url": "configuration.html#pv-autoscaling",
+      "validation": {
+        "min": 1.0,
+        "max": 20.0
+      },
+      "depends_on": {
+        "pv_autoscaling.enabled": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Limits"
+    },
+    {
+      "key": "pv_autoscaling.min_data_hours_required",
+      "type": "int",
+      "default": 24,
+      "section": "pv_autoscaling",
+      "level": "expert",
+      "description": "Minimum recorded hours required before scaling is applied",
+      "labels": [],
+      "help_url": "configuration.html#pv-autoscaling",
+      "validation": {
+        "min": 1,
+        "max": 168
+      },
+      "depends_on": {
+        "pv_autoscaling.enabled": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Limits"
+    },
+    {
       "key": "inverter.type",
       "type": "select",
       "default": "default",
@@ -1836,11 +2157,7 @@
           "default"
         ]
       },
-      "depends_on": {
-        "data_source.type": [
-          "homeassistant"
-        ]
-      },
+      "depends_on": null,
       "hot_reload": false,
       "display_group": "Hardware"
     },
@@ -2324,6 +2641,10 @@
     "pv_forecast": {
       "icon": "fa-solar-panel",
       "label": "PV Installations"
+    },
+    "pv_autoscaling": {
+      "icon": "fa-chart-line",
+      "label": "PV Auto-Scaling"
     },
     "mqtt": {
       "icon": "fa-tower-broadcast",

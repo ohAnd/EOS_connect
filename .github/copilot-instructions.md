@@ -246,7 +246,7 @@ Use `depends_on` field attribute to enforce cross-field dependencies:
 
 - **`inverter.type` → `evcc.url`**: If user selects "evcc" as inverter controller but `evcc.url` is empty or default, the option is greyed out with tooltip "Configure EVCC URL first". API validation returns `unmet_dependencies` error and prevents save.
 - **`pv_forecast_source.source` → `evcc.url`**: If user selects "evcc" as PV source but `evcc.url` is empty or default, the option is greyed out. API validation blocks save with "EVCC selected as PV source but EVCC URL not configured".
-- `pv_forecast_source.api_key`: Only visible if source is "solcast" or "victron"
+- `pv_forecast_source.api_key`: Only visible if source is "solcast", "victron" or "forecast_solar". Required for the first two; optional for Forecast.Solar, which works without a key on its public tier (12 requests/hour per IP). The field's `description_map` supplies the per-source wording.
 - `mqtt.broker`: Only visible when `mqtt.enabled` is true
 
 **Dependency validation across UI layers:**
@@ -466,7 +466,7 @@ These need more than a simple attribute swap:
 | Group              | Fields                                                                                                           | Interface           | Change Required                                  |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------ |
 | Battery capacity   | `battery.capacity_wh`, `battery.charge_efficiency`, `battery.discharge_efficiency`, `battery.max_charge_power_w` | BatteryInterface    | Update battery_data dict + recalc charging curve |
-| Battery price calc | `battery.price_update_interval`, `battery.price_history_lookback_hours`, `battery.price_euro_per_wh_accu`        | BatteryPriceHandler | Restart timer or update interval                 |
+| Battery price calc | `battery.price_update_interval`, `battery.price_history_lookback_hours`, `battery.price_ct_kwh_accu`             | BatteryPriceHandler | Restart timer or update interval                 |
 | Price fixed array  | `price.fixed_24h_array`                                                                                          | PriceInterface      | Re-parse array + recalc prices                   |
 | EOS time slot      | `eos.time_frame` (see Priority 1.5)                                                                              | Multiple            | Debounced reload with cache clear                |
 

@@ -2,12 +2,18 @@
 Unit tests for the config.yaml to SQLite migration.
 """
 
+import os
+
 import pytest
 from unittest.mock import patch, MagicMock
 from src.config_web.store import ConfigStore
 from src.config_web.schema import ConfigSchema
 from src.config_web.migration import (
     migrate_yaml_to_store,
+    migrate_battery_price_unit_to_ct_kwh,
+    migrate_sensor_placeholders_to_empty,
+    prune_migrated_yaml,
+    PRUNE_BACKUP_SUFFIX,
     _flatten_config,
     _has_user_configured_values,
     _coerce_migrated_value,
@@ -77,7 +83,7 @@ def _sample_config():
             "max_soc_percentage": 100,
             "charging_curve_enabled": True,
             "sensor_battery_temperature": "",
-            "price_euro_per_wh_accu": 0.0,
+            "price_ct_kwh_accu": 0.0,
             "price_euro_per_wh_sensor": "",
             "price_calculation_enabled": False,
             "price_update_interval": 900,
@@ -170,6 +176,26 @@ class TestMigration:
         assert store.get("eos_connect_web_port") is None
         assert store.get("time_zone") is None
         assert store.get("log_level") is None
+
+    def test_top_level_data_path_not_migrated(self, store, schema):
+        """data_path is bootstrap: data_dir must be known before the store opens."""
+        config = _sample_config()
+        config["data_path"] = "/mnt/eos_data"
+        migrate_yaml_to_store(config, store, schema)
+
+        assert store.get("data_path") is None
+
+    def test_nested_data_path_fields_still_migrate(self, store, schema):
+        """BOOTSTRAP_KEYS is flat, so price.data_path must not be swept up with it.
+
+        Correct today via the ``top_key in ... or key in ...`` test in migration.py,
+        but one careless edit from silently dropping two real user fields.
+        """
+        config = _sample_config()
+        config["price"]["data_path"] = "attributes.data"
+        migrate_yaml_to_store(config, store, schema)
+
+        assert store.get("price.data_path") == "attributes.data"
 
     def test_sections_migrated(self, store, schema):
         """Load, EOS, price etc. fields should be migrated."""
@@ -720,3 +746,353 @@ class TestAtomicMigration:
         assert result is True
         assert not store.is_empty()
         assert store.get("_wizard_completed") is True
+
+
+class TestBatteryPriceUnitMigration:
+    """Tests for the one-time battery.price_euro_per_wh_accu -> price_ct_kwh_accu migration."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = ConfigStore(str(tmp_path / "test.db"))
+        s.open()
+        yield s
+        s.close()
+
+    def test_fresh_install_no_value_sets_marker_only(self, store):
+        """No existing value: nothing to move, marker still gets set."""
+        ran = migrate_battery_price_unit_to_ct_kwh(store)
+
+        assert ran is True
+        assert store.get("_migrated_battery_price_unit_v2") is True
+        assert store.get("battery.price_ct_kwh_accu") is None
+        assert store.get("battery.price_euro_per_wh_accu") is None
+
+    def test_zero_value_left_unchanged(self, store):
+        """A stored 0.0 (the default/'unused') leaves the new key unset (schema default applies)."""
+        store.set("battery.price_euro_per_wh_accu", 0.0)
+        migrate_battery_price_unit_to_ct_kwh(store)
+
+        assert store.get("battery.price_ct_kwh_accu") is None
+        assert store.get("battery.price_euro_per_wh_accu") is None
+
+    def test_nonzero_value_rescaled_and_moved_to_new_key(self, store):
+        """An existing €/Wh value is rescaled ×100000 and moved to the ct/kWh key."""
+        store.set("battery.price_euro_per_wh_accu", 0.00004)  # 4 ct/kWh
+        ran = migrate_battery_price_unit_to_ct_kwh(store)
+
+        assert ran is True
+        assert store.get("battery.price_ct_kwh_accu") == pytest.approx(4.0)
+        assert store.get("battery.price_euro_per_wh_accu") is None
+
+    def test_runs_only_once(self, store):
+        """A second call is a no-op even if the new key already has a value."""
+        store.set("battery.price_euro_per_wh_accu", 0.00004)
+        migrate_battery_price_unit_to_ct_kwh(store)
+
+        # Simulate a value someone set AFTER migration already ran once —
+        # a second invocation must not touch it again.
+        store.set("battery.price_ct_kwh_accu", 8.0)
+        ran_again = migrate_battery_price_unit_to_ct_kwh(store)
+
+        assert ran_again is False
+        assert store.get("battery.price_ct_kwh_accu") == 8.0
+
+
+class TestSensorPlaceholderCleanup:
+    """
+    Installs that already stored a placeholder have to be got out of it.
+
+    The wizard used to write "Load_Power" and "battery_SOC" as though the user had
+    chosen them. Connecting Home Assistant afterwards turned those into a 404 on every
+    poll. Blanking them lets the interfaces' "not configured" handling take over.
+    """
+
+    @pytest.fixture(name="store")
+    def store_fixture(self, tmp_path):
+        store = ConfigStore(str(tmp_path / "placeholders.db"))
+        store.open()
+        yield store
+        store.close()
+
+    def test_it_blanks_every_placeholder(self, store):
+        store.set_batch({
+            "load.load_sensor": "Load_Power",
+            "load.car_charge_load_sensor": "Wallbox_Power",
+            "load.additional_load_1_sensor": "additional_load_1_sensor",
+            "battery.soc_sensor": "battery_SOC",
+        })
+
+        assert migrate_sensor_placeholders_to_empty(store) is True
+
+        for key in (
+            "load.load_sensor", "load.car_charge_load_sensor",
+            "load.additional_load_1_sensor", "battery.soc_sensor",
+        ):
+            assert store.get(key) == "", key
+
+    def test_it_writes_empty_rather_than_deleting(self, store):
+        """
+        A deleted key falls back to config.yaml — which _build_section consults before
+        the schema default — so a legacy file would resurrect the placeholder on the
+        next start. The empty string has to win outright.
+        """
+        store.set("load.load_sensor", "Load_Power")
+
+        migrate_sensor_placeholders_to_empty(store)
+
+        assert store.has_key("load.load_sensor")
+        assert store.get("load.load_sensor") == ""
+
+    def test_a_real_sensor_name_is_never_touched(self, store):
+        store.set("load.load_sensor", "sensor.house_power")
+
+        migrate_sensor_placeholders_to_empty(store)
+
+        assert store.get("load.load_sensor") == "sensor.house_power"
+
+    def test_it_runs_once(self, store):
+        store.set("load.load_sensor", "Load_Power")
+        assert migrate_sensor_placeholders_to_empty(store) is True
+
+        # A user who deliberately types the old name back keeps it.
+        store.set("load.load_sensor", "Load_Power")
+        assert migrate_sensor_placeholders_to_empty(store) is False
+        assert store.get("load.load_sensor") == "Load_Power"
+
+    def test_openhab_is_skipped_entirely(self, store):
+        """
+        openHAB item names are CamelCase, so "Load_Power" and "battery_SOC" are
+        plausible real items — unlike Home Assistant entity ids. Guessing wrong here
+        would silently disconnect a working installation.
+        """
+        store.set_batch({
+            "data_source.type": "openhab",
+            "load.load_sensor": "Load_Power",
+            "battery.soc_sensor": "battery_SOC",
+        })
+
+        migrate_sensor_placeholders_to_empty(store)
+
+        assert store.get("load.load_sensor") == "Load_Power"
+        assert store.get("battery.soc_sensor") == "battery_SOC"
+
+
+# -----------------------------------------------------------------------
+# Pruning a migrated legacy config.yaml
+# -----------------------------------------------------------------------
+
+LEGACY_YAML = """\
+eos_connect_web_port: 9099
+time_zone: Europe/Vienna
+log_level: debug
+load:
+  source: homeassistant
+  load_sensor: sensor.power
+  car_charge_load_sensor: Wallbox_Power
+battery:
+  source: homeassistant
+  soc_sensor: sensor.soc
+"""
+
+
+class TestPruneMigratedYaml:
+    """
+    A migrated config.yaml stops being the source of truth but keeps being
+    re-imported whenever the store comes up empty — every container recreate for a
+    Docker user with no volume on the data directory. Reducing it to bootstrap keys
+    removes what resurrects the old values, but only when the database will survive
+    to hold them (#287).
+    """
+
+    def _cm(self, tmp_path, contents=LEGACY_YAML, monkeypatch=None):
+        if monkeypatch is not None:
+            for var in ("HASSIO", "HASSIO_TOKEN", "EOS_DATA_PATH"):
+                monkeypatch.delenv(var, raising=False)
+        if contents is not None:
+            (tmp_path / "config.yaml").write_text(contents, encoding="utf-8")
+        from src.config import ConfigManager
+        return ConfigManager(str(tmp_path))
+
+    def _migrated(self, store):
+        store.set("_migrated_from_yaml", True)
+
+    def test_prunes_when_persistent(self, store, tmp_path, monkeypatch):
+        """The legacy sections go; the bootstrap keys and their values stay."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is True
+
+        text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "load:" not in text
+        assert "battery:" not in text
+        assert "Wallbox_Power" not in text
+        assert "9099" in text
+        assert "Europe/Vienna" in text
+        assert "debug" in text
+
+    def test_original_is_backed_up(self, store, tmp_path, monkeypatch):
+        """Nothing is destroyed: the pre-prune file is kept alongside."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+
+        prune_migrated_yaml(cm, store, "persistent")
+
+        backup = tmp_path / "data" / ("config.yaml" + PRUNE_BACKUP_SUFFIX)
+        assert backup.is_file()
+        assert "Wallbox_Power" in backup.read_text(encoding="utf-8")
+
+    def test_backup_goes_to_the_data_dir_not_beside_config_yaml(
+        self, store, tmp_path, monkeypatch
+    ):
+        """Under Docker config.yaml is bind-mounted as a single *file*.
+
+        A sibling backup path therefore resolves inside the container layer and
+        dies with the container — written, logged, and silently lost. The data dir
+        is the one place guaranteed to survive, since the prune only runs when it
+        is not ephemeral.
+        """
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is True
+
+        beside = tmp_path / ("config.yaml" + PRUNE_BACKUP_SUFFIX)
+        in_data = tmp_path / "data" / ("config.yaml" + PRUNE_BACKUP_SUFFIX)
+        assert not beside.exists(), "backup must not be written next to config.yaml"
+        assert in_data.is_file(), "backup belongs in the data directory"
+        assert "Wallbox_Power" in in_data.read_text(encoding="utf-8")
+
+    def test_ephemeral_leaves_the_file_alone(self, store, tmp_path, monkeypatch):
+        """Pruning here would trade stale-but-working values for an empty wizard."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "ephemeral") is False
+
+        text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "Wallbox_Power" in text
+        assert not (tmp_path / "data" / ("config.yaml" + PRUNE_BACKUP_SUFFIX)).exists()
+
+    def test_ephemeral_warns_with_the_fix(self, store, tmp_path, monkeypatch, caplog):
+        """The user cannot act on this unless the message names the volume."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+
+        with caplog.at_level("WARNING", logger="__main__"):
+            prune_migrated_yaml(cm, store, "ephemeral")
+
+        rendered = " ".join(r.getMessage() for r in caplog.records)
+        assert "./data:/app/data" in rendered
+        assert "EOS_DATA_PATH" in rendered
+        assert "Backup" in rendered
+
+    def test_unknown_is_treated_as_persistent(self, store, tmp_path, monkeypatch):
+        """A bare Python install reports "unknown" and has no volume problem."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "unknown") is True
+
+    def test_skipped_without_the_migration_marker(self, store, tmp_path, monkeypatch):
+        """A fresh install writes defaults but sets no marker — nothing to prune."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is False
+        assert "Wallbox_Power" in (tmp_path / "config.yaml").read_text(encoding="utf-8")
+
+    def test_skipped_in_ha_addon_mode(self, store, tmp_path, monkeypatch):
+        """Addon config lives in options.json; config.yaml is not ours to rewrite."""
+        monkeypatch.setenv("HASSIO", "1")
+        cm = self._cm(tmp_path)
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is False
+        assert "Wallbox_Power" in (tmp_path / "config.yaml").read_text(encoding="utf-8")
+
+    def test_noop_when_already_bootstrap_only(self, store, tmp_path, monkeypatch):
+        """Idempotent: a second start must not rewrite or re-back-up the file."""
+        cm = self._cm(
+            tmp_path,
+            contents="eos_connect_web_port: 8081\ntime_zone: UTC\nlog_level: info\n",
+            monkeypatch=monkeypatch,
+        )
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is False
+        assert not (tmp_path / "data" / ("config.yaml" + PRUNE_BACKUP_SUFFIX)).exists()
+
+    def test_data_path_is_kept_as_a_bootstrap_key(self, store, tmp_path, monkeypatch):
+        """data_path is bootstrap, so a hand-authored one must survive the prune.
+
+        It also relocates the backup, since that is written into the data dir.
+        """
+        custom = tmp_path / "elsewhere"
+        custom.mkdir()
+        cm = self._cm(
+            tmp_path,
+            contents=LEGACY_YAML + f"data_path: {custom}\n",
+            monkeypatch=monkeypatch,
+        )
+        self._migrated(store)
+        assert prune_migrated_yaml(cm, store, "persistent") is True
+
+        text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert str(custom) in text
+        assert "load:" not in text
+        assert (custom / ("config.yaml" + PRUNE_BACKUP_SUFFIX)).is_file()
+
+    def test_missing_config_yaml_is_a_noop(self, store, tmp_path, monkeypatch):
+        """Nothing to prune, and certainly nothing to create."""
+        for var in ("HASSIO", "HASSIO_TOKEN", "EOS_DATA_PATH"):
+            monkeypatch.delenv(var, raising=False)
+        target = tmp_path / "empty"
+        target.mkdir()
+        from src.config import ConfigManager
+        cm = ConfigManager(str(target))
+        # ConfigManager creates a bootstrap-only file; remove it to test the branch
+        (target / "config.yaml").unlink()
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is False
+
+    def test_secrets_leave_config_yaml_and_the_backup_keeps_its_mode(
+        self, store, tmp_path, monkeypatch
+    ):
+        """A legacy config.yaml holds access tokens. The prune removes them from the
+        live file, and copy2 must not widen the backup's permissions."""
+        cm = self._cm(
+            tmp_path,
+            contents=LEGACY_YAML.replace(
+                "  source: homeassistant\n  load_sensor:",
+                "  source: homeassistant\n  access_token: super_secret\n  load_sensor:",
+            ),
+            monkeypatch=monkeypatch,
+        )
+        config_file = tmp_path / "config.yaml"
+        os.chmod(config_file, 0o600)
+        self._migrated(store)
+
+        assert prune_migrated_yaml(cm, store, "persistent") is True
+
+        backup = tmp_path / "data" / ("config.yaml" + PRUNE_BACKUP_SUFFIX)
+        assert "super_secret" not in config_file.read_text(encoding="utf-8")
+        assert "super_secret" in backup.read_text(encoding="utf-8")
+        assert (os.stat(backup).st_mode & 0o777) == 0o600
+
+    @pytest.mark.skipif(
+        getattr(os, "geteuid", lambda: -1)() == 0,
+        reason="root bypasses directory permissions, so chmod cannot make this unwritable",
+    )
+    def test_unwritable_file_does_not_raise(self, store, tmp_path, monkeypatch):
+        """A read-only bind mount must degrade to a log line, not an exception."""
+        cm = self._cm(tmp_path, monkeypatch=monkeypatch)
+        self._migrated(store)
+        os.chmod(tmp_path, 0o500)
+        try:
+            assert prune_migrated_yaml(cm, store, "persistent") is False
+            assert "Wallbox_Power" in (
+                tmp_path / "config.yaml"
+            ).read_text(encoding="utf-8")
+        finally:
+            os.chmod(tmp_path, 0o700)

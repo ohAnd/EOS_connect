@@ -31,9 +31,21 @@ import sqlite3
 
 from .schema import ConfigSchema
 from .store import ConfigStore
-from .migration import migrate_yaml_to_store, migrate_ha_options_to_store
+from .migration import (
+    migrate_yaml_to_store,
+    migrate_ha_options_to_store,
+    migrate_battery_price_unit_to_ct_kwh,
+    migrate_sensor_placeholders_to_empty,
+    prune_migrated_yaml,
+)
 from .merger import build_merged_config
 from .api import config_bp, init_api
+from .backup import backup_bp, init_backup
+
+try:  # running from src/ as a script — src/ is on sys.path
+    from persistence import PvYieldStore
+except ImportError:  # imported as src.config_web (tests)
+    from ..persistence import PvYieldStore
 
 logger = logging.getLogger("__main__")
 
@@ -118,6 +130,19 @@ class ConfigWebModule:
             self._schema,
         )
 
+        # One-time migration: battery.price_euro_per_wh_accu (€/Wh) -> battery.price_ct_kwh_accu (ct/kWh)
+        migrate_battery_price_unit_to_ct_kwh(self._store)
+
+        # One-time migration: blank sensor names that were only ever schema hints,
+        # so the interfaces' "not configured" handling can take over.
+        migrate_sensor_placeholders_to_empty(self._store)
+
+        # Drop the migrated values from a legacy config.yaml so an empty store cannot
+        # resurrect them — but only once the database is known to survive (#287).
+        state, detail = self._config_manager.data_dir_persistence()
+        logger.debug("[ConfigWeb] Data directory is %s — %s", state, detail)
+        prune_migrated_yaml(self._config_manager, self._store, state)
+
         # Build the merged config dict
         self.rebuild_config()
 
@@ -134,6 +159,16 @@ class ConfigWebModule:
             db_path,
         )
 
+        # Ensure PV yield history table exists for autoscaling feature. On failure the
+        # attribute stays None so callers degrade instead of hitting AttributeError.
+        self._pv_yield_store = None
+        try:
+            store = PvYieldStore(self._store)
+            store.ensure_schema()
+            self._pv_yield_store = store
+        except Exception:
+            logger.exception("[ConfigWeb] Failed to initialize PvYieldStore schema")
+
     def start_api(self, flask_app):
         """
         Phase 2 — register the Flask REST API blueprint.
@@ -145,7 +180,9 @@ class ConfigWebModule:
         """
         self._flask_app = flask_app
         init_api(self._store, self._schema, self)
+        init_backup(self._store, self._schema, self)
         self._flask_app.register_blueprint(config_bp)
+        self._flask_app.register_blueprint(backup_bp)
         logger.info("[ConfigWeb] API registered on Flask app")
 
     def start(self):
@@ -205,6 +242,23 @@ class ConfigWebModule:
         if self._store:
             self._store.register_change_callback(callback)
 
+    def notify_config_changed(self, key, old_value, new_value):
+        """
+        Fire the hot-reload callbacks for a key that changed outside ``ConfigStore.set()``.
+
+        Bulk writes go through ``set_batch()``/``delete()``, which deliberately skip the
+        store's change callbacks so the whole import lands in one transaction.  The
+        importer replays the changes here afterwards, otherwise a restored config sits
+        in the database while the running interfaces keep their old values.
+        """
+        for cb in self._hot_reload_callbacks:
+            try:
+                cb(key, old_value, new_value)
+            except Exception:  # pylint: disable=broad-except
+                logger.exception(
+                    "[ConfigWeb] Error in hot-reload callback for key '%s'", key
+                )
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -223,3 +277,8 @@ class ConfigWebModule:
     def store(self) -> ConfigStore:
         """The SQLite config store."""
         return self._store
+
+    @property
+    def pv_yield_store(self) -> PvYieldStore:
+        """PvYieldStore wrapper for the pv_yield_history table."""
+        return getattr(self, "_pv_yield_store", None)

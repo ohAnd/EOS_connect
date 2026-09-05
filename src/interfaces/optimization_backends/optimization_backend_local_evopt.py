@@ -189,10 +189,16 @@ class LocalEVOptBackend(EVOptBackend):
             return eos_response, avg_runtime
 
         except CbcSolverUnavailableError as exc:
-            # Already logged in full at construction time; keep the cyclic log terse
-            # but still hand the actionable message to the UI.
+            # Already logged in full at construction time; keep the cyclic log terse.
             logger.error("[OPT-LocalEVopt] %s", exc)
-            return {"error": str(exc)}, None
+            # The exception spells out which candidate binaries were rejected and why,
+            # which means absolute paths and OSError text. Useful in the log, but this
+            # dict is served by GET /json/optimize_response.json, so the UI gets the
+            # actionable half only.
+            return {
+                "error": "No runnable CBC solver found for the built-in optimizer. "
+                "Switch the optimization backend in Settings, or see the log for details."
+            }, None
         except ImportError as exc:
             logger.error(
                 "[OPT-LocalEVopt] PuLP is not installed — cannot run local optimizer. "
@@ -200,8 +206,11 @@ class LocalEVOptBackend(EVOptBackend):
             )
             return {"error": "PuLP not installed — run: pip install 'pulp>=2.7.0,<4'"}, None
         except Exception as exc:  # pylint: disable=broad-except
+            # Broadest of the three: anything the solver or the transform raises lands
+            # here, so the message could be arbitrary internals. Full traceback goes to
+            # the log; the response says only that it failed.
             logger.error("[OPT-LocalEVopt] Optimization failed: %s", exc, exc_info=True)
-            return {"error": f"Local optimizer failed: {exc}"}, None
+            return {"error": "Local optimizer failed - see the log for details"}, None
 
     # ------------------------------------------------------------------
     # Private helpers
