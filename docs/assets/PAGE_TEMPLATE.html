@@ -1,0 +1,109 @@
+<!-- ============================================================================
+     Template for every EOS Connect documentation page.
+
+     This file is not published; it is the reference skeleton. Copy it, then
+     replace the CAPITALISED placeholders.
+
+     Rules that matter:
+
+     * No inline style="..." attributes. Every visual decision belongs in
+       assets/css/style.css. Inline styles beat media queries, which is how the
+       old pages became unreadable on phones.
+     * No <style> blocks, no per-page <script> blocks. site.js owns the nav,
+       footer, version badge, table of contents, mobile menu and back-to-top.
+     * Font Awesome free-tier icons only, never emoji
+       (.github/copilot-instructions.md:56-57). Decorative icons take
+       aria-hidden="true".
+     * Never hand-write the version. site.js renders the badge from one constant.
+     * Never hand-write a table of contents. site.js builds it from the h2[id]
+       and h3[id] in <main>.
+     * Wrap any wide block (tables, diagrams) in <div class="scroll-x">.
+
+     Depth levels — cumulative, mirroring ConfigSchema.get_by_level()
+     (src/config_web/schema.py:121-128) and LEVEL_ORDER (src/web/js/config.js:21):
+
+       untagged                 always visible — the Getting Started layer
+       data-level="standard"    visible at Standard and Expert
+       data-level="expert"      visible at Expert only
+
+     Add the data-levels attribute to <body> only on pages that should offer the
+     switcher, and give those pages a <div id="site-level"></div> mount. Pages
+     without it are pinned to Expert, so all their content shows.
+
+     Available classes: hero, content-section, card-grid, block-card, card-header,
+     icon, feature-grid, feature-item, alert (alert-info/-warning/-success/-danger),
+     btn, btn-primary, badge (badge-restart/-deprecated/-experimental/-hot/-level),
+     scroll-x, level-note.
+============================================================================ -->
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PAGE TITLE - EOS Connect</title>
+    <meta name="description" content="ONE SENTENCE, UNDER 160 CHARACTERS.">
+    <meta property="og:title" content="PAGE TITLE">
+    <meta property="og:description" content="SAME SENTENCE.">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="https://ohAnd.github.io/EOS_connect/assets/images/logo.png">
+    <link rel="icon" href="../assets/images/icon.png">
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+
+<!-- data-page: home | what-is | user-guide | configuration | advanced | developer
+     data-root: "" at docs/, "../" one directory down
+     data-levels: present only if this page offers the depth switcher -->
+
+<body data-page="PAGE-KEY" data-root="../">
+    <div id="site-nav"></div>
+    <noscript>
+        <div class="nav-fallback">
+            <a href="../index.html">Home</a>
+            <a href="../what-is/index.html">What Is</a>
+            <a href="../user-guide/index.html">User Guide</a>
+            <a href="../user-guide/configuration.html">Configuration</a>
+            <a href="../advanced/index.html">Advanced</a>
+            <a href="../developer/index.html">Developer</a>
+        </div>
+    </noscript>
+
+    <div class="container">
+        <div class="page-wrapper">
+            <aside class="toc-sidebar">
+                <div id="site-toc"></div>
+            </aside>
+
+            <main class="main-content" id="main">
+
+                <div class="hero">
+                    <h1>PAGE HEADING</h1>
+                    <p>ONE SENTENCE SAYING WHAT THE READER GETS FROM THIS PAGE.</p>
+                </div>
+
+                <!-- Only on pages with data-levels on <body>: -->
+                <div id="site-level"></div>
+
+                <div class="content-section">
+                    <h2 id="SECTION-ANCHOR"><i class="fas fa-ICON" aria-hidden="true"></i> SECTION TITLE</h2>
+                    <p>Lead with the answer. Depth goes in a tagged block below it.</p>
+
+                    <div data-level="standard">
+                        <p>Detail a confident user wants.</p>
+                    </div>
+
+                    <div data-level="expert">
+                        <p>Edge cases, internals, tuning.</p>
+                    </div>
+                </div>
+
+            </main>
+        </div>
+    </div>
+
+    <div id="site-footer"></div>
+    <script src="../assets/js/site.js"></script>
+</body>
+
+</html>

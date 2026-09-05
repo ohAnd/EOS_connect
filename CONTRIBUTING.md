@@ -5,9 +5,9 @@ We welcome PRs. Keep main clean, iterate fast on develop.
 Branch roles
 - main: stable, tagged releases only (comes from develop).
 - develop: integration branch (target of normal PRs).
-- feature_<short-desc> or feature_<issue>-<desc>: new code (from develop).
-- bugfix_<issue>-<desc>: fix for something already in develop.
-- hotfix_<issue>-<desc>: urgent production fix (from main → PR to main → merge back into develop).
+- feature/<short-desc> or feature/<issue>-<desc>: new code (from develop).
+- fix/<issue>-<desc>: fix for something already in develop.
+- hotfix/<issue>-<desc>: urgent production fix (from main → PR to main → merge back into develop).
 - issue-<number>-<desc>: automatically created from a GitHub issue (allowed and recommended).
 
 You can create a branch manually or use GitHub’s "Create branch" button on an issue, which will name it like `issue-123-description`. This is fully supported and recommended for traceability.
@@ -15,7 +15,9 @@ You can create a branch manually or use GitHub’s "Create branch" button on an 
 Flow
 1. Update local: git fetch origin && git switch develop && git pull --ff-only
 2. Create branch: git switch -c feature/better-forecast
-3. Code + tests + docs (README / CONFIG_README / MQTT if behavior changes)
+3. Code + tests + docs (README / `docs/` GitHub Pages / MQTT if behavior changes).
+   Configuration is documented by `src/config_web/schema.py`; re-run
+   `python scripts/export_config_schema.py` after changing a field.
 4. Run formatting, lint, tests
    - Ensure all Python files are formatted with [Black](https://black.readthedocs.io/en/stable/) (`black .`)
      - **Tip for VS Code users:** Install the [Black Formatter extension](https://github.com/microsoft/vscode-black-formatter) for automatic formatting on save. (// VS Code settings.json "[python]": { "editor.formatOnSave": true })
@@ -82,9 +84,11 @@ validator = StartupValidator()
 factory = InterfaceFactory(validator)
 
 battery_interface = factory.create_battery_interface(
-    config=config['battery'],
-    time_zone=time_zone,
-    critical=True,  # Halt startup if fails
+    config['battery'],
+    load_interface,   # battery pricing needs the load series
+    time_zone,
+    base_control,     # where the resulting control decisions are applied
+    critical=True,    # halt startup if this interface cannot be built
 )
 ```
 

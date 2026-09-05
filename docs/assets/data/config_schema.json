@@ -1997,7 +1997,7 @@
       "level": "standard",
       "description": "Override URL for data source (used when not reusing central Data Source)",
       "labels": [],
-      "help_url": "",
+      "help_url": "configuration.html#pv-autoscaling",
       "validation": {},
       "depends_on": {
         "pv_autoscaling.enabled": [
@@ -2018,7 +2018,7 @@
       "level": "standard",
       "description": "Bearer token for manual data source access (only when not using central data source)",
       "labels": [],
-      "help_url": "",
+      "help_url": "configuration.html#pv-autoscaling",
       "validation": {},
       "depends_on": {
         "pv_autoscaling.enabled": [
@@ -2039,7 +2039,7 @@
       "level": "expert",
       "description": "Skip TLS certificate verification for the manual data source (self-signed certificates)",
       "labels": [],
-      "help_url": "",
+      "help_url": "configuration.html#pv-autoscaling",
       "validation": {},
       "depends_on": {
         "pv_autoscaling.enabled": [
@@ -2060,7 +2060,7 @@
       "level": "standard",
       "description": "How many days of measured PV yield to retain for scaling (1-14 days)",
       "labels": [],
-      "help_url": "",
+      "help_url": "configuration.html#pv-autoscaling",
       "validation": {
         "min": 1,
         "max": 14

@@ -1,757 +1,957 @@
-/* EOS Connect Documentation Styles */
-/* Matching the application's dark theme design */
+/* EOS Connect Documentation
+ *
+ * Design tokens mirror the application UI in src/web/css/. The app hardcodes its
+ * colours (it has no custom properties), so the values below are the canonical
+ * copy — when the app's palette changes, change it here too.
+ *
+ * Dark-only, deliberately: the app has no light theme, no prefers-color-scheme
+ * and no theme switch, so a light docs theme would diverge from the product.
+ *
+ * Type is sized with clamp() on the element, never per component. That is what
+ * keeps a rule like `.hero h1` from silently out-specifying a responsive
+ * override — there are no responsive type overrides left to beat.
+ */
 
 :root {
-    --bg-primary: rgb(54, 54, 54);
-    --bg-secondary: rgb(78, 78, 78);
-    --bg-tertiary: rgb(114, 114, 114);
-    --text-primary: lightgray;
-    --text-secondary: #aaa;
-    --accent-color: #4a9eff;
-    --accent-hover: #6bb3ff;
-    --border-radius: 10px;
-    --box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
-    --warning-color: rgb(241, 177, 0);
-    --success-color: #4caf50;
-    --danger-color: #f44336;
+    /* Surfaces — src/web/css/style.css:22,133,173,183 */
+    --bg: #363636;
+    --surface: #4e4e4e;
+    --surface-header: #727272;
+    --surface-raised: #3a3a3a;
+    --surface-inset: rgba(0, 0, 0, 0.25);
+    --surface-code: rgba(30, 30, 30, 0.9);
+
+    /* Text — app uses #aaa as a *label* grey, not body text */
+    --text: #d3d3d3;
+    --text-strong: #ffffff;
+    --text-secondary: #cccccc;
+    /* 4.77:1 on --surface. The app's equivalent grey (#aaa) manages only
+     * 3.50:1 there, so it cannot be reused for text on a card. */
+    --text-muted: #c4c4c4;
+
+    /* Accent. --accent is the brand colour and is only ever used for large text,
+     * icons, borders and button fills (3:1 applies). --accent-text is the
+     * body-copy link colour: 6.94:1 on --bg and 4.78:1 on --surface, so it
+     * clears WCAG AA on both. #4a9eff manages only 4.39 / 3.02 and fails. */
+    --accent: #4a9eff;
+    --accent-text: #99c8ff;
+    --accent-strong: #357abd;
+    --accent-light: #6bb3ff;
+    /* Buttons keep the brand fill and take dark text: white on #4a9eff is
+     * 2.75:1 and fails AA, while this is 5.71:1. Darkening the fill instead
+     * would have meant giving up the brand colour. */
+    --on-accent: #10243a;
+    --accent-tint: rgba(74, 158, 255, 0.12);
+    --accent-tint-strong: rgba(74, 158, 255, 0.2);
+
+    /* Semantic — matched to src/web/css/config.css:292-310 so a "restart
+     * required" badge is the same colour in the docs as in the app. */
+    --restart: #ff9800;
+    --deprecated: #ffc107;
+    --experimental: #17a2b8;
+    --hot: #28a745;
+    --success: #4caf50;
+    --warning: #f1b100;
+    --danger: #f44336;
+
+    /* Borders — always white-alpha, never a solid grey */
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border: rgba(255, 255, 255, 0.15);
+    --border-strong: rgba(255, 255, 255, 0.2);
+
+    /* Shape */
+    --radius-sm: 4px;
+    --radius: 6px;
+    --radius-md: 8px;
+    --radius-lg: 10px;
+    --shadow-card: 0 0 10px rgba(0, 0, 0, 0.5);
+    --shadow-float: 0 4px 12px rgba(0, 0, 0, 0.3);
+    --focus-ring: 0 0 0 2px rgba(74, 158, 255, 0.5);
+
+    /* Type */
+    --font: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    --font-mono: 'Courier New', Courier, monospace;
+
+    /* Layout. One sticky offset, used by everything that needs to clear the
+     * header — previously this was three different magic numbers. */
+    --header-h: 4rem;
+    --scroll-offset: 5rem;
+    --content-max: 1400px;
+    --tap: 44px;
 }
 
-* {
-    margin: 0;
-    padding: 0;
+*,
+*::before,
+*::after {
     box-sizing: border-box;
 }
 
-body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background-color: var(--bg-primary);
-    color: var(--text-primary);
-    line-height: 1.6;
-    margin: 0;
-    padding: 0;
+html {
+    scroll-behavior: smooth;
+    /* Tell the browser to render form controls and scrollbars dark, so they stop
+     * rendering light against the dark chrome. */
+    color-scheme: dark;
 }
 
-/* Navigation */
+@media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+body {
+    margin: 0;
+    font-family: var(--font);
+    font-size: clamp(1rem, 0.97rem + 0.15vw, 1.0625rem);
+    line-height: 1.65;
+    background-color: var(--bg);
+    color: var(--text);
+    -webkit-text-size-adjust: 100%;
+}
+
+/* ---------------------------------------------------------------- Typography */
+
+h1,
+h2,
+h3,
+h4 {
+    margin: 0 0 0.6em;
+    line-height: 1.25;
+    color: var(--text-strong);
+    text-wrap: balance;
+}
+
+h1 {
+    font-size: clamp(1.75rem, 1.4rem + 1.6vw, 2.75rem);
+}
+
+h2 {
+    font-size: clamp(1.35rem, 1.15rem + 0.9vw, 2rem);
+}
+
+h3 {
+    font-size: clamp(1.15rem, 1.05rem + 0.45vw, 1.4rem);
+    color: var(--text);
+}
+
+h4 {
+    font-size: clamp(1rem, 0.97rem + 0.15vw, 1.1rem);
+    color: var(--text-secondary);
+}
+
+/* Anchor targets must clear the sticky header. One value, one rule. */
+:is(h1, h2, h3, h4)[id],
+[id].content-section {
+    scroll-margin-top: var(--scroll-offset);
+}
+
+p {
+    margin: 0 0 1rem;
+}
+
+p:last-child {
+    margin-bottom: 0;
+}
+
+ul,
+ol {
+    margin: 0 0 1rem;
+    padding-left: 1.5rem;
+}
+
+li {
+    margin: 0.4rem 0;
+}
+
+a {
+    color: var(--accent-text);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+a:focus-visible,
+button:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    border-radius: var(--radius-sm);
+}
+
+strong {
+    color: var(--text-strong);
+}
+
+/* ------------------------------------------------------------ Code and tables */
+
+code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    color: var(--accent-text);
+    background-color: var(--surface-inset);
+    padding: 0.1em 0.35em;
+    border-radius: var(--radius-sm);
+    /* Long dotted config keys must be able to break rather than widen the page. */
+    overflow-wrap: anywhere;
+}
+
+pre {
+    background-color: var(--surface-code);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    padding: 1rem;
+    margin: 0 0 1rem;
+    overflow-x: auto;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+pre code {
+    color: #e0e0e0;
+    background: none;
+    padding: 0;
+    font-size: inherit;
+    overflow-wrap: normal;
+}
+
+/* Any wide block scrolls inside itself; the page body never scrolls sideways.
+ *
+ * The gradients are the classic pure-CSS scrolling shadow: the two `local`
+ * layers are painted in the content's coordinate space and slide away as you
+ * scroll, uncovering the two `scroll` shadow layers pinned to whichever edge
+ * still has content behind it. Without this a wide table or diagram gives no
+ * hint that it continues past the right edge. */
+.scroll-x {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    background-image:
+        linear-gradient(to right, var(--surface), transparent 2.5rem),
+        linear-gradient(to left, var(--surface), transparent 2.5rem),
+        radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.65), transparent),
+        radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.65), transparent);
+    background-position: left center, right center, left center, right center;
+    background-size: 3rem 100%, 3rem 100%, 1.35rem 100%, 1.35rem 100%;
+    background-repeat: no-repeat;
+    background-attachment: local, local, scroll, scroll;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0 0 1rem;
+    font-size: 0.9375rem;
+}
+
+th,
+td {
+    padding: 0.6rem 0.75rem;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+th {
+    background-color: var(--surface-raised);
+    color: var(--text-strong);
+    font-weight: 600;
+}
+
+tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+/* ------------------------------------------------------------------ Skip link */
+
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 10001;
+    padding: 0.75rem 1.25rem;
+    background: var(--accent);
+    color: var(--on-accent);
+    border-radius: 0 0 var(--radius) 0;
+}
+
+.skip-link:focus {
+    left: 0;
+}
+
+/* --------------------------------------------------------------- Navigation */
+
 .nav-header {
-    background-color: var(--bg-tertiary);
-    padding: 1rem 2rem;
-    box-shadow: var(--box-shadow);
+    background-color: var(--surface-header);
+    box-shadow: var(--shadow-card);
     position: sticky;
     top: 0;
     z-index: 1000;
 }
 
-/* Offset anchor jump targets so the sticky header doesn't obscure the headline */
-h1[id], h2[id], h3[id], h4[id] {
-    scroll-margin-top: 8rem;
-}
-
-/* Draft Banner - Fixed overlay on top of header */
-.draft-banner {
-    background: linear-gradient(135deg, rgba(255, 107, 107, 0.7) 0%, rgba(254, 202, 87, 0.7) 100%);
-    color: white;
-    text-align: center;
-    padding: 0.3rem;
-    font-weight: 600;
-    font-size: 0.85rem;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 9999;
-    pointer-events: none; /* Allow clicking nav links underneath */
-}
-
 .nav-container {
-    max-width: 1400px;
+    max-width: var(--content-max);
     margin: 0 auto;
+    padding: 0.6rem 1.25rem;
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    gap: 1rem;
+    min-height: var(--header-h);
 }
 
 .nav-logo {
-    font-size: 1.8rem;
-    font-weight: bold;
-    color: white;
-    text-decoration: none;
     display: flex;
     align-items: center;
+    gap: 0.5rem;
+    font-size: clamp(1.05rem, 0.95rem + 0.5vw, 1.5rem);
+    font-weight: 700;
+    /* White on #727272 is 4.81:1 — the only text colour that clears AA here. */
+    color: #fff;
+    margin-right: auto;
 }
 
 .nav-logo:hover {
-    color: var(--accent-color);
+    text-decoration: none;
+    color: #fff;
 }
 
-/* Version badge in navigation */
+.nav-logo img {
+    height: 2rem;
+    width: auto;
+}
+
 .version-badge {
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: var(--text-secondary);
-    background-color: rgba(74, 158, 255, 0.15);
-    border: 1px solid rgba(74, 158, 255, 0.3);
-    padding: 0.15rem 0.5rem;
-    border-radius: 12px;
-    margin-left: 0.75rem;
-    letter-spacing: 0.02rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #fff;
+    background-color: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--border);
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    white-space: nowrap;
 }
 
 .nav-menu {
     display: flex;
-    gap: 2rem;
+    align-items: center;
+    gap: 1.5rem;
     list-style: none;
+    margin: 0;
+    padding: 0;
 }
 
 .nav-menu a {
-    color: var(--text-primary);
-    text-decoration: none;
-    font-size: 1rem;
-    transition: color 0.3s;
+    color: #fff;
+    font-size: 0.95rem;
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--tap);
 }
 
 .nav-menu a:hover {
-    color: var(--accent-color);
-}
-
-/* Special hover for sponsor icon */
-.nav-menu a[title="Sponsor the project"]:hover {
-    color: #ffca28; /* Warm yellow/gold */
+    color: #fff;
+    text-decoration: underline;
 }
 
 .nav-menu a.active {
-    color: var(--accent-color);
-    font-weight: 600;
-    cursor: default;
-    pointer-events: none;
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 0.35em;
+    text-decoration-thickness: 2px;
 }
 
-/* Mobile menu toggle - hidden by default */
+.nav-menu a[data-sponsor]:hover {
+    color: #ffca28;
+}
+
 .mobile-menu-toggle {
     display: none;
+    background: none;
+    border: none;
+    color: #fff;
+    font-size: 1.4rem;
+    cursor: pointer;
+    min-width: var(--tap);
+    min-height: var(--tap);
 }
 
-/* Container */
+/* No-JS fallback: site.js injects the real nav, so without it readers still
+ * need a way out of the page. */
+.nav-fallback {
+    padding: 0.75rem 1.25rem;
+    background: var(--surface-header);
+}
+
+.nav-fallback a {
+    color: #fff;
+    margin-right: 1rem;
+    display: inline-block;
+}
+
+/* ------------------------------------------------------------------- Layout */
+
 .container {
-    max-width: 1400px;
-    margin: 2rem auto;
-    padding: 0 2rem;
+    max-width: var(--content-max);
+    margin: 0 auto;
+    padding: 1.5rem 1.25rem 3rem;
 }
 
-/* Page wrapper with TOC sidebar */
 .page-wrapper {
-    display: flex;
-    gap: 2rem;
-    position: relative;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
 }
 
 .main-content {
-    flex: 1;
-    min-width: 0; /* Prevent flex overflow */
+    min-width: 0;
 }
 
-/* Table of Contents Sidebar */
+/* ---------------------------------------------------- Table of contents */
+
 .toc-sidebar {
-    width: 250px;
-    flex-shrink: 0;
-    position: sticky;
-    top: 7rem; /* Matches initial position (Header height + Container margin) */
-    height: fit-content;
-    max-height: calc(100vh - 8rem); /* Ensure it stays within viewport */
-    overflow-y: auto;
-    align-self: flex-start;
-    padding-right: 1rem; /* Space for scrollbar if needed */
+    min-width: 0;
 }
 
-/* Custom scrollbar for TOC */
-.toc-sidebar::-webkit-scrollbar {
-    width: 4px;
+.toc-details {
+    background-color: var(--surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 0 1rem;
 }
 
-.toc-sidebar::-webkit-scrollbar-thumb {
-    background: var(--bg-tertiary);
-    border-radius: 10px;
+.toc-details > summary {
+    cursor: pointer;
+    padding: 0.75rem 0;
+    min-height: var(--tap);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    color: var(--text-strong);
+    list-style: none;
 }
 
-.toc-sidebar h3 {
-    color: white;
-    font-size: 1.1rem;
-    margin-bottom: 1rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 2px solid var(--accent-color);
+.toc-details > summary::-webkit-details-marker {
+    display: none;
+}
+
+/* Drawn with borders rather than a Font Awesome glyph: if the icon CDN fails
+ * this still renders a chevron instead of a tofu box. */
+.toc-details > summary::after {
+    content: "";
+    margin-left: auto;
+    width: 0.5em;
+    height: 0.5em;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: translateY(-0.15em) rotate(45deg);
+    transition: transform 0.2s ease;
+}
+
+.toc-details[open] > summary::after {
+    transform: translateY(0.1em) rotate(225deg);
 }
 
 .toc-nav {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    padding-bottom: 0.75rem;
+    border-top: 1px solid var(--border-subtle);
 }
 
 .toc-link {
     color: var(--text-secondary);
-    text-decoration: none;
-    padding: 0.5rem 1rem;
+    padding: 0.5rem 0.75rem;
     border-left: 3px solid transparent;
-    transition: all 0.3s;
     font-size: 0.9rem;
+    min-height: var(--tap);
+    display: flex;
+    align-items: center;
 }
 
 .toc-link:hover {
-    color: var(--accent-color);
-    background-color: rgba(74, 158, 255, 0.1);
-    border-left-color: var(--accent-color);
+    color: var(--accent-text);
+    background-color: var(--accent-tint);
+    border-left-color: var(--accent);
+    text-decoration: none;
 }
 
 .toc-link.active {
-    color: var(--accent-color);
-    background-color: rgba(74, 158, 255, 0.15);
-    border-left-color: var(--accent-color);
+    color: var(--accent-text);
+    background-color: var(--accent-tint);
+    border-left-color: var(--accent);
     font-weight: 600;
 }
 
-/* Sub-level TOC links for nested navigation */
 .toc-link.toc-sub {
-    padding-left: 2rem;
+    padding-left: 1.75rem;
     font-size: 0.85rem;
-    border-left-width: 2px;
 }
 
-.toc-link.toc-sub:hover {
-    padding-left: 2.2rem;
+/* ------------------------------------------------------- Level switcher */
+
+.level-switcher {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    background-color: var(--surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.5rem;
 }
 
-/* Hero Section */
-.hero {
-    background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
-    padding: 4rem 2rem;
-    border-radius: var(--border-radius);
-    box-shadow: var(--box-shadow);
-    text-align: center;
-    margin-bottom: 3rem;
-}
-
-.hero h1 {
-    font-size: 3rem;
-    color: white;
-    margin-bottom: 1rem;
-}
-
-.hero p {
-    font-size: 1.3rem;
-    color: var(--text-secondary);
-    max-width: 800px;
-    margin: 0 auto;
-}
-
-/* 4 Main Blocks Grid */
-.main-blocks {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 2rem;
-    margin-bottom: 3rem;
-    max-width: 1400px;
-    margin-left: auto;
+.level-switcher-label {
+    font-size: 0.85rem;
+    color: var(--text-muted);
     margin-right: auto;
 }
 
-/* Responsive grid for navigation cards */
-@media screen and (max-width: 900px) {
-    .main-blocks {
-        grid-template-columns: 1fr;
-        max-width: 600px;
-    }
+.level-options {
+    display: flex;
+    gap: 0.25rem;
+    background-color: var(--surface-inset);
+    border-radius: var(--radius);
+    padding: 0.2rem;
+}
+
+.level-option {
+    appearance: none;
+    border: none;
+    background: none;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 0.875rem;
+    padding: 0.4rem 0.85rem;
+    min-height: var(--tap);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.level-option:hover {
+    color: var(--text-strong);
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+.level-option[aria-pressed="true"] {
+    background-color: var(--accent);
+    color: var(--on-accent);
+    font-weight: 600;
+}
+
+/* Depth gating. Untagged content is Getting Started and always visible;
+ * cumulative, matching ConfigSchema.get_by_level() in src/config_web/schema.py. */
+[data-level] {
+    display: none;
+}
+
+body[data-active-level="standard"] [data-level="standard"],
+body[data-active-level="expert"] [data-level="standard"],
+body[data-active-level="expert"] [data-level="expert"] {
+    display: revert;
+}
+
+.level-note {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* ---------------------------------------------------------------- Sections */
+
+.hero {
+    background: linear-gradient(135deg, var(--surface) 0%, var(--surface-header) 100%);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    padding: clamp(1.5rem, 1rem + 3vw, 3rem);
+    margin-bottom: 1.5rem;
+}
+
+.hero h1 {
+    margin-bottom: 0.5rem;
+}
+
+.hero p {
+    color: #f0f0f0;
+    font-size: clamp(1rem, 0.95rem + 0.4vw, 1.2rem);
+    max-width: 60ch;
+}
+
+.content-section {
+    background-color: var(--surface);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    padding: clamp(1.1rem, 0.9rem + 1vw, 2rem);
+    margin-bottom: 1.5rem;
+}
+
+.content-section > h2 {
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid var(--accent);
+}
+
+.content-section > h3 {
+    margin-top: 1.75rem;
+}
+
+/* ------------------------------------------------------------------- Cards */
+
+.card-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
 }
 
 .block-card {
-    background-color: var(--bg-secondary);
-    border-radius: var(--border-radius);
-    padding: 1.5rem;
-    box-shadow: var(--box-shadow);
-    transition: transform 0.3s, box-shadow 0.3s;
-    border-left: 4px solid var(--accent-color);
+    background-color: var(--surface);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    border-left: 4px solid var(--accent);
+    padding: 1.25rem;
     display: flex;
     flex-direction: column;
-}
-
-.block-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 5px 20px rgba(74, 158, 255, 0.3);
-}
-
-.block-card .icon {
-    font-size: 2.5rem;
-    color: var(--accent-color);
-    margin-right: 1rem;
-    flex-shrink: 0;
+    gap: 0.5rem;
 }
 
 .block-card .card-header {
     display: flex;
     align-items: center;
-    margin-bottom: 0.75rem;
+    gap: 0.75rem;
+}
+
+.block-card .icon {
+    font-size: 1.75rem;
+    color: var(--accent);
+    flex-shrink: 0;
 }
 
 .block-card h2,
 .block-card h3 {
-    color: white;
     margin: 0;
-    font-size: 1.5rem;
+    font-size: clamp(1.15rem, 1.05rem + 0.4vw, 1.35rem);
+    color: var(--text-strong);
 }
 
 .block-card p {
     color: var(--text-secondary);
-    margin-bottom: 1rem;
     flex-grow: 1;
 }
 
-.block-card .btn {
-    display: inline-block;
-    padding: 0.8rem 1.5rem;
-    background-color: var(--accent-color);
-    color: white;
-    text-decoration: none;
-    border-radius: 5px;
-    transition: background-color 0.3s;
-    margin-top: auto;
-    align-self: flex-start;
-}
-
-.block-card .btn:hover {
-    background-color: var(--accent-hover);
-}
-
-/* Content Sections */
-.content-section {
-    background-color: var(--bg-secondary);
-    border-radius: var(--border-radius);
-    padding: 2rem;
-    margin-bottom: 2rem;
-    box-shadow: var(--box-shadow);
-    scroll-margin-top: 150px;
-}
-
-.content-section h2 {
-    color: white;
-    margin-bottom: 1rem;
-    font-size: 2rem;
-    border-bottom: 2px solid var(--accent-color);
-    padding-bottom: 0.5rem;
-}
-
-.content-section h3 {
-    color: var(--text-primary);
-    margin-top: 1.5rem;
-    margin-bottom: 0.8rem;
-    font-size: 1.5rem;
-}
-
-.content-section h4 {
-    color: var(--text-secondary);
-    margin-top: 1rem;
-    margin-bottom: 0.5rem;
-    font-size: 1.2rem;
-}
-
-/* Code blocks */
-pre {
-    background-color: rgba(0, 0, 0, 0.3);
-    border-radius: 5px;
-    padding: 1rem;
-    overflow-x: auto;
-    margin: 1rem 0;
-}
-
-code {
-    font-family: 'Courier New', monospace;
-    color: #4a9eff;
-}
-
-pre code {
-    color: #e0e0e0;
-}
-
-/* Tables */
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 1rem 0;
-    background-color: rgba(0, 0, 0, 0.2);
-    border-radius: var(--border-radius);
-    overflow: hidden;
-}
-
-th {
-    background-color: var(--bg-tertiary);
-    color: white;
-    padding: 1rem;
-    text-align: left;
-    width: 200px;
-    min-width: 200px;
-}
-
-td {
-    padding: 0.8rem 1rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-tr:hover {
-    background-color: rgba(255, 255, 255, 0.05);
-}
-
-/* Lists */
-ul, ol {
-    margin: 1rem 0;
-    padding-left: 2rem;
-}
-
-li {
-    margin: 0.5rem 0;
-}
-
-/* Links */
-a {
-    color: var(--accent-color);
-    text-decoration: none;
-}
-
-a:hover {
-    color: var(--accent-hover);
-    text-decoration: underline;
-}
-
-/* Buttons */
-.btn-primary {
-    display: inline-block;
-    padding: 0.8rem 1.5rem;
-    background-color: var(--accent-color);
-    color: white;
-    border-radius: 5px;
-    text-decoration: none;
-    transition: background-color 0.3s;
-    border: none;
-    cursor: pointer;
-}
-
-.btn-primary:hover {
-    background-color: var(--accent-hover);
-    text-decoration: none;
-}
-
-/* Alert boxes */
-.alert {
-    padding: 1rem;
-    border-radius: 5px;
-    margin: 1rem 0;
-    border-left: 4px solid;
-}
-
-.alert-info {
-    background-color: rgba(74, 158, 255, 0.1);
-    border-color: var(--accent-color);
-}
-
-.alert-warning {
-    background-color: rgba(241, 177, 0, 0.1);
-    border-color: var(--warning-color);
-}
-
-.alert-success {
-    background-color: rgba(76, 175, 80, 0.1);
-    border-color: var(--success-color);
-}
-
-.alert-danger {
-    background-color: rgba(244, 67, 54, 0.1);
-    border-color: var(--danger-color);
-}
-
-/* Feature grid */
 .feature-grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 1.5rem;
-    margin: 2rem 0;
-    max-width: 1400px;
-    margin-left: auto;
-    margin-right: auto;
-}
-
-/* Responsive grid for feature items */
-@media screen and (max-width: 900px) {
-    .feature-grid {
-        grid-template-columns: 1fr;
-        max-width: 600px;
-    }
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    margin-bottom: 1rem;
 }
 
 .feature-item {
-    background-color: rgba(0, 0, 0, 0.3);
+    background-color: var(--surface-inset);
+    border-radius: var(--radius-md);
+    border-left: 3px solid var(--accent);
     padding: 1rem;
-    border-radius: 8px;
-    border-left: 3px solid var(--accent-color);
     display: flex;
     flex-direction: column;
+    gap: 0.4rem;
 }
 
 .feature-item h4 {
-    color: white;
-    margin: 0;
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    margin-bottom: 0.5rem;
+    margin: 0;
+    color: var(--text-strong);
 }
 
 .feature-item h4 i {
-    font-size: 1.3rem;
-    color: var(--accent-color);
+    color: var(--accent);
 }
 
 .feature-item p {
+    color: var(--text-secondary);
     flex-grow: 1;
-    margin: 0;
 }
 
-.feature-item .btn-primary {
-    margin-top: auto;
+/* ----------------------------------------------------------------- Buttons */
+
+.btn,
+.btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.6rem 1.25rem;
+    min-height: var(--tap);
+    background-color: var(--accent);
+    color: var(--on-accent);
+    font-weight: 600;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
     align-self: flex-start;
+    margin-top: auto;
 }
 
-/* Sidebar */
-.sidebar {
-    background-color: var(--bg-secondary);
-    border-radius: var(--border-radius);
-    padding: 1.5rem;
-    box-shadow: var(--box-shadow);
-}
-
-.sidebar h3 {
-    color: white;
-    margin-bottom: 1rem;
-    font-size: 1.3rem;
-}
-
-.sidebar ul {
-    list-style: none;
-    padding: 0;
-}
-
-.sidebar li {
-    margin: 0.5rem 0;
-}
-
-.sidebar a {
-    display: block;
-    padding: 0.5rem;
-    border-radius: 5px;
-    transition: background-color 0.3s;
-}
-
-.sidebar a:hover {
-    background-color: rgba(74, 158, 255, 0.1);
+.btn:hover,
+.btn-primary:hover {
+    background-color: var(--accent-light);
+    color: var(--on-accent);
     text-decoration: none;
 }
 
-/* Footer */
-.footer {
-    background-color: var(--bg-tertiary);
-    padding: 2rem;
+/* ------------------------------------------------------------------ Alerts */
+
+.alert {
+    padding: 0.9rem 1rem;
+    border-radius: var(--radius);
+    border-left: 4px solid;
+    margin: 0 0 1rem;
+    background-color: var(--surface-inset);
+}
+
+.alert > :last-child {
+    margin-bottom: 0;
+}
+
+.alert-info {
+    border-color: var(--accent);
+}
+
+.alert-warning {
+    border-color: var(--warning);
+}
+
+.alert-success {
+    border-color: var(--success);
+}
+
+.alert-danger {
+    border-color: var(--danger);
+}
+
+/* ------------------------------------------------------------------ Badges */
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.badge-restart {
+    color: var(--restart);
+    background-color: rgba(255, 152, 0, 0.15);
+}
+
+.badge-deprecated {
+    color: var(--deprecated);
+    background-color: rgba(255, 193, 7, 0.15);
+}
+
+.badge-experimental {
+    color: var(--experimental);
+    background-color: rgba(23, 162, 184, 0.18);
+}
+
+.badge-hot {
+    color: var(--hot);
+    background-color: rgba(40, 167, 69, 0.18);
+}
+
+.badge-level {
+    color: var(--text-muted);
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+/* -------------------------------------------------- Parameter reference */
+
+.param-section + .param-section {
+    margin-top: 2rem;
+}
+
+.param-table code {
+    background: none;
+    padding: 0;
+}
+
+.param-key {
+    font-weight: 600;
+}
+
+.param-desc {
+    color: var(--text-secondary);
+}
+
+.param-legend {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-top: 0.75rem;
+}
+
+/* Below the breakpoint each row becomes its own card. A 5-column reference
+ * table cannot be read on a phone, and horizontal scrolling hides the columns
+ * that matter most. */
+@media (max-width: 768px) {
+    .param-table thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+    }
+
+    .param-table,
+    .param-table tbody,
+    .param-table tr,
+    .param-table td {
+        display: block;
+        width: 100%;
+    }
+
+    .param-table tr {
+        background-color: var(--surface-inset);
+        border-radius: var(--radius-md);
+        border-left: 3px solid var(--accent);
+        padding: 0.75rem 0.9rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .param-table td {
+        border: none;
+        padding: 0.15rem 0;
+        display: grid;
+        grid-template-columns: 7rem 1fr;
+        gap: 0.5rem;
+    }
+
+    .param-table td::before {
+        content: attr(data-label);
+        color: var(--text-muted);
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        padding-top: 0.15rem;
+    }
+
+    /* The key is the row's title. Block, not grid: inside a grid the badges
+     * beside it would each become a stretched row of their own. */
+    .param-table td.param-key {
+        display: block;
+        margin-bottom: 0.5rem;
+    }
+
+    .param-table td.param-key::before {
+        display: none;
+    }
+
+    /* The description is the part worth reading, so it gets the full width with
+     * its label above rather than a 7rem column beside it. */
+    .param-table td.param-desc {
+        display: block;
+        margin-top: 0.35rem;
+    }
+
+    .param-table td.param-desc::before {
+        display: block;
+        margin-bottom: 0.15rem;
+    }
+}
+
+/* ---------------------------------------------------------------- Diagrams */
+
+.diagram-figure {
+    margin: 0 0 1rem;
+}
+
+/* Inline SVG, so strokes and text inherit currentColor and follow the theme.
+ * The floor keeps the labels legible: scaled to a 320px phone the type would
+ * drop under 8px, so below that width the figure scrolls instead. */
+.diagram {
+    display: block;
+    width: 100%;
+    min-width: 520px;
+    max-width: 720px;
+    height: auto;
+    margin: 0 auto;
+    color: var(--text);
+}
+
+/* A dashboard screenshot is too dense to read inline at any width a phone can
+ * give it, so it scales to fit and links to the full-size file instead of
+ * scrolling inside a box. */
+.shot-figure {
+    margin: 0 0 1rem;
+}
+
+.screenshot {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+}
+
+.shot-figure figcaption,
+.diagram-figure figcaption {
+    margin-top: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
     text-align: center;
-    margin-top: 4rem;
-    border-radius: var(--border-radius) var(--border-radius) 0 0;
+}
+
+/* ------------------------------------------------------------------ Footer */
+
+.footer {
+    background-color: var(--surface-raised);
+    border-top: 1px solid var(--border-subtle);
+    padding: 2rem 1.25rem;
+    text-align: center;
+    margin-top: 2rem;
 }
 
 .footer p {
     color: var(--text-secondary);
+    font-size: 0.9rem;
 }
 
-/* Responsive Design */
-@media (max-width: 1024px) {
-    .page-wrapper {
-        flex-direction: column;
-    }
+/* ------------------------------------------------------------ Back to top */
 
-    .toc-sidebar {
-        width: 100%;
-        position: static;
-        margin-bottom: 2rem;
-    }
-
-    .toc-nav {
-        flex-direction: row;
-        flex-wrap: wrap;
-        gap: 1rem;
-    }
-}
-
-@media (max-width: 892px) {
-    .nav-header {
-        padding: 0.75rem 1rem;
-    }
-
-    .nav-logo {
-        font-size: 1.2rem;
-    }
-
-    .nav-logo img {
-        height: 32px !important;
-        margin-right: 4px !important;
-    }
-
-    .nav-menu {
-        display: none; /* Hide full menu on mobile */
-    }
-
-    .nav-container {
-        flex-direction: row;
-        justify-content: space-between;
-    }
-
-    .container {
-        padding: 0 1rem;
-        margin: 1rem auto;
-    }
-
-    .toc-sidebar h3 {
-        font-size: 1rem;
-    }
-
-    /* Hide version badge on smaller screens */
-    .version-badge {
-        font-size: 0.65rem;
-        padding: 0.1rem 0.4rem;
-        margin-left: 0.5rem;
-    }
-
-    /* Mobile menu toggle button */
-    .mobile-menu-toggle {
-        display: block;
-        background: none;
-        border: none;
-        color: var(--text-primary);
-        font-size: 1.5rem;
-        cursor: pointer;
-        padding: 0.5rem;
-    }
-
-    /* Show menu when toggled */
-    .nav-menu.mobile-active {
-        display: flex;
-        flex-direction: column;
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        background-color: var(--bg-secondary);
-        padding: 1rem;
-        margin-top: 0;
-        box-shadow: var(--box-shadow);
-        z-index: 10000;
-        gap: 0.5rem;
-        max-height: 80vh;
-        overflow-y: auto;
-    }
-
-    .nav-menu.mobile-active li {
-        width: 100%;
-        text-align: center;
-        padding: 0.5rem 0;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-    }
-
-    .nav-menu.mobile-active li:last-child {
-        border-bottom: none;
-    }
-
-    /* Responsive tables */
-    table {
-        font-size: 0.85rem;
-        display: block;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-    }
-
-    th, td {
-        padding: 0.5rem;
-        white-space: nowrap;
-    }
-
-    th {
-        width: auto;
-        min-width: 100px;
-    }
-
-    /* Make certain content sections scrollable */
-    .content-section {
-        overflow-x: hidden;
-    }
-
-    /* Reduce heading sizes */
-    h1 {
-        font-size: 2rem;
-    }
-
-    h2 {
-        font-size: 1.5rem;
-    }
-
-    h3 {
-        font-size: 1.2rem;
-    }
-
-    h4 {
-        font-size: 1.1rem;
-    }
-
-    /* Adjust code blocks */
-    pre {
-        font-size: 0.8rem;
-        overflow-x: auto;
-    }
-
-    /* Feature grid to single column */
-    .feature-grid {
-        grid-template-columns: 1fr !important;
-    }
-
-    /* Main blocks single column */
-    .main-blocks {
-        grid-template-columns: 1fr !important;
-    }
-}
-
-/* Smooth scrolling */
-html {
-    scroll-behavior: smooth;
-}
-
-/* Selection */
-::selection {
-    background-color: var(--accent-color);
-    color: white;
-}
-
-/* Back to Top Button */
 .back-to-top {
     position: fixed;
-    bottom: 2rem;
-    right: 2rem;
-    background-color: var(--accent-color);
-    color: white;
-    width: 50px;
-    height: 50px;
+    bottom: 1.25rem;
+    right: 1.25rem;
+    width: var(--tap);
+    height: var(--tap);
+    border: none;
     border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.5rem;
+    background-color: var(--accent);
+    color: var(--on-accent);
+    font-size: 1.1rem;
     cursor: pointer;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-float);
     opacity: 0;
     visibility: hidden;
-    transition: all 0.3s ease;
-    z-index: 999;
-    border: none;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+    z-index: 900;
 }
 
 .back-to-top.visible {
@@ -760,28 +960,131 @@ html {
 }
 
 .back-to-top:hover {
-    background-color: var(--accent-hover);
-    transform: translateY(-3px);
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+    background-color: var(--accent-light);
 }
 
-.back-to-top:active {
-    transform: translateY(-1px);
+::selection {
+    background-color: var(--accent);
+    color: var(--on-accent);
 }
 
-@media (max-width: 768px) {
-    .back-to-top {
-        width: 45px;
-        height: 45px;
-        bottom: 1.5rem;
-        right: 1.5rem;
-        font-size: 1.3rem;
+img {
+    max-width: 100%;
+    height: auto;
+}
+
+/* ================================================================ Wide screens
+ *
+ * One breakpoint for layout, matching the app's single 768/769px switch, plus
+ * one wide stop where the table of contents earns a column of its own. Type
+ * needs no breakpoints at all — clamp() handles it.
+ */
+
+@media (min-width: 769px) {
+    .card-grid,
+    .feature-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .container {
+        padding: 2rem 2rem 4rem;
     }
 }
 
-/* Very small screens - hide version badge completely */
-@media (max-width: 480px) {
-    .version-badge {
+@media (min-width: 1100px) {
+    .page-wrapper {
+        grid-template-columns: 260px minmax(0, 1fr);
+        gap: 2rem;
+    }
+
+    /* The TOC is a sidebar here, so the disclosure wrapper stops being a
+     * disclosure: force it open and drop the summary. */
+    .toc-sidebar {
+        position: sticky;
+        top: calc(var(--header-h) + 1rem);
+        height: fit-content;
+        max-height: calc(100vh - var(--header-h) - 2rem);
+        overflow-y: auto;
+    }
+
+    .toc-details {
+        background: none;
+        border: none;
+        padding: 0;
+    }
+
+    .toc-details > summary {
+        cursor: default;
+        pointer-events: none;
+        border-bottom: 2px solid var(--accent);
+        margin-bottom: 0.5rem;
+    }
+
+    .toc-details > summary::after {
         display: none;
+    }
+
+    .toc-nav {
+        border-top: none;
+    }
+}
+
+@media (max-width: 768px) {
+    .nav-menu {
+        display: none;
+    }
+
+    .nav-menu.mobile-active {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background-color: var(--surface);
+        box-shadow: var(--shadow-float);
+        padding: 0.5rem;
+        max-height: min(70vh, 30rem);
+        overflow-y: auto;
+    }
+
+    .nav-menu.mobile-active li + li {
+        border-top: 1px solid var(--border-subtle);
+    }
+
+    .nav-menu.mobile-active a {
+        padding: 0.5rem 0.75rem;
+    }
+
+    .mobile-menu-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .nav-container {
+        position: relative;
+    }
+
+    .level-switcher-label {
+        width: 100%;
+        margin-right: 0;
+    }
+
+    .level-options {
+        width: 100%;
+    }
+
+    /* "Getting Started" cannot sit on one line in a third of a 360px screen,
+     * so the labels wrap rather than being clipped. */
+    .level-option {
+        flex: 1 1 0;
+        min-width: 0;
+        padding: 0.35rem 0.25rem;
+        font-size: 0.8rem;
+        line-height: 1.2;
+        white-space: normal;
     }
 }
