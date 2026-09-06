@@ -596,12 +596,98 @@ class ControlsManager {
         // When EVCC is active, never show dynamic override indicators
         this.updateModeIcon(inverterModeNum, overrideActive, controlsData.battery.max_charge_power_dyn, isEVCCActive ? false : dynOverrideActive);
 
+        this.updateManagedLoads(controlsData.managed_loads);
+
         // Show experimental banner if optimization source is ??? (t.b.d.) - was introduced in early phase of evopt
         if (controlsData.used_optimization_source === "tbd") {
             document.getElementById("experimental-banner").style.display = "flex";
         } else {
             document.getElementById("experimental-banner").style.display = "none";
         }
+    }
+
+    /**
+     * Render the managed loads card.
+     *
+     * Each row answers the two questions a user actually has: is it running right now,
+     * and how much energy is it going to need. A load with a release signal shows it;
+     * a pushed profile has none to show, because its sender already decided the timing.
+     *
+     * @param {Object[]|undefined} loads - The managed_loads array from current_controls
+     */
+    updateManagedLoads(loads) {
+        const box = document.getElementById('managed_loads_box');
+        const rows = document.getElementById('managed_loads_rows');
+        if (!box || !rows) {
+            return;
+        }
+
+        if (!Array.isArray(loads) || loads.length === 0) {
+            box.style.display = 'none';
+            return;
+        }
+        box.style.display = '';
+
+        let totalWh = 0;
+        const html = loads.map(load => {
+            totalWh += Number(load.planned_wh) || 0;
+
+            let status;
+            if (load.released === true) {
+                status = '<i style="color:#32CD32;" class="fa-solid fa-play"></i> released';
+            } else if (load.released === false) {
+                status = '<i style="color:#888;" class="fa-solid fa-pause"></i> blocked';
+            } else {
+                // No release signal: a pushed profile is a forecast, not something we
+                // switch on and off.
+                status = '<i style="color:#888;" class="fa-solid fa-chart-line"></i> forecast';
+            }
+
+            const temp = (load.temperature_c !== null && load.temperature_c !== undefined)
+                ? ` &middot; ${load.temperature_c}&deg;C / ${load.target_temperature_c}&deg;C`
+                : '';
+
+            const needed = Number(load.energy_needed_wh) || 0;
+            const neededText = needed > 0
+                ? `${(needed / 1000).toFixed(1)} kWh`
+                : '&mdash;';
+
+            const next = load.next_release_start
+                ? new Date(load.next_release_start).toLocaleTimeString(navigator.language, {
+                    hour: '2-digit', minute: '2-digit'
+                })
+                : '';
+
+            return `<tr>
+                <td class="top_box_info_text" title="${this.escapeHtml(load.reason || '')}">
+                    ${this.escapeHtml(load.id)}${temp}
+                </td>
+                <td style="text-align: right;">${status}${next ? ` ${next}` : ''} &middot; ${neededText}</td>
+            </tr>`;
+        }).join('');
+
+        rows.innerHTML = html;
+
+        const totalEl = document.getElementById('managed_loads_total');
+        if (totalEl) {
+            totalEl.textContent = `${(totalWh / 1000).toFixed(1)} kWh`;
+        }
+    }
+
+    /**
+     * Escape text taken from configuration before putting it in the DOM.
+     * @param {string} str - Raw text
+     * @returns {string} Escaped text
+     */
+    escapeHtml(str) {
+        if (str === null || str === undefined) {
+            return '';
+        }
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
     }
 
     /**

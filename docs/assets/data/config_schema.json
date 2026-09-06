@@ -243,6 +243,42 @@
       "display_group": "Additional Load"
     },
     {
+      "key": "load.managed_loads_max_power_w",
+      "type": "int",
+      "default": 0,
+      "section": "load",
+      "level": "standard",
+      "description": "Total power all managed loads together may be planned for, in watts (0 = no limit). Stops a pool pump and a sauna both being scheduled into the same cheap hour and forecasting a peak the house cannot draw",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0,
+        "max": 100000
+      },
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Managed Loads"
+    },
+    {
+      "key": "load.managed_loads_cycle_seconds",
+      "type": "int",
+      "default": 300,
+      "section": "load",
+      "level": "expert",
+      "description": "How often managed loads are re-planned and their sensors read, in seconds",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 30,
+        "max": 3600
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Managed Loads"
+    },
+    {
       "key": "eos.source",
       "type": "select",
       "default": "local_evopt",
@@ -2603,6 +2639,705 @@
       "depends_on": null,
       "hot_reload": false,
       "display_group": "General"
+    },
+    {
+      "key": "managed_loads.id",
+      "type": "str",
+      "default": "",
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "Short name for this load - becomes its MQTT topic and API path (lower case letters, digits and underscores)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "pattern": "^[a-z0-9_]{1,32}$"
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Identity"
+    },
+    {
+      "key": "managed_loads.type",
+      "type": "select",
+      "default": "pool_heatpump",
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "What kind of load this is - it decides which settings apply. Pool heat pump, sauna, hot water tank and buffer tank are heated stores that EOS Connect schedules and releases itself. External energy budget takes a \"needs X Wh by then\" push and schedules it. External load profile takes a ready-made profile and injects it as given, with no release signal - use it for space heating or air conditioning",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "choices": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "external_contingent",
+          "external_profile"
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Identity"
+    },
+    {
+      "key": "managed_loads.enabled",
+      "type": "bool",
+      "default": true,
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "Include this load in the forecast and control it",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Identity"
+    },
+    {
+      "key": "managed_loads.power_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "Entity/item for this load's power draw in watts",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Identity"
+    },
+    {
+      "key": "managed_loads.subtract_from_base_load",
+      "type": "bool",
+      "default": true,
+      "section": "managed_loads",
+      "level": "expert",
+      "description": "Remove this load's measured history from the household base load. Leave on unless its power sensor overlaps another one - turning it off makes the forecast count this appliance twice",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": null,
+      "hot_reload": false,
+      "display_group": "Identity"
+    },
+    {
+      "key": "managed_loads.priority",
+      "type": "int",
+      "default": 100,
+      "section": "managed_loads",
+      "level": "expert",
+      "description": "Lower numbers are planned first and get the cheapest slots when several managed loads compete for the same shared power budget",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 1,
+        "max": 999
+      },
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Identity"
+    },
+    {
+      "key": "managed_loads.temp_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "Entity/item for the stored medium's temperature in degrees Celsius",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Temperature"
+    },
+    {
+      "key": "managed_loads.target_temp",
+      "type": "float",
+      "default": 28.0,
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "Target temperature in degrees Celsius",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0,
+        "max": 120
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Temperature"
+    },
+    {
+      "key": "managed_loads.target_temp_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "managed_loads",
+      "level": "expert",
+      "description": "Optional entity/item holding the target temperature, when it is set elsewhere - overrides the fixed value above",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Temperature"
+    },
+    {
+      "key": "managed_loads.deadband_k",
+      "type": "float",
+      "default": 0.5,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "How far below target the medium must fall before heating starts, in kelvin - stops the appliance hunting around its setpoint",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0.1,
+        "max": 20
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Temperature"
+    },
+    {
+      "key": "managed_loads.ambient_temp_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Entity/item for the surrounding air temperature. A pool uses the outdoor forecast when this is empty; an indoor tank falls back to a fixed value",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Temperature"
+    },
+    {
+      "key": "managed_loads.volume_m3",
+      "type": "float",
+      "default": 30.0,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Stored volume in cubic metres. For a sauna this is a water-equivalent that reproduces its heat-up time - the calibration corrects it over time",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0.01,
+        "max": 1000
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Physical"
+    },
+    {
+      "key": "managed_loads.surface_m2",
+      "type": "float",
+      "default": 32.0,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Surface losing heat, in square metres",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0.1,
+        "max": 1000
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Physical"
+    },
+    {
+      "key": "managed_loads.heat_loss_w_per_m2_k",
+      "type": "float",
+      "default": 25.0,
+      "section": "managed_loads",
+      "level": "expert",
+      "description": "Starting guess for the heat loss coefficient in W/(m2 K). It is measured from the observed cooling rate and refined automatically",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0.1,
+        "max": 200
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Physical"
+    },
+    {
+      "key": "managed_loads.rated_power_w",
+      "type": "float",
+      "default": 2500.0,
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "Electrical power the appliance draws while running, in watts",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 1,
+        "max": 100000
+      },
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Physical"
+    },
+    {
+      "key": "managed_loads.cop_nominal",
+      "type": "float",
+      "default": 5.0,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Coefficient of performance at 26 C ambient. Use 1.0 for a resistive heater such as a sauna. Refined automatically from measured operation",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0.8,
+        "max": 8
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Physical"
+    },
+    {
+      "key": "managed_loads.cop_air_coeff",
+      "type": "float",
+      "default": 0.03,
+      "section": "managed_loads",
+      "level": "expert",
+      "description": "How much the COP changes per kelvin of ambient temperature, as a fraction of the nominal value. Refined automatically",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": -0.06,
+        "max": 0.06
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Physical"
+    },
+    {
+      "key": "managed_loads.cover_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Optional entity/item that is on when the cover is closed",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": {
+        "type": [
+          "pool_heatpump"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Physical"
+    },
+    {
+      "key": "managed_loads.cover_loss_factor",
+      "type": "float",
+      "default": 0.35,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Fraction of the heat loss that remains while the cover is closed",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0.05,
+        "max": 1.0
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Physical"
+    },
+    {
+      "key": "managed_loads.strategy",
+      "type": "select",
+      "default": "combined",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "How the cheapest slots are chosen. Combined uses the grid price but values PV surplus at the feed-in tariff, so your own solar wins over cheap grid energy - recommended. Cheapest slots looks at the grid price only. PV surplus takes the sunniest slots first and falls back to price when there is no surplus",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "choices": [
+          "combined",
+          "cheapest_slots",
+          "pv_surplus"
+        ]
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "external_contingent"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.min_runtime_minutes",
+      "type": "int",
+      "default": 30,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Shortest time the appliance stays released once started - protects the compressor from being cycled every time the plan is recalculated",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0,
+        "max": 720
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "external_contingent"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.max_runtime_hours_per_day",
+      "type": "int",
+      "default": 12,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Cap on released hours per day (0 = no cap)",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0,
+        "max": 24
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "external_contingent"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.window_start",
+      "type": "int",
+      "default": 8,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "First hour of the day the appliance may run (leave equal to end for no limit)",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0,
+        "max": 23
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "external_contingent"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.window_end",
+      "type": "int",
+      "default": 20,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Hour of the day after which the appliance may no longer run",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0,
+        "max": 23
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "external_contingent"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.deadline_hours",
+      "type": "int",
+      "default": 0,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Hours from now by which the target must be reached (0 = anywhere in the next two days). A sauna wanted this evening sets it; a pool does not",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0,
+        "max": 48
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "external_contingent"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.max_price_ct_kwh",
+      "type": "float",
+      "default": 0,
+      "section": "managed_loads",
+      "level": "expert",
+      "description": "Never run above this price in ct/kWh (0 = no cap). Ignored when frost protection is active",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 0,
+        "max": 200
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "external_contingent"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.min_ambient_temp_c",
+      "type": "float",
+      "default": 12.0,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Never run below this ambient temperature - an air source heat pump barely works in the cold and its heat exchanger can freeze",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": -30,
+        "max": 40
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.frost_protection_temp_c",
+      "type": "float",
+      "default": 4.0,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Run immediately regardless of price when the medium falls to this temperature",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": -20,
+        "max": 40
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.season_start",
+      "type": "str",
+      "default": "04-15",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "First day of the season, as MM-DD (leave empty for all year)",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "pattern": "^$|^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.season_end",
+      "type": "str",
+      "default": "09-30",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Last day of the season, as MM-DD",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "pattern": "^$|^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.ttl_minutes",
+      "type": "int",
+      "default": 1440,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "How long pushed data stays valid. After this the load stops being counted, so a sender that goes quiet cannot hold a stale forecast forever",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "min": 1,
+        "max": 10080
+      },
+      "depends_on": {
+        "type": [
+          "external_contingent",
+          "external_profile"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Pushed data"
     }
   ],
   "sections": {
@@ -2629,6 +3364,10 @@
     "load": {
       "icon": "fa-bolt",
       "label": "Load"
+    },
+    "managed_loads": {
+      "icon": "fa-sliders",
+      "label": "Managed Loads"
     },
     "price": {
       "icon": "fa-coins",

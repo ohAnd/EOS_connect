@@ -63,6 +63,7 @@ SECTION_META = {
     "data_source":        {"icon": "fa-plug",            "label": "Data Source"},
     "battery":            {"icon": "fa-battery-full",    "label": "Battery"},
     "load":               {"icon": "fa-bolt",            "label": "Load"},
+    "managed_loads":      {"icon": "fa-sliders",         "label": "Managed Loads"},
     "price":              {"icon": "fa-coins",           "label": "Price"},
     "pv_forecast_source": {"icon": "fa-sun",             "label": "PV Source"},
     "pv_forecast":        {"icon": "fa-solar-panel",     "label": "PV Installations"},
@@ -73,6 +74,48 @@ SECTION_META = {
 
 # Location-based PV forecast sources that require pv_forecast array configuration
 LOCATION_BASED_PV_SOURCES = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]
+
+
+# Sections stored as a *list of entries* rather than a flat group of keys. Their
+# FieldDefs are the template for ONE entry; the store holds indexed keys
+# (``managed_loads.0.type``) and the merger rebuilds the list. Everything that iterates
+# sections has to skip these, so they are named once here rather than special-cased at
+# each site - which is how ``pv_forecast`` ended up hardcoded in three places.
+LIST_SECTIONS = frozenset({"pv_forecast", "managed_loads"})
+
+
+# Managed-load appliance types. These mirror ``loads.presets.TYPES``; the schema cannot
+# import that module (it must stay importable without the runtime package layout), so
+# ``tests/loads/test_schema_presets_agree.py`` fails if the two ever drift.
+#
+# Four of them resolve to one thermal model and differ only in their starting values -
+# which is what makes "add a sauna" a table entry rather than a new implementation.
+MANAGED_LOAD_TYPES = [
+    "pool_heatpump",
+    "sauna",
+    "hot_water_tank",
+    "buffer_tank",
+    "external_contingent",
+    "external_profile",
+]
+
+# Types whose demand comes from stored heat, so the thermal fields apply.
+MANAGED_LOAD_THERMAL_TYPES = [
+    "pool_heatpump", "sauna", "hot_water_tank", "buffer_tank",
+]
+
+# Types the planner and the release gate apply to - everything except a pushed profile,
+# whose timing the sender has already decided.
+MANAGED_LOAD_CONTINGENT_TYPES = MANAGED_LOAD_THERMAL_TYPES + ["external_contingent"]
+
+# Types fed by a push over REST or MQTT rather than by sensors.
+MANAGED_LOAD_EXTERNAL_TYPES = ["external_contingent", "external_profile"]
+
+# Types for which a cover, and a swimming season, mean anything.
+MANAGED_LOAD_COVER_TYPES = ["pool_heatpump"]
+
+# Placement strategies offered to the user.
+MANAGED_LOAD_STRATEGIES = ["combined", "cheapest_slots", "pv_surplus"]
 
 
 @dataclass
@@ -199,8 +242,9 @@ class ConfigSchema:
         Returns a dict like: {"load": {"source": "default", ...}, "battery": {...}, ...}
         Top-level keys (no dot) become top-level dict entries.
         
-        Special handling: pv_forecast is a list and is built separately by the merger,
-        so we exclude it from the flat defaults dict.
+        Special handling: the sections in ``LIST_SECTIONS`` are lists built separately
+        by the merger, so they are excluded from the flat defaults dict and seeded as
+        empty lists instead.
         """
         result = {}
         for f in self._fields.values():
@@ -209,17 +253,15 @@ class ConfigSchema:
                 result[parts[0]] = f.default
             else:
                 section, subkey = parts
-                # Skip pv_forecast fields — they're built separately as a
-                # list by _build_pv_forecast()
-                if section == "pv_forecast":
+                if section in LIST_SECTIONS:
                     continue
                 if section not in result:
                     result[section] = {}
                 result[section][subkey] = f.default
 
-        # Ensure pv_forecast is initialized as an empty list (not a dict)
-        if "pv_forecast" not in result:
-            result["pv_forecast"] = []
+        for section in LIST_SECTIONS:
+            if section not in result:
+                result[section] = []
 
         return result
 
@@ -378,6 +420,37 @@ _ALL_FIELDS: list[FieldDef] = [
         validation={"min": 0},
         depends_on={"load.additional_load_1_sensor": "!empty"},
         display_group="Additional Load",
+    ),
+
+    FieldDef(
+        key="load.managed_loads_max_power_w",
+        field_type="int",
+        default=0,
+        section="load",
+        level="standard",
+        description=(
+            "Total power all managed loads together may be planned for, in watts "
+            "(0 = no limit). Stops a pool pump and a sauna both being scheduled into "
+            "the same cheap hour and forecasting a peak the house cannot draw"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0, "max": 100000},
+        display_group="Managed Loads",
+    ),
+    FieldDef(
+        key="load.managed_loads_cycle_seconds",
+        field_type="int",
+        default=300,
+        section="load",
+        level="expert",
+        description=(
+            "How often managed loads are re-planned and their sensors read, in seconds"
+        ),
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        validation={"min": 30, "max": 3600},
+        display_group="Managed Loads",
     ),
 
     # ===== EOS =====
@@ -1963,5 +2036,473 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="configuration.html#system",
         validation={"min": 5, "max": 120},
         display_group="General",
+    ),
+    # ===== MANAGED LOADS =====
+    # A list section, like pv_forecast: these FieldDefs are the template for ONE entry
+    # and the store holds indexed keys (``managed_loads.0.type``). The merger rebuilds
+    # the list; ``loads.presets`` supplies the per-type defaults at runtime, so the
+    # defaults here exist for the UI and mirror the pool preset.
+    #
+    # ``depends_on`` keys without a dot are resolved *within the entry* - "type" means
+    # this entry's type, not a top-level key. pv_forecast never needed that because its
+    # entries are homogeneous.
+    FieldDef(
+        key="managed_loads.id",
+        field_type="str",
+        default="",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "Short name for this load - becomes its MQTT topic and API path "
+            "(lower case letters, digits and underscores)"
+        ),
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        validation={"pattern": "^[a-z0-9_]{1,32}$"},
+        display_group="Identity",
+    ),
+    FieldDef(
+        key="managed_loads.type",
+        field_type="select",
+        default="pool_heatpump",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "What kind of load this is - it decides which settings apply. "
+            "Pool heat pump, sauna, hot water tank and buffer tank are heated stores "
+            "that EOS Connect schedules and releases itself. "
+            "External energy budget takes a "
+            "\"needs X Wh by then\" push and schedules it. "
+            "External load profile takes a ready-made profile and injects it as given, "
+            "with no release signal - use it for space heating or air conditioning"
+        ),
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        validation={"choices": MANAGED_LOAD_TYPES},
+        display_group="Identity",
+    ),
+    FieldDef(
+        key="managed_loads.enabled",
+        field_type="bool",
+        default=True,
+        section="managed_loads",
+        level="getting_started",
+        description="Include this load in the forecast and control it",
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        display_group="Identity",
+    ),
+    FieldDef(
+        key="managed_loads.power_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="getting_started",
+        description="Entity/item for this load's power draw in watts",
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        display_group="Identity",
+    ),
+    FieldDef(
+        key="managed_loads.subtract_from_base_load",
+        field_type="bool",
+        default=True,
+        section="managed_loads",
+        level="expert",
+        description=(
+            "Remove this load's measured history from the household base load. Leave on "
+            "unless its power sensor overlaps another one - turning it off makes the "
+            "forecast count this appliance twice"
+        ),
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        display_group="Identity",
+    ),
+    FieldDef(
+        key="managed_loads.priority",
+        field_type="int",
+        default=100,
+        section="managed_loads",
+        level="expert",
+        description=(
+            "Lower numbers are planned first and get the cheapest slots when several "
+            "managed loads compete for the same shared power budget"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 1, "max": 999},
+        display_group="Identity",
+    ),
+
+    # --- thermal ---
+    FieldDef(
+        key="managed_loads.temp_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="getting_started",
+        description="Entity/item for the stored medium's temperature in degrees Celsius",
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Temperature",
+    ),
+    FieldDef(
+        key="managed_loads.target_temp",
+        field_type="float",
+        default=28.0,
+        section="managed_loads",
+        level="getting_started",
+        description="Target temperature in degrees Celsius",
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0, "max": 120},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Temperature",
+    ),
+    FieldDef(
+        key="managed_loads.target_temp_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="expert",
+        description=(
+            "Optional entity/item holding the target temperature, when it is set "
+            "elsewhere - overrides the fixed value above"
+        ),
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Temperature",
+    ),
+    FieldDef(
+        key="managed_loads.deadband_k",
+        field_type="float",
+        default=0.5,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "How far below target the medium must fall before heating starts, in kelvin "
+            "- stops the appliance hunting around its setpoint"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0.1, "max": 20},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Temperature",
+    ),
+    FieldDef(
+        key="managed_loads.ambient_temp_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Entity/item for the surrounding air temperature. A pool uses the outdoor "
+            "forecast when this is empty; an indoor tank falls back to a fixed value"
+        ),
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Temperature",
+    ),
+    FieldDef(
+        key="managed_loads.volume_m3",
+        field_type="float",
+        default=30.0,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Stored volume in cubic metres. For a sauna this is a water-equivalent "
+            "that reproduces its heat-up time - the calibration corrects it over time"
+        ),
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0.01, "max": 1000},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.surface_m2",
+        field_type="float",
+        default=32.0,
+        section="managed_loads",
+        level="standard",
+        description="Surface losing heat, in square metres",
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0.1, "max": 1000},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.heat_loss_w_per_m2_k",
+        field_type="float",
+        default=25.0,
+        section="managed_loads",
+        level="expert",
+        description=(
+            "Starting guess for the heat loss coefficient in W/(m2 K). It is measured "
+            "from the observed cooling rate and refined automatically"
+        ),
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0.1, "max": 200},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.rated_power_w",
+        field_type="float",
+        default=2500.0,
+        section="managed_loads",
+        level="getting_started",
+        description="Electrical power the appliance draws while running, in watts",
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 1, "max": 100000},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.cop_nominal",
+        field_type="float",
+        default=5.0,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Coefficient of performance at 26 C ambient. Use 1.0 for a resistive "
+            "heater such as a sauna. Refined automatically from measured operation"
+        ),
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0.8, "max": 8},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.cop_air_coeff",
+        field_type="float",
+        default=0.03,
+        section="managed_loads",
+        level="expert",
+        description=(
+            "How much the COP changes per kelvin of ambient temperature, as a fraction "
+            "of the nominal value. Refined automatically"
+        ),
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        validation={"min": -0.06, "max": 0.06},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.cover_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description="Optional entity/item that is on when the cover is closed",
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        depends_on={"type": MANAGED_LOAD_COVER_TYPES},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.cover_loss_factor",
+        field_type="float",
+        default=0.35,
+        section="managed_loads",
+        level="standard",
+        description="Fraction of the heat loss that remains while the cover is closed",
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0.05, "max": 1.0},
+        depends_on={"type": MANAGED_LOAD_COVER_TYPES},
+        display_group="Physical",
+    ),
+
+    # --- when it may run ---
+    FieldDef(
+        key="managed_loads.strategy",
+        field_type="select",
+        default="combined",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "How the cheapest slots are chosen. "
+            "Combined uses the grid price but values PV surplus at the feed-in tariff, "
+            "so your own solar wins over cheap grid energy - recommended. "
+            "Cheapest slots looks at the grid price only. "
+            "PV surplus takes the sunniest slots first and falls back to price when "
+            "there is no surplus"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"choices": MANAGED_LOAD_STRATEGIES},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.min_runtime_minutes",
+        field_type="int",
+        default=30,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Shortest time the appliance stays released once started - protects the "
+            "compressor from being cycled every time the plan is recalculated"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0, "max": 720},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.max_runtime_hours_per_day",
+        field_type="int",
+        default=12,
+        section="managed_loads",
+        level="standard",
+        description="Cap on released hours per day (0 = no cap)",
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0, "max": 24},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.window_start",
+        field_type="int",
+        default=8,
+        section="managed_loads",
+        level="standard",
+        description="First hour of the day the appliance may run (leave equal to end for no limit)",
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0, "max": 23},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.window_end",
+        field_type="int",
+        default=20,
+        section="managed_loads",
+        level="standard",
+        description="Hour of the day after which the appliance may no longer run",
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0, "max": 23},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.deadline_hours",
+        field_type="int",
+        default=0,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Hours from now by which the target must be reached (0 = anywhere in the "
+            "next two days). A sauna wanted this evening sets it; a pool does not"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0, "max": 48},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.max_price_ct_kwh",
+        field_type="float",
+        default=0,
+        section="managed_loads",
+        level="expert",
+        description=(
+            "Never run above this price in ct/kWh (0 = no cap). Ignored when frost "
+            "protection is active"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0, "max": 200},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.min_ambient_temp_c",
+        field_type="float",
+        default=12.0,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Never run below this ambient temperature - an air source heat pump barely "
+            "works in the cold and its heat exchanger can freeze"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": -30, "max": 40},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.frost_protection_temp_c",
+        field_type="float",
+        default=4.0,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Run immediately regardless of price when the medium falls to this "
+            "temperature"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": -20, "max": 40},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.season_start",
+        field_type="str",
+        default="04-15",
+        section="managed_loads",
+        level="standard",
+        description="First day of the season, as MM-DD (leave empty for all year)",
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"pattern": "^$|^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"},
+        depends_on={"type": MANAGED_LOAD_COVER_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.season_end",
+        field_type="str",
+        default="09-30",
+        section="managed_loads",
+        level="standard",
+        description="Last day of the season, as MM-DD",
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"pattern": "^$|^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"},
+        depends_on={"type": MANAGED_LOAD_COVER_TYPES},
+        display_group="Operation",
+    ),
+
+    # --- pushed data ---
+    FieldDef(
+        key="managed_loads.ttl_minutes",
+        field_type="int",
+        default=1440,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "How long pushed data stays valid. After this the load stops being counted, "
+            "so a sender that goes quiet cannot hold a stale forecast forever"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 1, "max": 10080},
+        depends_on={"type": MANAGED_LOAD_EXTERNAL_TYPES},
+        display_group="Pushed data",
     ),
 ]

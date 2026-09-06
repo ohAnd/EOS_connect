@@ -171,6 +171,121 @@
                     </div>
                 </div>
 
+                <div class="content-section" data-level="standard">
+                    <h2 id="managed-loads"><i class="fas fa-sliders" aria-hidden="true"></i> Managed
+                        loads</h2>
+                    <p>The household load forecast is built from what the same weekday drew 7 and 14 days
+                        ago. That models a base load well and anything weather- or state-driven badly: a
+                        heat pump switched to cooling, a cold snap, a pool heated to a target temperature.
+                        <em>Settings &rsaquo; Managed Loads</em> is where you add those, one card each.</p>
+
+                    <h3>Two kinds</h3>
+                    <ul>
+                        <li><strong>Scheduled</strong> &mdash; &ldquo;this needs a certain amount of
+                            energy, you pick when&rdquo;. EOS Connect works out how much, places it in the
+                            cheapest hours the appliance is allowed to run in, and publishes a
+                            <strong>released / blocked</strong> signal you can wire to a relay.
+                            <em>Pool heat pump, sauna, hot water tank, buffer tank, external energy
+                                budget.</em></li>
+                        <li><strong>Forecast only</strong> &mdash; &ldquo;this is what it <em>will</em>
+                            draw, I cannot move it&rdquo;. The values are added to the forecast exactly as
+                            given. There is no release signal, because the timing was never ours to choose.
+                            <em>External load profile &mdash; use it for space heating and air
+                                conditioning.</em></li>
+                    </ul>
+
+                    <div class="alert alert-info">
+                        <p>Every managed load's own consumption is <strong>removed from the household base
+                                load</strong> before its forecast is added back, so the same appliance is
+                            never counted twice. This is what makes a managed load different from
+                            <em>Additional Load</em>, which models a shiftable appliance such as a
+                            dishwasher &mdash; a runtime and a total, for the optimizer to place. Do not
+                            configure the same sensor as both.</p>
+                    </div>
+
+                    <h3>Heated stores</h3>
+                    <p>A pool heat pump, a sauna, a hot water tank and a buffer tank are the same problem
+                        with different numbers, so they share one model. Pick the type closest to your
+                        appliance and it starts from sensible values.</p>
+                    <p>You supply the volume, the surface losing heat, the rated power and a rough
+                        efficiency. Those are a starting point, not an answer &mdash; nobody knows their
+                        pool's heat loss coefficient. EOS Connect measures both from ordinary operation:</p>
+                    <ul>
+                        <li>while the appliance is <strong>off</strong>, the rate the store cools at gives
+                            the heat loss;</li>
+                        <li>while it is <strong>on</strong>, the rate it warms at &mdash; with those losses
+                            added back &mdash; against the measured power gives the efficiency, and how it
+                            changes with the outdoor temperature.</li>
+                    </ul>
+                    <p>A <em>calibration confidence</em> figure on the API and on MQTT tells you when the
+                        estimate has settled. It survives restarts, and is seeded from up to two weeks of
+                        recorded samples.</p>
+
+                    <h3>When it may run</h3>
+                    <ul>
+                        <li><strong>Allowed window</strong> and <strong>season</strong> &mdash; a pool pump
+                            defaults to daylight hours in the swimming season. Nobody wants it audible at
+                            03:00 for two cents.</li>
+                        <li><strong>Minimum runtime</strong> &mdash; the plan is recalculated every few
+                            minutes; without this a compressor would be cycled every time the cheapest hour
+                            moved.</li>
+                        <li><strong>Minimum ambient temperature</strong> &mdash; an air source heat pump
+                            barely works in the cold and its heat exchanger can freeze.</li>
+                        <li><strong>Frost protection</strong> &mdash; below this the appliance runs
+                            immediately and price stops mattering.</li>
+                        <li><strong>Strategy</strong> &mdash; <em>Combined</em> uses the grid price but
+                            values your own PV surplus at the feed-in tariff, so free solar beats cheap
+                            grid energy.</li>
+                        <li><strong>Shared power budget</strong> (<em>Settings &rsaquo; Load</em>) &mdash;
+                            without it a pool pump and a sauna both take the single cheapest hour and the
+                            forecast shows a peak your house cannot draw. Lower <strong>priority</strong>
+                            numbers are planned first.</li>
+                    </ul>
+
+                    <h3>Pushing a forecast in</h3>
+                    <p>If you already model something elsewhere &mdash; a heating curve against the
+                        outdoor temperature forecast in Home Assistant, say &mdash; add an
+                        <strong>External load profile</strong> and push the result in. EOS Connect does not
+                        need to know anything about heat pumps, cooling or washing days.</p>
+                    <pre><code>POST /api/managed_loads/&lt;id&gt;/push
+
+{"value_wh": 1500}                       one hourly average, applied across the horizon
+{"values": [0, 0, 1200, 1400, ...]}      24 or 48 hourly values, or 96 or 192 quarter-hourly
+{"total_wh": 8000, "deadline_hours": 12} an energy budget for EOS Connect to place</code></pre>
+                    <p>The resolution is inferred from how many values you send and resampled to whatever
+                        the optimizer is running on, so your sender keeps working if you change the slot
+                        length. Add <code>"unit": "W"</code> for average power, <code>"start": "now"</code>
+                        if the series begins at the current slot rather than midnight, and
+                        <code>"ttl_minutes"</code> to control how long it stays valid. The response echoes
+                        the normalised series back so you can check the alignment.</p>
+                    <p>The same payload can be published to
+                        <code>eos_connect/managed_load/&lt;id&gt;/set</code>, including as a bare number.
+                        Retained messages are honoured on this topic, so a pushed forecast survives a
+                        restart.</p>
+                    <div class="alert alert-info">
+                        <p>Values may be <strong>negative</strong>. That is how you correct the forecast
+                            downwards &mdash; the difference between a heat pump's heating and cooling
+                            modes, for instance.</p>
+                    </div>
+
+                    <h3>What it publishes</h3>
+                    <ul>
+                        <li>MQTT, per load, discovered by Home Assistant automatically:
+                            <code>managed_load/&lt;id&gt;/released</code> (a binary sensor),
+                            <code>/state</code>, <code>/reason</code>, <code>/next_release_start</code>,
+                            <code>/energy_needed_wh</code>, <code>/temperature</code>,
+                            <code>/target_temperature</code> and
+                            <code>/calibration_confidence</code>.</li>
+                        <li><code>GET /api/managed_loads</code> for the full picture: the plan slot by
+                            slot, the release state and the calibration.</li>
+                        <li><code>POST /api/managed_loads/&lt;id&gt;/override</code> with
+                            <code>{"mode": "release" &#124; "block" &#124; "clear", "minutes": 60}</code>,
+                            or publish the same to
+                            <code>eos_connect/managed_load/&lt;id&gt;/override/set</code>. An override wins
+                            over everything, frost protection included.</li>
+                    </ul>
+                </div>
+
                 <div class="content-section">
                     <h2 id="backup-restore"><i class="fas fa-box-archive" aria-hidden="true"></i> Backup and
                         restore</h2>
