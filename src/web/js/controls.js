@@ -7,6 +7,9 @@ class ControlsManager {
     constructor() {
         this.menuControlEventListener = null;
         this.toastContainer = null;
+        // The dropdown menu reads this to decide whether to offer a Managed Loads
+        // entry, and it can be opened before the first poll has landed.
+        this.managedLoads = [];
     }
 
     /**
@@ -607,11 +610,13 @@ class ControlsManager {
     }
 
     /**
-     * Render the managed loads card.
+     * Render the managed loads summary tile.
      *
-     * Each row answers the two questions a user actually has: is it running right now,
-     * and how much energy is it going to need. A load with a release signal shows it;
-     * a pushed profile has none to show, because its sender already decided the timing.
+     * A summary, deliberately: one line per load with its name and its state, and
+     * everything else behind the overlay. The first cut put the temperature, the
+     * target, the next start and the energy on every row, which wrapped to three lines
+     * per load at 1680px and took so much width that Statistics and Battery State
+     * started wrapping too.
      *
      * @param {Object[]|undefined} loads - The managed_loads array from current_controls
      */
@@ -622,56 +627,288 @@ class ControlsManager {
             return;
         }
 
-        if (!Array.isArray(loads) || loads.length === 0) {
+        this.managedLoads = Array.isArray(loads) ? loads : [];
+        if (this.managedLoads.length === 0) {
             box.style.display = 'none';
             return;
         }
         box.style.display = '';
 
+        // More than this and the tile grows taller than its neighbours; the rest are
+        // one click away in the overlay.
+        const MAX_ROWS = 4;
+        const shown = this.managedLoads.slice(0, MAX_ROWS);
+        const hidden = this.managedLoads.length - shown.length;
+
         let totalWh = 0;
-        const html = loads.map(load => {
+        for (const load of this.managedLoads) {
             totalWh += Number(load.planned_wh) || 0;
+        }
 
-            let status;
-            if (load.released === true) {
-                status = '<i style="color:#32CD32;" class="fa-solid fa-play"></i> released';
-            } else if (load.released === false) {
-                status = '<i style="color:#888;" class="fa-solid fa-pause"></i> blocked';
-            } else {
-                // No release signal: a pushed profile is a forecast, not something we
-                // switch on and off.
-                status = '<i style="color:#888;" class="fa-solid fa-chart-line"></i> forecast';
-            }
-
-            const temp = (load.temperature_c !== null && load.temperature_c !== undefined)
-                ? ` &middot; ${load.temperature_c}&deg;C / ${load.target_temperature_c}&deg;C`
-                : '';
-
-            const needed = Number(load.energy_needed_wh) || 0;
-            const neededText = needed > 0
-                ? `${(needed / 1000).toFixed(1)} kWh`
-                : '&mdash;';
-
-            const next = load.next_release_start
-                ? new Date(load.next_release_start).toLocaleTimeString(navigator.language, {
-                    hour: '2-digit', minute: '2-digit'
-                })
-                : '';
-
+        let html = shown.map(load => {
+            const state = this.managedLoadState(load);
             return `<tr>
-                <td class="top_box_info_text" title="${this.escapeHtml(load.reason || '')}">
-                    ${this.escapeHtml(load.id)}${temp}
+                <td class="top_box_info_text managed-load-name" title="${this.escapeHtml(this.managedLoadTooltip(load))}">
+                    ${this.escapeHtml(load.id)}
                 </td>
-                <td style="text-align: right;">${status}${next ? ` ${next}` : ''} &middot; ${neededText}</td>
+                <td class="managed-load-state">${state.icon} ${state.short}</td>
             </tr>`;
         }).join('');
+
+        if (hidden > 0) {
+            html += `<tr><td colspan="2" class="top_box_info_text managed-load-more">
+                +${hidden} more
+            </td></tr>`;
+        }
 
         rows.innerHTML = html;
 
         const totalEl = document.getElementById('managed_loads_total');
         if (totalEl) {
-            totalEl.textContent = `${(totalWh / 1000).toFixed(1)} kWh`;
+            totalEl.innerHTML = `${(totalWh / 1000).toFixed(1)} <span style="font-size: 0.8em;">kWh</span>`;
+            totalEl.title = 'Energy planned for managed loads — click for details';
         }
+    }
+
+    /**
+     * Icon and short label for one load's current state.
+     * @param {Object} load - One managed_loads entry
+     * @returns {{icon: string, short: string, label: string}}
+     */
+    managedLoadState(load) {
+        if (load.released === true) {
+            return {
+                icon: '<i style="color:#32CD32;" class="fa-solid fa-play"></i>',
+                short: 'on',
+                label: 'Released',
+            };
+        }
+        if (load.released === false) {
+            const next = load.next_release_start
+                ? new Date(load.next_release_start).toLocaleTimeString(navigator.language, {
+                    hour: '2-digit', minute: '2-digit'
+                })
+                : 'off';
+            return {
+                icon: '<i style="color:#888;" class="fa-solid fa-pause"></i>',
+                short: next,
+                label: 'Blocked',
+            };
+        }
+        // No release signal at all: a pushed profile is a forecast, not something we
+        // switch on and off.
+        return {
+            icon: '<i style="color:#888;" class="fa-solid fa-chart-line"></i>',
+            short: 'fc',
+            label: 'Forecast only',
+        };
+    }
+
+    /**
+     * The detail that no longer fits on the tile row, as a hover title.
+     * @param {Object} load - One managed_loads entry
+     * @returns {string} Plain text
+     */
+    managedLoadTooltip(load) {
+        const parts = [load.id];
+        if (load.temperature_c !== null && load.temperature_c !== undefined) {
+            parts.push(`${load.temperature_c}°C of ${load.target_temperature_c}°C`);
+        }
+        const needed = Number(load.energy_needed_wh) || 0;
+        if (needed > 0) {
+            parts.push(`${(needed / 1000).toFixed(1)} kWh needed`);
+        }
+        if (load.reason) {
+            parts.push(load.reason);
+        }
+        return parts.join(' — ');
+    }
+
+    /**
+     * Show every managed load in a full-screen overlay.
+     *
+     * The tile is a summary by necessity - it shares a row with four others. This is
+     * where the rest lives: why each load is in the state it is, what it still needs,
+     * when it will next run, and how far the calibration has settled.
+     */
+    async showManagedLoadsOverlay() {
+        const header = '<i class="fa-solid fa-sliders"></i> Managed Loads';
+        try {
+            const res = await fetch('api/managed_loads/?nocache=' + Date.now());
+            if (res.status === 404) {
+                showFullScreenOverlay(header, this._managedLoadsEmptyHtml());
+                return;
+            }
+            if (!res.ok) {
+                showFullScreenOverlay(header,
+                    "<div style='color:#dc3545;'>Failed to load managed load details.</div>");
+                return;
+            }
+
+            const data = await res.json();
+            const loads = (data.loads || []).filter(l => l.enabled);
+            if (loads.length === 0) {
+                showFullScreenOverlay(header, this._managedLoadsEmptyHtml());
+                return;
+            }
+
+            const slotSeconds = Number(data.time_frame_base) || 3600;
+            const now = new Date();
+            const currentSlot = Math.floor(
+                (now.getHours() * 3600 + now.getMinutes() * 60) / slotSeconds
+            );
+
+            const total = Number(data.contribution_total_wh) || 0;
+            const budget = Number(data.max_power_w) || 0;
+
+            let html = `<div style="margin-bottom: 16px; opacity: 0.85;">
+                ${loads.length} load${loads.length === 1 ? '' : 's'} &middot;
+                <strong>${(total / 1000).toFixed(1)} kWh</strong> added to the load forecast
+                ${budget > 0 ? `&middot; shared limit ${budget} W` : ''}
+            </div>`;
+
+            html += loads.map(l => this._managedLoadCard(l, slotSeconds, currentSlot)).join('');
+            showFullScreenOverlay(header, html);
+        } catch (err) {
+            console.error('[ControlsManager] Managed loads overlay failed:', err);
+            showFullScreenOverlay(header,
+                "<div style='color:#dc3545;'>Failed to load managed load details.</div>");
+        }
+    }
+
+    /**
+     * What the overlay shows when nothing is configured.
+     * @returns {string} HTML
+     */
+    _managedLoadsEmptyHtml() {
+        return `<div style="opacity: 0.85; line-height: 1.6;">
+            <p>No managed loads are configured yet.</p>
+            <p>A managed load is an appliance the household load forecast cannot follow on
+               its own &mdash; a pool heat pump, a sauna, a hot water tank, or a heating
+               profile pushed in from Home Assistant.</p>
+            <p>Add one under <strong>Menu &rsaquo; Configuration &rsaquo; Managed Loads</strong>.</p>
+        </div>`;
+    }
+
+    /**
+     * One load's detail card.
+     * @param {Object} load - An entry from GET /api/managed_loads
+     * @param {number} slotSeconds - Seconds per optimizer slot
+     * @param {number} currentSlot - Index of the slot happening now
+     * @returns {string} Card HTML
+     */
+    _managedLoadCard(load, slotSeconds, currentSlot) {
+        const release = load.release || null;
+        const detail = load.detail || {};
+        const model = load.model || {};
+
+        let pill;
+        if (!release) {
+            pill = `<span style="background:#555;padding:3px 10px;border-radius:12px;font-size:0.8em;">
+                forecast only</span>`;
+        } else if (release.released) {
+            pill = `<span style="background:#2e7d32;padding:3px 10px;border-radius:12px;font-size:0.8em;">
+                running</span>`;
+        } else {
+            pill = `<span style="background:#555;padding:3px 10px;border-radius:12px;font-size:0.8em;">
+                blocked</span>`;
+        }
+
+        const facts = [];
+        if (detail.temperature_c !== undefined && detail.temperature_c !== null) {
+            facts.push(['Temperature',
+                `${detail.temperature_c} &deg;C &rarr; ${detail.target_temperature_c} &deg;C`]);
+        }
+        facts.push(['Energy needed', `${((load.energy_needed_wh || 0) / 1000).toFixed(1)} kWh`]);
+        facts.push(['Planned', `${((load.planned_wh || 0) / 1000).toFixed(1)} kWh`]);
+        if (release && release.next_release_start) {
+            facts.push(['Next start', new Date(release.next_release_start)
+                .toLocaleString(navigator.language,
+                    { weekday: 'short', hour: '2-digit', minute: '2-digit' })]);
+        }
+        if (model.rated_power_w) {
+            facts.push(['Rated power', `${model.rated_power_w} W`]);
+        }
+        if (detail.mean_cop) {
+            facts.push(['Efficiency now', `COP ${detail.mean_cop}`]);
+        }
+        if (model.confidence !== undefined && model.confidence !== null) {
+            // Until this settles the plan is running on the values from the config form,
+            // which is worth saying rather than hiding behind a number.
+            const pct = Math.round(model.confidence * 100);
+            facts.push(['Calibration', `${pct}%` + (pct < 50
+                ? ' <span style="opacity:0.7;">(still learning &mdash; using configured values)</span>'
+                : '')]);
+        }
+        if (release && release.override) {
+            facts.push(['Override', `${release.override} until ` + new Date(release.override_until)
+                .toLocaleTimeString(navigator.language, { hour: '2-digit', minute: '2-digit' })]);
+        }
+        if (load.error) {
+            facts.push(['Error', this.escapeHtml(load.error)]);
+        }
+
+        const factHtml = facts.map(([k, v]) => `
+            <div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;">
+                <span style="opacity:0.7;">${k}</span><span>${v}</span>
+            </div>`).join('');
+
+        return `<div style="background:rgb(54,54,54);border-radius:10px;padding:14px;margin-bottom:14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;
+                        margin-bottom:6px;flex-wrap:wrap;">
+                <strong style="font-size:1.1em;">${this.escapeHtml(load.id)}</strong>
+                <span style="opacity:0.6;font-size:0.85em;">${this.escapeHtml(load.type)}</span>
+                ${pill}
+            </div>
+            <div style="opacity:0.75;font-size:0.9em;margin-bottom:10px;">
+                ${this.escapeHtml((release && release.reason) || load.reason || '')}
+            </div>
+            ${factHtml}
+            ${this._managedLoadPlanStrip(load.plan || [], slotSeconds, currentSlot)}
+        </div>`;
+    }
+
+    /**
+     * A strip showing which slots of the horizon this load is planned to run in.
+     * @param {number[]} plan - Wh per slot
+     * @param {number} slotSeconds - Seconds per slot
+     * @param {number} currentSlot - Index of the slot happening now
+     * @returns {string} Strip HTML, or "" when nothing is planned
+     */
+    _managedLoadPlanStrip(plan, slotSeconds, currentSlot) {
+        if (!plan.length) {
+            return '';
+        }
+        const peak = Math.max(...plan.map(v => Number(v) || 0));
+        if (peak <= 0) {
+            return '';
+        }
+
+        const slotsPerHour = Math.max(1, Math.round(3600 / slotSeconds));
+        const bars = plan.map((value, i) => {
+            const v = Number(value) || 0;
+            const height = v > 0 ? Math.max(18, Math.round((v / peak) * 100)) : 6;
+            const isNow = i === currentSlot;
+            const colour = v > 0 ? '#4a9eff' : 'rgba(255,255,255,0.12)';
+            return `<div title="slot ${i} — ${Math.round(v)} Wh" style="flex:1 1 0;height:${height}%;
+                background:${colour};align-self:flex-end;
+                ${isNow ? 'outline:1px solid #fff;outline-offset:-1px;' : ''}"></div>`;
+        }).join('');
+
+        // Midnight of the second day, so the two days of the horizon are tellable apart.
+        const dayBreak = Math.round((24 * slotsPerHour / plan.length) * 100);
+
+        return `<div style="margin-top:12px;">
+            <div style="opacity:0.7;font-size:0.85em;margin-bottom:4px;">
+                Planned slots &mdash; today and tomorrow
+            </div>
+            <div style="position:relative;display:flex;align-items:flex-end;gap:1px;height:44px;
+                        background:rgba(0,0,0,0.15);border-radius:4px;padding:2px;">
+                ${bars}
+                <div style="position:absolute;top:0;bottom:0;left:${dayBreak}%;
+                            border-left:1px dashed rgba(255,255,255,0.35);"></div>
+            </div>
+        </div>`;
     }
 
     /**
@@ -857,3 +1094,16 @@ class ControlsManager {
 }
 
 // ControlsManager instance is created in main.js during initialization
+
+
+/**
+ * Open the managed loads overlay.
+ *
+ * Global because the dropdown menu and the tile's header chip both call it inline, the
+ * same way showBatteryOverviewMenu and the rest are reached.
+ */
+function showManagedLoadsMenu() {
+    if (typeof controlsManager !== 'undefined' && controlsManager) {
+        controlsManager.showManagedLoadsOverlay();
+    }
+}

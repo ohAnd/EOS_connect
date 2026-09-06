@@ -199,6 +199,15 @@ function showMainMenu(version, backend, granularity) {
             <span>Alarms</span>
         </div>
         
+        ${(typeof controlsManager !== 'undefined' && controlsManager
+            && (controlsManager.managedLoads || []).length) ? `
+        <div onclick="showManagedLoadsMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;"
+            onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'"
+            onmouseout="this.style.backgroundColor='transparent'">
+            <i class="fa-solid fa-sliders" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
+            <span>Managed Loads</span>
+        </div>` : ''}
+
         <div onclick="showLogsMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
