@@ -314,3 +314,63 @@ def test_reconfiguring_can_disable_a_load(make_manager, installation):
     manager.instance("pool").reconfigure(dict(POOL, enabled=False))
     manager.run_cycle()
     assert manager.registry.snapshot() == []
+
+
+# --- power sensor units ------------------------------------------------------------------
+
+def test_an_energy_counter_as_power_sensor_is_reported(make_manager, installation, caplog):
+    """
+    1234 W and 1234 kWh are the same number, so nothing downstream can catch this: the
+    appliance looks permanently on and every efficiency sample is nonsense.
+    """
+    manager = make_manager([POOL])
+    manager.sources.read_sensor_details = lambda name: {
+        "state": "412.5", "unit": "kWh", "device_class": "energy",
+    }
+
+    with caplog.at_level("WARNING", logger="__main__"):
+        manager.check_power_sensors()
+
+    warnings = [r.getMessage() for r in caplog.records if "power_sensor" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "kWh" in warnings[0]
+    # The suffixes the alerts panel turns into a deep link to the setting.
+    assert "| Config: #managed-loads" in warnings[0]
+    assert "ACTION REQUIRED" in warnings[0]
+
+
+def test_a_watt_sensor_passes_without_comment(make_manager, installation, caplog):
+    manager = make_manager([POOL])
+    manager.sources.read_sensor_details = lambda name: {
+        "state": "1800", "unit": "W", "device_class": "power",
+    }
+    with caplog.at_level("WARNING", logger="__main__"):
+        manager.check_power_sensors()
+    assert not [r for r in caplog.records if "power_sensor" in r.getMessage()]
+
+
+def test_a_source_reporting_no_unit_is_not_second_guessed(make_manager, caplog):
+    """openHAB never reports a unit; assuming the worst would warn every install."""
+    manager = make_manager([POOL])
+    manager.sources.read_sensor_details = lambda name: {
+        "state": "1800", "unit": "", "device_class": "",
+    }
+    with caplog.at_level("WARNING", logger="__main__"):
+        manager.check_power_sensors()
+    assert not [r for r in caplog.records if "power_sensor" in r.getMessage()]
+
+
+def test_an_unreachable_sensor_is_not_a_configuration_complaint(make_manager, caplog):
+    def boom(_name):
+        raise ConnectionError("down")
+
+    manager = make_manager([POOL])
+    manager.sources.read_sensor_details = boom
+    with caplog.at_level("WARNING", logger="__main__"):
+        manager.check_power_sensors()
+    assert not [r for r in caplog.records if "power_sensor" in r.getMessage()]
+
+
+def test_loads_without_a_power_sensor_are_skipped(make_manager):
+    manager = make_manager([{"id": "heating", "type": TYPE_EXTERNAL_PROFILE}])
+    manager.check_power_sensors()   # must not raise

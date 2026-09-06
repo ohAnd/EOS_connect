@@ -545,7 +545,7 @@ class ConfigurationManager {
                 </div>
                 ${helpText}
                 <div class="config-field-error" id="cfg-err-${this._cssKey(f.key)}"></div>
-            </div>${this._renderEntityTester(f)}`;
+            </div>${this._renderEntityTester(f, entryValues)}`;
     }
 
     /**
@@ -562,16 +562,23 @@ class ConfigurationManager {
      * a stray control rather than part of the field.
      *
      * @param {Object} f - Field definition
+     * @param {Object|null} entryValues - Values of the list entry this field belongs to,
+     *     for resolving entry-relative dependencies
      * @returns {string} Row HTML, or "" for anything that is not a sensor field
      */
-    _renderEntityTester(f) {
+    _renderEntityTester(f, entryValues = null) {
         if (f.type !== "sensor") {
             return "";
         }
         const cssKey = this._cssKey(f.key);
         // The test belongs to its field: when the field is not applicable, neither is
         // the button. _updateDependencies keeps the two in step after a change.
-        const hidden = this._isDependencyHidden(f) ? " hidden" : "";
+        //
+        // The entry scope has to be passed through as well. Without it a field whose
+        // dependency is relative ("type" meaning this card's type) resolves to
+        // undefined here, so the tester rendered permanently hidden while the field
+        // it belongs to was visible.
+        const hidden = this._isDependencyHidden(f, entryValues) ? " hidden" : "";
 
         return `
             <div class="config-field config-entity-tester${hidden}" data-entity-tester="${f.key}">

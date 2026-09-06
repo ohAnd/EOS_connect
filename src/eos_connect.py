@@ -43,7 +43,7 @@ from interfaces.inverters import create_inverter
 from interfaces.inverters.null_inverter import NullInverter
 from interfaces.inverters.evcc_inverter import EvccInverter
 from interfaces.pv_autoscaler import PvAutoscaler, TIMEFRAME_IDS, timeframe_bounds
-from interfaces.state_source import fetch_remote_state
+from interfaces.state_source import fetch_remote_state, fetch_remote_state_details
 from loads import api as loads_api
 from loads import mqtt_topics as managed_load_topics
 from loads.manager import ManagedLoadManager, ManagedLoadSources
@@ -392,6 +392,19 @@ def _managed_load_read_sensor(sensor):
     )
 
 
+def _managed_load_read_sensor_details(sensor):
+    """Read one entity together with its unit, so a kWh counter can be spotted."""
+    load_config = config_manager.config.get("load", {})
+    return fetch_remote_state_details(
+        source=load_config.get("source", ""),
+        sensor=sensor,
+        url=load_config.get("url", ""),
+        access_token=load_config.get("access_token", ""),
+        request_timeout=config_manager.config.get("request_timeout", 10),
+        ssl_ignore=bool(load_config.get("ssl_ignore", False)),
+    )
+
+
 def _managed_load_base_load():
     """
     The household base load, for working out the PV surplus in each slot.
@@ -417,6 +430,7 @@ def publish_managed_load_release(load_id, release):
 
 load_manager.sources = ManagedLoadSources(
     read_sensor=_managed_load_read_sensor,
+    read_sensor_details=_managed_load_read_sensor_details,
     price=price_interface.get_current_prices,
     feed_in_price=feed_in_price_interface.get_current_feedin_prices,
     pv_forecast=pv_interface.get_current_pv_forecast,
@@ -427,6 +441,7 @@ load_manager.on_release_change = publish_managed_load_release
 
 if load_manager.enabled_ids():
     mqtt_interface.register_topics(managed_load_topics.build_topics(load_manager))
+    load_manager.check_power_sensors()
     load_manager.backfill()
     load_manager.start()
     logger.info(

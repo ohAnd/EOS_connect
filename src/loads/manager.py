@@ -35,6 +35,13 @@ def _noop(*_args, **_kwargs):
     return None
 
 
+# Units that mean the sensor is counting energy, not reporting power. A managed load's
+# power sensor has to be watts: 1234 W and 1234 kWh are the same number, so reading one
+# as the other is a silent wrong answer - the appliance looks permanently on and the
+# measured efficiency is nonsense.
+ENERGY_UNITS = ("wh", "kwh", "mwh", "j", "kj", "mj")
+
+
 @dataclass
 class ManagedLoadSources:
     """
@@ -45,6 +52,7 @@ class ManagedLoadSources:
     """
 
     read_sensor: object = _noop           # (sensor_name) -> raw state or None
+    read_sensor_details: object = _noop   # (sensor_name) -> {state, unit, device_class}
     read_history: object = _noop          # (sensor, start, end) -> [{state, last_updated}]
     price: object = _noop                 # () -> [EUR/Wh per slot]
     feed_in_price: object = _noop         # () -> [EUR/Wh per slot]
@@ -426,6 +434,48 @@ class ManagedLoadManager:
         for index, value in enumerate(plan):
             if index < len(budget):
                 budget[index] = max(0.0, budget[index] - value)
+
+    def check_power_sensors(self):
+        """
+        Warn once about a power sensor that is actually counting energy.
+
+        Nothing downstream can detect this from the value: an energy counter reads as a
+        large, slowly rising wattage, so the appliance appears to be running
+        permanently and every efficiency sample it produces is wrong. The number alone
+        cannot say which it is, so the unit is what gets checked.
+
+        The "| Config:" and "| ACTION REQUIRED" suffixes are what the alerts panel turns
+        into a deep link to the setting - see ``parseAlertMeta`` in web/js/main.js.
+        """
+        for item in self.instances:
+            if not item.enabled or not item.power_sensor:
+                continue
+            try:
+                details = self.sources.read_sensor_details(item.power_sensor)
+            except Exception:  # pylint: disable=broad-except
+                # A sensor that is briefly unreachable is not a configuration problem.
+                logger.debug(
+                    "[LOADS] could not inspect the power sensor for '%s'", item.id,
+                    exc_info=True,
+                )
+                continue
+
+            if not isinstance(details, dict):
+                continue
+
+            unit = str(details.get("unit", "")).strip().lower()
+            device_class = str(details.get("device_class", "")).strip().lower()
+            if unit in ENERGY_UNITS or device_class == "energy":
+                logger.warning(
+                    "[LOADS] '%s' has power_sensor '%s' reporting %s, which is energy, "
+                    "not power. It must report watts - otherwise the appliance looks "
+                    "permanently on and its measured efficiency is meaningless. In Home "
+                    "Assistant, add a derivative helper and point this at that. "
+                    "| Config: #managed-loads | ACTION REQUIRED",
+                    item.id,
+                    item.power_sensor,
+                    details.get("unit") or device_class,
+                )
 
     # -- sampling and calibration ------------------------------------------------------------
 
