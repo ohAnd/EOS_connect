@@ -172,6 +172,35 @@ body {
     flex: 0 1 clamp(150px, 15%, 240px);
 }
 
+/*
+ * This tile's header lays its chip out in flow rather than absolutely.
+ *
+ * Everywhere else the title is centred and the chips are positioned over the ends of
+ * the header, which works while the tile is wide enough that the two never meet. This
+ * one is the narrowest by design, so they met: the chip sat on the last few pixels of
+ * "Managed Loads". Padding cannot fix it -- every value wide enough to clear the chip
+ * makes the title wrap instead. Putting the chip in the flex row means the two cannot
+ * overlap at any width, and the title gives way with an ellipsis if it ever has to.
+ */
+#managed_loads_box>.header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+#managed_loads_box>.header .header_notification {
+    position: static;
+    flex: 0 0 auto;
+}
+
+#managed_loads_box>.header .header-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
 /* One row per load: the name takes what is left after the state, and is clipped rather
    than wrapped. A wrapped name doubles the tile's height for no information. */
 .managed-load-name {
