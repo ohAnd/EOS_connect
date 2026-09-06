@@ -1738,6 +1738,25 @@
       "display_group": "Provider"
     },
     {
+      "key": "pv_forecast_source.temperature_source",
+      "type": "select",
+      "default": "openmeteo",
+      "section": "pv_forecast_source",
+      "level": "standard",
+      "description": "Where the outside-temperature forecast comes from. Open-Meteo needs no key and publishes the temperature directly. Akkudoktor derives it from a PV forecast query and relays its upstream provider's rate limit, which refuses everyone at once when it triggers. One curve is fetched and shared by the optimizer and by any outdoor managed load",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "choices": [
+          "openmeteo",
+          "akkudoktor"
+        ]
+      },
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Temperature"
+    },
+    {
       "key": "pv_forecast.name",
       "type": "str",
       "default": "myPvInstallation1",

@@ -231,3 +231,69 @@ def test_hold_message_names_the_provider_not_the_configuration(monkeypatch):
     assert "rate limited by the weather provider" in message
     assert "Nothing is wrong with the configuration" in message
     assert str(AKKUDOKTOR_RATE_LIMIT_HOLD_S) in message
+
+
+# ── Backing off a limit that is not ours ────────────────────────────────────────
+#
+# /forecast answers "Request failed with status code 429" for every location, from any
+# address, while /prices on the same host is fine — so the limit sits upstream of
+# akkudoktor and lasts hours or days. A fixed 900 s hold is exactly the PV update
+# interval, so it expired in time for the next cycle to ask again and re-arm it: ninety-
+# six pointless requests a day for as long as the outage ran.
+
+from src.interfaces.pv_interface import (  # noqa: E402
+    AKKUDOKTOR_RATE_LIMIT_HOLD_MAX_S,
+    AKKUDOKTOR_RATE_LIMIT_HOLD_S,
+)
+
+
+def _limited(interface):
+    """One refusal, returning the hold it armed."""
+    before = interface._akkudoktor_hold_seconds  # pylint: disable=protected-access
+    interface._akkudoktor_hold_until = None      # pylint: disable=protected-access
+    interface._akkudoktor_hold_seconds = min(    # pylint: disable=protected-access
+        before * 2, AKKUDOKTOR_RATE_LIMIT_HOLD_MAX_S
+    )
+    return before
+
+
+def test_the_hold_starts_at_the_documented_length():
+    assert _pv()._akkudoktor_hold_seconds == AKKUDOKTOR_RATE_LIMIT_HOLD_S
+
+
+def test_consecutive_refusals_back_off():
+    pv_interface = _pv()
+    holds = [_limited(pv_interface) for _ in range(5)]
+    assert holds == [900, 1800, 3600, 7200, 14400]
+
+
+def test_the_backoff_is_capped_so_it_always_recovers():
+    pv_interface = _pv()
+    for _ in range(40):
+        _limited(pv_interface)
+    assert pv_interface._akkudoktor_hold_seconds == AKKUDOKTOR_RATE_LIMIT_HOLD_MAX_S
+
+
+def test_an_answer_ends_the_run():
+    pv_interface = _pv()
+    for _ in range(4):
+        _limited(pv_interface)
+    pv_interface._akkudoktor_limit_reported = True
+
+    pv_interface._PvInterface__akkudoktor_limit_cleared()
+
+    assert pv_interface._akkudoktor_hold_seconds == AKKUDOKTOR_RATE_LIMIT_HOLD_S
+    assert pv_interface._akkudoktor_limit_reported is False
+    assert pv_interface._akkudoktor_hold_until is None
+
+
+def test_recovery_is_announced_only_when_something_was_wrong(caplog):
+    pv_interface = _pv()
+    with caplog.at_level("INFO", logger="__main__"):
+        pv_interface._PvInterface__akkudoktor_limit_cleared()
+    assert not [r for r in caplog.records if "answering again" in r.getMessage()]
+
+    _limited(pv_interface)
+    with caplog.at_level("INFO", logger="__main__"):
+        pv_interface._PvInterface__akkudoktor_limit_cleared()
+    assert [r for r in caplog.records if "answering again" in r.getMessage()]

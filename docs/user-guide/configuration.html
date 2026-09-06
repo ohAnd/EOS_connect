@@ -220,14 +220,26 @@
                         appliance and it starts from sensible values.</p>
                     <p>You supply the volume, the surface losing heat, the rated power and a rough
                         efficiency. Those are a starting point, not an answer &mdash; nobody knows their
-                        pool's heat loss coefficient. EOS Connect measures both from ordinary operation:</p>
-                    <ul>
-                        <li>while the appliance is <strong>off</strong>, the rate the store cools at gives
-                            the heat loss;</li>
-                        <li>while it is <strong>on</strong>, the rate it warms at &mdash; with those losses
-                            added back &mdash; against the measured power gives the efficiency, and how it
-                            changes with the outdoor temperature.</li>
-                    </ul>
+                        pool's heat loss coefficient. EOS Connect measures them from ordinary
+                        operation.</p>
+                    <p>Every pair of consecutive readings is one equation of the same energy
+                        balance: what the store gained equals what the appliance put in, minus what
+                        leaked out. The heat loss and the efficiency are both unknowns in it, and
+                        they are solved for <strong>together</strong> across the recorded history
+                        rather than one after the other.</p>
+                    <p>That matters because the obvious order does not work. Measuring the losses
+                        while the appliance is off and then using them to measure the efficiency
+                        while it is on sounds right, but a pool held at its target barely changes
+                        temperature while heating &mdash; so the <em>assumed</em> loss dominates the
+                        efficiency measurement, and a wrong starting guess stays wrong. Solving both
+                        at once has no such bootstrap.</p>
+                    <p>Two things keep it honest where the history is thin. The configured values
+                        act as a weak prior worth a couple of samples, so an under-determined fit
+                        falls back to what you entered instead of to noise. And the appliance has to
+                        be seen both <strong>running and idle</strong>, across a range of outdoor
+                        temperatures, before the two can really be separated: a colder day raises
+                        the losses and lowers the efficiency at the same time, so a pump that never
+                        stops cannot tell you which. The confidence figure accounts for that.</p>
                     <p>A <em>calibration confidence</em> figure on the API, on MQTT and in the
                         overlay tells you when the estimate has settled. It survives restarts, and is
                         seeded from up to two weeks of recorded samples.</p>
@@ -278,6 +290,29 @@
                         <em>Latitude</em> and <em>Longitude</em> under
                         <em>Settings &rsaquo; System</em> instead. Leave them at 0 if you do not
                         need them.</p>
+                    <p><em>Settings &rsaquo; PV Source &rsaquo; Temperature source</em> chooses who
+                        supplies the curve:</p>
+                    <ul>
+                        <li><strong>Open-Meteo</strong> (default) publishes the air temperature
+                            directly, needs no API key, and returns whole local days &mdash; which is
+                            already how EOS Connect indexes a forecast.</li>
+                        <li><strong>Akkudoktor</strong> derives it from a PV forecast query against
+                            <code>api.akkudoktor.net/forecast</code>, which proxies a weather
+                            provider that rate-limits it. When that provider refuses, the API
+                            relays a 429 and <em>nobody</em> gets a forecast, whatever their own
+                            request rate &mdash; and because the temperature rides on a solar query,
+                            a solar rate limit takes it down too. EOS Connect backs off with a
+                            doubling hold rather than asking every fifteen minutes, reports it once
+                            rather than once a cycle, and resumes on its own.</li>
+                    </ul>
+                    <div class="alert alert-info">
+                        <p>One curve is fetched and shared by the optimizer and by every outdoor
+                            managed load, so this is a single choice for both rather than one each.
+                            While no forecast is available, an outdoor managed load falls back to
+                            its <em>Ambient Temp Sensor</em> &mdash; which is the best reason to
+                            configure one.</p>
+                    </div>
+
                     <div class="alert alert-info">
                         <p>The forecast used to be fetched only for the EOS Server backend, since
                             EVopt does not consume temperature. Managed loads changed that: an

@@ -72,6 +72,12 @@ SECTION_META = {
     "system":             {"icon": "fa-gears",           "label": "System"},
 }
 
+# Outside-temperature providers. Mirrors ``interfaces.temperature_forecast
+# .TEMPERATURE_PROVIDERS``; the schema cannot import it, so
+# ``tests/interfaces/test_pv_interface_temperature.py`` pins the two together.
+TEMPERATURE_SOURCES = ["openmeteo", "akkudoktor"]
+
+
 # Location-based PV forecast sources that require pv_forecast array configuration
 LOCATION_BASED_PV_SOURCES = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]
 
@@ -1474,6 +1480,24 @@ _ALL_FIELDS: list[FieldDef] = [
     # The schema defines the template for ONE pv_forecast entry.
     # This section is only shown for location-based sources
     # (not for solcast, victron, evcc, timeseries).
+    FieldDef(
+        key="pv_forecast_source.temperature_source",
+        field_type="select",
+        default="openmeteo",
+        section="pv_forecast_source",
+        level="standard",
+        description=(
+            "Where the outside-temperature forecast comes from. Open-Meteo needs no key "
+            "and publishes the temperature directly. Akkudoktor derives it from a PV "
+            "forecast query and relays its upstream provider's rate limit, which refuses "
+            "everyone at once when it triggers. One curve is fetched and shared by the "
+            "optimizer and by any outdoor managed load"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"choices": TEMPERATURE_SOURCES},
+        display_group="Temperature",
+    ),
     FieldDef(
         key="pv_forecast.name",
         field_type="str",

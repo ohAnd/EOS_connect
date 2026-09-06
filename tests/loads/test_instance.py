@@ -591,3 +591,40 @@ def test_resetting_something_that_learns_nothing_is_refused(make_manager):
 def test_resetting_an_unknown_load_is_refused(make_manager):
     with pytest.raises(InjectionError):
         make_manager([POOL]).reset_calibration("nobody")
+
+
+def test_a_quarter_hour_forecast_is_not_expanded_twice(make_manager, installation):
+    """
+    The provider already publishes the curve at the optimizer's resolution. Expanding a
+    192-value series again described the first twelve hours as if they were two days -
+    invisible at hourly resolution, wrong at quarter-hourly.
+    """
+    manager = make_manager([POOL], time_frame_base=900)
+    installation.sensors.update({"sensor.pool_water": 24.0, "sensor.pool_power": 0.0})
+    # 192 slots: hour h holds the value h, each repeated four times.
+    installation.temperature = [float(i // 4) for i in range(192)]
+
+    ctx = manager._context()  # pylint: disable=protected-access
+    ambient, source = manager._ambient_series(  # pylint: disable=protected-access
+        manager.instance("pool"), ctx, {}
+    )
+
+    assert source == "forecast"
+    assert len(ambient) == 192
+    assert ambient[:4] == [0.0] * 4
+    assert ambient[-4:] == [47.0] * 4      # the last hour, not hour 11 stretched
+
+
+def test_an_hourly_forecast_is_still_expanded_for_quarter_hour_slots(make_manager, installation):
+    manager = make_manager([POOL], time_frame_base=900)
+    installation.sensors.update({"sensor.pool_water": 24.0, "sensor.pool_power": 0.0})
+    installation.temperature = [float(h) for h in range(48)]
+
+    ctx = manager._context()  # pylint: disable=protected-access
+    ambient, _ = manager._ambient_series(  # pylint: disable=protected-access
+        manager.instance("pool"), ctx, {}
+    )
+
+    assert len(ambient) == 192
+    assert ambient[:4] == [0.0] * 4
+    assert ambient[4:8] == [1.0] * 4
