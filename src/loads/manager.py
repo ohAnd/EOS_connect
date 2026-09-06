@@ -47,6 +47,21 @@ ENERGY_UNITS = ("wh", "kwh", "mwh", "j", "kj", "mj")
 AMBIENT_FORECAST = "forecast"
 AMBIENT_SENSOR = "sensor"
 AMBIENT_FALLBACK = "fallback"
+# A forecast shifted to agree with the site's own thermometer.
+AMBIENT_CORRECTED = "forecast_corrected"
+
+# A regional forecast and a garden thermometer disagree, and each is right about
+# something the other cannot know: the forecast has the shape - that tonight drops to
+# 11 and tomorrow reaches 22 - and the sensor has the level, because it is standing at
+# the site. Shifting the forecast onto the sensor keeps both.
+#
+# The offset is smoothed rather than taken from the latest reading: one transient
+# disagreement must not tilt a two-day horizon, and only a persistent gap is a bias
+# worth correcting.
+AMBIENT_BIAS_HALF_LIFE_CYCLES = 24.0
+# Beyond this the two are not measuring the same thing - a sensor in the sun, or indoors
+# by mistake - and shifting the whole horizon by it would be worse than not correcting.
+AMBIENT_BIAS_LIMIT_K = 5.0
 
 
 @dataclass
@@ -105,6 +120,9 @@ class ManagedLoadManager:
         self._instances = {}
         self._published_release = {}
         self._warned_ambient = set()
+        self._warned_bias = set()
+        # Smoothed forecast-versus-sensor offset per instance.
+        self._ambient_bias_estimate = {}
         self._stop = threading.Event()
         self._thread = None
 
@@ -399,22 +417,75 @@ class ManagedLoadManager:
         pool with a perfectly good outdoor sensor configured was modelled against a
         fiction - both its losses and its efficiency.
         """
+        measured = self._sensor_ambient(readings)
+
         if uses_outdoor_ambient(item.type):
             hourly = self.sources.temperature_forecast() or []
             if hourly:
-                return self._expand_hourly(hourly, ctx.slot_count), AMBIENT_FORECAST
+                series = self._expand_hourly(hourly, ctx.slot_count)
+                offset = self._ambient_bias(item, series, measured, ctx)
+                if offset:
+                    return [value + offset for value in series], AMBIENT_CORRECTED
+                return series, AMBIENT_FORECAST
 
-        from_sensor = readings.get("ambient_temp_sensor")
-        if from_sensor is not None:
-            try:
-                value = float(str(from_sensor).strip().split()[0])
-                return [value] * ctx.slot_count, AMBIENT_SENSOR
-            except (ValueError, IndexError):
-                pass
+        if measured is not None:
+            return [measured] * ctx.slot_count, AMBIENT_SENSOR
 
         if uses_outdoor_ambient(item.type):
             self._warn_missing_ambient(item)
         return [fallback_ambient_c(item.type)] * ctx.slot_count, AMBIENT_FALLBACK
+
+    @staticmethod
+    def _sensor_ambient(readings):
+        """The instance's own outdoor reading, or None."""
+        raw = readings.get("ambient_temp_sensor")
+        if raw is None:
+            return None
+        try:
+            return float(str(raw).strip().split()[0])
+        except (ValueError, IndexError):
+            return None
+
+    def _ambient_bias(self, item, series, measured, ctx):
+        """
+        How far the forecast sits from this site's own thermometer, smoothed.
+
+        Returns the correction to add to the whole series, or 0.0 when there is nothing
+        to correct with. The estimate decays towards each new observation rather than
+        following it, so a single odd reading moves the horizon a little and a standing
+        disagreement moves it most of the way.
+        """
+        if measured is None:
+            return 0.0
+        slot = min(max(0, ctx.current_slot), len(series) - 1)
+        gap = measured - series[slot]
+        if abs(gap) > AMBIENT_BIAS_LIMIT_K * 2:
+            # Not a bias - the two are not measuring the same air.
+            self._warn_ambient_disagreement(item, gap)
+            return 0.0
+
+        previous = self._ambient_bias_estimate.get(item.id)
+        if previous is None:
+            estimate = gap
+        else:
+            alpha = 1.0 - 0.5 ** (1.0 / AMBIENT_BIAS_HALF_LIFE_CYCLES)
+            estimate = previous + alpha * (gap - previous)
+
+        estimate = max(-AMBIENT_BIAS_LIMIT_K, min(AMBIENT_BIAS_LIMIT_K, estimate))
+        self._ambient_bias_estimate[item.id] = estimate
+        return estimate
+
+    def _warn_ambient_disagreement(self, item, gap):
+        """Say once that the forecast and the sensor cannot both be describing the site."""
+        if item.id in self._warned_bias:
+            return
+        self._warned_bias.add(item.id)
+        logger.warning(
+            "[LOADS] '%s' has an ambient sensor reading %.1f C away from the outdoor "
+            "forecast. One of them is not measuring outdoor air at this site, so the "
+            "forecast is being used uncorrected. | Config: #managed-loads",
+            item.id, gap,
+        )
 
     def _warn_missing_ambient(self, item):
         """

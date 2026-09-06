@@ -284,6 +284,20 @@
                         <li>a fixed fallback, which is a guess and is reported as one on the
                             alerts panel.</li>
                     </ol>
+                    <p>When you have <em>both</em>, they are combined rather than ranked. A
+                        regional forecast knows the <strong>shape</strong> &mdash; that tonight
+                        drops to 11&nbsp;&deg;C and tomorrow reaches 22 &mdash; while your own
+                        thermometer knows the <strong>level</strong> at your site. The forecast is
+                        shifted so it agrees with your sensor, which keeps both. On a pool a
+                        3&nbsp;K difference is around a quarter of the standing loss, so it is
+                        not a rounding matter.</p>
+                    <p>The shift is a smoothed average of the disagreement, not the latest
+                        reading: one odd measurement should not tilt a two-day horizon, and only a
+                        persistent gap is a bias worth correcting. It is capped at 5&nbsp;K, and a
+                        sensor that disagrees by more than twice that is assumed not to be
+                        measuring outdoor air at all &mdash; the forecast is then used uncorrected
+                        and the alerts panel says so. The overlay shows the measurement and the
+                        value the model used side by side whenever they differ.</p>
                     <p>The forecast is fetched for coordinates, which normally come from your
                         first PV installation. Sources that are not location-based &mdash; EVCC,
                         Solcast, Victron, timeseries &mdash; have no installations, so set

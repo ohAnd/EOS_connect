@@ -220,6 +220,51 @@ def test_the_ambient_input_and_its_provenance_are_shown(page):
             or "fixed guess" in content)
 
 
+def test_a_disagreement_between_sensor_and_forecast_is_shown(page):
+    """
+    "Outside now" promises a measurement. Showing a regional forecast under that label
+    while the thermometer at the site reads 3 K lower hides a quarter of the pool's
+    standing loss.
+    """
+    _open_overlay(page)
+    content = page.text_content("#full_screen_content")
+    # The harness has no ambient sensor, so it shows the single figure and its source.
+    assert "Outside now" in content
+
+    # With a sensor that disagrees, both numbers appear.
+    page.evaluate(
+        """() => {
+            const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
+                reason: 'below target', energy_needed_wh: 1000, planned_wh: 1000,
+                plan: [], model: {}, release: null,
+                detail: {ambient_now_c: 17.9, ambient_measured_c: 14.9,
+                         ambient_source: 'forecast_corrected'}};
+            const html = controlsManager._managedLoadCard(load, 3600, 0);
+            document.getElementById('full_screen_content').innerHTML = html;
+        }"""
+    )
+    shown = page.text_content("#full_screen_content")
+    assert "14.9" in shown and "measured" in shown
+    assert "17.9" in shown and "model using" in shown
+    assert "corrected to your sensor" in shown
+
+
+def test_agreeing_values_are_not_shown_twice(page):
+    _open_overlay(page)
+    page.evaluate(
+        """() => {
+            const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
+                reason: 'below target', energy_needed_wh: 1000, planned_wh: 1000,
+                plan: [], model: {}, release: null,
+                detail: {ambient_now_c: 15.0, ambient_measured_c: 15.1,
+                         ambient_source: 'forecast_corrected'}};
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadCard(load, 3600, 0);
+        }"""
+    )
+    assert "model using" not in page.text_content("#full_screen_content")
+
+
 def test_the_rating_is_given_in_both_currencies(page):
     """It is electrical; everything above it on the card is derived from heat."""
     _open_overlay(page)

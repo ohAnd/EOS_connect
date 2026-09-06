@@ -628,3 +628,115 @@ def test_an_hourly_forecast_is_still_expanded_for_quarter_hour_slots(make_manage
     assert len(ambient) == 192
     assert ambient[:4] == [0.0] * 4
     assert ambient[4:8] == [1.0] * 4
+
+
+# --- correcting the forecast to the site ------------------------------------------------
+
+def _ambient(manager, sensor_c=None):
+    """Resolve the ambient series once, as the cycle would."""
+    ctx = manager._context()  # pylint: disable=protected-access
+    readings = {} if sensor_c is None else {"ambient_temp_sensor": sensor_c}
+    return manager._ambient_series(  # pylint: disable=protected-access
+        manager.instance("pool"), ctx, readings
+    )
+
+
+def test_the_forecast_is_shifted_onto_the_sites_own_thermometer(make_manager, installation):
+    """
+    A regional forecast has the shape and the sensor has the level. Shifting keeps both,
+    where preferring either one throws away what the other knows.
+    """
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = [17.9] * 48
+
+    series, source = _ambient(manager, 14.9)
+
+    assert source == "forecast_corrected"
+    assert series[0] == pytest.approx(14.9, abs=0.05)
+
+
+def test_the_shape_of_the_forecast_survives_the_shift(make_manager, installation):
+    """Only the level moves - the diurnal curve is the reason to use a forecast at all."""
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = [10.0 + h for h in range(48)]
+
+    series, _ = _ambient(manager, 5.0)
+
+    spans = [series[i + 1] - series[i] for i in range(10)]
+    assert all(abs(step - 1.0) < 1e-6 for step in spans)
+
+
+def test_the_correction_is_smoothed_rather_than_snapped(make_manager, installation):
+    """One transient disagreement must not tilt a two-day horizon."""
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = [20.0] * 48
+
+    # A settled agreement first, then one reading 6 K out -- large, but still
+    # plausibly the same air, so it is smoothed rather than refused outright.
+    for _ in range(30):
+        _ambient(manager, 20.0)
+    series, _ = _ambient(manager, 14.0)
+
+    # It moves towards the outlier, but nowhere near onto it.
+    assert series[0] < 20.0
+    assert series[0] > 19.0
+
+
+def test_a_standing_disagreement_is_followed(make_manager, installation):
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = [20.0] * 48
+
+    for _ in range(200):
+        series, _ = _ambient(manager, 17.0)
+
+    assert series[0] == pytest.approx(17.0, abs=0.3)
+
+
+def test_the_correction_is_capped(make_manager, installation):
+    """A sensor indoors by mistake must not drag the whole horizon with it."""
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = [5.0] * 48
+
+    for _ in range(300):
+        series, _ = _ambient(manager, 12.0)
+
+    assert series[0] <= 5.0 + 5.0 + 1e-6
+
+
+def test_a_wild_disagreement_is_refused_and_reported(make_manager, installation, caplog):
+    """Beyond a point the two are not measuring the same air, so neither corrects."""
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = [20.0] * 48
+
+    with caplog.at_level("WARNING", logger="__main__"):
+        series, source = _ambient(manager, -15.0)
+        _ambient(manager, -15.0)
+
+    assert source == "forecast"          # used uncorrected
+    assert series[0] == 20.0
+    warnings = [r.getMessage() for r in caplog.records if "away from the outdoor" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+def test_without_a_sensor_the_forecast_is_used_as_is(make_manager, installation):
+    manager = make_manager([POOL])
+    installation.temperature = [12.0] * 48
+
+    series, source = _ambient(manager)
+
+    assert source == "forecast"
+    assert series[0] == 12.0
+
+
+def test_the_measurement_is_reported_next_to_what_the_model_used(make_manager, installation):
+    """"Outside now" promised a measurement and was showing a forecast."""
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = [17.9] * 48
+    installation.sensors.update({
+        "sensor.pool_water": 24.0, "sensor.pool_power": 0.0, "sensor.outside": 14.9,
+    })
+    manager.run_cycle()
+
+    detail = manager.instance("pool").last_demand.detail
+    assert detail["ambient_measured_c"] == 14.9
+    assert detail["ambient_source"] == "forecast_corrected"
