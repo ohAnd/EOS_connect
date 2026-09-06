@@ -57,6 +57,11 @@ def _as_float(value, default=None):
         return default
 
 
+def _round_or_none(value, digits=1):
+    """Round a value that may not be there."""
+    return None if value is None else round(value, digits)
+
+
 def _parse_month_day(value):
     """``"04-15"`` to ``(4, 15)``, or None when unset or unparseable."""
     if not value:
@@ -272,6 +277,11 @@ class ThermalStorageModel(BaseDemandModel):
                     if self._ambient_at(ctx, ctx.current_slot) is not None else None
                 ),
                 "ambient_source": ctx.ambient_source,
+                # What the site's own thermometer says, alongside what the model used.
+                # "Outside now" promised a measurement and showed a forecast.
+                "ambient_measured_c": _round_or_none(
+                    _as_float(ctx.readings.get("ambient_temp_sensor"))
+                ),
                 "horizon_hours": round(
                     max(0, ctx.slot_count - ctx.current_slot) * ctx.hours_per_slot(), 1
                 ),

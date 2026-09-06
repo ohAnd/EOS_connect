@@ -6,6 +6,8 @@ enough for something a heat pump plans against: akkudoktor's /forecast relays it
 upstream provider's rate limit and refuses everyone at once when it triggers.
 """
 
+import types
+
 import pytest
 import requests
 
@@ -42,7 +44,12 @@ def captured_fixture(monkeypatch):
         seen["timeout"] = timeout
         return seen.get("response", _Response(_hourly([10.0] * 48)))
 
-    monkeypatch.setattr(tf.requests, "get", fake_get)
+    # The module reference, not requests.get -- ``requests`` is one shared module
+    # object and patching its ``get`` reaches every other caller in the process.
+    monkeypatch.setattr(
+        tf, "requests",
+        types.SimpleNamespace(get=fake_get, exceptions=requests.exceptions),
+    )
     return seen
 
 

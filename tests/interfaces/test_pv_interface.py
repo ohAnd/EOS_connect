@@ -577,9 +577,7 @@ def test_update_loop_temperature_failure_never_uses_pv_cache(monkeypatch):
     monkeypatch.setattr(pv, "get_summarized_pv_forecast", lambda scale=False: [100.0])
     monkeypatch.setattr(pv, "apply_autoscaling", lambda values: values)
     monkeypatch.setattr(
-        pv,
-        "_PvInterface__get_pv_forecast_akkudoktor_api",
-        lambda tgt_value, pv_config_entry: [],
+        pv, "_PvInterface__fetch_temperature", lambda temp_config: []
     )
 
     _run_one_update_loop_iteration(pv)
@@ -603,8 +601,8 @@ def test_update_loop_rejects_implausible_temperature_values(monkeypatch):
     monkeypatch.setattr(pv, "apply_autoscaling", lambda values: values)
     monkeypatch.setattr(
         pv,
-        "_PvInterface__get_pv_forecast_akkudoktor_api",
-        lambda tgt_value, pv_config_entry: [2090.0, 1500.0, 800.0],
+        "_PvInterface__fetch_temperature",
+        lambda temp_config: [2090.0, 1500.0, 800.0],
     )
 
     _run_one_update_loop_iteration(pv)

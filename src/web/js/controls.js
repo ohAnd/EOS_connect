@@ -933,17 +933,32 @@ class ControlsManager {
         // The input that drives everything, and where it came from. Without the second
         // half a prediction standing on a guessed constant looks exactly like one
         // standing on a forecast.
+        //
+        // Both numbers are shown when they differ, because "Outside now" promises a
+        // measurement: reading 17.9 from a regional forecast while the thermometer in
+        // the garden says 14.9 is not a rounding difference -- on a pool it is a
+        // quarter of the standing loss.
         if (detail.ambient_now_c !== undefined && detail.ambient_now_c !== null) {
             const SOURCES = {
                 forecast: 'from the weather forecast',
+                forecast_corrected: 'forecast, corrected to your sensor',
                 sensor: 'from your sensor, held flat',
                 fallback: 'a fixed guess &mdash; no forecast and no sensor',
             };
             const note = SOURCES[detail.ambient_source] || '';
             const warn = detail.ambient_source === 'fallback';
+            const measured = detail.ambient_measured_c;
+            const differs = measured !== undefined && measured !== null
+                && Math.abs(measured - detail.ambient_now_c) >= 0.5;
+
+            const value = differs
+                ? `${measured} &deg;C measured
+                   <span style="opacity:0.6;">&middot; model using ${detail.ambient_now_c} &deg;C</span>`
+                : `${detail.ambient_now_c} &deg;C`;
+
             facts.push(['Outside now',
-                `${detail.ambient_now_c} &deg;C
-                 <span style="opacity:0.6;${warn ? 'color:#e0a030;' : ''}">${note}</span>`]);
+                `${value}
+                 <div style="opacity:0.6;font-size:0.85em;${warn ? 'color:#e0a030;' : ''}">${note}</div>`]);
         }
 
         if (release && release.next_release_start) {
