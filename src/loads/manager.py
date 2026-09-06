@@ -41,6 +41,13 @@ def _noop(*_args, **_kwargs):
 # measured efficiency is nonsense.
 ENERGY_UNITS = ("wh", "kwh", "mwh", "j", "kj", "mj")
 
+# Where an ambient series came from, best first. Reported alongside the numbers, because
+# a prediction standing on a guessed constant looks exactly like one standing on a
+# forecast until you are told otherwise.
+AMBIENT_FORECAST = "forecast"
+AMBIENT_SENSOR = "sensor"
+AMBIENT_FALLBACK = "fallback"
+
 
 @dataclass
 class ManagedLoadSources:
@@ -97,6 +104,7 @@ class ManagedLoadManager:
 
         self._instances = {}
         self._published_release = {}
+        self._warned_ambient = set()
         self._stop = threading.Event()
         self._thread = None
 
@@ -163,6 +171,19 @@ class ManagedLoadManager:
     def enabled_ids(self):
         """Ids of the instances that are actually running."""
         return [item.id for item in self.instances if item.enabled]
+
+    def needs_outdoor_temperature(self):
+        """
+        Whether any managed load reads the outdoor temperature forecast.
+
+        A pool sits outside: both what it loses and how efficiently the pump replaces it
+        depend on the air temperature over the next two days. Without the forecast the
+        model falls back to a flat default, and the prediction stops following the
+        weather - which is the one thing it exists to do.
+        """
+        return any(
+            item.enabled and uses_outdoor_ambient(item.type) for item in self.instances
+        )
 
     # -- the optimizer-facing call ---------------------------------------------------------
 
@@ -325,7 +346,7 @@ class ManagedLoadManager:
     def _context_for(self, item, ctx_base):
         """Per-instance context: its own sensors and its own ambient series."""
         readings = self._read_sensors(item)
-        ambient = self._ambient_series(item, ctx_base, readings)
+        ambient, ambient_source = self._ambient_series(item, ctx_base, readings)
         return DemandContext(
             now=ctx_base.now,
             anchor=ctx_base.anchor,
@@ -336,6 +357,7 @@ class ManagedLoadManager:
             feed_in_eur_per_wh=ctx_base.feed_in_eur_per_wh,
             pv_surplus_wh=ctx_base.pv_surplus_wh,
             ambient_temp_c=ambient,
+            ambient_source=ambient_source,
             readings=readings,
         )
 
@@ -360,25 +382,60 @@ class ManagedLoadManager:
         """
         The ambient temperature this instance sees, one value per slot.
 
-        A pool sits outdoors, so it uses the outdoor forecast already fetched for the
-        optimizer - the same data j4rvisstant pointed out is the missing input. A tank
-        in a cellar does not care about the weather, so it uses its own sensor, or a
-        constant when it has none.
+        Returns ``(series, source)`` - the values, and which of the three they came
+        from, so the page can say what the prediction is standing on.
+
+        Three sources, best first:
+
+        1. a real outdoor forecast, which is the only one that can see into tomorrow -
+           and the horizon is two days long;
+        2. the instance's own ambient sensor, held flat. It cannot see ahead, but it is
+           a measurement of this actual site;
+        3. the preset's constant, which is a guess and is treated as one.
+
+        The provider must return nothing rather than a placeholder for step 1 to fall
+        through correctly. It did not, at first: the static 15 degree default that
+        stands in for an unfetched forecast is indistinguishable from a real one, so a
+        pool with a perfectly good outdoor sensor configured was modelled against a
+        fiction - both its losses and its efficiency.
         """
         if uses_outdoor_ambient(item.type):
             hourly = self.sources.temperature_forecast() or []
             if hourly:
-                return self._expand_hourly(hourly, ctx.slot_count)
+                return self._expand_hourly(hourly, ctx.slot_count), AMBIENT_FORECAST
 
         from_sensor = readings.get("ambient_temp_sensor")
         if from_sensor is not None:
             try:
                 value = float(str(from_sensor).strip().split()[0])
-                return [value] * ctx.slot_count
+                return [value] * ctx.slot_count, AMBIENT_SENSOR
             except (ValueError, IndexError):
                 pass
 
-        return [fallback_ambient_c(item.type)] * ctx.slot_count
+        if uses_outdoor_ambient(item.type):
+            self._warn_missing_ambient(item)
+        return [fallback_ambient_c(item.type)] * ctx.slot_count, AMBIENT_FALLBACK
+
+    def _warn_missing_ambient(self, item):
+        """
+        Say once that an outdoor load is running on a guessed air temperature.
+
+        Silently assuming a constant is the worst outcome available: the forecast looks
+        like it is working, and every number it produces is wrong in a way nothing on
+        the page reveals.
+        """
+        if item.id in self._warned_ambient:
+            return
+        self._warned_ambient.add(item.id)
+        logger.warning(
+            "[LOADS] '%s' sits outdoors but has no outdoor temperature to work from, so "
+            "it is running on a fixed %.0f C and its energy prediction cannot follow the "
+            "weather. Either set an ambient_temp_sensor on the load, or give the "
+            "installation a Latitude and Longitude under System so the temperature "
+            "forecast can be fetched. | Config: #managed-loads | ACTION REQUIRED",
+            item.id,
+            fallback_ambient_c(item.type),
+        )
 
     def _expand_hourly(self, hourly, slot_count):
         """Stretch an hourly forecast over the running slot resolution."""
@@ -589,6 +646,36 @@ class ManagedLoadManager:
             self.registry.drop(entry_id)
             self.refresh(entry_id)
         return cleared
+
+    def reset_calibration(self, entry_id):
+        """
+        Throw away what a load has learned and start again from its configuration.
+
+        Needed when the inputs the calibration was fitted against turn out to have been
+        wrong - a store that was learning against a placeholder ambient temperature has
+        recorded samples that will drag the fit for as long as they are retained, and no
+        amount of good data arriving later undoes that quickly.
+        """
+        item = self.instance(entry_id)
+        if item is None:
+            raise InjectionError(f"no managed load with id '{entry_id}'")
+        if not hasattr(item.model, "reset_calibration"):
+            raise InjectionError(
+                f"managed load '{entry_id}' is of type '{item.type}' and learns nothing"
+            )
+
+        if self.store is not None:
+            try:
+                self.store.forget(entry_id)
+            except Exception:  # pylint: disable=broad-except
+                logger.exception(
+                    "[LOADS] could not clear the recorded samples for '%s'", entry_id
+                )
+
+        item.model.reset_calibration()
+        logger.info("[LOADS] '%s' calibration reset to its configured values", entry_id)
+        self.refresh(entry_id)
+        return item.model.status()
 
     def set_override(self, entry_id, mode, minutes):
         """Force one instance released or blocked for *minutes*, or clear it."""

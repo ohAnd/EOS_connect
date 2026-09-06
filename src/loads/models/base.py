@@ -49,6 +49,10 @@ class DemandContext:
     time_frame_base: int
     current_slot: int
     ambient_temp_c: list = field(default_factory=list)
+    # Where ambient_temp_c came from: "forecast", "sensor" or "fallback". A model that
+    # reports its inputs lets a wrong answer be diagnosed from the page rather than
+    # from the log - the flat-default bug hid behind a number that looked fine.
+    ambient_source: str = ""
     price_eur_per_wh: list = field(default_factory=list)
     feed_in_eur_per_wh: list = field(default_factory=list)
     pv_surplus_wh: list = field(default_factory=list)

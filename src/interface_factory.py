@@ -265,6 +265,7 @@ class InterfaceFactory:
         temperature_forecast_enabled: bool,
         time_zone_str: str,
         critical: bool = False,
+        site_location=None,
     ):
         """
         Create PvInterface with error handling.
@@ -279,6 +280,8 @@ class InterfaceFactory:
                 forecast (see ``interfaces.pv_interface.wants_temperature_forecast``)
             time_zone_str: Timezone string
             critical: Whether interface is critical (non-critical by default)
+            site_location: ``(lat, lon)`` for this installation, used for the
+                temperature forecast when no PV entry carries coordinates
             
         Returns:
             PvInterface instance or None if non-critical and failed
@@ -309,6 +312,7 @@ class InterfaceFactory:
                 config_special,
                 temperature_forecast_enabled,
                 time_zone_str,
+                site_location=site_location,
             ),
         )
 

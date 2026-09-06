@@ -189,23 +189,55 @@ logger.info("[PV-IF] loading module ")
 EOS_API_GET_PV_FORECAST = "https://api.akkudoktor.net/forecast"
 
 
-def wants_temperature_forecast(eos_config):
+def _clean_site_location(site_location):
     """
-    True when an outside-temperature curve should be fetched for the optimizer.
+    Validate a ``(lat, lon)`` pair, or None.
+
+    Both zero means "not set". Null Island is a real coordinate and a real user could
+    sit on the Greenwich meridian, but nobody is at 0,0 - and a numeric field needs a
+    value that means unset, since an empty number box does not.
+    """
+    if not site_location:
+        return None
+    try:
+        lat, lon = float(site_location[0]), float(site_location[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if lat == 0.0 and lon == 0.0:
+        return None
+    if not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        logger.warning(
+            "[PV-IF] Site location %s, %s is not a valid coordinate - ignoring it",
+            lat, lon,
+        )
+        return None
+    return (lat, lon)
+
+
+def wants_temperature_forecast(eos_config, also_needed=False):
+    """
+    True when an outside-temperature curve should be fetched.
 
     EOS asks for one and models the house more precisely with it, so it is on by default
-    there.  EVopt - local or external - does not use temperature at all, so nothing is
+    there.  EVopt - local or external - does not use temperature at all, so nothing was
     fetched for it.  ``eos.temperature_forecast_enabled`` lets an EOS user opt out
     anyway, which is the only way to stop EOS Connect talking to the forecast provider;
-    the static 15 degree default is sent instead.
+    the static 15 degree default is used instead.
+
+    *also_needed* covers a second consumer that has nothing to do with the optimizer: a
+    managed load that sits outdoors.  A pool heat pump's losses and its efficiency both
+    turn on the air temperature over the next two days, and with the default backend
+    being ``local_evopt`` the rule above left it reading a flat 15 degrees - a weather
+    forecast that does not follow the weather.  It therefore overrides the source check,
+    but not the explicit opt-out below, which stays the way to stop the requests.
 
     ``config_web.hot_reload`` holds an inline copy of this rule (it imports nothing from
     ``interfaces`` by design).  The two are pinned equal by
     ``tests/interfaces/test_pv_interface_temperature_gating.py``.
     """
     if not isinstance(eos_config, dict):
-        return False
-    if eos_config.get("source", "eos_server") != "eos_server":
+        return bool(also_needed)
+    if not also_needed and eos_config.get("source", "eos_server") != "eos_server":
         return False
     value = eos_config.get("temperature_forecast_enabled", True)
     if isinstance(value, str):
@@ -227,8 +259,12 @@ class PvInterface:
         config_special,
         temperature_forecast_enabled=False,
         timezone="UTC",
+        site_location=None,
     ):
         self.config = config
+        # Coordinates for this installation, used only when no PV entry carries any.
+        # ``(lat, lon)`` or None. See ``__get_temperature_config_entry``.
+        self.site_location = _clean_site_location(site_location)
         self.time_zone = timezone
         self.config_source = config_source
         # Set time_frame_base, defaulting to 3600 if None or not provided
@@ -369,6 +405,7 @@ class PvInterface:
         config_special,
         temperature_forecast_enabled,
         timezone,
+        site_location=None,
     ):
         """
         Reload PV configuration at runtime without restarting the full application.
@@ -382,6 +419,7 @@ class PvInterface:
                 "config_source": self.config_source,
                 "config_special": self.config_special,
                 "temperature_forecast_enabled": self.temperature_forecast_enabled,
+                "site_location": self.site_location,
                 "time_zone": self.time_zone,
                 "update_interval": self.update_interval,
                 "configuration_valid": self.configuration_valid,
@@ -395,6 +433,7 @@ class PvInterface:
             self.config_source = config_source
             self.config_special = config_special
             self.temperature_forecast_enabled = temperature_forecast_enabled
+            self.site_location = _clean_site_location(site_location)
             self.time_zone = timezone
             self.pv_forcast_request_error = {
                 "error": None,
@@ -440,6 +479,7 @@ class PvInterface:
                 self.temperature_forecast_enabled = old_state[
                     "temperature_forecast_enabled"
                 ]
+                self.site_location = old_state["site_location"]
                 self.time_zone = old_state["time_zone"]
                 self.update_interval = old_state["update_interval"]
                 self.configuration_valid = old_state["configuration_valid"]
@@ -999,9 +1039,23 @@ class PvInterface:
             return False
         return (time.monotonic() - self._last_temp_fetch) < TEMP_REFRESH_INTERVAL_S
 
+    def has_real_temperature_forecast(self):
+        """
+        Whether the temperature array holds a fetched forecast or the static default.
+
+        The two are indistinguishable to a caller - both are 48 plausible-looking
+        numbers - and treating the 15 degree default as a forecast is worse than having
+        none: a consumer with a real outdoor sensor of its own will prefer the fake
+        curve over its own measurement, which is exactly what happened to managed loads.
+        """
+        return bool(self.temperature_forecast_enabled and self.last_successful_temp_forecast)
+
     def get_current_temp_forecast(self):
         """
         Returns the current temperature forecast array.
+
+        Falls back to a static 15 degree curve when no forecast has been fetched. Ask
+        `has_real_temperature_forecast` first if that distinction matters to you.
         """
         # logger.debug(
         #     "[PV-IF] Returning current temp forecast: %s", self.temp_forecast_array
@@ -1067,12 +1121,19 @@ class PvInterface:
 
     def __get_temperature_config_entry(self):
         """
-        Extracts temperature configuration from PV entries.
-        Returns the first config entry (which already has all defaults set by validation).
-        Temperature uses this full config to match the standard PV request format.
+        Where to ask for the outside temperature.
+
+        A PV installation is the usual answer and stays first, so nothing changes for an
+        install that has one. But ``pv_forecast`` is empty for every source that is not
+        location-based - EVCC, Solcast, Victron, timeseries - and a temperature consumer
+        that is not the optimizer (a pool heat pump) then had no coordinates at all. The
+        site location covers that case.
+
+        Only ``lat`` and ``lon`` are read for a temperature request; the rest of the
+        query is canonical, so a bare pair is a complete answer.
 
         Returns:
-            dict: Full configuration entry with all parameters, or None if no valid config found
+            dict: An entry carrying lat/lon, or None when nothing supplies them.
         """
         if self.config and len(self.config) > 0:
             first_entry = self.config[0]
@@ -1086,6 +1147,14 @@ class PvInterface:
                     lon,
                 )
                 return first_entry
+
+        if self.site_location is not None:
+            lat, lon = self.site_location
+            logger.debug(
+                "[PV-IF] Using the configured site location for temperature: "
+                "lat=%s, lon=%s", lat, lon,
+            )
+            return {"lat": lat, "lon": lon}
 
         return None
 

@@ -111,6 +111,24 @@ def clear_push(load_id):
     return jsonify({"id": load_id, "cleared": bool(cleared)})
 
 
+@loads_bp.route("/<load_id>/calibration/reset", methods=["POST"])
+def reset_calibration(load_id):
+    """
+    Throw away what this load has learned and start again from its configuration.
+
+    Worth doing when the inputs it was fitted against turn out to have been wrong: the
+    recorded samples carry those inputs, so they keep dragging the fit until they age
+    out of the retention window on their own.
+    """
+    if _manager is None:
+        return _unavailable()
+    try:
+        state = _manager.reset_calibration(load_id)
+    except InjectionError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"id": load_id, "calibration": state})
+
+
 @loads_bp.route("/<load_id>/override", methods=["POST"])
 def override(load_id):
     """
