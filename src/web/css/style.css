@@ -128,6 +128,9 @@ body {
 
 .top-box {
     flex: 1;
+    /* Long labels inside a tile wrap rather than push the row wider, so one tile with
+       a lot to say cannot squeeze its neighbours. */
+    min-width: 0;
     margin: 10px;
     padding: 10px;
     background-color: rgb(78, 78, 78);
@@ -135,16 +138,58 @@ body {
     border-radius: 10px;
     display: flex;
     flex-direction: column;
-    font-size: clamp(10px, 1.5vh, 18px);
-    /* Dynamically scale font size */
+    /*
+     * Scaled by viewport height *and* width. Height alone was the original rule, and it
+     * reads the wrong dimension: the tiles sit side by side, so how much room a label
+     * has depends on the width. On a tall 4:3 screen such as 1680x1200 that produced the
+     * largest text in the narrowest tiles, and the labels wrapped. The width term only
+     * bites where it is the tighter of the two.
+     */
+    font-size: clamp(10px, min(1.5vh, 0.95vw), 18px);
 }
 
 .top-box .top_box_info_text_head {
-    font-size: clamp(8px, 1.3vh, 16px);
+    font-size: clamp(8px, min(1.3vh, 0.82vw), 16px);
 }
 
 .top-box .top_box_info_text {
-    font-size: clamp(7px, 1.1vh, 14px);
+    font-size: clamp(7px, min(1.1vh, 0.7vw), 14px);
+}
+
+/*
+ * Managed loads is a summary tile, not a full one: a name and a state per load, with
+ * the detail behind the overlay. It therefore asks for less width than the four tiles
+ * that were here before it.
+ *
+ * That matters because .top-box is flex:1 — a fifth equal share took every tile from
+ * 400px to 316px at 1680px wide, which is below the width Statistics and Battery State
+ * need for their own labels. Both started wrapping the moment a managed load was
+ * configured. Capping this one keeps the other four near the width they had.
+ */
+#managed_loads_box {
+    /* Takes a share of the row rather than a fixed slice, so it gives width back on a
+       small screen instead of holding 240px while its neighbours are squeezed. */
+    flex: 0 1 clamp(150px, 15%, 240px);
+}
+
+/* One row per load: the name takes what is left after the state, and is clipped rather
+   than wrapped. A wrapped name doubles the tile's height for no information. */
+.managed-load-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 0;
+    width: 60%;
+}
+
+.managed-load-state {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.managed-load-more {
+    opacity: 0.7;
+    font-style: italic;
 }
 
 .bottom-boxes {
@@ -258,6 +303,12 @@ th {
     .top-box {
         height: auto;
         font-size: 0.73em;
+    }
+
+    /* Stacked, so there is no neighbour to protect and no reason to stay narrow. */
+    #managed_loads_box {
+        flex: 1 1 auto;
+        min-width: 0;
     }
 
     .top-box>.header {

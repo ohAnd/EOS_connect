@@ -215,6 +215,7 @@
             <div class="top-box" id="managed_loads_box" style="display: none;">
                 <div class="header"><i class="fa-solid fa-sliders"></i> Managed Loads
                     <span class="header_notification" id="managed_loads_total"
+                        onclick="showManagedLoadsMenu()"
                         style="cursor: pointer;min-width: 20px;">...</span>
                 </div>
                 <div class="content">
@@ -341,7 +342,8 @@
                 <div class="content">
                     <table style="width: 100%; text-align: left;padding-top: 10px;">
                         <tr>
-                            <th class="top_box_info_text_head" style="text-align: left;">Expense (rest of the day)</th>
+                            <th class="top_box_info_text_head" style="text-align: left;"
+                                title="Expense for the rest of the day">Expense</th>
                             <th style="text-align: right;" id="expense_summary">0.00 ...</th>
                         </tr>
                         <tr>
