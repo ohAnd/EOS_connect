@@ -870,7 +870,12 @@ class ControlsManager {
 
     /**
      * A strip showing which slots of the horizon this load is planned to run in.
-     * @param {number[]} plan - Wh per slot
+     *
+     * The bars alone answer "roughly when"; the axis and the hover answer "exactly
+     * when", which is the question you have once you are deciding whether the plan is
+     * sensible.
+     *
+     * @param {number[]} plan - Wh per slot, starting at local midnight today
      * @param {number} slotSeconds - Seconds per slot
      * @param {number} currentSlot - Index of the slot happening now
      * @returns {string} Strip HTML, or "" when nothing is planned
@@ -885,29 +890,82 @@ class ControlsManager {
         }
 
         const slotsPerHour = Math.max(1, Math.round(3600 / slotSeconds));
+        const slotsPerDay = 24 * slotsPerHour;
+
+        // Slot 0 is local midnight today, by the same convention the optimizer array
+        // uses, so a slot index converts straight to a wall-clock time.
+        const midnight = new Date();
+        midnight.setHours(0, 0, 0, 0);
+        const slotStart = i => new Date(midnight.getTime() + i * slotSeconds * 1000);
+
+        const hhmm = d => d.toLocaleTimeString(navigator.language,
+            { hour: '2-digit', minute: '2-digit' });
+        const dayName = d => d.toLocaleDateString(navigator.language,
+            { weekday: 'short', day: 'numeric', month: 'short' });
+
+        let running = 0;
         const bars = plan.map((value, i) => {
             const v = Number(value) || 0;
-            const height = v > 0 ? Math.max(18, Math.round((v / peak) * 100)) : 6;
+            running += v;
+            const from = slotStart(i);
+            const to = slotStart(i + 1);
             const isNow = i === currentSlot;
+
+            const tip = [
+                `${dayName(from)} ${hhmm(from)}\u2013${hhmm(to)}`,
+                v > 0 ? `${Math.round(v)} Wh planned` : 'not planned',
+                v > 0 ? `${(running / 1000).toFixed(1)} kWh cumulative` : null,
+                isNow ? 'happening now' : null,
+            ].filter(Boolean).join(' \u00b7 ');
+
+            const height = v > 0 ? Math.max(18, Math.round((v / peak) * 100)) : 6;
             const colour = v > 0 ? '#4a9eff' : 'rgba(255,255,255,0.12)';
-            return `<div title="slot ${i} — ${Math.round(v)} Wh" style="flex:1 1 0;height:${height}%;
+            return `<div title="${this.escapeHtml(tip)}" style="flex:1 1 0;height:${height}%;
                 background:${colour};align-self:flex-end;
                 ${isNow ? 'outline:1px solid #fff;outline-offset:-1px;' : ''}"></div>`;
         }).join('');
 
-        // Midnight of the second day, so the two days of the horizon are tellable apart.
-        const dayBreak = Math.round((24 * slotsPerHour / plan.length) * 100);
+        // A tick every six hours: enough to read the shape against the clock without
+        // crowding a strip that is only a few hundred pixels wide.
+        const TICK_HOURS = 6;
+        const ticks = [];
+        for (let hour = 0; hour * slotsPerHour < plan.length; hour += TICK_HOURS) {
+            const slot = hour * slotsPerHour;
+            ticks.push({
+                left: (slot / plan.length) * 100,
+                label: String(slotStart(slot).getHours()).padStart(2, '0'),
+                major: hour % 24 === 0,
+            });
+        }
+
+        const tickHtml = ticks.map(t => `
+            <span style="position:absolute;left:${t.left}%;transform:translateX(-50%);
+                         font-size:0.75em;opacity:${t.major ? 0.85 : 0.5};
+                         ${t.major ? 'font-weight:600;' : ''}">${t.label}</span>`).join('');
+
+        const gridHtml = ticks.map(t => `
+            <div style="position:absolute;top:0;bottom:0;left:${t.left}%;
+                        border-left:1px ${t.major ? 'dashed' : 'dotted'}
+                        rgba(255,255,255,${t.major ? 0.35 : 0.15});"></div>`).join('');
+
+        const dayLabels = [];
+        for (let day = 0; day * slotsPerDay < plan.length; day++) {
+            const span = Math.min(slotsPerDay, plan.length - day * slotsPerDay);
+            dayLabels.push(`<span style="flex:${span} 1 0;text-align:center;opacity:0.65;">
+                ${dayName(slotStart(day * slotsPerDay))}</span>`);
+        }
 
         return `<div style="margin-top:12px;">
             <div style="opacity:0.7;font-size:0.85em;margin-bottom:4px;">
-                Planned slots &mdash; today and tomorrow
+                Planned slots &mdash; hover a bar for the time and energy
             </div>
             <div style="position:relative;display:flex;align-items:flex-end;gap:1px;height:44px;
                         background:rgba(0,0,0,0.15);border-radius:4px;padding:2px;">
+                ${gridHtml}
                 ${bars}
-                <div style="position:absolute;top:0;bottom:0;left:${dayBreak}%;
-                            border-left:1px dashed rgba(255,255,255,0.35);"></div>
             </div>
+            <div style="position:relative;height:1.2em;margin-top:2px;">${tickHtml}</div>
+            <div style="display:flex;font-size:0.8em;margin-top:2px;">${dayLabels.join('')}</div>
         </div>`;
     }
 

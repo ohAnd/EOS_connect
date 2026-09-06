@@ -196,6 +196,111 @@ def test_the_menu_offers_managed_loads_only_once_configured(page):
     assert "Managed Loads" in page.text_content("#main-dropdown-menu")
 
 
+def test_the_header_title_never_sits_under_its_chip(page):
+    """
+    The tile is the narrowest on the row, so a centred title and a chip positioned over
+    the end of the header met: "38.4 kWh" landed on top of "Managed Loads". Padding
+    cannot fix that -- every value wide enough to clear the chip wraps the title -- so
+    the chip is laid out in flow here instead.
+    """
+    for _, width, height in VIEWPORTS:
+        page.set_viewport_size({"width": width, "height": height})
+        _seed(page, TWO_LOADS)
+        overlap = page.evaluate(
+            """() => {
+                const h = document.querySelector('#managed_loads_box > .header');
+                const t = h.querySelector('.header-title').getBoundingClientRect();
+                const c = h.querySelector('.header_notification').getBoundingClientRect();
+                const x = Math.min(t.right, c.right) - Math.max(t.left, c.left);
+                const y = Math.min(t.bottom, c.bottom) - Math.max(t.top, c.top);
+                return (x > 0.5 && y > 0.5) ? Math.round(x) : 0;
+            }"""
+        )
+        assert overlap == 0, f"{width}x{height}: title and chip overlap by {overlap}px"
+
+
+def test_the_header_title_stays_on_one_line(page):
+    for _, width, height in VIEWPORTS:
+        page.set_viewport_size({"width": width, "height": height})
+        _seed(page, TWO_LOADS)
+        lines = page.evaluate(
+            """() => {
+                const el = document.querySelector('#managed_loads_box .header-title');
+                const r = document.createRange();
+                r.selectNodeContents(el);
+                const rects = [...r.getClientRects()].filter(x => x.width > 0.5);
+                return new Set(rects.map(x => Math.round(x.top))).size;
+            }"""
+        )
+        assert lines == 1, f"{width}x{height}: header title wraps to {lines} lines"
+
+
+# ── The plan strip ──────────────────────────────────────────────────────────────
+
+def _open_overlay(page):
+    _seed(page, TWO_LOADS)
+    page.click("#managed_loads_total")
+    page.wait_for_selector("#full_screen_content")
+
+
+def test_the_plan_strip_is_labelled_with_the_time_of_day(page):
+    """Bars alone say roughly when; the axis says exactly when."""
+    _open_overlay(page)
+    ticks = page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content span')]
+            .map(e => e.textContent.trim())
+            .filter(t => /^(00|06|12|18)$/.test(t))"""
+    )
+    # Every six hours across a two-day horizon.
+    assert ticks[:4] == ["00", "06", "12", "18"]
+    assert len(ticks) >= 8
+
+
+def test_the_plan_strip_names_both_days(page):
+    _open_overlay(page)
+    content = page.text_content("#full_screen_content")
+    today = page.evaluate(
+        """() => new Date().toLocaleDateString(navigator.language,
+            {weekday: 'short', day: 'numeric', month: 'short'})"""
+    )
+    assert today in content
+
+
+def test_hovering_a_bar_gives_the_time_the_energy_and_the_running_total(page):
+    _open_overlay(page)
+    tips = page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content div[title]')]
+            .map(e => e.getAttribute('title'))"""
+    )
+    planned = [t for t in tips if "planned" in t and "not planned" not in t]
+    assert planned, "no planned slot carried a tooltip"
+    assert "Wh planned" in planned[0]
+    assert "cumulative" in planned[0]
+    # A time range, not just an index.
+    assert "\u2013" in planned[0] or "-" in planned[0] or ":" in planned[0]
+
+    idle = [t for t in tips if "not planned" in t]
+    assert idle, "idle slots should say so rather than carry no tooltip"
+
+
+def test_the_current_slot_is_marked_once_per_load(page):
+    _open_overlay(page)
+    marked, strips = page.evaluate(
+        """() => {
+            const tips = [...document.querySelectorAll('#full_screen_content div[title]')]
+                .map(e => e.getAttribute('title'))
+                .filter(t => t.includes('happening now'));
+            // The label itself, not every ancestor that contains it.
+            const strips = [...document.querySelectorAll('#full_screen_content div')]
+                .filter(e => e.children.length === 0
+                    && e.textContent.trim().startsWith('Planned slots')).length;
+            return [tips.length, strips];
+        }"""
+    )
+    assert strips > 0
+    assert marked == strips, "every plan strip marks exactly one current slot"
+
+
 def test_the_menu_entry_opens_the_same_overlay(page):
     _seed(page, TWO_LOADS)
     page.evaluate("() => showManagedLoadsMenu()")
