@@ -36,6 +36,13 @@ import requests
 import pandas as pd
 import numpy as np
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
+from .temperature_forecast import (
+    AKKUDOKTOR,
+    DEFAULT_TEMPERATURE_PROVIDER,
+    OPENMETEO,
+    TemperatureForecastError,
+    fetch_openmeteo_temperature,
+)
 
 # PV sources that derive the forecast from a physical installation's coordinates, and
 # therefore need at least one entry in ``pv_forecast``.  Every other source carries its
@@ -103,6 +110,17 @@ AKKUDOKTOR_BODY_EXCERPT_CHARS = 200
 # Retry-After and documents no quota, so the wait is a fixed, deliberately modest guess:
 # too short only wastes one request, while too long strands a recovered API.
 AKKUDOKTOR_RATE_LIMIT_HOLD_S = 900
+
+# The first hold is the same length as the PV update interval, so on its own it never
+# actually suppresses anything: it expires exactly in time for the next cycle to ask
+# again, get the same 429, and re-arm it. When the limit is upstream of akkudoktor -
+# which it is; /forecast answers "status code 429" for every location, from any address,
+# while /prices on the same host is fine - that condition lasts hours or days, and a
+# fixed hold means ninety-six pointless requests a day for as long as it does.
+#
+# So it doubles on each consecutive refusal, up to six hours. A recovery clears it, and
+# the first attempt after one is immediate.
+AKKUDOKTOR_RATE_LIMIT_HOLD_MAX_S = 6 * 60 * 60
 
 
 class _AkkudoktorRateLimit(Exception):
@@ -271,6 +289,10 @@ class PvInterface:
         self.time_frame_base = time_frame_base if time_frame_base is not None else 3600
         self.config_special = config_special
         self.temperature_forecast_enabled = temperature_forecast_enabled
+        self.temperature_source = str(
+            (config_source or {}).get("temperature_source")
+            or DEFAULT_TEMPERATURE_PROVIDER
+        ).strip().lower()
         # Extract source type value first (breaks taint chain from config dict)
         source_type = (
             self.config_source.get("source", "akkudoktor")
@@ -300,6 +322,13 @@ class PvInterface:
             "source": None,
         }
         self.temp_forecast_array = self.__get_default_temperature_forecast()
+
+        # How long the next akkudoktor refusal holds for. Doubles while they keep
+        # coming, so a limit that is upstream of the API - and therefore lasts hours -
+        # is not met with a request every fifteen minutes for as long as it does.
+        self._akkudoktor_hold_seconds = AKKUDOKTOR_RATE_LIMIT_HOLD_S
+        # Whether the current run of refusals has been reported. Once, not once a cycle.
+        self._akkudoktor_limit_reported = False
 
         # Cache mechanism for fallback on API failures (similar to PriceInterface)
         # When Akkudoktor is unavailable, reuse last successful forecast
@@ -419,6 +448,7 @@ class PvInterface:
                 "config_source": self.config_source,
                 "config_special": self.config_special,
                 "temperature_forecast_enabled": self.temperature_forecast_enabled,
+                "temperature_source": self.temperature_source,
                 "site_location": self.site_location,
                 "time_zone": self.time_zone,
                 "update_interval": self.update_interval,
@@ -433,6 +463,10 @@ class PvInterface:
             self.config_source = config_source
             self.config_special = config_special
             self.temperature_forecast_enabled = temperature_forecast_enabled
+            self.temperature_source = str(
+                (config_source or {}).get("temperature_source")
+                or DEFAULT_TEMPERATURE_PROVIDER
+            ).strip().lower()
             self.site_location = _clean_site_location(site_location)
             self.time_zone = timezone
             self.pv_forcast_request_error = {
@@ -460,6 +494,8 @@ class PvInterface:
             # anything real.  It re-arms on the next 429 if we are still blocked.
             self._forecast_solar_hold_until = None
             self._akkudoktor_hold_until = None
+            self._akkudoktor_hold_seconds = AKKUDOKTOR_RATE_LIMIT_HOLD_S
+            self._akkudoktor_limit_reported = False
 
             try:
                 self.__configure_update_interval()
@@ -479,6 +515,7 @@ class PvInterface:
                 self.temperature_forecast_enabled = old_state[
                     "temperature_forecast_enabled"
                 ]
+                self.temperature_source = old_state["temperature_source"]
                 self.site_location = old_state["site_location"]
                 self.time_zone = old_state["time_zone"]
                 self.update_interval = old_state["update_interval"]
@@ -934,9 +971,7 @@ class PvInterface:
             if self.temperature_forecast_enabled:
                 temp_config = self.__get_temperature_config_entry()
                 if temp_config and not self.__temperature_forecast_is_fresh():
-                    temp_result = self.__get_pv_forecast_akkudoktor_api(
-                        tgt_value="temperature", pv_config_entry=temp_config
-                    )
+                    temp_result = self.__fetch_temperature(temp_config)
                     # Reject empty/None results and physically implausible values
                     # (e.g. PV Watts leaking into the temperature array) as a
                     # fail-safe on top of the target-aware cache/counter below.
@@ -1931,6 +1966,59 @@ class PvInterface:
         )
         return hourly
 
+    def __fetch_temperature(self, temp_config):
+        """
+        Ask the configured provider for the outside-temperature curve.
+
+        Returns the array at the running slot resolution, or an empty list. The caller
+        already treats empty as "use the previous curve, else the default", so a failure
+        here needs no special handling - only a provider that is honest about failing.
+        """
+        if self.temperature_source == AKKUDOKTOR:
+            return self.__get_pv_forecast_akkudoktor_api(
+                tgt_value="temperature", pv_config_entry=temp_config
+            )
+
+        try:
+            hourly = fetch_openmeteo_temperature(
+                latitude=temp_config["lat"],
+                longitude=temp_config["lon"],
+                timezone=self.time_zone,
+                hours=48,
+            )
+        except TemperatureForecastError as exc:
+            self.consecutive_temp_failures += 1
+            logger.warning("[PV-IF] %s", exc)
+            self._log_error_diagnostics("request", OPENMETEO, target="temperature")
+            return []
+
+        result = self.__expand_temperature_to_slots(hourly)
+        self.last_successful_temp_forecast = list(result)
+        self.consecutive_temp_failures = 0
+        self._last_temp_fetch = time.monotonic()
+        logger.debug(
+            "[PV-IF] Temperature forecast fetched from Open-Meteo (%d values)",
+            len(result),
+        )
+        return result
+
+    def __expand_temperature_to_slots(self, hourly):
+        """Repeat each hourly value across the slots of that hour."""
+        if self.time_frame_base != 900:
+            return list(hourly)
+        expanded = []
+        for value in hourly:
+            expanded.extend([value] * 4)
+        return expanded
+
+    def __akkudoktor_limit_cleared(self):
+        """A successful fetch ends the run of refusals, so reset the escalation."""
+        if self._akkudoktor_hold_seconds != AKKUDOKTOR_RATE_LIMIT_HOLD_S:
+            logger.info("[PV-IF] akkudoktor.net is answering again")
+        self._akkudoktor_hold_until = None
+        self._akkudoktor_hold_seconds = AKKUDOKTOR_RATE_LIMIT_HOLD_S
+        self._akkudoktor_limit_reported = False
+
     def __akkudoktor_hold_remaining(self):
         """Seconds left on an active akkudoktor rate-limit hold; 0 when clear."""
         if self._akkudoktor_hold_until is None:
@@ -2050,19 +2138,26 @@ class PvInterface:
                 request_func, error_handler, retries, delay
             )
         except _AkkudoktorRateLimit as exc:
-            self._akkudoktor_hold_until = datetime.now() + timedelta(
-                seconds=exc.hold_seconds
+            hold = self._akkudoktor_hold_seconds
+            self._akkudoktor_hold_until = datetime.now() + timedelta(seconds=hold)
+            # Escalate for the next one. Capped, so it always recovers on its own.
+            self._akkudoktor_hold_seconds = min(
+                self._akkudoktor_hold_seconds * 2, AKKUDOKTOR_RATE_LIMIT_HOLD_MAX_S
             )
+            if self._akkudoktor_limit_reported:
+                logger.debug(
+                    "[PV-IF] akkudoktor.net still rate limited - holding for %d s", hold
+                )
+                return self.__akkudoktor_hold_response(tgt_value, pv_config_entry, hold)
+            self._akkudoktor_limit_reported = True
             logger.warning(
                 "[PV-IF] akkudoktor.net relayed an upstream 429 (as HTTP 500) -"
                 " pausing requests for %d s. The request is not at fault; the weather"
-                " provider behind the API is rate limiting it.",
-                exc.hold_seconds,
+                " provider behind the API is rate limiting it. Requests back off while"
+                " it lasts, and resume on their own once it clears.",
             )
             self._log_error_diagnostics("rate_limit", "akkudoktor", target=tgt_value)
-            return self.__akkudoktor_hold_response(
-                tgt_value, pv_config_entry, exc.hold_seconds
-            )
+            return self.__akkudoktor_hold_response(tgt_value, pv_config_entry, hold)
 
         if failure["occurred"]:
             # day_values is whatever _handle_interface_error picked as the fallback: a
@@ -2179,6 +2274,9 @@ class PvInterface:
                 self.last_successful_temp_forecast = list(result)
                 self.consecutive_temp_failures = 0
                 self._last_temp_fetch = time.monotonic()
+
+            # Any answer at all ends a run of refusals, whichever target asked for it.
+            self.__akkudoktor_limit_cleared()
 
             return result
 

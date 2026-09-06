@@ -438,11 +438,24 @@ class ManagedLoadManager:
         )
 
     def _expand_hourly(self, hourly, slot_count):
-        """Stretch an hourly forecast over the running slot resolution."""
-        per_hour = max(1, 3600 // self.time_frame_base)
+        """
+        Bring a temperature series onto the running slot grid.
+
+        The provider already publishes it at the optimizer's resolution, so the length
+        is the thing to read rather than an assumption to make. Expanding an array that
+        was already 15-minute would have described the first twelve hours of the
+        forecast as if they were the whole two days - invisible at hourly resolution,
+        and wrong at quarter-hourly.
+        """
+        if not hourly:
+            return [15.0] * slot_count
+        if len(hourly) >= slot_count:
+            return self._fit(list(hourly), slot_count, fallback=15.0)
+
+        factor = max(1, round(slot_count / len(hourly)))
         expanded = []
         for value in hourly:
-            expanded.extend([value] * per_hour)
+            expanded.extend([value] * factor)
         return self._fit(expanded, slot_count, fallback=15.0)
 
     def _series(self, provider, slot_count, fallback=0.0):

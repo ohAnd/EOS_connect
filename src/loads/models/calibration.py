@@ -6,18 +6,29 @@ surface area roughly, and that it cools down overnight. The configured values ar
 therefore a starting point, not an answer, and a forecast built on them alone would be
 wrong in a way the user cannot diagnose.
 
-The physics gives two free measurements, every day, for nothing:
+Every consecutive pair of samples is one equation of the same energy balance::
 
-- while the pump is **off**, the water cools at a rate that depends only on the loss
-  coefficient and the temperature difference to ambient;
-- while the pump is **on**, the water warms at a rate that, once the simultaneous losses
-  are added back, is the heat pump's thermal output - and dividing by the measured
-  electrical draw gives the COP at that ambient temperature.
+    V·c·dT/dt  =  COP(T_air)·P_el  -  k·A·cover·(T_water - T_air)
+      measured         unknown                  unknown
 
-Both are noisy, so both are smoothed, bounded, and reported with a confidence the user
-can see. This is also the honest answer to the "there are dozens of variables" objection
-raised on issue #201: the model is deliberately lumped, and the fit absorbs what it does
-not name.
+and with ``COP(T_air) = a + b·T_air`` that is *linear* in the three unknowns a, b and k.
+So they are fitted together, by weighted least squares over the recorded history, rather
+than one at a time.
+
+That matters more than it sounds. The obvious approach - measure the losses while the
+appliance is off, then use them to measure the COP while it is on - has a circular
+dependency, and a real installation walks straight into it: a pool that is held at
+target barely changes temperature while heating, so the *assumed* loss term dominates
+the COP measurement. An appliance that had never been observed cooling produced a
+confident COP of 1.3 and an efficiency that improved as it got colder, which is
+backwards. The joint fit has no bootstrap to get wrong, and off-periods contribute
+naturally as the rows where ``P_el`` is zero.
+
+Two guards keep it honest where the data is thin. A ridge term pulls the solution
+towards the configured values with the weight of a few samples, so an underdetermined
+fit degrades to "what you told us" instead of to noise. And the reported confidence
+accounts for whether the history actually contains the variety the parameters need -
+a week of identical afternoons cannot identify the slope, and says so.
 """
 
 import logging
@@ -28,8 +39,7 @@ from .thermal_physics import (
     COP_MAX,
     COP_MIN,
     COP_REFERENCE_AMBIENT_C,
-    observed_cop,
-    observed_loss_coefficient,
+    WH_PER_M3_PER_K,
 )
 
 logger = logging.getLogger("__main__")
@@ -43,32 +53,78 @@ IDLE_POWER_W = 50.0
 MIN_SAMPLE_HOURS = 5 / 60.0
 MAX_SAMPLE_HOURS = 3.0
 
+# A jump larger than this between two samples is a sensor glitch, not a store.
+MAX_TEMPERATURE_STEP_K = 20.0
+
 # Plausibility bounds. A covered indoor tank sits near the bottom, an uncovered pool in
-# a breeze near the top; anything outside is a bad sample, not a discovery.
+# a breeze near the top; anything outside is a bad fit, not a discovery.
 LOSS_COEFFICIENT_MIN = 1.0
 LOSS_COEFFICIENT_MAX = 200.0
 
-# How fast the estimates follow new evidence. Slow enough that one odd afternoon does
-# not move the plan, fast enough to track a pool cover being left off for a week.
-SMOOTHING = 0.1
-
-# Samples retained for the COP-versus-ambient fit, and what a settled fit looks like.
-COP_SAMPLE_LIMIT = 400
-COP_FIT_MIN_SAMPLES = 8
-COP_FIT_MIN_SPAN_K = 3.0
-CONFIDENCE_TARGET_SAMPLES = 60
-
 # A linear COP slope beyond this is a fitting artefact, not a compressor characteristic.
 AIR_COEFFICIENT_LIMIT = 0.06
+
+# Rows retained for the fit, and what a settled history looks like.
+SAMPLE_LIMIT = 2000
+CONFIDENCE_TARGET_SAMPLES = 60
+
+# Ambient spread the slope needs before it means anything. Below this the ridge holds b
+# at its configured value and the fit says the slope was not identified.
+COP_FIT_MIN_SPAN_K = 3.0
+
+# How quickly old rows stop counting. A cover left off, or a season turning, should show
+# up within a couple of weeks rather than being averaged away forever.
+WEIGHT_HALF_LIFE_HOURS = 7 * 24.0
+
+# How much the configured values are worth, in samples. Deliberately weak: swept against
+# a simulated store, 5 samples' worth of prior still cost 9% on the loss coefficient and
+# a third of the COP slope, while 2 recovers both to within a few percent and a fortnight
+# of real rows swamps it entirely. The protection against a wild fit comes from the
+# physical bounds and from holding the slope when the ambient never varied, not from
+# leaning on the configuration.
+RIDGE_SAMPLES = 2.0
 
 
 def _clamp(value, low, high):
     return max(low, min(high, value))
 
 
+def _solve3(matrix, rhs):
+    """
+    Solve a 3x3 system by Gauss-Jordan with partial pivoting.
+
+    Hand-rolled rather than pulled from numpy: this package is deliberately free of
+    heavy dependencies, and three unknowns is not a reason to acquire one.
+
+    Returns the solution, or None when the system is singular.
+    """
+    aug = [list(matrix[i]) + [rhs[i]] for i in range(3)]
+
+    for col in range(3):
+        pivot_row = max(range(col, 3), key=lambda r: abs(aug[r][col]))
+        if abs(aug[pivot_row][col]) < 1e-12:
+            return None
+        aug[col], aug[pivot_row] = aug[pivot_row], aug[col]
+
+        pivot = aug[col][col]
+        for j in range(col, 4):
+            aug[col][j] /= pivot
+
+        for row in range(3):
+            if row == col:
+                continue
+            factor = aug[row][col]
+            if factor == 0.0:
+                continue
+            for j in range(col, 4):
+                aug[row][j] -= factor * aug[col][j]
+
+    return [aug[i][3] for i in range(3)]
+
+
 class ThermalCalibrator:
     """
-    Online estimator for one store's loss coefficient and COP curve.
+    Joint estimator for one store's loss coefficient and COP curve.
 
     Starts from the configured values and moves away from them only as evidence
     accumulates, so a fresh installation behaves sensibly on day one and better by
@@ -80,33 +136,82 @@ class ThermalCalibrator:
         self.volume_m3 = float(volume_m3 or 0.0)
         self.surface_m2 = float(surface_m2 or 0.0)
 
-        self.configured_loss_coefficient = float(loss_coefficient or 0.0)
+        self.configured_loss_coefficient = _clamp(
+            float(loss_coefficient or 25.0), LOSS_COEFFICIENT_MIN, LOSS_COEFFICIENT_MAX
+        )
         self.configured_cop_nominal = _clamp(float(cop_nominal or 4.0), COP_MIN, COP_MAX)
-
-        self.loss_coefficient = self.configured_loss_coefficient
-        self.cop_nominal = self.configured_cop_nominal
-        self.air_coefficient = _clamp(
+        self.configured_air_coefficient = _clamp(
             float(air_coefficient or 0.0), -AIR_COEFFICIENT_LIMIT, AIR_COEFFICIENT_LIMIT
         )
 
+        self.loss_coefficient = self.configured_loss_coefficient
+        self.cop_nominal = self.configured_cop_nominal
+        self.air_coefficient = self.configured_air_coefficient
+
         self.loss_samples = 0
         self.cop_samples = 0
-        self._cop_points = deque(maxlen=COP_SAMPLE_LIMIT)
+        self.slope_identified = False
+        self.residual_w = None
+
+        self._rows = deque(maxlen=SAMPLE_LIMIT)
+        self._latest_timestamp = None
+        # What a previous run knew, until this one has rows of its own. Persisted state
+        # restores the coefficients but not the history they came from - the samples are
+        # replayed separately - and reporting no confidence in the meantime would
+        # understate an estimate that is about to be rebuilt.
+        self._restored_confidence = None
 
     # -- ingest -----------------------------------------------------------------------
 
-    def observe_pair(self, previous, current):
+    def observe_pair(self, previous, current, refit=True):
         """
-        Take two consecutive samples and learn what they allow.
+        Turn two consecutive samples into one equation and keep it.
 
         A sample is a dict with ``timestamp`` (aware datetime), ``medium_c``,
         ``ambient_c``, ``power_w`` and optional ``cover_factor``. Pairs that cannot say
         anything are dropped silently - most pairs are, and logging each one would bury
         the log.
         """
-        hours = self._pair_hours(previous, current)
-        if hours is None:
+        row = self._row_from(previous, current)
+        if row is None:
             return False
+
+        self._rows.append(row)
+        if row["power_w"] >= IDLE_POWER_W:
+            self.cop_samples += 1
+        else:
+            self.loss_samples += 1
+
+        if self._latest_timestamp is None or row["timestamp"] > self._latest_timestamp:
+            self._latest_timestamp = row["timestamp"]
+
+        if refit:
+            self.refit()
+        return True
+
+    def observe_series(self, samples):
+        """
+        Feed a whole recorded history, oldest first. Returns pairs actually used.
+
+        Fits once at the end rather than after every pair: replaying a fortnight is a
+        few thousand pairs, and the answer only matters after the last one.
+        """
+        used = 0
+        for previous, current in zip(samples, samples[1:]):
+            if self.observe_pair(previous, current, refit=False):
+                used += 1
+        if used:
+            self.refit()
+        return used
+
+    def _row_from(self, previous, current):
+        """One usable equation, or None."""
+        try:
+            span = (current["timestamp"] - previous["timestamp"]).total_seconds() / 3600.0
+        except (KeyError, TypeError, AttributeError):
+            return None
+        if not MIN_SAMPLE_HOURS <= span <= MAX_SAMPLE_HOURS:
+            return None
 
         try:
             medium_now = float(current["medium_c"])
@@ -115,35 +220,180 @@ class ThermalCalibrator:
             power_now = float(current.get("power_w", 0.0))
             power_before = float(previous.get("power_w", 0.0))
         except (KeyError, TypeError, ValueError):
-            return False
+            return None
 
         if not all(math.isfinite(v) for v in (medium_now, medium_before, ambient)):
-            return False
+            return None
 
         delta_k = medium_now - medium_before
-        cover_factor = float(current.get("cover_factor", 1.0) or 1.0)
-        medium_mean = (medium_now + medium_before) / 2.0
+        if abs(delta_k) > MAX_TEMPERATURE_STEP_K:
+            return None
 
         running = power_now >= IDLE_POWER_W and power_before >= IDLE_POWER_W
         idle = power_now < IDLE_POWER_W and power_before < IDLE_POWER_W
+        if not running and not idle:
+            # The appliance started or stopped inside the interval: neither the heat put
+            # in nor the power drawn describes the whole of it.
+            return None
 
-        if idle:
-            return self._learn_loss(delta_k, hours, medium_mean, ambient, cover_factor)
-        if running:
-            return self._learn_cop(
-                delta_k, hours, medium_mean, ambient, cover_factor,
-                (power_now + power_before) / 2.0,
-            )
-        # The pump started or stopped inside the interval: neither measurement is clean.
-        return False
+        if self.volume_m3 <= 0 or self.surface_m2 <= 0:
+            return None
 
-    def observe_series(self, samples):
-        """Feed a whole recorded history, oldest first. Returns pairs actually used."""
-        used = 0
-        for previous, current in zip(samples, samples[1:]):
-            if self.observe_pair(previous, current):
-                used += 1
-        return used
+        return {
+            "timestamp": current["timestamp"],
+            # Left-hand side: the rate heat actually accumulated in the store, in watts.
+            "stored_w": delta_k / span * WH_PER_M3_PER_K * self.volume_m3,
+            "power_w": (power_now + power_before) / 2.0 if running else 0.0,
+            "ambient_c": ambient,
+            # Driving temperature difference for the loss term.
+            "drive_k": (medium_now + medium_before) / 2.0 - ambient,
+            "cover_factor": float(current.get("cover_factor", 1.0) or 1.0),
+        }
+
+    # -- the fit ------------------------------------------------------------------------
+
+    def refit(self):
+        """
+        Re-solve for (a, b, k) over the retained rows.
+
+        Columns are scaled to comparable magnitudes before solving - power is in
+        thousands of watts and the loss term in hundreds, and an unscaled normal-equation
+        solve of those is numerically poor.
+        """
+        rows = list(self._rows)
+        if not rows:
+            return False
+
+        prior = self._prior()
+        weights = self._weights(rows)
+
+        # The slope only means anything if the history spans a range of air
+        # temperatures. Below that it must be *held* during the solve, not solved for
+        # and overwritten afterwards: with a constant ambient the power columns are
+        # collinear, so the fit splits the identifiable sum between the intercept and
+        # the slope, and discarding the slope afterwards throws that part away. It cost
+        # a recovered COP of 3.74 where the answer was 4.5.
+        on_rows = [row for row in rows if row["power_w"] >= IDLE_POWER_W]
+        span = 0.0
+        if on_rows:
+            temps = [row["ambient_c"] for row in on_rows]
+            span = max(temps) - min(temps)
+        self.slope_identified = span >= COP_FIT_MIN_SPAN_K
+
+        # x1 = P_el, x2 = T_air·P_el, x3 = -A·cover·(T_water - T_air)
+        design = []
+        for row in rows:
+            design.append((
+                row["power_w"],
+                row["ambient_c"] * row["power_w"],
+                -self.surface_m2 * row["cover_factor"] * row["drive_k"],
+            ))
+        targets = [row["stored_w"] for row in rows]
+
+        total_weight = sum(weights)
+        if total_weight <= 0:
+            return False
+
+        # Column scales: root-mean-square, so every column enters the solve at O(1).
+        scales = []
+        for col in range(3):
+            mean_square = sum(
+                w * design[i][col] ** 2 for i, w in enumerate(weights)
+            ) / total_weight
+            scales.append(math.sqrt(mean_square) if mean_square > 0 else 0.0)
+
+        # A column that is identically zero carries no information about its parameter -
+        # no heating at all, or no surface. Hold it at the prior rather than solving for
+        # a number the data cannot support. The slope is held on the same footing when
+        # the ambient temperature never varied.
+        held = [scale <= 0 for scale in scales]
+        held[1] = held[1] or not self.slope_identified
+        for col in range(3):
+            if scales[col] <= 0:
+                scales[col] = 1.0
+
+        ridge = RIDGE_SAMPLES * (total_weight / len(rows))
+
+        normal = [[0.0] * 3 for _ in range(3)]
+        rhs = [0.0] * 3
+        for i, weight in enumerate(weights):
+            scaled = [design[i][col] / scales[col] for col in range(3)]
+            for r in range(3):
+                for c in range(3):
+                    normal[r][c] += weight * scaled[r] * scaled[c]
+                rhs[r] += weight * scaled[r] * targets[i]
+
+        # Ridge towards the configured values, in the scaled space.
+        prior_scaled = [prior[col] * scales[col] for col in range(3)]
+        for col in range(3):
+            strength = ridge * 1e9 if held[col] else ridge
+            normal[col][col] += strength
+            rhs[col] += strength * prior_scaled[col]
+
+        solution = _solve3(normal, rhs)
+        if solution is None:
+            logger.debug("[LOADS] calibration fit is singular - keeping the last estimate")
+            return False
+
+        estimate = [solution[col] / scales[col] for col in range(3)]
+        self._apply(estimate, rows, weights, design, targets)
+        return True
+
+    def _prior(self):
+        """The configured values, as (a, b, k)."""
+        nominal = self.configured_cop_nominal
+        slope = nominal * self.configured_air_coefficient
+        return [nominal - slope * COP_REFERENCE_AMBIENT_C, slope,
+                self.configured_loss_coefficient]
+
+    def _weights(self, rows):
+        """Exponential decay by age, so recent behaviour counts for more."""
+        if self._latest_timestamp is None:
+            return [1.0] * len(rows)
+        weights = []
+        for row in rows:
+            age_hours = (
+                self._latest_timestamp - row["timestamp"]
+            ).total_seconds() / 3600.0
+            weights.append(0.5 ** (max(0.0, age_hours) / WEIGHT_HALF_LIFE_HOURS))
+        return weights
+
+    def _apply(self, estimate, rows, weights, design, targets):
+        """Bound the solution, convert it to the reported form, and score the fit."""
+        intercept, slope, loss = estimate
+
+        loss = _clamp(loss, LOSS_COEFFICIENT_MIN, LOSS_COEFFICIENT_MAX)
+
+        nominal = _clamp(
+            intercept + slope * COP_REFERENCE_AMBIENT_C, COP_MIN, COP_MAX
+        )
+        air_coefficient = _clamp(
+            slope / nominal if nominal > 0 else 0.0,
+            -AIR_COEFFICIENT_LIMIT, AIR_COEFFICIENT_LIMIT,
+        )
+
+        self.loss_coefficient = loss
+        self.cop_nominal = nominal
+        self.air_coefficient = air_coefficient
+        self.residual_w = self._residual(rows, weights, design, targets)
+
+    def _residual(self, rows, weights, design, targets):
+        """Weighted RMS of what the fitted model fails to explain, in watts."""
+        theta = self._theta()
+        total_weight = sum(weights)
+        if total_weight <= 0:
+            return None
+        error = 0.0
+        for i, weight in enumerate(weights):
+            predicted = sum(design[i][col] * theta[col] for col in range(3))
+            error += weight * (targets[i] - predicted) ** 2
+        return round(math.sqrt(error / total_weight), 1)
+
+    def _theta(self):
+        """The current estimate as (a, b, k)."""
+        slope = self.cop_nominal * self.air_coefficient
+        return [self.cop_nominal - slope * COP_REFERENCE_AMBIENT_C, slope,
+                self.loss_coefficient]
 
     # -- estimates --------------------------------------------------------------------
 
@@ -155,12 +405,17 @@ class ThermalCalibrator:
         """
         How much the fit should be trusted, 0 to 1.
 
-        Both halves have to be earned: an estimator that has watched the pump run but
-        never watched it cool down knows the COP and is still guessing at the losses.
+        Two things have to be earned. Enough rows, and enough *variety* among them: an
+        estimator that has only ever watched the appliance run is solving for the losses
+        and the efficiency from the same observations, and cannot separate them as well
+        as one that has also watched it cool.
         """
-        loss_part = min(1.0, self.loss_samples / CONFIDENCE_TARGET_SAMPLES)
-        cop_part = min(1.0, self.cop_samples / CONFIDENCE_TARGET_SAMPLES)
-        return round((loss_part + cop_part) / 2.0, 3)
+        rows = len(self._rows)
+        if not rows:
+            return self._restored_confidence or 0.0
+        coverage = min(1.0, rows / CONFIDENCE_TARGET_SAMPLES)
+        variety = 1.0 if (self.loss_samples and self.cop_samples) else 0.5
+        return round(coverage * variety, 3)
 
     def state(self):
         """Serializable estimator state - persisted, and shown on the API."""
@@ -171,6 +426,8 @@ class ThermalCalibrator:
             "loss_samples": self.loss_samples,
             "cop_samples": self.cop_samples,
             "confidence": self.confidence(),
+            "slope_identified": self.slope_identified,
+            "residual_w": self.residual_w,
         }
 
     def restore(self, state):
@@ -190,90 +447,7 @@ class ThermalCalibrator:
             )
         self.loss_samples = max(0, int(state.get("loss_samples", 0) or 0))
         self.cop_samples = max(0, int(state.get("cop_samples", 0) or 0))
-
-    # -- internals --------------------------------------------------------------------
-
-    @staticmethod
-    def _pair_hours(previous, current):
-        try:
-            span = (current["timestamp"] - previous["timestamp"]).total_seconds() / 3600.0
-        except (KeyError, TypeError, AttributeError):
-            return None
-        if not MIN_SAMPLE_HOURS <= span <= MAX_SAMPLE_HOURS:
-            return None
-        return span
-
-    def _learn_loss(self, delta_k, hours, medium_c, ambient_c, cover_factor):
-        estimate = observed_loss_coefficient(
-            self.volume_m3, self.surface_m2, delta_k, hours,
-            medium_c, ambient_c, cover_factor,
-        )
-        if estimate is None:
-            return False
-        if not LOSS_COEFFICIENT_MIN <= estimate <= LOSS_COEFFICIENT_MAX:
-            return False
-
-        self.loss_coefficient = (
-            (1 - SMOOTHING) * self.loss_coefficient + SMOOTHING * estimate
-        )
-        self.loss_samples += 1
-        return True
-
-    def _learn_cop(self, delta_k, hours, medium_c, ambient_c, cover_factor, power_w):
-        loss_w = 0.0
-        if self.loss_coefficient > 0 and self.surface_m2 > 0:
-            loss_w = (
-                self.loss_coefficient * self.surface_m2
-                * (medium_c - ambient_c) * cover_factor
-            )
-
-        estimate = observed_cop(self.volume_m3, delta_k, hours, power_w, loss_w)
-        if estimate is None or not COP_MIN <= estimate <= COP_MAX:
-            return False
-
-        self._cop_points.append((ambient_c, estimate))
-        self.cop_samples += 1
-        self._refit_cop()
-        return True
-
-    def _refit_cop(self):
-        """
-        Least squares of COP against ambient, falling back to a plain average.
-
-        The fit only runs once the samples actually span a temperature range: fitting a
-        slope through a week of identical afternoons produces a confident nonsense
-        gradient that would then be extrapolated to a cold morning.
-        """
-        points = list(self._cop_points)
-        if len(points) < COP_FIT_MIN_SAMPLES:
-            mean = sum(value for _, value in points) / len(points)
-            self.cop_nominal = _clamp(
-                (1 - SMOOTHING) * self.cop_nominal + SMOOTHING * mean, COP_MIN, COP_MAX
-            )
-            return
-
-        temps = [temp for temp, _ in points]
-        span = max(temps) - min(temps)
-        mean_temp = sum(temps) / len(temps)
-        mean_cop = sum(value for _, value in points) / len(points)
-
-        slope = 0.0
-        if span >= COP_FIT_MIN_SPAN_K:
-            variance = sum((temp - mean_temp) ** 2 for temp in temps)
-            if variance > 0:
-                covariance = sum(
-                    (temp - mean_temp) * (value - mean_cop) for temp, value in points
-                )
-                slope = covariance / variance
-
-        cop_at_reference = mean_cop + slope * (COP_REFERENCE_AMBIENT_C - mean_temp)
-        cop_at_reference = _clamp(cop_at_reference, COP_MIN, COP_MAX)
-
-        air_coefficient = 0.0
-        if cop_at_reference > 0:
-            air_coefficient = _clamp(
-                slope / cop_at_reference, -AIR_COEFFICIENT_LIMIT, AIR_COEFFICIENT_LIMIT
-            )
-
-        self.cop_nominal = cop_at_reference
-        self.air_coefficient = air_coefficient
+        self.slope_identified = bool(state.get("slope_identified", False))
+        restored = state.get("confidence")
+        if isinstance(restored, (int, float)):
+            self._restored_confidence = _clamp(float(restored), 0.0, 1.0)
