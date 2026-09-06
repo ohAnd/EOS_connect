@@ -2026,6 +2026,34 @@ _ALL_FIELDS: list[FieldDef] = [
         display_group="General",
     ),
     FieldDef(
+        key="latitude",
+        field_type="float",
+        default=0.0,
+        section="system",
+        level="standard",
+        description=(
+            "Latitude of this installation. Only needed for the outside-temperature "
+            "forecast when no PV installation supplies coordinates - a pool heat pump "
+            "uses it to predict its losses. Leave both at 0 if you do not need it"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#system",
+        validation={"min": -90, "max": 90},
+        display_group="Location",
+    ),
+    FieldDef(
+        key="longitude",
+        field_type="float",
+        default=0.0,
+        section="system",
+        level="standard",
+        description="Longitude of this installation. See Latitude",
+        hot_reload=True,
+        help_url="configuration.html#system",
+        validation={"min": -180, "max": 180},
+        display_group="Location",
+    ),
+    FieldDef(
         key="request_timeout",
         field_type="int",
         default=10,

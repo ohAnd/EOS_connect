@@ -374,3 +374,220 @@ def test_an_unreachable_sensor_is_not_a_configuration_complaint(make_manager, ca
 def test_loads_without_a_power_sensor_are_skipped(make_manager):
     manager = make_manager([{"id": "heating", "type": TYPE_EXTERNAL_PROFILE}])
     manager.check_power_sensors()   # must not raise
+
+
+# --- outdoor temperature ------------------------------------------------------------------
+
+def test_a_pool_declares_that_it_needs_the_outdoor_forecast(make_manager):
+    """
+    Both what a pool loses and how efficiently the pump replaces it turn on the air
+    temperature, so the manager has to be able to ask for the forecast - the default
+    optimizer backend does not.
+    """
+    assert make_manager([POOL]).needs_outdoor_temperature() is True
+
+
+def test_an_indoor_store_does_not(make_manager):
+    tank = {"id": "dhw", "type": "hot_water_tank", "temp_sensor": "sensor.dhw"}
+    assert make_manager([tank]).needs_outdoor_temperature() is False
+
+
+def test_a_pushed_profile_does_not(make_manager):
+    manager = make_manager([{"id": "heating", "type": TYPE_EXTERNAL_PROFILE}])
+    assert manager.needs_outdoor_temperature() is False
+
+
+def test_a_disabled_pool_does_not_keep_the_forecast_alive(make_manager):
+    assert make_manager([dict(POOL, enabled=False)]).needs_outdoor_temperature() is False
+
+
+def test_the_forecast_reaches_the_model_rather_than_a_flat_default(make_manager, installation):
+    """The whole point: the loss and COP terms must move with the forecast."""
+    manager = make_manager([POOL])
+    installation.sensors.update({"sensor.pool_water": 24.0, "sensor.pool_power": 0.0})
+
+    installation.temperature = [20.0] * 48
+    manager.run_cycle()
+    mild = manager.instance("pool").last_demand.total_wh
+
+    installation.temperature = [4.0] * 48
+    manager.run_cycle()
+    cold = manager.instance("pool").last_demand.total_wh
+
+    assert cold > mild, "a colder forecast has to mean more energy needed"
+
+
+# --- where the ambient temperature comes from -----------------------------------------------
+
+POOL_WITH_AMBIENT = dict(POOL, ambient_temp_sensor="sensor.outside")
+
+
+def test_a_real_forecast_is_preferred_over_a_flat_sensor_reading(make_manager, installation):
+    """Only the forecast can see into tomorrow, and the horizon is two days long."""
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.sensors.update({
+        "sensor.pool_water": 24.0, "sensor.pool_power": 0.0, "sensor.outside": 30.0,
+    })
+    installation.temperature = [8.0] * 48
+    manager.run_cycle()
+
+    ctx = manager._context()  # pylint: disable=protected-access
+    ambient, source = manager._ambient_series(  # pylint: disable=protected-access
+        manager.instance("pool"), ctx, {"ambient_temp_sensor": 30.0}
+    )
+    assert ambient[0] == 8.0
+    assert source == "forecast"
+
+
+def test_a_configured_sensor_beats_a_missing_forecast(make_manager, installation):
+    """
+    The bug this exists for: the placeholder curve that stands in for an unfetched
+    forecast is indistinguishable from a real one, so a pool with a perfectly good
+    outdoor sensor was modelled against a fixed 15 C.
+    """
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.sensors.update({
+        "sensor.pool_water": 24.0, "sensor.pool_power": 0.0, "sensor.outside": 21.5,
+    })
+    installation.temperature = []          # the provider reports "nothing real"
+
+    ctx = manager._context()  # pylint: disable=protected-access
+    ambient, source = manager._ambient_series(  # pylint: disable=protected-access
+        manager.instance("pool"), ctx, {"ambient_temp_sensor": "21.5 °C"}
+    )
+    assert ambient == [21.5] * ctx.slot_count
+    assert source == "sensor"
+
+
+def test_that_sensor_actually_changes_the_prediction(make_manager, installation):
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = []
+    installation.sensors.update({"sensor.pool_water": 24.0, "sensor.pool_power": 0.0})
+
+    installation.sensors["sensor.outside"] = 24.0
+    manager.run_cycle()
+    warm = manager.instance("pool").last_demand.total_wh
+
+    installation.sensors["sensor.outside"] = 6.0
+    manager.run_cycle()
+    cold = manager.instance("pool").last_demand.total_wh
+
+    assert cold > warm
+
+
+def test_no_forecast_and_no_sensor_is_reported_once(make_manager, installation, caplog):
+    """A silent constant is the worst outcome: it looks like it is working."""
+    manager = make_manager([POOL])
+    installation.temperature = []
+    installation.sensors.update({"sensor.pool_water": 24.0, "sensor.pool_power": 0.0})
+
+    with caplog.at_level("WARNING", logger="__main__"):
+        manager.run_cycle()
+        manager.run_cycle()
+
+    warnings = [r.getMessage() for r in caplog.records if "sits outdoors" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "| Config: #managed-loads" in warnings[0]
+
+
+def test_an_indoor_store_is_not_nagged_about_the_weather(make_manager, installation, caplog):
+    tank = {"id": "dhw", "type": "hot_water_tank", "temp_sensor": "sensor.dhw"}
+    installation.sensors["sensor.dhw"] = 45.0
+    installation.temperature = []
+
+    with caplog.at_level("WARNING", logger="__main__"):
+        make_manager([tank]).run_cycle()
+    assert not [r for r in caplog.records if "sits outdoors" in r.getMessage()]
+
+
+def test_the_prediction_reports_the_inputs_it_used(make_manager, installation):
+    """
+    The placeholder-ambient bug produced entirely plausible outputs and was invisible
+    because none of its inputs were reported. They are now.
+    """
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = []
+    installation.sensors.update({
+        "sensor.pool_water": 24.0, "sensor.pool_power": 0.0, "sensor.outside": 21.5,
+    })
+    manager.run_cycle()
+
+    detail = manager.instance("pool").last_demand.detail
+    assert detail["ambient_now_c"] == 21.5
+    assert detail["ambient_source"] == "sensor"
+    assert detail["horizon_hours"] > 0
+    assert detail["electrical_power_w"] == 2500.0
+    # The one figure that was in the wrong currency next to the energy numbers.
+    assert detail["thermal_power_w"] > detail["electrical_power_w"]
+
+
+def test_a_guessed_ambient_is_labelled_as_such(make_manager, installation):
+    manager = make_manager([POOL])
+    installation.temperature = []
+    installation.sensors.update({"sensor.pool_water": 24.0, "sensor.pool_power": 0.0})
+    manager.run_cycle()
+    assert manager.instance("pool").last_demand.detail["ambient_source"] == "fallback"
+
+
+# --- resetting a calibration ----------------------------------------------------------------
+
+def test_resetting_returns_a_model_to_its_configured_values(make_manager, installation):
+    manager = make_manager([dict(POOL, heat_loss_w_per_m2_k=25.0, cop_nominal=5.0)])
+    installation.sensors.update({"sensor.pool_water": 24.0, "sensor.pool_power": 0.0})
+    manager.run_cycle()
+
+    cal = manager.instance("pool").model.calibrator
+    cal.loss_coefficient, cal.cop_nominal, cal.loss_samples = 61.0, 2.1, 300
+
+    state = manager.reset_calibration("pool")
+    assert state["loss_coefficient"] == 25.0
+    assert state["cop_nominal"] == 5.0
+    assert state["loss_samples"] == 0
+    assert state["confidence"] == 0.0
+
+
+def test_resetting_also_clears_the_recorded_samples(make_manager, installation, tmp_path):
+    """
+    The samples carry the inputs the fit was made against, so leaving them behind means
+    the same wrong numbers come straight back.
+    """
+    from src.config_web.store import ConfigStore
+    from src.persistence import ManagedLoadStore
+
+    config_store = ConfigStore(str(tmp_path / "c.db"))
+    config_store.open()
+    store = ManagedLoadStore(config_store)
+    store.ensure_schema()
+
+    manager = make_manager([POOL], store=store)
+    installation.sensors.update({"sensor.pool_water": 24.0, "sensor.pool_power": 0.0})
+    manager.run_cycle()
+    assert store.sample_count("pool") > 0
+
+    manager.reset_calibration("pool")
+    assert store.sample_count("pool") == 0
+    assert store.load_model_state("pool") is None
+    config_store.close()
+
+
+def test_resetting_takes_effect_without_waiting_for_a_cycle(make_manager, installation):
+    manager = make_manager([POOL])
+    installation.sensors.update({"sensor.pool_water": 24.0, "sensor.pool_power": 0.0})
+    manager.run_cycle()
+    before = manager.stats.cycles
+
+    manager.reset_calibration("pool")
+    assert manager.stats.cycles == before      # no full cycle
+    assert manager.instance("pool").last_demand is not None
+
+
+def test_resetting_something_that_learns_nothing_is_refused(make_manager):
+    manager = make_manager([{"id": "heating", "type": TYPE_EXTERNAL_PROFILE}])
+    with pytest.raises(InjectionError) as excinfo:
+        manager.reset_calibration("heating")
+    assert "learns nothing" in str(excinfo.value)
+
+
+def test_resetting_an_unknown_load_is_refused(make_manager):
+    with pytest.raises(InjectionError):
+        make_manager([POOL]).reset_calibration("nobody")

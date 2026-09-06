@@ -136,6 +136,17 @@ class ThermalStorageModel(BaseDemandModel):
         super().reconfigure(config)
         self._apply_config(self.config)
 
+    def reset_calibration(self):
+        """Discard what has been learned and start again from the configured values."""
+        self.calibrator = ThermalCalibrator(
+            volume_m3=self.volume_m3,
+            surface_m2=self.surface_m2,
+            loss_coefficient=self.config.get("heat_loss_w_per_m2_k", 25.0),
+            cop_nominal=self.config.get("cop_nominal", 4.5),
+            air_coefficient=self.config.get("cop_air_coeff", 0.0),
+        )
+        self._last_sample = None
+
     # -- configuration helpers ----------------------------------------------------------
 
     def target_temperature(self, readings):
@@ -253,6 +264,19 @@ class ThermalStorageModel(BaseDemandModel):
                 "mean_cop": round(mean_cop, 2),
                 "cover_factor": cover,
                 "running": self.is_running(ctx.readings),
+                # The inputs, so a wrong answer can be diagnosed from the page. The
+                # placeholder-ambient bug produced entirely plausible outputs and was
+                # invisible precisely because none of this was reported.
+                "ambient_now_c": (
+                    round(self._ambient_at(ctx, ctx.current_slot), 1)
+                    if self._ambient_at(ctx, ctx.current_slot) is not None else None
+                ),
+                "ambient_source": ctx.ambient_source,
+                "horizon_hours": round(
+                    max(0, ctx.slot_count - ctx.current_slot) * ctx.hours_per_slot(), 1
+                ),
+                "electrical_power_w": self.rated_power_w,
+                "thermal_power_w": round(self.rated_power_w * mean_cop),
             },
         )
 

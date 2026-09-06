@@ -228,9 +228,15 @@
                             added back &mdash; against the measured power gives the efficiency, and how it
                             changes with the outdoor temperature.</li>
                     </ul>
-                    <p>A <em>calibration confidence</em> figure on the API and on MQTT tells you when the
-                        estimate has settled. It survives restarts, and is seeded from up to two weeks of
-                        recorded samples.</p>
+                    <p>A <em>calibration confidence</em> figure on the API, on MQTT and in the
+                        overlay tells you when the estimate has settled. It survives restarts, and is
+                        seeded from up to two weeks of recorded samples.</p>
+                    <p>If the inputs it was learning from turn out to have been wrong &mdash; an
+                        ambient temperature that was not what you thought, say &mdash; use
+                        <strong>Reset</strong> on the overlay card, or
+                        <code>POST /api/managed_loads/&lt;id&gt;/calibration/reset</code>. The
+                        recorded samples carry those inputs, so without a reset they keep dragging
+                        the fit until they age out of the retention window on their own.</p>
 
                     <h3>When it may run</h3>
                     <ul>
@@ -252,6 +258,66 @@
                             forecast shows a peak your house cannot draw. Lower <strong>priority</strong>
                             numbers are planned first.</li>
                     </ul>
+
+                    <h3>Outdoor loads need an outdoor temperature</h3>
+                    <p>A pool's losses and its heat pump's efficiency both turn on the air
+                        temperature, so an outdoor managed load is only as good as the
+                        temperature it is given. It takes the best of three, in order:</p>
+                    <ol>
+                        <li>the <strong>outside-temperature forecast</strong>, which is the only
+                            one that can see into tomorrow &mdash; and the horizon is two days
+                            long;</li>
+                        <li>the load's own <strong>Ambient Temp Sensor</strong>, held flat. It
+                            cannot see ahead, but it measures this actual site;</li>
+                        <li>a fixed fallback, which is a guess and is reported as one on the
+                            alerts panel.</li>
+                    </ol>
+                    <p>The forecast is fetched for coordinates, which normally come from your
+                        first PV installation. Sources that are not location-based &mdash; EVCC,
+                        Solcast, Victron, timeseries &mdash; have no installations, so set
+                        <em>Latitude</em> and <em>Longitude</em> under
+                        <em>Settings &rsaquo; System</em> instead. Leave them at 0 if you do not
+                        need them.</p>
+                    <div class="alert alert-info">
+                        <p>The forecast used to be fetched only for the EOS Server backend, since
+                            EVopt does not consume temperature. Managed loads changed that: an
+                            outdoor load now asks for the curve on its own account, whichever
+                            optimizer you run. <code>eos.temperature_forecast_enabled</code> is
+                            still the way to stop the requests entirely.</p>
+                    </div>
+
+                    <h3>How long it is allowed to run</h3>
+                    <p>Three settings bound the runtime and they stack, so the tightest one
+                        wins. It is worth knowing which is binding before changing anything:</p>
+                    <ul>
+                        <li><strong>Window Start / Window End</strong> &mdash; the hours of the
+                            day it may run at all. 8 to 22 gives fourteen hours.</li>
+                        <li><strong>Max Runtime Hours Per Day</strong> &mdash; a cap inside that
+                            window. Set to 12 with a 14-hour window, twelve is what you get; the
+                            other two hours are simply never used. Set it to 0 for no cap.</li>
+                        <li><strong>Min Ambient Temp</strong> &mdash; removes individual slots
+                            the air is too cold for, wherever they fall.</li>
+                    </ul>
+                    <p>Compare <em>Energy needed</em> with <em>Planned</em> in the overlay to see
+                        whether they bind:</p>
+                    <ul>
+                        <li><strong>Planned equals needed</strong> &mdash; the plan covers the
+                            demand; the settings are not in the way.</li>
+                        <li><strong>Planned is lower</strong> &mdash; the load cannot get enough
+                            runtime. Widen the window, raise the cap, or accept that the target
+                            will not be reached. Note the strip: contiguous blocks that stop at a
+                            fixed hour point at the window, scattered gaps at the price cap or
+                            the ambient limit.</li>
+                        <li><strong>Planned is lower and the pump runs flat out anyway</strong>
+                            &mdash; the appliance is undersized for the losses rather than
+                            short of time. A cover changes that faster than a bigger pump.</li>
+                    </ul>
+                    <div class="alert alert-info">
+                        <p><em>Energy needed</em> covers the rest of the optimization horizon,
+                            not a day. It shrinks through the day and steps back up at midnight,
+                            so compare it with <em>Planned</em> beside it rather than with
+                            yesterday's figure.</p>
+                    </div>
 
                     <h3>Pushing a forecast in</h3>
                     <p>If you already model something elsewhere &mdash; a heating curve against the
@@ -289,6 +355,14 @@
                         settled, and which slots of the next two days it is planned for &mdash; with the
                         time of day along the axis, and the exact window, energy and running total
                         on hovering a bar.</p>
+                    <p>Two things on that card are worth reading carefully. <strong>Energy
+                        needed</strong> is split into what it takes to reach the target and what it
+                        takes to hold it for the rest of the horizon &mdash; for a pool the second
+                        part dominates, which is why a one-degree rise can read as tens of kWh. And
+                        <strong>Outside now</strong> names not just the air temperature but where it
+                        came from: the forecast, your own sensor, or a fixed guess. A prediction
+                        standing on a guess looks exactly like one standing on a forecast, so it
+                        says which.</p>
 
                     <h3>What it publishes</h3>
                     <ul>

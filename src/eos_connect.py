@@ -286,8 +286,25 @@ feed_in_price_interface = interface_factory.create_feed_in_price_interface(
     feed_in_config, time_frame_base, time_zone, evcc_interface, critical=False
 ) or FeedInPriceInterface(feed_in_config, time_frame_base, time_zone, evcc_interface)
 
+def site_location():
+    """
+    Coordinates for this installation, or None.
+
+    Only the outside-temperature forecast needs them, and only when no PV installation
+    already carries a pair - which is every PV source that is not location-based
+    (EVCC, Solcast, Victron, timeseries). ``PvInterface`` prefers a PV entry, so this is
+    a fallback rather than an override: an existing install keeps working untouched.
+    """
+    lat = config_manager.config.get("latitude", 0.0)
+    lon = config_manager.config.get("longitude", 0.0)
+    return (lat, lon)
+
+
+# The optimizer is not the only consumer: an outdoor managed load needs the curve too,
+# and the default backend does not ask for one.
 temperature_forecast_enabled = wants_temperature_forecast(
-    config_manager.config.get("eos", {})
+    config_manager.config.get("eos", {}),
+    also_needed=load_manager.needs_outdoor_temperature(),
 )
 
 pv_interface = interface_factory.create_pv_interface(
@@ -299,6 +316,7 @@ pv_interface = interface_factory.create_pv_interface(
     temperature_forecast_enabled,
     config_manager.config.get("time_zone", "UTC"),
     critical=False,
+    site_location=site_location(),
 ) or PvInterface(
     config_manager.config["pv_forecast_source"],
     config_manager.config["pv_forecast"],
@@ -309,6 +327,7 @@ pv_interface = interface_factory.create_pv_interface(
     },
     temperature_forecast_enabled,
     config_manager.config.get("time_zone", "UTC"),
+    site_location=site_location(),
 )
 
 # Initialize PV autoscaler and attach to PvInterface (best-effort)
@@ -417,6 +436,20 @@ def _managed_load_base_load():
     return load_interface.get_load_profile(slots)
 
 
+def _managed_load_temperature_forecast():
+    """
+    The outdoor forecast, but only when there really is one.
+
+    `get_current_temp_forecast` falls back to a static 15 degree curve, which is
+    indistinguishable from a real one and outranked a user's own outdoor sensor. Handing
+    back nothing instead lets the manager fall through to that sensor, which is a real
+    measurement even if it cannot see into tomorrow.
+    """
+    if not pv_interface.has_real_temperature_forecast():
+        return []
+    return pv_interface.get_current_temp_forecast()
+
+
 def publish_managed_load_release(load_id, release):
     """Publish one managed load's release decision when it changes."""
     logger.info(
@@ -435,7 +468,7 @@ load_manager.sources = ManagedLoadSources(
     feed_in_price=feed_in_price_interface.get_current_feedin_prices,
     pv_forecast=pv_interface.get_current_pv_forecast,
     base_load=_managed_load_base_load,
-    temperature_forecast=pv_interface.get_current_temp_forecast,
+    temperature_forecast=_managed_load_temperature_forecast,
 )
 load_manager.on_release_change = publish_managed_load_release
 

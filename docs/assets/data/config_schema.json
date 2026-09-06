@@ -2622,6 +2622,40 @@
       "display_group": "General"
     },
     {
+      "key": "latitude",
+      "type": "float",
+      "default": 0.0,
+      "section": "system",
+      "level": "standard",
+      "description": "Latitude of this installation. Only needed for the outside-temperature forecast when no PV installation supplies coordinates - a pool heat pump uses it to predict its losses. Leave both at 0 if you do not need it",
+      "labels": [],
+      "help_url": "configuration.html#system",
+      "validation": {
+        "min": -90,
+        "max": 90
+      },
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Location"
+    },
+    {
+      "key": "longitude",
+      "type": "float",
+      "default": 0.0,
+      "section": "system",
+      "level": "standard",
+      "description": "Longitude of this installation. See Latitude",
+      "labels": [],
+      "help_url": "configuration.html#system",
+      "validation": {
+        "min": -180,
+        "max": 180
+      },
+      "depends_on": null,
+      "hot_reload": true,
+      "display_group": "Location"
+    },
+    {
       "key": "request_timeout",
       "type": "int",
       "default": 10,

@@ -147,6 +147,10 @@ _PV_KEY_PREFIXES = (
 # temperature forecast.
 _PV_TEMPERATURE_KEYS = {
     "eos.temperature_forecast_enabled",
+    # The site location only feeds the temperature request, and the PV interface is
+    # what makes it - so a change to either reloads the same interface.
+    "latitude",
+    "longitude",
 }
 
 # Managed loads. Every entry key is ``managed_loads.<n>.<field>``, and the change is
@@ -162,17 +166,17 @@ _MANAGED_LOAD_GLOBAL_KEYS = {
 }
 
 
-def _wants_temperature_forecast(eos_config):
+def _wants_temperature_forecast(eos_config, also_needed=False):
     """
-    Whether an outside-temperature forecast should be fetched for the optimizer.
+    Whether an outside-temperature forecast should be fetched.
 
     Inline copy of ``interfaces.pv_interface.wants_temperature_forecast`` - this module
     imports nothing cross-package on purpose.  The two are pinned equal by
     ``tests/interfaces/test_pv_interface_temperature_gating.py``.
     """
     if not isinstance(eos_config, dict):
-        return False
-    if eos_config.get("source", "eos_server") != "eos_server":
+        return bool(also_needed)
+    if not also_needed and eos_config.get("source", "eos_server") != "eos_server":
         return False
     return _coerce_bool(eos_config.get("temperature_forecast_enabled", True))
 
@@ -957,9 +961,16 @@ class HotReloadAdapter:
                 config=config.get("pv_forecast", []),
                 config_special=config.get("evcc", {}),
                 temperature_forecast_enabled=_wants_temperature_forecast(
-                    config.get("eos", {})
+                    config.get("eos", {}),
+                    also_needed=bool(
+                        self._load_manager is not None
+                        and self._load_manager.needs_outdoor_temperature()
+                    ),
                 ),
                 timezone=config.get("time_zone", "UTC"),
+                site_location=(
+                    config.get("latitude", 0.0), config.get("longitude", 0.0)
+                ),
             )
             self._applied_keys.extend(pending_keys)
             logger.info(

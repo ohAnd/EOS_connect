@@ -185,6 +185,67 @@ def test_the_overlay_shows_every_configured_load(page):
     assert "Energy needed" in content
 
 
+# ── The card ────────────────────────────────────────────────────────────────────
+
+def test_the_energy_figure_is_split_into_why(page):
+    """
+    "Energy needed" alone was the most misread number here: for a pool it is dominated
+    by two days of standing losses, so a 1.3 degree rise reads as 77 kWh and looks
+    absurd until you are told what it is made of.
+    """
+    _open_overlay(page)
+    content = page.text_content("#full_screen_content")
+    assert "Energy needed" in content
+    assert "to reach" in content
+    assert "to hold it" in content
+
+
+def test_coverage_says_whether_the_plan_is_enough(page):
+    """Two numbers to compare became a state, because the comparison is the point."""
+    _open_overlay(page)
+    content = page.text_content("#full_screen_content")
+    assert "covers" in content or "fully covered" in content
+
+
+def test_the_ambient_input_and_its_provenance_are_shown(page):
+    """
+    A prediction standing on a guessed constant looks exactly like one standing on a
+    forecast. That is how the placeholder-ambient bug stayed invisible.
+    """
+    _open_overlay(page)
+    content = page.text_content("#full_screen_content")
+    assert "Outside now" in content
+    assert ("weather forecast" in content
+            or "your sensor" in content
+            or "fixed guess" in content)
+
+
+def test_the_rating_is_given_in_both_currencies(page):
+    """It is electrical; everything above it on the card is derived from heat."""
+    _open_overlay(page)
+    content = page.text_content("#full_screen_content")
+    assert "W electrical" in content
+    assert "of heat" in content
+
+
+def test_calibration_offers_a_reset(page):
+    _open_overlay(page)
+    assert page.query_selector("#full_screen_content button") is not None
+    assert "Calibration" in page.text_content("#full_screen_content")
+
+
+def test_resetting_the_calibration_reaches_the_backend(page):
+    _open_overlay(page)
+    before = page.text_content("#full_screen_content")
+    assert "Still learning" in before
+
+    page.click("#full_screen_content button:has-text('Reset')")
+    page.wait_for_timeout(400)
+
+    # The overlay reopens against the API, so a stale card would be a failure here.
+    assert "Calibration 0%" in page.text_content("#full_screen_content")
+
+
 def test_the_menu_offers_managed_loads_only_once_configured(page):
     _seed(page, [])
     page.evaluate("() => showMainMenu('v', 'b', 'g')")

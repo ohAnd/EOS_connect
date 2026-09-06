@@ -792,6 +792,11 @@ class ControlsManager {
 
     /**
      * One load's detail card.
+     *
+     * Laid out to answer the questions in the order they get asked: what is it doing,
+     * how much energy does that take and can it actually get it, what is the model
+     * standing on, and how much of the model is measured rather than assumed.
+     *
      * @param {Object} load - An entry from GET /api/managed_loads
      * @param {number} slotSeconds - Seconds per optimizer slot
      * @param {number} currentSlot - Index of the slot happening now
@@ -804,41 +809,161 @@ class ControlsManager {
 
         let pill;
         if (!release) {
-            pill = `<span style="background:#555;padding:3px 10px;border-radius:12px;font-size:0.8em;">
-                forecast only</span>`;
+            pill = this._pill('#555', 'forecast only');
         } else if (release.released) {
-            pill = `<span style="background:#2e7d32;padding:3px 10px;border-radius:12px;font-size:0.8em;">
-                running</span>`;
+            pill = this._pill('#2e7d32', 'running');
         } else {
-            pill = `<span style="background:#555;padding:3px 10px;border-radius:12px;font-size:0.8em;">
-                blocked</span>`;
+            pill = this._pill('#555', 'blocked');
         }
 
+        return `<div style="background:rgb(54,54,54);border-radius:10px;padding:14px;margin-bottom:14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;
+                        margin-bottom:6px;flex-wrap:wrap;">
+                <strong style="font-size:1.1em;">${this.escapeHtml(load.id)}</strong>
+                <span style="opacity:0.6;font-size:0.85em;">${this.escapeHtml(load.type)}</span>
+                ${pill}
+            </div>
+            <div style="opacity:0.75;font-size:0.9em;margin-bottom:12px;">
+                ${this.escapeHtml((release && release.reason) || load.reason || '')}
+            </div>
+            ${this._managedLoadEnergy(load, detail)}
+            ${this._managedLoadFacts(load, detail, model, release)}
+            ${this._managedLoadCalibration(load, model)}
+            ${this._managedLoadPlanStrip(load.plan || [], slotSeconds, currentSlot)}
+        </div>`;
+    }
+
+    /**
+     * A coloured pill.
+     * @param {string} colour - CSS background
+     * @param {string} text - Label
+     * @returns {string} HTML
+     */
+    _pill(colour, text) {
+        return `<span style="background:${colour};padding:3px 10px;border-radius:12px;
+                     font-size:0.8em;">${this.escapeHtml(text)}</span>`;
+    }
+
+    /**
+     * The energy block: what is needed, split into why, against what can be delivered.
+     *
+     * "Energy needed" on its own was the most misread number on the page. For a pool it
+     * is dominated by standing losses over the rest of the horizon, not by the gap to
+     * the target, so a 1.3 degree rise reads as 77 kWh and looks absurd. Splitting it
+     * and saying how long the horizon is makes it ordinary.
+     *
+     * @param {Object} load - The load entry
+     * @param {Object} detail - Its model detail
+     * @returns {string} HTML
+     */
+    _managedLoadEnergy(load, detail) {
+        const needed = Number(load.energy_needed_wh) || 0;
+        const planned = Number(load.planned_wh) || 0;
+        if (needed <= 0 && planned <= 0) {
+            return '';
+        }
+
+        const cop = Number(detail.mean_cop) || 0;
+        const kwh = wh => `${(wh / 1000).toFixed(1)} kWh`;
+        // The split is thermal; divide by the same COP the model used so the parts add
+        // up to the electrical total shown above them.
+        const toElectric = thermal => (cop > 0 ? thermal / cop : 0);
+        const heatUp = Number(detail.heat_up_wh_thermal) || 0;
+        const losses = Number(detail.standing_losses_wh_thermal) || 0;
+
+        let split = '';
+        if (heatUp > 0 || losses > 0) {
+            const hours = Number(detail.horizon_hours) || 0;
+            split = `<div style="opacity:0.7;font-size:0.85em;margin:2px 0 8px 0;line-height:1.5;">
+                ${heatUp > 0 ? `${kwh(toElectric(heatUp))} to reach
+                    ${detail.target_temperature_c}&nbsp;&deg;C` : ''}
+                ${heatUp > 0 && losses > 0 ? ' &middot; ' : ''}
+                ${losses > 0 ? `${kwh(toElectric(losses))} to hold it
+                    ${hours ? `for the next ${Math.round(hours)}&nbsp;h` : ''}` : ''}
+            </div>`;
+        }
+
+        // Planned against needed, as a state rather than two numbers to compare.
+        let coverage = '';
+        if (needed > 0) {
+            const pct = Math.min(100, Math.round((planned / needed) * 100));
+            const short = pct < 98;
+            const colour = short ? '#e0a030' : '#4a9eff';
+            coverage = `
+                <div style="height:6px;background:rgba(255,255,255,0.12);border-radius:3px;
+                            overflow:hidden;margin-top:8px;">
+                    <div style="width:${pct}%;height:100%;background:${colour};"></div>
+                </div>
+                <div style="font-size:0.85em;opacity:0.75;margin-top:4px;">
+                    ${short
+                        ? `Planned ${kwh(planned)} &mdash; covers ${pct}% of it. The load
+                           cannot get enough runtime; widen its window or raise the daily
+                           cap.`
+                        : `Planned ${kwh(planned)} &mdash; fully covered.`}
+                </div>`;
+        }
+
+        return `<div style="background:rgba(0,0,0,0.15);border-radius:6px;padding:10px;
+                            margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;">
+                <span style="opacity:0.7;">Energy needed</span>
+                <strong>${kwh(needed)}</strong>
+            </div>
+            ${split}
+            ${coverage}
+        </div>`;
+    }
+
+    /**
+     * The measured inputs and the appliance's rating.
+     * @param {Object} load - The load entry
+     * @param {Object} detail - Its model detail
+     * @param {Object} model - Its model status
+     * @param {Object|null} release - Its release state
+     * @returns {string} HTML
+     */
+    _managedLoadFacts(load, detail, model, release) {
         const facts = [];
+
         if (detail.temperature_c !== undefined && detail.temperature_c !== null) {
             facts.push(['Temperature',
                 `${detail.temperature_c} &deg;C &rarr; ${detail.target_temperature_c} &deg;C`]);
         }
-        facts.push(['Energy needed', `${((load.energy_needed_wh || 0) / 1000).toFixed(1)} kWh`]);
-        facts.push(['Planned', `${((load.planned_wh || 0) / 1000).toFixed(1)} kWh`]);
+
+        // The input that drives everything, and where it came from. Without the second
+        // half a prediction standing on a guessed constant looks exactly like one
+        // standing on a forecast.
+        if (detail.ambient_now_c !== undefined && detail.ambient_now_c !== null) {
+            const SOURCES = {
+                forecast: 'from the weather forecast',
+                sensor: 'from your sensor, held flat',
+                fallback: 'a fixed guess &mdash; no forecast and no sensor',
+            };
+            const note = SOURCES[detail.ambient_source] || '';
+            const warn = detail.ambient_source === 'fallback';
+            facts.push(['Outside now',
+                `${detail.ambient_now_c} &deg;C
+                 <span style="opacity:0.6;${warn ? 'color:#e0a030;' : ''}">${note}</span>`]);
+        }
+
         if (release && release.next_release_start) {
             facts.push(['Next start', new Date(release.next_release_start)
                 .toLocaleString(navigator.language,
                     { weekday: 'short', hour: '2-digit', minute: '2-digit' })]);
         }
-        if (model.rated_power_w) {
-            facts.push(['Rated power', `${model.rated_power_w} W`]);
+
+        // Both currencies. The rating is electrical and everything above it is derived
+        // from heat, which made it the one number on the card that did not compare.
+        if (detail.electrical_power_w || model.rated_power_w) {
+            const electrical = detail.electrical_power_w || model.rated_power_w;
+            const thermal = detail.thermal_power_w;
+            facts.push(['Power', thermal
+                ? `${electrical} W electrical &rarr;
+                   <span style="opacity:0.8;">${(thermal / 1000).toFixed(1)} kW of heat</span>`
+                : `${electrical} W electrical`]);
         }
         if (detail.mean_cop) {
             facts.push(['Efficiency now', `COP ${detail.mean_cop}`]);
-        }
-        if (model.confidence !== undefined && model.confidence !== null) {
-            // Until this settles the plan is running on the values from the config form,
-            // which is worth saying rather than hiding behind a number.
-            const pct = Math.round(model.confidence * 100);
-            facts.push(['Calibration', `${pct}%` + (pct < 50
-                ? ' <span style="opacity:0.7;">(still learning &mdash; using configured values)</span>'
-                : '')]);
         }
         if (release && release.override) {
             facts.push(['Override', `${release.override} until ` + new Date(release.override_until)
@@ -848,24 +973,70 @@ class ControlsManager {
             facts.push(['Error', this.escapeHtml(load.error)]);
         }
 
-        const factHtml = facts.map(([k, v]) => `
+        return facts.map(([k, v]) => `
             <div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;">
-                <span style="opacity:0.7;">${k}</span><span>${v}</span>
+                <span style="opacity:0.7;">${k}</span><span style="text-align:right;">${v}</span>
             </div>`).join('');
+    }
 
-        return `<div style="background:rgb(54,54,54);border-radius:10px;padding:14px;margin-bottom:14px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;
-                        margin-bottom:6px;flex-wrap:wrap;">
-                <strong style="font-size:1.1em;">${this.escapeHtml(load.id)}</strong>
-                <span style="opacity:0.6;font-size:0.85em;">${this.escapeHtml(load.type)}</span>
-                ${pill}
+    /**
+     * How much of the model is measured rather than assumed, and a way to start over.
+     * @param {string} load - The load entry
+     * @param {Object} model - Its model status
+     * @returns {string} HTML
+     */
+    _managedLoadCalibration(load, model) {
+        if (model.confidence === undefined || model.confidence === null) {
+            return '';
+        }
+        const pct = Math.round(model.confidence * 100);
+        const settled = pct >= 50;
+
+        return `<div style="display:flex;align-items:center;justify-content:space-between;
+                            gap:12px;padding:8px 0 0 0;margin-top:8px;
+                            border-top:1px solid rgba(255,255,255,0.08);">
+            <div style="min-width:0;">
+                <div style="opacity:0.7;">Calibration ${pct}%</div>
+                <div style="opacity:0.6;font-size:0.85em;">
+                    ${settled
+                        ? `Heat loss and efficiency measured from ${model.loss_samples || 0}
+                           cooling and ${model.cop_samples || 0} heating samples.`
+                        : 'Still learning &mdash; the plan is running on the values from the configuration form.'}
+                </div>
             </div>
-            <div style="opacity:0.75;font-size:0.9em;margin-bottom:10px;">
-                ${this.escapeHtml((release && release.reason) || load.reason || '')}
-            </div>
-            ${factHtml}
-            ${this._managedLoadPlanStrip(load.plan || [], slotSeconds, currentSlot)}
+            <button class="config-btn" style="flex:0 0 auto;"
+                    onclick="controlsManager.resetManagedLoadCalibration('${this.escapeHtml(load.id)}')"
+                    title="Discard what has been learned and start again from the configured values">
+                <i class="fas fa-rotate-left"></i> Reset
+            </button>
         </div>`;
+    }
+
+    /**
+     * Discard a load's learned coefficients and its recorded samples.
+     *
+     * Worth doing when the inputs it was fitted against turn out to have been wrong -
+     * the samples carry those inputs, so they keep dragging the fit until they age out
+     * of the retention window on their own.
+     *
+     * @param {string} loadId - Which load
+     */
+    async resetManagedLoadCalibration(loadId) {
+        try {
+            const res = await fetch(`api/managed_loads/${encodeURIComponent(loadId)}/calibration/reset`,
+                { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) {
+                this.showToast(data.error || 'Reset failed.', 'error');
+                return;
+            }
+            this.showToast(`${loadId}: calibration reset — learning again from scratch.`, 'info');
+            // Reopen so the card shows the reset state rather than the stale one.
+            this.showManagedLoadsOverlay();
+        } catch (err) {
+            console.error('[ControlsManager] Calibration reset failed:', err);
+            this.showToast('Reset request failed.', 'error');
+        }
     }
 
     /**
