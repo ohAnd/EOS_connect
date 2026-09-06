@@ -2098,7 +2098,13 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="managed_loads",
         level="getting_started",
-        description="Entity/item for this load's power draw in watts",
+        description=(
+            "Entity/item for this load's power draw in watts (W), like every other "
+            "sensor in EOS Connect. It answers two questions a meter reading cannot: "
+            "is the appliance running right now, and how fast is it heating - which is "
+            "what the efficiency is measured from. If you only have a kWh meter, add a "
+            "derivative helper in Home Assistant and point this at that"
+        ),
         labels=["restart_required"],
         help_url="configuration.html#managed-loads",
         display_group="Identity",
@@ -2165,10 +2171,11 @@ _ALL_FIELDS: list[FieldDef] = [
         field_type="sensor",
         default="",
         section="managed_loads",
-        level="expert",
+        level="standard",
         description=(
             "Optional entity/item holding the target temperature, when it is set "
-            "elsewhere - overrides the fixed value above"
+            "elsewhere - a number helper, a thermostat, or the appliance itself. "
+            "Overrides the fixed value above whenever it can be read"
         ),
         labels=["restart_required"],
         help_url="configuration.html#managed-loads",

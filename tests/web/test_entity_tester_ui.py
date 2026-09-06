@@ -211,3 +211,112 @@ def test_a_group_of_only_sensors_still_collapses(config_page):
         }"""
     )
     assert hidden is True
+
+
+# ── Managed loads ───────────────────────────────────────────────────────────────
+#
+# Managed loads are the first list section whose entries are heterogeneous: which
+# fields apply depends on the type picked in that card, so their dependencies are
+# resolved *within* the entry. The tester row did not get that scope passed to it, so
+# every sensor field with a type dependency rendered its Test button permanently
+# hidden — visible field, no way to test it. Only the power sensor, which has no type
+# dependency, escaped, which is exactly how it was reported.
+
+MANAGED_SENSOR_KEYS = [
+    "managed_loads.0.temp_sensor",
+    "managed_loads.0.target_temp_sensor",
+    "managed_loads.0.ambient_temp_sensor",
+    "managed_loads.0.power_sensor",
+    "managed_loads.0.cover_sensor",
+]
+
+
+def _seed_entry(page, entry_type, index=0):
+    """Put one managed load into the form and render its section at expert level."""
+    page.evaluate(
+        """([type, index]) => {
+            const cm = configurationManager;
+            cm._setLevel('expert');
+            for (const k of Object.keys(cm.values)) {
+                if (/^managed_loads\\.\\d+\\./.test(k)) { delete cm.values[k]; }
+            }
+            cm.values[`managed_loads.${index}.id`] = 'pool';
+            cm.values[`managed_loads.${index}.type`] = type;
+            cm._selectSection('managed_loads');
+        }""",
+        [entry_type, index],
+    )
+    page.wait_for_selector('[data-entry-section="managed_loads"]')
+
+
+def _is_visible(page, selector):
+    return page.evaluate(
+        """(sel) => {
+            const el = document.querySelector(sel);
+            return el ? el.offsetParent !== null : false;
+        }""",
+        selector,
+    )
+
+
+@pytest.mark.parametrize("key", MANAGED_SENSOR_KEYS)
+def test_a_pool_sensor_field_gets_a_visible_tester(config_page, key):
+    """Rendered *and* visible — it was rendered all along, just always hidden."""
+    _seed_entry(config_page, "pool_heatpump")
+
+    assert config_page.query_selector(f'[data-entity-tester="{key}"]') is not None
+    assert _is_visible(config_page, f'[data-entity-tester="{key}"]'), (
+        f"{key} has a Test button the user cannot see"
+    )
+
+
+@pytest.mark.parametrize("key", MANAGED_SENSOR_KEYS)
+def test_a_visible_field_always_has_a_visible_tester(config_page, key):
+    """
+    The invariant behind the bug: a field and its connection test travel together.
+    Either both apply to this entry or neither does.
+    """
+    _seed_entry(config_page, "pool_heatpump")
+
+    field_visible = _is_visible(config_page, f"#cfg-field-{_css_key(key)}")
+    tester_visible = _is_visible(config_page, f'[data-entity-tester="{key}"]')
+    assert field_visible == tester_visible, (
+        f"{key}: field visible={field_visible}, tester visible={tester_visible}"
+    )
+
+
+def test_a_pushed_profile_hides_the_thermal_fields_and_their_testers(config_page):
+    """The other half: an entry that does not use a sensor must not offer to test it."""
+    _seed_entry(config_page, "external_profile")
+
+    assert not _is_visible(config_page, '[data-entity-tester="managed_loads.0.temp_sensor"]')
+    assert not _is_visible(config_page, "#cfg-field-managed_loads-0-temp_sensor")
+    # A pushed profile still has a power sensor, so the base load can be corrected.
+    assert _is_visible(config_page, '[data-entity-tester="managed_loads.0.power_sensor"]')
+
+
+def test_two_entries_of_different_types_are_judged_independently(config_page):
+    """The reason the dependency has to be entry-relative at all."""
+    config_page.evaluate(
+        """() => {
+            const cm = configurationManager;
+            cm._setLevel('expert');
+            cm.values['managed_loads.0.id'] = 'pool';
+            cm.values['managed_loads.0.type'] = 'pool_heatpump';
+            cm.values['managed_loads.1.id'] = 'heating';
+            cm.values['managed_loads.1.type'] = 'external_profile';
+            cm._selectSection('managed_loads');
+        }"""
+    )
+    config_page.wait_for_selector('[data-entry-idx="1"]')
+
+    assert _is_visible(config_page, '[data-entity-tester="managed_loads.0.temp_sensor"]')
+    assert not _is_visible(config_page, '[data-entity-tester="managed_loads.1.temp_sensor"]')
+
+
+def test_only_a_pool_offers_a_cover_sensor(config_page):
+    _seed_entry(config_page, "hot_water_tank")
+    assert not _is_visible(config_page, '[data-entity-tester="managed_loads.0.cover_sensor"]')
+
+    _seed_entry(config_page, "pool_heatpump")
+    assert _is_visible(config_page, '[data-entity-tester="managed_loads.0.cover_sensor"]')

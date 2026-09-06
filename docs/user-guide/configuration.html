@@ -194,6 +194,17 @@
                                 conditioning.</em></li>
                     </ul>
 
+                    <h3>The power sensor</h3>
+                    <p>Every sensor field in EOS Connect takes <strong>watts</strong>, and this one is no
+                        exception. It is not only used to subtract the appliance from the base load &mdash;
+                        it answers two questions a meter reading cannot: is this running <em>right now</em>,
+                        and how fast is the store warming for the power going in. That second one is where
+                        the measured efficiency comes from.</p>
+                    <p>If you only have a kWh counter, add a <strong>derivative</strong> helper in Home
+                        Assistant and point the field at that. Pointing it straight at the counter is
+                        caught and reported on the alerts panel: 1234&nbsp;W and 1234&nbsp;kWh are the same
+                        number, so it would otherwise look like an appliance that never switches off.</p>
+
                     <div class="alert alert-info">
                         <p>Every managed load's own consumption is <strong>removed from the household base
                                 load</strong> before its forecast is added back, so the same appliance is
