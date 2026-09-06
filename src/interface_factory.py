@@ -46,6 +46,7 @@ class InterfaceFactory:
         time_zone: tzinfo,
         request_timeout: int = 10,
         critical: bool = True,
+        extra_subtract_sensors=None,
     ):
         """
         Create LoadInterface with error handling.
@@ -56,6 +57,8 @@ class InterfaceFactory:
             time_zone: Timezone for timestamps
             request_timeout: Request timeout in seconds
             critical: Whether interface is critical (stops startup on failure)
+            extra_subtract_sensors: Power sensors of managed loads, removed from the
+                household base load so their predicted consumption is not counted twice
             
         Returns:
             LoadInterface instance or None if non-critical and failed
@@ -77,6 +80,49 @@ class InterfaceFactory:
                 time_frame_base,
                 time_zone,
                 request_timeout=request_timeout,
+                extra_subtract_sensors=extra_subtract_sensors,
+            ),
+        )
+
+    def create_managed_load_manager(
+        self,
+        entries,
+        time_frame_base: int,
+        time_zone: tzinfo,
+        sources=None,
+        store=None,
+        cycle_seconds: int = 300,
+        max_power_w: int = 0,
+        on_release_change=None,
+    ):
+        """
+        Create the managed load manager with error handling.
+
+        Never critical: a mistyped pool configuration must not stop the house being
+        optimized. On failure the caller substitutes a manager with no entries, which
+        is a no-op on the optimizer path.
+
+        Returns:
+            ManagedLoadManager instance, or None if creation failed
+        """
+        return self._create_interface(
+            component_name="managed_load_manager",
+            category="configuration",
+            critical=False,
+            title="Managed loads unavailable",
+            error_message="Failed to set up the configured managed loads",
+            config_link="#managed-loads",
+            creator_func=lambda: self._import_and_create(
+                "loads.manager",
+                "ManagedLoadManager",
+                entries,
+                time_frame_base,
+                time_zone,
+                sources=sources,
+                store=store,
+                cycle_seconds=cycle_seconds,
+                max_power_w=max_power_w,
+                on_release_change=on_release_change,
             ),
         )
 

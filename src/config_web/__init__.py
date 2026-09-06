@@ -43,9 +43,9 @@ from .api import config_bp, init_api
 from .backup import backup_bp, init_backup
 
 try:  # running from src/ as a script — src/ is on sys.path
-    from persistence import PvYieldStore
+    from persistence import ManagedLoadStore, PvYieldStore
 except ImportError:  # imported as src.config_web (tests)
-    from ..persistence import PvYieldStore
+    from ..persistence import ManagedLoadStore, PvYieldStore
 
 logger = logging.getLogger("__main__")
 
@@ -169,6 +169,18 @@ class ConfigWebModule:
         except Exception:
             logger.exception("[ConfigWeb] Failed to initialize PvYieldStore schema")
 
+        # Sample history and learned coefficients for managed loads. Same contract: on
+        # failure the attribute stays None and the manager runs without persistence,
+        # relearning from the configured values after each restart.
+        self._managed_load_store = None
+        try:
+            managed_store = ManagedLoadStore(self._store)
+            managed_store.ensure_schema()
+            managed_store.purge_old_samples()
+            self._managed_load_store = managed_store
+        except Exception:
+            logger.exception("[ConfigWeb] Failed to initialize ManagedLoadStore schema")
+
     def start_api(self, flask_app):
         """
         Phase 2 — register the Flask REST API blueprint.
@@ -282,3 +294,8 @@ class ConfigWebModule:
     def pv_yield_store(self) -> PvYieldStore:
         """PvYieldStore wrapper for the pv_yield_history table."""
         return getattr(self, "_pv_yield_store", None)
+
+    @property
+    def managed_load_store(self) -> ManagedLoadStore:
+        """ManagedLoadStore wrapper for the managed-load sample and model tables."""
+        return getattr(self, "_managed_load_store", None)

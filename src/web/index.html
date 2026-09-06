@@ -208,6 +208,21 @@
                     </table>
                 </div>
             </div>
+            <!--
+                Managed loads. Hidden until at least one is configured, so an install
+                without a pool or a pushed heating profile looks exactly as it did.
+            -->
+            <div class="top-box" id="managed_loads_box" style="display: none;">
+                <div class="header"><i class="fa-solid fa-sliders"></i> Managed Loads
+                    <span class="header_notification" id="managed_loads_total"
+                        style="cursor: pointer;min-width: 20px;">...</span>
+                </div>
+                <div class="content">
+                    <table style="width: 100%; text-align: left;padding-top: 10px;">
+                        <tbody id="managed_loads_rows"></tbody>
+                    </table>
+                </div>
+            </div>
             <div class="top-box">
                 <div class="header"><i id="battery_icon_main"></i> Battery State
                     <span class="header_notification" id="battery_usable_capacity"

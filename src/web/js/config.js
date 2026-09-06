@@ -20,6 +20,25 @@ let LOCATION_BASED_PV_SOURCES = ["akkudoktor", "openmeteo", "openmeteo_local", "
 
 const LEVEL_ORDER = { getting_started: 0, standard: 1, expert: 2 };
 
+// Sections stored as a list of entries rather than a flat group of keys. Their schema
+// fields are the template for ONE entry; the stored keys are indexed
+// ("managed_loads.0.type"). Mirrors LIST_SECTIONS in schema.py.
+const LIST_SECTIONS = new Set(["pv_forecast", "managed_loads"]);
+
+// Entry cards for a list section, keyed by section: which icon each card shows and
+// which field supplies its title.
+const LIST_SECTION_CARDS = {
+    managed_loads: {
+        icon: "fa-sliders",
+        titleField: "id",
+        addLabel: "Add Managed Load",
+        description:
+            "Appliances EOS Connect forecasts and, where the timing is ours to choose, " +
+            "releases. Each one is added to the household load forecast and gets its " +
+            "own MQTT topics.",
+    },
+};
+
 // ── Subsection mapping (display_group → subsection_group) ──────
 // Groups related display_groups under logical subsections.
 // Allows automatic rendering of subsection headers.
@@ -128,7 +147,7 @@ class ConfigurationManager {
 
         // Fill missing keys with schema defaults
         for (const f of this.schema) {
-            if (!(f.key in this.values) && f.key.indexOf("pv_forecast.") !== 0) {
+            if (!(f.key in this.values) && !LIST_SECTIONS.has(f.section)) {
                 this.values[f.key] = f.default;
             }
         }
@@ -321,6 +340,8 @@ class ConfigurationManager {
         if (contentEl) {
             if (section === "pv_forecast") {
                 contentEl.innerHTML = this._renderPvForecastSection();
+            } else if (LIST_SECTIONS.has(section)) {
+                contentEl.innerHTML = this._renderListSection(section);
             } else {
                 contentEl.innerHTML = this._renderSection(section);
                 // Initialize dynamic descriptions for this section
@@ -459,9 +480,9 @@ class ConfigurationManager {
      * @param {Object} f - Field definition from schema
      * @returns {string} Field HTML
      */
-    _renderField(f) {
+    _renderField(f, entryValues = null) {
         const val = this.values[f.key] ?? f.default;
-        const isHidden = this._isDependencyHidden(f) ? " hidden" : "";
+        const isHidden = this._isDependencyHidden(f, entryValues) ? " hidden" : "";
 
         let inputHtml;
         switch (f.type) {
@@ -887,6 +908,177 @@ class ConfigurationManager {
         return html;
     }
 
+    // ── Generic list sections ───────────────────────────────────
+
+    /**
+     * Whether a stored key belongs to an entry of a list section.
+     * @param {string} section - Section key
+     * @param {string} key - Stored config key
+     * @returns {boolean}
+     */
+    _isEntryKey(section, key) {
+        return new RegExp(`^${section}\\.\\d+\\.`).test(key);
+    }
+
+    /**
+     * Collect the entries of a list section from the current values.
+     * @param {string} section - Section key
+     * @returns {Object[]} One value map per entry, ordered by index
+     */
+    _getListEntries(section) {
+        const byIndex = {};
+        const re = new RegExp(`^${section}\\.(\\d+)\\.(.+)$`);
+        for (const [k, v] of Object.entries(this.values)) {
+            const m = k.match(re);
+            if (m) {
+                const idx = parseInt(m[1], 10);
+                if (!byIndex[idx]) {
+                    byIndex[idx] = {};
+                }
+                byIndex[idx][m[2]] = v;
+            }
+        }
+        return Object.keys(byIndex)
+            .sort((a, b) => a - b)
+            .map(k => byIndex[k]);
+    }
+
+    /**
+     * Render a list section as one card per entry.
+     *
+     * Unlike the PV installations, entries here are heterogeneous: which fields apply
+     * depends on the entry's own type, so every field is rendered with the entry as its
+     * dependency scope.
+     *
+     * @param {string} section - Section key
+     * @returns {string} Section HTML
+     */
+    _renderListSection(section) {
+        const meta = CONFIG_SECTIONS[section] || {};
+        const card = LIST_SECTION_CARDS[section] || {};
+        const maxLvl = LEVEL_ORDER[this.level] ?? 2;
+        const fields = this.schema
+            .filter(f => f.section === section)
+            .filter(f => (LEVEL_ORDER[f.level] ?? 2) <= maxLvl);
+
+        const entries = this._getListEntries(section);
+
+        let html = `<div class="config-restart-banner" id="cfg-restart-banner">
+            <i class="fas fa-rotate"></i>
+            <span id="cfg-restart-msg">Restart required for changes to take effect.</span>
+        </div>`;
+
+        html += `<div class="config-section-title">
+            <i class="fa-solid ${meta.icon || card.icon || "fa-sliders"}" style="color:#4a9eff;"></i>
+            ${meta.label || section}
+        </div>
+        <div class="config-section-desc">${card.description || ""}</div>`;
+
+        if (entries.length === 0) {
+            html += `<div class="config-section-desc" style="opacity:0.75;">
+                Nothing configured yet.
+            </div>`;
+        } else {
+            entries.forEach((entry, idx) => {
+                html += this._renderEntryCard(section, idx, fields, entry, card);
+            });
+        }
+
+        html += `<button class="config-pv-add" onclick="configurationManager._addListEntry('${section}')">
+            <i class="fas fa-plus"></i> ${card.addLabel || "Add Entry"}
+        </button>`;
+
+        html += this._renderActions(section);
+        return html;
+    }
+
+    /**
+     * Render one entry card of a list section.
+     * @param {string} section - Section key
+     * @param {number} idx - Entry index
+     * @param {Object[]} fieldDefs - Visible field definitions (templates)
+     * @param {Object} values - This entry's values
+     * @param {Object} card - Card metadata from LIST_SECTION_CARDS
+     * @returns {string} Card HTML
+     */
+    _renderEntryCard(section, idx, fieldDefs, values, card) {
+        const titleField = card.titleField || "name";
+        const title = values[titleField] || `Entry ${idx + 1}`;
+
+        let html = `<div class="config-pv-card" data-entry-section="${section}" data-entry-idx="${idx}">
+            <div class="config-pv-card-header">
+                <span><i class="fas ${card.icon || "fa-sliders"}" style="margin-right:8px;color:#4a9eff;"></i>${this._escapeHtml(title)}</span>
+                <button class="config-btn config-btn-danger" style="padding:4px 10px;font-size:0.8em;"
+                    onclick="configurationManager._removeListEntry('${section}', ${idx})">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>`;
+
+        for (const f of fieldDefs) {
+            const subKey = f.key.split(".").pop();
+            const pf = { ...f, key: `${section}.${idx}.${subKey}` };
+            html += this._renderField(pf, values);
+        }
+
+        html += "</div>";
+        return html;
+    }
+
+    /**
+     * Add an entry to a list section, seeded from the schema defaults.
+     * @param {string} section - Section key
+     */
+    _addListEntry(section) {
+        const entries = this._getListEntries(section);
+        const newIdx = entries.length;
+        const card = LIST_SECTION_CARDS[section] || {};
+        const titleField = card.titleField || "name";
+
+        for (const f of this.schema.filter(x => x.section === section)) {
+            const subKey = f.key.split(".").pop();
+            let value = f.default;
+            if (subKey === titleField && !value) {
+                // An id has to be unique — it becomes an MQTT topic and a URL path.
+                value = `${section.replace(/s$/, "")}_${newIdx + 1}`;
+            }
+            this.values[`${section}.${newIdx}.${subKey}`] = value;
+            // Deliberately not added to originalValues, so every field counts as
+            // changed and is sent on save.
+        }
+
+        this._selectSection(section);
+    }
+
+    /**
+     * Remove an entry from a list section and close the gap in the indexes.
+     * @param {string} section - Section key
+     * @param {number} idx - Entry index to remove
+     */
+    _removeListEntry(section, idx) {
+        const prefix = `${section}.${idx}.`;
+        for (const k of Object.keys(this.values)) {
+            if (k.startsWith(prefix)) {
+                delete this.values[k];
+            }
+        }
+
+        // Re-index so the stored keys stay contiguous — the merger reads them in index
+        // order and a gap would silently drop everything after it.
+        const remaining = this._getListEntries(section);
+        for (const k of Object.keys(this.values)) {
+            if (this._isEntryKey(section, k)) {
+                delete this.values[k];
+            }
+        }
+        remaining.forEach((entry, newIdx) => {
+            for (const [subKey, val] of Object.entries(entry)) {
+                this.values[`${section}.${newIdx}.${subKey}`] = val;
+            }
+        });
+
+        this._selectSection(section);
+    }
+
     /**
      * Render a single PV installation card.
      * @param {number} idx - Installation index
@@ -1143,12 +1335,18 @@ class ConfigurationManager {
      * @param {Object} f - Field definition
      * @returns {boolean} True if hidden
      */
-    _isDependencyHidden(f) {
+    _isDependencyHidden(f, entryValues = null) {
         if (!f.depends_on) {
             return false;
         }
         for (const [depKey, allowed] of Object.entries(f.depends_on)) {
-            const currentVal = this.values[depKey] ?? this._getSchemaDefault(depKey);
+            // A key without a dot is resolved *within the entry*: in managed_loads,
+            // "type" means this card's type. Two cards of different types have to be
+            // judged independently, which is why pv_forecast never needed this — its
+            // entries are all the same shape.
+            const currentVal = depKey.includes(".")
+                ? (this.values[depKey] ?? this._getSchemaDefault(depKey))
+                : (entryValues ? entryValues[depKey] : undefined);
 
             if (allowed === "!empty") {
                 if (!currentVal || currentVal === "") {
@@ -1183,6 +1381,23 @@ class ConfigurationManager {
         if (!this.schema) {
             return;
         }
+
+        // Changing an entry's own governing field (its type) changes which fields apply
+        // to that card and to no other, and the per-field toggle below cannot express
+        // that. Re-rendering the section is both simpler and correct.
+        const entryMatch = changedKey.match(/^(\w+)\.\d+\.(.+)$/);
+        if (entryMatch && LIST_SECTIONS.has(entryMatch[1])) {
+            const section = entryMatch[1];
+            const governs = this.schema.some(
+                f => f.section === section && f.depends_on
+                    && Object.keys(f.depends_on).includes(entryMatch[2])
+            );
+            if (governs) {
+                this._selectSection(section);
+                return;
+            }
+        }
+
         for (const f of this.schema) {
             if (f.depends_on && changedKey in f.depends_on) {
                 const hidden = this._isDependencyHidden(f);
@@ -1500,8 +1715,8 @@ class ConfigurationManager {
      * @param {string} section - Section key
      */
     _resetSection(section) {
-        const fields = section === "pv_forecast"
-            ? Object.keys(this.values).filter(k => k.match(/^pv_forecast\.\d+\./))
+        const fields = LIST_SECTIONS.has(section)
+            ? Object.keys(this.values).filter(k => this._isEntryKey(section, k))
             : this._fieldsForSection(section).map(f => f.key);
 
         for (const key of fields) {
@@ -1634,10 +1849,10 @@ class ConfigurationManager {
     _getChangedValues(section) {
         const changes = {};
 
-        if (section === "pv_forecast") {
-            // For PV, capture all pv_forecast.N.field keys
+        if (LIST_SECTIONS.has(section)) {
+            // Capture every <section>.N.field key that differs from what was loaded.
             for (const [k, v] of Object.entries(this.values)) {
-                if (/^pv_forecast\.\d+\./.test(k)) {
+                if (this._isEntryKey(section, k)) {
                     if (String(v) !== String(this.originalValues[k] ?? "")) {
                         changes[k] = v;
                     }

@@ -560,11 +560,18 @@ class MqttInterface:
         logger.debug(
             "[MQTT] Received message on topic '%s': %s", msg.topic, msg.payload.decode()
         )
-        # Ignore retained messages: they are re-delivered on every MQTT reconnect
-        # and would silently override config values (e.g. soc_min, soc_max) with
-        # stale values from a previous session.  Live commands from HA / automations
-        # arrive with retain=False and are always processed normally.
-        if msg.retain:
+        topic = msg.topic.replace(self.base_topic + "/", "", 1).removesuffix("/set")
+        definition = self.topics_publish.get(topic, {})
+
+        # Retained messages are re-delivered on every MQTT reconnect and would silently
+        # override config values (e.g. soc_min, soc_max) with stale values from a
+        # previous session, so they are skipped by default.  Live commands from HA /
+        # automations arrive with retain=False and are always processed normally.
+        #
+        # A topic can opt in: a pushed load forecast is not a config value, and losing
+        # it on restart would mean the optimizer plans without it until the sender next
+        # publishes - which may be hours.
+        if msg.retain and not definition.get("accept_retained"):
             logger.info(
                 "[MQTT] Skipping retained message on topic '%s' (value: %s) "
                 "- config.yaml takes priority on reconnect.",
@@ -572,7 +579,6 @@ class MqttInterface:
                 msg.payload.decode(),
             )
             return
-        topic = msg.topic.replace(self.base_topic + "/", "", 1).removesuffix("/set")
         if topic in self.topics_publish:
             try:
                 self.topics_publish[topic]["set_value"] = msg.payload.decode()
@@ -601,6 +607,18 @@ class MqttInterface:
                 self.on_mqtt_command(
                     {topic_command_map[topic]: self.topics_publish[topic]["set_value"]}
                 )
+
+            handler = definition.get("on_command")
+            if handler:
+                try:
+                    handler(self.topics_publish[topic]["set_value"])
+                except Exception:  # pylint: disable=broad-except
+                    # A published message has nowhere to return an error to, and this
+                    # runs on the paho network thread - an escaping exception there
+                    # takes the client loop down with it.
+                    logger.exception(
+                        "[MQTT] handler for topic '%s' failed", topic
+                    )
 
     def __connect(self):
         """
@@ -698,6 +716,74 @@ class MqttInterface:
                 )
                 self.topics_publish_last[topic]["value"] = value["value"]
 
+    def register_topics(self, topics):
+        """
+        Add topics to the registry after construction.
+
+        The built-in registry is fixed at start-up, but managed loads are configured by
+        the user: their ids are only known once the configuration has been read, and
+        each one needs its own release, state and temperature entities. Registering them
+        here means subscription, change detection and Home Assistant discovery all keep
+        working the way they do for the built-in topics, including across a reconnect -
+        ``__on_connect`` re-reads the whole registry.
+
+        Each definition is a dict in the same shape as the built-in entries. Two extra
+        keys are understood:
+
+        - ``accept_retained``: process retained messages on this topic instead of
+          skipping them. Off by default, because a retained value silently overriding a
+          configuration setting on every reconnect is the reason retained messages are
+          skipped at all - but a pushed load forecast *should* survive a restart.
+        - ``on_command``: a callable invoked with the payload string. Managed-load
+          commands have nothing to do with the battery control state, so they bypass the
+          ``on_mqtt_command`` route entirely.
+
+        Existing topics are never overwritten. Returns the topics actually added.
+        """
+        if not self.enable_mqtt:
+            # With MQTT disabled ``__init__`` returns before the registry is built, so
+            # there is nothing to add to and nothing that would ever be published. The
+            # caller registers topics unconditionally on purpose - whether MQTT is on
+            # is this interface's business, not the caller's.
+            return {}
+
+        added = {}
+        for topic, definition in (topics or {}).items():
+            if topic in self.topics_publish:
+                logger.warning(
+                    "[MQTT] topic '%s' is already registered - ignoring the duplicate",
+                    topic,
+                )
+                continue
+            entry = {
+                "value": None,
+                "qos": 0,
+                "retain": True,
+                "unit": None,
+                "type": "sensor",
+                "device_class": None,
+                "icon": None,
+                "name": topic,
+            }
+            entry.update(definition)
+            self.topics_publish[topic] = entry
+            self.topics_publish_last[topic] = entry.copy()
+            added[topic] = entry
+
+        if not added:
+            return added
+
+        logger.info("[MQTT] registered %d additional topic(s)", len(added))
+        if not self.enable_mqtt:
+            return added
+
+        for topic, entry in added.items():
+            if entry.get("command_topic"):
+                self.__subscribe(self.base_topic + "/" + entry["command_topic"])
+            if self.ha_auto_discovery:
+                self.__publish_discovery_for(topic, entry)
+        return added
+
     def update_publish_topics(self, topics):
         """
         Update the publish topics with new values.
@@ -734,26 +820,30 @@ class MqttInterface:
     def __send_mqtt_discovery_messages(self) -> None:
         """Publish all offered mqtt discovery config messages"""
         for topic, value in self.topics_publish.items():
-            self.__publish_mqtt_discovery_message(
-                value["name"],
-                "eos_connect_" + topic.replace("/", "_"),
-                value["type"],
-                value["device_class"],
-                value["unit"],
-                self.base_topic + "/" + topic,
-                icon=value.get("icon") and value["icon"],
-                command_topic=value.get("command_topic")
-                and self.base_topic + "/" + value["command_topic"],
-                entity_category=value.get("entity_category")
-                and value["entity_category"],
-                min_value=value.get("min") and value["min"],
-                max_value=value.get("max") and value["max"],
-                step_value=value.get("step") and value["step"],
-                value_template=value.get("value_template") and value["value_template"],
-                command_template=value.get("command_template")
-                and value["command_template"],
-                options=value.get("options") and value["options"],
-            )
+            self.__publish_discovery_for(topic, value)
+
+    def __publish_discovery_for(self, topic, value) -> None:
+        """Publish the Home Assistant discovery message for one registered topic."""
+        self.__publish_mqtt_discovery_message(
+            value["name"],
+            "eos_connect_" + topic.replace("/", "_"),
+            value["type"],
+            value["device_class"],
+            value["unit"],
+            self.base_topic + "/" + topic,
+            icon=value.get("icon") and value["icon"],
+            command_topic=value.get("command_topic")
+            and self.base_topic + "/" + value["command_topic"],
+            entity_category=value.get("entity_category")
+            and value["entity_category"],
+            min_value=value.get("min") and value["min"],
+            max_value=value.get("max") and value["max"],
+            step_value=value.get("step") and value["step"],
+            value_template=value.get("value_template") and value["value_template"],
+            command_template=value.get("command_template")
+            and value["command_template"],
+            options=value.get("options") and value["options"],
+        )
 
     def __publish_mqtt_discovery_message(
         self,

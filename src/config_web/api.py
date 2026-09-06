@@ -17,6 +17,7 @@ from .migration import _flatten_config
 from .schema import (
     DATA_SOURCE_REQUIRED_SENSORS,
     LEGACY_SENSOR_PLACEHOLDERS,
+    LIST_SECTIONS,
     LOCATION_BASED_PV_SOURCES,
     REMOTE_DATA_SOURCE_TYPES,
 )
@@ -132,6 +133,20 @@ def get_section(section):
         for f in system_fields:
             result[f.key] = config.get(f.key, f.default)
         return jsonify(_mask_passwords_flat(result))
+
+    if section in LIST_SECTIONS:
+        # A list section holds one dict per entry, not a flat group of keys. Masking it
+        # as a dict raised a 500 - which `pv_forecast` has done since it was added,
+        # because nothing reads this route for it: the settings UI works from
+        # ``GET /api/config``.
+        entries = config.get(section, [])
+        if not isinstance(entries, list):
+            entries = []
+        return jsonify([
+            _mask_passwords_flat(entry, section=section)
+            for entry in entries
+            if isinstance(entry, dict)
+        ])
 
     section_data = config.get(section, {})
     return jsonify(_mask_passwords_flat(section_data, section=section))
@@ -1143,24 +1158,68 @@ def _validate_price_arrays(data: dict) -> list[dict]:
     return errors
 
 
-def _dependency_met(field_def, data: dict, current_config: dict) -> bool:
+_ENTRY_PREFIX_RE = re.compile(r"^(\w+)\.(\d+)\.")
+
+
+def _entry_prefix(key: str):
+    """``"managed_loads.0.temp_sensor"`` → ``("managed_loads", 0)``, else None."""
+    match = _ENTRY_PREFIX_RE.match(key or "")
+    if not match:
+        return None
+    return match.group(1), int(match.group(2))
+
+
+def _dependency_value(dep_key: str, key: str, data: dict, current_config: dict):
+    """
+    Resolve the value a ``depends_on`` entry is checked against.
+
+    A dotted key is absolute, as it always was. A key *without* a dot is resolved
+    **within the same list entry**: in ``managed_loads``, "type" means this entry's
+    type, because whether a heat-loss coefficient applies depends on the appliance the
+    user picked in that card, not on anything top-level. ``pv_forecast`` never needed
+    this - its entries are homogeneous.
+    """
+    if "." in dep_key:
+        if dep_key in data:
+            return data[dep_key]
+        current = current_config
+        for part in dep_key.split("."):
+            current = current.get(part) if isinstance(current, dict) else None
+        return current
+
+    entry = _entry_prefix(key)
+    if entry is None:
+        # A relative dependency on a field that is not part of a list entry cannot be
+        # resolved. Treat it as unknown rather than guessing at a top-level key.
+        return None
+
+    section, index = entry
+    scoped_key = f"{section}.{index}.{dep_key}"
+    if scoped_key in data:
+        return data[scoped_key]
+
+    entries = current_config.get(section)
+    if isinstance(entries, list) and 0 <= index < len(entries):
+        stored = entries[index]
+        if isinstance(stored, dict):
+            return stored.get(dep_key)
+    return None
+
+
+def _dependency_met(field_def, data: dict, current_config: dict, key: str = "") -> bool:
     """
     Whether *field_def* applies at all, given the values this request would leave.
 
     Mirrors ``_isDependencyMet`` in the frontend: a ``depends_on`` entry is satisfied
     when the governing key holds one of the listed values, or — for ``"!empty"`` — any
-    value at all.
+    value at all. *key* is the concrete key being validated, which is what lets a
+    relative dependency find the entry it belongs to.
     """
     if not field_def.depends_on:
         return True
 
     for dep_key, allowed in field_def.depends_on.items():
-        if dep_key in data:
-            current = data[dep_key]
-        else:
-            current = current_config
-            for part in dep_key.split("."):
-                current = current.get(part) if isinstance(current, dict) else None
+        current = _dependency_value(dep_key, key, data, current_config)
 
         if allowed == "!empty":
             if not current:
@@ -1191,7 +1250,9 @@ def _validate_updates(data: dict) -> list[dict]:
         # how a fresh install could not complete the setup wizard: an empty
         # data_source.url that only applies to Home Assistant and OpenHAB, and
         # pv_autoscaling.sensor_entity_id, required but only when auto-scaling is on.
-        if _is_empty(value) and not _dependency_met(field_def, data, current_config):
+        if _is_empty(value) and not _dependency_met(
+            field_def, data, current_config, key
+        ):
             continue
 
         err = _validate_single(field_def, value)

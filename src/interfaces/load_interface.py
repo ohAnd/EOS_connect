@@ -31,12 +31,24 @@ class LoadInterface:
         time_frame_base,
         tz_name=None,  # Changed default to None
         request_timeout=10,  # Default timeout for API requests
+        extra_subtract_sensors=None,
     ):
         self.src = config.get("source", "")
         self.url = config.get("url", "")
         self.load_sensor = config.get("load_sensor", "")
         self.car_charge_load_sensor = config.get("car_charge_load_sensor", "")
         self.additional_load_1_sensor = config.get("additional_load_1_sensor", "")
+        # Power sensors of managed loads, whose measured history has to leave the
+        # household base load for the same reason the two above do: their predicted
+        # consumption is added back on top, and counting the appliance twice is exactly
+        # what makes a heat pump in `additional_load_1` worse than not configuring it.
+        # The list arrives from the caller so this interface stays unaware of what a
+        # managed load is.
+        self.extra_subtract_sensors = [
+            str(sensor).strip()
+            for sensor in (extra_subtract_sensors or [])
+            if str(sensor or "").strip()
+        ]
         raw_token = config.get("access_token", "")
         # Strip leading/trailing whitespace that can be introduced by YAML >- block
         # scalar style when long tokens wrap across multiple lines
@@ -776,6 +788,15 @@ class LoadInterface:
                 add_load_data_1_energy, 0
             )  # prevent negative values
 
+            managed_load_energy = 0
+            for sensor in self.extra_subtract_sensors:
+                managed_data = self.__get_additional_load_list_from_to(
+                    sensor, current_time_slot, next_slot
+                )
+                managed_load_energy += max(
+                    abs(self.__process_energy_data({"data": managed_data}, sensor)), 0
+                )
+
             energy = abs(
                 self.__process_energy_data({"data": energy_data}, self.load_sensor)
             )
@@ -785,10 +806,11 @@ class LoadInterface:
             energy_wh = energy * interval_hours
             car_load_energy_wh = car_load_energy * interval_hours
             add_load_data_1_energy_wh = add_load_data_1_energy * interval_hours
+            managed_load_energy_wh = managed_load_energy * interval_hours
 
             # sum_controlable_energy_load = car_load_energy + add_load_data_1_energy
             sum_controlable_energy_load_wh = (
-                car_load_energy_wh + add_load_data_1_energy_wh
+                car_load_energy_wh + add_load_data_1_energy_wh + managed_load_energy_wh
             )
 
             # Save original household sensor value before potential modification
@@ -812,7 +834,7 @@ class LoadInterface:
                         + " )"
                     )
                 logger.warning(
-                    "[LOAD-IF] DATA ERROR household load smaller than controllables (excess: %5.1f Wh) - Energy for %s - household: %5.1f Wh | car: %5.1f Wh + additional: %5.1f Wh | car+add: %5.1f Wh %s",
+                    "[LOAD-IF] DATA ERROR household load smaller than controllables (excess: %5.1f Wh) - Energy for %s - household: %5.1f Wh | car: %5.1f Wh + additional: %5.1f Wh + managed: %5.1f Wh | total: %5.1f Wh %s",
                     round(
                         sum_controlable_energy_load_wh - original_household_energy_wh, 1
                     ),
@@ -820,6 +842,7 @@ class LoadInterface:
                     round(original_household_energy_wh, 1),
                     round(car_load_energy_wh, 1),
                     round(add_load_data_1_energy_wh, 1),
+                    round(managed_load_energy_wh, 1),
                     round(sum_controlable_energy_load_wh, 1),
                     debug_url,
                 )
