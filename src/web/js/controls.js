@@ -951,6 +951,12 @@ class ControlsManager {
             const differs = measured !== undefined && measured !== null
                 && Math.abs(measured - detail.ambient_now_c) >= 0.5;
 
+            const offset = detail.ambient_offset_k;
+            const shift = (offset !== undefined && offset !== null && Math.abs(offset) >= 0.1)
+                ? ` <span style="opacity:0.6;">(${offset > 0 ? '+' : ''}${offset} K
+                    learned for this hour)</span>`
+                : '';
+
             const value = differs
                 ? `${measured} &deg;C measured
                    <span style="opacity:0.6;">&middot; model using ${detail.ambient_now_c} &deg;C</span>`
@@ -958,7 +964,7 @@ class ControlsManager {
 
             facts.push(['Outside now',
                 `${value}
-                 <div style="opacity:0.6;font-size:0.85em;${warn ? 'color:#e0a030;' : ''}">${note}</div>`]);
+                 <div style="opacity:0.6;font-size:0.85em;${warn ? 'color:#e0a030;' : ''}">${note}${shift}</div>`]);
         }
 
         if (release && release.next_release_start) {

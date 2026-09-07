@@ -292,11 +292,12 @@ def test_reconfiguring_keeps_what_the_calibrator_learned(make_manager, installat
     pool = manager.instance("pool")
 
     pool.model.calibrator.loss_coefficient = 17.5
-    pool.model.calibrator.loss_samples = 42
+    learned_from = pool.model.calibrator.loss_samples
 
     pool.reconfigure(dict(POOL, target_temp=30.0))
     assert pool.model.calibrator.loss_coefficient == 17.5
-    assert pool.model.calibrator.loss_samples == 42
+    # And the windows it was fitted from are still there.
+    assert pool.model.calibrator.loss_samples == learned_from
 
 
 def test_reconfiguring_updates_the_minimum_runtime(make_manager):
@@ -539,7 +540,7 @@ def test_resetting_returns_a_model_to_its_configured_values(make_manager, instal
     manager.run_cycle()
 
     cal = manager.instance("pool").model.calibrator
-    cal.loss_coefficient, cal.cop_nominal, cal.loss_samples = 61.0, 2.1, 300
+    cal.loss_coefficient, cal.cop_nominal = 61.0, 2.1
 
     state = manager.reset_calibration("pool")
     assert state["loss_coefficient"] == 25.0
@@ -643,6 +644,20 @@ def _ambient(manager, sensor_c=None):
     )
 
 
+def test_one_disagreement_is_not_yet_a_bias(make_manager, installation):
+    """
+    A single reading is not evidence of anything. The offset is learned per hour of the
+    day and needs a few observations before it speaks.
+    """
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = [17.9] * 48
+
+    series, source = _ambient(manager, 14.9)
+
+    assert source == "forecast"
+    assert series[0] == pytest.approx(17.9)
+
+
 def test_the_forecast_is_shifted_onto_the_sites_own_thermometer(make_manager, installation):
     """
     A regional forecast has the shape and the sensor has the level. Shifting keeps both,
@@ -651,10 +666,32 @@ def test_the_forecast_is_shifted_onto_the_sites_own_thermometer(make_manager, in
     manager = make_manager([POOL_WITH_AMBIENT])
     installation.temperature = [17.9] * 48
 
+    for _ in range(5):
+        _ambient(manager, 14.9)
     series, source = _ambient(manager, 14.9)
 
+    current = manager._context().current_slot  # pylint: disable=protected-access
     assert source == "forecast_corrected"
-    assert series[0] == pytest.approx(14.9, abs=0.05)
+    assert series[current] == pytest.approx(14.9, abs=0.05)
+
+
+def test_the_offset_is_learned_for_the_hour_it_was_seen_in(make_manager, installation):
+    """
+    The point of learning it per hour: a site that runs cold overnight and close to the
+    model by afternoon needs two different corrections, not the average of them.
+    """
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = [17.9] * 48
+
+    for _ in range(5):
+        _ambient(manager, 14.9)
+    series, _ = _ambient(manager, 14.9)
+
+    current = manager._context().current_slot  # pylint: disable=protected-access
+    # The hour that was observed is corrected...
+    assert series[current] == pytest.approx(14.9, abs=0.05)
+    # ...and one twelve hours later, never seen, is not yet touched.
+    assert series[(current + 12) % 24] == pytest.approx(17.9)
 
 
 def test_the_shape_of_the_forecast_survives_the_shift(make_manager, installation):
@@ -695,14 +732,16 @@ def test_a_standing_disagreement_is_followed(make_manager, installation):
 
 
 def test_the_correction_is_capped(make_manager, installation):
-    """A sensor indoors by mistake must not drag the whole horizon with it."""
+    """A sensor reporting in the wrong unit must not drag the whole horizon with it."""
+    from src.loads.ambient_bias import MAX_OFFSET_K
+
     manager = make_manager([POOL_WITH_AMBIENT])
     installation.temperature = [5.0] * 48
 
     for _ in range(300):
-        series, _ = _ambient(manager, 12.0)
+        series, _ = _ambient(manager, 18.0)
 
-    assert series[0] <= 5.0 + 5.0 + 1e-6
+    assert series[0] <= 5.0 + MAX_OFFSET_K + 1e-6
 
 
 def test_a_wild_disagreement_is_refused_and_reported(make_manager, installation, caplog):
@@ -737,10 +776,13 @@ def test_the_measurement_is_reported_next_to_what_the_model_used(make_manager, i
     installation.sensors.update({
         "sensor.pool_water": 24.0, "sensor.pool_power": 0.0, "sensor.outside": 14.9,
     })
-    manager.run_cycle()
+    for _ in range(6):
+        manager.run_cycle()
 
     detail = manager.instance("pool").last_demand.detail
     assert detail["ambient_measured_c"] == 14.9
+    assert detail["ambient_forecast_c"] == 17.9
+    assert detail["ambient_offset_k"] == pytest.approx(-3.0, abs=0.1)
     assert detail["ambient_source"] == "forecast_corrected"
 
 

@@ -474,3 +474,23 @@ def test_fit_quality_is_reported_alongside_the_numbers():
     assert 0.0 <= state["fit_quality"] <= 1.0
     assert state["signal_w"] is not None
     assert state["confidence"] <= state["fit_quality"] + 1e-9
+
+
+def test_the_reported_period_counts_describe_the_current_fit():
+    """
+    They used to be independent counters that ``restore`` seeded and the replayed
+    history then added to, so a card reporting 260 observed periods was describing a fit
+    built from 16 of them.
+    """
+    cal = _calibrator()
+    cal.restore({"loss_coefficient": 22.0, "loss_samples": 202, "cop_samples": 58})
+    # With no rows yet, the persisted figures are all there is to report.
+    assert cal.loss_samples == 202
+
+    cal.observe_series(
+        _simulate(hours=30, step_minutes=15, medium_c=28.0, ambient_c=16.0, power_w=0.0)
+    )
+
+    assert cal.loss_samples == len(cal._rows)
+    assert cal.cop_samples == 0
+    assert cal.loss_samples < 202

@@ -18,6 +18,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from .ambient_bias import IMPLAUSIBLE_GAP_K, AmbientBias
 from .contribution import SOURCE_API, LoadContributionRegistry
 from .injection import InjectionError, parse_push
 from .instance import ManagedLoad
@@ -53,15 +54,8 @@ AMBIENT_CORRECTED = "forecast_corrected"
 # A regional forecast and a garden thermometer disagree, and each is right about
 # something the other cannot know: the forecast has the shape - that tonight drops to
 # 11 and tomorrow reaches 22 - and the sensor has the level, because it is standing at
-# the site. Shifting the forecast onto the sensor keeps both.
-#
-# The offset is smoothed rather than taken from the latest reading: one transient
-# disagreement must not tilt a two-day horizon, and only a persistent gap is a bias
-# worth correcting.
-AMBIENT_BIAS_HALF_LIFE_CYCLES = 24.0
-# Beyond this the two are not measuring the same thing - a sensor in the sun, or indoors
-# by mistake - and shifting the whole horizon by it would be worse than not correcting.
-AMBIENT_BIAS_LIMIT_K = 5.0
+# the site. Shifting the forecast onto the sensor keeps both. See `loads.ambient_bias`
+# for why the shift is learned per hour of the day rather than as one number.
 
 
 @dataclass
@@ -121,8 +115,8 @@ class ManagedLoadManager:
         self._published_release = {}
         self._warned_ambient = set()
         self._warned_bias = set()
-        # Smoothed forecast-versus-sensor offset per instance.
-        self._ambient_bias_estimate = {}
+        # Per-hour forecast-versus-sensor offset, one learner per instance.
+        self._ambient_bias = {}
         self._stop = threading.Event()
         self._thread = None
 
@@ -364,6 +358,7 @@ class ManagedLoadManager:
     def _context_for(self, item, ctx_base):
         """Per-instance context: its own sensors and its own ambient series."""
         readings = self._read_sensors(item)
+        measured, forecast_now = self._ambient_inputs(item, ctx_base, readings)
         ambient, ambient_source = self._ambient_series(item, ctx_base, readings)
         return DemandContext(
             now=ctx_base.now,
@@ -376,6 +371,8 @@ class ManagedLoadManager:
             pv_surplus_wh=ctx_base.pv_surplus_wh,
             ambient_temp_c=ambient,
             ambient_source=ambient_source,
+            ambient_measured_c=measured,
+            ambient_forecast_c=forecast_now,
             readings=readings,
         )
 
@@ -395,6 +392,18 @@ class ManagedLoadManager:
                     exc_info=True,
                 )
         return readings
+
+    def _ambient_inputs(self, item, ctx, readings):
+        """The raw sensor reading and the raw forecast for the current slot."""
+        measured = self._sensor_ambient(readings)
+        forecast = None
+        if uses_outdoor_ambient(item.type):
+            hourly = self.sources.temperature_forecast() or []
+            if hourly:
+                raw = self._expand_hourly(hourly, ctx.slot_count)
+                slot = min(max(0, ctx.current_slot), len(raw) - 1)
+                forecast = raw[slot]
+        return measured, forecast
 
     def _ambient_series(self, item, ctx, readings):
         """
@@ -422,11 +431,8 @@ class ManagedLoadManager:
         if uses_outdoor_ambient(item.type):
             hourly = self.sources.temperature_forecast() or []
             if hourly:
-                series = self._expand_hourly(hourly, ctx.slot_count)
-                offset = self._ambient_bias(item, series, measured, ctx)
-                if offset:
-                    return [value + offset for value in series], AMBIENT_CORRECTED
-                return series, AMBIENT_FORECAST
+                raw = self._expand_hourly(hourly, ctx.slot_count)
+                return self._corrected_forecast(item, raw, measured, ctx)
 
         if measured is not None:
             return [measured] * ctx.slot_count, AMBIENT_SENSOR
@@ -446,44 +452,53 @@ class ManagedLoadManager:
         except (ValueError, IndexError):
             return None
 
-    def _ambient_bias(self, item, series, measured, ctx):
+    def _corrected_forecast(self, item, raw, measured, ctx):
         """
-        How far the forecast sits from this site's own thermometer, smoothed.
+        The forecast shifted onto this site, hour by hour.
 
-        Returns the correction to add to the whole series, or 0.0 when there is nothing
-        to correct with. The estimate decays towards each new observation rather than
-        following it, so a single odd reading moves the horizon a little and a standing
-        disagreement moves it most of the way.
+        Each slot takes the offset learned for its own hour of the day. One number for
+        the whole horizon cannot describe a site that runs 4 K cold overnight and close
+        to the model by mid-afternoon - it splits the difference and is wrong at both
+        ends, and at the current cap it applied a night-time correction to tomorrow's
+        afternoon.
         """
-        if measured is None:
-            return 0.0
-        slot = min(max(0, ctx.current_slot), len(series) - 1)
-        gap = measured - series[slot]
-        if abs(gap) > AMBIENT_BIAS_LIMIT_K * 2:
-            # Not a bias - the two are not measuring the same air.
-            self._warn_ambient_disagreement(item, gap)
-            return 0.0
+        bias = self._ambient_bias.get(item.id)
+        if bias is None:
+            bias = self._ambient_bias[item.id] = AmbientBias()
 
-        previous = self._ambient_bias_estimate.get(item.id)
-        if previous is None:
-            estimate = gap
-        else:
-            alpha = 1.0 - 0.5 ** (1.0 / AMBIENT_BIAS_HALF_LIFE_CYCLES)
-            estimate = previous + alpha * (gap - previous)
+        slot = min(max(0, ctx.current_slot), len(raw) - 1)
+        forecast_now = raw[slot]
+        if measured is not None:
+            bias.observe(ctx.now, measured, forecast_now)
+            self._warn_if_implausible(item, measured - forecast_now)
 
-        estimate = max(-AMBIENT_BIAS_LIMIT_K, min(AMBIENT_BIAS_LIMIT_K, estimate))
-        self._ambient_bias_estimate[item.id] = estimate
-        return estimate
+        slots_per_day = max(1, 86400 // ctx.time_frame_base)
+        slots_per_hour = max(1, ctx.slots_per_hour())
+        corrected = []
+        for index, value in enumerate(raw):
+            hour = (index % slots_per_day) // slots_per_hour
+            corrected.append(value + bias.offset(hour))
 
-    def _warn_ambient_disagreement(self, item, gap):
-        """Say once that the forecast and the sensor cannot both be describing the site."""
-        if item.id in self._warned_bias:
+        source = AMBIENT_CORRECTED if bias.offset(
+            (slot % slots_per_day) // slots_per_hour
+        ) else AMBIENT_FORECAST
+        return corrected, source
+
+    def ambient_bias_state(self, entry_id):
+        """What has been learned about this site's offset, for the API."""
+        bias = self._ambient_bias.get(entry_id)
+        return bias.state() if bias else None
+
+    def _warn_if_implausible(self, item, gap):
+        """Say once when the sensor and the forecast cannot be describing the same air."""
+        if abs(gap) <= IMPLAUSIBLE_GAP_K or item.id in self._warned_bias:
             return
         self._warned_bias.add(item.id)
         logger.warning(
             "[LOADS] '%s' has an ambient sensor reading %.1f C away from the outdoor "
             "forecast. One of them is not measuring outdoor air at this site, so the "
-            "forecast is being used uncorrected. | Config: #managed-loads",
+            "reading is being ignored rather than corrected for. "
+            "| Config: #managed-loads",
             item.id, gap,
         )
 
@@ -635,6 +650,10 @@ class ManagedLoadManager:
                 "power_w": self._reading_as_float(ctx.readings.get("power_sensor"), 0.0),
                 "cover_factor": item.model.cover_factor(ctx.readings)
                 if hasattr(item.model, "cover_factor") else 1.0,
+                # Kept alongside the value actually used, so the site-versus-model
+                # offset can be relearned after a restart instead of starting over.
+                "ambient_measured_c": ctx.ambient_measured_c,
+                "ambient_forecast_c": ctx.ambient_forecast_c,
             }
         except (ValueError, IndexError, TypeError):
             return
@@ -679,6 +698,7 @@ class ManagedLoadManager:
             samples = self.store.load_samples(item.id, days=days)
             if samples and hasattr(item.model, "observe_history"):
                 restored += item.model.observe_history(samples)
+            self._replay_ambient_bias(item, samples)
         if restored:
             logger.info(
                 "[LOADS] calibration seeded from %d recorded sample pairs", restored
@@ -686,6 +706,25 @@ class ManagedLoadManager:
         return restored
 
     # -- external control --------------------------------------------------------------------
+
+    def _replay_ambient_bias(self, item, samples):
+        """
+        Rebuild this site's per-hour offset from recorded history.
+
+        Samples written before the measurement was stored simply carry neither field and
+        are skipped, so an upgraded install relearns over a day rather than failing.
+        """
+        if not samples or not uses_outdoor_ambient(item.type):
+            return
+        bias = self._ambient_bias.get(item.id)
+        if bias is None:
+            bias = self._ambient_bias[item.id] = AmbientBias()
+        for sample in samples:
+            bias.observe(
+                sample.get("timestamp"),
+                sample.get("ambient_measured_c"),
+                sample.get("ambient_forecast_c"),
+            )
 
     def push(self, entry_id, payload, source=SOURCE_API):
         """
