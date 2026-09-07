@@ -48,10 +48,25 @@ logger = logging.getLogger("__main__")
 # actually run" heuristic already used for the additional-load feature.
 IDLE_POWER_W = 50.0
 
-# Sample pairs outside this spacing say nothing: too short and the temperature sensor's
-# resolution dominates, too long and the pump state changed in between.
+# How long a window may run before it is closed regardless. A pool at target loses about
+# 0.05 K/h, so it needs hours to move a tenth of a degree; a sauna moves that in a minute.
+# One fixed interval cannot serve both, which is why the window is closed on the
+# *temperature* having moved and this is only the backstop.
 MIN_SAMPLE_HOURS = 5 / 60.0
-MAX_SAMPLE_HOURS = 3.0
+MAX_WINDOW_HOURS = 8.0
+
+# What counts as a measurable change, in sensor resolutions.
+#
+# The reason this exists: a store's temperature is read to some finite precision, and the
+# fit's left-hand side is that reading divided by the elapsed time. On an 18 m3 pool
+# sampled every five minutes, one 0.1 C tick is 25 kW - against a real loss of about
+# 1 kW. Every row was then a rounding artefact twenty-five times the signal, and the fit
+# could not tell a loss coefficient of 15 from one of 25. Waiting for three ticks before
+# closing a window puts the signal comfortably above the rounding.
+RESOLUTION_MULTIPLE = 3.0
+
+# Assumed until the data says otherwise - the coarsest precision worth expecting.
+DEFAULT_RESOLUTION_K = 0.1
 
 # A jump larger than this between two samples is a sensor glitch, not a store.
 MAX_TEMPERATURE_STEP_K = 20.0
@@ -64,9 +79,11 @@ LOSS_COEFFICIENT_MAX = 200.0
 # A linear COP slope beyond this is a fitting artefact, not a compressor characteristic.
 AIR_COEFFICIENT_LIMIT = 0.06
 
-# Rows retained for the fit, and what a settled history looks like.
+# Rows retained for the fit, and what a settled history looks like. Far fewer rows than
+# there are samples now that a window spans a measurable change rather than one cycle,
+# so the target is lower to match: a store cycling normally produces a handful a day.
 SAMPLE_LIMIT = 2000
-CONFIDENCE_TARGET_SAMPLES = 60
+CONFIDENCE_TARGET_SAMPLES = 30
 
 # Ambient spread the slope needs before it means anything. Below this the ridge holds b
 # at its configured value and the fit says the slope was not identified.
@@ -152,9 +169,14 @@ class ThermalCalibrator:
         self.cop_samples = 0
         self.slope_identified = False
         self.residual_w = None
+        self.signal_w = None
 
         self._rows = deque(maxlen=SAMPLE_LIMIT)
         self._latest_timestamp = None
+        # Samples since the last closed window, and the finest step the medium sensor
+        # has been seen to take. See RESOLUTION_MULTIPLE.
+        self._window = []
+        self._resolution_k = DEFAULT_RESOLUTION_K
         # What a previous run knew, until this one has rows of its own. Persisted state
         # restores the coefficients but not the history they came from - the samples are
         # replayed separately - and reporting no confidence in the meantime would
@@ -163,16 +185,108 @@ class ThermalCalibrator:
 
     # -- ingest -----------------------------------------------------------------------
 
-    def observe_pair(self, previous, current, refit=True):
+    def observe(self, sample):
         """
-        Turn two consecutive samples into one equation and keep it.
+        Take one recorded sample. Returns True when it completed a window.
 
-        A sample is a dict with ``timestamp`` (aware datetime), ``medium_c``,
-        ``ambient_c``, ``power_w`` and optional ``cover_factor``. Pairs that cannot say
-        anything are dropped silently - most pairs are, and logging each one would bury
-        the log.
+        Samples accumulate until the medium has moved far enough to be measured, the
+        appliance switches on or off, or the backstop elapses - then the whole span
+        becomes one equation. Pairing consecutive samples instead would divide a
+        rounding step by five minutes and call the result a heat flow.
         """
-        row = self._row_from(previous, current)
+        if not self._usable(sample):
+            return False
+
+        if self._window:
+            self._learn_resolution(self._window[-1], sample)
+            if self._state_changed(self._window[-1], sample):
+                # The transition itself describes neither state, so close what came
+                # before it and begin again from the new one.
+                closed = self._close_window()
+                self._window = [sample]
+                return closed
+
+        self._window.append(sample)
+
+        if self._window_is_ready():
+            return self._close_window(keep_last=True)
+        return False
+
+    def observe_series(self, samples):
+        """
+        Feed a whole recorded history, oldest first. Returns the windows it produced.
+
+        Fits once at the end rather than after every window: replaying a fortnight is a
+        few thousand samples, and the answer only matters after the last one.
+        """
+        rows_before = len(self._rows)
+        self._window = []
+        for sample in samples:
+            self.observe(sample, )
+        # Whatever is left is still a usable span if it is long enough.
+        self._close_window()
+
+        produced = len(self._rows) - rows_before
+        if produced:
+            self.refit()
+        return produced
+
+    # -- windowing ----------------------------------------------------------------------
+
+    @staticmethod
+    def _usable(sample):
+        """Whether a sample carries the fields a window needs."""
+        if not isinstance(sample, dict):
+            return False
+        try:
+            float(sample["medium_c"])
+            float(sample["ambient_c"])
+            return sample["timestamp"] is not None
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _state_changed(previous, current):
+        """Whether the appliance switched on or off between two samples."""
+        was_on = float(previous.get("power_w", 0.0) or 0.0) >= IDLE_POWER_W
+        is_on = float(current.get("power_w", 0.0) or 0.0) >= IDLE_POWER_W
+        return was_on != is_on
+
+    def _learn_resolution(self, previous, current):
+        """
+        The finest non-zero step the medium sensor takes is its resolution.
+
+        Measured rather than configured: a sensor reporting 29.0 and one reporting
+        29.0134 need windows orders of magnitude apart, and only the data knows which
+        this is.
+        """
+        try:
+            step = abs(float(current["medium_c"]) - float(previous["medium_c"]))
+        except (KeyError, TypeError, ValueError):
+            return
+        if 0.0 < step < self._resolution_k:
+            self._resolution_k = step
+
+    def _window_is_ready(self):
+        """Whether the open window has something worth fitting."""
+        if len(self._window) < 2:
+            return False
+        first, last = self._window[0], self._window[-1]
+        span = (last["timestamp"] - first["timestamp"]).total_seconds() / 3600.0
+        if span < MIN_SAMPLE_HOURS:
+            return False
+        if span >= MAX_WINDOW_HOURS:
+            return True
+        moved = abs(float(last["medium_c"]) - float(first["medium_c"]))
+        return moved >= RESOLUTION_MULTIPLE * self._resolution_k
+
+    def _close_window(self, keep_last=False):
+        """Turn the open window into a row. Returns True when one was produced."""
+        if len(self._window) < 2:
+            return False
+
+        row = self._row_from(self._window[0], self._window[-1], self._window)
+        self._window = [self._window[-1]] if keep_last else []
         if row is None:
             return False
 
@@ -181,73 +295,64 @@ class ThermalCalibrator:
             self.cop_samples += 1
         else:
             self.loss_samples += 1
-
         if self._latest_timestamp is None or row["timestamp"] > self._latest_timestamp:
             self._latest_timestamp = row["timestamp"]
-
-        if refit:
-            self.refit()
         return True
 
-    def observe_series(self, samples):
+    def _row_from(self, first, last, window):
         """
-        Feed a whole recorded history, oldest first. Returns pairs actually used.
+        One equation, from the whole span rather than from two adjacent readings.
 
-        Fits once at the end rather than after every pair: replaying a fortnight is a
-        few thousand pairs, and the answer only matters after the last one.
+        Power is averaged across the window because that is what actually went in over
+        it; the temperatures are the endpoints, because the accumulated heat is the
+        difference between them and nothing in between matters.
         """
-        used = 0
-        for previous, current in zip(samples, samples[1:]):
-            if self.observe_pair(previous, current, refit=False):
-                used += 1
-        if used:
-            self.refit()
-        return used
-
-    def _row_from(self, previous, current):
-        """One usable equation, or None."""
         try:
-            span = (current["timestamp"] - previous["timestamp"]).total_seconds() / 3600.0
+            span = (last["timestamp"] - first["timestamp"]).total_seconds() / 3600.0
         except (KeyError, TypeError, AttributeError):
             return None
-        if not MIN_SAMPLE_HOURS <= span <= MAX_SAMPLE_HOURS:
+        if not MIN_SAMPLE_HOURS <= span <= MAX_WINDOW_HOURS * 1.5:
             return None
 
         try:
-            medium_now = float(current["medium_c"])
-            medium_before = float(previous["medium_c"])
-            ambient = (float(current["ambient_c"]) + float(previous["ambient_c"])) / 2.0
-            power_now = float(current.get("power_w", 0.0))
-            power_before = float(previous.get("power_w", 0.0))
+            medium_last = float(last["medium_c"])
+            medium_first = float(first["medium_c"])
         except (KeyError, TypeError, ValueError):
             return None
 
-        if not all(math.isfinite(v) for v in (medium_now, medium_before, ambient)):
+        ambients, powers, covers = [], [], []
+        for sample in window:
+            try:
+                ambients.append(float(sample["ambient_c"]))
+                powers.append(float(sample.get("power_w", 0.0) or 0.0))
+                covers.append(float(sample.get("cover_factor", 1.0) or 1.0))
+            except (KeyError, TypeError, ValueError):
+                return None
+        if not ambients:
             return None
 
-        delta_k = medium_now - medium_before
-        if abs(delta_k) > MAX_TEMPERATURE_STEP_K:
+        delta_k = medium_last - medium_first
+        if not math.isfinite(delta_k) or abs(delta_k) > MAX_TEMPERATURE_STEP_K:
             return None
-
-        running = power_now >= IDLE_POWER_W and power_before >= IDLE_POWER_W
-        idle = power_now < IDLE_POWER_W and power_before < IDLE_POWER_W
-        if not running and not idle:
-            # The appliance started or stopped inside the interval: neither the heat put
-            # in nor the power drawn describes the whole of it.
-            return None
-
         if self.volume_m3 <= 0 or self.surface_m2 <= 0:
             return None
 
+        running = all(power >= IDLE_POWER_W for power in powers)
+        idle = all(power < IDLE_POWER_W for power in powers)
+        if not running and not idle:
+            # A window that spans a switch describes neither state.
+            return None
+
+        ambient = sum(ambients) / len(ambients)
         return {
-            "timestamp": current["timestamp"],
+            "timestamp": last["timestamp"],
             # Left-hand side: the rate heat actually accumulated in the store, in watts.
             "stored_w": delta_k / span * WH_PER_M3_PER_K * self.volume_m3,
-            "power_w": (power_now + power_before) / 2.0 if running else 0.0,
+            "power_w": sum(powers) / len(powers) if running else 0.0,
             "ambient_c": ambient,
-            # Driving temperature difference for the loss term.
-            "drive_k": (medium_now + medium_before) / 2.0 - ambient,
-            "cover_factor": float(current.get("cover_factor", 1.0) or 1.0),
+            "drive_k": (medium_last + medium_first) / 2.0 - ambient,
+            "cover_factor": sum(covers) / len(covers),
+            "span_hours": span,
         }
 
     # -- the fit ------------------------------------------------------------------------
@@ -376,6 +481,7 @@ class ThermalCalibrator:
         self.cop_nominal = nominal
         self.air_coefficient = air_coefficient
         self.residual_w = self._residual(rows, weights, design, targets)
+        self.signal_w = self._signal(weights, targets)
 
     def _residual(self, rows, weights, design, targets):
         """Weighted RMS of what the fitted model fails to explain, in watts."""
@@ -388,6 +494,15 @@ class ThermalCalibrator:
             predicted = sum(design[i][col] * theta[col] for col in range(3))
             error += weight * (targets[i] - predicted) ** 2
         return round(math.sqrt(error / total_weight), 1)
+
+    @staticmethod
+    def _signal(weights, targets):
+        """Weighted RMS of what the model is trying to explain, in watts."""
+        total_weight = sum(weights)
+        if total_weight <= 0:
+            return None
+        energy = sum(w * targets[i] ** 2 for i, w in enumerate(weights))
+        return round(math.sqrt(energy / total_weight), 1)
 
     def _theta(self):
         """The current estimate as (a, b, k)."""
@@ -405,17 +520,37 @@ class ThermalCalibrator:
         """
         How much the fit should be trusted, 0 to 1.
 
-        Two things have to be earned. Enough rows, and enough *variety* among them: an
-        estimator that has only ever watched the appliance run is solving for the losses
-        and the efficiency from the same observations, and cannot separate them as well
-        as one that has also watched it cool.
+        Three things have to be earned:
+
+        - enough rows;
+        - enough *variety* among them, because an estimator that has only watched the
+          appliance run is solving for the losses and the efficiency from the same
+          observations and cannot separate them;
+        - and a fit that actually explains the data.
+
+        The third was missing, and it mattered. One installation reported full
+        confidence while the residual stood at twelve times the signal it was supposed
+        to describe - the number said "trust this" at exactly the moment it should have
+        said the opposite.
         """
         rows = len(self._rows)
         if not rows:
             return self._restored_confidence or 0.0
         coverage = min(1.0, rows / CONFIDENCE_TARGET_SAMPLES)
         variety = 1.0 if (self.loss_samples and self.cop_samples) else 0.5
-        return round(coverage * variety, 3)
+        return round(coverage * variety * self.fit_quality(), 3)
+
+    def fit_quality(self):
+        """
+        How much of the signal the fit explains, 0 to 1.
+
+        One minus the residual over the signal, floored at zero: a residual as large as
+        what it is explaining means the estimate carries no information, however many
+        rows produced it.
+        """
+        if self.residual_w is None or not self.signal_w:
+            return 1.0
+        return round(max(0.0, 1.0 - self.residual_w / self.signal_w), 3)
 
     def state(self):
         """Serializable estimator state - persisted, and shown on the API."""
@@ -428,6 +563,8 @@ class ThermalCalibrator:
             "confidence": self.confidence(),
             "slope_identified": self.slope_identified,
             "residual_w": self.residual_w,
+            "signal_w": self.signal_w,
+            "fit_quality": self.fit_quality(),
         }
 
     def restore(self, state):

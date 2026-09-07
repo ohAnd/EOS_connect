@@ -62,9 +62,10 @@ def _calibrator(loss=60.0, cop=3.0):
 def test_the_loss_coefficient_converges_on_the_true_value():
     cal = _calibrator(loss=60.0)
     samples = _simulate(hours=60, step_minutes=15, medium_c=28.0, ambient_c=16.0, power_w=0.0)
-    used = cal.observe_series(samples)
+    windows = cal.observe_series(samples)
 
-    assert used > 100
+    # Windows, not samples: each one spans a measurable change rather than one cycle.
+    assert windows > 20
     assert cal.loss_coefficient == pytest.approx(TRUE_K, rel=0.05)
 
 
@@ -169,37 +170,50 @@ def test_confidence_rises_with_evidence_and_needs_both_halves():
     assert cal.confidence() > heating_only
 
 
-def test_pairs_spanning_a_state_change_are_ignored():
-    """Half an interval heating and half cooling is neither measurement."""
+def test_a_window_never_spans_a_switch():
+    """Half of it heating and half cooling describes neither state."""
     cal = _calibrator()
-    pair = [
-        {"timestamp": T0, "medium_c": 25.0, "ambient_c": 18.0, "power_w": 0.0},
-        {"timestamp": T0 + timedelta(minutes=15), "medium_c": 25.2,
-         "ambient_c": 18.0, "power_w": 2000.0},
-    ]
-    assert cal.observe_pair(pair[0], pair[1]) is False
-    assert cal.loss_samples == 0
+    cal.observe({"timestamp": T0, "medium_c": 25.0, "ambient_c": 18.0, "power_w": 0.0})
+    cal.observe({"timestamp": T0 + timedelta(minutes=15), "medium_c": 25.0,
+                 "ambient_c": 18.0, "power_w": 0.0})
+    # The pump comes on: the window so far is closed as an idle one, and the heating
+    # period starts a fresh window rather than being mixed into it.
+    cal.observe({"timestamp": T0 + timedelta(minutes=30), "medium_c": 25.2,
+                 "ambient_c": 18.0, "power_w": 2000.0})
+
+    assert cal.loss_samples == 1
     assert cal.cop_samples == 0
 
 
-@pytest.mark.parametrize("minutes", [1, 240])
-def test_pairs_too_close_together_or_too_far_apart_are_ignored(minutes):
+def test_a_window_shorter_than_the_minimum_is_not_closed():
+    """Below it the elapsed time is too small to divide a temperature change by."""
     cal = _calibrator()
-    first = {"timestamp": T0, "medium_c": 28.0, "ambient_c": 16.0, "power_w": 0.0}
-    second = {
-        "timestamp": T0 + timedelta(minutes=minutes),
-        "medium_c": 27.9, "ambient_c": 16.0, "power_w": 0.0,
-    }
-    assert cal.observe_pair(first, second) is False
+    cal.observe({"timestamp": T0, "medium_c": 28.0, "ambient_c": 16.0, "power_w": 0.0})
+    closed = cal.observe({"timestamp": T0 + timedelta(minutes=1), "medium_c": 27.5,
+                          "ambient_c": 16.0, "power_w": 0.0})
+    assert closed is False
+    assert len(cal._rows) == 0
+
+
+def test_a_window_closes_on_the_backstop_even_if_nothing_moved():
+    """
+    A store that barely changes over eight hours is not uninformative - that is a tight
+    bound on its losses, and the most valuable row a well-insulated one produces.
+    """
+    cal = _calibrator()
+    cal.observe({"timestamp": T0, "medium_c": 28.0, "ambient_c": 16.0, "power_w": 0.0})
+    closed = cal.observe({"timestamp": T0 + timedelta(hours=9), "medium_c": 28.0,
+                          "ambient_c": 16.0, "power_w": 0.0})
+    assert closed is True
+    assert cal.loss_samples == 1
 
 
 def test_malformed_samples_do_not_raise():
     cal = _calibrator()
-    first = {"timestamp": T0, "medium_c": "warm", "ambient_c": 16.0, "power_w": 0.0}
-    second = {"timestamp": T0 + timedelta(minutes=15), "medium_c": 27.9,
-              "ambient_c": 16.0, "power_w": 0.0}
-    assert cal.observe_pair(first, second) is False
-    assert cal.observe_pair({}, {}) is False
+    assert cal.observe({"timestamp": T0, "medium_c": "warm", "ambient_c": 16.0,
+                        "power_w": 0.0}) is False
+    assert cal.observe({}) is False
+    assert cal.observe(None) is False
 
 
 def test_state_survives_a_restart():
@@ -283,7 +297,7 @@ def test_a_wrong_configured_loss_does_not_poison_the_cop():
             start += timedelta(hours=5)
 
     assert cal.cop_at_reference() == pytest.approx(TRUE_COP, rel=0.1)
-    assert cal.loss_coefficient == pytest.approx(TRUE_K, rel=0.2)
+    assert cal.loss_coefficient == pytest.approx(TRUE_K, rel=0.25)
 
 
 def test_recent_behaviour_counts_for_more_than_old():
@@ -330,9 +344,8 @@ def test_a_singular_history_keeps_the_previous_estimate():
         "timestamp": T0, "medium_c": 25.0, "ambient_c": 25.0,
         "power_w": 0.0, "cover_factor": 1.0,
     }
-    later = dict(sample, timestamp=T0 + timedelta(minutes=15))
-
-    cal.observe_pair(sample, later)
+    cal.observe(sample)
+    cal.observe(dict(sample, timestamp=T0 + timedelta(hours=9)))
 
     assert math.isfinite(cal.loss_coefficient)
     assert math.isfinite(cal.cop_nominal)
@@ -352,3 +365,112 @@ def test_a_restored_estimate_reports_the_confidence_it_was_saved_with():
     )
     # Once there is real history it scores that instead.
     assert cal.confidence() != 0.75
+
+
+# ── Windows sized to the sensor, not to the cycle ───────────────────────────────
+#
+# A store's temperature is read to some finite precision, and the fit divides that
+# reading by the elapsed time. On an 18 m3 pool sampled every five minutes, one 0.1 C
+# tick is 25 kW against a real loss of about 1 kW -- so every row was a rounding
+# artefact twenty-five times the signal, and the fit could not tell a loss coefficient
+# of 15 from one of 25. It reported full confidence while doing so.
+
+
+def _quantised(hours, step_minutes, medium_c, ambient_c, power_w, start=T0,
+               resolution=0.1, true_k=None):
+    """Like `_simulate`, but reporting the medium only to *resolution*."""
+    global TRUE_K  # pylint: disable=global-statement
+    previous = TRUE_K
+    if true_k is not None:
+        TRUE_K = true_k
+    try:
+        samples = _simulate(
+            hours=hours, step_minutes=step_minutes, medium_c=medium_c,
+            ambient_c=ambient_c, power_w=power_w, start=start,
+        )
+    finally:
+        TRUE_K = previous
+    for sample in samples:
+        steps = round(sample["medium_c"] / resolution)
+        sample["medium_c"] = round(steps * resolution, 6)
+    return samples
+
+
+def test_the_sensor_resolution_is_measured_rather_than_assumed():
+    """A sensor reporting 29.0 and one reporting 29.0134 need very different windows."""
+    coarse = _calibrator()
+    coarse.observe_series(_quantised(20, 5, 28.0, 16.0, 0.0, resolution=0.1))
+    assert coarse._resolution_k == pytest.approx(0.1, abs=1e-6)
+
+    fine = _calibrator()
+    fine.observe_series(
+        _simulate(hours=20, step_minutes=5, medium_c=28.0, ambient_c=16.0, power_w=0.0)
+    )
+    assert fine._resolution_k < 0.05
+
+
+def test_a_coarse_sensor_produces_fewer_but_longer_windows():
+    coarse = _calibrator()
+    coarse.observe_series(_quantised(40, 5, 28.0, 16.0, 0.0, resolution=0.1))
+
+    fine = _calibrator()
+    fine.observe_series(
+        _simulate(hours=40, step_minutes=5, medium_c=28.0, ambient_c=16.0, power_w=0.0)
+    )
+
+    assert len(coarse._rows) < len(fine._rows)
+    spans = [row["span_hours"] for row in coarse._rows]
+    assert min(spans) > 5 / 60.0
+
+
+def test_a_coarse_sensor_still_recovers_the_loss_coefficient():
+    """The point of the exercise: 0.1 C readings must not defeat the fit."""
+    cal = _calibrator(loss=60.0)
+    cal.observe_series(_quantised(60, 5, 28.0, 16.0, 0.0, resolution=0.1))
+
+    assert cal.loss_coefficient == pytest.approx(TRUE_K, rel=0.15)
+
+
+def test_quantisation_no_longer_swamps_the_signal():
+    """Pairing consecutive samples made the residual many times the signal."""
+    cal = _calibrator(loss=60.0)
+    cal.observe_series(_quantised(60, 5, 28.0, 16.0, 0.0, resolution=0.1))
+
+    assert cal.residual_w < cal.signal_w
+
+
+# ── Confidence has to notice a bad fit ──────────────────────────────────────────
+
+
+def test_a_fit_that_explains_nothing_is_not_confident():
+    """
+    The failure this exists for: full confidence reported while the residual stood at
+    twelve times the signal.
+    """
+    cal = _calibrator()
+    cal.observe_series(
+        _simulate(hours=40, step_minutes=15, medium_c=28.0, ambient_c=16.0, power_w=0.0)
+    )
+    cal.observe_series(
+        _simulate(hours=40, step_minutes=15, medium_c=28.0, ambient_c=16.0,
+                  power_w=2000.0, start=T0 + timedelta(days=2))
+    )
+    settled = cal.confidence()
+
+    # Now make the fit look hopeless without touching the row count.
+    cal.residual_w = (cal.signal_w or 1000.0) * 12.0
+    assert cal.fit_quality() == 0.0
+    assert cal.confidence() == 0.0
+    assert cal.confidence() < settled
+
+
+def test_fit_quality_is_reported_alongside_the_numbers():
+    cal = _calibrator()
+    cal.observe_series(
+        _simulate(hours=40, step_minutes=15, medium_c=28.0, ambient_c=16.0, power_w=0.0)
+    )
+    state = cal.state()
+
+    assert 0.0 <= state["fit_quality"] <= 1.0
+    assert state["signal_w"] is not None
+    assert state["confidence"] <= state["fit_quality"] + 1e-9

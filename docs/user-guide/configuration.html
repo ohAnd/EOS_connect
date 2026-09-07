@@ -233,13 +233,28 @@
                         temperature while heating &mdash; so the <em>assumed</em> loss dominates the
                         efficiency measurement, and a wrong starting guess stays wrong. Solving both
                         at once has no such bootstrap.</p>
+                    <p>Readings are grouped into windows long enough for the temperature to have
+                        actually moved, rather than paired cycle by cycle. This matters more than
+                        it sounds: a store's temperature is read to some finite precision, and the
+                        calculation divides that reading by the elapsed time. On an 18&nbsp;m&sup3;
+                        pool sampled every five minutes, one 0.1&nbsp;&deg;C step of the sensor
+                        works out as 25&nbsp;kW &mdash; against a real heat loss of about
+                        1&nbsp;kW. Every reading was then rounding noise many times larger than the
+                        thing being measured. The sensor's precision is measured from the data, so
+                        the window sizes itself: minutes for a sauna, hours for a pool.</p>
                     <p>Two things keep it honest where the history is thin. The configured values
                         act as a weak prior worth a couple of samples, so an under-determined fit
                         falls back to what you entered instead of to noise. And the appliance has to
                         be seen both <strong>running and idle</strong>, across a range of outdoor
                         temperatures, before the two can really be separated: a colder day raises
                         the losses and lowers the efficiency at the same time, so a pump that never
-                        stops cannot tell you which. The confidence figure accounts for that.</p>
+                        stops cannot tell you which.</p>
+                    <p>The <strong>confidence</strong> figure accounts for all of that: how many
+                        windows there are, whether they include both running and idle periods, and
+                        how much of the measured behaviour the fit actually explains. If the
+                        readings do not fit &mdash; most often a temperature sensor too coarse to
+                        see how slowly the store changes &mdash; confidence stays low and the
+                        overlay says so, rather than reporting a confident wrong answer.</p>
                     <p>A <em>calibration confidence</em> figure on the API, on MQTT and in the
                         overlay tells you when the estimate has settled. It survives restarts, and is
                         seeded from up to two weeks of recorded samples.</p>
@@ -249,6 +264,29 @@
                         <code>POST /api/managed_loads/&lt;id&gt;/calibration/reset</code>. The
                         recorded samples carry those inputs, so without a reset they keep dragging
                         the fit until they age out of the retention window on their own.</p>
+
+                    <h3>The cover</h3>
+                    <p>A pool cover is worth roughly two thirds of the heat loss, and it goes on
+                        and off on a daily rhythm. Reading the switch once and assuming that state
+                        for the whole two-day horizon gets most of it wrong &mdash; planning at
+                        nine in the evening, with the cover just pulled over, predicts a covered
+                        pool through the whole of the next afternoon.</p>
+                    <p>Two sources answer better than one, and they are good over different
+                        distances:</p>
+                    <ul>
+                        <li>the <strong>switch</strong>, for the next couple of hours. It is
+                            reliable about now and says little about tomorrow;</li>
+                        <li>the <strong>habit</strong> beyond that &mdash; how often the cover has
+                            actually been on at that hour of the day, learned from the samples
+                            already recorded for calibration. Nothing to configure, and nothing to
+                            keep in step by hand.</li>
+                    </ul>
+                    <p>The habit is blended rather than switched: an hour covered four nights in
+                        five is planned as four fifths of a cover, which is more honest than
+                        rounding it either way. Recent days count for more, so a cover that starts
+                        being left off shows up within a week. An hour with too little history
+                        &mdash; fewer than about three days &mdash; defers to the switch instead of
+                        being guessed at.</p>
 
                     <h3>When it may run</h3>
                     <ul>

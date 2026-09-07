@@ -1015,8 +1015,13 @@ class ControlsManager {
                 <div style="opacity:0.6;font-size:0.85em;">
                     ${settled
                         ? `Heat loss and efficiency measured from ${model.loss_samples || 0}
-                           cooling and ${model.cop_samples || 0} heating samples.`
+                           cooling and ${model.cop_samples || 0} heating periods.`
                         : 'Still learning &mdash; the plan is running on the values from the configuration form.'}
+                    ${(model.fit_quality !== undefined && model.fit_quality < 0.5)
+                        ? `<div style="color:#e0a030;">The readings do not fit the model
+                           well &mdash; often a temperature sensor too coarse to measure
+                           how slowly this store changes.</div>`
+                        : ''}
                 </div>
             </div>
             <button class="config-btn" style="flex:0 0 auto;"

@@ -26,6 +26,7 @@ from datetime import timedelta
 
 from .base import KIND_CONTINGENT, BaseDemandModel, EnergyDemand
 from .calibration import IDLE_POWER_W, ThermalCalibrator
+from .cover_habit import OBSERVED_HOURS, CoverHabit
 from .thermal_physics import (
     cop_at,
     energy_to_raise_wh,
@@ -110,7 +111,7 @@ class ThermalStorageModel(BaseDemandModel):
             cop_nominal=self.config.get("cop_nominal", 4.5),
             air_coefficient=self.config.get("cop_air_coeff", 0.0),
         )
-        self._last_sample = None
+        self.cover_habit = CoverHabit()
 
     def _apply_config(self, config):
         """
@@ -150,7 +151,7 @@ class ThermalStorageModel(BaseDemandModel):
             cop_nominal=self.config.get("cop_nominal", 4.5),
             air_coefficient=self.config.get("cop_air_coeff", 0.0),
         )
-        self._last_sample = None
+        self.cover_habit.reset()
 
     # -- configuration helpers ----------------------------------------------------------
 
@@ -226,7 +227,8 @@ class ThermalStorageModel(BaseDemandModel):
             )
 
         target = self.target_temperature(ctx.readings)
-        cover = self.cover_factor(ctx.readings)
+        cover_now = self.cover_factor(ctx.readings)
+        cover = self.cover_series(ctx, cover_now)
         feasible = self.feasibility(ctx)
 
         urgent = (
@@ -267,7 +269,8 @@ class ThermalStorageModel(BaseDemandModel):
                 "heat_up_wh_thermal": round(heat_up_wh, 1),
                 "standing_losses_wh_thermal": round(losses_wh, 1),
                 "mean_cop": round(mean_cop, 2),
-                "cover_factor": cover,
+                "cover_factor": cover_now,
+                "cover_habit_hours": self.cover_habit.hours_known(),
                 "running": self.is_running(ctx.readings),
                 # The inputs, so a wrong answer can be diagnosed from the page. The
                 # placeholder-ambient bug produced entirely plausible outputs and was
@@ -290,6 +293,38 @@ class ThermalStorageModel(BaseDemandModel):
             },
         )
 
+    def cover_series(self, ctx, measured):
+        """
+        Effective cover factor for every slot of the horizon.
+
+        The next couple of hours take the switch as it reads now; beyond that the
+        learned habit, blended rather than switched - an hour that is covered four
+        nights in five is worth four fifths of a cover, and saying so is more honest
+        than rounding it either way. An hour with too little history defers to the
+        switch.
+        """
+        if self.cover_loss_factor >= 1.0:
+            return [1.0] * ctx.slot_count
+
+        slots_per_day = max(1, 86400 // ctx.time_frame_base)
+        slots_per_hour = max(1, ctx.slots_per_hour())
+        observed_until = ctx.current_slot + round(
+            OBSERVED_HOURS * 3600 / ctx.time_frame_base
+        )
+
+        series = []
+        for index in range(ctx.slot_count):
+            if index <= observed_until:
+                series.append(measured)
+                continue
+            hour = (index % slots_per_day) // slots_per_hour
+            probability = self.cover_habit.probability(hour)
+            if probability is None:
+                series.append(measured)
+            else:
+                series.append(1.0 - probability * (1.0 - self.cover_loss_factor))
+        return series
+
     def _horizon_losses(self, ctx, target, cover, feasible):
         """
         Thermal energy lost between now and the end of the horizon, and the COP to use.
@@ -307,7 +342,8 @@ class ThermalStorageModel(BaseDemandModel):
             if ambient is None:
                 continue
             losses += loss_power_w(
-                self.calibrator.loss_coefficient, self.surface_m2, target, ambient, cover
+                self.calibrator.loss_coefficient, self.surface_m2, target, ambient,
+                cover[index] if isinstance(cover, list) else cover,
             ) * hours
             if feasible[index]:
                 cops.append(
@@ -334,24 +370,36 @@ class ThermalStorageModel(BaseDemandModel):
     # -- calibration ----------------------------------------------------------------------
 
     def observe(self, sample):
-        """Pair each sample with its predecessor and let the calibrator learn."""
+        """Hand one recorded sample to the calibrator, and to the cover habit."""
         if not isinstance(sample, dict) or "timestamp" not in sample:
             return False
-        previous, self._last_sample = self._last_sample, sample
-        if previous is None:
-            return False
-        return self.calibrator.observe_pair(previous, sample)
+        self._observe_cover(sample)
+        return self.calibrator.observe(sample)
+
+    def _observe_cover(self, sample):
+        """Note whether the store was covered, for the per-hour pattern."""
+        if self.cover_loss_factor >= 1.0:
+            return
+        factor = sample.get("cover_factor")
+        if factor is None:
+            return
+        try:
+            self.cover_habit.observe(sample["timestamp"], float(factor) < 1.0)
+        except (TypeError, ValueError):
+            pass
 
     def observe_history(self, samples):
         """Replay a recorded history at startup so day one is not a cold start."""
-        used = self.calibrator.observe_series(list(samples))
-        if samples:
-            self._last_sample = samples[-1]
-        return used
+        rows = list(samples)
+        for sample in rows:
+            if isinstance(sample, dict):
+                self._observe_cover(sample)
+        return self.calibrator.observe_series(rows)
 
     def status(self):
         state = self.calibrator.state()
         state.update({
+            "cover_habit": self.cover_habit.state(),
             "volume_m3": self.volume_m3,
             "surface_m2": self.surface_m2,
             "rated_power_w": self.rated_power_w,

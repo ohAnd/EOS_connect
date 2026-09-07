@@ -8,6 +8,8 @@ battery around a load that never appears.
 
 import pytest
 
+from tests.loads.conftest import NOW
+
 from src.loads.gate import REASON_PLANNED
 from src.loads.injection import InjectionError
 from src.loads.models.thermal import REASON_AT_TARGET, REASON_NO_TEMPERATURE
@@ -740,3 +742,137 @@ def test_the_measurement_is_reported_next_to_what_the_model_used(make_manager, i
     detail = manager.instance("pool").last_demand.detail
     assert detail["ambient_measured_c"] == 14.9
     assert detail["ambient_source"] == "forecast_corrected"
+
+
+# --- the cover over the horizon -------------------------------------------------------
+
+POOL_WITH_COVER = dict(
+    POOL, cover_sensor="binary_sensor.cover", cover_loss_factor=0.35,
+    ambient_temp_sensor="sensor.outside",
+)
+
+
+def _cover_series(manager, cover_on=None):
+    """
+    The per-slot cover factor the model would plan with.
+
+    ``cover_on=None`` means no cover sensor answered, which is what a load without one
+    configured actually looks like.
+    """
+    ctx = manager._context()  # pylint: disable=protected-access
+    model = manager.instance("pool").model
+    readings = {} if cover_on is None else {"cover_sensor": "on" if cover_on else "off"}
+    return model.cover_series(ctx, model.cover_factor(readings))
+
+
+def test_the_switch_speaks_for_the_next_couple_of_hours(make_manager, installation):
+    """
+    Planning at nine in the evening with the cover just pulled over used to predict a
+    covered pool through the whole of the next afternoon.
+    """
+    manager = make_manager([POOL_WITH_COVER], time_frame_base=3600)
+    series = _cover_series(manager, cover_on=True)
+
+    current = manager._context().current_slot  # pylint: disable=protected-access
+    assert series[current] == pytest.approx(0.35)
+    assert series[current + 1] == pytest.approx(0.35)
+
+
+def test_beyond_that_it_stops_speaking_without_a_habit(make_manager, installation):
+    """With no history the far horizon still defers to the switch - there is nothing else."""
+    manager = make_manager([POOL_WITH_COVER], time_frame_base=3600)
+    series = _cover_series(manager, cover_on=True)
+    assert series[-1] == pytest.approx(0.35)
+
+
+def test_a_learned_habit_takes_over_the_far_horizon(make_manager, installation):
+    """
+    The point of the exercise: what the household usually does at a given hour beats
+    what the switch happens to say now, once tomorrow is what is being planned.
+    """
+    from datetime import timedelta
+
+    manager = make_manager([POOL_WITH_COVER], time_frame_base=3600)
+    habit = manager.instance("pool").model.cover_habit
+
+    # Covered overnight, open by day - for a week.
+    moment = NOW - timedelta(days=7)
+    for _ in range(7):
+        for hour in range(24):
+            habit.observe(moment.replace(hour=hour), hour >= 21 or hour < 8)
+        moment += timedelta(days=1)
+
+    # The switch says covered right now, but the model should not believe that of
+    # tomorrow lunchtime.
+    series = _cover_series(manager, cover_on=True)
+    slots_per_day = 24
+    noon_tomorrow = slots_per_day + 12
+    midnight_tonight = 23
+
+    assert series[noon_tomorrow] == pytest.approx(1.0)      # open, per the habit
+    assert series[midnight_tonight] == pytest.approx(0.35)  # covered, per the habit
+
+
+def test_a_partial_habit_blends_rather_than_switches(make_manager, installation):
+    """Four nights in five is worth four fifths of a cover."""
+    from datetime import timedelta
+
+    manager = make_manager([POOL_WITH_COVER], time_frame_base=3600)
+    habit = manager.instance("pool").model.cover_habit
+
+    moment = NOW - timedelta(days=10)
+    for day in range(10):
+        habit.observe(moment.replace(hour=14), day % 5 != 0)
+        moment += timedelta(days=1)
+
+    series = _cover_series(manager, cover_on=False)
+    blended = series[24 + 14]
+    assert 0.35 < blended < 1.0
+
+
+def test_a_load_without_a_cover_sensor_is_unaffected(make_manager, installation):
+    """Nothing reports the cover, so nothing is assumed about it."""
+    manager = make_manager([POOL], time_frame_base=3600)
+    assert set(_cover_series(manager)) == {1.0}
+
+
+def test_the_habit_is_learned_from_the_recorded_samples(make_manager, installation):
+    """No new storage: it rides on the samples calibration already keeps."""
+    manager = make_manager([POOL_WITH_COVER])
+    installation.sensors.update({
+        "sensor.pool_water": 28.0, "sensor.pool_power": 0.0,
+        "sensor.outside": 18.0, "binary_sensor.cover": "on",
+    })
+    for _ in range(4):
+        manager.run_cycle()
+
+    habit = manager.instance("pool").model.cover_habit
+    assert habit.probability(NOW.hour) in (None, 1.0)
+    assert manager.instance("pool").last_demand.detail["cover_factor"] == 0.35
+
+
+def test_covering_the_pool_overnight_lowers_the_predicted_demand(make_manager, installation):
+    """The whole reason to model it: the cover is worth about two thirds of the loss."""
+    from datetime import timedelta
+
+    installation.sensors.update({
+        "sensor.pool_water": 26.0, "sensor.pool_power": 0.0, "sensor.outside": 10.0,
+        "binary_sensor.cover": "off",
+    })
+    installation.temperature = [10.0] * 48
+
+    bare = make_manager([POOL_WITH_COVER])
+    bare.run_cycle()
+    uncovered = bare.instance("pool").last_demand.total_wh
+
+    habitual = make_manager([POOL_WITH_COVER])
+    habit = habitual.instance("pool").model.cover_habit
+    moment = NOW - timedelta(days=7)
+    for _ in range(7):
+        for hour in range(24):
+            habit.observe(moment.replace(hour=hour), True)   # always covered
+        moment += timedelta(days=1)
+    habitual.run_cycle()
+    covered = habitual.instance("pool").last_demand.total_wh
+
+    assert covered < uncovered * 0.6
