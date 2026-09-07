@@ -53,6 +53,11 @@ class DemandContext:
     # reports its inputs lets a wrong answer be diagnosed from the page rather than
     # from the log - the flat-default bug hid behind a number that looked fine.
     ambient_source: str = ""
+    # The two raw inputs behind ambient_temp_c, kept so the disagreement between them
+    # can be recorded, learned from and audited later. Storing only the derived value
+    # left the bias estimate unable to survive a restart.
+    ambient_measured_c: object = None
+    ambient_forecast_c: object = None
     price_eur_per_wh: list = field(default_factory=list)
     feed_in_eur_per_wh: list = field(default_factory=list)
     pv_surplus_wh: list = field(default_factory=list)

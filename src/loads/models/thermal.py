@@ -282,8 +282,12 @@ class ThermalStorageModel(BaseDemandModel):
                 "ambient_source": ctx.ambient_source,
                 # What the site's own thermometer says, alongside what the model used.
                 # "Outside now" promised a measurement and showed a forecast.
-                "ambient_measured_c": _round_or_none(
-                    _as_float(ctx.readings.get("ambient_temp_sensor"))
+                "ambient_measured_c": _round_or_none(ctx.ambient_measured_c),
+                "ambient_forecast_c": _round_or_none(ctx.ambient_forecast_c),
+                "ambient_offset_k": _round_or_none(
+                    None if (ctx.ambient_measured_c is None
+                             or ctx.ambient_forecast_c is None)
+                    else self._ambient_at(ctx, ctx.current_slot) - ctx.ambient_forecast_c
                 ),
                 "horizon_hours": round(
                     max(0, ctx.slot_count - ctx.current_slot) * ctx.hours_per_slot(), 1

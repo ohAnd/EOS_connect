@@ -165,8 +165,12 @@ class ThermalCalibrator:
         self.cop_nominal = self.configured_cop_nominal
         self.air_coefficient = self.configured_air_coefficient
 
-        self.loss_samples = 0
-        self.cop_samples = 0
+        # Counts of what is *in the fit*, exposed as properties below. They used to be
+        # independent counters, which drifted: ``restore`` seeded them from the previous
+        # run and the replayed history then added to them, so a card reporting 260
+        # periods was describing a fit built from 16.
+        self._restored_loss_samples = 0
+        self._restored_cop_samples = 0
         self.slope_identified = False
         self.residual_w = None
         self.signal_w = None
@@ -291,10 +295,6 @@ class ThermalCalibrator:
             return False
 
         self._rows.append(row)
-        if row["power_w"] >= IDLE_POWER_W:
-            self.cop_samples += 1
-        else:
-            self.loss_samples += 1
         if self._latest_timestamp is None or row["timestamp"] > self._latest_timestamp:
             self._latest_timestamp = row["timestamp"]
         return True
@@ -510,6 +510,22 @@ class ThermalCalibrator:
         return [self.cop_nominal - slope * COP_REFERENCE_AMBIENT_C, slope,
                 self.loss_coefficient]
 
+    # -- what the fit is built from -----------------------------------------------------
+
+    @property
+    def loss_samples(self):
+        """Windows in the current fit during which the appliance was idle."""
+        if not self._rows:
+            return self._restored_loss_samples
+        return sum(1 for row in self._rows if row["power_w"] < IDLE_POWER_W)
+
+    @property
+    def cop_samples(self):
+        """Windows in the current fit during which it was running."""
+        if not self._rows:
+            return self._restored_cop_samples
+        return sum(1 for row in self._rows if row["power_w"] >= IDLE_POWER_W)
+
     # -- estimates --------------------------------------------------------------------
 
     def cop_at_reference(self):
@@ -582,8 +598,8 @@ class ThermalCalibrator:
             self.air_coefficient = _clamp(
                 float(air), -AIR_COEFFICIENT_LIMIT, AIR_COEFFICIENT_LIMIT
             )
-        self.loss_samples = max(0, int(state.get("loss_samples", 0) or 0))
-        self.cop_samples = max(0, int(state.get("cop_samples", 0) or 0))
+        self._restored_loss_samples = max(0, int(state.get("loss_samples", 0) or 0))
+        self._restored_cop_samples = max(0, int(state.get("cop_samples", 0) or 0))
         self.slope_identified = bool(state.get("slope_identified", False))
         restored = state.get("confidence")
         if isinstance(restored, (int, float)):
