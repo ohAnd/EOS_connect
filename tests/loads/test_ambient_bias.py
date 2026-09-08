@@ -136,3 +136,24 @@ def test_a_reset_forgets_everything():
     bias.reset()
     assert bias.offset(3) == 0.0
     assert bias.state()["mean_offset_k"] is None
+
+
+def test_the_offsets_are_reported_hour_by_hour():
+    """
+    A correction averaging -5 K across a horizon looks identical from outside to one
+    that is -8 K overnight and zero at noon, and only the second is right. Without the
+    per-hour figures there is no way to tell which you have.
+    """
+    bias = AmbientBias()
+    day = T0
+    for _ in range(5):
+        bias.observe(day.replace(hour=3), 12.0, 20.0)     # -8 before dawn
+        bias.observe(day.replace(hour=14), 20.0, 20.0)    # spot on by afternoon
+        day += timedelta(days=1)
+
+    by_hour = bias.state()["offset_by_hour"]
+    assert len(by_hour) == 24
+    assert by_hour[3] == pytest.approx(-8.0, abs=0.3)
+    assert by_hour[14] == pytest.approx(0.0, abs=0.3)
+    # An hour with no history of its own reports nothing rather than the average.
+    assert by_hour[9] is None

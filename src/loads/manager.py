@@ -829,6 +829,14 @@ class ManagedLoadManager:
         except Exception:  # pylint: disable=broad-except
             logger.exception("[LOADS] publishing the release state for '%s' failed", item.id)
 
+    def _load_status(self, item):
+        """One load's status, plus what the manager knows about its site."""
+        status = item.status()
+        bias = self.ambient_bias_state(item.id)
+        if bias is not None:
+            status["ambient_bias"] = bias
+        return status
+
     def status(self):
         """The whole subsystem, for `GET /api/managed_loads` and the dashboard."""
         return {
@@ -843,5 +851,5 @@ class ManagedLoadManager:
             "samples_recorded": self.stats.samples_recorded,
             "calibration_updates": self.stats.calibration_updates,
             "contributions": self.registry.snapshot(),
-            "loads": [item.status() for item in self.instances],
+            "loads": [self._load_status(item) for item in self.instances],
         }
