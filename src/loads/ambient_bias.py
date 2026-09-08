@@ -127,12 +127,23 @@ class AmbientBias:
         ]
 
     def state(self):
-        """Serializable summary for the API and the overlay."""
+        """
+        Serializable summary for the API and the overlay.
+
+        The per-hour figures are included because they are what actually drives the
+        forecast: a correction that averages -5 K across a horizon looks identical from
+        outside to one that is -8 K overnight and zero at noon, and only the second is
+        right. Without them there is no way to tell which you have.
+        """
         mean = self.mean_offset()
         return {
             "hours_known": self.hours_known(),
             "mean_offset_k": None if mean is None else round(mean, 2),
             "saturated_hours": self.saturated_hours(),
+            "offset_by_hour": [
+                round(self.offset(hour), 2) if self._weight[hour] >= MIN_WEIGHT else None
+                for hour in range(24)
+            ],
         }
 
     def reset(self):

@@ -918,3 +918,25 @@ def test_covering_the_pool_overnight_lowers_the_predicted_demand(make_manager, i
     covered = habitual.instance("pool").last_demand.total_wh
 
     assert covered < uncovered * 0.6
+
+
+def test_the_status_carries_what_was_learned_about_the_site(make_manager, installation):
+    """The correction drives the whole forecast, so it has to be inspectable."""
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = [17.9] * 48
+    installation.sensors.update({
+        "sensor.pool_water": 24.0, "sensor.pool_power": 0.0, "sensor.outside": 14.9,
+    })
+    for _ in range(6):
+        manager.run_cycle()
+
+    load = manager.status()["loads"][0]
+    assert "ambient_bias" in load
+    assert load["ambient_bias"]["mean_offset_k"] == pytest.approx(-3.0, abs=0.1)
+    assert len(load["ambient_bias"]["offset_by_hour"]) == 24
+
+
+def test_a_load_with_no_site_history_reports_no_bias(make_manager):
+    manager = make_manager([{"id": "heating", "type": TYPE_EXTERNAL_PROFILE}])
+    manager.run_cycle()
+    assert "ambient_bias" not in manager.status()["loads"][0]
