@@ -98,12 +98,22 @@ class CoverHabit:
         return sum(1 for hour in range(24) if self.probability(hour) is not None)
 
     def state(self):
-        """Serializable summary for the API and the overlay."""
-        known = self.hours_known()
+        """
+        Serializable summary for the API and the overlay.
+
+        The probabilities are included, not just the hours over a half. What is used is
+        the fraction - an hour at 0.7 plans as seven tenths of a cover - and rounding
+        that to a yes changed one installation's predicted loss by more than half while
+        the reported state looked identical either way.
+        """
         return {
-            "hours_known": known,
+            "hours_known": self.hours_known(),
             "covered_hours": [
                 hour for hour in range(24) if (self.probability(hour) or 0.0) >= 0.5
+            ],
+            "probability_by_hour": [
+                None if self.probability(hour) is None else round(self.probability(hour), 2)
+                for hour in range(24)
             ],
         }
 
