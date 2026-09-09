@@ -121,3 +121,28 @@ def test_an_hour_seen_once_a_day_becomes_known_on_the_third():
 
     habit.observe(T0 + timedelta(days=2, hours=9), True)
     assert habit.probability(9) == pytest.approx(1.0)
+
+
+def test_the_summary_reports_the_probabilities_not_just_a_yes_or_no():
+    """
+    What the model uses is the fraction: an hour at 0.7 plans as seven tenths of a
+    cover. Reporting only the hours over a half made a state where every hour was
+    "covered" look identical whether the mean was 0.7 or 1.0 -- a difference of more
+    than half the predicted loss.
+    """
+    habit = CoverHabit()
+    moment = T0
+    for day in range(10):
+        habit.observe(moment.replace(hour=2), True)             # always
+        habit.observe(moment.replace(hour=14), day % 3 != 0)    # usually
+        moment += timedelta(days=1)
+
+    state = habit.state()
+    by_hour = state["probability_by_hour"]
+
+    assert len(by_hour) == 24
+    assert by_hour[2] == pytest.approx(1.0)
+    assert 0.5 < by_hour[14] < 0.95
+    # Both cross the half mark, so the thresholded list cannot tell them apart.
+    assert state["covered_hours"] == [2, 14]
+    assert by_hour[9] is None
