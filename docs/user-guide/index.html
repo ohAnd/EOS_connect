@@ -201,6 +201,11 @@ log_level: info             # debug, info, warning, error</code></pre>
                             against measured yield over a rolling window and applies a correction factor,
                             so the plan stops being systematically optimistic about a shaded array. See
                             <a href="configuration.html#pv-autoscaling">the PV auto-scaling settings</a>.</p>
+                        <p>To see what it has learned &mdash; the scale factor per timeframe, how much
+                            history it is working from, and the forecast before and after correction
+                            &mdash; pick <em>Menu &rsaquo; PV Auto-Scaling</em>. The two figures in the
+                            Statistics tile's header open the same panel, but they only carry a value
+                            after the first optimization cycle; the menu entry always works.</p>
                     </div>
                 </div>
 

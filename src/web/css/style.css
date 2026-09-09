@@ -157,48 +157,73 @@ body {
 }
 
 /*
- * Managed loads is a summary tile, not a full one: a name and a state per load, with
- * the detail behind the overlay. It therefore asks for less width than the four tiles
- * that were here before it.
+ * Managed loads is a summary tile, not a full one -- a name and a state per load, with
+ * the detail behind the overlay -- but it sits in a row of four full tiles, and a
+ * narrower fifth one read as unfinished next to them. So it has no width rule of its
+ * own: it takes the same flex:1 share as every other .top-box.
  *
- * That matters because .top-box is flex:1 — a fifth equal share took every tile from
- * 400px to 316px at 1680px wide, which is below the width Statistics and Battery State
- * need for their own labels. Both started wrapping the moment a managed load was
- * configured. Capping this one keeps the other four near the width they had.
+ * It used to be capped narrower than its neighbours, because five equal shares are four
+ * fifths of the width their labels were sized for and they started wrapping. That is
+ * paid for out of the row's font size instead. Each width term above is scaled to match
+ * the narrower share, which is what keeps Battery State and Statistics on one line each
+ * -- "Avg AC Charging Price" at 1280px wide, "Dynamic Max AC+DC Charge Power" at 1680px.
+ * The row-label term is scaled harder than 4/5 for that second one: it is the longest
+ * label on the row and only just fitted at four tiles.
+ *
+ * The height terms and the floors are untouched, so on a screen where height is the
+ * tighter dimension nothing about the row changed. Below the phone breakpoint the tiles
+ * stack one per row and there is no width to share, so the rules are scoped out of it --
+ * they are more specific than the media query's own .top-box rule and would otherwise
+ * win there.
  */
-#managed_loads_box {
-    /* Takes a share of the row rather than a fixed slice, so it gives width back on a
-       small screen instead of holding 240px while its neighbours are squeezed. */
-    flex: 0 1 clamp(150px, 15%, 240px);
+@media (min-width: 769px) {
+    .top-boxes.has-managed-loads .top-box {
+        font-size: clamp(10px, min(1.5vh, 0.76vw), 18px);
+    }
+
+    .top-boxes.has-managed-loads .top-box .top_box_info_text_head {
+        font-size: clamp(8px, min(1.3vh, 0.65vw), 16px);
+    }
+
+    .top-boxes.has-managed-loads .top-box .top_box_info_text {
+        font-size: clamp(7px, min(1.1vh, 0.5vw), 14px);
+    }
 }
 
 /*
- * This tile's header lays its chip out in flow rather than absolutely.
+ * The chip is flush with the right edge of the header, the same 10px in as every other
+ * tile's, and the title is centred on the tile -- but here the two are laid out in a
+ * three-column grid rather than one absolutely over the other.
  *
- * Everywhere else the title is centred and the chips are positioned over the ends of
- * the header, which works while the tile is wide enough that the two never meet. This
- * one is the narrowest by design, so they met: the chip sat on the last few pixels of
- * "Managed Loads". Padding cannot fix it -- every value wide enough to clear the chip
- * makes the title wrap instead. Putting the chip in the flex row means the two cannot
- * overlap at any width, and the title gives way with an ellipsis if it ever has to.
+ * "Managed Loads" plus an energy value is the longest title-and-chip pairing on the row,
+ * so with the chip positioned absolutely the title reached under it at the narrower
+ * widths, and padding wide enough to clear it wrapped the title instead. The grid gives
+ * the icon and the chip a column each and centres the title between them: the outer
+ * columns are equal shares, so the title sits on the tile's centre line and the two can
+ * never meet at any width. The title still clips with an ellipsis rather than wrapping.
  */
 #managed_loads_box>.header {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: center;
-    gap: 6px;
+}
+
+#managed_loads_box>.header>i {
+    justify-self: end;
+    margin-right: 0.4em;
+}
+
+#managed_loads_box>.header .header-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 #managed_loads_box>.header .header_notification {
     position: static;
-    flex: 0 0 auto;
-}
-
-#managed_loads_box>.header .header-title {
-    overflow: hidden;
-    text-overflow: ellipsis;
+    justify-self: end;
     white-space: nowrap;
-    min-width: 0;
 }
 
 /* One row per load: the name takes what is left after the state, and is clipped rather
@@ -332,12 +357,6 @@ th {
     .top-box {
         height: auto;
         font-size: 0.73em;
-    }
-
-    /* Stacked, so there is no neighbour to protect and no reason to stay narrow. */
-    #managed_loads_box {
-        flex: 1 1 auto;
-        min-width: 0;
     }
 
     .top-box>.header {

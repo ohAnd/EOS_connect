@@ -183,6 +183,26 @@ function showMainMenu(version, backend, granularity) {
             <span>Override Controls</span>
         </div>
 
+        <!-- Managed Loads and PV Auto-Scaling sit with Override Controls: all three are
+             what the optimizer is doing right now. They were below Alarms, which is
+             where diagnostics live. Managed Loads appears only once a load is
+             configured; PV Auto-Scaling always does. -->
+        ${(typeof controlsManager !== 'undefined' && controlsManager
+            && (controlsManager.managedLoads || []).length) ? `
+        <div onclick="showManagedLoadsMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;"
+            onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'"
+            onmouseout="this.style.backgroundColor='transparent'">
+            <i class="fa-solid fa-sliders" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
+            <span>Managed Loads</span>
+        </div>` : ''}
+
+        <div onclick="showPvAutoscalingMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;"
+            onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'"
+            onmouseout="this.style.backgroundColor='transparent'">
+            <i class="fa-solid fa-arrows-up-down" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
+            <span>PV Auto-Scaling</span>
+        </div>
+
         <div onclick="showBatteryOverviewMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
@@ -199,15 +219,6 @@ function showMainMenu(version, backend, granularity) {
             <span>Alarms</span>
         </div>
         
-        ${(typeof controlsManager !== 'undefined' && controlsManager
-            && (controlsManager.managedLoads || []).length) ? `
-        <div onclick="showManagedLoadsMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;"
-            onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'"
-            onmouseout="this.style.backgroundColor='transparent'">
-            <i class="fa-solid fa-sliders" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
-            <span>Managed Loads</span>
-        </div>` : ''}
-
         <div onclick="showLogsMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
             onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'" 
             onmouseout="this.style.backgroundColor='transparent'">
@@ -611,6 +622,22 @@ function showOverrideControlsMenu() {
         controlsManager.showOverrideMenuFullScreen();
     } else {
         showFullScreenOverlay("Override Controls", "<div style='text-align: center; color: #888; padding: 20px;'>Controls system not initialized</div>");
+        setTimeout(() => closeFullScreenOverlay(), 2000);
+    }
+}
+
+/**
+ * Show PV auto-scaling menu using StatisticsManager
+ *
+ * The same overlay the Statistics tile's badges open. It is reachable from the menu too
+ * because those badges are only filled in after the first optimization cycle, which is
+ * exactly when a user wants to check whether autoscaling is collecting.
+ */
+function showPvAutoscalingMenu() {
+    if (typeof statisticsManager !== 'undefined' && statisticsManager) {
+        statisticsManager.showPvAutoscalingOverlay();
+    } else {
+        showFullScreenOverlay("PV Auto-Scaling", "<div style='text-align: center; color: #888; padding: 20px;'>Statistics system not initialized</div>");
         setTimeout(() => closeFullScreenOverlay(), 2000);
     }
 }

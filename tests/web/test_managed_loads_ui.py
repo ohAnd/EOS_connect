@@ -107,6 +107,49 @@ def test_the_baseline_stays_clean_too(page, label, width, height):
     assert wrapped == [], f"{label}: wrapped labels {wrapped}"
 
 
+# Every line box under the tiles, nested markup included. LINE_BOXES above only reads
+# direct text nodes, which is how "Dynamic Max AC+DC Charge Power" -- an <i> inside its
+# cell -- stayed invisible to it.
+ALL_LINE_BOXES = """
+() => {
+    const out = [];
+    for (const box of document.querySelectorAll('.top-box')) {
+        if (box.offsetParent === null) { continue; }
+        for (const cell of box.querySelectorAll('.content td, .content th')) {
+            const r = document.createRange();
+            r.selectNodeContents(cell);
+            const rects = [...r.getClientRects()].filter(x => x.width > 0.5);
+            if (new Set(rects.map(x => Math.round(x.top))).size > 1) {
+                out.push((box.id || 'tile') + ': ' + cell.textContent.trim().slice(0, 34));
+            }
+        }
+    }
+    return out;
+}
+"""
+
+
+@pytest.mark.parametrize("label,width,height", VIEWPORTS)
+def test_the_fifth_tile_wraps_nothing_that_four_did_not(page, label, width, height):
+    """
+    The tile takes an equal share of the row now rather than a capped one, so the four
+    others are narrower than they were. Whatever fitted on one line without it has to
+    still fit with it -- the row's font size is what pays for the width.
+
+    Measured inclusive of nested markup, unlike LINE_BOXES: two labels already wrap at
+    1440px and below with four tiles, and this asks only that the fifth changes nothing.
+    """
+    page.set_viewport_size({"width": width, "height": height})
+
+    _seed(page, [])
+    before = page.evaluate(ALL_LINE_BOXES, None)
+    _seed(page, TWO_LOADS)
+    after = page.evaluate(ALL_LINE_BOXES, None)
+
+    added = [cell for cell in after if cell not in before]
+    assert added == [], f"{label}: the fifth tile wrapped {added}"
+
+
 def test_the_tile_is_hidden_until_something_is_configured(page):
     _seed(page, [])
     assert page.evaluate(
@@ -302,12 +345,88 @@ def test_the_menu_offers_managed_loads_only_once_configured(page):
     assert "Managed Loads" in page.text_content("#main-dropdown-menu")
 
 
+def _menu_entries(page):
+    page.evaluate("() => showMainMenu('v', 'b', 'g')")
+    entries = page.evaluate(
+        r"""() => [...document.querySelectorAll('#main-dropdown-menu > div')]
+            .map(d => d.textContent.replace(/\s+/g, ' ').trim())"""
+    )
+    page.evaluate("() => closeDropdownMenu()")
+    return entries
+
+
+def test_the_menu_groups_managed_loads_with_override_controls(page):
+    """
+    Both are "what is being done to a load right now", so they belong together at the
+    top. Managed Loads was below Alarms, which is where diagnostics live.
+    """
+    _seed(page, TWO_LOADS)
+    entries = _menu_entries(page)
+
+    at = entries.index("Override Controls")
+    assert entries[at + 1:at + 3] == ["Managed Loads", "PV Auto-Scaling"]
+
+
+def test_pv_autoscaling_is_offered_even_with_no_managed_loads(page):
+    """It is not conditional on anything: its overlay is how a user checks it is running."""
+    _seed(page, [])
+    entries = _menu_entries(page)
+
+    at = entries.index("Override Controls")
+    assert entries[at + 1] == "PV Auto-Scaling"
+
+
+# ── The tile in its row ────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("label,width,height", VIEWPORTS)
+def test_the_tile_is_as_wide_as_its_neighbours(page, label, width, height):
+    """
+    It was capped narrower than the four full tiles to protect their labels, and a short
+    fifth tile in a row of four equal ones read as unfinished. The labels are protected
+    by the row's font size now, so every tile takes the same share.
+    """
+    page.set_viewport_size({"width": width, "height": height})
+    _seed(page, TWO_LOADS)
+
+    widths = page.evaluate(
+        """() => [...document.querySelectorAll('.top-box')]
+            .filter(b => b.offsetParent !== null)
+            .map(b => [b.id || 'tile', Math.round(b.getBoundingClientRect().width)])"""
+    )
+    measured = [w for _, w in widths]
+    assert max(measured) - min(measured) <= 1, f"{label}: uneven tiles {widths}"
+
+
+@pytest.mark.parametrize("label,width,height", VIEWPORTS)
+def test_the_chip_sits_where_every_other_tile_puts_its_own(page, label, width, height):
+    """
+    The chip was laid out in flow next to the title, so it floated in the middle of the
+    header while every other tile's sits against the right edge.
+    """
+    page.set_viewport_size({"width": width, "height": height})
+    _seed(page, TWO_LOADS)
+
+    insets = page.evaluate(
+        """() => [...document.querySelectorAll('.top-box')]
+            .filter(b => b.offsetParent !== null)
+            .map(b => {
+                const header = b.querySelector('.header');
+                const chips = [...header.querySelectorAll('.header_notification')];
+                const right = chips[chips.length - 1].getBoundingClientRect().right;
+                return [b.id || 'tile',
+                        Math.round(header.getBoundingClientRect().right - right)];
+            })"""
+    )
+    measured = [inset for _, inset in insets]
+    assert max(measured) - min(measured) <= 1, f"{label}: chips misaligned {insets}"
+
+
 def test_the_header_title_never_sits_under_its_chip(page):
     """
-    The tile is the narrowest on the row, so a centred title and a chip positioned over
-    the end of the header met: "38.4 kWh" landed on top of "Managed Loads". Padding
-    cannot fix that -- every value wide enough to clear the chip wraps the title -- so
-    the chip is laid out in flow here instead.
+    "Managed Loads" plus an energy value is the longest title-and-chip pairing on the
+    row, and with the chip positioned over the end of the header the two met: "38.4 kWh"
+    landed on top of the title. Padding wide enough to clear it wraps the title instead,
+    so this header is a grid: an icon column, the centred title, and the chip.
     """
     for _, width, height in VIEWPORTS:
         page.set_viewport_size({"width": width, "height": height})
