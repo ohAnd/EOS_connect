@@ -189,7 +189,7 @@ class ThermalCalibrator:
 
     # -- ingest -----------------------------------------------------------------------
 
-    def observe(self, sample):
+    def observe(self, sample, refit=True):
         """
         Take one recorded sample. Returns True when it completed a window.
 
@@ -197,24 +197,32 @@ class ThermalCalibrator:
         appliance switches on or off, or the backstop elapses - then the whole span
         becomes one equation. Pairing consecutive samples instead would divide a
         rounding step by five minutes and call the result a heat flow.
+
+        A completed window re-solves immediately unless *refit* says otherwise, which
+        only the bulk replay does. Leaving that out froze the estimate between restarts:
+        windows kept accumulating and nothing ever looked at them again, so an install
+        running for a week reported the fit it had made in its first minute.
         """
         if not self._usable(sample):
             return False
 
-        if self._window:
+        closed = False
+        if self._window and self._state_changed(self._window[-1], sample):
+            # The transition itself describes neither state, so close what came before
+            # it and begin again from the new one.
             self._learn_resolution(self._window[-1], sample)
-            if self._state_changed(self._window[-1], sample):
-                # The transition itself describes neither state, so close what came
-                # before it and begin again from the new one.
-                closed = self._close_window()
-                self._window = [sample]
-                return closed
+            closed = self._close_window()
+            self._window = [sample]
+        else:
+            if self._window:
+                self._learn_resolution(self._window[-1], sample)
+            self._window.append(sample)
+            if self._window_is_ready():
+                closed = self._close_window(keep_last=True)
 
-        self._window.append(sample)
-
-        if self._window_is_ready():
-            return self._close_window(keep_last=True)
-        return False
+        if closed and refit:
+            self.refit()
+        return closed
 
     def observe_series(self, samples):
         """
@@ -226,7 +234,7 @@ class ThermalCalibrator:
         rows_before = len(self._rows)
         self._window = []
         for sample in samples:
-            self.observe(sample, )
+            self.observe(sample, refit=False)
         # Whatever is left is still a usable span if it is long enough.
         self._close_window()
 

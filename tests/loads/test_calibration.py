@@ -494,3 +494,58 @@ def test_the_reported_period_counts_describe_the_current_fit():
     assert cal.loss_samples == len(cal._rows)
     assert cal.cop_samples == 0
     assert cal.loss_samples < 202
+
+
+def test_a_window_closed_while_running_updates_the_fit():
+    """
+    The estimate used to be re-solved only by the bulk replay, which runs at start-up
+    and nowhere else. Windows kept accumulating and nothing looked at them again, so an
+    install running for a week reported the fit it had made in its first minute -- rows
+    rising, every fitted value bit-identical.
+    """
+    cal = _calibrator(loss=60.0)
+    samples = _simulate(hours=40, step_minutes=15, medium_c=28.0, ambient_c=16.0,
+                        power_w=0.0)
+
+    # Feed them the way the poll thread does: one at a time, no bulk replay.
+    for sample in samples:
+        cal.observe(sample)
+
+    assert len(cal._rows) > 1
+    assert cal.loss_coefficient == pytest.approx(TRUE_K, rel=0.2)
+    assert cal.residual_w is not None
+
+
+def test_the_estimate_keeps_moving_as_windows_arrive():
+    cal = _calibrator(loss=60.0)
+    first = _simulate(hours=12, step_minutes=15, medium_c=28.0, ambient_c=16.0,
+                      power_w=0.0)
+    for sample in first:
+        cal.observe(sample)
+    after_first = cal.loss_coefficient
+
+    second = _simulate(hours=12, step_minutes=15, medium_c=first[-1]["medium_c"],
+                       ambient_c=16.0, power_w=0.0,
+                       start=first[-1]["timestamp"] + timedelta(minutes=15))
+    for sample in second:
+        cal.observe(sample)
+
+    assert cal.loss_coefficient != after_first
+    assert cal.loss_coefficient == pytest.approx(TRUE_K, rel=0.2)
+
+
+def test_the_bulk_replay_still_solves_only_once(monkeypatch):
+    """Replaying a fortnight should not re-solve a few hundred times over."""
+    cal = _calibrator()
+    calls = {"n": 0}
+    real = cal.refit
+
+    def counting():
+        calls["n"] += 1
+        return real()
+
+    monkeypatch.setattr(cal, "refit", counting)
+    cal.observe_series(
+        _simulate(hours=40, step_minutes=15, medium_c=28.0, ambient_c=16.0, power_w=0.0)
+    )
+    assert calls["n"] == 1
