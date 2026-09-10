@@ -25,6 +25,28 @@ STRATEGY_COMBINED = "combined"
 
 STRATEGIES = (STRATEGY_CHEAPEST, STRATEGY_PV_SURPLUS, STRATEGY_COMBINED)
 
+# Why a slot carries no energy. Recorded per slot so the page can say which setting is
+# actually holding a load back: "covers 20% of it, widen the window" is bad advice when
+# the window is wide open and the price cap is doing the excluding.
+SLOT_PLANNED = "planned"
+SLOT_PAST = "past"
+SLOT_DEADLINE = "after deadline"
+SLOT_INFEASIBLE = "not allowed"
+SLOT_PRICE = "above price cap"
+SLOT_BUDGET = "shared power budget"
+SLOT_DAILY_CAP = "daily runtime cap"
+SLOT_NOT_NEEDED = "not needed"
+
+# Reasons that are nobody's fault: the slot has gone, or the demand was already met.
+# Everything else represents a setting standing in the way, and a load short of energy
+# is limited by whichever of those excluded the most slots.
+#
+# Defined as the exception rather than the rule on purpose. Listing the blocking reasons
+# instead meant the model's own, more specific ones - "outside allowed hours" in place of
+# a generic "not allowed" - were not on the list, so the very cases worth naming were the
+# ones that came back as nothing at all.
+NON_BLOCKING_REASONS = (SLOT_PLANNED, SLOT_PAST, SLOT_NOT_NEEDED)
+
 # Ranking cost for a slot with no price information. Above any realistic tariff, so
 # priced slots always win, but finite so a missing price series still yields a plan
 # rather than no heating at all.
@@ -100,22 +122,34 @@ def _slot_costs(ctx, options, caps):
     return costs
 
 
-def _candidates(demand, ctx, caps, costs, options):
-    """Slots the load may actually occupy, cheapest first."""
+def _candidates(demand, ctx, caps, costs, options, reasons):
+    """Slots the load may actually occupy, and why each of the others is out."""
     start = max(0, ctx.current_slot)
     end = ctx.slot_count - 1
     if demand.deadline_slot is not None:
         end = min(end, int(demand.deadline_slot))
 
     feasible = _series([bool(v) for v in demand.feasible], ctx.slot_count, True)
+    detail = _series(list(demand.feasible_reason or []), ctx.slot_count, None)
+
+    for index in range(ctx.slot_count):
+        if index < start:
+            reasons[index] = SLOT_PAST
+        elif index > end:
+            reasons[index] = SLOT_DEADLINE
 
     usable = []
     priced_out = 0
     for index in range(start, end + 1):
-        if not feasible[index] or caps[index] <= 0:
+        if not feasible[index]:
+            reasons[index] = detail[index] or SLOT_INFEASIBLE
+            continue
+        if caps[index] <= 0:
+            reasons[index] = SLOT_BUDGET
             continue
         cost = costs[index]
         if isinstance(cost, float) and cost == float("inf"):
+            reasons[index] = SLOT_BUDGET
             continue
         if (
             options.max_price_eur_per_wh is not None
@@ -124,6 +158,7 @@ def _candidates(demand, ctx, caps, costs, options):
             and cost > options.max_price_eur_per_wh
         ):
             priced_out += 1
+            reasons[index] = SLOT_PRICE
             continue
         usable.append(index)
 
@@ -158,6 +193,10 @@ def plan_contingent(demand, ctx, options, budget_wh=None):
     """
     length = ctx.slot_count
     plan = [0.0] * length
+    # Filled in as slots are ruled out, so the page can name the setting that is
+    # actually holding the load back rather than guessing.
+    reasons = [SLOT_NOT_NEEDED] * length
+    demand.slot_reasons = reasons
     remaining = float(demand.total_wh)
     if remaining <= 0:
         return plan
@@ -177,7 +216,7 @@ def plan_contingent(demand, ctx, options, budget_wh=None):
         caps.append(cap)
 
     costs = _slot_costs(ctx, options, caps)
-    candidates, _ = _candidates(demand, ctx, caps, costs, options)
+    candidates, _ = _candidates(demand, ctx, caps, costs, options, reasons)
 
     if not candidates:
         logger.info(
@@ -190,7 +229,7 @@ def plan_contingent(demand, ctx, options, budget_wh=None):
     if demand.urgent:
         # Cheapness is worthless if the pool freezes: take the next slots available.
         ordered = sorted(candidates)
-        return _fill(plan, ordered, caps, remaining, options, ctx)
+        return _fill(plan, ordered, caps, remaining, options, ctx, reasons)
 
     ordered_blocks = _blocks(candidates, options.min_runtime_slots)
     if not ordered_blocks:
@@ -224,7 +263,7 @@ def plan_contingent(demand, ctx, options, budget_wh=None):
     leftovers.sort(key=lambda index: (costs[index], index))
     order.extend(leftovers)
 
-    return _fill(plan, order, caps, float(demand.total_wh), options, ctx)
+    return _fill(plan, order, caps, float(demand.total_wh), options, ctx, reasons)
 
 
 def _block_cost(run, costs):
@@ -237,7 +276,7 @@ def _block_cost(run, costs):
     return sum(values) / len(values)
 
 
-def _fill(plan, order, caps, remaining, options, ctx):
+def _fill(plan, order, caps, remaining, options, ctx, reasons):
     """Pour *remaining* Wh into *order* until it is gone, honouring the daily cap."""
     slots_per_day = max(1, 86400 // ctx.time_frame_base)
     used_per_day = {}
@@ -247,11 +286,14 @@ def _fill(plan, order, caps, remaining, options, ctx):
             break
         day = slot // slots_per_day
         if options.max_slots_per_day and used_per_day.get(day, 0) >= options.max_slots_per_day:
+            reasons[slot] = SLOT_DAILY_CAP
             continue
         take = min(caps[slot], remaining)
         if take <= 0:
+            reasons[slot] = SLOT_BUDGET
             continue
         plan[slot] = take
+        reasons[slot] = SLOT_PLANNED
         remaining -= take
         used_per_day[day] = used_per_day.get(day, 0) + 1
 

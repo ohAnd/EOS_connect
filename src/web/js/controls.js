@@ -3,6 +3,32 @@
  * Handles all control-related functionality including override controls, mode changes, and UI interactions
  */
 
+// Plan-strip colours. Slots 1-3 of the validated categorical palette, stepped for a
+// dark surface; checked all-pairs against this dashboard's card background
+// (worst CVD deltaE 9.4, normal-vision 20.9, all at or above 3:1 contrast).
+//
+// Three hues, not one per reason: on a timeline any two states can end up adjacent, and
+// the palette is only safe to three under that condition. The exact reason rides on the
+// hover instead, so grouping costs nothing.
+const MANAGED_LOAD_SLOT_STYLE = {
+    // Height carries the energy for this one; the rest are fixed-height bands.
+    planned: { color: '#3987e5', height: 0, label: 'Will run' },
+    capped:  { color: '#d95926', height: 14, label: 'Capped' },
+    blocked: { color: '#199e70', height: 14, label: 'Not allowed then' },
+    idle:    { color: 'rgba(255,255,255,0.12)', height: 6, label: 'Not needed' },
+};
+
+// You are rationing it: a limit you set on how much or how dear.
+const MANAGED_LOAD_CAPPED_REASONS = new Set([
+    'above price cap', 'daily runtime cap', 'shared power budget',
+]);
+
+// It is not allowed to run then, whatever the price.
+const MANAGED_LOAD_BLOCKED_REASONS = new Set([
+    'outside allowed hours', 'out of season', 'too cold to run', 'after deadline',
+    'not allowed',
+]);
+
 class ControlsManager {
     constructor() {
         this.menuControlEventListener = null;
@@ -829,7 +855,8 @@ class ControlsManager {
             ${this._managedLoadEnergy(load, detail)}
             ${this._managedLoadFacts(load, detail, model, release)}
             ${this._managedLoadCalibration(load, model)}
-            ${this._managedLoadPlanStrip(load.plan || [], slotSeconds, currentSlot)}
+            ${this._managedLoadPlanStrip(load.plan || [], slotSeconds, currentSlot,
+                                          load.plan_reasons || [])}
         </div>`;
     }
 
@@ -896,9 +923,8 @@ class ControlsManager {
                 </div>
                 <div style="font-size:0.85em;opacity:0.75;margin-top:4px;">
                     ${short
-                        ? `Planned ${kwh(planned)} &mdash; covers ${pct}% of it. The load
-                           cannot get enough runtime; widen its window or raise the daily
-                           cap.`
+                        ? `Planned ${kwh(planned)} &mdash; covers ${pct}% of it.
+                           ${this._managedLoadLimit(load)}`
                         : `Planned ${kwh(planned)} &mdash; fully covered.`}
                 </div>`;
         }
@@ -912,6 +938,35 @@ class ControlsManager {
             ${split}
             ${coverage}
         </div>`;
+    }
+
+    /**
+     * Why a load cannot get all the energy it needs, named rather than guessed.
+     *
+     * This used to read "widen its window or raise the daily cap" whatever the cause,
+     * which is wrong advice whenever something else did the excluding: a price cap can
+     * rule out four fifths of a horizon while the window stands wide open.
+     *
+     * @param {Object} load - An entry from GET /api/managed_loads
+     * @returns {string} A sentence naming the limiting setting
+     */
+    _managedLoadLimit(load) {
+        const summary = load.plan_summary;
+        if (!summary || !summary.limited_by) {
+            return 'It cannot get enough runtime in the hours available.';
+        }
+        const REMEDY = {
+            'above price cap': 'raise or clear the price cap',
+            'outside allowed hours': 'widen the allowed window',
+            'too cold to run': 'lower the minimum outside temperature, if the appliance allows it',
+            'out of season': 'extend the season',
+            'daily runtime cap': 'raise the daily runtime cap',
+            'shared power budget': 'raise the shared power limit, or lower another load\u2019s priority',
+            'after deadline': 'allow more time before the deadline',
+        };
+        const remedy = REMEDY[summary.limited_by];
+        return `Limited by <strong>${this.escapeHtml(summary.limited_by)}</strong>
+                (${summary.limited_slots} of ${summary.slots} slots)${remedy ? ` &mdash; ${remedy}` : ''}.`;
     }
 
     /**
@@ -1075,14 +1130,21 @@ class ControlsManager {
      * @param {number[]} plan - Wh per slot, starting at local midnight today
      * @param {number} slotSeconds - Seconds per slot
      * @param {number} currentSlot - Index of the slot happening now
+     * @param {string[]} slotReasons - Why each slot carries no energy, if known
      * @returns {string} Strip HTML, or "" when nothing is planned
      */
-    _managedLoadPlanStrip(plan, slotSeconds, currentSlot) {
+    _managedLoadPlanStrip(plan, slotSeconds, currentSlot, slotReasons = []) {
         if (!plan.length) {
             return '';
         }
         const peak = Math.max(...plan.map(v => Number(v) || 0));
-        if (peak <= 0) {
+        // A plan with nothing in it still has something to say -- which is why nothing
+        // is in it. Returning early here hid the strip in the one case where it was the
+        // most informative thing on the card: a price cap that ruled out the lot.
+        const blocked = slotReasons.some(
+            r => r && r !== 'planned' && r !== 'not needed' && r !== 'past'
+        );
+        if (peak <= 0 && !blocked) {
             return '';
         }
 
@@ -1101,24 +1163,36 @@ class ControlsManager {
             { weekday: 'short', day: 'numeric', month: 'short' });
 
         let running = 0;
+        const used = new Set();
         const bars = plan.map((value, i) => {
             const v = Number(value) || 0;
             running += v;
             const from = slotStart(i);
             const to = slotStart(i + 1);
             const isNow = i === currentSlot;
+            const why = slotReasons[i];
+            const kind = v > 0 ? 'planned' : this._managedLoadSlotKind(why);
+            used.add(kind);
+            const style = MANAGED_LOAD_SLOT_STYLE[kind];
 
             const tip = [
                 `${dayName(from)} ${hhmm(from)}\u2013${hhmm(to)}`,
-                v > 0 ? `${Math.round(v)} Wh planned` : 'not planned',
+                v > 0 ? `${Math.round(v)} Wh planned`
+                      : (why && why !== 'planned' ? why : 'not planned'),
                 v > 0 ? `${(running / 1000).toFixed(1)} kWh cumulative` : null,
                 isNow ? 'happening now' : null,
             ].filter(Boolean).join(' \u00b7 ');
 
-            const height = v > 0 ? Math.max(18, Math.round((v / peak) * 100)) : 6;
-            const colour = v > 0 ? '#4a9eff' : 'rgba(255,255,255,0.12)';
+            // Energy is carried by height on the blue bars only. Everything else is a
+            // fixed-height band with square corners, so a colour can never be misread
+            // as a quantity -- the rounded top is what says "this much".
+            const height = v > 0
+                ? Math.max(22, Math.round((v / Math.max(peak, 1)) * 100))
+                : style.height;
+            const radius = v > 0 ? 'border-radius:2px 2px 0 0;' : '';
+
             return `<div title="${this.escapeHtml(tip)}" style="flex:1 1 0;height:${height}%;
-                background:${colour};align-self:flex-end;
+                background:${style.color};align-self:flex-end;${radius}
                 ${isNow ? 'outline:1px solid #fff;outline-offset:-1px;' : ''}"></div>`;
         }).join('');
 
@@ -1163,7 +1237,50 @@ class ControlsManager {
             </div>
             <div style="position:relative;height:1.2em;margin-top:2px;">${tickHtml}</div>
             <div style="display:flex;font-size:0.8em;margin-top:2px;">${dayLabels.join('')}</div>
+            ${this._managedLoadStripLegend(used)}
         </div>`;
+    }
+
+    /**
+     * Which of the four visual states a slot is in.
+     *
+     * Grouped rather than one colour per reason: the palette is only safe to three
+     * categorical hues when any two can end up side by side, which on a timeline they
+     * can. The exact reason is on the hover, so nothing is lost.
+     *
+     * @param {string|undefined} reason - The planner's reason for this slot
+     * @returns {string} A key of MANAGED_LOAD_SLOT_STYLE
+     */
+    _managedLoadSlotKind(reason) {
+        if (MANAGED_LOAD_CAPPED_REASONS.has(reason)) {
+            return 'capped';
+        }
+        if (MANAGED_LOAD_BLOCKED_REASONS.has(reason)) {
+            return 'blocked';
+        }
+        return 'idle';
+    }
+
+    /**
+     * Name the states actually on the strip. Identity is never colour alone.
+     * @param {Set<string>} used - Kinds present in this plan
+     * @returns {string} Legend HTML
+     */
+    _managedLoadStripLegend(used) {
+        const order = ['planned', 'capped', 'blocked', 'idle'];
+        const items = order.filter(kind => used.has(kind)).map(kind => {
+            const style = MANAGED_LOAD_SLOT_STYLE[kind];
+            return `<span style="display:inline-flex;align-items:center;gap:5px;">
+                <span style="width:9px;height:9px;border-radius:2px;
+                             background:${style.color};"></span>${style.label}</span>`;
+        });
+        // A single state still needs naming unless it is the one the heading already
+        // names. A strip of uniformly orange bars with no legend is colour alone.
+        if (!items.length || (items.length === 1 && used.has('planned'))) {
+            return '';
+        }
+        return `<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:6px;
+                            font-size:0.8em;opacity:0.75;">${items.join('')}</div>`;
     }
 
     /**

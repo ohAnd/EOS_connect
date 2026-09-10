@@ -45,6 +45,11 @@ REASON_HEATING = "below target temperature"
 REASON_HOLDING = "covering standing losses"
 REASON_OUT_OF_SEASON = "out of season"
 
+# Per-slot exclusions, reported so a shortfall can name the setting behind it.
+REASON_SLOT_WINDOW = "outside allowed hours"
+REASON_SLOT_SEASON = "out of season"
+REASON_SLOT_AMBIENT = "too cold to run"
+
 
 def _as_float(value, default=None):
     """Sensor readings arrive as strings with units; take the number or give up."""
@@ -180,7 +185,7 @@ class ThermalStorageModel(BaseDemandModel):
 
     def feasibility(self, ctx):
         """
-        Per-slot mask of when the appliance may run at all.
+        Per-slot mask of when the appliance may run at all, and why not when it may not.
 
         Hours are derived from the slot index because slot 0 is local midnight by
         construction. On the two DST days of the year that drifts by an hour late in the
@@ -188,21 +193,24 @@ class ThermalStorageModel(BaseDemandModel):
         """
         slots_per_day = max(1, 86400 // ctx.time_frame_base)
         slots_per_hour = max(1, ctx.slots_per_hour())
-        mask = []
+        mask, reasons = [], []
         for index in range(ctx.slot_count):
             hour = (index % slots_per_day) // slots_per_hour
             day = (ctx.anchor + timedelta(days=index // slots_per_day)).date()
 
-            allowed = _in_window(hour, self.window_start, self.window_end)
-            if allowed and not _in_season((day.month, day.day), self.season_start,
-                                          self.season_end):
-                allowed = False
-            if allowed and self.min_ambient_temp_c is not None:
+            reason = None
+            if not _in_window(hour, self.window_start, self.window_end):
+                reason = REASON_SLOT_WINDOW
+            elif not _in_season((day.month, day.day), self.season_start, self.season_end):
+                reason = REASON_SLOT_SEASON
+            elif self.min_ambient_temp_c is not None:
                 ambient = self._ambient_at(ctx, index)
                 if ambient is not None and ambient < float(self.min_ambient_temp_c):
-                    allowed = False
-            mask.append(allowed)
-        return mask
+                    reason = REASON_SLOT_AMBIENT
+
+            mask.append(reason is None)
+            reasons.append(reason)
+        return mask, reasons
 
     @staticmethod
     def _ambient_at(ctx, index):
@@ -229,7 +237,7 @@ class ThermalStorageModel(BaseDemandModel):
         target = self.target_temperature(ctx.readings)
         cover_now = self.cover_factor(ctx.readings)
         cover = self.cover_series(ctx, cover_now)
-        feasible = self.feasibility(ctx)
+        feasible, feasible_reason = self.feasibility(ctx)
 
         urgent = (
             self.frost_protection_temp_c is not None
@@ -258,6 +266,7 @@ class ThermalStorageModel(BaseDemandModel):
             kind=self.kind,
             total_wh=total_wh,
             feasible=feasible,
+            feasible_reason=feasible_reason,
             max_power_w=self.rated_power_w,
             deadline_slot=deadline_slot,
             urgent=urgent and active,

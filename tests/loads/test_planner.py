@@ -267,3 +267,91 @@ def test_quarter_hour_slots_halve_the_per_slot_capacity():
     )
     assert max(plan) == pytest.approx(450.0)
     assert sum(plan) == pytest.approx(1800.0)
+
+
+# ── Why a slot carries no energy ────────────────────────────────────────────────
+#
+# A shortfall was reported as "widen its window or raise the daily cap" whatever the
+# cause. On a real install a 22 ct/kWh cap ruled out four fifths of the horizon while
+# the window stood wide open from 06:00 to 23:00, and the page sent the user to the
+# wrong setting.
+
+from src.loads.planner import (  # noqa: E402
+    NON_BLOCKING_REASONS,
+    SLOT_DAILY_CAP,
+    SLOT_INFEASIBLE,
+    SLOT_NOT_NEEDED,
+    SLOT_PAST,
+    SLOT_PLANNED,
+    SLOT_PRICE,
+)
+
+
+def test_the_reasons_line_up_with_the_plan():
+    demand = _demand(total_wh=3600.0)
+    plan = plan_contingent(demand, _ctx(), PlanOptions(strategy=STRATEGY_CHEAPEST))
+
+    assert len(demand.slot_reasons) == len(plan)
+    planned = [i for i, v in enumerate(demand.slot_reasons) if v == SLOT_PLANNED]
+    assert planned == _used(plan)
+
+
+def test_a_price_cap_says_so():
+    price = [0.0009] * 48
+    price[15] = 0.0001
+    demand = _demand(total_wh=9000.0)
+    plan_contingent(
+        demand, _ctx(price=price),
+        PlanOptions(strategy=STRATEGY_CHEAPEST, max_price_eur_per_wh=0.0002),
+    )
+
+    counts = {}
+    for reason in demand.slot_reasons:
+        counts[reason] = counts.get(reason, 0) + 1
+    assert counts[SLOT_PRICE] == 47
+    assert counts[SLOT_PLANNED] == 1
+
+
+def test_slots_before_now_are_marked_past_not_blocked():
+    """Being in the past is not a setting anyone can change."""
+    demand = _demand(total_wh=1800.0)
+    plan_contingent(demand, _ctx(current_slot=12), PlanOptions())
+
+    assert demand.slot_reasons[:12] == [SLOT_PAST] * 12
+    assert SLOT_PAST in NON_BLOCKING_REASONS
+
+
+def test_an_infeasible_slot_carries_the_models_own_reason():
+    """Window, season and ambient are distinct settings and are named separately."""
+    feasible = [False] * 48
+    feasible[30] = True
+    demand = _demand(total_wh=1800.0, feasible=feasible)
+    demand.feasible_reason = ["outside allowed hours"] * 48
+    demand.feasible_reason[30] = None
+
+    plan_contingent(demand, _ctx(), PlanOptions())
+
+    assert demand.slot_reasons[0] == "outside allowed hours"
+    assert demand.slot_reasons[30] == SLOT_PLANNED
+
+
+def test_an_infeasible_slot_without_a_reason_still_says_something():
+    demand = _demand(total_wh=1800.0, feasible=[False] * 48)
+    plan_contingent(demand, _ctx(), PlanOptions())
+    assert demand.slot_reasons[10] == SLOT_INFEASIBLE
+
+
+def test_the_daily_cap_is_distinguished_from_everything_else():
+    demand = _demand(total_wh=18000.0)
+    plan_contingent(
+        demand, _ctx(), PlanOptions(strategy=STRATEGY_CHEAPEST, max_slots_per_day=2),
+    )
+    assert SLOT_DAILY_CAP in demand.slot_reasons
+
+
+def test_slots_left_over_once_the_demand_is_met_are_not_blamed_on_anything():
+    demand = _demand(total_wh=1800.0)
+    plan_contingent(demand, _ctx(), PlanOptions(strategy=STRATEGY_CHEAPEST))
+
+    assert SLOT_NOT_NEEDED in demand.slot_reasons
+    assert SLOT_NOT_NEEDED in NON_BLOCKING_REASONS

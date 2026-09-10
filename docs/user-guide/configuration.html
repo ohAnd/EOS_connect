@@ -408,11 +408,17 @@
                     <ul>
                         <li><strong>Planned equals needed</strong> &mdash; the plan covers the
                             demand; the settings are not in the way.</li>
-                        <li><strong>Planned is lower</strong> &mdash; the load cannot get enough
-                            runtime. Widen the window, raise the cap, or accept that the target
-                            will not be reached. Note the strip: contiguous blocks that stop at a
-                            fixed hour point at the window, scattered gaps at the price cap or
-                            the ambient limit.</li>
+                        <li><strong>Planned is lower</strong> &mdash; the load cannot get all
+                            the energy it needs, and the card names the setting responsible:
+                            the price cap, the allowed hours, the minimum outside temperature,
+                            the season, the daily runtime cap or the shared power limit,
+                            whichever ruled out the most slots. The strip colours each slot
+                            by what became of it &mdash; blue where the load will run, with the
+                            bar height showing how much, amber where you are rationing it
+                            (price cap, daily runtime cap, shared power limit), green where it
+                            is simply not allowed to run then (outside the hours, out of
+                            season, too cold), and faint grey where nothing was needed.
+                            Hovering any bar gives the exact reason for that slot.</li>
                         <li><strong>Planned is lower and the pump runs flat out anyway</strong>
                             &mdash; the appliance is undersized for the losses rather than
                             short of time. A cover changes that faster than a bigger pump.</li>

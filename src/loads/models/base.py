@@ -105,6 +105,11 @@ class EnergyDemand:
     total_wh: float = 0.0
     profile_wh: list = None
     feasible: list = field(default_factory=list)
+    # Per slot, why it is not feasible - so a shortfall can name the setting behind it
+    # rather than sending the user to widen a window that was never the problem.
+    feasible_reason: list = field(default_factory=list)
+    # Filled in by the planner: what became of every slot. See `loads.planner`.
+    slot_reasons: list = field(default_factory=list)
     max_power_w: float = 0.0
     deadline_slot: object = None
     urgent: bool = False
