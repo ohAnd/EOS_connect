@@ -628,23 +628,11 @@ class ControlsManager {
         }
 
         this.managedLoads = Array.isArray(loads) ? loads : [];
-
-        // The row's font size is scaled for the number of tiles in it, so the row has to
-        // know whether this one is in play. Five equal shares are narrower than four, and
-        // without the smaller text the neighbours' labels wrap.
-        const row = box.closest('.top-boxes');
-
         if (this.managedLoads.length === 0) {
             box.style.display = 'none';
-            if (row) {
-                row.classList.remove('has-managed-loads');
-            }
             return;
         }
         box.style.display = '';
-        if (row) {
-            row.classList.add('has-managed-loads');
-        }
 
         // More than this and the tile grows taller than its neighbours; the rest are
         // one click away in the overlay.

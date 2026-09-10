@@ -160,6 +160,8 @@ function showMainMenu(version, backend, granularity) {
     // Create dropdown menu
     const dropdown = document.createElement('div');
     dropdown.id = 'main-dropdown-menu';
+    // The size is in rem, not em: the menu is appended into a .top-box, whose own text is
+    // sized from the tile's width for the tiles' sake and is no basis for a menu.
     dropdown.style.cssText = `
         position: absolute;
         top: 45px;
@@ -171,8 +173,7 @@ function showMainMenu(version, backend, granularity) {
         z-index: 1000;
         min-width: 180px;
         padding: 8px 0;
-        // font-size: 0.9em;
-        font-size: ${isMobile() ? '1.1em' : '0.9em'};
+        font-size: ${isMobile() ? '0.8rem' : '0.85rem'};
     `;
 
     dropdown.innerHTML = `
