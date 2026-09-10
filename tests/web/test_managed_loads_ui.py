@@ -108,8 +108,8 @@ def test_the_baseline_stays_clean_too(page, label, width, height):
 
 
 # Every line box under the tiles, nested markup included. LINE_BOXES above only reads
-# direct text nodes, which is how "Dynamic Max AC+DC Charge Power" -- an <i> inside its
-# cell -- stayed invisible to it.
+# direct text nodes, which is how the italic hint in Battery State -- an <i> inside its
+# cell -- stayed invisible to it while it wrapped.
 ALL_LINE_BOXES = """
 () => {
     const out = [];
@@ -132,12 +132,14 @@ ALL_LINE_BOXES = """
 @pytest.mark.parametrize("label,width,height", VIEWPORTS)
 def test_the_fifth_tile_wraps_nothing_that_four_did_not(page, label, width, height):
     """
-    The tile takes an equal share of the row now rather than a capped one, so the four
-    others are narrower than they were. Whatever fitted on one line without it has to
-    still fit with it -- the row's font size is what pays for the width.
+    The tile takes an equal share of the row rather than a capped one, so the four others
+    are narrower than they were. Whatever fitted on one line without it has to still fit
+    with it -- the text is sized from each tile's own width, so a fifth share makes every
+    tile's text smaller rather than pushing a neighbour's label into a second line.
 
-    Measured inclusive of nested markup, unlike LINE_BOXES: two labels already wrap at
-    1440px and below with four tiles, and this asks only that the fifth changes nothing.
+    A delta, not an absolute: this compares the row against itself with and without the
+    tile, and still measures the placeholder text the markup ships. Whether the row fits
+    at all, against the values a running install shows, is test_tile_sizing_ui.py.
     """
     page.set_viewport_size({"width": width, "height": height})
 

@@ -139,58 +139,143 @@ body {
     display: flex;
     flex-direction: column;
     /*
-     * Scaled by viewport height *and* width. Height alone was the original rule, and it
-     * reads the wrong dimension: the tiles sit side by side, so how much room a label
-     * has depends on the width. On a tall 4:3 screen such as 1680x1200 that produced the
-     * largest text in the narrowest tiles, and the labels wrapped. The width term only
-     * bites where it is the tighter of the two.
+     * A size container, so the text below can be sized from *this tile's* width rather
+     * than the viewport's.
+     *
+     * Viewport width was the wrong dimension twice over. It cannot see how many tiles
+     * share the row -- a fifth tile takes every share down by a fifth, which had to be
+     * compensated for by hand -- and it cannot see the phone layout, where one stacked
+     * tile is the full width of the screen. The tile's own inline size answers both
+     * without being told.
      */
-    font-size: clamp(10px, min(1.5vh, 0.95vw), 18px);
+    container-type: inline-size;
 }
 
+/*
+ * Fallback for browsers without container queries (pre-2023). Sized by viewport width,
+ * which is what the whole row used before: smaller than it needs to be on a wide screen,
+ * but never wrapped. The rules below override it wherever cqi is understood.
+ */
+.top-box>.header,
+.top-box>.content {
+    font-size: clamp(10px, min(1.5vh, 0.8vw), 18px);
+}
+
+/*
+ * How large the text can be is a property of the tile, not of the screen: text may grow
+ * until the widest row is about to wrap. Measured across 20 viewports from 320px to
+ * 3440px wide, that point is `0.0567 * W - 2.25px` for a tile of inline size W -- the
+ * same line through every one of them, to within a tenth of a pixel. It is affine and
+ * not a plain percentage because the padding, borders and cell gaps a row spends its
+ * width on do not shrink with the tile. The rule below sits about 7% under that line,
+ * which is the margin for a font wider than the one measured with.
+ *
+ * The row it is measured from is "Needed Energy" against "12.4 kWh / 3.21 EUR" -- two
+ * values in one cell, and the widest pairing on the row. Behind it was a 30-character
+ * "Dynamic Max AC+DC Charge Power", since shortened, which held the whole row 25% below
+ * this line for the sake of one label.
+ *
+ * Headers get a slightly larger share of the width: a header spends it on a title and
+ * two chips rather than on two columns of a table, and does not wrap until about 6.3%.
+ * They share the *height* rule below unchanged, though, so the bump only happens where
+ * there is height to spare -- on a short screen the row's height is the scarce side, and
+ * a larger header there would be taken straight out of the table under it.
+ */
+.top-box>.header {
+    font-size: clamp(10px, 6cqi - 2.4px, 30px);
+}
+
+.top-box>.content {
+    font-size: clamp(9px, 5.4cqi - 2.4px, 28px);
+}
+
+/*
+ * The two quieter tiers, relative to the tile's own text rather than to the viewport, so
+ * the hierarchy holds at every size: row headings a little smaller, row labels smaller
+ * again.
+ */
 .top-box .top_box_info_text_head {
-    font-size: clamp(8px, min(1.3vh, 0.82vw), 16px);
+    font-size: 0.86em;
 }
 
 .top-box .top_box_info_text {
-    font-size: clamp(7px, min(1.1vh, 0.7vw), 14px);
+    font-size: 0.74em;
+}
+
+/*
+ * Vertical spacing inside a tile is proportional to the tile's own text; only the frame
+ * (the tile's margin and padding) stays fixed.
+ *
+ * It used to be fixed throughout -- 10px for the header's padding, 10px for the
+ * content's, 10px on top of the table -- and on a 16:9 screen that overhead was most of
+ * the tile. At 1600x900 a tile is 160px tall and 90px of it was padding, so the text had
+ * to fit 60px however much width it had, and the height rule below held the row to 11px
+ * where the width allowed 17px. Proportional spacing spends the tile's height on text
+ * and its padding in the same ratio at every screen size.
+ *
+ * Horizontal padding stays at 10px: that side is not short of room, and the header's
+ * chips are positioned against it.
+ */
+.top-box>.header {
+    padding: 0.5em 10px;
+}
+
+.top-box>.content {
+    padding: 0.5em 10px;
+}
+
+.top-box .content table {
+    padding-top: 0.4em;
+}
+
+/*
+ * The chips ride the middle of the header rather than sitting 10px from its top.
+ *
+ * 10px was safe while the header's padding was a fixed 10px too, so the header could
+ * never be shorter than a chip. With proportional padding it can: at 1280x720 the header
+ * is 21px tall and a 16px chip pinned 10px down hung 5px out the bottom of it.
+ */
+.top-box>.header .header_notification {
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+/*
+ * Side by side, the row is a fixed 20% of the viewport height, so the text has to fit
+ * that as well: at 1280x720 a tile has room for about 10px of text however wide it is,
+ * and the width rule above would spend 13px. Measured the same way as the width, a tile
+ * stops fitting its own height at `0.0177 * H - 2.1px`, and the rule sits just under it.
+ *
+ * Affine again, but only just: with the spacing inside a tile proportional (see above),
+ * the only part of its height that does not scale with the text is the 20px of margin
+ * around it. Before that it was 90px, and this term read `0.0254 * H - 11.3px` -- a
+ * third of the row's height on a 16:9 screen, which is what used to hold the text there
+ * so far below what its width allowed.
+ *
+ * Below the phone breakpoint the tiles stack and the row grows to fit its content, so
+ * there is no height to fit and this does not apply.
+ */
+@media (min-width: 769px) {
+    .top-box>.header {
+        font-size: clamp(10px, min(6cqi - 2.4px, 1.75vh - 2.4px), 30px);
+    }
+
+    .top-box>.content {
+        font-size: clamp(9px, min(5.4cqi - 2.4px, 1.75vh - 2.4px), 28px);
+    }
 }
 
 /*
  * Managed loads is a summary tile, not a full one -- a name and a state per load, with
  * the detail behind the overlay -- but it sits in a row of four full tiles, and a
  * narrower fifth one read as unfinished next to them. So it has no width rule of its
- * own: it takes the same flex:1 share as every other .top-box.
+ * own: it takes the same flex:1 share as every other .top-box, and nothing has to be
+ * compensated for it. The row's text is sized from each tile's own width (see .top-box
+ * above), so a fifth share makes every tile's text a fifth smaller and leaves no label
+ * any closer to wrapping than it was with four.
  *
- * It used to be capped narrower than its neighbours, because five equal shares are four
- * fifths of the width their labels were sized for and they started wrapping. That is
- * paid for out of the row's font size instead. Each width term above is scaled to match
- * the narrower share, which is what keeps Battery State and Statistics on one line each
- * -- "Avg AC Charging Price" at 1280px wide, "Dynamic Max AC+DC Charge Power" at 1680px.
- * The row-label term is scaled harder than 4/5 for that second one: it is the longest
- * label on the row and only just fitted at four tiles.
+ * What it does need is a header of its own, below.
  *
- * The height terms and the floors are untouched, so on a screen where height is the
- * tighter dimension nothing about the row changed. Below the phone breakpoint the tiles
- * stack one per row and there is no width to share, so the rules are scoped out of it --
- * they are more specific than the media query's own .top-box rule and would otherwise
- * win there.
- */
-@media (min-width: 769px) {
-    .top-boxes.has-managed-loads .top-box {
-        font-size: clamp(10px, min(1.5vh, 0.76vw), 18px);
-    }
-
-    .top-boxes.has-managed-loads .top-box .top_box_info_text_head {
-        font-size: clamp(8px, min(1.3vh, 0.65vw), 16px);
-    }
-
-    .top-boxes.has-managed-loads .top-box .top_box_info_text {
-        font-size: clamp(7px, min(1.1vh, 0.5vw), 14px);
-    }
-}
-
-/*
  * The chip is flush with the right edge of the header, the same 10px in as every other
  * tile's, and the title is centred on the tile -- but here the two are laid out in a
  * three-column grid rather than one absolutely over the other.
@@ -224,6 +309,9 @@ body {
     position: static;
     justify-self: end;
     white-space: nowrap;
+    /* A grid item, so it is already centred by align-items and the nudge that centres
+       the absolutely positioned chips would lift it half its height out of the row. */
+    transform: none;
 }
 
 /* One row per load: the name takes what is left after the state, and is clipped rather
@@ -354,17 +442,11 @@ th {
         height: auto;
     }
 
+    /* Stacked, so the tile is as tall as its content. The text is sized from the tile's
+       width like everywhere else -- full-screen width here, which is why a phone gets
+       larger text than a 1280px desktop where five tiles share the row. */
     .top-box {
         height: auto;
-        font-size: 0.73em;
-    }
-
-    .top-box>.header {
-        font-size: 1.5em;
-    }
-
-    .top-box>.content {
-        font-size: 1.2em;
     }
 
     /* .left-box > .header {
