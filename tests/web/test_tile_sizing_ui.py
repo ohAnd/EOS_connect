@@ -47,7 +47,6 @@ VIEWPORTS = [
 # each, which no font size fits -- see test_the_row_cannot_be_shared_below_250px_a_tile.
 TABLET_BAND = [
     ("1024x768", 1024, 768),
-    ("tablet-landscape", 1180, 820),
     ("tablet-portrait", 820, 1180),
 ]
 
@@ -179,10 +178,17 @@ def test_the_text_is_nearly_as_large_as_the_tile_allows(page, label, width, heig
     """
     The tiles should be reading the room they have, not a fixed fraction of the viewport.
 
-    The rendered size is compared against the largest that still fits, measured in the
-    browser: within 12% of the ceiling, which is about the margin the CSS keeps for a
-    font wider than the one this harness renders with -- or at MAX_CONTENT_PX, where the
-    tile has room to spare and the clamp deliberately stops.
+    A loose bound, deliberately. The ceiling is measured in whatever font the machine
+    running the tests falls back to -- the stylesheet asks for Segoe UI, which exists on
+    none of them -- and that moves it by more than 10%: the same viewport measures 13.6px
+    against DejaVu Sans and 15.2px on a GitHub runner, while the CSS produces one size for
+    both. The coefficients are fitted to the widest of those, so a narrower font shows up
+    here as headroom that cannot be claimed without wrapping somewhere else.
+
+    So this catches a size that is wrong by a lot, which is what it was written for: the
+    viewport-scaled sizing it replaced scored 53-59% of the ceiling. For the exact
+    coefficients see test_the_size_is_the_one_the_stylesheet_documents, which does not
+    depend on a font at all.
     """
     _show(page, width, height)
 
@@ -190,10 +196,66 @@ def test_the_text_is_nearly_as_large_as_the_tile_allows(page, label, width, heig
     ceiling = _ceiling(page)
     assert ceiling is not None, f"{label}: no font fits at all"
     target = min(ceiling, MAX_CONTENT_PX)
-    assert actual >= 0.88 * target, (
+    assert actual >= 0.75 * target, (
         f"{label}: text is {actual:.1f}px where {ceiling:.1f}px fits "
         f"({100 * actual / ceiling:.0f}% of what the tile allows)"
     )
+
+
+# The clamps in style.css, as (floor, cqi coefficient, px offset, cap). The height term
+# is 1.75vh - 2.4px for both, and applies only in the side-by-side layout.
+CONTENT_CLAMP = (9.0, 5.4, 2.4, 28.0)
+HEADER_CLAMP = (10.0, 6.0, 2.4, 30.0)
+HEIGHT_TERM = (1.75, 2.4)
+STACKED_BELOW = 769
+
+
+def _expected(clamp, tile_width, viewport_height):
+    floor, cqi, offset, cap = clamp
+    size = cqi * tile_width / 100 - offset
+    if viewport_height is not None:
+        vh, vh_offset = HEIGHT_TERM
+        size = min(size, vh * viewport_height / 100 - vh_offset)
+    return min(max(size, floor), cap)
+
+
+@pytest.mark.parametrize("label,width,height", VIEWPORTS)
+@pytest.mark.parametrize("tiles", [4, 5], ids=["four-tiles", "five-tiles"])
+def test_the_size_is_the_one_the_stylesheet_documents(page, label, width, height, tiles):
+    """
+    The text is a function of the tile's own inline size, and of the row's height where
+    the tiles share one -- not of the viewport's width, and not of how many tiles there
+    are except through the width each one gets.
+
+    No font is involved in this, so it says the same thing on every machine. It is the
+    test that fails if the sizing goes back to viewport units, if a per-tile-count
+    correction reappears, or if a coefficient is edited without the stylesheet's
+    measurements being redone.
+    """
+    _show(page, width, height, loads=TWO_LOADS if tiles == 5 else [])
+
+    measured = page.evaluate(
+        """() => {
+            const box = [...document.querySelectorAll('.top-box')].find(b => b.offsetParent);
+            const cs = getComputedStyle(box);
+            return {
+                tile: box.getBoundingClientRect().width
+                    - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+                header: parseFloat(getComputedStyle(box.querySelector('.header')).fontSize),
+                content: parseFloat(getComputedStyle(box.querySelector('.content')).fontSize),
+            };
+        }"""
+    )
+    # Stacked one per row, the tiles are as tall as their content and the height term is
+    # scoped out of the stylesheet.
+    row_height = height if width >= STACKED_BELOW else None
+
+    for tier, clamp in (("content", CONTENT_CLAMP), ("header", HEADER_CLAMP)):
+        expected = _expected(clamp, measured["tile"], row_height)
+        assert abs(measured[tier] - expected) < 0.6, (
+            f"{label} {tiles} tiles: {tier} is {measured[tier]:.2f}px, "
+            f"expected {expected:.2f}px for a {measured['tile']:.0f}px tile"
+        )
 
 
 @pytest.mark.parametrize("label,width,height", VIEWPORTS)
