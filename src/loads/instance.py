@@ -24,7 +24,12 @@ from .contribution import (
     LoadContribution,
 )
 from .gate import ReleaseGate
-from .planner import PlanOptions, plan_contingent
+from .planner import (
+    NON_BLOCKING_REASONS,
+    SLOT_PLANNED,
+    PlanOptions,
+    plan_contingent,
+)
 from .presets import CONTINGENT_TYPES, EXTERNAL_TYPES, apply_defaults, build_model
 
 logger = logging.getLogger("__main__")
@@ -245,6 +250,42 @@ class ManagedLoad:
 
     # -- reporting ------------------------------------------------------------------------
 
+    def plan_summary(self):
+        """
+        What became of every slot, and which setting is holding the load back.
+
+        A shortfall used to be reported as "widen its window or raise the daily cap",
+        which is wrong advice whenever something else did the excluding - a price cap
+        can rule out four fifths of a horizon while the window stands wide open.
+        """
+        reasons = (self.last_demand.slot_reasons if self.last_demand else None) or []
+        if not reasons:
+            return None
+
+        counts = {}
+        for reason in reasons:
+            counts[reason] = counts.get(reason, 0) + 1
+
+        # Only a shortfall has something holding it back. A slot can be skipped for the
+        # daily cap and the demand still be met the next day, and reporting that as a
+        # limit would send the user to loosen a setting that cost them nothing.
+        needed = self.last_demand.total_wh
+        covered = sum(self.last_plan or []) >= needed - 1.0
+
+        blocking = [] if covered else [
+            (count, reason) for reason, count in counts.items()
+            if reason not in NON_BLOCKING_REASONS and count
+        ]
+        blocking.sort(reverse=True)
+        return {
+            "slots": len(reasons),
+            "planned": counts.get(SLOT_PLANNED, 0),
+            "counts": counts,
+            # The one worth naming to the user; None when nothing was in the way.
+            "limited_by": blocking[0][1] if blocking else None,
+            "limited_slots": blocking[0][0] if blocking else 0,
+        }
+
     def status(self):
         """Everything the REST API and the dashboard show for this instance."""
         demand = self.last_demand
@@ -263,6 +304,10 @@ class ManagedLoad:
         }
         if demand:
             payload["detail"] = demand.detail
+            payload["plan_reasons"] = list(demand.slot_reasons or [])
+        summary = self.plan_summary()
+        if summary:
+            payload["plan_summary"] = summary
         if self.gate is not None:
             payload["release"] = self.last_release or self.gate.status()
         return payload

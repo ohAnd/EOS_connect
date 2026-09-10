@@ -940,3 +940,62 @@ def test_a_load_with_no_site_history_reports_no_bias(make_manager):
     manager = make_manager([{"id": "heating", "type": TYPE_EXTERNAL_PROFILE}])
     manager.run_cycle()
     assert "ambient_bias" not in manager.status()["loads"][0]
+
+
+# --- naming what holds a load back ------------------------------------------------------
+
+def test_a_price_cap_is_named_as_the_limit(make_manager, installation):
+    """
+    The real case: a 22 ct/kWh cap ruled out four fifths of the horizon while the
+    window stood open from 06:00 to 23:00, and the page said "widen its window".
+    """
+    manager = make_manager([dict(POOL, max_price_ct_kwh=5.0)])
+    installation.prices = [0.0009] * 48          # 90 ct/kWh everywhere
+    installation.prices[20] = 0.00001
+    _run(manager, installation, water_c=22.0)
+
+    summary = manager.instance("pool").plan_summary()
+    assert summary["limited_by"] == "above price cap"
+    assert summary["limited_slots"] > 20
+
+
+def test_the_allowed_window_is_named_when_it_is_the_limit(make_manager, installation):
+    manager = make_manager([dict(POOL, window_start=10, window_end=12)])
+    _run(manager, installation, water_c=20.0)
+
+    summary = manager.instance("pool").plan_summary()
+    assert summary["limited_by"] == "outside allowed hours"
+
+
+def test_a_cold_snap_is_named_rather_than_the_window(make_manager, installation):
+    """Distinct settings, distinct advice."""
+    manager = make_manager([dict(POOL, min_ambient_temp_c=12.0)])
+    installation.temperature = [4.0] * 48
+    _run(manager, installation, water_c=20.0)
+
+    summary = manager.instance("pool").plan_summary()
+    assert summary["limited_by"] == "too cold to run"
+
+
+def test_nothing_is_blamed_when_the_demand_is_covered(make_manager, installation):
+    """
+    A slot can be skipped for the daily cap and the demand still be met the next day.
+    Reporting that would send the user to loosen a setting that cost them nothing.
+    """
+    manager = make_manager([POOL])
+    installation.temperature = [27.0] * 48        # barely any standing loss
+    _run(manager, installation, water_c=27.9)
+
+    load = manager.instance("pool")
+    assert sum(load.last_plan) >= load.last_demand.total_wh - 1.0
+    assert load.plan_summary()["limited_by"] is None
+
+
+def test_the_summary_reaches_the_api(make_manager, installation):
+    manager = make_manager([dict(POOL, max_price_ct_kwh=5.0)])
+    installation.prices = [0.0009] * 48
+    _run(manager, installation, water_c=22.0)
+
+    load = manager.status()["loads"][0]
+    assert load["plan_summary"]["limited_by"] == "above price cap"
+    assert len(load["plan_reasons"]) == 48

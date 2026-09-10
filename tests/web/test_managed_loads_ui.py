@@ -252,6 +252,180 @@ def test_coverage_says_whether_the_plan_is_enough(page):
     assert "covers" in content or "fully covered" in content
 
 
+def test_a_shortfall_names_the_setting_behind_it(page):
+    """
+    It used to read "widen its window or raise the daily cap" whatever the cause. On a
+    real install a 22 ct/kWh cap ruled out four fifths of the horizon while the window
+    stood open from 06:00 to 23:00, so the page sent the user to the wrong setting.
+    """
+    _open_overlay(page)
+    page.evaluate(
+        """() => {
+            const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
+                reason: 'below target', energy_needed_wh: 24000, planned_wh: 4800,
+                plan: [], plan_reasons: [], model: {}, release: null, detail: {},
+                plan_summary: {slots: 192, planned: 12, limited_by: 'above price cap',
+                               limited_slots: 150, counts: {}}};
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadCard(load, 900, 0);
+        }"""
+    )
+    shown = page.text_content("#full_screen_content")
+    assert "above price cap" in shown
+    assert "150 of 192" in shown
+    assert "raise or clear the price cap" in shown
+    assert "widen the allowed window" not in shown
+
+
+def test_each_limit_suggests_its_own_remedy(page):
+    _open_overlay(page)
+    for limit, remedy in [
+        ("outside allowed hours", "widen the allowed window"),
+        ("too cold to run", "lower the minimum outside temperature"),
+        ("daily runtime cap", "raise the daily runtime cap"),
+    ]:
+        page.evaluate(
+            """(limit) => {
+                const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
+                    reason: 'below target', energy_needed_wh: 24000, planned_wh: 4800,
+                    plan: [], plan_reasons: [], model: {}, release: null, detail: {},
+                    plan_summary: {slots: 192, planned: 12, limited_by: limit,
+                                   limited_slots: 100, counts: {}}};
+                document.getElementById('full_screen_content').innerHTML =
+                    controlsManager._managedLoadCard(load, 900, 0);
+            }""",
+            limit,
+        )
+        assert remedy in page.text_content("#full_screen_content")
+
+
+def test_a_covered_plan_blames_nothing(page):
+    _open_overlay(page)
+    page.evaluate(
+        """() => {
+            const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
+                reason: 'covering losses', energy_needed_wh: 5000, planned_wh: 5000,
+                plan: [], plan_reasons: [], model: {}, release: null, detail: {},
+                plan_summary: {slots: 192, planned: 40, limited_by: null,
+                               limited_slots: 0, counts: {}}};
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadCard(load, 900, 0);
+        }"""
+    )
+    shown = page.text_content("#full_screen_content")
+    assert "fully covered" in shown
+    assert "Limited by" not in shown
+
+
+def test_a_bar_says_why_it_is_empty(page):
+    """The strip already had tooltips; they said "not planned" and nothing more."""
+    _open_overlay(page)
+    page.evaluate(
+        """() => {
+            const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
+                reason: 'below target', energy_needed_wh: 24000, planned_wh: 1600,
+                plan: [1600, 0, 0, 0], plan_reasons: ['planned', 'above price cap',
+                    'outside allowed hours', 'too cold to run'],
+                model: {}, release: null, detail: {}};
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadCard(load, 3600, 0);
+        }"""
+    )
+    tips = page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content div[title]')]
+            .map(e => e.getAttribute('title'))"""
+    )
+    assert any("above price cap" in t for t in tips)
+    assert any("too cold to run" in t for t in tips)
+
+
+def _render_strip(page, plan, reasons):
+    page.evaluate(
+        """([plan, reasons]) => {
+            const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
+                reason: 'below target', energy_needed_wh: 9000, planned_wh: 1600,
+                plan: plan, plan_reasons: reasons, model: {}, release: null, detail: {}};
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadCard(load, 3600, 0);
+        }""",
+        [plan, reasons],
+    )
+
+
+def _bar_colours(page):
+    return page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content div[title]')]
+            .map(e => getComputedStyle(e).backgroundColor)"""
+    )
+
+
+def test_the_strip_colours_a_capped_slot_differently_from_a_disallowed_one(page):
+    """
+    Blue says it will run. A slot that could have run but was rationed, and one that
+    was never allowed to, are different problems with different remedies -- so they
+    cannot look the same as each other or as an empty one.
+    """
+    _open_overlay(page)
+    _render_strip(page,
+                  [1600, 0, 0, 0],
+                  ['planned', 'above price cap', 'too cold to run', 'not needed'])
+
+    colours = _bar_colours(page)
+    assert len(set(colours)) == 4, colours
+
+
+def test_every_capped_reason_shares_one_colour(page):
+    """Three hues is the safe limit when any two states can sit side by side."""
+    _open_overlay(page)
+    _render_strip(page,
+                  [0, 0, 0],
+                  ['above price cap', 'daily runtime cap', 'shared power budget'])
+    assert len(set(_bar_colours(page))) == 1
+
+
+def test_every_not_allowed_reason_shares_one_colour(page):
+    _open_overlay(page)
+    _render_strip(page,
+                  [0, 0, 0, 0],
+                  ['outside allowed hours', 'out of season', 'too cold to run',
+                   'after deadline'])
+    assert len(set(_bar_colours(page))) == 1
+
+
+def test_only_the_running_bars_carry_height(page):
+    """A colour must never be readable as a quantity; only the blue bars are."""
+    _open_overlay(page)
+    _render_strip(page, [1600, 800, 0, 0],
+                  ['planned', 'planned', 'above price cap', 'too cold to run'])
+
+    heights = page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content div[title]')]
+            .map(e => e.getBoundingClientRect().height)"""
+    )
+    assert heights[0] > heights[1] > heights[2]      # energy orders the blue bars
+    assert abs(heights[2] - heights[3]) < 1.0        # both blocked bands, same height
+
+
+def test_the_strip_names_the_states_it_shows(page):
+    """Identity is never colour alone."""
+    _open_overlay(page)
+    _render_strip(page, [1600, 0, 0],
+                  ['planned', 'above price cap', 'too cold to run'])
+
+    shown = page.text_content("#full_screen_content")
+    assert "Will run" in shown
+    assert "Capped" in shown
+    assert "Not allowed then" in shown
+
+
+def test_a_state_that_is_absent_is_not_in_the_legend(page):
+    _open_overlay(page)
+    _render_strip(page, [1600, 0], ['planned', 'above price cap'])
+    shown = page.text_content("#full_screen_content")
+    assert "Capped" in shown
+    assert "Not allowed then" not in shown
+
+
 def test_the_ambient_input_and_its_provenance_are_shown(page):
     """
     A prediction standing on a guessed constant looks exactly like one standing on a
@@ -506,8 +680,11 @@ def test_hovering_a_bar_gives_the_time_the_energy_and_the_running_total(page):
     # A time range, not just an index.
     assert "\u2013" in planned[0] or "-" in planned[0] or ":" in planned[0]
 
-    idle = [t for t in tips if "not planned" in t]
-    assert idle, "idle slots should say so rather than carry no tooltip"
+    # An idle slot names why it is idle. It used to say only "not planned", which is
+    # the one thing the reader could already see from the bar being empty.
+    idle = [t for t in tips if "Wh planned" not in t]
+    assert idle, "idle slots should carry a tooltip too"
+    assert all(t.count("\u00b7") >= 1 for t in idle), idle[:3]
 
 
 def test_the_current_slot_is_marked_once_per_load(page):
@@ -533,3 +710,23 @@ def test_the_menu_entry_opens_the_same_overlay(page):
     page.evaluate("() => showManagedLoadsMenu()")
     page.wait_for_selector("#full_screen_overlay", state="visible")
     assert "Managed Loads" in page.text_content("#full_screen_header")
+
+
+def test_a_wholly_blocked_plan_still_draws_its_strip(page):
+    """
+    The strip used to be skipped whenever nothing was planned -- hiding it in the one
+    case where it explains the most: a price cap that ruled out the entire horizon.
+    """
+    _open_overlay(page)
+    _render_strip(page, [0, 0, 0, 0],
+                  ['above price cap'] * 4)
+
+    assert len(_bar_colours(page)) == 4
+    assert "Capped" in page.text_content("#full_screen_content")
+
+
+def test_a_plan_with_nothing_to_say_draws_no_strip(page):
+    """An idle, satisfied load should not sprout an empty chart."""
+    _open_overlay(page)
+    _render_strip(page, [0, 0, 0], ['not needed', 'past', 'not needed'])
+    assert _bar_colours(page) == []
