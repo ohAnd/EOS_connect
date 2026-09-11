@@ -23,7 +23,7 @@ from tests.web.test_managed_loads_ui import TWO_LOADS
 # Sizes people actually use, and the aspect ratios that pull in different directions:
 # 16:9 is short, so the row's height binds; 4:3 and 16:10 are tall, so the tile's width
 # does; a phone is one tile per row and neither.
-VIEWPORTS = [
+SIDE_BY_SIDE = [
     ("1280x720", 1280, 720),
     ("1280x800", 1280, 800),
     ("1280x1024", 1280, 1024),
@@ -35,13 +35,20 @@ VIEWPORTS = [
     ("1920x1080", 1920, 1080),
     ("2560x1440", 2560, 1440),
     ("3440x1440", 3440, 1440),
+]
+
+# Below the breakpoint the tiles stack one per row, and take their sizes from the boxes
+# they then sit above rather than from their own width. 768 is inside the phone media
+# query, so a 4:3 tablet in portrait stacks like one.
+STACKED = [
     ("phone-large", 430, 932),
     ("phone", 390, 844),
     ("phone-small", 360, 800),
     ("phone-se", 320, 568),
-    # 768 is inside the phone media query, so a 4:3 tablet in portrait stacks like one.
     ("tablet-portrait-4-3", 768, 1024),
 ]
+
+VIEWPORTS = SIDE_BY_SIDE + STACKED
 
 # Between the phone breakpoint and about 1300px, five tiles side by side get under 250px
 # each, which no font size fits -- see test_the_row_cannot_be_shared_below_250px_a_tile.
@@ -173,10 +180,13 @@ def test_the_baseline_fits_too(page, label, width, height):
     assert fits["scrolling"] == [], f"{label}: scrolling {fits['scrolling']}"
 
 
-@pytest.mark.parametrize("label,width,height", VIEWPORTS)
+@pytest.mark.parametrize("label,width,height", SIDE_BY_SIDE)
 def test_the_text_is_nearly_as_large_as_the_tile_allows(page, label, width, height):
     """
-    The tiles should be reading the room they have, not a fixed fraction of the viewport.
+    Sharing the row, the tiles should be reading the room they have rather than a fixed
+    fraction of the viewport. Stacked they should not -- see the mobile test below, where
+    matching the boxes above and below matters more than filling the tile -- so this asks
+    about the side-by-side layout only.
 
     A loose bound, deliberately. The ceiling is measured in whatever font the machine
     running the tests falls back to -- the stylesheet asks for Segoe UI, which exists on
@@ -202,21 +212,37 @@ def test_the_text_is_nearly_as_large_as_the_tile_allows(page, label, width, heig
     )
 
 
-# The clamps in style.css, as (floor, cqi coefficient, px offset, cap). The height term
-# is 1.75vh - 2.4px for both, and applies only in the side-by-side layout.
+# The clamps in style.css, as (floor, cqi coefficient, px offset, cap), and the height
+# term they share.
 CONTENT_CLAMP = (9.0, 5.4, 2.4, 28.0)
 HEADER_CLAMP = (10.0, 6.0, 2.4, 30.0)
 HEIGHT_TERM = (1.75, 2.4)
-STACKED_BELOW = 769
+
+# The stacked layout's sizes, in ems of the body: a header the size every other box's
+# header inherits, and content matching the Schedule table (0.35em of .right-box's 1.2em
+# content) including its 0.9vh term.
+STACKED_HEADER_EM = 1.0
+STACKED_CONTENT_EM = 0.42
+STACKED_CONTENT_VH = 0.9
 
 
-def _expected(clamp, tile_width, viewport_height):
+def _expected_side_by_side(clamp, tile_width, viewport_height):
     floor, cqi, offset, cap = clamp
-    size = cqi * tile_width / 100 - offset
-    if viewport_height is not None:
-        vh, vh_offset = HEIGHT_TERM
-        size = min(size, vh * viewport_height / 100 - vh_offset)
+    vh, vh_offset = HEIGHT_TERM
+    size = min(cqi * tile_width / 100 - offset, vh * viewport_height / 100 - vh_offset)
     return min(max(size, floor), cap)
+
+
+# ...capped at what a stacked tile can carry with one size inside it.
+STACKED_CONTENT_CQI = (4.7, 1.9)
+
+
+def _expected_stacked(tier, body_px, viewport_height, tile_width):
+    if tier == "header":
+        return STACKED_HEADER_EM * body_px
+    schedule = STACKED_CONTENT_EM * body_px + STACKED_CONTENT_VH * viewport_height / 100
+    cqi, offset = STACKED_CONTENT_CQI
+    return min(schedule, cqi * tile_width / 100 - offset)
 
 
 @pytest.mark.parametrize("label,width,height", VIEWPORTS)
@@ -243,19 +269,77 @@ def test_the_size_is_the_one_the_stylesheet_documents(page, label, width, height
                     - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
                 header: parseFloat(getComputedStyle(box.querySelector('.header')).fontSize),
                 content: parseFloat(getComputedStyle(box.querySelector('.content')).fontSize),
+                body: parseFloat(getComputedStyle(document.body).fontSize),
             };
         }"""
     )
-    # Stacked one per row, the tiles are as tall as their content and the height term is
-    # scoped out of the stylesheet.
-    row_height = height if width >= STACKED_BELOW else None
+    stacked = (label, width, height) in STACKED
 
     for tier, clamp in (("content", CONTENT_CLAMP), ("header", HEADER_CLAMP)):
-        expected = _expected(clamp, measured["tile"], row_height)
+        if stacked:
+            expected = _expected_stacked(
+                tier, measured["body"], height, measured["tile"])
+        else:
+            expected = _expected_side_by_side(clamp, measured["tile"], height)
         assert abs(measured[tier] - expected) < 0.6, (
             f"{label} {tiles} tiles: {tier} is {measured[tier]:.2f}px, "
             f"expected {expected:.2f}px for a {measured['tile']:.0f}px tile"
         )
+
+
+@pytest.mark.parametrize("label,width,height", STACKED)
+def test_a_stacked_tile_is_sized_like_the_boxes_it_stacks_with(page, label, width, height):
+    """
+    Stacked, the tiles are one column with Optimization and Schedule, and a column of
+    boxes should read as one column. Sized from its own width a tile had a heading 16%
+    larger than every other box's and three tiers of body text where the others have
+    one, which is what is being ruled out here:
+
+      * every heading on the page is one size -- the tiles', Optimization's, Schedule's;
+      * everything inside a tile is one size, tiers included;
+      * and that size is the Schedule table's, which is the only other table on the page.
+
+    The last of those is asked as "no larger, and not much smaller": the size is capped
+    at what the tile can carry, which on a 320px phone is 0.8px under the Schedule's, and
+    on a machine whose fallback font is narrower than this one's is not a cap at all.
+    Standing out by being larger is the thing being ruled out.
+    """
+    _show(page, width, height)
+
+    sizes = page.evaluate(
+        """() => {
+            const px = (sel) => {
+                const el = document.querySelector(sel);
+                return el ? parseFloat(getComputedStyle(el).fontSize) : null;
+            };
+            return {
+                tile_header: px('.top-box > .header'),
+                left_header: px('.left-box > .header'),
+                right_header: px('.right-box > .header'),
+                tile_content: px('.top-box > .content'),
+                tile_heading_tier: px('.top-box .top_box_info_text_head'),
+                tile_label_tier: px('.top-box .top_box_info_text'),
+                schedule_cell: px('.right-box .table'),
+            };
+        }"""
+    )
+    assert None not in sizes.values(), f"{label}: nothing measured for {sizes}"
+
+    headers = (sizes["tile_header"], sizes["left_header"], sizes["right_header"])
+    assert max(headers) - min(headers) < 0.6, f"{label}: headings differ, {sizes}"
+
+    inside = (sizes["tile_content"], sizes["tile_heading_tier"], sizes["tile_label_tier"])
+    assert max(inside) - min(inside) < 0.6, f"{label}: a tile has tiers, {sizes}"
+
+    tile, schedule = sizes["tile_content"], sizes["schedule_cell"]
+    assert tile <= schedule + 0.6, (
+        f"{label}: tile text is {tile:.1f}px, larger than the Schedule table's "
+        f"{schedule:.1f}px"
+    )
+    assert tile >= 0.9 * schedule, (
+        f"{label}: tile text is {tile:.1f}px against the Schedule table's "
+        f"{schedule:.1f}px -- more than the narrow-phone cap accounts for"
+    )
 
 
 @pytest.mark.parametrize("label,width,height", VIEWPORTS)

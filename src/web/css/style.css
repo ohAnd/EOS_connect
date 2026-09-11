@@ -442,11 +442,56 @@ th {
         height: auto;
     }
 
-    /* Stacked, so the tile is as tall as its content. The text is sized from the tile's
-       width like everywhere else -- full-screen width here, which is why a phone gets
-       larger text than a 1280px desktop where five tiles share the row. */
+    /* Stacked, so the tile is as tall as its content. */
     .top-box {
         height: auto;
+    }
+
+    /*
+     * Stacked, a tile also sits directly above Optimization and Schedule, so it takes
+     * its sizes from those rather than from its own width.
+     *
+     * Sizing text from the tile's width is for the side-by-side row, where five tiles
+     * share it and each one has a different amount of room. Here every box is the full
+     * width of the screen, so the width says nothing, and reading it anyway made the
+     * tiles a size of their own -- an 18.6px heading over three tiers of body text,
+     * above a 16px heading and one 14.3px tier in every box below them.
+     */
+    .top-box>.header {
+        /* What .left-box and .right-box headers inherit from the body. */
+        font-size: 1em;
+    }
+
+    .top-box>.content {
+        /* What the Schedule table works out to: 0.35em of .right-box's 1.2em content,
+           plus the same 0.9vh term, so the two track each other on any phone. */
+        font-size: calc(0.42em + 0.9vh);
+    }
+
+    /*
+     * ...but never more than the tile can carry. With one size inside a tile instead of
+     * three, the widest row -- "Needed Energy" against "12.4 kWh / 3.21 EUR" -- is 35%
+     * wider than it was, because the label is no longer the quiet tier. Measured the
+     * same way as the side-by-side row, a stacked tile fits `0.0487 * W - 1.93px`, which
+     * the size above exceeds by a fraction of a pixel on a 360px phone and by one pixel
+     * on a 320px one.
+     *
+     * So the Schedule's size on any phone 390px and wider, which is all of the common
+     * ones, and up to 0.8px under it on the two narrowest -- below the eye's notice,
+     * where the alternative is a label on two lines.
+     */
+    .top-box>.content {
+        font-size: min(0.42em + 0.9vh, 4.7cqi - 1.9px);
+    }
+
+    /*
+     * One size inside a tile. The quieter tiers exist to fit a label into a tile that is
+     * a fifth of a row; a tile with the whole screen to itself does not need them, and
+     * three sizes in a stacked column read as three different kinds of box.
+     */
+    .top-box .top_box_info_text_head,
+    .top-box .top_box_info_text {
+        font-size: 1em;
     }
 
     /* .left-box > .header {
