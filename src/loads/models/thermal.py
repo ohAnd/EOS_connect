@@ -115,6 +115,7 @@ class ThermalStorageModel(BaseDemandModel):
             loss_coefficient=self.config.get("heat_loss_w_per_m2_k", 25.0),
             cop_nominal=self.config.get("cop_nominal", 4.5),
             air_coefficient=self.config.get("cop_air_coeff", 0.0),
+            cover_loss_factor=self.cover_loss_factor,
         )
         self.cover_habit = CoverHabit()
 
@@ -155,6 +156,7 @@ class ThermalStorageModel(BaseDemandModel):
             loss_coefficient=self.config.get("heat_loss_w_per_m2_k", 25.0),
             cop_nominal=self.config.get("cop_nominal", 4.5),
             air_coefficient=self.config.get("cop_air_coeff", 0.0),
+            cover_loss_factor=self.cover_loss_factor,
         )
         self.cover_habit.reset()
 
@@ -167,14 +169,31 @@ class ThermalStorageModel(BaseDemandModel):
             return from_sensor
         return _as_float(self.config.get("target_temp"), 0.0)
 
-    def cover_factor(self, readings):
-        """A closed cover cuts the losses; anything unreadable means "open"."""
+    def is_covered(self, readings):
+        """Whether the cover reads closed; anything unreadable means "open"."""
         raw = readings.get("cover_sensor")
         if raw is None:
-            return 1.0
+            return False
         text = str(raw).strip().lower()
-        closed = text in ("on", "true", "closed", "1", "yes", "home")
-        return self.cover_loss_factor if closed else 1.0
+        return text in ("on", "true", "closed", "1", "yes", "home")
+
+    def effective_cover_factor(self):
+        """
+        How much a closed cover actually cuts the losses.
+
+        The configured value is the cold start; what the calibrator has since measured
+        replaces it. A cover is the one part of this model the user has no way to look
+        up - the number on a supplier's data sheet is for still air over new material -
+        so guessing it once and holding it forever put its whole error into the loss
+        coefficient instead.
+        """
+        if self.cover_loss_factor >= 1.0:
+            return 1.0
+        return self.calibrator.cover_loss_factor
+
+    def cover_factor(self, readings):
+        """A closed cover cuts the losses; anything unreadable means "open"."""
+        return self.effective_cover_factor() if self.is_covered(readings) else 1.0
 
     def is_running(self, readings):
         """Whether the appliance is drawing more than standby power right now."""
@@ -335,7 +354,7 @@ class ThermalStorageModel(BaseDemandModel):
             if probability is None:
                 series.append(measured)
             else:
-                series.append(1.0 - probability * (1.0 - self.cover_loss_factor))
+                series.append(1.0 - probability * (1.0 - self.effective_cover_factor()))
         return series
 
     def _horizon_losses(self, ctx, target, cover, feasible):
@@ -393,13 +412,16 @@ class ThermalStorageModel(BaseDemandModel):
         """Note whether the store was covered, for the per-hour pattern."""
         if self.cover_loss_factor >= 1.0:
             return
-        factor = sample.get("cover_factor")
-        if factor is None:
-            return
-        try:
-            self.cover_habit.observe(sample["timestamp"], float(factor) < 1.0)
-        except (TypeError, ValueError):
-            pass
+        covered = sample.get("covered")
+        if covered is None:
+            factor = sample.get("cover_factor")
+            if factor is None:
+                return
+            try:
+                covered = float(factor) < 1.0
+            except (TypeError, ValueError):
+                return
+        self.cover_habit.observe(sample["timestamp"], bool(covered))
 
     def observe_history(self, samples):
         """Replay a recorded history at startup so day one is not a cold start."""

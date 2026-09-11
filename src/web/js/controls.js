@@ -955,6 +955,17 @@ class ControlsManager {
         if (!summary || !summary.limited_by) {
             return 'It cannot get enough runtime in the hours available.';
         }
+        // Naming a setting is only useful if changing it would help. When the demand is
+        // above what the appliance could deliver running flat out through every slot
+        // left, no setting closes the gap, and pointing at the one that excluded the
+        // most slots sends the user to loosen something that was never the problem.
+        if (summary.over_committed) {
+            const reach = `${((Number(summary.reachable_wh) || 0) / 1000).toFixed(1)} kWh`;
+            return `It needs more than it can deliver: <strong>${reach}</strong> is all
+                    that fits in the hours left, running without a break. No setting
+                    closes that gap &mdash; the appliance is undersized for the target,
+                    or the store is losing more heat than it is being given.`;
+        }
         const REMEDY = {
             'above price cap': 'raise or clear the price cap',
             'outside allowed hours': 'widen the allowed window',
@@ -1078,6 +1089,7 @@ class ControlsManager {
                         ? `Heat loss and efficiency measured from ${model.loss_samples || 0}
                            cooling and ${model.cop_samples || 0} heating periods.`
                         : 'Still learning &mdash; the plan is running on the values from the configuration form.'}
+                    ${this._managedLoadCoverNote(model)}
                     ${(model.fit_quality !== undefined && model.fit_quality < 0.5)
                         ? `<div style="color:#e0a030;">The readings do not fit the model
                            well &mdash; often a temperature sensor too coarse to measure
@@ -1091,6 +1103,28 @@ class ControlsManager {
                 <i class="fas fa-rotate-left"></i> Reset
             </button>
         </div>`;
+    }
+
+    /**
+     * What the calibration has worked out about the cover, if the store has one.
+     *
+     * Worth its own line because it is the one figure nobody can look up - a supplier's
+     * data sheet is for still air over new material - and because holding it at a guess
+     * is what let its error accumulate in the loss coefficient instead.
+     *
+     * @param {Object} model - The load's model status
+     * @returns {string} HTML, empty when the store has no cover
+     */
+    _managedLoadCoverNote(model) {
+        const factor = Number(model.cover_loss_factor);
+        if (!Number.isFinite(factor) || factor >= 1) {
+            return '';
+        }
+        const cut = Math.round((1 - factor) * 100);
+        return model.cover_identified
+            ? `<div>The cover measures out at ${cut}% off the heat loss.</div>`
+            : `<div>The cover is still assumed to cut the heat loss by ${cut}% &mdash;
+               it has not yet been seen both on and off for long enough to measure.</div>`;
     }
 
     /**

@@ -2372,7 +2372,12 @@ _ALL_FIELDS: list[FieldDef] = [
         default=0.35,
         section="managed_loads",
         level="standard",
-        description="Fraction of the heat loss that remains while the cover is closed",
+        description=(
+            "Fraction of the heat loss that remains while the cover is closed. A "
+            "starting point only: once the store has been seen both covered and "
+            "uncovered, this is measured from its own cooling and the measured value "
+            "is what the forecast uses. The calibration panel says which it is on."
+        ),
         hot_reload=True,
         help_url="configuration.html#managed-loads",
         validation={"min": 0.05, "max": 1.0},

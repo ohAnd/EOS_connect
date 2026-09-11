@@ -8,12 +8,22 @@ wrong in a way the user cannot diagnose.
 
 Every consecutive pair of samples is one equation of the same energy balance::
 
-    V·c·dT/dt  =  COP(T_air)·P_el  -  k·A·cover·(T_water - T_air)
-      measured         unknown                  unknown
+    V·c·dT/dt  =  COP(T_air)·P_el  -  k·A·(T_water - T_air)
+      measured         unknown              unknown
 
-and with ``COP(T_air) = a + b·T_air`` that is *linear* in the three unknowns a, b and k.
-So they are fitted together, by weighted least squares over the recorded history, rather
+and with ``COP(T_air) = a + b·T_air`` that is *linear* in the unknowns a, b and k. So
+they are fitted together, by weighted least squares over the recorded history, rather
 than one at a time.
+
+The loss coefficient is two unknowns, not one: ``k_open`` while the store is uncovered
+and ``k_closed`` while it is covered. Holding the ratio between them at a configured
+constant looked harmless and was not. A pool covered five sixths of the time gives a fit
+that is overwhelmingly about the covered state, so every error in that constant had
+nowhere to go but into ``k_open``, which then drifted upward refit after refit - 15 to
+33 W/(m²·K) over a few days on a real pool, inflating the predicted standing losses to
+60% of total demand and making the target unreachable. Both states are observed, so both
+are identifiable; the ratio is an output now, and a cold start still gets the configured
+one through the ridge.
 
 That matters more than it sounds. The obvious approach - measure the losses while the
 appliance is off, then use them to measure the COP while it is on - has a circular
@@ -79,6 +89,19 @@ LOSS_COEFFICIENT_MAX = 200.0
 # A linear COP slope beyond this is a fitting artefact, not a compressor characteristic.
 AIR_COEFFICIENT_LIMIT = 0.06
 
+# A cover cannot make a store lose heat faster than no cover, and no cover cuts losses
+# by more than this. Both ends are physical, not statistical: outside them the fit has
+# split the loss between the two states on noise rather than on evidence.
+COVER_FACTOR_MIN = 0.05
+
+# How much of the history must have been in each cover state before the two coefficients
+# mean anything separately. A pool that was covered every single window says nothing
+# about its uncovered losses, and should keep the configured guess rather than invent one.
+COVER_SPAN_MIN = 0.05
+
+# How many unknowns the fit carries: COP intercept, COP slope, open loss, covered loss.
+UNKNOWNS = 4
+
 # Rows retained for the fit, and what a settled history looks like. Far fewer rows than
 # there are samples now that a window spans a measurable change rather than one cycle,
 # so the target is lower to match: a store cycling normally produces a handful a day.
@@ -106,37 +129,70 @@ def _clamp(value, low, high):
     return max(low, min(high, value))
 
 
-def _solve3(matrix, rhs):
+def _observed_ambient(sample):
     """
-    Solve a 3x3 system by Gauss-Jordan with partial pivoting.
+    The air temperature this window actually saw.
+
+    The sensor reading where there is one, and only otherwise the value the forecast
+    supplied. Both are recorded on every sample, and the fit was reading the wrong one:
+    ``ambient_c`` carries the *bias-corrected forecast*, which is the right input for
+    predicting a slot nobody has measured yet and the wrong one for learning from a slot
+    that has already happened. The correction removes the average error for that hour of
+    the day and leaves the rest, so the difference went straight into the temperature
+    difference that fixes the loss coefficient - and the windows that fix it hardest are
+    the ones overnight, where that correction is largest.
+    """
+    measured = sample.get("ambient_measured_c")
+    if measured is not None:
+        value = float(measured)
+        if math.isfinite(value):
+            return value
+    return float(sample["ambient_c"])
+
+
+def _was_covered(sample):
+    """Whether the store was covered, from the recorded state or the older multiplier."""
+    covered = sample.get("covered")
+    if covered is not None:
+        return bool(covered)
+    try:
+        return float(sample.get("cover_factor", 1.0) or 1.0) < 1.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _solve(matrix, rhs):
+    """
+    Solve a square system by Gauss-Jordan with partial pivoting.
 
     Hand-rolled rather than pulled from numpy: this package is deliberately free of
-    heavy dependencies, and three unknowns is not a reason to acquire one.
+    heavy dependencies, and four unknowns is not a reason to acquire one.
 
     Returns the solution, or None when the system is singular.
     """
-    aug = [list(matrix[i]) + [rhs[i]] for i in range(3)]
+    size = len(matrix)
+    aug = [list(matrix[i]) + [rhs[i]] for i in range(size)]
 
-    for col in range(3):
-        pivot_row = max(range(col, 3), key=lambda r: abs(aug[r][col]))
+    for col in range(size):
+        pivot_row = max(range(col, size), key=lambda r, c=col: abs(aug[r][c]))
         if abs(aug[pivot_row][col]) < 1e-12:
             return None
         aug[col], aug[pivot_row] = aug[pivot_row], aug[col]
 
         pivot = aug[col][col]
-        for j in range(col, 4):
+        for j in range(col, size + 1):
             aug[col][j] /= pivot
 
-        for row in range(3):
+        for row in range(size):
             if row == col:
                 continue
             factor = aug[row][col]
             if factor == 0.0:
                 continue
-            for j in range(col, 4):
+            for j in range(col, size + 1):
                 aug[row][j] -= factor * aug[col][j]
 
-    return [aug[i][3] for i in range(3)]
+    return [aug[i][size] for i in range(size)]
 
 
 class ThermalCalibrator:
@@ -149,7 +205,7 @@ class ThermalCalibrator:
     """
 
     def __init__(self, volume_m3, surface_m2, loss_coefficient, cop_nominal,
-                 air_coefficient=0.0):
+                 air_coefficient=0.0, cover_loss_factor=1.0):
         self.volume_m3 = float(volume_m3 or 0.0)
         self.surface_m2 = float(surface_m2 or 0.0)
 
@@ -160,10 +216,14 @@ class ThermalCalibrator:
         self.configured_air_coefficient = _clamp(
             float(air_coefficient or 0.0), -AIR_COEFFICIENT_LIMIT, AIR_COEFFICIENT_LIMIT
         )
+        self.configured_cover_loss_factor = _clamp(
+            float(cover_loss_factor or 1.0), COVER_FACTOR_MIN, 1.0
+        )
 
         self.loss_coefficient = self.configured_loss_coefficient
         self.cop_nominal = self.configured_cop_nominal
         self.air_coefficient = self.configured_air_coefficient
+        self.cover_loss_factor = self.configured_cover_loss_factor
 
         # Counts of what is *in the fit*, exposed as properties below. They used to be
         # independent counters, which drifted: ``restore`` seeded them from the previous
@@ -172,6 +232,7 @@ class ThermalCalibrator:
         self._restored_loss_samples = 0
         self._restored_cop_samples = 0
         self.slope_identified = False
+        self.cover_identified = False
         self.residual_w = None
         self.signal_w = None
 
@@ -331,9 +392,9 @@ class ThermalCalibrator:
         ambients, powers, covers = [], [], []
         for sample in window:
             try:
-                ambients.append(float(sample["ambient_c"]))
+                ambients.append(_observed_ambient(sample))
                 powers.append(float(sample.get("power_w", 0.0) or 0.0))
-                covers.append(float(sample.get("cover_factor", 1.0) or 1.0))
+                covers.append(1.0 if _was_covered(sample) else 0.0)
             except (KeyError, TypeError, ValueError):
                 return None
         if not ambients:
@@ -359,15 +420,65 @@ class ThermalCalibrator:
             "power_w": sum(powers) / len(powers) if running else 0.0,
             "ambient_c": ambient,
             "drive_k": (medium_last + medium_first) / 2.0 - ambient,
-            "cover_factor": sum(covers) / len(covers),
+            # The share of the window the store spent covered, which is what splits the
+            # loss between the two coefficients. Not the multiplier: feeding back a
+            # factor this estimator itself produced would close a loop around the fit.
+            "covered_share": sum(covers) / len(covers),
             "span_hours": span,
         }
 
     # -- the fit ------------------------------------------------------------------------
 
+    def _identifiability(self, rows):
+        """
+        Which unknowns this history can actually speak for, and the covered share.
+
+        The COP slope only means anything if the history spans a range of air
+        temperatures. Below that it must be *held* during the solve, not solved for
+        and overwritten afterwards: with a constant ambient the power columns are
+        collinear, so the fit splits the identifiable sum between the intercept and
+        the slope, and discarding the slope afterwards throws that part away. It cost
+        a recovered COP of 3.74 where the answer was 4.5.
+
+        The two loss coefficients separate on the same principle. A store that was
+        covered through every single window can say what a cover costs and nothing at
+        all about going without one, so the coefficient it never observed keeps the
+        configured guess rather than absorbing the other one's error.
+        """
+        on_rows = [row for row in rows if row["power_w"] >= IDLE_POWER_W]
+        span = 0.0
+        if on_rows:
+            temps = [row["ambient_c"] for row in on_rows]
+            span = max(temps) - min(temps)
+        self.slope_identified = span >= COP_FIT_MIN_SPAN_K
+
+        shares = [row["covered_share"] for row in rows]
+        covered_share = sum(shares) / len(shares) if shares else 0.0
+        self.cover_identified = COVER_SPAN_MIN <= covered_share <= 1.0 - COVER_SPAN_MIN
+        return covered_share
+
+    def _design(self, rows):
+        """
+        The regressors, one row per window.
+
+        x1 = P_el, x2 = T_air·P_el,
+        x3 = -A·(1-covered)·dT  (k while open), x4 = -A·covered·dT  (k while covered)
+        """
+        design = []
+        for row in rows:
+            drive = self.surface_m2 * row["drive_k"]
+            share = row["covered_share"]
+            design.append((
+                row["power_w"],
+                row["ambient_c"] * row["power_w"],
+                -drive * (1.0 - share),
+                -drive * share,
+            ))
+        return design
+
     def refit(self):
         """
-        Re-solve for (a, b, k) over the retained rows.
+        Re-solve for (a, b, k_open, k_covered) over the retained rows.
 
         Columns are scaled to comparable magnitudes before solving - power is in
         thousands of watts and the loss term in hundreds, and an unscaled normal-equation
@@ -379,28 +490,8 @@ class ThermalCalibrator:
 
         prior = self._prior()
         weights = self._weights(rows)
-
-        # The slope only means anything if the history spans a range of air
-        # temperatures. Below that it must be *held* during the solve, not solved for
-        # and overwritten afterwards: with a constant ambient the power columns are
-        # collinear, so the fit splits the identifiable sum between the intercept and
-        # the slope, and discarding the slope afterwards throws that part away. It cost
-        # a recovered COP of 3.74 where the answer was 4.5.
-        on_rows = [row for row in rows if row["power_w"] >= IDLE_POWER_W]
-        span = 0.0
-        if on_rows:
-            temps = [row["ambient_c"] for row in on_rows]
-            span = max(temps) - min(temps)
-        self.slope_identified = span >= COP_FIT_MIN_SPAN_K
-
-        # x1 = P_el, x2 = T_air·P_el, x3 = -A·cover·(T_water - T_air)
-        design = []
-        for row in rows:
-            design.append((
-                row["power_w"],
-                row["ambient_c"] * row["power_w"],
-                -self.surface_m2 * row["cover_factor"] * row["drive_k"],
-            ))
+        covered_share = self._identifiability(rows)
+        design = self._design(rows)
         targets = [row["stored_w"] for row in rows]
 
         total_weight = sum(weights)
@@ -409,7 +500,7 @@ class ThermalCalibrator:
 
         # Column scales: root-mean-square, so every column enters the solve at O(1).
         scales = []
-        for col in range(3):
+        for col in range(UNKNOWNS):
             mean_square = sum(
                 w * design[i][col] ** 2 for i, w in enumerate(weights)
             ) / total_weight
@@ -421,43 +512,48 @@ class ThermalCalibrator:
         # the ambient temperature never varied.
         held = [scale <= 0 for scale in scales]
         held[1] = held[1] or not self.slope_identified
-        for col in range(3):
+        for col in range(UNKNOWNS):
             if scales[col] <= 0:
                 scales[col] = 1.0
 
         ridge = RIDGE_SAMPLES * (total_weight / len(rows))
 
-        normal = [[0.0] * 3 for _ in range(3)]
-        rhs = [0.0] * 3
+        normal = [[0.0] * UNKNOWNS for _ in range(UNKNOWNS)]
+        rhs = [0.0] * UNKNOWNS
         for i, weight in enumerate(weights):
-            scaled = [design[i][col] / scales[col] for col in range(3)]
-            for r in range(3):
-                for c in range(3):
+            scaled = [design[i][col] / scales[col] for col in range(UNKNOWNS)]
+            for r in range(UNKNOWNS):
+                for c in range(UNKNOWNS):
                     normal[r][c] += weight * scaled[r] * scaled[c]
                 rhs[r] += weight * scaled[r] * targets[i]
 
-        # Ridge towards the configured values, in the scaled space.
-        prior_scaled = [prior[col] * scales[col] for col in range(3)]
-        for col in range(3):
-            strength = ridge * 1e9 if held[col] else ridge
+        # Ridge towards the configured values, in the scaled space. An unidentified
+        # coefficient is pinned to its prior the same way the COP slope is.
+        prior_scaled = [prior[col] * scales[col] for col in range(UNKNOWNS)]
+        pinned = list(held)
+        if not self.cover_identified:
+            pinned[2 if covered_share > 0.5 else 3] = True
+        for col in range(UNKNOWNS):
+            strength = ridge * 1e9 if pinned[col] else ridge
             normal[col][col] += strength
             rhs[col] += strength * prior_scaled[col]
 
-        solution = _solve3(normal, rhs)
+        solution = _solve(normal, rhs)
         if solution is None:
             logger.debug("[LOADS] calibration fit is singular - keeping the last estimate")
             return False
 
-        estimate = [solution[col] / scales[col] for col in range(3)]
+        estimate = [solution[col] / scales[col] for col in range(UNKNOWNS)]
         self._apply(estimate, rows, weights, design, targets)
         return True
 
     def _prior(self):
-        """The configured values, as (a, b, k)."""
+        """The configured values, as (a, b, k_open, k_covered)."""
         nominal = self.configured_cop_nominal
         slope = nominal * self.configured_air_coefficient
+        open_loss = self.configured_loss_coefficient
         return [nominal - slope * COP_REFERENCE_AMBIENT_C, slope,
-                self.configured_loss_coefficient]
+                open_loss, open_loss * self.configured_cover_loss_factor]
 
     def _weights(self, rows):
         """Exponential decay by age, so recent behaviour counts for more."""
@@ -473,9 +569,12 @@ class ThermalCalibrator:
 
     def _apply(self, estimate, rows, weights, design, targets):
         """Bound the solution, convert it to the reported form, and score the fit."""
-        intercept, slope, loss = estimate
+        intercept, slope, loss, covered_loss = estimate
 
         loss = _clamp(loss, LOSS_COEFFICIENT_MIN, LOSS_COEFFICIENT_MAX)
+        # A cover that made a pool lose heat faster would be a fitting artefact, so the
+        # covered coefficient is bounded by the open one rather than trusted past it.
+        covered_loss = _clamp(covered_loss, LOSS_COEFFICIENT_MIN, loss)
 
         nominal = _clamp(
             intercept + slope * COP_REFERENCE_AMBIENT_C, COP_MIN, COP_MAX
@@ -486,6 +585,7 @@ class ThermalCalibrator:
         )
 
         self.loss_coefficient = loss
+        self.cover_loss_factor = _clamp(covered_loss / loss, COVER_FACTOR_MIN, 1.0)
         self.cop_nominal = nominal
         self.air_coefficient = air_coefficient
         self.residual_w = self._residual(rows, weights, design, targets)
@@ -513,10 +613,11 @@ class ThermalCalibrator:
         return round(math.sqrt(energy / total_weight), 1)
 
     def _theta(self):
-        """The current estimate as (a, b, k)."""
+        """The current estimate as (a, b, k_open, k_covered)."""
         slope = self.cop_nominal * self.air_coefficient
         return [self.cop_nominal - slope * COP_REFERENCE_AMBIENT_C, slope,
-                self.loss_coefficient]
+                self.loss_coefficient,
+                self.loss_coefficient * self.cover_loss_factor]
 
     # -- what the fit is built from -----------------------------------------------------
 
@@ -580,12 +681,14 @@ class ThermalCalibrator:
         """Serializable estimator state - persisted, and shown on the API."""
         return {
             "loss_coefficient": round(self.loss_coefficient, 3),
+            "cover_loss_factor": round(self.cover_loss_factor, 3),
             "cop_nominal": round(self.cop_nominal, 3),
             "air_coefficient": round(self.air_coefficient, 5),
             "loss_samples": self.loss_samples,
             "cop_samples": self.cop_samples,
             "confidence": self.confidence(),
             "slope_identified": self.slope_identified,
+            "cover_identified": self.cover_identified,
             "residual_w": self.residual_w,
             "signal_w": self.signal_w,
             "fit_quality": self.fit_quality(),
@@ -601,6 +704,9 @@ class ThermalCalibrator:
         cop = state.get("cop_nominal")
         if isinstance(cop, (int, float)) and COP_MIN <= cop <= COP_MAX:
             self.cop_nominal = float(cop)
+        cover = state.get("cover_loss_factor")
+        if isinstance(cover, (int, float)) and COVER_FACTOR_MIN <= cover <= 1.0:
+            self.cover_loss_factor = float(cover)
         air = state.get("air_coefficient")
         if isinstance(air, (int, float)):
             self.air_coefficient = _clamp(

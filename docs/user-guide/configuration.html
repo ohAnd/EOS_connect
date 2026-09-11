@@ -249,6 +249,25 @@
                         temperatures, before the two can really be separated: a colder day raises
                         the losses and lowers the efficiency at the same time, so a pump that never
                         stops cannot tell you which.</p>
+                    <p>What is fitted is <strong>two</strong> loss coefficients, not one: the
+                        store uncovered, and the store covered. The fraction between them is the
+                        one number nobody can look up &mdash; a supplier&rsquo;s data sheet is for
+                        still air over new material &mdash; so it is measured rather than trusted.
+                        Holding it at the configured guess turned out to be the worst place to be
+                        wrong: a pool covered five nights in six gives a fit that is almost entirely
+                        about the covered state, so the error in that one constant had nowhere to
+                        accumulate but in the uncovered coefficient, which then climbed refit after
+                        refit until the predicted standing losses made the target unreachable. Both
+                        states have to actually occur before they separate; until then the
+                        calibration panel says the cover is still assumed rather than measured.</p>
+                    <p>The fit learns from the <strong>sensor</strong>, never from the forecast.
+                        Both are recorded on every sample, and they are for different jobs: the
+                        bias-corrected forecast is the right input for a slot nobody has measured
+                        yet, and the wrong one for a slot that has already happened. The correction
+                        only removes the average error for that hour of the day, and what it leaves
+                        would go straight into the temperature difference that fixes the loss
+                        coefficient &mdash; worst of all overnight, where the correction is largest
+                        and where the idle windows that pin the losses down mostly are.</p>
                     <p>The <strong>confidence</strong> figure accounts for all of that: how many
                         windows there are, whether they include both running and idle periods, and
                         how much of the measured behaviour the fit actually explains. If the
@@ -412,7 +431,12 @@
                             the energy it needs, and the card names the setting responsible:
                             the price cap, the allowed hours, the minimum outside temperature,
                             the season, the daily runtime cap or the shared power limit,
-                            whichever ruled out the most slots. The strip colours each slot
+                            whichever ruled out the most slots &mdash; unless no setting would
+                            help, in which case it says that instead. A load can want more energy
+                            than the appliance could deliver running flat out through every slot
+                            left, and naming the setting that excluded the most of them is then
+                            true and useless: you raise it and the store still never reaches
+                            target. The strip colours each slot
                             by what became of it &mdash; blue where the load will run, with the
                             bar height showing how much, amber where you are rationing it
                             (price cap, daily runtime cap, shared power limit), green where it

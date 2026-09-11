@@ -26,6 +26,8 @@ from .contribution import (
 from .gate import ReleaseGate
 from .planner import (
     NON_BLOCKING_REASONS,
+    SLOT_DEADLINE,
+    SLOT_PAST,
     SLOT_PLANNED,
     PlanOptions,
     plan_contingent,
@@ -65,6 +67,7 @@ class ManagedLoad:
         self.max_price_eur_per_wh = self._price_cap(resolved)
 
         self.last_plan = []
+        self.last_slot_capacity_wh = 0.0
         self.last_demand = None
         self.last_release = None
         self.last_error = None
@@ -174,6 +177,7 @@ class ManagedLoad:
         demand.feasible = feasible
 
         options = self._resolved_options(ctx)
+        self.last_slot_capacity_wh = demand.max_power_w * ctx.hours_per_slot()
         plan = plan_contingent(demand, ctx, options, budget_wh=budget_wh)
 
         planned_now = (
@@ -277,6 +281,19 @@ class ManagedLoad:
             if reason not in NON_BLOCKING_REASONS and count
         ]
         blocking.sort(reverse=True)
+
+        # What the appliance could deliver if every limit were lifted at once - every
+        # slot still ahead of it, running flat out. When the demand is above even that,
+        # naming the setting that excluded the most slots is true and useless: the user
+        # raises it, and the load still cannot keep up. On a real pool the standing
+        # losses grew until 36 kWh was wanted from a horizon that could carry 29, and
+        # the card sent its owner to the price cap.
+        reachable = sum(
+            1 for reason in reasons if reason not in (SLOT_PAST, SLOT_DEADLINE)
+        )
+        reachable_wh = reachable * self.last_slot_capacity_wh
+        over_committed = bool(blocking) and needed > reachable_wh + 1.0
+
         return {
             "slots": len(reasons),
             "planned": counts.get(SLOT_PLANNED, 0),
@@ -284,6 +301,10 @@ class ManagedLoad:
             # The one worth naming to the user; None when nothing was in the way.
             "limited_by": blocking[0][1] if blocking else None,
             "limited_slots": blocking[0][0] if blocking else 0,
+            # Set when no setting can close the gap, so the card stops naming one.
+            "over_committed": over_committed,
+            "reachable_wh": round(reachable_wh, 1),
+            "shortfall_wh": round(max(0.0, needed - sum(self.last_plan or [])), 1),
         }
 
     def status(self):
