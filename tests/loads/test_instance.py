@@ -999,3 +999,33 @@ def test_the_summary_reaches_the_api(make_manager, installation):
     load = manager.status()["loads"][0]
     assert load["plan_summary"]["limited_by"] == "above price cap"
     assert len(load["plan_reasons"]) == 48
+
+
+def test_an_undersized_appliance_is_not_blamed_on_a_setting(make_manager, installation):
+    """
+    The real case, and the reason this exists: standing losses grew until 36 kWh was
+    wanted from a horizon that could carry 29, and the card said "limited by above
+    price cap". Lifting the cap would not have covered it - nothing would.
+    """
+    manager = make_manager([dict(POOL, rated_power_w=200.0, max_price_ct_kwh=5.0)])
+    installation.prices = [0.0009] * 48
+    installation.prices[20] = 0.00001
+    installation.temperature = [2.0] * 48        # a large, permanent standing loss
+    _run(manager, installation, water_c=15.0)
+
+    summary = manager.instance("pool").plan_summary()
+    assert summary["over_committed"] is True
+    assert summary["reachable_wh"] < manager.instance("pool").last_demand.total_wh
+    assert summary["shortfall_wh"] > 0
+
+
+def test_a_reachable_demand_still_names_the_setting(make_manager, installation):
+    """The over-committed flag must not swallow the case it was carved out of."""
+    manager = make_manager([dict(POOL, max_price_ct_kwh=5.0)])
+    installation.prices = [0.0009] * 48
+    installation.prices[20] = 0.00001
+    _run(manager, installation, water_c=27.0)
+
+    summary = manager.instance("pool").plan_summary()
+    assert summary["limited_by"] == "above price cap"
+    assert summary["over_committed"] is False

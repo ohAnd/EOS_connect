@@ -27,25 +27,36 @@ T0 = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
 
 def _simulate(hours, step_minutes, medium_c, ambient_c, power_w, cover_factor=1.0,
-              start=T0):
+              start=T0, covered_when=None, forecast_ambient_c=None):
     """
     Roll the store forward and emit the samples a real installation would record.
 
-    Returns a list of ``{timestamp, medium_c, ambient_c, power_w, cover_factor}``.
+    *covered_when* takes the moment and says whether the cover was on then, so a history
+    can contain both states the way a real one does. *forecast_ambient_c* fills the
+    forecast field with something wrong while the sensor field keeps the truth, which is
+    what a site with a learned bias actually records.
     """
     samples = []
     step_h = step_minutes / 60.0
     moment = start
     temp = medium_c
     for _ in range(int(hours / step_h) + 1):
+        covered = bool(covered_when(moment)) if covered_when else cover_factor < 1.0
+        factor = cover_factor if covered else 1.0
         samples.append({
             "timestamp": moment,
             "medium_c": temp,
-            "ambient_c": ambient_c,
+            "ambient_c": (
+                forecast_ambient_c if forecast_ambient_c is not None else ambient_c
+            ),
+            "ambient_measured_c": (
+                ambient_c if forecast_ambient_c is not None else None
+            ),
             "power_w": power_w,
-            "cover_factor": cover_factor,
+            "cover_factor": factor,
+            "covered": covered,
         })
-        loss_w = TRUE_K * SURFACE * (temp - ambient_c) * cover_factor
+        loss_w = TRUE_K * SURFACE * (temp - ambient_c) * factor
         thermal_w = 0.0
         if power_w >= IDLE_POWER_W:
             thermal_w = power_w * cop_at(ambient_c, TRUE_COP, TRUE_AIR_COEFF)
@@ -54,9 +65,14 @@ def _simulate(hours, step_minutes, medium_c, ambient_c, power_w, cover_factor=1.
     return samples
 
 
-def _calibrator(loss=60.0, cop=3.0):
+def _calibrator(loss=60.0, cop=3.0, cover=1.0):
     """Deliberately wrong starting values, as a real user's guess would be."""
-    return ThermalCalibrator(VOLUME, SURFACE, loss, cop)
+    return ThermalCalibrator(VOLUME, SURFACE, loss, cop, cover_loss_factor=cover)
+
+
+def _nights(moment):
+    """Covered from 20:00 to 06:00, which is what a pool cover is actually used for."""
+    return moment.hour >= 20 or moment.hour < 6
 
 
 def test_the_loss_coefficient_converges_on_the_true_value():
@@ -69,14 +85,67 @@ def test_the_loss_coefficient_converges_on_the_true_value():
     assert cal.loss_coefficient == pytest.approx(TRUE_K, rel=0.05)
 
 
-def test_a_cover_is_accounted_for_rather_than_read_as_a_better_pool():
-    """A covered pool loses less; the coefficient must stay the same."""
-    cal = _calibrator(loss=60.0)
+def test_a_cover_is_measured_rather_than_taken_on_trust():
+    """
+    Both loss coefficients come out of a history that contains both states.
+
+    The configured cover factor here is wrong on purpose - 0.6 against a true 0.3 - and
+    must not survive. Holding it fixed is what let its error accumulate in the open
+    coefficient instead, which on a real pool climbed from 15 to 33 W/(m2.K) over a few
+    days and made the target unreachable.
+    """
+    cal = _calibrator(loss=60.0, cover=0.6)
+    samples = _simulate(
+        hours=96, step_minutes=15, medium_c=28.0, ambient_c=16.0,
+        power_w=0.0, cover_factor=0.3, covered_when=_nights,
+    )
+    cal.observe_series(samples)
+
+    assert cal.cover_identified is True
+    assert cal.loss_coefficient == pytest.approx(TRUE_K, rel=0.05)
+    assert cal.cover_loss_factor == pytest.approx(0.3, rel=0.1)
+
+
+def test_an_always_covered_history_does_not_invent_an_open_coefficient():
+    """
+    What was never observed keeps the configured guess, and says it is a guess.
+
+    A pool that was covered through every window carries no information about its
+    uncovered losses. Splitting the fit is only an improvement if it refuses to answer
+    where the data cannot.
+    """
+    cal = _calibrator(loss=60.0, cover=0.3)
     samples = _simulate(
         hours=60, step_minutes=15, medium_c=28.0, ambient_c=16.0,
         power_w=0.0, cover_factor=0.3,
     )
     cal.observe_series(samples)
+
+    assert cal.cover_identified is False
+    assert cal.loss_coefficient == pytest.approx(60.0, rel=0.01)
+    # The covered state is what was observed, so that is what moved: 60 x 0.125 = 7.5,
+    # the true covered coefficient, reached by the ratio rather than by the open value.
+    assert cal.loss_coefficient * cal.cover_loss_factor == pytest.approx(
+        TRUE_K * 0.3, rel=0.05
+    )
+
+
+def test_the_fit_learns_from_the_sensor_not_the_forecast():
+    """
+    A wrong forecast in the record must not reach the fit while a measurement exists.
+
+    Every sample carries both. The corrected forecast is the right input for a slot
+    nobody has measured yet and the wrong one for a slot that has already happened -
+    and the windows that fix the loss coefficient hardest are overnight, where the
+    correction is largest.
+    """
+    cal = _calibrator(loss=60.0)
+    samples = _simulate(
+        hours=60, step_minutes=15, medium_c=28.0, ambient_c=16.0, power_w=0.0,
+        forecast_ambient_c=21.0,
+    )
+    cal.observe_series(samples)
+
     assert cal.loss_coefficient == pytest.approx(TRUE_K, rel=0.05)
 
 

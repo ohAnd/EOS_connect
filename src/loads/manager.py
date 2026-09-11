@@ -650,6 +650,10 @@ class ManagedLoadManager:
                 "power_w": self._reading_as_float(ctx.readings.get("power_sensor"), 0.0),
                 "cover_factor": item.model.cover_factor(ctx.readings)
                 if hasattr(item.model, "cover_factor") else 1.0,
+                # The state, not the multiplier. The multiplier is now an output of the
+                # calibration, and feeding it back in as an input would close a loop.
+                "covered": bool(item.model.is_covered(ctx.readings))
+                if hasattr(item.model, "is_covered") else False,
                 # Kept alongside the value actually used, so the site-versus-model
                 # offset can be relearned after a restart instead of starting over.
                 "ambient_measured_c": ctx.ambient_measured_c,

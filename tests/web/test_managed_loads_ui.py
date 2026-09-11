@@ -730,3 +730,66 @@ def test_a_plan_with_nothing_to_say_draws_no_strip(page):
     _open_overlay(page)
     _render_strip(page, [0, 0, 0], ['not needed', 'past', 'not needed'])
     assert _bar_colours(page) == []
+
+
+def test_an_undersized_appliance_is_not_blamed_on_a_setting(page):
+    """
+    When nothing can close the gap, naming the biggest blocker is true and useless:
+    the user raises the price cap and the pool still never reaches target.
+    """
+    _open_overlay(page)
+    page.evaluate(
+        """() => {
+            const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
+                reason: 'below target', energy_needed_wh: 36600, planned_wh: 12400,
+                plan: [], plan_reasons: [], model: {}, release: null, detail: {},
+                plan_summary: {slots: 192, planned: 31, limited_by: 'above price cap',
+                               limited_slots: 43, counts: {}, over_committed: true,
+                               reachable_wh: 29600, shortfall_wh: 24200}};
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadCard(load, 900, 0);
+        }"""
+    )
+    # Normalised: the sentence wraps across source lines in the template.
+    shown = " ".join(page.text_content("#full_screen_content").split())
+    assert "29.6 kWh" in shown
+    assert "No setting closes that gap" in shown
+    assert "raise or clear the price cap" not in shown
+
+
+def test_a_measured_cover_is_told_apart_from_an_assumed_one(page):
+    """
+    The cover factor is now an output, not a setting, and the card must say which:
+    "it cuts losses by 65%" and "we still assume it cuts losses by 65%" are different
+    claims, and only one of them is evidence.
+    """
+    _open_overlay(page)
+    for identified, expected in [
+        (True, "measures out at 65% off"),
+        (False, "still assumed to cut the heat loss by 65%"),
+    ]:
+        page.evaluate(
+            """(identified) => {
+                const model = {confidence: 0.8, loss_samples: 40, cop_samples: 20,
+                               fit_quality: 0.9, cover_loss_factor: 0.35,
+                               cover_identified: identified};
+                document.getElementById('full_screen_content').innerHTML =
+                    controlsManager._managedLoadCalibration({id: 'pool'}, model);
+            }""",
+            identified,
+        )
+        shown = " ".join(page.text_content("#full_screen_content").split())
+        assert expected in shown
+
+
+def test_a_store_with_no_cover_says_nothing_about_one(page):
+    _open_overlay(page)
+    page.evaluate(
+        """() => {
+            const model = {confidence: 0.8, loss_samples: 40, cop_samples: 20,
+                           fit_quality: 0.9, cover_loss_factor: 1.0};
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadCalibration({id: 'tank'}, model);
+        }"""
+    )
+    assert "cover" not in page.text_content("#full_screen_content").lower()
