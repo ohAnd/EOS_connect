@@ -75,6 +75,13 @@ class ManagedLoad:
 
         self.last_plan = []
         self.last_slot_capacity_wh = 0.0
+        # When a schedule last arrived from outside, and when this load first started
+        # waiting for one. A gate that is only ever settled by someone else freezes the
+        # moment they stop answering - but a load that has never been scheduled is not
+        # stale, it is new, and falling back on its first cycle would put it into the
+        # household forecast *and* offer it to the solver at the same time.
+        self.last_schedule_at = None
+        self.waiting_for_schedule_since = None
         self.last_demand = None
         self.last_release = None
         self.last_error = None
@@ -92,6 +99,19 @@ class ManagedLoad:
                 self.id, key, raw,
             )
             return None
+
+    def schedule_is_stale(self, now, max_age_seconds):
+        """
+        Whether nobody has scheduled this load recently enough to be trusted.
+
+        The release signal is only refreshed when a schedule arrives, so an optimizer
+        that stops answering would otherwise leave the appliance latched on whatever it
+        was last told - a pump held released indefinitely, with nothing logging why.
+        """
+        since = self.last_schedule_at or self.waiting_for_schedule_since
+        if since is None:
+            return False
+        return (now - since).total_seconds() > max_age_seconds
 
     def kind_is_contingent(self):
         """Whether this load's timing is ours to choose, rather than merely reported."""
@@ -173,7 +193,10 @@ class ManagedLoad:
             # nobody made.
             self._mask_current_slot(demand, ctx)
             plan = self._plan_only(demand, ctx, budget_wh)
-            release = None
+            # The gate keeps whatever it last decided until a schedule arrives. Nulling
+            # it left the card reporting a bare gate state - no energy figure, no next
+            # start - for every cycle that landed between two optimizer runs.
+            release = self.last_release
         else:
             plan, release = self._plan_and_gate(demand, ctx, budget_wh)
 
@@ -200,6 +223,7 @@ class ManagedLoad:
         if len(plan) < ctx.slot_count:
             plan += [0.0] * (ctx.slot_count - len(plan))
         self.last_plan = plan[: ctx.slot_count]
+        self.last_schedule_at = ctx.now
         self.last_release = self._gate_on(self.last_demand, ctx, self.last_plan)
         return self.last_release
 

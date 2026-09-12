@@ -303,6 +303,16 @@ class ManagedLoadManager:
             self._last_ctx_for[item.id] = ctx
             self._record_sample(item, ctx)
             defer = self.external_scheduler and item.kind_is_contingent()
+            if defer:
+                if item.waiting_for_schedule_since is None:
+                    item.waiting_for_schedule_since = ctx_base.now
+                if item.schedule_is_stale(ctx_base.now, self._schedule_max_age()):
+                    defer = False
+                    logger.warning(
+                        "[LOADS] '%s' has had no schedule from the optimizer for over "
+                        "%d s - deciding from its own plan until one arrives",
+                        item.id, self._schedule_max_age(),
+                    )
             contribution, release = item.evaluate(
                 ctx, budget_wh=budget, defer_gate=defer
             )
@@ -320,6 +330,16 @@ class ManagedLoadManager:
         return self.stats.cycles
 
     # -- handing the placing to something that can do it better -----------------------------
+
+    def _schedule_max_age(self):
+        """
+        How long a load may go unscheduled before it falls back to its own plan.
+
+        Two cycles: one missed run is a slow solve, two is something wrong. Short
+        enough that a dead optimizer does not leave a pump latched on for an hour,
+        long enough not to flap on a single late answer.
+        """
+        return max(120, self.cycle_seconds * 2)
 
     def schedulable(self):
         """

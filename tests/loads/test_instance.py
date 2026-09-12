@@ -8,6 +8,8 @@ battery around a load that never appears.
 
 import pytest
 
+from datetime import timedelta
+
 from tests.loads.conftest import NOW
 
 from src.loads.gate import REASON_PLANNED
@@ -1174,3 +1176,92 @@ def test_no_price_limit_means_worth_more_than_any_tariff(make_manager, installat
     value = manager.schedulable()[0]["value_eur_per_wh"]
     assert value > max(installation.prices) * 5
     assert value < float("inf")
+
+
+def test_a_silent_optimizer_hands_the_load_back_its_own_plan(make_manager, installation, caplog):
+    """
+    The release signal is only refreshed when a schedule arrives, so an optimizer that
+    stops answering would leave the appliance latched on whatever it was last told -
+    a pump held released indefinitely with nothing saying why.
+    """
+    manager = make_manager([POOL], cycle_seconds=60)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    load = manager.instance("pool")
+    assert load.last_release is None, "gated before any schedule arrived"
+
+    # Two cycles' worth of silence later, it decides for itself again.
+    load.waiting_for_schedule_since = load.waiting_for_schedule_since - timedelta(
+        seconds=600
+    )
+    with caplog.at_level("WARNING"):
+        manager.run_cycle()
+
+    assert load.last_release is not None
+    assert "no schedule from the optimizer" in caplog.text
+
+
+def test_a_load_that_falls_back_rejoins_the_household_forecast(make_manager, installation):
+    """Otherwise its energy is in neither place and the optimizer plans around nothing."""
+    manager = make_manager([POOL], cycle_seconds=60)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    load = manager.instance("pool")
+    load.waiting_for_schedule_since = load.waiting_for_schedule_since - timedelta(
+        seconds=600
+    )
+    manager.run_cycle()
+
+    base = [1000.0] * 48
+    assert manager.apply(base, 3600) != base
+
+
+def test_a_fresh_load_waits_rather_than_counting_itself_twice(make_manager, installation):
+    """
+    On its first cycle nothing has scheduled it yet - but that is new, not stale.
+    Falling back immediately would put it in the household forecast *and* offer it to
+    the solver, and the optimizer would size the battery for both.
+    """
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    base = [1000.0] * 48
+    assert manager.apply(base, 3600) == base
+    assert manager.schedulable()
+
+
+def test_an_adopted_schedule_restarts_the_clock(make_manager, installation):
+    manager = make_manager([POOL], cycle_seconds=60)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    manager.adopt_schedules({"pool": [0.0] * 48})
+
+    load = manager.instance("pool")
+    assert load.last_schedule_at is not None
+    assert not load.schedule_is_stale(load.last_schedule_at, 120)
+
+
+def test_the_release_survives_a_cycle_between_two_optimizer_runs(
+    make_manager, installation
+):
+    """
+    The card reported a bare gate state - no energy figure, no next start - for every
+    managed-load cycle that landed between two solves, because the cycle nulled it.
+    """
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    schedule = [0.0] * 48
+    schedule[manager._last_ctx.current_slot] = 1500.0   # pylint: disable=protected-access
+    manager.adopt_schedules({"pool": schedule})
+    adopted = manager.instance("pool").last_release
+    assert "energy_needed_wh" in adopted
+
+    manager.run_cycle()
+    kept = manager.instance("pool").last_release
+    assert kept is not None
+    assert "energy_needed_wh" in kept
