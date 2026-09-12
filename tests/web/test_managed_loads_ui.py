@@ -264,16 +264,16 @@ def test_a_shortfall_names_the_setting_behind_it(page):
             const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
                 reason: 'below target', energy_needed_wh: 24000, planned_wh: 4800,
                 plan: [], plan_reasons: [], model: {}, release: null, detail: {},
-                plan_summary: {slots: 192, planned: 12, limited_by: 'over the price budget',
+                plan_summary: {slots: 192, planned: 12, limited_by: 'above price cap',
                                limited_slots: 150, counts: {}}};
             document.getElementById('full_screen_content').innerHTML =
                 controlsManager._managedLoadCard(load, 900, 0);
         }"""
     )
     shown = page.text_content("#full_screen_content")
-    assert "over the price budget" in shown
+    assert "above price cap" in shown
     assert "150 of 192" in shown
-    assert "raise the average price limit" in shown
+    assert "raise or clear the price cap" in shown
     assert "widen the allowed window" not in shown
 
 
@@ -324,7 +324,7 @@ def test_a_bar_says_why_it_is_empty(page):
         """() => {
             const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
                 reason: 'below target', energy_needed_wh: 24000, planned_wh: 1600,
-                plan: [1600, 0, 0, 0], plan_reasons: ['planned', 'over the price budget',
+                plan: [1600, 0, 0, 0], plan_reasons: ['planned', 'above price cap',
                     'outside allowed hours', 'too cold to run'],
                 model: {}, release: null, detail: {}};
             document.getElementById('full_screen_content').innerHTML =
@@ -335,7 +335,7 @@ def test_a_bar_says_why_it_is_empty(page):
         """() => [...document.querySelectorAll('#full_screen_content div[title]')]
             .map(e => e.getAttribute('title'))"""
     )
-    assert any("over the price budget" in t for t in tips)
+    assert any("above price cap" in t for t in tips)
     assert any("too cold to run" in t for t in tips)
 
 
@@ -368,7 +368,7 @@ def test_the_strip_colours_a_capped_slot_differently_from_a_disallowed_one(page)
     _open_overlay(page)
     _render_strip(page,
                   [1600, 0, 0, 0],
-                  ['planned', 'over the price budget', 'too cold to run', 'not needed'])
+                  ['planned', 'above price cap', 'too cold to run', 'not needed'])
 
     colours = _bar_colours(page)
     assert len(set(colours)) == 4, colours
@@ -379,7 +379,7 @@ def test_every_capped_reason_shares_one_colour(page):
     _open_overlay(page)
     _render_strip(page,
                   [0, 0, 0],
-                  ['over the price budget', 'daily runtime cap', 'shared power budget'])
+                  ['above price cap', 'daily runtime cap', 'shared power budget'])
     assert len(set(_bar_colours(page))) == 1
 
 
@@ -396,7 +396,7 @@ def test_only_the_running_bars_carry_height(page):
     """A colour must never be readable as a quantity; only the blue bars are."""
     _open_overlay(page)
     _render_strip(page, [1600, 800, 0, 0],
-                  ['planned', 'planned', 'over the price budget', 'too cold to run'])
+                  ['planned', 'planned', 'above price cap', 'too cold to run'])
 
     heights = page.evaluate(
         """() => [...document.querySelectorAll('#full_screen_content div[title]')]
@@ -410,7 +410,7 @@ def test_the_strip_names_the_states_it_shows(page):
     """Identity is never colour alone."""
     _open_overlay(page)
     _render_strip(page, [1600, 0, 0],
-                  ['planned', 'over the price budget', 'too cold to run'])
+                  ['planned', 'above price cap', 'too cold to run'])
 
     shown = page.text_content("#full_screen_content")
     assert "Will run" in shown
@@ -420,7 +420,7 @@ def test_the_strip_names_the_states_it_shows(page):
 
 def test_a_state_that_is_absent_is_not_in_the_legend(page):
     _open_overlay(page)
-    _render_strip(page, [1600, 0], ['planned', 'over the price budget'])
+    _render_strip(page, [1600, 0], ['planned', 'above price cap'])
     shown = page.text_content("#full_screen_content")
     assert "Capped" in shown
     assert "Not allowed then" not in shown
@@ -719,7 +719,7 @@ def test_a_wholly_blocked_plan_still_draws_its_strip(page):
     """
     _open_overlay(page)
     _render_strip(page, [0, 0, 0, 0],
-                  ['over the price budget'] * 4)
+                  ['above price cap'] * 4)
 
     assert len(_bar_colours(page)) == 4
     assert "Capped" in page.text_content("#full_screen_content")
@@ -743,7 +743,7 @@ def test_an_undersized_appliance_is_not_blamed_on_a_setting(page):
             const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
                 reason: 'below target', energy_needed_wh: 36600, planned_wh: 12400,
                 plan: [], plan_reasons: [], model: {}, release: null, detail: {},
-                plan_summary: {slots: 192, planned: 31, limited_by: 'over the price budget',
+                plan_summary: {slots: 192, planned: 31, limited_by: 'above price cap',
                                limited_slots: 43, counts: {}, over_committed: true,
                                reachable_wh: 29600, shortfall_wh: 24200}};
             document.getElementById('full_screen_content').innerHTML =
@@ -754,7 +754,7 @@ def test_an_undersized_appliance_is_not_blamed_on_a_setting(page):
     shown = " ".join(page.text_content("#full_screen_content").split())
     assert "29.6 kWh" in shown
     assert "No setting closes that gap" in shown
-    assert "raise the average price limit" not in shown
+    assert "raise or clear the price cap" not in shown
 
 
 def test_a_measured_cover_is_told_apart_from_an_assumed_one(page):
@@ -827,40 +827,36 @@ def test_a_plan_with_no_price_information_says_nothing_about_one(page):
     assert "Averages" not in _card_with(page, {"avg_price_ct_kwh": None})
 
 
-def test_the_two_price_limits_suggest_different_remedies(page):
-    """
-    Widening the window helps a budget - more cheap hours to pay with - and does
-    nothing for a ceiling, which refuses an hour outright.
-    """
-    _open_overlay(page)
-    for limit, expected, unwanted in [
-        ("over the price budget", "raise the average price limit", "per-hour price ceiling"),
-        ("above the price ceiling", "raise or clear the per-hour price ceiling",
-         "widen the window"),
-    ]:
-        page.evaluate(
-            """(limit) => {
-                const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
-                    reason: 'below target', energy_needed_wh: 24000, planned_wh: 4800,
-                    plan: [], plan_reasons: [], model: {}, release: null, detail: {},
-                    plan_summary: {slots: 192, planned: 12, limited_by: limit,
-                                   limited_slots: 100, counts: {}}};
-                document.getElementById('full_screen_content').innerHTML =
-                    controlsManager._managedLoadCard(load, 900, 0);
-            }""",
-            limit,
-        )
-        shown = " ".join(page.text_content("#full_screen_content").split())
-        assert expected in shown
-        assert unwanted not in shown
+
+def _price_line(page, price, scheduled):
+    page.evaluate(
+        """([price, scheduled]) => {
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadPlanPrice(
+                    {plan_summary: {avg_price_ct_kwh: price}}, scheduled);
+        }""",
+        [price, scheduled],
+    )
+    return " ".join(page.text_content("#full_screen_content").split())
 
 
-def test_both_price_reasons_colour_as_rationing(page):
+def test_the_card_says_what_the_plan_costs_per_kwh(page):
+    _open_overlay(page)
+    assert "21.4 ct/kWh" in _price_line(page, 21.4, False)
+
+
+def test_a_scheduled_load_makes_the_stronger_claim(page):
     """
-    Both are limits the user set, not hours the load is forbidden - so they share the
-    amber band rather than the green one.
+    Under the optimizer the figure is what the household actually pays extra, battery
+    included - not the tariff of whichever hours the load happens to occupy.
     """
     _open_overlay(page)
-    _render_strip(page, [0, 0], ["over the price budget", "above the price ceiling"])
-    colours = set(_bar_colours(page))
-    assert len(colours) == 1
+    assert "with the battery and the house together" in _price_line(page, 18.0, True)
+    assert "across the planned hours" in _price_line(page, 18.0, False)
+
+
+def test_no_price_means_no_claim_at_all(page):
+    """Number(null) is 0, which would have this report a plan costing nothing."""
+    _open_overlay(page)
+    assert _price_line(page, None, False) == ""
+    assert _price_line(page, None, True) == ""

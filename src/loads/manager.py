@@ -77,6 +77,18 @@ class ManagedLoadSources:
     temperature_forecast: object = _noop  # () -> [degrees C, hourly]
 
 
+# What a Wh is worth to a load with no price limit set: high enough that the solver
+# always prefers running, low enough to stay a number rather than an unbounded reward.
+# 10 EUR/kWh is two orders above any tariff anyone has.
+UNCAPPED_VALUE_EUR_PER_WH = 0.01
+
+
+def _padded(mask, length):
+    """A feasibility mask at exactly the horizon length, missing slots allowed."""
+    values = [bool(value) for value in (mask or [])][:length]
+    return values + [True] * (length - len(values))
+
+
 @dataclass
 class ManagerStats:
     """Counters shown on the status endpoint, for answering "is this thing running"."""
@@ -115,6 +127,11 @@ class ManagedLoadManager:
         self._published_release = {}
         self._warned_ambient = set()
         self._warned_bias = set()
+        # Set when the optimizer can place contingent loads itself, which changes what
+        # this module does with them: it computes the demand and defers the placing.
+        self.external_scheduler = False
+        self._last_ctx = None
+        self._last_ctx_for = {}
         # Per-hour forecast-versus-sensor offset, one learner per instance.
         self._ambient_bias = {}
         self._stop = threading.Event()
@@ -203,6 +220,11 @@ class ManagedLoadManager:
         """
         Add every active contribution to a household load profile.
 
+        Contingent loads are in here only when nothing downstream can place them. Where
+        the optimizer schedules them itself they were dropped from the registry as the
+        cycle ran, so this adds the profile loads and nothing else - a load cannot be
+        both a fixed part of the forecast and a thing the solver is choosing when to run.
+
         The input list is never modified - both series here are backed by a cache on the
         interface that produced them, and mutating one in place is a bug this codebase
         has already paid for once (see the comment in `get_ems_data`).
@@ -268,6 +290,7 @@ class ManagedLoadManager:
         """One full pass: read, learn, plan, publish. Also the unit-test entry point."""
         ctx_base = self._context()
         budget = self._initial_budget(ctx_base)
+        self._last_ctx = ctx_base
 
         for item in self.instances:
             if not item.enabled:
@@ -277,14 +300,94 @@ class ManagedLoadManager:
                 self.registry.drop(item.id)
                 continue
             ctx = self._context_for(item, ctx_base)
+            self._last_ctx_for[item.id] = ctx
             self._record_sample(item, ctx)
-            contribution, release = item.evaluate(ctx, budget_wh=budget)
-            self._store_result(item, contribution, release)
+            defer = self.external_scheduler and item.kind_is_contingent()
+            contribution, release = item.evaluate(
+                ctx, budget_wh=budget, defer_gate=defer
+            )
+            if defer:
+                # Its energy reaches the optimizer as something to place, not as part
+                # of the household profile. Registering it here as well would have the
+                # solver schedule around a load it is also being asked to schedule.
+                self.registry.drop(item.id)
+            else:
+                self._store_result(item, contribution, release)
             self._consume_budget(budget, item.last_plan)
 
         self.stats.cycles += 1
         self.stats.last_cycle = ctx_base.now.isoformat()
         return self.stats.cycles
+
+    # -- handing the placing to something that can do it better -----------------------------
+
+    def schedulable(self):
+        """
+        The contingent loads, as records for an optimizer that can place them itself.
+
+        Nothing in a record names an appliance: a sauna and a hot-water tank produce
+        the same shape from the same code, because what the energy is *for* lives in
+        the demand model that worked the numbers out.
+        """
+        records = []
+        for item in self.instances:
+            if not item.enabled or not item.kind_is_contingent():
+                continue
+            demand = item.last_demand
+            if demand is None or demand.total_wh <= 0 or demand.max_power_w <= 0:
+                continue
+            ctx = self._last_ctx_for.get(item.id)
+            slots = ctx.slot_count if ctx else len(demand.feasible or [])
+            records.append({
+                "id": item.id,
+                "demand_wh": round(float(demand.total_wh), 1),
+                "max_power_w": float(demand.max_power_w),
+                "value_eur_per_wh": self._value_of(item),
+                "feasible": _padded(demand.feasible, slots),
+                "min_runtime_slots": item.min_runtime_slots(ctx) if ctx else 1,
+                "urgent_wh": float(demand.total_wh) if demand.urgent else 0.0,
+            })
+        return records
+
+    def adopt_schedules(self, schedules):
+        """
+        Take the optimizer's placements and settle each gate on them.
+
+        Loads the optimizer did not answer for keep the plan this module worked out on
+        its own - a solver that failed, or was swapped out, must not leave a pool with
+        no way to decide anything.
+        """
+        if not isinstance(schedules, dict):
+            return 0
+        adopted = 0
+        for item in self.instances:
+            if not item.enabled or not item.kind_is_contingent():
+                continue
+            schedule = schedules.get(item.id)
+            if schedule is None:
+                continue
+            ctx = self._last_ctx_for.get(item.id)
+            if ctx is None:
+                continue
+            release = item.adopt_schedule(schedule, ctx)
+            if release is not None:
+                self._publish_release(item, release)
+                adopted += 1
+        return adopted
+
+    def _value_of(self, item):
+        """
+        What a Wh delivered to this load is worth, which is also its price limit.
+
+        With no limit set the figure has to be high enough that the solver always
+        prefers running to not running, so the demand is met whatever it costs - but
+        finite, so an unreachable target still degrades to a short plan rather than to
+        an unbounded objective.
+        """
+        if item.max_price_eur_per_wh is not None:
+            return float(item.max_price_eur_per_wh)
+        prices = self._series(self.sources.price, self.horizon_hours) or [0.0]
+        return max(max(prices) * 10.0, UNCAPPED_VALUE_EUR_PER_WH)
 
     def refresh(self, entry_id):
         """
@@ -845,6 +948,11 @@ class ManagedLoadManager:
         """The whole subsystem, for `GET /api/managed_loads` and the dashboard."""
         return {
             "enabled": bool(self._instances),
+            # Which rule the price limit is under. The optimizer places these loads
+            # against the battery and the household together and runs them whenever the
+            # energy genuinely costs less; without it the load falls back to skipping
+            # any hour above the figure, which is blunter and worth saying out loud.
+            "scheduled_by_optimizer": bool(self.external_scheduler),
             "time_frame_base": self.time_frame_base,
             "cycle_seconds": self.cycle_seconds,
             "max_power_w": self.max_power_w,

@@ -72,9 +72,6 @@ class ManagedLoad:
             else None
         )
         self.max_price_eur_per_wh = self._price_cap(resolved, "max_price_ct_kwh")
-        self.max_slot_price_eur_per_wh = self._price_cap(
-            resolved, "max_slot_price_ct_kwh"
-        )
 
         self.last_plan = []
         self.last_slot_capacity_wh = 0.0
@@ -96,20 +93,25 @@ class ManagedLoad:
             )
             return None
 
+    def kind_is_contingent(self):
+        """Whether this load's timing is ours to choose, rather than merely reported."""
+        return self.type in CONTINGENT_TYPES
+
+    def min_runtime_slots(self, ctx):
+        """The configured minimum run, in slots at the running resolution."""
+        minutes = float(self.config.get("min_runtime_minutes", 0) or 0)
+        return max(1, int(round(minutes * 60 / ctx.time_frame_base)))
+
     def _resolved_options(self, ctx):
         """Turn the minute- and hour-based config into slot counts for this resolution."""
         slots_per_hour = ctx.slots_per_hour()
-        min_runtime_minutes = float(self.config.get("min_runtime_minutes", 0) or 0)
-        min_runtime_slots = max(
-            1, int(round(min_runtime_minutes * 60 / ctx.time_frame_base))
-        )
+        min_runtime_slots = self.min_runtime_slots(ctx)
         max_hours = float(self.config.get("max_runtime_hours_per_day", 0) or 0)
         return PlanOptions(
             strategy=self.config.get("strategy"),
             min_runtime_slots=min_runtime_slots,
             max_slots_per_day=int(max_hours * slots_per_hour),
             max_price_eur_per_wh=self.max_price_eur_per_wh,
-            max_slot_price_eur_per_wh=self.max_slot_price_eur_per_wh,
         )
 
     def reconfigure(self, entry):
@@ -127,9 +129,6 @@ class ManagedLoad:
         self.enabled = bool(resolved.get("enabled", True))
         self.priority = int(resolved.get("priority", 100) or 100)
         self.max_price_eur_per_wh = self._price_cap(resolved, "max_price_ct_kwh")
-        self.max_slot_price_eur_per_wh = self._price_cap(
-            resolved, "max_slot_price_ct_kwh"
-        )
 
         if self.gate is not None:
             self.gate.min_runtime_minutes = max(
@@ -140,7 +139,7 @@ class ManagedLoad:
 
     # -- the cycle ------------------------------------------------------------------------
 
-    def evaluate(self, ctx, budget_wh=None):
+    def evaluate(self, ctx, budget_wh=None, defer_gate=False):
         """
         Run one planning cycle.
 
@@ -166,6 +165,15 @@ class ManagedLoad:
         if demand.kind == KIND_PROFILE:
             plan = list(demand.profile_wh or [0.0] * ctx.slot_count)
             release = None
+        elif defer_gate:
+            # Somebody else is doing the placing. Plan anyway - it is what the load
+            # falls back to if no schedule arrives - but do not touch the gate: it
+            # remembers when it last released, so settling it against a plan that is
+            # about to be replaced would start a minimum-runtime hold on a decision
+            # nobody made.
+            self._mask_current_slot(demand, ctx)
+            plan = self._plan_only(demand, ctx, budget_wh)
+            release = None
         else:
             plan, release = self._plan_and_gate(demand, ctx, budget_wh)
 
@@ -177,23 +185,33 @@ class ManagedLoad:
 
         return self._contribution(plan, ctx, demand), release
 
-    def _plan_and_gate(self, demand, ctx, budget_wh):
-        """Place the contingent, then decide whether that means "run now"."""
-        active = bool(demand.detail.get("active", demand.total_wh > 0))
+    def adopt_schedule(self, schedule, ctx):
+        """
+        Take a schedule somebody else produced, and gate on that instead.
 
-        # A load that must not start right now must not be *forecast* to start right
-        # now either. Marking the current slot infeasible before planning is what keeps
-        # the array sent to the optimizer and the signal sent to the appliance in
-        # agreement - the whole reason both are derived from one plan.
-        feasible = list(demand.feasible) or [True] * ctx.slot_count
-        if not active and 0 <= ctx.current_slot < len(feasible):
-            feasible[ctx.current_slot] = False
-        demand.feasible = feasible
+        The optimizer places this load against the household and the battery together,
+        which is a better answer than this module can reach on its own. What does not
+        change is that one series drives both the release signal and whatever is
+        reported - the two cannot disagree, because there is only ever one plan.
+        """
+        if self.last_demand is None or self.gate is None:
+            return None
+        plan = [max(0.0, float(value or 0.0)) for value in schedule]
+        if len(plan) < ctx.slot_count:
+            plan += [0.0] * (ctx.slot_count - len(plan))
+        self.last_plan = plan[: ctx.slot_count]
+        self.last_release = self._gate_on(self.last_demand, ctx, self.last_plan)
+        return self.last_release
 
+    def _plan_only(self, demand, ctx, budget_wh):
+        """The placement, without settling the gate on it."""
         options = self._resolved_options(ctx)
         self.last_slot_capacity_wh = demand.max_power_w * ctx.hours_per_slot()
-        plan = plan_contingent(demand, ctx, options, budget_wh=budget_wh)
+        return plan_contingent(demand, ctx, options, budget_wh=budget_wh)
 
+    def _gate_on(self, demand, ctx, plan):
+        """Turn a placement into a release decision."""
+        active = bool(demand.detail.get("active", demand.total_wh > 0))
         planned_now = (
             0 <= ctx.current_slot < len(plan) and plan[ctx.current_slot] > 0
         )
@@ -205,7 +223,28 @@ class ManagedLoad:
         )
         release["next_release_start"] = self._next_release_start(plan, ctx)
         release["energy_needed_wh"] = round(demand.total_wh, 1)
-        return plan, release
+        return release
+
+    def _mask_current_slot(self, demand, ctx):
+        """
+        A load that must not start right now must not be *forecast* to start now either.
+
+        Marking the current slot infeasible before anything is placed is what keeps the
+        array the optimizer works from and the signal sent to the appliance in
+        agreement. It belongs here rather than inside the planner because the same mask
+        is handed out when something else does the placing.
+        """
+        active = bool(demand.detail.get("active", demand.total_wh > 0))
+        feasible = list(demand.feasible) or [True] * ctx.slot_count
+        if not active and 0 <= ctx.current_slot < len(feasible):
+            feasible[ctx.current_slot] = False
+        demand.feasible = feasible
+
+    def _plan_and_gate(self, demand, ctx, budget_wh):
+        """Place the contingent, then decide whether that means "run now"."""
+        self._mask_current_slot(demand, ctx)
+        plan = self._plan_only(demand, ctx, budget_wh)
+        return plan, self._gate_on(demand, ctx, plan)
 
     def _next_release_start(self, plan, ctx):
         """When the appliance is next expected to run, as an ISO timestamp."""

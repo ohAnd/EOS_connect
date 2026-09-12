@@ -32,8 +32,7 @@ SLOT_PLANNED = "planned"
 SLOT_PAST = "past"
 SLOT_DEADLINE = "after deadline"
 SLOT_INFEASIBLE = "not allowed"
-SLOT_PRICE_CEILING = "above the price ceiling"
-SLOT_PRICE_BUDGET = "over the price budget"
+SLOT_PRICE = "above price cap"
 SLOT_BUDGET = "shared power budget"
 SLOT_DAILY_CAP = "daily runtime cap"
 SLOT_NOT_NEEDED = "not needed"
@@ -62,23 +61,23 @@ class PlanOptions:
         strategy: One of `STRATEGIES`.
         min_runtime_slots: Shortest contiguous run the load may be released for.
         max_slots_per_day: Cap on released slots per local day, 0 for none.
-        max_price_eur_per_wh: What the load's energy may cost *on average* over the
-            whole plan. Cheap and free slots earn headroom that dear ones spend, which
-            is what lets a target be reached through an expensive evening. None
-            disables it.
-        max_slot_price_eur_per_wh: A hard ceiling no single slot may exceed, whatever
-            the average would allow. Without it a sunny horizon can buy a tariff spike
-            on the strength of a forecast. None disables it.
+        max_price_eur_per_wh: Refuse any slot above this. None disables the cap.
+
+            A blunt rule, and knowingly so. Bounding the plan's *average* instead was
+            tried and reverted: the average only looks forward, so the cheap hours that
+            were meant to pay for a dear evening are in the past by the time the evening
+            arrives - on a real install, 0.0 kWh planned at 19:52 with every sub-budget
+            hour already spent. Where the optimizer can schedule the load itself it
+            weighs the cost properly and this cap is not used at all; this is the rule
+            for the backends that cannot.
     """
 
     def __init__(self, strategy=STRATEGY_COMBINED, min_runtime_slots=1,
-                 max_slots_per_day=0, max_price_eur_per_wh=None,
-                 max_slot_price_eur_per_wh=None):
+                 max_slots_per_day=0, max_price_eur_per_wh=None):
         self.strategy = strategy if strategy in STRATEGIES else STRATEGY_COMBINED
         self.min_runtime_slots = max(1, int(min_runtime_slots or 1))
         self.max_slots_per_day = max(0, int(max_slots_per_day or 0))
         self.max_price_eur_per_wh = max_price_eur_per_wh
-        self.max_slot_price_eur_per_wh = max_slot_price_eur_per_wh
 
 
 def _series(values, length, fill=0.0):
@@ -160,20 +159,19 @@ def _candidates(demand, ctx, caps, costs, options, reasons):
             reasons[index] = SLOT_BUDGET
             continue
         if (
-            options.max_slot_price_eur_per_wh is not None
+            options.max_price_eur_per_wh is not None
             and not demand.urgent
             and options.strategy != STRATEGY_PV_SURPLUS
-            and cost > options.max_slot_price_eur_per_wh
+            and cost > options.max_price_eur_per_wh
         ):
             priced_out += 1
-            reasons[index] = SLOT_PRICE_CEILING
+            reasons[index] = SLOT_PRICE
             continue
         usable.append(index)
 
     if priced_out:
         logger.debug(
-            "[LOADS] %d slots skipped for exceeding the per-slot price ceiling",
-            priced_out,
+            "[LOADS] %d slots skipped for exceeding the configured price cap", priced_out
         )
     return usable, priced_out
 
@@ -241,7 +239,6 @@ def plan_contingent(demand, ctx, options, budget_wh=None):
 
     if demand.urgent:
         # Cheapness is worthless if the pool freezes: take the next slots available.
-        # No costs is what tells _fill the price budget does not apply here either.
         ordered = sorted(candidates)
         plan = _fill(plan, ordered, caps, remaining, options, ctx, reasons)
         demand.plan_price_eur_per_wh = plan_price(plan, _numeric_costs(costs, options))
@@ -279,11 +276,8 @@ def plan_contingent(demand, ctx, options, budget_wh=None):
     leftovers.sort(key=lambda index: (costs[index], index))
     order.extend(leftovers)
 
-    priced = _numeric_costs(costs, options)
-    plan = _fill(
-        plan, order, caps, float(demand.total_wh), options, ctx, reasons, priced
-    )
-    demand.plan_price_eur_per_wh = plan_price(plan, priced)
+    plan = _fill(plan, order, caps, float(demand.total_wh), options, ctx, reasons)
+    demand.plan_price_eur_per_wh = plan_price(plan, _numeric_costs(costs, options))
     return plan
 
 
@@ -302,7 +296,7 @@ def _numeric_costs(costs, options):
     The per-slot costs when they are numbers, else None.
 
     `pv_surplus` ranks on ``(-surplus, price)`` tuples, and an average over those is not
-    a defined thing - so that strategy has no price budget and reports no plan price.
+    a defined thing - so that strategy reports no plan price.
     """
     if options.strategy == STRATEGY_PV_SURPLUS:
         return None
@@ -322,31 +316,10 @@ def plan_price(plan, costs):
     return total_cost / total_wh if total_wh > 0 else None
 
 
-def _fill(plan, order, caps, remaining, options, ctx, reasons, costs=None):
-    """
-    Pour *remaining* Wh into *order* until it is gone, honouring the caps.
-
-    The price limit is a budget on the *average*, not a veto on each slot: energy that
-    was free or cheap earns headroom a dear slot may spend, so a target stays reachable
-    through an expensive evening. A per-slot veto could not do that - it refused an
-    expensive hour however nearly free the rest of the plan was, and on a real install
-    left 36.6 kWh of demand against 29.6 kWh it was willing to place, with no setting
-    that would close the gap.
-
-    *order* arrives cheapest-first, and taking the cheapest while the running average
-    holds admits the most energy the budget allows: if any set of k slots is within
-    budget then the k cheapest are. A rejected slot is skipped rather than breaking the
-    loop, because block ordering leaves the sequence only approximately ascending and a
-    later, cheaper slot can still fit.
-
-    *costs* of None means no budget applies - the urgent path, which must not be priced
-    out of running at all.
-    """
+def _fill(plan, order, caps, remaining, options, ctx, reasons):
+    """Pour *remaining* Wh into *order* until it is gone, honouring the daily cap."""
     slots_per_day = max(1, 86400 // ctx.time_frame_base)
     used_per_day = {}
-    budget = None if costs is None else options.max_price_eur_per_wh
-    spent_cost = 0.0
-    spent_wh = 0.0
 
     for slot in order:
         if remaining <= 1e-6:
@@ -359,14 +332,6 @@ def _fill(plan, order, caps, remaining, options, ctx, reasons, costs=None):
         if take <= 0:
             reasons[slot] = SLOT_BUDGET
             continue
-        if budget is not None:
-            # Multiplied out rather than divided, so a slot of zero energy cannot
-            # divide by zero on the way in.
-            if spent_cost + take * costs[slot] > budget * (spent_wh + take):
-                reasons[slot] = SLOT_PRICE_BUDGET
-                continue
-            spent_cost += take * costs[slot]
-            spent_wh += take
         plan[slot] = take
         reasons[slot] = SLOT_PLANNED
         remaining -= take
