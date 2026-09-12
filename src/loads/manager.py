@@ -127,6 +127,7 @@ class ManagedLoadManager:
         self._published_release = {}
         self._warned_ambient = set()
         self._warned_bias = set()
+        self._warned_no_prices = False
         # Set when the optimizer can place contingent loads itself, which changes what
         # this module does with them: it computes the demand and defers the placing.
         self.external_scheduler = False
@@ -471,7 +472,7 @@ class ManagedLoadManager:
             slot_count=slot_count,
             time_frame_base=self.time_frame_base,
             current_slot=current_slot,
-            price_eur_per_wh=self._series(self.sources.price, slot_count),
+            price_eur_per_wh=self._prices(slot_count),
             feed_in_eur_per_wh=self._series(self.sources.feed_in_price, slot_count),
             pv_surplus_wh=self._surplus(slot_count),
             ambient_temp_c=[],
@@ -666,6 +667,28 @@ class ManagedLoadManager:
         for value in hourly:
             expanded.extend([value] * factor)
         return self._fit(expanded, slot_count, fallback=15.0)
+
+    def _prices(self, slot_count):
+        """
+        The grid price series, or nothing at all when it has not arrived yet.
+
+        An all-zero series is not a tariff, it is an interface that has not fetched
+        anything - and it reads to the planner as free electricity, so the price cap
+        stops binding and every slot in the horizon gets planned at 0 ct. Handing back
+        an empty list instead lets the planner substitute its "unknown price" value,
+        which is above any tariff, so an unpriced cycle places nothing rather than
+        everything. The next cycle has real numbers.
+        """
+        prices = self._series(self.sources.price, slot_count)
+        if prices and any(value for value in prices):
+            return prices
+        if not self._warned_no_prices:
+            self._warned_no_prices = True
+            logger.warning(
+                "[LOADS] no electricity prices available yet - managed loads will not "
+                "be placed until they arrive"
+            )
+        return []
 
     def _series(self, provider, slot_count, fallback=0.0):
         try:

@@ -1265,3 +1265,53 @@ def test_the_release_survives_a_cycle_between_two_optimizer_runs(
     kept = manager.instance("pool").last_release
     assert kept is not None
     assert "energy_needed_wh" in kept
+
+
+def test_the_reported_price_describes_the_schedule_that_was_adopted(
+    make_manager, installation
+):
+    """
+    It was reporting the fallback planner's figure beside the optimizer's schedule -
+    a price for hours the appliance is not going to run in. On the live instance that
+    read 0.0 ct/kWh against a plan sitting in two 29.8 ct slots.
+    """
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    installation.prices = [0.0009] * 48
+    installation.prices[20] = 0.0002
+    installation.prices[21] = 0.0002
+    _run(manager, installation, water_c=20.0)
+
+    schedule = [0.0] * 48
+    schedule[20] = schedule[21] = 1500.0
+    manager.adopt_schedules({"pool": schedule})
+
+    assert manager.instance("pool").plan_summary()["avg_price_ct_kwh"] == pytest.approx(
+        20.0, abs=0.1
+    )
+
+
+def test_prices_that_have_not_arrived_place_nothing(make_manager, installation, caplog):
+    """
+    An all-zero series is an interface that has not fetched, not a free tariff - and it
+    read as free electricity, so the cap stopped binding and the whole horizon was
+    planned at 0 ct.
+    """
+    manager = make_manager([dict(POOL, max_price_ct_kwh=30.0)])
+    installation.prices = [0.0] * 48
+    with caplog.at_level("WARNING"):
+        _run(manager, installation, water_c=20.0)
+
+    load = manager.instance("pool")
+    assert sum(load.last_plan) == 0
+    assert "no electricity prices available yet" in caplog.text
+
+
+def test_a_genuinely_free_hour_is_still_usable(make_manager, installation):
+    """Only a series that is zero *everywhere* is treated as missing."""
+    manager = make_manager([dict(POOL, max_price_ct_kwh=30.0)])
+    installation.prices = [0.0009] * 48
+    installation.prices[20] = 0.0
+    _run(manager, installation, water_c=20.0)
+
+    assert manager.instance("pool").last_plan[20] > 0
