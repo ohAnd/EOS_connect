@@ -36,6 +36,13 @@ from .presets import CONTINGENT_TYPES, EXTERNAL_TYPES, apply_defaults, build_mod
 
 logger = logging.getLogger("__main__")
 
+
+def _as_ct_per_kwh(eur_per_wh):
+    """Back to the unit the user set the limit in, or None when nothing was placed."""
+    if eur_per_wh is None:
+        return None
+    return round(eur_per_wh * 100.0 * 1000.0, 2)
+
 # How long a contribution computed internally stays valid. Long enough to survive a
 # skipped cycle, short enough that a wedged poll thread stops inflating the forecast
 # instead of holding a stale demand there for a day.
@@ -64,7 +71,10 @@ class ManagedLoad:
             if self.gates_release
             else None
         )
-        self.max_price_eur_per_wh = self._price_cap(resolved)
+        self.max_price_eur_per_wh = self._price_cap(resolved, "max_price_ct_kwh")
+        self.max_slot_price_eur_per_wh = self._price_cap(
+            resolved, "max_slot_price_ct_kwh"
+        )
 
         self.last_plan = []
         self.last_slot_capacity_wh = 0.0
@@ -72,17 +82,17 @@ class ManagedLoad:
         self.last_release = None
         self.last_error = None
 
-    def _price_cap(self, entry):
-        """``max_price_ct_kwh`` is what a user can reason about; the planner wants EUR/Wh."""
-        raw = entry.get("max_price_ct_kwh")
+    def _price_cap(self, entry, key):
+        """ct/kWh is what a user can reason about; the planner wants EUR/Wh."""
+        raw = entry.get(key)
         if raw in (None, "", 0):
             return None
         try:
             return float(raw) / 100.0 / 1000.0
         except (TypeError, ValueError):
             logger.warning(
-                "[LOADS] '%s' has an unreadable max_price_ct_kwh %r - ignoring the cap",
-                self.id, raw,
+                "[LOADS] '%s' has an unreadable %s %r - ignoring that limit",
+                self.id, key, raw,
             )
             return None
 
@@ -99,6 +109,7 @@ class ManagedLoad:
             min_runtime_slots=min_runtime_slots,
             max_slots_per_day=int(max_hours * slots_per_hour),
             max_price_eur_per_wh=self.max_price_eur_per_wh,
+            max_slot_price_eur_per_wh=self.max_slot_price_eur_per_wh,
         )
 
     def reconfigure(self, entry):
@@ -115,7 +126,10 @@ class ManagedLoad:
         self.config = resolved
         self.enabled = bool(resolved.get("enabled", True))
         self.priority = int(resolved.get("priority", 100) or 100)
-        self.max_price_eur_per_wh = self._price_cap(resolved)
+        self.max_price_eur_per_wh = self._price_cap(resolved, "max_price_ct_kwh")
+        self.max_slot_price_eur_per_wh = self._price_cap(
+            resolved, "max_slot_price_ct_kwh"
+        )
 
         if self.gate is not None:
             self.gate.min_runtime_minutes = max(
@@ -301,6 +315,12 @@ class ManagedLoad:
             # The one worth naming to the user; None when nothing was in the way.
             "limited_by": blocking[0][1] if blocking else None,
             "limited_slots": blocking[0][0] if blocking else 0,
+            # What the plan came to per kWh. Under a budget the pump can legitimately
+            # run in the day's dearest hour, which looks wrong until this number is
+            # next to it.
+            "avg_price_ct_kwh": _as_ct_per_kwh(
+                self.last_demand.plan_price_eur_per_wh if self.last_demand else None
+            ),
             # Set when no setting can close the gap, so the card stops naming one.
             "over_committed": over_committed,
             "reachable_wh": round(reachable_wh, 1),

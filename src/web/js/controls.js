@@ -20,7 +20,8 @@ const MANAGED_LOAD_SLOT_STYLE = {
 
 // You are rationing it: a limit you set on how much or how dear.
 const MANAGED_LOAD_CAPPED_REASONS = new Set([
-    'above price cap', 'daily runtime cap', 'shared power budget',
+    'over the price budget', 'above the price ceiling', 'daily runtime cap',
+    'shared power budget',
 ]);
 
 // It is not allowed to run then, whatever the price.
@@ -926,6 +927,7 @@ class ControlsManager {
                         ? `Planned ${kwh(planned)} &mdash; covers ${pct}% of it.
                            ${this._managedLoadLimit(load)}`
                         : `Planned ${kwh(planned)} &mdash; fully covered.`}
+                    ${this._managedLoadPlanPrice(load)}
                 </div>`;
         }
 
@@ -938,6 +940,31 @@ class ControlsManager {
             ${split}
             ${coverage}
         </div>`;
+    }
+
+    /**
+     * What the plan works out to per kWh.
+     *
+     * Worth its own line because the price limit is on the *average*: the pump can
+     * legitimately be scheduled into the day's dearest hour, paid for by the free ones
+     * around it. Without this number next to it that reads as a fault.
+     *
+     * @param {Object} load - An entry from GET /api/managed_loads
+     * @returns {string} HTML, empty when nothing was placed
+     */
+    _managedLoadPlanPrice(load) {
+        const raw = load.plan_summary && load.plan_summary.avg_price_ct_kwh;
+        // Explicitly, because Number(null) is 0 and would have this claim the plan
+        // averages nothing per kWh whenever no slot was placed at all.
+        if (raw === null || raw === undefined) {
+            return '';
+        }
+        const price = Number(raw);
+        if (!Number.isFinite(price)) {
+            return '';
+        }
+        return `<div style="opacity:0.75;">Averages
+                ${price.toFixed(1)}&nbsp;ct/kWh across the plan.</div>`;
     }
 
     /**
@@ -967,7 +994,8 @@ class ControlsManager {
                     or the store is losing more heat than it is being given.`;
         }
         const REMEDY = {
-            'above price cap': 'raise or clear the price cap',
+            'over the price budget': 'raise the average price limit, or widen the window so cheaper hours can pay for the dear ones',
+            'above the price ceiling': 'raise or clear the per-hour price ceiling',
             'outside allowed hours': 'widen the allowed window',
             'too cold to run': 'lower the minimum outside temperature, if the appliance allows it',
             'out of season': 'extend the season',

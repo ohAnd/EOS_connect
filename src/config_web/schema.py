@@ -2484,8 +2484,29 @@ _ALL_FIELDS: list[FieldDef] = [
         section="managed_loads",
         level="expert",
         description=(
-            "Never run above this price in ct/kWh (0 = no cap). Ignored when frost "
+            "What this load's energy may cost on average, in ct/kWh, across the whole "
+            "plan (0 = no limit). Free and cheap hours earn headroom that an expensive "
+            "hour can spend, so a target stays reachable through a dear evening - the "
+            "limit is on the average, not on each hour taken alone. Ignored when frost "
             "protection is active"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"min": 0, "max": 200},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.max_slot_price_ct_kwh",
+        field_type="float",
+        default=0,
+        section="managed_loads",
+        level="expert",
+        description=(
+            "Never run in a single hour above this price in ct/kWh, whatever the "
+            "average allows (0 = no ceiling). A guard against a sunny forecast buying "
+            "a tariff spike; about twice the average limit is a sensible starting "
+            "point. Ignored when frost protection is active"
         ),
         hot_reload=True,
         help_url="configuration.html#managed-loads",
