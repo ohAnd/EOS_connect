@@ -26,6 +26,7 @@ from .contribution import (
 from .gate import ReleaseGate
 from .planner import (
     NON_BLOCKING_REASONS,
+    plan_price,
     SLOT_DEADLINE,
     SLOT_PAST,
     SLOT_PLANNED,
@@ -224,6 +225,12 @@ class ManagedLoad:
             plan += [0.0] * (ctx.slot_count - len(plan))
         self.last_plan = plan[: ctx.slot_count]
         self.last_schedule_at = ctx.now
+        # The price has to describe the plan that was adopted, not the one this module
+        # worked out and then threw away. Reporting the fallback's figure beside the
+        # optimizer's schedule was describing hours the appliance is not going to run in.
+        self.last_demand.plan_price_eur_per_wh = plan_price(
+            self.last_plan, list(ctx.price_eur_per_wh or [])
+        )
         self.last_release = self._gate_on(self.last_demand, ctx, self.last_plan)
         return self.last_release
 
