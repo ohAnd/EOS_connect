@@ -157,6 +157,45 @@ def get_section(section):
 # ------------------------------------------------------------------
 
 
+def _classify_updates(data):
+    """
+    Coerce an incoming save and sort its keys into restart-required and hot-reloadable.
+
+    Keys with no schema definition are dropped, which is what makes a payload carrying
+    UI state safe to post.
+    """
+    updates = {}
+    changed_keys = []
+    restart_required = []
+    hot_reloaded = []
+
+    for key, value in data.items():
+        field_def = _resolve_schema_key(key)
+        if field_def is None:
+            continue
+
+        updates[key] = _coerce_value(field_def, value)
+        changed_keys.append(key)
+
+        if "restart_required" in field_def.labels:
+            restart_required.append(key)
+        elif field_def.hot_reload:
+            hot_reloaded.append(key)
+
+    return updates, changed_keys, restart_required, hot_reloaded
+
+
+def _notify_changes(before, updates):
+    """Fire the hot-reload callbacks for the values that actually changed."""
+    notify = getattr(_module, "notify_config_changed", None)
+    for key, value in updates.items():
+        old_value = before.get(key)
+        if old_value == value:
+            continue
+        if notify is not None:
+            notify(key, old_value, value)
+
+
 @config_bp.route("/", methods=["PUT"])
 def update_config():
     """
@@ -209,26 +248,27 @@ def update_config():
             "message": "Cannot save: required dependencies not configured"
         }), 200
 
-    changed_keys = []
-    restart_required = []
-    hot_reloaded = []
+    before = _store.get_all()
+    updates, changed_keys, restart_required, hot_reloaded = _classify_updates(data)
 
-    for key, value in data.items():
-        field_def = _resolve_schema_key(key)
-        if field_def is None:
-            continue
-
-        value = _coerce_value(field_def, value)
-        _store.set(key, value)
-        changed_keys.append(key)
-
-        if "restart_required" in field_def.labels:
-            restart_required.append(key)
-        elif field_def.hot_reload:
-            hot_reloaded.append(key)
-
-    # Rebuild merged config so get_config() reflects changes
+    # Write, rebuild, *then* notify - in that order, and the order is the whole point.
+    #
+    # ``ConfigStore.set`` fires the change callbacks the moment each row lands, and this
+    # handler used to rebuild the merged config afterwards. ``get_config()`` serves a
+    # cached dict, so any hot-reload handler that reads it rather than taking the value
+    # from its callback argument was handed the values it was replacing. Managed loads
+    # are exactly such a handler - deliberately, so it cannot drift out of step with
+    # fields added later - so every one of their live-editable settings quietly needed a
+    # restart: a price cap saved as "no cap" kept capping at the old figure.
+    #
+    # ``set_batch`` skips the callbacks and commits once, which also makes a multi-key
+    # save all-or-nothing instead of partially applied. The import path has done it this
+    # way all along; this is the same sequence.
+    if updates:
+        _store.set_batch(updates)
     _module.rebuild_config()
+
+    _notify_changes(before, updates)
 
     # Persist restart-required fields for banner across reloads
     if restart_required:
