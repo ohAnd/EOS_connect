@@ -1036,3 +1036,76 @@ class TestManagedLoads:
             [self._load(n_slots=192)],
         )
         assert len(result["managed_loads"]["pool"]) == 192
+
+    # -- what the household actually pays extra ------------------------------------
+
+    def test_the_cost_is_measured_against_a_run_without_the_load(self, backend_hourly):
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48, pv_value=0.0),
+            [self._load()],
+        )
+        cost = result["managed_loads_cost"]
+        assert cost is not None
+        assert cost["energy_wh"] > 0
+        assert cost["eur_per_wh"] > 0
+        assert cost["shared"] is False
+
+    def test_nothing_placed_means_no_cost_to_report(self, backend_hourly):
+        """No second solve either - there is nothing to measure."""
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48),
+            [self._load(value_eur_per_wh=0.0)],
+        )
+        assert result["managed_loads_cost"] is None
+
+    def test_sun_makes_the_load_cheaper_not_dearer(self, backend_hourly):
+        """
+        The whole reason this is measured rather than read off the tariff. The hours a
+        load occupies on a sunny day are not cheaper hours - often they are dearer -
+        so the tariff of those hours moves the wrong way. What the household actually
+        pays does not.
+        """
+        rates = []
+        for pv in (0.0, 4000.0):
+            result, _ = self._solve(
+                backend_hourly,
+                _make_eos_request(n_slots=48, pv_value=pv, load_value=400.0),
+                [self._load(value_eur_per_wh=0.0005)],
+            )
+            cost = result["managed_loads_cost"]
+            rates.append(cost["eur_per_wh"] if cost else 0.0)
+        assert rates[1] < rates[0], "a sunny day must not cost more"
+
+    def test_the_measured_rate_stays_under_what_the_energy_was_worth(self, backend_hourly):
+        """The promise the price limit makes, checked on the figure the card shows."""
+        value = 0.0004
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48, pv_value=0.0),
+            [self._load(value_eur_per_wh=value)],
+        )
+        assert result["managed_loads_cost"]["eur_per_wh"] <= value + 1e-9
+
+    def test_two_loads_report_a_shared_figure(self, backend_hourly):
+        loads = [self._load(id="pool"), self._load(id="sauna", demand_wh=3000.0)]
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48, pv_value=0.0), loads
+        )
+        assert result["managed_loads_cost"]["shared"] is True
+
+    def test_the_baseline_is_solved_without_the_loads(self, backend_hourly):
+        """
+        Guards the thing that would quietly ruin the number: a baseline that still had
+        the loads in it would measure zero, and the card would report the pool as free.
+        """
+        seen = []
+        original = backend_hourly._build_optimizer
+
+        def spy(request, timeout, managed_loads=None):
+            seen.append(len(managed_loads or []))
+            return original(request, timeout, managed_loads)
+
+        backend_hourly._build_optimizer = spy
+        self._solve(
+            backend_hourly, _make_eos_request(n_slots=48, pv_value=0.0), [self._load()]
+        )
+        assert seen == [1, 0], f"expected one solve with and one without, got {seen}"

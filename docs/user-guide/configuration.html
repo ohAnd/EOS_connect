@@ -422,13 +422,23 @@
                             &mdash; including an expensive hour served from a battery that was
                             charged cheaply for the purpose, which is a trade only something
                             seeing both sides can make. What you actually pay per kWh comes in
-                            under the figure you set, and the overlay reports it.</li>
+                            under the figure you set, and the overlay reports it &mdash;
+                            measured, by solving the same horizon again without the load and
+                            taking the difference in your own bill. On a sunny day that falls
+                            towards your <em>feed-in tariff</em> rather than to zero, because
+                            self-consumed solar still costs you the export you gave up; on a
+                            dark one it rises towards the limit. With more than one load
+                            scheduled the total is split between them by energy, which the
+                            card says.</li>
                         <li><strong>External optimizer</strong> &mdash; EOS Connect cannot
                             reach inside EOS Server or a remote EVopt, so the rule is simpler:
                             skip any hour whose own price is above the limit, and hand the
                             resulting plan over as part of the load forecast. Safe, but blunt
                             &mdash; it refuses a dear hour even when the rest of the day was
-                            nearly free, and it cannot arrange cheap energy in advance.</li>
+                            nearly free, and it cannot arrange cheap energy in advance. The
+                            overlay then shows the tariff of the hours the load runs in, which
+                            is a rougher guide: it cannot see that the energy came off your
+                            roof, so a sunny day can read dearer than a dark one.</li>
                     </ul>
                     <p>Everything else about a managed load behaves the same either way: the
                         allowed window, the minimum outside temperature, the minimum runtime

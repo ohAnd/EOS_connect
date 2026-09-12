@@ -83,6 +83,10 @@ class ManagedLoad:
         # household forecast *and* offer it to the solver at the same time.
         self.last_schedule_at = None
         self.waiting_for_schedule_since = None
+        # Whether the reported price was measured against a run without this load, or
+        # is only the tariff of the hours it occupies.
+        self.last_cost_is_measured = False
+        self.last_cost_is_shared = False
         self.last_demand = None
         self.last_release = None
         self.last_error = None
@@ -209,7 +213,7 @@ class ManagedLoad:
 
         return self._contribution(plan, ctx, demand), release
 
-    def adopt_schedule(self, schedule, ctx):
+    def adopt_schedule(self, schedule, ctx, cost=None):
         """
         Take a schedule somebody else produced, and gate on that instead.
 
@@ -225,12 +229,17 @@ class ManagedLoad:
             plan += [0.0] * (ctx.slot_count - len(plan))
         self.last_plan = plan[: ctx.slot_count]
         self.last_schedule_at = ctx.now
-        # The price has to describe the plan that was adopted, not the one this module
-        # worked out and then threw away. Reporting the fallback's figure beside the
-        # optimizer's schedule was describing hours the appliance is not going to run in.
-        self.last_demand.plan_price_eur_per_wh = plan_price(
-            self.last_plan, list(ctx.price_eur_per_wh or [])
+        # What the household actually pays extra, where the optimizer measured it. The
+        # tariff of the occupied hours is the fallback, and only a rough guide: it
+        # cannot see that the energy came from the roof, so a sunny day reads dearer
+        # than a dark one.
+        measured = (cost or {}).get("eur_per_wh")
+        self.last_demand.plan_price_eur_per_wh = (
+            float(measured) if measured is not None
+            else plan_price(self.last_plan, list(ctx.price_eur_per_wh or []))
         )
+        self.last_cost_is_measured = measured is not None
+        self.last_cost_is_shared = bool((cost or {}).get("shared"))
         self.last_release = self._gate_on(self.last_demand, ctx, self.last_plan)
         return self.last_release
 
@@ -391,6 +400,11 @@ class ManagedLoad:
             "avg_price_ct_kwh": _as_ct_per_kwh(
                 self.last_demand.plan_price_eur_per_wh if self.last_demand else None
             ),
+            # What that figure is: what the household pays extra for this load, or
+            # merely the tariff of the hours it runs in. They differ most on the sunny
+            # days people care about, so the card must not present one as the other.
+            "price_is_measured": self.last_cost_is_measured,
+            "price_is_shared": self.last_cost_is_shared,
             # Set when no setting can close the gap, so the card stops naming one.
             "over_committed": over_committed,
             "reachable_wh": round(reachable_wh, 1),

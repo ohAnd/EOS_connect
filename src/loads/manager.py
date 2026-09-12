@@ -370,13 +370,17 @@ class ManagedLoadManager:
             })
         return records
 
-    def adopt_schedules(self, schedules):
+    def adopt_schedules(self, schedules, cost=None):
         """
         Take the optimizer's placements and settle each gate on them.
 
         Loads the optimizer did not answer for keep the plan this module worked out on
         its own - a solver that failed, or was swapped out, must not leave a pool with
         no way to decide anything.
+
+        *cost* is what the household pays extra for them, measured by the optimizer
+        against a run without them. It is the figure the price limit promises, so it is
+        what gets reported rather than the tariff of the hours they happen to occupy.
         """
         if not isinstance(schedules, dict):
             return 0
@@ -390,7 +394,7 @@ class ManagedLoadManager:
             ctx = self._last_ctx_for.get(item.id)
             if ctx is None:
                 continue
-            release = item.adopt_schedule(schedule, ctx)
+            release = item.adopt_schedule(schedule, ctx, cost=cost)
             if release is not None:
                 self._publish_release(item, release)
                 adopted += 1

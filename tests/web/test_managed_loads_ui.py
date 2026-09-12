@@ -813,13 +813,10 @@ def _card_with(page, summary_extra):
     return " ".join(page.text_content("#full_screen_content").split())
 
 
-def test_the_card_says_what_the_plan_averages(page):
-    """
-    The limit is on the average, so the pump can legitimately be scheduled into the
-    day's dearest hour. Without this number beside it that reads as a fault.
-    """
+def test_the_card_says_what_the_plan_costs(page):
+    """Whatever the figure is, it reaches the card from the plan summary."""
     _open_overlay(page)
-    assert "Averages 21.4 ct/kWh" in _card_with(page, {"avg_price_ct_kwh": 21.4})
+    assert "21.4 ct/kWh" in _card_with(page, {"avg_price_ct_kwh": 21.4})
 
 
 def test_a_plan_with_no_price_information_says_nothing_about_one(page):
@@ -828,14 +825,16 @@ def test_a_plan_with_no_price_information_says_nothing_about_one(page):
 
 
 
-def _price_line(page, price, scheduled):
+def _price_line(page, price, scheduled, measured=False, shared=False):
     page.evaluate(
-        """([price, scheduled]) => {
+        """([price, scheduled, measured, shared]) => {
             document.getElementById('full_screen_content').innerHTML =
                 controlsManager._managedLoadPlanPrice(
-                    {plan_summary: {avg_price_ct_kwh: price}}, scheduled);
+                    {plan_summary: {avg_price_ct_kwh: price,
+                                    price_is_measured: measured,
+                                    price_is_shared: shared}}, scheduled);
         }""",
-        [price, scheduled],
+        [price, scheduled, measured, shared],
     )
     return " ".join(page.text_content("#full_screen_content").split())
 
@@ -845,14 +844,30 @@ def test_the_card_says_what_the_plan_costs_per_kwh(page):
     assert "21.4 ct/kWh" in _price_line(page, 21.4, False)
 
 
-def test_a_scheduled_load_makes_the_stronger_claim(page):
+def test_an_unmeasured_price_is_not_called_a_cost(page):
     """
-    Under the optimizer the figure is what the household actually pays extra, battery
-    included - not the tariff of whichever hours the load happens to occupy.
+    The tariff of the occupied hours cannot see where the energy came from, so it reads
+    *dearer* on a sunny day than a dark one. Calling it "costs" would point the user at
+    the wrong number on exactly the day they look.
     """
     _open_overlay(page)
-    assert "with the battery and the house together" in _price_line(page, 18.0, True)
-    assert "across the planned hours" in _price_line(page, 18.0, False)
+    shown = _price_line(page, 34.9, True, measured=False)
+    assert "Runs in hours averaging 34.9 ct/kWh on the tariff" in shown
+    assert "Costs" not in shown
+
+
+def test_a_measured_price_is_stated_as_the_extra_spending_it_is(page):
+    _open_overlay(page)
+    shown = _price_line(page, 18.4, True, measured=True)
+    assert "Costs 18.4 ct/kWh of extra household spending" in shown
+
+
+def test_a_shared_measurement_says_it_is_shared(page):
+    """With several loads the split is an allocation, not a measurement of each."""
+    _open_overlay(page)
+    shown = _price_line(page, 18.7, True, measured=True, shared=True)
+    assert "shared with the other scheduled loads by energy" in shown
+    assert "shared" not in _price_line(page, 18.4, True, measured=True)
 
 
 def test_no_price_means_no_claim_at_all(page):

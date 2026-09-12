@@ -1324,7 +1324,10 @@ class OptimizationScheduler:
         # acts on the response. A load the optimizer did not answer for keeps the plan
         # the managed-load module worked out on its own.
         if optimized_response.get("managed_loads"):
-            load_manager.adopt_schedules(optimized_response["managed_loads"])
+            load_manager.adopt_schedules(
+                optimized_response["managed_loads"],
+                cost=optimized_response.get("managed_loads_cost"),
+            )
 
         if error is not True:
             setting_control_data(ac_charge_demand, dc_charge_demand, discharge_allowed)

@@ -970,14 +970,23 @@ class ControlsManager {
         if (!Number.isFinite(price)) {
             return '';
         }
-        // Under the optimizer this figure is what the household actually pays extra
-        // for the load, battery included, which is a stronger claim than the tariff of
-        // the hours it happens to run in - so it is worth wording differently.
-        return scheduled
-            ? `<div style="opacity:0.75;">Costs ${price.toFixed(1)}&nbsp;ct/kWh,
-               scheduled with the battery and the house together.</div>`
-            : `<div style="opacity:0.75;">Averages
-               ${price.toFixed(1)}&nbsp;ct/kWh across the planned hours.</div>`;
+        // Two different figures, and the difference matters most on the days people
+        // ask about. Measured, it is what the household pays extra for this load -
+        // it falls towards the feed-in tariff on a sunny day, because self-consumed
+        // sun costs only the export it gave up. Unmeasured, it is the tariff of the
+        // hours the load occupies, which cannot see where the energy came from and so
+        // reads *dearer* on a sunny day than a dark one. Saying "costs" for the second
+        // would point the user at the wrong number on exactly the day they look.
+        const summary = load.plan_summary || {};
+        if (!summary.price_is_measured) {
+            return `<div style="opacity:0.75;">Runs in hours averaging
+                    ${price.toFixed(1)}&nbsp;ct/kWh on the tariff.</div>`;
+        }
+        const shared = summary.price_is_shared
+            ? ' &mdash; shared with the other scheduled loads by energy'
+            : '';
+        return `<div style="opacity:0.75;">Costs ${price.toFixed(1)}&nbsp;ct/kWh of
+                extra household spending${shared}.</div>`;
     }
 
     /**
