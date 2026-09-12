@@ -944,7 +944,7 @@ def test_a_load_with_no_site_history_reports_no_bias(make_manager):
 
 # --- naming what holds a load back ------------------------------------------------------
 
-def test_a_price_cap_is_named_as_the_limit(make_manager, installation):
+def test_the_price_budget_is_named_as_the_limit(make_manager, installation):
     """
     The real case: a 22 ct/kWh cap ruled out four fifths of the horizon while the
     window stood open from 06:00 to 23:00, and the page said "widen its window".
@@ -955,7 +955,7 @@ def test_a_price_cap_is_named_as_the_limit(make_manager, installation):
     _run(manager, installation, water_c=22.0)
 
     summary = manager.instance("pool").plan_summary()
-    assert summary["limited_by"] == "above price cap"
+    assert summary["limited_by"] == "over the price budget"
     assert summary["limited_slots"] > 20
 
 
@@ -997,7 +997,7 @@ def test_the_summary_reaches_the_api(make_manager, installation):
     _run(manager, installation, water_c=22.0)
 
     load = manager.status()["loads"][0]
-    assert load["plan_summary"]["limited_by"] == "above price cap"
+    assert load["plan_summary"]["limited_by"] == "over the price budget"
     assert len(load["plan_reasons"]) == 48
 
 
@@ -1027,5 +1027,42 @@ def test_a_reachable_demand_still_names_the_setting(make_manager, installation):
     _run(manager, installation, water_c=27.0)
 
     summary = manager.instance("pool").plan_summary()
-    assert summary["limited_by"] == "above price cap"
+    assert summary["limited_by"] == "over the price budget"
     assert summary["over_committed"] is False
+
+
+def test_the_summary_reports_what_the_plan_averages(make_manager, installation):
+    """The number that makes an expensive planned hour legible instead of alarming."""
+    manager = make_manager([POOL])
+    installation.prices = [0.0003] * 48
+    _run(manager, installation, water_c=20.0)
+
+    summary = manager.instance("pool").plan_summary()
+    assert summary["avg_price_ct_kwh"] == pytest.approx(30.0, abs=0.1)
+
+
+def test_cheap_hours_pay_for_dear_ones(make_manager, installation):
+    """
+    End to end: a budget the old per-slot veto would have failed. Half the horizon is
+    free and half is at 45 ct, so a 25 ct limit must place both halves - the veto would
+    have placed only the free one.
+    """
+    manager = make_manager([dict(POOL, max_price_ct_kwh=25.0)])
+    installation.prices = [0.0] * 24 + [0.00045] * 24
+    _run(manager, installation, water_c=15.0)
+
+    load = manager.instance("pool")
+    assert any(load.last_plan[24:]), "no dear slot was subsidised"
+    assert load.plan_summary()["avg_price_ct_kwh"] <= 25.0
+
+
+def test_the_per_hour_ceiling_is_separate_from_the_budget(make_manager, installation):
+    manager = make_manager(
+        [dict(POOL, max_price_ct_kwh=0, max_slot_price_ct_kwh=30.0)]
+    )
+    installation.prices = [0.0002] * 48
+    installation.prices[20] = 0.0009
+    _run(manager, installation, water_c=15.0)
+
+    load = manager.instance("pool")
+    assert load.last_demand.slot_reasons[20] == "above the price ceiling"
