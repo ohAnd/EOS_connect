@@ -944,7 +944,7 @@ def test_a_load_with_no_site_history_reports_no_bias(make_manager):
 
 # --- naming what holds a load back ------------------------------------------------------
 
-def test_the_price_budget_is_named_as_the_limit(make_manager, installation):
+def test_a_price_cap_is_named_as_the_limit(make_manager, installation):
     """
     The real case: a 22 ct/kWh cap ruled out four fifths of the horizon while the
     window stood open from 06:00 to 23:00, and the page said "widen its window".
@@ -955,7 +955,7 @@ def test_the_price_budget_is_named_as_the_limit(make_manager, installation):
     _run(manager, installation, water_c=22.0)
 
     summary = manager.instance("pool").plan_summary()
-    assert summary["limited_by"] == "over the price budget"
+    assert summary["limited_by"] == "above price cap"
     assert summary["limited_slots"] > 20
 
 
@@ -997,7 +997,7 @@ def test_the_summary_reaches_the_api(make_manager, installation):
     _run(manager, installation, water_c=22.0)
 
     load = manager.status()["loads"][0]
-    assert load["plan_summary"]["limited_by"] == "over the price budget"
+    assert load["plan_summary"]["limited_by"] == "above price cap"
     assert len(load["plan_reasons"]) == 48
 
 
@@ -1027,7 +1027,7 @@ def test_a_reachable_demand_still_names_the_setting(make_manager, installation):
     _run(manager, installation, water_c=27.0)
 
     summary = manager.instance("pool").plan_summary()
-    assert summary["limited_by"] == "over the price budget"
+    assert summary["limited_by"] == "above price cap"
     assert summary["over_committed"] is False
 
 
@@ -1041,28 +1041,136 @@ def test_the_summary_reports_what_the_plan_averages(make_manager, installation):
     assert summary["avg_price_ct_kwh"] == pytest.approx(30.0, abs=0.1)
 
 
-def test_cheap_hours_pay_for_dear_ones(make_manager, installation):
+
+# --- handing the placing to the optimizer ------------------------------------------------
+
+def test_a_scheduled_load_is_not_also_in_the_household_forecast(make_manager, installation):
     """
-    End to end: a budget the old per-slot veto would have failed. Half the horizon is
-    free and half is at 45 ct, so a 25 ct limit must place both halves - the veto would
-    have placed only the free one.
+    It cannot be both. Injecting it *and* asking the solver to place it would have the
+    optimizer schedule around an appliance it is simultaneously scheduling.
     """
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    base = [1000.0] * 48
+    assert manager.apply(base, 3600) == base
+
+
+def test_the_load_is_offered_to_the_optimizer_instead(make_manager, installation):
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    records = manager.schedulable()
+    assert len(records) == 1
+    record = records[0]
+    assert record["id"] == "pool"
+    assert record["demand_wh"] > 0
+    assert record["max_power_w"] > 0
+    assert len(record["feasible"]) == 48
+
+
+def test_nothing_is_offered_while_the_backend_cannot_place_it(make_manager, installation):
+    """The record is built either way; what changes is who acts on it."""
+    manager = make_manager([POOL])
+    _run(manager, installation, water_c=20.0)
+
+    base = [1000.0] * 48
+    assert manager.apply(base, 3600) != base
+
+
+def test_the_gate_waits_for_the_schedule_rather_than_guessing(make_manager, installation):
+    """
+    The gate remembers when it last released. Settling it on a plan that is about to be
+    replaced would start a minimum-runtime hold on a decision nobody made.
+    """
+    manager = make_manager([dict(POOL, min_runtime_minutes=60)])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    assert manager.instance("pool").last_release is None
+
+
+def test_adopting_a_schedule_settles_the_gate_on_it(make_manager, installation):
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    schedule = [0.0] * 48
+    schedule[manager._last_ctx.current_slot] = 1500.0   # pylint: disable=protected-access
+    assert manager.adopt_schedules({"pool": schedule}) == 1
+
+    load = manager.instance("pool")
+    assert load.last_release["released"] is True
+    assert load.last_plan[manager._last_ctx.current_slot] == 1500.0  # pylint: disable=protected-access
+
+
+def test_an_empty_schedule_blocks_the_load(make_manager, installation):
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    assert manager.instance("pool").last_release["released"] is False
+
+
+def test_a_load_the_optimizer_did_not_answer_for_keeps_its_own_plan(
+    make_manager, installation
+):
+    """A solver that failed must not leave a pool with no way to decide anything."""
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    own_plan = list(manager.instance("pool").last_plan)
+
+    assert manager.adopt_schedules({"sauna": [0.0] * 48}) == 0
+    assert manager.instance("pool").last_plan == own_plan
+
+
+def test_a_disabled_load_is_never_offered(make_manager, installation):
+    manager = make_manager([dict(POOL, enabled=False)])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    assert manager.schedulable() == []
+
+
+def test_a_pushed_profile_load_is_never_offered(make_manager, installation):
+    """Nothing to place: it says what it *will* draw, not what it needs."""
+    manager = make_manager([{"id": "heating", "type": TYPE_EXTERNAL_PROFILE}])
+    manager.external_scheduler = True
+    manager.push("heating", {"value_wh": 900})
+    assert manager.schedulable() == []
+
+
+def test_a_profile_load_still_joins_the_household_forecast(make_manager, installation):
+    """Only contingent loads move; a pushed profile is part of the forecast as before."""
+    manager = make_manager([{"id": "heating", "type": TYPE_EXTERNAL_PROFILE}])
+    manager.external_scheduler = True
+    manager.push("heating", {"value_wh": 900})
+    manager.run_cycle()
+
+    base = [1000.0] * 48
+    assert manager.apply(base, 3600) != base
+
+
+def test_the_price_limit_becomes_what_the_energy_is_worth(make_manager, installation):
     manager = make_manager([dict(POOL, max_price_ct_kwh=25.0)])
-    installation.prices = [0.0] * 24 + [0.00045] * 24
-    _run(manager, installation, water_c=15.0)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
 
-    load = manager.instance("pool")
-    assert any(load.last_plan[24:]), "no dear slot was subsidised"
-    assert load.plan_summary()["avg_price_ct_kwh"] <= 25.0
+    assert manager.schedulable()[0]["value_eur_per_wh"] == pytest.approx(0.00025)
 
 
-def test_the_per_hour_ceiling_is_separate_from_the_budget(make_manager, installation):
-    manager = make_manager(
-        [dict(POOL, max_price_ct_kwh=0, max_slot_price_ct_kwh=30.0)]
-    )
-    installation.prices = [0.0002] * 48
-    installation.prices[20] = 0.0009
-    _run(manager, installation, water_c=15.0)
+def test_no_price_limit_means_worth_more_than_any_tariff(make_manager, installation):
+    """
+    Finite on purpose. An unbounded reward would make a target that cannot be reached
+    into an unbounded objective rather than a short plan.
+    """
+    manager = make_manager([dict(POOL, max_price_ct_kwh=0)])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
 
-    load = manager.instance("pool")
-    assert load.last_demand.slot_reasons[20] == "above the price ceiling"
+    value = manager.schedulable()[0]["value_eur_per_wh"]
+    assert value > max(installation.prices) * 5
+    assert value < float("inf")

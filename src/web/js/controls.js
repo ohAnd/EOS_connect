@@ -20,8 +20,7 @@ const MANAGED_LOAD_SLOT_STYLE = {
 
 // You are rationing it: a limit you set on how much or how dear.
 const MANAGED_LOAD_CAPPED_REASONS = new Set([
-    'over the price budget', 'above the price ceiling', 'daily runtime cap',
-    'shared power budget',
+    'above price cap', 'daily runtime cap', 'shared power budget',
 ]);
 
 // It is not allowed to run then, whatever the price.
@@ -787,14 +786,22 @@ class ControlsManager {
 
             const total = Number(data.contribution_total_wh) || 0;
             const budget = Number(data.max_power_w) || 0;
+            // "Added to the load forecast" is only true of the loads that are in it.
+            // Where the optimizer schedules them they are not part of the forecast at
+            // all - they are something it is deciding the timing of.
+            const headline = Boolean(data.scheduled_by_optimizer)
+                ? 'scheduled by the optimizer, with the battery and the house'
+                : `<strong>${(total / 1000).toFixed(1)} kWh</strong> added to the load forecast`;
 
             let html = `<div style="margin-bottom: 16px; opacity: 0.85;">
-                ${loads.length} load${loads.length === 1 ? '' : 's'} &middot;
-                <strong>${(total / 1000).toFixed(1)} kWh</strong> added to the load forecast
+                ${loads.length} load${loads.length === 1 ? '' : 's'} &middot; ${headline}
                 ${budget > 0 ? `&middot; shared limit ${budget} W` : ''}
             </div>`;
 
-            html += loads.map(l => this._managedLoadCard(l, slotSeconds, currentSlot)).join('');
+            const scheduled = Boolean(data.scheduled_by_optimizer);
+            html += loads
+                .map(l => this._managedLoadCard(l, slotSeconds, currentSlot, scheduled))
+                .join('');
             showFullScreenOverlay(header, html);
         } catch (err) {
             console.error('[ControlsManager] Managed loads overlay failed:', err);
@@ -829,7 +836,7 @@ class ControlsManager {
      * @param {number} currentSlot - Index of the slot happening now
      * @returns {string} Card HTML
      */
-    _managedLoadCard(load, slotSeconds, currentSlot) {
+    _managedLoadCard(load, slotSeconds, currentSlot, scheduled = false) {
         const release = load.release || null;
         const detail = load.detail || {};
         const model = load.model || {};
@@ -853,7 +860,7 @@ class ControlsManager {
             <div style="opacity:0.75;font-size:0.9em;margin-bottom:12px;">
                 ${this.escapeHtml((release && release.reason) || load.reason || '')}
             </div>
-            ${this._managedLoadEnergy(load, detail)}
+            ${this._managedLoadEnergy(load, detail, scheduled)}
             ${this._managedLoadFacts(load, detail, model, release)}
             ${this._managedLoadCalibration(load, model)}
             ${this._managedLoadPlanStrip(load.plan || [], slotSeconds, currentSlot,
@@ -884,7 +891,7 @@ class ControlsManager {
      * @param {Object} detail - Its model detail
      * @returns {string} HTML
      */
-    _managedLoadEnergy(load, detail) {
+    _managedLoadEnergy(load, detail, scheduled = false) {
         const needed = Number(load.energy_needed_wh) || 0;
         const planned = Number(load.planned_wh) || 0;
         if (needed <= 0 && planned <= 0) {
@@ -927,7 +934,7 @@ class ControlsManager {
                         ? `Planned ${kwh(planned)} &mdash; covers ${pct}% of it.
                            ${this._managedLoadLimit(load)}`
                         : `Planned ${kwh(planned)} &mdash; fully covered.`}
-                    ${this._managedLoadPlanPrice(load)}
+                    ${this._managedLoadPlanPrice(load, scheduled)}
                 </div>`;
         }
 
@@ -952,7 +959,7 @@ class ControlsManager {
      * @param {Object} load - An entry from GET /api/managed_loads
      * @returns {string} HTML, empty when nothing was placed
      */
-    _managedLoadPlanPrice(load) {
+    _managedLoadPlanPrice(load, scheduled) {
         const raw = load.plan_summary && load.plan_summary.avg_price_ct_kwh;
         // Explicitly, because Number(null) is 0 and would have this claim the plan
         // averages nothing per kWh whenever no slot was placed at all.
@@ -963,8 +970,14 @@ class ControlsManager {
         if (!Number.isFinite(price)) {
             return '';
         }
-        return `<div style="opacity:0.75;">Averages
-                ${price.toFixed(1)}&nbsp;ct/kWh across the plan.</div>`;
+        // Under the optimizer this figure is what the household actually pays extra
+        // for the load, battery included, which is a stronger claim than the tariff of
+        // the hours it happens to run in - so it is worth wording differently.
+        return scheduled
+            ? `<div style="opacity:0.75;">Costs ${price.toFixed(1)}&nbsp;ct/kWh,
+               scheduled with the battery and the house together.</div>`
+            : `<div style="opacity:0.75;">Averages
+               ${price.toFixed(1)}&nbsp;ct/kWh across the planned hours.</div>`;
     }
 
     /**
@@ -994,8 +1007,7 @@ class ControlsManager {
                     or the store is losing more heat than it is being given.`;
         }
         const REMEDY = {
-            'over the price budget': 'raise the average price limit, or widen the window so cheaper hours can pay for the dear ones',
-            'above the price ceiling': 'raise or clear the per-hour price ceiling',
+            'above price cap': 'raise or clear the price cap',
             'outside allowed hours': 'widen the allowed window',
             'too cold to run': 'lower the minimum outside temperature, if the appliance allows it',
             'out of season': 'extend the season',

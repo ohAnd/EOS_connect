@@ -471,6 +471,11 @@ load_manager.sources = ManagedLoadSources(
     temperature_forecast=_managed_load_temperature_forecast,
 )
 load_manager.on_release_change = publish_managed_load_release
+# The built-in optimizer places contingent loads itself, which means this module must
+# stop putting them into the household profile and start handing them over instead.
+load_manager.external_scheduler = getattr(
+    eos_interface, "schedules_managed_loads", False
+)
 
 if load_manager.enabled_ids():
     mqtt_interface.register_topics(managed_load_topics.build_topics(load_manager))
@@ -1263,7 +1268,16 @@ class OptimizationScheduler:
         mqtt_interface.update_publish_topics(
             {"optimization/state": {"value": self.get_current_state()["request_state"]}}
         )
-        optimized_response, avg_runtime = eos_interface.optimize(json_optimize_input)
+        # Contingent loads reach a solver that can place them as something to schedule,
+        # beside the request rather than inside it: that dict is posted verbatim to an
+        # EOS server, which validates what it is sent, and no other backend could use
+        # them anyway.
+        if getattr(eos_interface, "schedules_managed_loads", False):
+            optimized_response, avg_runtime = eos_interface.optimize(
+                json_optimize_input, managed_loads=load_manager.schedulable()
+            )
+        else:
+            optimized_response, avg_runtime = eos_interface.optimize(json_optimize_input)
         # Store the runtime for use in sleep calculation (defensive against None)
         try:
             if avg_runtime is None:
@@ -1306,6 +1320,12 @@ class OptimizationScheduler:
             error,
             dyn_override_array,
         ) = eos_interface.examine_response_to_control_data(optimized_response)
+        # Settle each load's gate on what the optimizer decided, before anything else
+        # acts on the response. A load the optimizer did not answer for keeps the plan
+        # the managed-load module worked out on its own.
+        if optimized_response.get("managed_loads"):
+            load_manager.adopt_schedules(optimized_response["managed_loads"])
+
         if error is not True:
             setting_control_data(ac_charge_demand, dc_charge_demand, discharge_allowed)
             # Store the override array for API response

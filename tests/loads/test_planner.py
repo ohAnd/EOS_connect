@@ -149,8 +149,7 @@ def test_urgent_demand_runs_immediately_and_ignores_price():
     assert _used(plan) == [6, 7]
 
 
-def test_the_budget_excludes_slots_nothing_can_pay_for():
-    """One cheap slot cannot subsidise 47 dear ones, so only it is used."""
+def test_price_cap_excludes_expensive_slots():
     price = [0.0009] * 48
     price[15] = 0.0001
     plan = plan_contingent(
@@ -284,8 +283,7 @@ from src.loads.planner import (  # noqa: E402
     SLOT_NOT_NEEDED,
     SLOT_PAST,
     SLOT_PLANNED,
-    SLOT_PRICE_BUDGET,
-    SLOT_PRICE_CEILING,
+    SLOT_PRICE,
 )
 
 
@@ -298,7 +296,7 @@ def test_the_reasons_line_up_with_the_plan():
     assert planned == _used(plan)
 
 
-def test_the_budget_says_so():
+def test_a_price_cap_says_so():
     price = [0.0009] * 48
     price[15] = 0.0001
     demand = _demand(total_wh=9000.0)
@@ -310,7 +308,7 @@ def test_the_budget_says_so():
     counts = {}
     for reason in demand.slot_reasons:
         counts[reason] = counts.get(reason, 0) + 1
-    assert counts[SLOT_PRICE_BUDGET] == 47
+    assert counts[SLOT_PRICE] == 47
     assert counts[SLOT_PLANNED] == 1
 
 
@@ -357,164 +355,3 @@ def test_slots_left_over_once_the_demand_is_met_are_not_blamed_on_anything():
 
     assert SLOT_NOT_NEEDED in demand.slot_reasons
     assert SLOT_NOT_NEEDED in NON_BLOCKING_REASONS
-
-
-# --- the price limit as a budget -------------------------------------------------------
-
-def _avg_ct(demand):
-    """The plan's achieved price in ct/kWh, for reading assertions aloud."""
-    return demand.plan_price_eur_per_wh * 100.0 * 1000.0
-
-
-def test_cheap_energy_pays_for_expensive_energy():
-    """
-    The whole point. A per-slot veto refused the 45 ct slot outright; a budget lets the
-    free and cheap hours carry it, so the target is reachable through a dear evening.
-    """
-    price = [0.0009] * 48
-    price[10] = 0.0                            # free
-    price[11] = 0.0001                         # 10 ct
-    price[12] = 0.00045                        # 45 ct, above the 25 ct budget
-    demand = _demand(total_wh=5400.0)          # three slots' worth
-    plan = plan_contingent(
-        demand, _ctx(price=price, feed_in=[0.0] * 48),
-        PlanOptions(strategy=STRATEGY_CHEAPEST, max_price_eur_per_wh=0.00025),
-    )
-
-    assert _used(plan) == [10, 11, 12]
-    assert _avg_ct(demand) == pytest.approx((0 + 10 + 45) / 3, abs=0.01)
-
-
-def test_a_dear_slot_with_nothing_to_subsidise_it_is_still_refused():
-    price = [0.0009] * 48
-    price[12] = 0.00045
-    demand = _demand(total_wh=1800.0)
-    plan = plan_contingent(
-        demand, _ctx(price=price),
-        PlanOptions(strategy=STRATEGY_CHEAPEST, max_price_eur_per_wh=0.00025),
-    )
-    assert _used(plan) == []
-    assert demand.slot_reasons[12] == SLOT_PRICE_BUDGET
-
-
-@pytest.mark.parametrize("shape", [
-    [0.0001] * 48,
-    [0.0009] * 48,
-    [0.0001 if i % 2 else 0.0009 for i in range(48)],
-    [0.00001 * i for i in range(48)],
-    [0.0] * 24 + [0.0009] * 24,
-])
-def test_the_plan_never_averages_above_the_budget(shape):
-    """The property the setting promises, over price shapes that stress the greedy."""
-    budget = 0.00025
-    demand = _demand(total_wh=48 * 1800.0)     # more than the horizon can hold
-    plan = plan_contingent(
-        demand, _ctx(price=shape, feed_in=[0.0] * 48),
-        PlanOptions(strategy=STRATEGY_CHEAPEST, max_price_eur_per_wh=budget),
-    )
-    if not any(plan):
-        return
-    assert demand.plan_price_eur_per_wh <= budget + 1e-12
-
-
-def test_the_budget_admits_as_much_as_it_possibly_can():
-    """
-    Greedy is not just safe, it is optimal: taking the cheapest slots while the average
-    holds admits the most energy any set could. Here 24 free slots can carry 24 dear
-    ones at exactly twice the budget, and the plan must take all 48.
-    """
-    price = [0.0] * 24 + [0.0005] * 24
-    demand = _demand(total_wh=48 * 1800.0)
-    plan = plan_contingent(
-        demand, _ctx(price=price, feed_in=[0.0] * 48),
-        PlanOptions(strategy=STRATEGY_CHEAPEST, max_price_eur_per_wh=0.00025),
-    )
-    assert len(_used(plan)) == 48
-
-
-def test_a_surplus_slot_is_admitted_whatever_the_tariff():
-    """
-    Free energy only ever lowers the average, so "always runs when there is surplus"
-    needs no rule of its own - it falls out of the arithmetic.
-    """
-    price = [0.0009] * 48
-    surplus = [0.0] * 48
-    surplus[30] = 9000.0
-    demand = _demand(total_wh=1800.0)
-    plan = plan_contingent(
-        demand, _ctx(price=price, feed_in=[0.0] * 48, surplus=surplus),
-        PlanOptions(strategy=STRATEGY_COMBINED, max_price_eur_per_wh=0.00025),
-    )
-    assert _used(plan) == [30]
-
-
-def test_the_ceiling_refuses_a_spike_the_budget_would_allow():
-    """A sunny horizon must not be able to buy a tariff outlier."""
-    price = [0.0] * 47 + [0.00058]
-    demand = _demand(total_wh=48 * 1800.0)
-    plan = plan_contingent(
-        demand, _ctx(price=price, feed_in=[0.0] * 48),
-        PlanOptions(
-            strategy=STRATEGY_CHEAPEST,
-            max_price_eur_per_wh=0.00025,
-            max_slot_price_eur_per_wh=0.0005,
-        ),
-    )
-    assert 47 not in _used(plan)
-    assert demand.slot_reasons[47] == SLOT_PRICE_CEILING
-
-
-def test_without_a_ceiling_the_budget_alone_governs():
-    price = [0.0] * 47 + [0.00058]
-    demand = _demand(total_wh=48 * 1800.0)
-    plan = plan_contingent(
-        demand, _ctx(price=price, feed_in=[0.0] * 48),
-        PlanOptions(strategy=STRATEGY_CHEAPEST, max_price_eur_per_wh=0.00025),
-    )
-    assert 47 in _used(plan)
-
-
-def test_a_ceiling_can_stand_without_a_budget():
-    """Either limit is usable alone; they are independent settings."""
-    price = [0.0003] * 48
-    price[20] = 0.0009
-    demand = _demand(total_wh=1800.0)
-    plan_contingent(
-        demand, _ctx(price=price),
-        PlanOptions(strategy=STRATEGY_CHEAPEST, max_slot_price_eur_per_wh=0.0005),
-    )
-    assert demand.slot_reasons[20] == SLOT_PRICE_CEILING
-
-
-def test_urgent_demand_ignores_both_limits():
-    price = [0.0009] * 48
-    demand = _demand(total_wh=1800.0, urgent=True)
-    plan = plan_contingent(
-        demand, _ctx(price=price),
-        PlanOptions(
-            strategy=STRATEGY_CHEAPEST,
-            max_price_eur_per_wh=0.00025,
-            max_slot_price_eur_per_wh=0.0003,
-        ),
-    )
-    assert plan[0] == pytest.approx(1800.0)
-
-
-def test_the_pv_surplus_strategy_has_no_price_budget():
-    """Its costs are (-surplus, price) tuples; no average is defined over those."""
-    price = [0.0009] * 48
-    demand = _demand(total_wh=1800.0)
-    plan = plan_contingent(
-        demand, _ctx(price=price),
-        PlanOptions(strategy=STRATEGY_PV_SURPLUS, max_price_eur_per_wh=0.00025),
-    )
-    assert len(_used(plan)) == 1
-    assert demand.plan_price_eur_per_wh is None
-
-
-def test_the_plan_price_is_reported_even_with_no_limit_set():
-    """The card shows what the plan came to whether or not anything constrained it."""
-    price = [0.0003] * 48
-    demand = _demand(total_wh=1800.0)
-    plan_contingent(demand, _ctx(price=price), PlanOptions(strategy=STRATEGY_CHEAPEST))
-    assert _avg_ct(demand) == pytest.approx(30.0, abs=0.01)

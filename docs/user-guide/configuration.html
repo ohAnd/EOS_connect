@@ -410,33 +410,35 @@
                             still the way to stop the requests entirely.</p>
                     </div>
 
-                    <h3>What the price limits mean</h3>
-                    <p><strong>Max Price</strong> is a limit on what this load&rsquo;s energy
-                        costs <em>on average</em> across the whole plan &mdash; not a veto on
-                        each hour taken alone. Free and cheap hours earn headroom that an
-                        expensive hour can spend:</p>
+                    <h3>What the price limit means</h3>
+                    <p><strong>Max Price</strong> is a limit on what you pay per kWh for
+                        this load&rsquo;s energy. What it can guarantee depends on which
+                        optimizer is running, and the overlay says which rule is in force:</p>
                     <ul>
-                        <li>Three hours at 0, 10 and 45&nbsp;ct/kWh average
-                            18.3&nbsp;ct, so a 25&nbsp;ct limit runs all three &mdash;
-                            including the 45&nbsp;ct one.</li>
-                        <li>A single 45&nbsp;ct hour with nothing to subsidise it is refused,
-                            because on its own it averages 45.</li>
-                        <li>Slots covered by your own solar cost the feed-in tariff you gave
-                            up, which only ever pulls the average down. That is why a load
-                            with surplus available runs without needing a rule of its own.</li>
+                        <li><strong>Built-in optimizer</strong> &mdash; the load stops being
+                            part of the household forecast and becomes something the solver
+                            schedules, alongside the battery and everything else. It runs in
+                            any hour where the energy genuinely costs less than your limit
+                            &mdash; including an expensive hour served from a battery that was
+                            charged cheaply for the purpose, which is a trade only something
+                            seeing both sides can make. What you actually pay per kWh comes in
+                            under the figure you set, and the overlay reports it.</li>
+                        <li><strong>External optimizer</strong> &mdash; EOS Connect cannot
+                            reach inside EOS Server or a remote EVopt, so the rule is simpler:
+                            skip any hour whose own price is above the limit, and hand the
+                            resulting plan over as part of the load forecast. Safe, but blunt
+                            &mdash; it refuses a dear hour even when the rest of the day was
+                            nearly free, and it cannot arrange cheap energy in advance.</li>
                     </ul>
-                    <p>This is deliberately different from a per-hour cap, which cannot let a
-                        target be reached through a dear evening however cheap the rest of the
-                        plan is. On a real pool that left 36.6&nbsp;kWh of demand against
-                        29.6&nbsp;kWh the planner would place, with no setting that closed the
-                        gap. The overlay shows the average the plan came to, so an expensive
-                        hour in the schedule reads as intended rather than as a fault.</p>
-                    <p><strong>Max Slot Price</strong> is the guard on top: no single hour
-                        above it is ever used, whatever the average would allow. Without one, a
-                        sunny forecast can buy a tariff spike &mdash; and if the sun does not
-                        arrive, you have paid for it anyway. Roughly twice the average limit is
-                        a sensible starting point. Set either to <strong>0</strong> to switch
-                        it off; frost protection ignores both.</p>
+                    <p>Everything else about a managed load behaves the same either way: the
+                        allowed window, the minimum outside temperature, the minimum runtime
+                        and frost protection are limits the solver is given, not rules it may
+                        trade away. The one setting that stops applying under the built-in
+                        optimizer is <strong>Priority</strong>: loads are placed together
+                        rather than one after another, so there is no queue to be near the
+                        front of.</p>
+                    <p>Set it to <strong>0</strong> for no limit; frost protection ignores it
+                        either way.</p>
 
                     <h3>How long it is allowed to run</h3>
                     <p>Three settings bound the runtime and they stack, so the tightest one
@@ -457,7 +459,7 @@
                             demand; the settings are not in the way.</li>
                         <li><strong>Planned is lower</strong> &mdash; the load cannot get all
                             the energy it needs, and the card names the setting responsible:
-                            the price limit, the allowed hours, the minimum outside temperature,
+                            the price cap, the allowed hours, the minimum outside temperature,
                             the season, the daily runtime cap or the shared power limit,
                             whichever ruled out the most slots &mdash; unless no setting would
                             help, in which case it says that instead. A load can want more energy
@@ -467,7 +469,7 @@
                             target. The strip colours each slot
                             by what became of it &mdash; blue where the load will run, with the
                             bar height showing how much, amber where you are rationing it
-                            (price limit, daily runtime cap, shared power limit), green where it
+                            (price cap, daily runtime cap, shared power limit), green where it
                             is simply not allowed to run then (outside the hours, out of
                             season, too cold), and faint grey where nothing was needed.
                             Hovering any bar gives the exact reason for that slot.</li>

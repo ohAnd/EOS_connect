@@ -3263,32 +3263,7 @@
       "default": 0,
       "section": "managed_loads",
       "level": "expert",
-      "description": "What this load's energy may cost on average, in ct/kWh, across the whole plan (0 = no limit). Free and cheap hours earn headroom that an expensive hour can spend, so a target stays reachable through a dear evening - the limit is on the average, not on each hour taken alone. Ignored when frost protection is active",
-      "labels": [],
-      "help_url": "configuration.html#managed-loads",
-      "validation": {
-        "min": 0,
-        "max": 200
-      },
-      "depends_on": {
-        "type": [
-          "pool_heatpump",
-          "sauna",
-          "hot_water_tank",
-          "buffer_tank",
-          "external_contingent"
-        ]
-      },
-      "hot_reload": true,
-      "display_group": "Operation"
-    },
-    {
-      "key": "managed_loads.max_slot_price_ct_kwh",
-      "type": "float",
-      "default": 0,
-      "section": "managed_loads",
-      "level": "expert",
-      "description": "Never run in a single hour above this price in ct/kWh, whatever the average allows (0 = no ceiling). A guard against a sunny forecast buying a tariff spike; about twice the average limit is a sensible starting point. Ignored when frost protection is active",
+      "description": "Never pay more than this per kWh for this load's energy, in ct/kWh (0 = no limit). With the built-in optimizer the load is scheduled against this figure directly, so it runs whenever the energy actually costs less; with an external optimizer it is a simpler rule that skips any hour above it. Ignored when frost protection is active",
       "labels": [],
       "help_url": "configuration.html#managed-loads",
       "validation": {

@@ -479,6 +479,47 @@ class EVOptBackend:
             evcc_resp,
         )
 
+    def to_solver_slots(self, series, fill=None):
+        """
+        Move a 48-hour series from EOS slot space into solver slot space.
+
+        EOS arrays start at local midnight and run 192 slots (or 48 hourly). The solver
+        is given the horizon that starts *now*, which is the same array rotated by
+        `current_slot` and cut at `n_result` - past slots wrapped round to the tail are
+        stale, and leaving them in is what once let the solver spend today's noon
+        surplus twice.
+
+        Anything that indexes by slot has to make exactly this trip or it silently
+        describes the wrong hours: a mask that says "not before 06:00" would let a pool
+        run at midnight.
+        """
+        params = self._calculate_time_parameters()
+        values = list(series or [])
+        if not values:
+            return []
+        start = params["current_slot"]
+        rotated = values[start:] + values[:start]
+        window = rotated[: params["n_result"]]
+        if fill is not None and len(window) < params["n_result"]:
+            window += [fill] * (params["n_result"] - len(window))
+        return window
+
+    def from_solver_slots(self, series, fill=0.0):
+        """
+        Move a solved per-slot series back into EOS slot space.
+
+        The inverse of `to_solver_slots`: pad the slots already gone with *fill* and
+        extend to the full horizon, so the result can be indexed by EOS slot like every
+        other array the rest of the application handles.
+        """
+        params = self._calculate_time_parameters()
+        values = list(series or [])
+        padded = [fill] * params["current_slot"] + values
+        total = params["n_control"]
+        if len(padded) < total:
+            padded += [fill] * (total - len(padded))
+        return padded[:total]
+
     def _calculate_time_parameters(self):
         """
         Calculate time-based parameters for array sizing and padding.
