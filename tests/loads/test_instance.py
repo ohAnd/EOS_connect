@@ -1299,12 +1299,29 @@ def test_prices_that_have_not_arrived_place_nothing(make_manager, installation, 
     """
     manager = make_manager([dict(POOL, max_price_ct_kwh=30.0)])
     installation.prices = [0.0] * 48
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("INFO"):
         _run(manager, installation, water_c=20.0)
 
     load = manager.instance("pool")
     assert sum(load.last_plan) == 0
-    assert "no electricity prices available yet" in caplog.text
+    assert "prices have not arrived yet" in caplog.text
+
+
+def test_prices_still_missing_after_startup_is_a_warning(make_manager, installation, caplog):
+    """
+    Once at startup is this thread and the price interface racing, which is expected.
+    Still true a cycle later means something is actually wrong.
+    """
+    manager = make_manager([dict(POOL, max_price_ct_kwh=30.0)])
+    installation.prices = [0.0003] * 48
+    manager.run_cycle()                      # a normal cycle first
+
+    installation.prices = [0.0] * 48
+    manager._warned_no_prices = False        # pylint: disable=protected-access
+    with caplog.at_level("WARNING"):
+        manager.run_cycle()
+
+    assert "no electricity prices available" in caplog.text
 
 
 def test_a_genuinely_free_hour_is_still_usable(make_manager, installation):
@@ -1315,3 +1332,59 @@ def test_a_genuinely_free_hour_is_still_usable(make_manager, installation):
     _run(manager, installation, water_c=20.0)
 
     assert manager.instance("pool").last_plan[20] > 0
+
+
+def test_the_reasons_describe_the_schedule_that_was_adopted(make_manager, installation):
+    """
+    They came from the fallback planner, which had refused the very slots the optimizer
+    went on to use. On the live instance ten slots carried energy while every one was
+    labelled "above price cap" - bars drawn in slots the same card coloured as blocked.
+    """
+    manager = make_manager([dict(POOL, max_price_ct_kwh=20.0)])
+    manager.external_scheduler = True
+    installation.prices = [0.0009] * 48          # the fallback refuses everything
+    _run(manager, installation, water_c=20.0)
+
+    load = manager.instance("pool")
+    assert "planned" not in load.last_demand.slot_reasons, "fallback planned something"
+
+    schedule = [0.0] * 48
+    schedule[30] = schedule[31] = 1500.0
+    manager.adopt_schedules({"pool": schedule})
+
+    reasons = load.last_demand.slot_reasons
+    assert reasons[30] == "planned"
+    assert reasons[31] == "planned"
+    assert "above price cap" not in reasons
+
+
+def test_a_feasible_slot_the_optimizer_skipped_says_why(make_manager, installation):
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    reasons = manager.instance("pool").last_demand.slot_reasons
+    assert "costs more than it is worth" in reasons
+
+
+def test_a_slot_the_load_may_not_use_keeps_its_own_reason(make_manager, installation):
+    """The window and the temperature limit are still the load's own rules."""
+    manager = make_manager([dict(POOL, window_start=10, window_end=12)])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    reasons = manager.instance("pool").last_demand.slot_reasons
+    assert "outside allowed hours" in reasons
+
+
+def test_past_slots_stay_past(make_manager, installation):
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    reasons = manager.instance("pool").last_demand.slot_reasons
+    current = manager._last_ctx.current_slot            # pylint: disable=protected-access
+    assert all(r == "past" for r in reasons[:current])

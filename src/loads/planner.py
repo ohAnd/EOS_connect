@@ -36,6 +36,10 @@ SLOT_PRICE = "above price cap"
 SLOT_BUDGET = "shared power budget"
 SLOT_DAILY_CAP = "daily runtime cap"
 SLOT_NOT_NEEDED = "not needed"
+# Feasible, and the optimizer looked at it and decided the energy was not worth what it
+# would have cost. Distinct from the per-slot cap: nothing refused this slot, it simply
+# lost on price against everything else in the horizon.
+SLOT_NOT_WORTH_IT = "costs more than it is worth"
 
 # Reasons that are nobody's fault: the slot has gone, or the demand was already met.
 # Everything else represents a setting standing in the way, and a load short of energy
@@ -46,6 +50,34 @@ SLOT_NOT_NEEDED = "not needed"
 # a generic "not allowed" - were not on the list, so the very cases worth naming were the
 # ones that came back as nothing at all.
 NON_BLOCKING_REASONS = (SLOT_PLANNED, SLOT_PAST, SLOT_NOT_NEEDED)
+
+
+def reasons_for_schedule(plan, demand, ctx):
+    """
+    Describe a schedule somebody else produced, slot by slot.
+
+    Without this the card kept showing the fallback planner's reasoning next to the
+    optimizer's plan, and the two disagreed: on a live install ten slots carried energy
+    while every one of them was labelled "above price cap". Bars drawn in slots the same
+    card coloured as blocked, under a heading naming a limit that had not applied.
+    """
+    mask = list(demand.feasible or [])
+    detail = list(demand.feasible_reason or [])
+    reasons = []
+    for index in range(ctx.slot_count):
+        if index < ctx.current_slot:
+            reasons.append(SLOT_PAST)
+        elif index < len(plan) and plan[index] > 0:
+            reasons.append(SLOT_PLANNED)
+        elif index < len(mask) and not mask[index]:
+            reasons.append(
+                (detail[index] if index < len(detail) else None) or SLOT_INFEASIBLE
+            )
+        elif demand.total_wh > 0:
+            reasons.append(SLOT_NOT_WORTH_IT)
+        else:
+            reasons.append(SLOT_NOT_NEEDED)
+    return reasons
 
 # Ranking cost for a slot with no price information. Above any realistic tariff, so
 # priced slots always win, but finite so a missing price series still yields a plan

@@ -875,3 +875,31 @@ def test_no_price_means_no_claim_at_all(page):
     _open_overlay(page)
     assert _price_line(page, None, False) == ""
     assert _price_line(page, None, True) == ""
+
+
+def test_a_slot_the_optimizer_skipped_colours_as_rationing(page):
+    """
+    "Costs more than it is worth" is a price decision like any other limit the user
+    set, not an hour the load is forbidden - so it shares the amber band.
+    """
+    _open_overlay(page)
+    _render_strip(page, [0, 0], ["costs more than it is worth", "above price cap"])
+    assert len(set(_bar_colours(page))) == 1
+
+
+def test_the_skipped_reason_suggests_raising_the_limit(page):
+    _open_overlay(page)
+    page.evaluate(
+        """() => {
+            const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
+                reason: 'below target', energy_needed_wh: 40000, planned_wh: 4000,
+                plan: [], plan_reasons: [], model: {}, release: null, detail: {},
+                plan_summary: {slots: 192, planned: 10,
+                               limited_by: 'costs more than it is worth',
+                               limited_slots: 100, counts: {}}};
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadCard(load, 900, 0);
+        }"""
+    )
+    shown = " ".join(page.text_content("#full_screen_content").split())
+    assert "raise the price limit" in shown

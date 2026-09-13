@@ -20,7 +20,8 @@ const MANAGED_LOAD_SLOT_STYLE = {
 
 // You are rationing it: a limit you set on how much or how dear.
 const MANAGED_LOAD_CAPPED_REASONS = new Set([
-    'above price cap', 'daily runtime cap', 'shared power budget',
+    'above price cap', 'costs more than it is worth', 'daily runtime cap',
+    'shared power budget',
 ]);
 
 // It is not allowed to run then, whatever the price.
@@ -1017,6 +1018,7 @@ class ControlsManager {
         }
         const REMEDY = {
             'above price cap': 'raise or clear the price cap',
+            'costs more than it is worth': 'raise the price limit, so the energy is worth more to you than it costs',
             'outside allowed hours': 'widen the allowed window',
             'too cold to run': 'lower the minimum outside temperature, if the appliance allows it',
             'out of season': 'extend the season',

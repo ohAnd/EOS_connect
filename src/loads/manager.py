@@ -688,10 +688,19 @@ class ManagedLoadManager:
             return prices
         if not self._warned_no_prices:
             self._warned_no_prices = True
-            logger.warning(
-                "[LOADS] no electricity prices available yet - managed loads will not "
-                "be placed until they arrive"
-            )
+            # Expected once at startup: this thread and the price interface come up
+            # together and either may win. It only deserves a warning if it is still
+            # true after that, because then something is actually wrong.
+            if self.stats.cycles == 0:
+                logger.info(
+                    "[LOADS] electricity prices have not arrived yet - waiting for "
+                    "them before placing anything"
+                )
+            else:
+                logger.warning(
+                    "[LOADS] no electricity prices available - managed loads will not "
+                    "be placed until they arrive"
+                )
         return []
 
     def _series(self, provider, slot_count, fallback=0.0):

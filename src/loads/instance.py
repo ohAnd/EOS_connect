@@ -27,6 +27,7 @@ from .gate import ReleaseGate
 from .planner import (
     NON_BLOCKING_REASONS,
     plan_price,
+    reasons_for_schedule,
     SLOT_DEADLINE,
     SLOT_PAST,
     SLOT_PLANNED,
@@ -240,6 +241,11 @@ class ManagedLoad:
         )
         self.last_cost_is_measured = measured is not None
         self.last_cost_is_shared = bool((cost or {}).get("shared"))
+        # The reasons have to describe this plan too. They came from the fallback
+        # planner, which had refused the very slots the optimizer went on to use.
+        self.last_demand.slot_reasons = reasons_for_schedule(
+            self.last_plan, self.last_demand, ctx
+        )
         self.last_release = self._gate_on(self.last_demand, ctx, self.last_plan)
         return self.last_release
 
