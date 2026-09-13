@@ -18,6 +18,60 @@ class ChartManager {
     }
 
     /**
+     * Move a 48-hour, midnight-based series onto the chart's x-axis.
+     *
+     * The chart shows the horizon starting *now*, which is the stored array rotated by
+     * the current slot and cut to the length of the solved result. The hourly branch is
+     * not a plain rotation - it appends tomorrow again - so anything that has to line up
+     * with the Load bar has to come through here rather than repeat the expression.
+     * Two copies of a rotation that must agree is how every slot bug in this feature
+     * has started.
+     *
+     * @param {Array<number>} series - 192 (quarter-hourly) or 48 (hourly) values
+     * @param {number} slot - Current slot index at the running resolution
+     * @param {number} length - Slots the chart is drawing
+     * @param {number} timeFrameBase - 900 or 3600
+     * @returns {Array<number>} Values aligned to the chart's x-axis
+     */
+    static alignToAxis(series, slot, length, timeFrameBase) {
+        const values = series || [];
+        if (!values.length) {
+            return [];
+        }
+        return timeFrameBase === 900
+            ? values.slice(slot).concat(values.slice(0, slot)).slice(0, length)
+            : values.slice(slot).concat(values.slice(24, 48)).slice(0, length);
+    }
+
+    /**
+     * The scheduled managed loads, summed and aligned to the chart's x-axis.
+     *
+     * One band rather than one per load: the total is what the Load bar was missing,
+     * and the managed-loads overlay already breaks it down per appliance.
+     *
+     * @param {Object|undefined} schedules - {id: [Wh per slot]} from the response
+     * @param {number} slot - Current slot index
+     * @param {number} length - Slots the chart is drawing
+     * @param {number} timeFrameBase - 900 or 3600
+     * @returns {Array<string>} kWh per slot, or empty when nothing was scheduled
+     */
+    static managedLoadSeries(schedules, slot, length, timeFrameBase) {
+        const series = Object.values(schedules || {}).filter(Array.isArray);
+        if (!series.length) {
+            return [];
+        }
+        const width = Math.max(...series.map(values => values.length));
+        const summed = Array.from({ length: width }, (_, index) =>
+            series.reduce((total, values) => total + (Number(values[index]) || 0), 0)
+        );
+        if (!summed.some(value => value > 0)) {
+            return [];
+        }
+        return ChartManager.alignToAxis(summed, slot, length, timeFrameBase)
+            .map(value => (value / 1000).toFixed(3));
+    }
+
+    /**
      * Update existing chart with new data
      */
     updateChart(data_request, data_response, data_controls, priceInfo = null) {
@@ -69,18 +123,11 @@ class ChartManager {
         // Use gesamtlast from request as pure household load.
         // EOS server includes AC charging energy in Last_Wh_pro_Stunde; using gesamtlast
         // gives consistent display across both EOS and EVopt backends.
-        let gesamtlastSliced;
-        if (time_frame_base === 900) {
-            gesamtlastSliced = data_request["ems"]["gesamtlast"]
-                .slice(currentSlot)
-                .concat(data_request["ems"]["gesamtlast"].slice(0, currentSlot))
-                .slice(0, data_response["result"]["Last_Wh_pro_Stunde"].length);
-        } else {
-            gesamtlastSliced = data_request["ems"]["gesamtlast"]
-                .slice(currentHour)
-                .concat(data_request["ems"]["gesamtlast"].slice(24, 48))
-                .slice(0, data_response["result"]["Last_Wh_pro_Stunde"].length);
-        }
+        const axisLength = data_response["result"]["Last_Wh_pro_Stunde"].length;
+        const axisSlot = time_frame_base === 900 ? currentSlot : currentHour;
+        const gesamtlastSliced = ChartManager.alignToAxis(
+            data_request["ems"]["gesamtlast"], axisSlot, axisLength, time_frame_base
+        );
         // Calculate consumption (excluding home appliances)
         this.chartInstance.data.datasets[0].data = gesamtlastSliced.map((value, index) => {
             const actHomeApplianceValue = data_response["result"]["Home_appliance_wh_per_hour"][index] || 0;
@@ -89,6 +136,14 @@ class ChartManager {
 
         // Home appliances
         this.chartInstance.data.datasets[1].data = data_response["result"]["Home_appliance_wh_per_hour"].map(value => (value / 1000).toFixed(3));
+
+        // Managed loads the optimizer placed. Only the built-in solver reports these;
+        // under the others the loads are still inside gesamtlast and the Load bar above
+        // already counts them, so an absent key has to leave the band empty rather than
+        // draw a zero line.
+        this.chartInstance.data.datasets[13].data = ChartManager.managedLoadSeries(
+            data_response["managed_loads"], axisSlot, axisLength, time_frame_base
+        );
 
         // PV forecast
         let pvData;
@@ -332,7 +387,13 @@ class ChartManager {
                     { label: 'Dynamic Discharge Allowed (PV > Load)', data: [], type: 'line', borderColor: 'rgba(50, 205, 50, 0.6)', backgroundColor: 'rgba(50, 205, 50, 0.1)', borderWidth: 1, fill: true, yAxisID: 'y3', pointRadius: 1, pointHoverRadius: 4, stepped: true, hidden: false },
                     { label: `Electricity Price (${localization.currency_minor_unit}/kWh)`, data: [], type: 'line', borderColor: 'rgba(255, 69, 0, 0.8)', backgroundColor: 'rgba(255, 165, 0, 0.2)', borderWidth: 1, yAxisID: 'y1', stepped: true, pointRadius: 1, pointHoverRadius: 4 },
                     { label: 'Electricity Price - Forecast', data: [], type: 'line', borderColor: 'rgba(167, 167, 167, 0.7)', backgroundColor: 'rgba(220, 20, 60, 0.05)', borderWidth: 2, yAxisID: 'y1', stepped: true, pointRadius: 1, pointHoverRadius: 4, fill: false, hidden: true },
-                    { label: 'PV Charge Planned', data: [], type: 'line', borderColor: 'transparent', backgroundColor: 'transparent', borderWidth: 0, fill: false, yAxisID: 'y3', pointRadius: 0, pointHoverRadius: 0, stepped: true, hidden: true }
+                    { label: 'PV Charge Planned', data: [], type: 'line', borderColor: 'transparent', backgroundColor: 'transparent', borderWidth: 0, fill: false, yAxisID: 'y3', pointRadius: 0, pointHoverRadius: 0, stepped: true, hidden: true },
+                    // Loads the optimizer schedules itself. They are not in gesamtlast -
+                    // that is the point of scheduling them - so without this band their
+                    // energy shows up only in the Grid bar it causes, and the demand side
+                    // reads far too low. Appended rather than placed next to Load because
+                    // forty-odd datasets[N] references index past it.
+                    { label: 'Managed Loads', data: [], backgroundColor: 'rgba(57, 135, 229, 0.35)', borderColor: 'rgba(57, 135, 229, 1)', borderWidth: 1, stack: 'load' }
                 ]
             },
             options: {
@@ -372,6 +433,8 @@ class ChartManager {
                                 if (label === 'Load')
                                     return `${label}: ${value} kWh`;
                                 else if (label === 'Home Appliance')
+                                    return `${label}: ${value} kWh`;
+                                else if (label === 'Managed Loads')
                                     return `${label}: ${value} kWh`;
                                 else if (label === 'PV forecast') {
                                     // Amber bar = PV charging battery (dc_charge=1)
