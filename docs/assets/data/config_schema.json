@@ -2798,13 +2798,41 @@
       "default": "",
       "section": "managed_loads",
       "level": "getting_started",
-      "description": "Entity/item for this load's power draw in watts (W), like every other sensor in EOS Connect. It answers two questions a meter reading cannot: is the appliance running right now, and how fast is it heating - which is what the efficiency is measured from. If you only have a kWh meter, add a derivative helper in Home Assistant and point this at that",
+      "description": "Entity/item for this load's power draw in watts (W), like every other sensor in EOS Connect. It answers two questions a meter reading cannot: is the appliance running right now, and how fast is it heating - which is what the efficiency is measured from. Its history also leaves the household base load, so the appliance is never counted twice. If you only have a kWh meter, add a derivative helper in Home Assistant and point this at that",
       "labels": [
         "restart_required"
       ],
       "help_url": "configuration.html#managed-loads",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Identity"
+    },
+    {
+      "key": "managed_loads.replaces_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "The meter this load's forecast stands in for, in watts (W). Set it only when what you send is the appliance's WHOLE consumption: its measured history then leaves the household base load, so the same appliance is not counted twice. Leave it empty when you send only the extra bit - a heating-versus-cooling difference, say - because that extra is added on top of a base load which already contains the rest",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": {
+        "type": [
+          "external_contingent",
+          "external_profile"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Identity"
     },
@@ -2814,7 +2842,7 @@
       "default": true,
       "section": "managed_loads",
       "level": "expert",
-      "description": "Remove this load's measured history from the household base load. Leave on unless its power sensor overlaps another one - turning it off makes the forecast count this appliance twice",
+      "description": "Remove this load's measured history from the household base load. Leave on unless the sensor named above overlaps another one already being subtracted - turning it off then makes the forecast count this appliance twice",
       "labels": [
         "restart_required"
       ],
@@ -3042,7 +3070,7 @@
       "default": 2500.0,
       "section": "managed_loads",
       "level": "getting_started",
-      "description": "Electrical power the appliance draws while running, in watts",
+      "description": "Electrical power the appliance draws while running, in watts. For a load whose profile is fetched or pushed it is not used to plan anything - it is the reference the incoming values are sanity-checked against, which is what catches a source publishing watts where watt-hours were expected",
       "labels": [],
       "help_url": "configuration.html#managed-loads",
       "validation": {
@@ -3433,6 +3461,171 @@
       },
       "hot_reload": true,
       "display_group": "Pushed data"
+    },
+    {
+      "key": "managed_loads.profile_source",
+      "type": "select",
+      "default": "push",
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "Where this load's profile comes from. 'push' waits for an external system to hand one over; 'timeseries' names an entity EOS Connect reads itself, the same way the price and PV sources do",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "choices": [
+          "push",
+          "timeseries"
+        ]
+      },
+      "depends_on": {
+        "type": [
+          "external_profile"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Profile source"
+    },
+    {
+      "key": "managed_loads.use_ha_central_data_source",
+      "type": "bool",
+      "default": true,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Read the profile through the Home Assistant connection already configured under Data Source, instead of repeating a URL and a token here",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": {
+        "type": [
+          "external_profile"
+        ],
+        "profile_source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Profile source"
+    },
+    {
+      "key": "managed_loads.ha_sensor_name",
+      "type": "str",
+      "default": "",
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "Entity holding the load forecast, for example sensor.heat_pump_forecast. The array itself lives in one of its attributes - a Home Assistant state is capped at 255 characters and a 96-value series does not fit",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": {
+        "type": [
+          "external_profile"
+        ],
+        "profile_source": [
+          "timeseries"
+        ],
+        "use_ha_central_data_source": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Profile source"
+    },
+    {
+      "key": "managed_loads.data_path",
+      "type": "str",
+      "default": "attributes.data",
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "Where the array sits inside the entity, in dot notation - 'attributes.data' for the usual template sensor, 'attributes.forecast' when you named it that",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": {
+        "type": [
+          "external_profile"
+        ],
+        "profile_source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Profile source"
+    },
+    {
+      "key": "managed_loads.data_url",
+      "type": "str",
+      "default": "",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Endpoint returning the forecast, when it does not come from the central Home Assistant connection",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": {
+        "type": [
+          "external_profile"
+        ],
+        "profile_source": [
+          "timeseries"
+        ],
+        "use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Profile source"
+    },
+    {
+      "key": "managed_loads.data_token",
+      "type": "password",
+      "default": "",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Bearer token for that endpoint, if it needs one",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {},
+      "depends_on": {
+        "type": [
+          "external_profile"
+        ],
+        "profile_source": [
+          "timeseries"
+        ],
+        "use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Profile source"
+    },
+    {
+      "key": "managed_loads.value_unit",
+      "type": "select",
+      "default": "W",
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "What the fetched values are measured in. 'W' and 'kW' are average power over each entry; 'Wh' and 'kWh' are energy within it. Getting this wrong is a factor of four on quarter-hourly data, so it is checked against the rated power above",
+      "labels": [],
+      "help_url": "configuration.html#managed-loads",
+      "validation": {
+        "choices": [
+          "W",
+          "kW",
+          "Wh",
+          "kWh"
+        ]
+      },
+      "depends_on": {
+        "type": [
+          "external_profile"
+        ],
+        "profile_source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Profile source"
     }
   ],
   "sections": {

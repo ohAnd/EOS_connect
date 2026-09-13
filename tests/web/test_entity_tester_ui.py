@@ -219,8 +219,10 @@ def test_a_group_of_only_sensors_still_collapses(config_page):
 # fields apply depends on the type picked in that card, so their dependencies are
 # resolved *within* the entry. The tester row did not get that scope passed to it, so
 # every sensor field with a type dependency rendered its Test button permanently
-# hidden — visible field, no way to test it. Only the power sensor, which has no type
-# dependency, escaped, which is exactly how it was reported.
+# hidden — visible field, no way to test it. The power sensor escaped at the time,
+# because it then had no type dependency, which is exactly how it was reported. It has
+# one now (thermal types only), so it is no longer the exception - which makes this
+# parametrisation a stricter guard than it was, not a weaker one.
 
 MANAGED_SENSOR_KEYS = [
     "managed_loads.0.temp_sensor",
@@ -291,8 +293,10 @@ def test_a_pushed_profile_hides_the_thermal_fields_and_their_testers(config_page
 
     assert not _is_visible(config_page, '[data-entity-tester="managed_loads.0.temp_sensor"]')
     assert not _is_visible(config_page, "#cfg-field-managed_loads-0-temp_sensor")
-    # A pushed profile still has a power sensor, so the base load can be corrected.
-    assert _is_visible(config_page, '[data-entity-tester="managed_loads.0.power_sensor"]')
+    # Nor the power sensor: on this type it never measured anything, and what it
+    # really did - take a meter out of the base load - is now replaces_sensor.
+    assert not _is_visible(config_page, '[data-entity-tester="managed_loads.0.power_sensor"]')
+    assert _is_visible(config_page, '[data-entity-tester="managed_loads.0.replaces_sensor"]')
 
 
 def test_two_entries_of_different_types_are_judged_independently(config_page):

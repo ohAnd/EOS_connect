@@ -11,6 +11,7 @@ from src.config_web.schema import ConfigSchema
 from src.config_web.migration import (
     migrate_yaml_to_store,
     migrate_battery_price_unit_to_ct_kwh,
+    migrate_managed_load_power_sensor_to_replaces_sensor,
     migrate_sensor_placeholders_to_empty,
     prune_migrated_yaml,
     PRUNE_BACKUP_SUFFIX,
@@ -1096,3 +1097,94 @@ class TestPruneMigratedYaml:
             ).read_text(encoding="utf-8")
         finally:
             os.chmod(tmp_path, 0o700)
+
+
+class TestManagedLoadReplacesSensorMigration:
+    """
+    The one-time managed_loads.<n>.power_sensor -> replaces_sensor rename.
+
+    Unlike every other migration here the keys are indexed, and only some of them are
+    eligible: whether an entry is touched depends on a *different* key in the same
+    entry. Getting that wrong either leaves an external load subtracting nothing, or
+    strips a heated store of the sensor its calibration runs on.
+    """
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = ConfigStore(str(tmp_path / "test.db"))
+        s.open()
+        yield s
+        s.close()
+
+    def test_an_external_entry_has_its_sensor_moved(self, store):
+        store.set("managed_loads.0.type", "external_profile")
+        store.set("managed_loads.0.power_sensor", "sensor.heat_pump_power")
+
+        ran = migrate_managed_load_power_sensor_to_replaces_sensor(store)
+
+        assert ran is True
+        assert store.get("managed_loads.0.replaces_sensor") == "sensor.heat_pump_power"
+        assert store.get("managed_loads.0.power_sensor") is None
+
+    def test_a_thermal_entry_is_left_alone(self, store):
+        """Its power sensor still measures how fast the store is warming."""
+        store.set("managed_loads.0.type", "pool_heatpump")
+        store.set("managed_loads.0.power_sensor", "sensor.pool_power")
+
+        migrate_managed_load_power_sensor_to_replaces_sensor(store)
+
+        assert store.get("managed_loads.0.power_sensor") == "sensor.pool_power"
+        assert store.get("managed_loads.0.replaces_sensor") is None
+
+    def test_each_entry_is_judged_on_its_own_type(self, store):
+        """A mixed installation is the normal one - a pool and a pushed heat pump."""
+        store.set("managed_loads.0.type", "pool_heatpump")
+        store.set("managed_loads.0.power_sensor", "sensor.pool_power")
+        store.set("managed_loads.1.type", "external_profile")
+        store.set("managed_loads.1.power_sensor", "sensor.heat_pump_power")
+        store.set("managed_loads.2.type", "external_contingent")
+        store.set("managed_loads.2.power_sensor", "sensor.boiler_power")
+
+        migrate_managed_load_power_sensor_to_replaces_sensor(store)
+
+        assert store.get("managed_loads.0.power_sensor") == "sensor.pool_power"
+        assert store.get("managed_loads.1.replaces_sensor") == "sensor.heat_pump_power"
+        assert store.get("managed_loads.2.replaces_sensor") == "sensor.boiler_power"
+        assert store.get("managed_loads.1.power_sensor") is None
+        assert store.get("managed_loads.2.power_sensor") is None
+
+    def test_an_empty_sensor_is_dropped_without_creating_the_new_key(self, store):
+        """Nothing was configured, so nothing should appear to have been."""
+        store.set("managed_loads.0.type", "external_profile")
+        store.set("managed_loads.0.power_sensor", "")
+
+        migrate_managed_load_power_sensor_to_replaces_sensor(store)
+
+        assert store.get("managed_loads.0.power_sensor") is None
+        assert store.get("managed_loads.0.replaces_sensor") is None
+
+    def test_an_entry_with_no_type_is_not_guessed_at(self, store):
+        store.set("managed_loads.0.power_sensor", "sensor.mystery")
+
+        migrate_managed_load_power_sensor_to_replaces_sensor(store)
+
+        assert store.get("managed_loads.0.power_sensor") == "sensor.mystery"
+
+    def test_fresh_install_sets_the_marker_only(self, store):
+        ran = migrate_managed_load_power_sensor_to_replaces_sensor(store)
+
+        assert ran is True
+        assert store.get("_migrated_managed_load_replaces_sensor_v1") is True
+
+    def test_runs_only_once(self, store):
+        """A user who re-points the old field afterwards must not have it moved again."""
+        store.set("managed_loads.0.type", "external_profile")
+        store.set("managed_loads.0.power_sensor", "sensor.heat_pump_power")
+        migrate_managed_load_power_sensor_to_replaces_sensor(store)
+
+        store.set("managed_loads.0.power_sensor", "sensor.something_else")
+        ran_again = migrate_managed_load_power_sensor_to_replaces_sensor(store)
+
+        assert ran_again is False
+        assert store.get("managed_loads.0.power_sensor") == "sensor.something_else"
+        assert store.get("managed_loads.0.replaces_sensor") == "sensor.heat_pump_power"

@@ -116,6 +116,13 @@ MANAGED_LOAD_CONTINGENT_TYPES = MANAGED_LOAD_THERMAL_TYPES + ["external_continge
 
 # Types fed by a push over REST or MQTT rather than by sensors.
 MANAGED_LOAD_EXTERNAL_TYPES = ["external_contingent", "external_profile"]
+# Where an external load profile gets its array. "push" waits to be handed one over
+# HTTP or MQTT; "timeseries" names an entity EOS Connect fetches itself, the same way
+# the price and PV sources do.
+MANAGED_LOAD_PROFILE_SOURCES = ["push", "timeseries"]
+# Units a fetched load array may be published in. Identical to the PV table, because a
+# load series carries the same question: is this watts, or watt-hours in this slot?
+MANAGED_LOAD_VALUE_UNITS = ["W", "kW", "Wh", "kWh"]
 
 # Types for which a cover, and a swimming season, mean anything.
 MANAGED_LOAD_COVER_TYPES = ["pool_heatpump"]
@@ -2188,11 +2195,33 @@ _ALL_FIELDS: list[FieldDef] = [
             "Entity/item for this load's power draw in watts (W), like every other "
             "sensor in EOS Connect. It answers two questions a meter reading cannot: "
             "is the appliance running right now, and how fast is it heating - which is "
-            "what the efficiency is measured from. If you only have a kWh meter, add a "
-            "derivative helper in Home Assistant and point this at that"
+            "what the efficiency is measured from. Its history also leaves the "
+            "household base load, so the appliance is never counted twice. If you only "
+            "have a kWh meter, add a derivative helper in Home Assistant and point "
+            "this at that"
         ),
         labels=["restart_required"],
         help_url="configuration.html#managed-loads",
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Identity",
+    ),
+    FieldDef(
+        key="managed_loads.replaces_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "The meter this load's forecast stands in for, in watts (W). Set it only "
+            "when what you send is the appliance's WHOLE consumption: its measured "
+            "history then leaves the household base load, so the same appliance is not "
+            "counted twice. Leave it empty when you send only the extra bit - a "
+            "heating-versus-cooling difference, say - because that extra is added on "
+            "top of a base load which already contains the rest"
+        ),
+        labels=["restart_required"],
+        help_url="configuration.html#managed-loads",
+        depends_on={"type": MANAGED_LOAD_EXTERNAL_TYPES},
         display_group="Identity",
     ),
     FieldDef(
@@ -2203,8 +2232,9 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description=(
             "Remove this load's measured history from the household base load. Leave on "
-            "unless its power sensor overlaps another one - turning it off makes the "
-            "forecast count this appliance twice"
+            "unless the sensor named above overlaps another one already being "
+            "subtracted - turning it off then makes the forecast count this appliance "
+            "twice"
         ),
         labels=["restart_required"],
         help_url="configuration.html#managed-loads",
@@ -2350,7 +2380,12 @@ _ALL_FIELDS: list[FieldDef] = [
         default=2500.0,
         section="managed_loads",
         level="getting_started",
-        description="Electrical power the appliance draws while running, in watts",
+        description=(
+            "Electrical power the appliance draws while running, in watts. For a load "
+            "whose profile is fetched or pushed it is not used to plan anything - it is "
+            "the reference the incoming values are sanity-checked against, which is what "
+            "catches a source publishing watts where watt-hours were expected"
+        ),
         hot_reload=True,
         help_url="configuration.html#managed-loads",
         validation={"min": 1, "max": 100000},
@@ -2605,5 +2640,138 @@ _ALL_FIELDS: list[FieldDef] = [
         validation={"min": 1, "max": 10080},
         depends_on={"type": MANAGED_LOAD_EXTERNAL_TYPES},
         display_group="Pushed data",
+    ),
+
+    # --- fetched profile ---
+    FieldDef(
+        key="managed_loads.profile_source",
+        field_type="select",
+        default="push",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "Where this load's profile comes from. 'push' waits for an external system "
+            "to hand one over; 'timeseries' names an entity EOS Connect reads itself, "
+            "the same way the price and PV sources do"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"choices": MANAGED_LOAD_PROFILE_SOURCES},
+        depends_on={"type": ["external_profile"]},
+        display_group="Profile source",
+    ),
+    FieldDef(
+        key="managed_loads.use_ha_central_data_source",
+        field_type="bool",
+        default=True,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Read the profile through the Home Assistant connection already configured "
+            "under Data Source, instead of repeating a URL and a token here"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        depends_on={
+            "type": ["external_profile"],
+            "profile_source": ["timeseries"],
+        },
+        display_group="Profile source",
+    ),
+    FieldDef(
+        key="managed_loads.ha_sensor_name",
+        field_type="str",
+        default="",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "Entity holding the load forecast, for example "
+            "sensor.heat_pump_forecast. The array itself lives in one of its "
+            "attributes - a Home Assistant state is capped at 255 characters and a "
+            "96-value series does not fit"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        depends_on={
+            "type": ["external_profile"],
+            "profile_source": ["timeseries"],
+            "use_ha_central_data_source": [True],
+        },
+        display_group="Profile source",
+    ),
+    FieldDef(
+        key="managed_loads.data_path",
+        field_type="str",
+        default="attributes.data",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "Where the array sits inside the entity, in dot notation - "
+            "'attributes.data' for the usual template sensor, 'attributes.forecast' "
+            "when you named it that"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        depends_on={
+            "type": ["external_profile"],
+            "profile_source": ["timeseries"],
+        },
+        display_group="Profile source",
+    ),
+    FieldDef(
+        key="managed_loads.data_url",
+        field_type="str",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Endpoint returning the forecast, when it does not come from the central "
+            "Home Assistant connection"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        depends_on={
+            "type": ["external_profile"],
+            "profile_source": ["timeseries"],
+            "use_ha_central_data_source": [False],
+        },
+        display_group="Profile source",
+    ),
+    FieldDef(
+        key="managed_loads.data_token",
+        field_type="password",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description="Bearer token for that endpoint, if it needs one",
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        depends_on={
+            "type": ["external_profile"],
+            "profile_source": ["timeseries"],
+            "use_ha_central_data_source": [False],
+        },
+        display_group="Profile source",
+    ),
+    FieldDef(
+        key="managed_loads.value_unit",
+        field_type="select",
+        default="W",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "What the fetched values are measured in. 'W' and 'kW' are average power "
+            "over each entry; 'Wh' and 'kWh' are energy within it. Getting this wrong "
+            "is a factor of four on quarter-hourly data, so it is checked against the "
+            "rated power above"
+        ),
+        hot_reload=True,
+        help_url="configuration.html#managed-loads",
+        validation={"choices": MANAGED_LOAD_VALUE_UNITS},
+        depends_on={
+            "type": ["external_profile"],
+            "profile_source": ["timeseries"],
+        },
+        display_group="Profile source",
     ),
 ]

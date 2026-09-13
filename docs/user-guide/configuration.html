@@ -224,8 +224,9 @@
                                 budget.</em></li>
                         <li><strong>Forecast only</strong> &mdash; &ldquo;this is what it <em>will</em>
                             draw, I cannot move it&rdquo;. The values are added to the forecast exactly as
-                            given. There is no release signal, because the timing was never ours to choose.
-                            <em>External load profile &mdash; use it for space heating and air
+                            given, either fetched from an entity you name or pushed in by your own
+                            automation. There is no release signal, because the timing was never ours to
+                            choose. <em>External load profile &mdash; use it for space heating and air
                                 conditioning.</em></li>
                     </ul>
 
@@ -241,9 +242,12 @@
                         number, so it would otherwise look like an appliance that never switches off.</p>
 
                     <div class="alert alert-info">
-                        <p>Every managed load's own consumption is <strong>removed from the household base
-                                load</strong> before its forecast is added back, so the same appliance is
-                            never counted twice. This is what makes a managed load different from
+                        <p>A managed load with a sensor has its own consumption <strong>removed from the
+                                household base load</strong> before its forecast is added back, so the same
+                            appliance is never counted twice. A heated store does this from its power
+                            sensor; an external load profile only when you point <em>Replaces sensor</em>
+                            at a meter, because what you send it is often just an extra on top rather than
+                            the whole appliance. This is what makes a managed load different from
                             <em>Additional Load</em>, which models a shiftable appliance such as a
                             dishwasher &mdash; a runtime and a total, for the optimizer to place. Do not
                             configure the same sensor as both.</p>
@@ -529,11 +533,54 @@
                             yesterday's figure.</p>
                     </div>
 
-                    <h3>Pushing a forecast in</h3>
+                    <h3>Getting a forecast in</h3>
                     <p>If you already model something elsewhere &mdash; a heating curve against the
                         outdoor temperature forecast in Home Assistant, say &mdash; add an
-                        <strong>External load profile</strong> and push the result in. EOS Connect does not
+                        <strong>External load profile</strong> and hand EOS Connect the result. It does not
                         need to know anything about heat pumps, cooling or washing days.</p>
+                    <p>There are two ways round, and <strong>Profile source</strong> on the load chooses
+                        between them:</p>
+                    <ul>
+                        <li><strong>Fetched</strong> &mdash; you name an entity and EOS Connect reads it
+                            every few minutes. Pick this if what you have is a template sensor holding the
+                            numbers. Nothing to write, and nothing to keep running.</li>
+                        <li><strong>Pushed</strong> &mdash; your automation sends the numbers when it has
+                            them. Pick this if the forecast is produced on its own schedule, or by
+                            something outside Home Assistant.</li>
+                    </ul>
+
+                    <h4>Fetching it from an entity</h4>
+                    <p>Set <strong>Profile source</strong> to <em>timeseries</em> and give it the entity,
+                        the path to the array inside it, and what the values are measured in. It is the
+                        same arrangement as the price and PV sources, and it takes the same format &mdash;
+                        see <a href="#timeseries-templates">Home Assistant Template Snippets</a> for
+                        ready-made templates you can adapt.</p>
+                    <pre><code>Entity      sensor.heat_pump_forecast
+Path        attributes.forecast
+Unit        W                          &mdash; or kW, Wh, kWh
+
+attributes:
+  forecast:
+    - start: "2026-01-15T00:00:00+01:00"
+      value: 0
+    - start: "2026-01-15T01:00:00+01:00"
+      value: 1400
+    ...</code></pre>
+                    <p>Put the array in an <strong>attribute</strong>, not the entity's state: a Home
+                        Assistant state is capped at 255 characters, which a 48-value series will not fit.
+                        Each entry needs a <code>start</code>; <code>end</code> is worked out from the next
+                        one. Publish as far ahead as you can model &mdash; EOS Connect plans 48 hours, and
+                        uses whatever part of that you cover.</p>
+                    <div class="alert alert-info">
+                        <p>If the entity cannot be read, the last good forecast stays in place rather than
+                            the load dropping out of the plan &mdash; a Home Assistant restart should not
+                            move your battery. It is only given up after <strong>TTL minutes</strong>, at
+                            which point the load simply stops contributing. The first failure is written to
+                            the log; repeats are not, so one dead sensor cannot bury everything else.</p>
+                    </div>
+
+                    <h4>Pushing it in</h4>
+                    <p>Leave <strong>Profile source</strong> on <em>push</em> and send it:</p>
                     <pre><code>POST /api/managed_loads/&lt;id&gt;/push
 
 {"value_wh": 1500}                       one hourly average, applied across the horizon
@@ -550,9 +597,28 @@
                         Retained messages are honoured on this topic, so a pushed forecast survives a
                         restart.</p>
                     <div class="alert alert-info">
-                        <p>Values may be <strong>negative</strong>. That is how you correct the forecast
-                            downwards &mdash; the difference between a heat pump's heating and cooling
-                            modes, for instance.</p>
+                        <p>Values may be <strong>negative</strong>, whichever way they arrive. That is how
+                            you correct the forecast downwards &mdash; the difference between a heat pump's
+                            heating and cooling modes, for instance.</p>
+                    </div>
+
+                    <h4>Extra load, or the whole appliance?</h4>
+                    <p>This is the one thing worth getting right, and it is invisible from the sending
+                        end. What you send is <strong>added</strong> to the household load forecast, slot
+                        by slot. The household forecast is built from your own measured history, which
+                        already contains whatever the appliance was doing over the last fortnight.</p>
+                    <ul>
+                        <li>Sending only the <strong>extra</strong> &mdash; the difference cooling makes
+                            over heating, say &mdash; is the ordinary case. Leave <strong>Replaces
+                                sensor</strong> empty.</li>
+                        <li>Sending the appliance's <strong>whole</strong> consumption means its history
+                            has to come out of the household forecast first, or it is counted twice. Set
+                            <strong>Replaces sensor</strong> to the meter measuring it, in watts.</li>
+                    </ul>
+                    <div class="alert alert-warning">
+                        <p>Setting <em>Replaces sensor</em> while sending only the extra bit is the
+                            mistake to watch for: the whole measured consumption leaves the base load and
+                            only the difference comes back, so the forecast ends up far too low.</p>
                     </div>
 
                     <h3>On the dashboard</h3>

@@ -1,8 +1,11 @@
 """
-Payload parsing for the push endpoint.
+Turning what arrives from outside into a slot-aligned series.
 
-These cover the shapes the issue thread actually asked for - a daily average, a 24 h
-array, a 96-slot array - plus the unit and alignment mistakes a first integration makes.
+The push half covers the shapes the issue thread actually asked for - a daily average, a
+24 h array, a 96-slot array - plus the unit and alignment mistakes a first integration
+makes. The pull half covers the timestamped entries a fetched source hands over, where
+the mistakes are different: a half-hourly grid that does not line up with the slots, and
+a source stuck a day behind.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -15,6 +18,7 @@ from src.loads.injection import (
     PushedContingent,
     PushedProfile,
     parse_push,
+    profile_from_entries,
     resample,
 )
 
@@ -178,3 +182,115 @@ def test_ttl_defaults_and_overrides():
     assert default.valid_until == NOW + timedelta(minutes=1440)
     explicit = _push({"value_wh": 100, "ttl_minutes": 60})
     assert explicit.valid_until == NOW + timedelta(minutes=60)
+
+
+# --- the pulled form -----------------------------------------------------------------
+
+def _entries(count, value, start_hour=0, step_seconds=3600, day=1):
+    """Normalized entries as the timeseries source hands them over."""
+    first = datetime(2026, 6, day, 0, 0, tzinfo=BERLIN) + timedelta(hours=start_hour)
+    return [
+        {"start": first + timedelta(seconds=index * step_seconds), "value": value}
+        for index in range(count)
+    ]
+
+
+def _pull(entries, resolution=3600, slot_count=48, base=3600):
+    return profile_from_entries(
+        entries,
+        resolution_seconds=resolution,
+        anchor=ANCHOR,
+        slot_count=slot_count,
+        time_frame_base=base,
+        valid_until=NOW + timedelta(minutes=60),
+    )
+
+
+def test_an_hourly_series_lands_slot_for_slot():
+    result = _pull(_entries(48, 1000.0))
+    assert result.slots_wh == [1000.0] * 48
+    assert result.source_length == 48
+
+
+def test_a_quarter_hourly_source_aggregates_into_hourly_slots():
+    """Four 250 Wh quarters make one 1000 Wh hour - exact, not averaged."""
+    result = _pull(_entries(96, 250.0, step_seconds=900), resolution=900)
+    assert result.slots_wh[:24] == pytest.approx([1000.0] * 24)
+    assert result.slots_wh[24:] == [0.0] * 24
+
+
+def test_an_hourly_source_is_split_evenly_across_quarter_hour_slots():
+    """
+    Decision D1: follow the push path rather than refusing, as price and PV do.
+
+    An hourly load forecast carries no information about the shape inside the hour, so
+    spreading it evenly is the honest answer - and it keeps the pulled path behaving
+    like `resample` does for a push.
+    """
+    result = _pull(_entries(48, 1000.0), slot_count=192, base=900)
+    assert result.slots_wh[:8] == pytest.approx([250.0] * 8)
+    assert sum(result.slots_wh) == pytest.approx(48 * 1000.0)
+
+
+def test_energy_is_conserved_when_the_timestamps_straddle_slot_boundaries():
+    """
+    A source on its own half-hourly grid must not lose energy at each edge.
+
+    Splitting by overlap rather than by slot index is what makes this hold; bucketing
+    on the start timestamp alone would put both halves in the same slot.
+    """
+    entries = _entries(4, 600.0, step_seconds=1800)
+    result = _pull(entries, resolution=1800)
+    assert sum(result.slots_wh) == pytest.approx(2400.0)
+    assert result.slots_wh[0] == pytest.approx(1200.0)
+    assert result.slots_wh[1] == pytest.approx(1200.0)
+
+
+def test_an_explicit_end_wins_over_the_declared_resolution():
+    entries = [{
+        "start": ANCHOR,
+        "end": ANCHOR + timedelta(hours=4),
+        "value": 4000.0,
+    }]
+    result = _pull(entries, resolution=3600)
+    assert result.slots_wh[:4] == pytest.approx([1000.0] * 4)
+    assert result.slots_wh[4] == 0.0
+
+
+def test_entries_before_the_horizon_are_dropped_and_counted(caplog):
+    """A source publishing yesterday too is normal; one stuck a day behind is not."""
+    entries = _entries(24, 500.0, day=1)
+    stale = [
+        {"start": entry["start"] - timedelta(days=1), "value": entry["value"]}
+        for entry in entries
+    ]
+    with caplog.at_level("INFO", logger="__main__"):
+        result = _pull(stale + entries)
+    assert result.slots_wh[:24] == [500.0] * 24
+    assert any("outside" in record.getMessage() for record in caplog.records)
+
+
+def test_entries_past_the_horizon_are_dropped():
+    entries = _entries(24, 500.0, day=4)  # three days out, past a 48 h horizon
+    result = _pull(entries)
+    assert result.slots_wh == [0.0] * 48
+
+
+def test_a_negative_series_survives_the_pull_path():
+    """The cooling-versus-heating correction has to work either way in."""
+    result = _pull(_entries(24, -300.0))
+    assert result.slots_wh[:24] == [-300.0] * 24
+
+
+@pytest.mark.parametrize("entries,resolution,fragment", [
+    ([], 3600, "no values"),
+    ([{"value": 1.0}], 3600, "no 'start'"),
+    ([{"start": ANCHOR, "value": "x"}], 3600, "must be a number"),
+    ([{"start": ANCHOR, "value": float("nan")}], 3600, "finite"),
+    ([{"start": ANCHOR, "end": ANCHOR, "value": 1.0}], 3600, "ends at or before"),
+    ([{"start": ANCHOR, "value": 500000.0}], 3600, "plausible range"),
+])
+def test_a_broken_pull_is_rejected_with_a_usable_message(entries, resolution, fragment):
+    with pytest.raises(InjectionError) as excinfo:
+        _pull(entries, resolution=resolution)
+    assert fragment in str(excinfo.value)

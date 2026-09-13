@@ -18,6 +18,7 @@ from src.interfaces.timeseries_normalizer import (
     convert_pv_values,
     detect_resolution_seconds,
     extract_json_path,
+    load_plausibility_message,
     normalize_entries,
     price_plausibility_message,
     pv_plausibility_message,
@@ -421,3 +422,51 @@ class TestPvPlausibility:
 
     def test_empty_values_are_not_a_warning(self):
         assert pv_plausibility_message([], "W", 900, 4000) is None
+
+
+# --- load plausibility ---------------------------------------------------------------
+
+class TestLoadPlausibility:
+    """
+    The unit check for a pushed or pulled managed-load profile.
+
+    Same failure as PV: a source reporting watts, read as watt-hours per slot, is a
+    factor of four out on quarter-hourly data - which looks like a pessimistic
+    forecast rather than a misconfiguration.
+    """
+
+    def test_a_plausible_profile_says_nothing(self):
+        # 1.5 kW heat pump, quarter-hourly: 375 Wh per slot.
+        assert load_plausibility_message([375.0] * 96, "Wh", 900, 1500.0) is None
+
+    def test_watts_read_as_energy_is_caught_against_the_rated_power(self):
+        """1500 W stored as 1500 Wh in a 15-minute slot is 6 kW - four times the rating."""
+        message = load_plausibility_message([1500.0] * 96, "Wh", 900, 1500.0)
+        assert message is not None
+        assert "6.0 kW" in message
+        assert "1.5 kW" in message
+
+    def test_the_tolerance_allows_a_load_above_its_nameplate(self):
+        """A defrost cycle or a backup heater draws more than the plate says."""
+        assert load_plausibility_message([2000.0] * 48, "Wh", 3600, 1500.0) is None
+
+    def test_without_a_rated_power_only_the_gross_mistakes_are_visible(self):
+        """3 kW entered as kW and read as W - the factor-1000 version."""
+        assert load_plausibility_message([3000.0] * 48, "Wh", 3600, 0) is None
+        message = load_plausibility_message([3_000_000.0] * 48, "Wh", 3600, 0)
+        assert message is not None
+        assert "50 kW" in message
+
+    def test_a_negative_correction_is_checked_on_its_magnitude(self):
+        """A downward correction can carry the same unit mistake as an upward one."""
+        message = load_plausibility_message([-1500.0] * 96, "Wh", 900, 1500.0)
+        assert message is not None
+        assert "6.0 kW" in message
+
+    def test_an_appliance_that_is_simply_off_is_not_a_problem(self):
+        """Only the high direction is checked - all-zero is an ordinary answer."""
+        assert load_plausibility_message([0.0] * 48, "Wh", 3600, 1500.0) is None
+
+    def test_nothing_to_check(self):
+        assert load_plausibility_message([], "Wh", 3600, 1500.0) is None
+        assert load_plausibility_message([100.0], "Wh", 0, 1500.0) is None

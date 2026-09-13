@@ -35,6 +35,7 @@ from .migration import (
     migrate_yaml_to_store,
     migrate_ha_options_to_store,
     migrate_battery_price_unit_to_ct_kwh,
+    migrate_managed_load_power_sensor_to_replaces_sensor,
     migrate_sensor_placeholders_to_empty,
     prune_migrated_yaml,
 )
@@ -132,6 +133,10 @@ class ConfigWebModule:
 
         # One-time migration: battery.price_euro_per_wh_accu (€/Wh) -> battery.price_ct_kwh_accu (ct/kWh)
         migrate_battery_price_unit_to_ct_kwh(self._store)
+
+        # One-time migration: managed_loads.<n>.power_sensor -> replaces_sensor on the
+        # external types, where subtracting from the base load was all it ever did
+        migrate_managed_load_power_sensor_to_replaces_sensor(self._store)
 
         # One-time migration: blank sensor names that were only ever schema hints,
         # so the interfaces' "not configured" handling can take over.

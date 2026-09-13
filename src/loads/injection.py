@@ -16,6 +16,11 @@ whatever shape is natural at the sending end and normalises it here:
 - ``{"total_wh": 8000, "deadline_hours": 24}`` - an energy contingent to be placed by the
   planner rather than a fixed profile.
 
+A load can also be pointed at a source EOS Connect fetches itself, which arrives here as
+already-normalised timestamped entries - see `profile_from_entries`. Both paths end in
+the same `PushedProfile`, so everything downstream treats a pulled forecast and a pushed
+one identically.
+
 Everything is validated before it can reach the optimizer: the payload arrives from the
 network and a malformed array must produce a 400, never a corrupted ``gesamtlast``.
 """
@@ -309,6 +314,113 @@ def _parse_profile(payload, anchor, slot_count, time_frame_base, current_slot, v
         source_resolution_s=source_base,
         source_length=len(numbers),
     )
+
+
+def profile_from_entries(entries, resolution_seconds, anchor, slot_count,
+                        time_frame_base, valid_until):
+    """
+    Lay a timestamped series onto the optimizer's slot grid.
+
+    This is the pull counterpart to `parse_push`. Where a push sends a bare array and
+    says where it starts, a pulled series carries a real timestamp per entry - which is
+    what makes it safe across midnight and across a DST change, where "the 24th value"
+    and "the hour at 02:00" stop meaning the same thing.
+
+    Each entry's energy is spread over the target slots its span actually covers,
+    weighted by overlap. That gets both directions right without a separate resampling
+    step: a finer source simply lands several entries in one slot and they sum, and a
+    coarser one is divided evenly across the slots it spans - the same rule `resample`
+    applies to a push, because a source that knows only the hourly total has no better
+    information about the shape inside that hour either way.
+
+    Args:
+        entries: Normalized entries, oldest first, each ``{"start": datetime, "value":
+            float}`` with an optional ``"end"``. Values are energy in Wh per entry.
+        resolution_seconds: Span of one entry, used when ``end`` is absent.
+        anchor: Local midnight that slot 0 starts at, timezone-aware.
+        slot_count: Length of the series to produce.
+        time_frame_base: Seconds per target slot.
+        valid_until: When the result stops counting.
+
+    Returns:
+        PushedProfile: ready to be handed to `ExternalPushModel.accept`.
+
+    Raises:
+        InjectionError: with a message written for the user.
+    """
+    if not entries:
+        raise InjectionError("the source returned no values")
+
+    placed = [0.0] * slot_count
+    horizon_seconds = slot_count * time_frame_base
+    dropped = 0
+
+    for index, entry in enumerate(entries):
+        start = entry.get("start")
+        if start is None:
+            raise InjectionError(f"entry {index} has no 'start'")
+        value = _as_number(entry.get("value"), f"entries[{index}].value")
+
+        begin = (start - anchor).total_seconds()
+        end_stamp = entry.get("end")
+        finish = (
+            (end_stamp - anchor).total_seconds() if end_stamp is not None
+            else begin + resolution_seconds
+        )
+        span = finish - begin
+        if span <= 0:
+            raise InjectionError(
+                f"entry {index} ends at or before it starts - check the source's "
+                "timestamps"
+            )
+
+        if finish <= 0 or begin >= horizon_seconds:
+            dropped += 1
+            continue
+
+        _spread(placed, value, begin, finish, span, time_frame_base, slot_count)
+
+    if dropped:
+        # The same accounting a push gets. A source publishing yesterday as well as
+        # today is normal and its past entries are meant to fall away - but so is a
+        # source stuck a day behind, and only the count tells those apart.
+        logger.info(
+            "[LOADS] %d of %d pulled entries fall outside the %d-slot horizon and were "
+            "ignored", dropped, len(entries), slot_count,
+        )
+
+    for value in placed:
+        if abs(value) > MAX_SLOT_WH:
+            raise InjectionError(
+                f"a slot value of {value:.0f} Wh is outside the plausible range "
+                f"(+/-{MAX_SLOT_WH:.0f} Wh) - check the unit"
+            )
+
+    return PushedProfile(
+        slots_wh=placed,
+        valid_until=valid_until,
+        source_resolution_s=int(resolution_seconds),
+        source_length=len(entries),
+    )
+
+
+def _spread(placed, value, begin, finish, span, time_frame_base, slot_count):
+    """
+    Add one entry's energy to every slot its span touches, weighted by overlap.
+
+    Splitting by overlap rather than by slot index is what keeps a source whose
+    timestamps do not line up with the slot boundaries from silently losing energy at
+    each edge.
+    """
+    first = max(0, int(begin // time_frame_base))
+    last = min(slot_count - 1, int((finish - 1e-9) // time_frame_base))
+
+    for slot in range(first, last + 1):
+        slot_begin = slot * time_frame_base
+        slot_end = slot_begin + time_frame_base
+        overlap = min(finish, slot_end) - max(begin, slot_begin)
+        if overlap > 0:
+            placed[slot] += value * (overlap / span)
 
 
 def describe(profile, time_frame_base):

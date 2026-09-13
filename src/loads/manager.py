@@ -19,11 +19,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .ambient_bias import IMPLAUSIBLE_GAP_K, AmbientBias
-from .contribution import SOURCE_API, LoadContributionRegistry
-from .injection import InjectionError, parse_push
+from .contribution import (
+    SOURCE_API, SOURCE_PULL, LoadContributionRegistry, ttl_from_minutes,
+)
+from .injection import InjectionError, parse_push, profile_from_entries
 from .instance import ManagedLoad
 from .models.base import DemandContext
-from .presets import EXTERNAL_TYPES, fallback_ambient_c, uses_outdoor_ambient
+from .presets import (
+    EXTERNAL_TYPES, fallback_ambient_c, pulls_its_profile, uses_outdoor_ambient,
+)
 
 logger = logging.getLogger("__main__")
 
@@ -75,6 +79,15 @@ class ManagedLoadSources:
     pv_forecast: object = _noop           # () -> [Wh per slot]
     base_load: object = _noop             # () -> [Wh per slot]
     temperature_forecast: object = _noop  # () -> [degrees C, hourly]
+    # (entry_config) -> {"entries": [{"start": datetime, "value": Wh}, ...],
+    #                    "resolution_seconds": int} | None
+    #
+    # Fetches a load profile for one managed load. Returns None when nothing is
+    # configured to fetch, and raises ValueError with a user-facing message when the
+    # fetch or the format fails. Timestamps must be aware and values already converted
+    # to Wh per entry - normalising a timeseries needs `interfaces`, which this package
+    # deliberately cannot import.
+    read_profile: object = _noop
 
 
 # What a Wh is worth to a load with no price limit set: high enough that the solver
@@ -126,6 +139,9 @@ class ManagedLoadManager:
         self._instances = {}
         self._published_release = {}
         self._warned_ambient = set()
+        # (id, kind) pairs already reported as unfetchable, so a source that is down
+        # for a day writes one line rather than one per cycle.
+        self._warned_pull = set()
         self._warned_bias = set()
         self._warned_no_prices = False
         # Set when the optimizer can place contingent loads itself, which changes what
@@ -191,11 +207,16 @@ class ManagedLoadManager:
         profile is built from. Injecting its prediction on top without removing the
         history would count the same appliance twice - the exact trap described on issue
         #55 for `additional_load_1`.
+
+        Which field names that meter depends on the type, so the instance resolves it;
+        see `ManagedLoad.subtracted_sensor`. An externally fed load that names none is
+        saying its forecast is an addition to the base load rather than a replacement
+        for part of it, and that is the ordinary case.
         """
         return [
-            item.power_sensor
+            item.subtracted_sensor
             for item in self.instances
-            if item.enabled and item.subtract_from_base_load and item.power_sensor
+            if item.enabled and item.subtracted_sensor
         ]
 
     def enabled_ids(self):
@@ -302,6 +323,7 @@ class ManagedLoadManager:
                 continue
             ctx = self._context_for(item, ctx_base)
             self._last_ctx_for[item.id] = ctx
+            self._pull_profile(item, ctx)
             self._record_sample(item, ctx)
             defer = self.external_scheduler and item.kind_is_contingent()
             if defer:
@@ -763,10 +785,11 @@ class ManagedLoadManager:
         into a deep link to the setting - see ``parseAlertMeta`` in web/js/main.js.
         """
         for item in self.instances:
-            if not item.enabled or not item.power_sensor:
+            sensor = item.power_sensor or item.replaces_sensor
+            if not item.enabled or not sensor:
                 continue
             try:
-                details = self.sources.read_sensor_details(item.power_sensor)
+                details = self.sources.read_sensor_details(sensor)
             except Exception:  # pylint: disable=broad-except
                 # A sensor that is briefly unreachable is not a configuration problem.
                 logger.debug(
@@ -781,15 +804,27 @@ class ManagedLoadManager:
             unit = str(details.get("unit", "")).strip().lower()
             device_class = str(details.get("device_class", "")).strip().lower()
             if unit in ENERGY_UNITS or device_class == "energy":
+                # An externally fed load measures no efficiency, so naming one would be
+                # nonsense - but the reading still has to be watts, because it is the
+                # history that leaves the household base load.
+                consequence = (
+                    "otherwise too much is taken out of the household base load and the "
+                    "forecast comes out far too low"
+                    if item.replaces_sensor and not item.power_sensor
+                    else "otherwise the appliance looks permanently on and its measured "
+                         "efficiency is meaningless"
+                )
                 logger.warning(
-                    "[LOADS] '%s' has power_sensor '%s' reporting %s, which is energy, "
-                    "not power. It must report watts - otherwise the appliance looks "
-                    "permanently on and its measured efficiency is meaningless. In Home "
+                    "[LOADS] '%s' has %s '%s' reporting %s, which is energy, "
+                    "not power. It must report watts - %s. In Home "
                     "Assistant, add a derivative helper and point this at that. "
                     "| Config: #managed-loads | ACTION REQUIRED",
                     item.id,
-                    item.power_sensor,
+                    "replaces_sensor" if item.replaces_sensor and not item.power_sensor
+                    else "power_sensor",
+                    sensor,
                     details.get("unit") or device_class,
+                    consequence,
                 )
 
     # -- sampling and calibration ------------------------------------------------------------
@@ -905,6 +940,14 @@ class ManagedLoadManager:
                 f"managed load '{entry_id}' is of type '{item.type}' and computes its "
                 "own demand - only external types accept pushed data"
             )
+        if pulls_its_profile(item.config):
+            # Accepting it would work for exactly one cycle and then be overwritten by
+            # the next fetch, which looks like the push was lost rather than refused.
+            raise InjectionError(
+                f"managed load '{entry_id}' fetches its profile from the source "
+                "configured for it - set its profile source back to 'push' to hand it "
+                "one instead"
+            )
 
         anchor, now, slot_count = self._clock()
         current_slot = int((now - anchor).total_seconds() // self.time_frame_base)
@@ -921,6 +964,74 @@ class ManagedLoadManager:
         logger.info("[LOADS] '%s' accepted a push via %s", entry_id, source)
         self.refresh(entry_id)
         return parsed
+
+    def _pull_profile(self, item, ctx):
+        """
+        Fetch one load's profile from the source the user named.
+
+        A failed fetch keeps whatever was last fetched rather than clearing it. Home
+        Assistant restarts, and blanking the forecast for the minutes that takes would
+        swing the battery plan on nothing more than a reboot. The staleness bound is
+        ``ttl_minutes``, which the model enforces on its own: if the source stays gone
+        long enough, the profile expires and the load simply stops contributing.
+        """
+        if not pulls_its_profile(item.config):
+            return
+
+        try:
+            fetched = self.sources.read_profile(item.config)
+        except (ValueError, TypeError, KeyError) as exc:
+            self._warn_once(item.id, "pull", str(exc))
+            return
+        except Exception:  # pylint: disable=broad-except
+            # A network layer can raise anything at all, and one unreachable sensor
+            # must not stop the other managed loads - or the house - being planned.
+            logger.exception("[LOADS] '%s' could not fetch its profile", item.id)
+            return
+
+        if not fetched:
+            return
+
+        try:
+            profile = profile_from_entries(
+                fetched.get("entries") or [],
+                resolution_seconds=fetched.get("resolution_seconds") or 3600,
+                anchor=ctx.anchor,
+                slot_count=ctx.slot_count,
+                time_frame_base=ctx.time_frame_base,
+                valid_until=ttl_from_minutes(
+                    item.config.get("ttl_minutes", 1440), now=ctx.now
+                ),
+            )
+        except InjectionError as exc:
+            self._warn_once(item.id, "format", str(exc))
+            return
+
+        self._warned_pull.discard((item.id, "pull"))
+        self._warned_pull.discard((item.id, "format"))
+        item.accept_push(profile, ctx.anchor, self.time_frame_base, source=SOURCE_PULL)
+        logger.debug(
+            "[LOADS] '%s' fetched %d entries, %.0f Wh over the horizon",
+            item.id, profile.source_length, sum(profile.slots_wh),
+        )
+
+    def _warn_once(self, entry_id, kind, message):
+        """
+        Report a failing fetch the first time and then stay quiet about it.
+
+        The cycle runs every few minutes; a source that is down for a day would
+        otherwise write the same line three hundred times and bury everything else.
+        """
+        if (entry_id, kind) in self._warned_pull:
+            logger.debug("[LOADS] '%s' still cannot fetch its profile: %s",
+                         entry_id, message)
+            return
+        self._warned_pull.add((entry_id, kind))
+        logger.warning(
+            "[LOADS] '%s' could not fetch its profile: %s. The last one stays in the "
+            "forecast until it expires. | Config: #managed-loads",
+            entry_id, message,
+        )
 
     def clear_push(self, entry_id):
         """Drop an instance's pushed data, so it stops contributing immediately."""

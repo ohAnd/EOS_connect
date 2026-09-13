@@ -21,6 +21,7 @@ from .contribution import (
     SOURCE_API,
     SOURCE_INTERNAL,
     SOURCE_MQTT,
+    SOURCE_PULL,
     LoadContribution,
 )
 from .gate import ReleaseGate
@@ -64,6 +65,11 @@ class ManagedLoad:
         self.priority = int(resolved.get("priority", 100) or 100)
         self.subtract_from_base_load = bool(resolved.get("subtract_from_base_load", True))
         self.power_sensor = str(resolved.get("power_sensor", "") or "").strip()
+        # The meter an externally fed load's forecast stands in for. Separate from
+        # ``power_sensor`` because on those types it was only ever the base-load
+        # subtraction: there is no efficiency to measure and no sample to record, so
+        # sharing one field meant sharing a description that described none of it.
+        self.replaces_sensor = str(resolved.get("replaces_sensor", "") or "").strip()
 
         self.cycle_seconds = max(30, int(cycle_seconds or 300))
         self.model = build_model(resolved)
@@ -105,6 +111,26 @@ class ManagedLoad:
                 self.id, key, raw,
             )
             return None
+
+    @property
+    def subtracted_sensor(self):
+        """
+        The meter whose history has to leave the household base load, or "".
+
+        One question, two fields: a heated store names the appliance it measures, an
+        externally fed load names the meter its forecast replaces. Resolving it here
+        keeps the manager from having to know which type it is holding.
+        """
+        if not self.subtract_from_base_load:
+            return ""
+        if self.type in EXTERNAL_TYPES:
+            # Falling back to the old field name is not tidiness, it is the safety net
+            # under the rename. The store migration only reaches a config it has
+            # already seen: a backup restored afterwards, or a hand-written YAML, can
+            # still arrive carrying `power_sensor` on an external load, and silently
+            # not subtracting it would double-count the appliance with nothing said.
+            return self.replaces_sensor or self.power_sensor
+        return self.power_sensor
 
     def schedule_is_stale(self, now, max_age_seconds):
         """
@@ -328,7 +354,12 @@ class ManagedLoad:
                 "own demand - it does not accept pushed data"
             )
         self.model.accept(parsed, anchor, time_frame_base)
-        self.model.last_source = SOURCE_MQTT if source == SOURCE_MQTT else SOURCE_API
+        # Carried through as given. Collapsing anything that was not MQTT into "api"
+        # reported a profile EOS Connect fetched itself as one somebody had pushed,
+        # which sends a user chasing an automation that was never involved.
+        self.model.last_source = (
+            source if source in (SOURCE_API, SOURCE_MQTT, SOURCE_PULL) else SOURCE_API
+        )
 
     def clear_push(self):
         """Drop the stored push. Only external types have one to drop."""

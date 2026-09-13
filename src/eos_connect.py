@@ -43,6 +43,7 @@ from interfaces.inverters import create_inverter
 from interfaces.inverters.null_inverter import NullInverter
 from interfaces.inverters.evcc_inverter import EvccInverter
 from interfaces.pv_autoscaler import PvAutoscaler, TIMEFRAME_IDS, timeframe_bounds
+from interfaces.load_profile_source import fetch_profile
 from interfaces.state_source import fetch_remote_state, fetch_remote_state_details
 from loads import api as loads_api
 from loads import mqtt_topics as managed_load_topics
@@ -450,6 +451,23 @@ def _managed_load_temperature_forecast():
     return pv_interface.get_current_temp_forecast()
 
 
+def _managed_load_read_profile(entry):
+    """
+    Fetch one managed load's forecast from the source configured for it.
+
+    The manager owns *when* this happens; all this does is answer. Raising is how a
+    failure is reported - the manager keeps the previous profile and warns once, rather
+    than blanking the forecast because Home Assistant happened to be restarting.
+    """
+    load_config = config_manager.config.get("load", {})
+    return fetch_profile(
+        entry,
+        data_source=config_manager.config.get("data_source", {}),
+        time_zone=time_zone,
+        ssl_ignore=bool(load_config.get("ssl_ignore", False)),
+    )
+
+
 def publish_managed_load_release(load_id, release):
     """Publish one managed load's release decision when it changes."""
     logger.info(
@@ -469,6 +487,7 @@ load_manager.sources = ManagedLoadSources(
     pv_forecast=pv_interface.get_current_pv_forecast,
     base_load=_managed_load_base_load,
     temperature_forecast=_managed_load_temperature_forecast,
+    read_profile=_managed_load_read_profile,
 )
 load_manager.on_release_change = publish_managed_load_release
 # The built-in optimizer places contingent loads itself, which means this module must

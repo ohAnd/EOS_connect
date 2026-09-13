@@ -36,7 +36,10 @@ class ExternalPushModel(BaseDemandModel):
     # Overridden per push; a fresh instance advertises whatever its preset configured,
     # so the UI can show the right fields before anything has ever been pushed.
     kind = KIND_PROFILE
-    sensor_keys = ("power_sensor",)
+    # Nothing. A pushed or fetched profile is the answer already - there is no reading
+    # this model would do anything with, and asking for one cost a Home Assistant
+    # request per cycle for a value that was then discarded.
+    sensor_keys = ()
 
     def __init__(self, entry_id, config):
         super().__init__(entry_id, config)

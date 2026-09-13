@@ -31,6 +31,11 @@ KIND_PROFILE = "profile"
 SOURCE_INTERNAL = "internal"
 SOURCE_API = "api"
 SOURCE_MQTT = "mqtt"
+# Fetched by EOS Connect from a source the user named, rather than handed over by
+# somebody else. Distinguished so the status page can say which way round it was: a
+# profile that stops updating is diagnosed very differently depending on who was
+# supposed to be doing the updating.
+SOURCE_PULL = "pull"
 
 
 def _utcnow():

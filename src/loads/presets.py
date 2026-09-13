@@ -41,8 +41,14 @@ THERMAL_TYPES = (
 # Types the planner and the release gate apply to.
 CONTINGENT_TYPES = THERMAL_TYPES + (TYPE_EXTERNAL_CONTINGENT,)
 
-# Types fed by a push rather than by sensors.
+# Types fed from outside rather than from sensors.
 EXTERNAL_TYPES = (TYPE_EXTERNAL_CONTINGENT, TYPE_EXTERNAL_PROFILE)
+
+# Where an external load profile gets its array from. Push is the original behaviour -
+# an automation hands one over - and stays the default; timeseries names a source EOS
+# Connect fetches itself.
+PROFILE_SOURCE_PUSH = "push"
+PROFILE_SOURCE_TIMESERIES = "timeseries"
 
 # Types for which a cover, and a season, mean anything.
 COVER_TYPES = (TYPE_POOL_HEATPUMP,)
@@ -183,6 +189,16 @@ PRESETS = {
         "default_ambient_c": 18.0,
         "defaults": {
             "ttl_minutes": 1440,
+            # Waiting to be handed a profile is what this type has always done, so an
+            # entry that predates the fetched source keeps behaving exactly as it did.
+            "profile_source": PROFILE_SOURCE_PUSH,
+            "use_ha_central_data_source": True,
+            "ha_sensor_name": "",
+            "data_path": "attributes.data",
+            "data_url": "",
+            "data_token": "",
+            "value_unit": "W",
+            "rated_power_w": 0.0,
         },
     },
 }
@@ -236,8 +252,23 @@ def is_thermal(type_name):
 
 
 def is_external(type_name):
-    """Whether this type is fed by a push rather than by sensors."""
+    """Whether this type is fed from outside rather than from sensors."""
     return type_name in EXTERNAL_TYPES
+
+
+def pulls_its_profile(entry):
+    """
+    Whether this entry fetches its own profile instead of waiting to be handed one.
+
+    Reads the resolved entry rather than the type, because the two external types
+    differ here: only a profile can be fetched. A budget and a deadline is not a
+    timeseries, and nothing would know what to fetch.
+    """
+    if str(entry.get("type", "")).strip() != TYPE_EXTERNAL_PROFILE:
+        return False
+    return str(entry.get("profile_source", PROFILE_SOURCE_PUSH)).strip() == (
+        PROFILE_SOURCE_TIMESERIES
+    )
 
 
 def uses_outdoor_ambient(type_name):
