@@ -182,6 +182,7 @@ class ConfigWebModule:
             managed_store = ManagedLoadStore(self._store)
             managed_store.ensure_schema()
             managed_store.purge_old_samples()
+            managed_store.purge_old_decisions()
             self._managed_load_store = managed_store
         except Exception:
             logger.exception("[ConfigWeb] Failed to initialize ManagedLoadStore schema")

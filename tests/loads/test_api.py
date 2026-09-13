@@ -219,3 +219,90 @@ def test_every_route_reports_cleanly_when_nothing_is_configured():
         ):
             assert response.status_code == 404
             assert "not configured" in response.get_json()["error"]
+
+
+# --- the decision journal ----------------------------------------------------------------
+
+class _Journal:
+    """A store that only answers the journal calls the endpoint makes."""
+
+    def __init__(self, rows=None, fail=False):
+        self.rows = rows or []
+        self.fail = fail
+        self.calls = []
+
+    def load_decisions(self, load_id, hours=24, limit=2000):
+        if self.fail:
+            raise RuntimeError("database is locked")
+        self.calls.append((load_id, hours, limit))
+        return list(self.rows)
+
+
+def _decision(plan_hash, released=True, reason="planned cheap slot"):
+    return {
+        "timestamp": "2026-09-13T17:16:00+00:00", "origin": "optimizer",
+        "released": released, "reason": reason, "current_slot": 77,
+        "planned_now": released, "plan_hash": plan_hash,
+    }
+
+
+def test_the_journal_is_served_newest_first_with_a_summary(client):
+    """The summary answers what people arrive asking: did the plan keep moving?"""
+    client.manager.store = _Journal([
+        _decision("aaa"), _decision("bbb", released=False, reason="not in a planned slot"),
+        _decision("aaa"), _decision("ccc"),
+    ])
+
+    body = client.get("/api/managed_loads/heating/decisions").get_json()
+
+    assert body["id"] == "heating"
+    assert body["count"] == 4
+    assert body["distinct_plans"] == 3
+    assert body["release_changes"] == 2
+    assert len(body["decisions"]) == 4
+
+
+def test_the_window_and_the_limit_are_passed_through(client):
+    journal = _Journal([_decision("aaa")])
+    client.manager.store = journal
+
+    client.get("/api/managed_loads/heating/decisions?hours=72&limit=50")
+
+    assert journal.calls == [("heating", 72, 50)]
+
+
+def test_the_window_is_clamped_to_a_week(client):
+    journal = _Journal([])
+    client.manager.store = journal
+
+    client.get("/api/managed_loads/heating/decisions?hours=99999")
+
+    assert journal.calls[0][1] == 168
+
+
+def test_a_nonsense_window_is_refused(client):
+    client.manager.store = _Journal([])
+    response = client.get("/api/managed_loads/heating/decisions?hours=soon")
+    assert response.status_code == 400
+    assert "whole numbers" in response.get_json()["error"]
+
+
+def test_the_journal_of_an_unknown_load_is_a_404(client):
+    client.manager.store = _Journal([])
+    assert client.get("/api/managed_loads/nope/decisions").status_code == 404
+
+
+def test_without_a_database_the_endpoint_says_so(client):
+    client.manager.store = None
+    response = client.get("/api/managed_loads/heating/decisions")
+    assert response.status_code == 404
+    assert "journalled" in response.get_json()["error"]
+
+
+def test_a_broken_journal_does_not_leak_the_exception(client):
+    """Same rule as everywhere else served: the message is ours, not the driver's."""
+    client.manager.store = _Journal(fail=True)
+    response = client.get("/api/managed_loads/heating/decisions")
+
+    assert response.status_code == 500
+    assert "database is locked" not in response.get_json()["error"]

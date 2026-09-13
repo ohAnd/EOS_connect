@@ -13,9 +13,10 @@ manager asks for "the price series" and does not care that a `PriceInterface` pr
 which also makes the whole thing testable with four lambdas.
 """
 
+import hashlib
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from .ambient_bias import IMPLAUSIBLE_GAP_K, AmbientBias
@@ -54,6 +55,12 @@ AMBIENT_SENSOR = "sensor"
 AMBIENT_FALLBACK = "fallback"
 # A forecast shifted to agree with the site's own thermometer.
 AMBIENT_CORRECTED = "forecast_corrected"
+
+# Who made a release decision, recorded in the journal. The distinction is the first
+# thing you want when reviewing a day of toggling: an optimizer that keeps changing its
+# mind and this module falling back on its own plan look identical from the appliance.
+ORIGIN_OPTIMIZER = "optimizer"
+ORIGIN_SELF = "self"
 
 # A regional forecast and a garden thermometer disagree, and each is right about
 # something the other cannot know: the forecast has the shape - that tonight drops to
@@ -346,6 +353,8 @@ class ManagedLoadManager:
                 self.registry.drop(item.id)
             else:
                 self._store_result(item, contribution, release)
+                if item.kind_is_contingent():
+                    self._record_decision(item, ctx, release, origin=ORIGIN_SELF)
             self._consume_budget(budget, item.last_plan)
 
         self.stats.cycles += 1
@@ -406,6 +415,16 @@ class ManagedLoadManager:
         """
         if not isinstance(schedules, dict):
             return 0
+
+        # The optimizer answers far more often than this module polls - every two
+        # minutes against a five-minute cycle on a live install - so the context from
+        # the last cycle is stale by up to a whole cycle. Its sensor readings and its
+        # demand are fine: those are only refreshed on a cycle by design. Its *clock*
+        # is not. Settling the gate against a stale `current_slot` releases the load
+        # for a slot that has already ended, and a minimum runtime then holds the
+        # appliance on for half an hour that nothing ever planned.
+        _, now, _ = self._clock()
+
         adopted = 0
         for item in self.instances:
             if not item.enabled or not item.kind_is_contingent():
@@ -416,11 +435,25 @@ class ManagedLoadManager:
             ctx = self._last_ctx_for.get(item.id)
             if ctx is None:
                 continue
+            ctx = self._at_now(ctx, now)
             release = item.adopt_schedule(schedule, ctx, cost=cost)
             if release is not None:
                 self._publish_release(item, release)
+                self._record_decision(item, ctx, release, origin=ORIGIN_OPTIMIZER)
                 adopted += 1
         return adopted
+
+    def _at_now(self, ctx, now):
+        """
+        The same context, read from the current moment.
+
+        The slot index stays relative to ``ctx.anchor`` rather than to today's midnight,
+        because the plan it will be compared against is indexed from that anchor. Past
+        midnight this simply counts on beyond a day, which is what the 192-slot horizon
+        already expects.
+        """
+        current_slot = int((now - ctx.anchor).total_seconds() // self.time_frame_base)
+        return replace(ctx, now=now, current_slot=current_slot)
 
     def _value_of(self, item):
         """
@@ -475,6 +508,49 @@ class ManagedLoadManager:
         else:
             self.registry.drop(item.id)
         self._publish_release(item, release)
+
+    def _record_decision(self, item, ctx, release, origin):
+        """
+        Journal one release decision and the plan behind it.
+
+        Purely diagnostic - nothing reads this back to run the house. It exists because
+        a toggling appliance is almost impossible to explain after the fact from a
+        release signal alone: the signal says *what* happened and never *which plan*
+        said so, and the plan that said so has been replaced by the time anyone looks.
+        """
+        if self.store is None or release is None:
+            return
+
+        plan = item.last_plan or []
+        slots = [index for index, value in enumerate(plan) if value]
+        demand = item.last_demand
+        record = {
+            "origin": origin,
+            "released": bool(release.get("released")),
+            "reason": release.get("reason", ""),
+            "current_slot": ctx.current_slot,
+            "planned_now": bool(
+                0 <= ctx.current_slot < len(plan) and plan[ctx.current_slot] > 0
+            ),
+            # A short digest of *which* slots, so churn is one GROUP BY rather than a
+            # walk over a week of arrays.
+            "plan_hash": hashlib.md5(
+                str(slots).encode("utf-8")
+            ).hexdigest()[:8] if slots else "",
+            "anchor": ctx.anchor.isoformat(),
+            "planned_slots": slots,
+            "planned_wh": round(sum(plan), 1),
+            "demand_wh": round(float(demand.total_wh), 1) if demand else 0.0,
+            "demand_reason": demand.reason if demand else "",
+            "next_release_start": release.get("next_release_start"),
+            "price_eur_per_wh": getattr(demand, "plan_price_eur_per_wh", None)
+            if demand else None,
+        }
+        try:
+            self.store.record_decision(item.id, ctx.now, record)
+        except Exception:  # pylint: disable=broad-except
+            # A journal that cannot be written must never stop the house being run.
+            logger.exception("[LOADS] could not journal the decision for '%s'", item.id)
 
     # -- context ---------------------------------------------------------------------------
 

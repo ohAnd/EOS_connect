@@ -130,3 +130,109 @@ def test_forget_removes_both_samples_and_state(store):
     store.forget("pool")
     assert store.sample_count("pool") == 0
     assert store.load_model_state("pool") is None
+
+
+# --- the decision journal ------------------------------------------------------------
+
+class TestDecisionJournal:
+    """
+    What was decided, and against which plan.
+
+    Written because a toggling appliance could not be explained after the fact. The
+    release signal says only that it changed; by the time anyone looks, the plan that
+    said so has been replaced several times over.
+    """
+
+    def _record(self, store, moment, **overrides):
+        record = {
+            "origin": "optimizer", "released": True, "reason": "planned cheap slot",
+            "current_slot": 76, "planned_now": True, "plan_hash": "abc12345",
+            "planned_slots": [76, 77], "planned_wh": 800.0, "demand_wh": 35733.5,
+        }
+        record.update(overrides)
+        return store.record_decision("pool", moment, record)
+
+    def test_a_decision_round_trips(self, store):
+        now = datetime.now(timezone.utc)
+        assert self._record(store, now) is True
+
+        rows = store.load_decisions("pool")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["released"] is True
+        assert row["reason"] == "planned cheap slot"
+        assert row["current_slot"] == 76
+        assert row["planned_now"] is True
+        assert row["plan_hash"] == "abc12345"
+        assert row["planned_slots"] == [76, 77]
+        assert row["demand_wh"] == 35733.5
+
+    def test_the_newest_comes_first(self, store):
+        now = datetime.now(timezone.utc)
+        for minutes, plan in ((30, "aaa"), (20, "bbb"), (10, "ccc")):
+            self._record(store, now - timedelta(minutes=minutes), plan_hash=plan)
+
+        assert [r["plan_hash"] for r in store.load_decisions("pool")] == \
+            ["ccc", "bbb", "aaa"]
+
+    def test_a_plan_that_keeps_moving_is_visible_as_distinct_hashes(self, store):
+        """The whole point: four plans in seven minutes has to be countable."""
+        now = datetime.now(timezone.utc)
+        for index, plan in enumerate(["aaa", "bbb", "aaa", "ccc", "ddd", "ccc"]):
+            self._record(store, now - timedelta(minutes=index), plan_hash=plan)
+
+        hashes = {r["plan_hash"] for r in store.load_decisions("pool")}
+        assert hashes == {"aaa", "bbb", "ccc", "ddd"}
+
+    def test_only_the_window_asked_for_comes_back(self, store):
+        now = datetime.now(timezone.utc)
+        self._record(store, now - timedelta(hours=30), plan_hash="old")
+        self._record(store, now - timedelta(hours=2), plan_hash="new")
+
+        assert [r["plan_hash"] for r in store.load_decisions("pool", hours=24)] == ["new"]
+
+    def test_the_limit_keeps_the_recent_end(self, store):
+        now = datetime.now(timezone.utc)
+        for index in range(10):
+            self._record(store, now - timedelta(minutes=index),
+                         plan_hash=f"h{index:02d}")
+
+        rows = store.load_decisions("pool", limit=3)
+        assert [r["plan_hash"] for r in rows] == ["h00", "h01", "h02"]
+
+    def test_decisions_are_kept_per_load(self, store):
+        now = datetime.now(timezone.utc)
+        self._record(store, now)
+        store.record_decision("sauna", now, {"origin": "self", "released": False,
+                                             "reason": "no demand"})
+
+        assert len(store.load_decisions("pool")) == 1
+        assert len(store.load_decisions("sauna")) == 1
+
+    def test_a_record_with_no_timestamp_is_refused(self, store):
+        assert store.record_decision("pool", "not a datetime", {}) is False
+
+    def test_old_decisions_are_purged(self, store):
+        now = datetime.now(timezone.utc)
+        self._record(store, now - timedelta(days=9))
+        self._record(store, now)
+
+        assert store.purge_old_decisions(days=7) == 1
+        assert len(store.load_decisions("pool", hours=168)) == 1
+
+    def test_forgetting_a_load_takes_its_journal_too(self, store):
+        """The id is the user's - the next appliance under that name is not this one."""
+        self._record(store, datetime.now(timezone.utc))
+        store.forget("pool")
+
+        assert store.load_decisions("pool") == []
+
+    def test_the_journal_is_separate_from_the_calibration_samples(self, store):
+        """A calibrator sifting control records out of its own history forever."""
+        now = datetime.now(timezone.utc)
+        self._record(store, now)
+        store.record_sample("pool", {"timestamp": now, "medium_c": 25.1,
+                                     "ambient_c": 17.2, "power_w": 1600.0})
+
+        assert len(store.load_samples("pool")) == 1
+        assert len(store.load_decisions("pool")) == 1

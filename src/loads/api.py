@@ -111,6 +111,59 @@ def clear_push(load_id):
     return jsonify({"id": load_id, "cleared": bool(cleared)})
 
 
+@loads_bp.route("/<load_id>/decisions", methods=["GET"])
+def decisions(load_id):
+    """
+    The release journal: what was decided, when, and against which plan.
+
+    ``?hours=24`` (1-168) and ``?limit=2000`` bound it. Newest first, because the
+    question asked of this is nearly always "what just happened".
+
+    This is what makes a toggling appliance diagnosable after the fact. The release
+    signal on its own says only that it changed; the journal says whether the optimizer
+    or the fallback planner decided it, which slot it thought was current, and how many
+    different plans it held that day.
+    """
+    if _manager is None:
+        return _unavailable()
+
+    item = _manager.instance(load_id)
+    if item is None:
+        return jsonify({"error": f"No managed load with id '{load_id}'"}), 404
+    if _manager.store is None:
+        return jsonify({
+            "error": "No database is configured, so nothing is being journalled"
+        }), 404
+
+    try:
+        hours = max(1, min(168, int(flask_request.args.get("hours", 24))))
+        limit = max(1, min(5000, int(flask_request.args.get("limit", 2000))))
+    except (TypeError, ValueError):
+        return jsonify({"error": "'hours' and 'limit' must be whole numbers"}), 400
+
+    try:
+        rows = _manager.store.load_decisions(load_id, hours=hours, limit=limit)
+    except Exception:  # pylint: disable=broad-except
+        logger.exception("[LOADS] could not read the decision journal for '%s'", load_id)
+        return jsonify({"error": "The decision journal could not be read"}), 500
+
+    # The summary is the answer to the question people actually arrive with: did the
+    # plan keep moving? Counting distinct plans beats reading 700 rows to find out.
+    plans = [row.get("plan_hash") for row in rows if row.get("plan_hash")]
+    flips = sum(
+        1 for older, newer in zip(rows[1:], rows[:-1])
+        if bool(older.get("released")) != bool(newer.get("released"))
+    )
+    return jsonify({
+        "id": load_id,
+        "hours": hours,
+        "count": len(rows),
+        "distinct_plans": len(set(plans)),
+        "release_changes": flips,
+        "decisions": rows,
+    })
+
+
 @loads_bp.route("/<load_id>/calibration/reset", methods=["POST"])
 def reset_calibration(load_id):
     """

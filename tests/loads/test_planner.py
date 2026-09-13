@@ -12,6 +12,7 @@ from src.loads.planner import (
     STRATEGY_PV_SURPLUS,
     PlanOptions,
     plan_contingent,
+    plan_price,
 )
 
 BERLIN = ZoneInfo("Europe/Berlin")
@@ -355,3 +356,27 @@ def test_slots_left_over_once_the_demand_is_met_are_not_blamed_on_anything():
 
     assert SLOT_NOT_NEEDED in demand.slot_reasons
     assert SLOT_NOT_NEEDED in NON_BLOCKING_REASONS
+
+
+# --- reporting a price we may not have -----------------------------------------------
+
+def test_plan_price_without_a_price_series_is_unknown_not_a_crash():
+    """
+    `_prices` hands back an empty list until the price interface has fetched.
+
+    That is deliberate - an all-zero series would read as free electricity - but it used
+    to be indexed into anyway, which raised out of `adopt_schedules` and lost the
+    optimizer's whole schedule during the seconds after a restart.
+    """
+    assert plan_price([0.0, 400.0, 400.0], []) is None
+    assert plan_price([0.0, 400.0, 400.0], None) is None
+
+
+def test_plan_price_ignores_slots_the_price_series_does_not_reach():
+    """A short series prices what it covers rather than throwing the rest away."""
+    assert plan_price([400.0, 400.0], [0.0003]) == pytest.approx(0.0003)
+
+
+def test_plan_price_averages_over_the_placed_energy():
+    price = plan_price([400.0, 0.0, 800.0], [0.0002, 0.0009, 0.0005])
+    assert price == pytest.approx((400 * 0.0002 + 800 * 0.0005) / 1200)

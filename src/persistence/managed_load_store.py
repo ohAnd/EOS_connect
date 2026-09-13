@@ -42,6 +42,29 @@ _MODEL_TABLE = """
     )
 """
 
+# Why a separate table from the samples: a sample is what the *world* did and feeds the
+# calibration, a decision is what *we* did and feeds nothing. Mixing them would have the
+# calibrator sifting control records out of its own history forever.
+_DECISIONS_TABLE = """
+    CREATE TABLE IF NOT EXISTS managed_load_decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        load_id TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        released INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        current_slot INTEGER,
+        planned_now INTEGER,
+        plan_hash TEXT,
+        payload TEXT NOT NULL
+    )
+"""
+
+_DECISION_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_managed_load_decisions_lookup "
+    "ON managed_load_decisions (load_id, timestamp)"
+)
+
 _SAMPLE_INDEX = (
     "CREATE INDEX IF NOT EXISTS idx_managed_load_samples_lookup "
     "ON managed_load_samples (load_id, timestamp)"
@@ -55,6 +78,15 @@ DEFAULT_RETENTION_DAYS = 14
 # One row per instance per cycle at the default five-minute cadence is ~4000 rows a
 # fortnight. This bound only exists to stop a misconfigured cycle time filling the disk.
 MAX_SAMPLES_PER_LOAD = 20000
+
+# Decisions are diagnostic, not operational - nothing reads them back to run the
+# house. A week is long enough to see a pattern across a weekend and a working day, and
+# short enough that the table stays a few thousand rows.
+DECISION_RETENTION_DAYS = 7
+
+# At a two-minute optimizer cadence one load writes ~720 rows a day. This bound only
+# exists so a misconfigured refresh time cannot fill the disk.
+MAX_DECISIONS_PER_LOAD = 50000
 
 _STATE_KEY = "calibration"
 
@@ -85,7 +117,9 @@ class ManagedLoadStore:
         """Create the tables. Safe to call on every start."""
         self._store.execute(_SAMPLES_TABLE)
         self._store.execute(_MODEL_TABLE)
+        self._store.execute(_DECISIONS_TABLE)
         self._store.execute(_SAMPLE_INDEX)
+        self._store.execute(_DECISION_INDEX)
 
     # -- samples ----------------------------------------------------------------------
 
@@ -109,6 +143,88 @@ class ManagedLoadStore:
             (str(load_id), _iso(moment), json.dumps(payload)),
         )
         return True
+
+    # -- decisions --------------------------------------------------------------------
+
+    def record_decision(self, load_id, moment, record):
+        """
+        Append one release decision, with the plan it was made against.
+
+        Written on every optimizer answer and every own-planner cycle, not only on a
+        change: what needs diagnosing is a plan that *moves*, and a journal that records
+        only transitions cannot tell a plan that flipped four times from one that was
+        recomputed four times and held.
+
+        The columns are the ones a review query filters or groups on. ``plan_hash``
+        exists so "how many different plans did this load have today" is one GROUP BY
+        rather than a JSON walk over a week of rows.
+        """
+        if not isinstance(moment, datetime):
+            return False
+
+        payload = {k: v for k, v in record.items()
+                   if k not in ("released", "reason", "current_slot",
+                                "planned_now", "plan_hash", "origin")}
+        self._store.execute(
+            "INSERT INTO managed_load_decisions "
+            "(load_id, timestamp, origin, released, reason, current_slot, "
+            " planned_now, plan_hash, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(load_id), _iso(moment), str(record.get("origin", "")),
+                1 if record.get("released") else 0, str(record.get("reason", "")),
+                record.get("current_slot"),
+                1 if record.get("planned_now") else 0,
+                record.get("plan_hash"),
+                json.dumps(payload),
+            ),
+        )
+        return True
+
+    def load_decisions(self, load_id, hours=24, limit=2000):
+        """
+        Recent decisions for one load, newest first - what the review endpoint serves.
+
+        Newest first because the question asked of this is almost always "what just
+        happened", and a truncated answer should keep the recent end.
+        """
+        cutoff = _iso(datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours))))
+        rows = self._store.query(
+            "SELECT timestamp, origin, released, reason, current_slot, planned_now, "
+            "plan_hash, payload FROM managed_load_decisions "
+            "WHERE load_id = ? AND timestamp >= ? "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (str(load_id), cutoff, int(limit)),
+        )
+        out = []
+        for row in rows:
+            try:
+                payload = json.loads(row[7])
+            except (TypeError, ValueError):
+                payload = {}
+            entry = {
+                "timestamp": row[0], "origin": row[1], "released": bool(row[2]),
+                "reason": row[3], "current_slot": row[4],
+                "planned_now": bool(row[5]), "plan_hash": row[6],
+            }
+            entry.update(payload)
+            out.append(entry)
+        return out
+
+    def purge_old_decisions(self, days=DECISION_RETENTION_DAYS):
+        """Drop decisions past the retention window. Returns how many went."""
+        cutoff = _iso(datetime.now(timezone.utc) - timedelta(days=max(1, int(days))))
+        before = self._decision_count()
+        self._store.execute(
+            "DELETE FROM managed_load_decisions WHERE timestamp < ?", (cutoff,)
+        )
+        removed = before - self._decision_count()
+        if removed:
+            logger.debug("[LOADS] purged %d old decision rows", removed)
+        return removed
+
+    def _decision_count(self):
+        rows = self._store.query("SELECT COUNT(*) FROM managed_load_decisions")
+        return rows[0][0] if rows else 0
 
     def load_samples(self, load_id, days=DEFAULT_RETENTION_DAYS):
         """
@@ -158,6 +274,12 @@ class ManagedLoadStore:
         )
         self._store.execute(
             "DELETE FROM managed_load_model WHERE load_id = ?", (str(load_id),)
+        )
+        # The journal goes too. It is keyed by the id the user chose, so leaving it
+        # behind would attach one appliance's history to whatever is configured under
+        # that name next.
+        self._store.execute(
+            "DELETE FROM managed_load_decisions WHERE load_id = ?", (str(load_id),)
         )
 
     def sample_count(self, load_id):

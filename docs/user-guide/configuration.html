@@ -656,6 +656,38 @@ attributes:
                             <code>eos_connect/managed_load/&lt;id&gt;/override/set</code>. An override wins
                             over everything, frost protection included.</li>
                     </ul>
+
+                    <h3>Why did it run then?</h3>
+                    <p>A released/blocked signal tells you <em>that</em> something changed and never
+                        <em>which plan</em> said so &mdash; and by the time you look, that plan has been
+                        replaced several times over. So every release decision is written to the
+                        database as it is made, together with the plan behind it:</p>
+                    <pre><code>GET /api/managed_loads/&lt;id&gt;/decisions?hours=24
+
+{
+  "count": 712,
+  "distinct_plans": 34,        &mdash; how many different plans it held
+  "release_changes": 9,        &mdash; how often the appliance was switched
+  "decisions": [
+    {"timestamp": "...", "origin": "optimizer", "released": true,
+     "reason": "planned cheap slot", "current_slot": 77, "planned_now": true,
+     "plan_hash": "4fa96012", "planned_slots": [150, 151, 160, 161, 162],
+     "planned_wh": 2000.0, "demand_wh": 35733.5}
+  ]
+}</code></pre>
+                    <p>The two summary numbers are usually the whole answer. A high
+                        <strong>distinct_plans</strong> against a low <strong>release_changes</strong>
+                        means the optimizer keeps changing its mind but the minimum runtime is
+                        absorbing it. Both high means that churn is reaching the appliance.</p>
+                    <p><strong>origin</strong> separates the two things that look identical from the
+                        appliance: <code>optimizer</code> is a schedule the solver produced,
+                        <code>self</code> is EOS Connect falling back on its own plan because the
+                        solver went quiet. <strong>planned_now</strong> says whether the slot that was
+                        current at that moment actually carried energy &mdash; a release with
+                        <code>planned_now: false</code> is being held by the minimum runtime or an
+                        override, not by the plan.</p>
+                    <p>Kept for seven days and purged on start. It is written for reading after the
+                        fact; nothing uses it to run the house.</p>
                 </div>
 
                 <div class="content-section">

@@ -336,13 +336,21 @@ def _numeric_costs(costs, options):
 
 
 def plan_price(plan, costs):
-    """What the placed energy came to, per Wh, or None when nothing was placed."""
-    if costs is None:
+    """
+    What the placed energy came to, per Wh.
+
+    Returns None when nothing was placed, and also when the prices are not known yet:
+    `ManagedLoadManager._prices` hands back an empty list until the price interface has
+    fetched, deliberately, so a slot outside it is an ordinary startup state rather than
+    a missing entry. Indexing into it raised straight out of `adopt_schedules` and into
+    the optimizer loop - a price we cannot report is not a reason to lose the schedule.
+    """
+    if not costs:
         return None
     total_wh = 0.0
     total_cost = 0.0
     for slot, placed in enumerate(plan):
-        if placed > 0:
+        if placed > 0 and slot < len(costs):
             total_wh += placed
             total_cost += placed * costs[slot]
     return total_cost / total_wh if total_wh > 0 else None
