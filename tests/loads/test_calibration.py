@@ -618,3 +618,51 @@ def test_the_bulk_replay_still_solves_only_once(monkeypatch):
         _simulate(hours=40, step_minutes=15, medium_c=28.0, ambient_c=16.0, power_w=0.0)
     )
     assert calls["n"] == 1
+
+
+def test_a_state_seen_only_briefly_does_not_get_its_own_coefficient():
+    """
+    Two hours uncovered in four days is not enough to pin a heat loss coefficient, and
+    fitting one anyway means extrapolating the forecast from almost nothing. The share
+    test alone would allow it.
+    """
+    cal = _calibrator(loss=25.0, cover=0.3)
+    samples = _simulate(
+        hours=96, step_minutes=15, medium_c=28.0, ambient_c=16.0, power_w=0.0,
+        cover_factor=0.3, covered_when=lambda m: not (m.day == 2 and m.hour == 12),
+    )
+    cal.observe_series(samples)
+
+    assert cal.cover_identified is False
+    assert cal.loss_coefficient == pytest.approx(25.0, rel=0.02), "open value moved"
+
+
+def test_enough_of_both_states_still_identifies_them():
+    """The guard must not block a history that genuinely contains both."""
+    cal = _calibrator(loss=60.0, cover=0.6)
+    samples = _simulate(
+        hours=96, step_minutes=15, medium_c=28.0, ambient_c=16.0,
+        power_w=0.0, cover_factor=0.3, covered_when=_nights,
+    )
+    cal.observe_series(samples)
+
+    assert cal.cover_identified is True
+    assert cal.loss_coefficient == pytest.approx(TRUE_K, rel=0.05)
+
+
+def test_the_state_with_evidence_keeps_what_it_learned():
+    """
+    Thin evidence holds the *thin* coefficient, not the other one. Holding the wrong
+    one would anchor what is known and free what is not.
+    """
+    cal = _calibrator(loss=25.0, cover=0.3)
+    samples = _simulate(
+        hours=96, step_minutes=15, medium_c=28.0, ambient_c=16.0,
+        power_w=0.0, cover_factor=0.3, covered_when=lambda m: m.hour != 13,
+    )
+    cal.observe_series(samples)
+
+    # Covered is what was observed, so the covered loss is what tracks the truth.
+    assert cal.loss_coefficient * cal.cover_loss_factor == pytest.approx(
+        TRUE_K * 0.3, rel=0.1
+    )

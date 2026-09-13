@@ -94,10 +94,17 @@ AIR_COEFFICIENT_LIMIT = 0.06
 # split the loss between the two states on noise rather than on evidence.
 COVER_FACTOR_MIN = 0.05
 
-# How much of the history must have been in each cover state before the two coefficients
-# mean anything separately. A pool that was covered every single window says nothing
-# about its uncovered losses, and should keep the configured guess rather than invent one.
+# What it takes before the two coefficients mean anything separately. A pool that was
+# covered every single window says nothing about its uncovered losses and should keep
+# the configured guess rather than invent one.
+#
+# Both a share *and* a count. The share alone lets a coefficient be fitted for a state
+# the store was barely ever in: five percent of a fortnight is a couple of hours, and
+# two hours does not pin a heat loss coefficient. The count is the cheap half of the
+# guard and it only bites on genuinely thin evidence - on any history worth the name,
+# both states clear it easily.
 COVER_SPAN_MIN = 0.05
+COVER_MIN_ROWS = 5
 
 # How many unknowns the fit carries: COP intercept, COP slope, open loss, covered loss.
 UNKNOWNS = 4
@@ -233,6 +240,7 @@ class ThermalCalibrator:
         self._restored_cop_samples = 0
         self.slope_identified = False
         self.cover_identified = False
+        self._thin_state = None
         self.residual_w = None
         self.signal_w = None
 
@@ -454,7 +462,18 @@ class ThermalCalibrator:
 
         shares = [row["covered_share"] for row in rows]
         covered_share = sum(shares) / len(shares) if shares else 0.0
-        self.cover_identified = COVER_SPAN_MIN <= covered_share <= 1.0 - COVER_SPAN_MIN
+        covered_rows = sum(1 for share in shares if share > 0.5)
+        open_rows = len(shares) - covered_rows
+        self.cover_identified = (
+            COVER_SPAN_MIN <= covered_share <= 1.0 - COVER_SPAN_MIN
+            and covered_rows >= COVER_MIN_ROWS
+            and open_rows >= COVER_MIN_ROWS
+        )
+        # Which one the evidence is thin for decides which one is held. Holding the
+        # wrong one would anchor what is known and free what is not.
+        self._thin_state = None
+        if not self.cover_identified:
+            self._thin_state = "open" if open_rows < covered_rows else "covered"
         return covered_share
 
     def _design(self, rows):
@@ -532,7 +551,7 @@ class ThermalCalibrator:
         prior_scaled = [prior[col] * scales[col] for col in range(UNKNOWNS)]
         pinned = list(held)
         if not self.cover_identified:
-            pinned[2 if covered_share > 0.5 else 3] = True
+            pinned[2 if self._thin_state == "open" else 3] = True
         for col in range(UNKNOWNS):
             strength = ridge * 1e9 if pinned[col] else ridge
             normal[col][col] += strength
