@@ -241,7 +241,13 @@ def _launch_browser(driver):
 
 def _open_page(browser, url):
     """A page on *url* with the dashboard's CDN traffic blocked."""
-    page = browser.new_page()
+    # Pinned, because the dashboard reads the clock. `chart.js` turns the server's
+    # timestamp into a slot index with `Date.getHours()`, which answers in the
+    # *browser's* zone - so a chart assertion that holds on a developer's machine in
+    # Berlin fails on a CI runner in UTC, six hours off and entirely plausible looking.
+    # UTC is the choice because that is what CI already runs under: pinning it makes a
+    # local run agree with the one that decides whether the branch is green.
+    page = browser.new_page(timezone_id="UTC")
     # The page pulls FontAwesome, Chart.js and a font from CDNs. Blocking them keeps
     # the tests offline and fast; none of them affect the behaviour under test.
     page.route("**://cdnjs.cloudflare.com/**", lambda route: route.abort())

@@ -121,7 +121,9 @@ def _fixtures(slots=192, base=900, managed=None):
         }
     }
     response = {
-        "timestamp": "2026-09-13T06:00:00+02:00",
+        # 06:00 with no offset, read by a browser pinned to UTC: slot 24 at quarter-
+        # hourly resolution, whatever the runner's own zone and whether it is summer.
+        "timestamp": "2026-09-13T06:00:00+00:00",
         "ac_charge": [0.0] * slots,
         "dc_charge": [0.0] * slots,
         "discharge_allowed": [0] * slots,
