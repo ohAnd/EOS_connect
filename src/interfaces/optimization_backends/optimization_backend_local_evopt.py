@@ -407,6 +407,7 @@ class LocalEVOptBackend(EVOptBackend):
                 max_power_w=power,
                 min_runtime_slots=max(1, int(entry.get("min_runtime_slots", 1) or 1)),
                 urgent_wh=float(entry.get("urgent_wh", 0) or 0),
+                start_cost_eur=float(entry.get("start_cost_eur", 0) or 0),
             ))
         if configs:
             logger.debug(

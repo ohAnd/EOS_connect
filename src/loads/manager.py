@@ -102,6 +102,16 @@ class ManagedLoadSources:
 # 10 EUR/kWh is two orders above any tariff anyone has.
 UNCAPPED_VALUE_EUR_PER_WH = 0.01
 
+# What one start is worth avoiding, as a fraction of a slot's energy value.
+#
+# Without it the solver is indifferent between a contiguous run and the same slots
+# scattered across the day - with near-flat prices every arrangement costs the same -
+# so it returns whichever the search reaches first and the appliance cycles. Measured
+# on fragmenting cases it collapsed five starts to one and three to one while placing
+# exactly the same energy, so it buys contiguity for nothing. Half a slot says: take
+# another start only if it saves more than half a slot's worth of running.
+START_COST_SLOTS = 0.5
+
 
 def _padded(mask, length):
     """A feasibility mask at exactly the horizon length, missing slots allowed."""
@@ -398,6 +408,10 @@ class ManagedLoadManager:
                 "feasible": _padded(demand.feasible, slots),
                 "min_runtime_slots": item.min_runtime_slots(ctx) if ctx else 1,
                 "urgent_wh": float(demand.total_wh) if demand.urgent else 0.0,
+                "start_cost_eur": (
+                    START_COST_SLOTS * self._value_of(item)
+                    * demand.max_power_w * (ctx.hours_per_slot() if ctx else 1.0)
+                ),
             })
         return records
 

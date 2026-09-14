@@ -300,3 +300,96 @@ def test_no_managed_loads_leaves_the_model_as_it_was():
     result = _optimizer([]).solve()
     assert result["status"] == "Optimal"
     assert result["managed_loads"] == []
+
+
+# --- not cycling -------------------------------------------------------------------------
+
+def _shape(result, load_id="pool"):
+    """The run/stop pattern, as a string: # is running, . is idle."""
+    return "".join("#" if value > 1 else "." for value in _placed(result, load_id))
+
+
+def _starts(shape):
+    return sum(1 for t, mark in enumerate(shape)
+               if mark == "#" and (t == 0 or shape[t - 1] == "."))
+
+
+def test_equal_cost_slots_are_taken_together_not_scattered():
+    """
+    With near-flat prices every arrangement of the same number of slots costs the same,
+    so nothing in the objective preferred a contiguous one and the solver returned
+    whichever the search reached first. On a real pool that read as an hour of running,
+    a fifteen-minute stop, then another three and a half hours.
+    """
+    prices = [CHEAP] * T
+    prices[8] = DEAR
+    opt = _optimizer(
+        [_load(demand_wh=12000.0, max_power_w=1000.0, min_runtime_slots=2,
+               value_eur_per_wh=0.00030, start_cost_eur=0.5 * 0.00030 * 1000.0)],
+        prices=prices,
+    )
+    shape = _shape(opt.solve())
+    assert _starts(shape) == 1, shape
+
+
+def test_pricing_starts_costs_no_energy():
+    """It breaks ties; it does not buy contiguity by running less."""
+    prices = [CHEAP if hour % 4 else DEAR for hour in range(T)]
+    placed = []
+    for start_cost in (0.0, 0.5 * 0.00030 * 1000.0):
+        opt = _optimizer(
+            [_load(demand_wh=12000.0, max_power_w=1000.0, min_runtime_slots=2,
+                   value_eur_per_wh=0.00030, start_cost_eur=start_cost)],
+            prices=prices,
+        )
+        placed.append(sum(_placed(opt.solve())))
+    assert placed[1] == pytest.approx(placed[0], rel=0.01)
+
+
+def test_a_priced_start_is_still_taken_when_it_pays():
+    """
+    Half a slot's worth, not a veto. A long dear stretch is still worth stopping for.
+
+    No battery here on purpose: with one the solver charges cheaply and runs straight
+    through the expensive hours, which is the right answer and the wrong test - it
+    never has to choose between stopping and overpaying.
+    """
+    prices = [CHEAP] * 6 + [DEAR * 4] * 8 + [CHEAP] * 10
+    opt = _optimizer(
+        [_load(demand_wh=12000.0, max_power_w=1000.0, min_runtime_slots=2,
+               value_eur_per_wh=0.00030, start_cost_eur=0.5 * 0.00030 * 1000.0)],
+        prices=prices, battery=False,
+    )
+    shape = _shape(opt.solve())
+    assert _starts(shape) == 2, shape
+    assert "#" not in shape[6:14], shape
+
+
+def test_a_short_stop_between_two_runs_is_not_allowed():
+    """The minimum runtime bounds the runs; this bounds the rests between them."""
+    prices = [CHEAP] * T
+    prices[10] = DEAR * 3
+    opt = _optimizer(
+        [_load(demand_wh=18000.0, max_power_w=1000.0, min_runtime_slots=3,
+               value_eur_per_wh=0.00030)],
+        prices=prices,
+    )
+    shape = _shape(opt.solve())
+    gaps = [len(gap) for gap in shape.strip(".").split("#") if gap]
+    assert all(gap >= 3 for gap in gaps), shape
+
+
+def test_no_start_cost_creates_no_binary():
+    """Priced starts cost a binary per slot; unpriced ones must not."""
+    opt = _optimizer([_load(min_runtime_slots=1, start_cost_eur=0.0)])
+    opt.create_model()
+    assert opt.variables["ml_start"][0] is None
+    assert opt.variables["ml_on"][0] is None
+
+
+def test_pricing_starts_creates_the_switch_it_needs():
+    """The start variable is defined off the on/off state, so it has to exist."""
+    opt = _optimizer([_load(min_runtime_slots=1, start_cost_eur=0.01)])
+    opt.create_model()
+    assert opt.variables["ml_start"][0] is not None
+    assert opt.variables["ml_on"][0] is not None

@@ -271,6 +271,10 @@ class ManagedLoadConfig:
         min_runtime_slots: Shortest run the appliance may be started for. Above 1 this
             costs a binary per slot.
         urgent_wh: Energy that must be placed whatever it costs - frost protection.
+        start_cost_eur: What one start is worth avoiding. Without it the objective is
+            indifferent between a contiguous run and the same energy scattered over the
+            day - every schedule of the same slots costs the same - so the solver
+            returns whichever the search reaches first, and the appliance cycles.
     """
 
     id: str = ""
@@ -280,6 +284,7 @@ class ManagedLoadConfig:
     max_power_w: float = 0.0
     min_runtime_slots: int = 1
     urgent_wh: float = 0.0
+    start_cost_eur: float = 0.0
 
 
 @dataclass
@@ -499,6 +504,16 @@ class Optimizer:
             else:
                 self.variables['z_c'][i] = None
 
+        # One per load: whether this slot begins a run. Only created when starts are
+        # priced, since otherwise it is a binary the objective never reads.
+        self.variables['ml_start'] = {}
+        for i, load in enumerate(self.managed_loads):
+            self.variables['ml_start'][i] = (
+                [pulp.LpVariable(f"ml_start_{i}_{t}", cat='Binary')
+                 for t in self.time_steps]
+                if load.start_cost_eur > 0 else None
+            )
+
         # Managed loads: energy placed in each slot, and whether the appliance is
         # running there. The mask is applied as an upper bound of zero rather than by
         # leaving the variable out, so every list stays T long and the result can be
@@ -521,10 +536,11 @@ class Optimizer:
                 )
                 for t in self.time_steps
             ]
-            # Only worth a binary when a minimum run is actually asked for: without
-            # one the appliance may be placed in any slot and the on/off state carries
-            # no information the continuous variable does not already have.
-            if load.min_runtime_slots > 1:
+            # Worth a binary when something actually reads the on/off state: a minimum
+            # run to enforce, or starts being priced. Without either, the appliance may
+            # be placed in any slot and the switch carries nothing the continuous
+            # variable does not already have.
+            if load.min_runtime_slots > 1 or load.start_cost_eur > 0:
                 self.variables['ml_on'][i] = [
                     pulp.LpVariable(f"ml_on_{i}_{t}", cat='Binary')
                     for t in self.time_steps
@@ -572,6 +588,9 @@ class Optimizer:
         # separate cap to enforce, and no averaging window to argue about.
         for i, load in enumerate(self.managed_loads):
             objective += load.value_eur_per_wh * pulp.lpSum(self.variables['ml'][i])
+            starts = self.variables['ml_start'][i]
+            if starts is not None:
+                objective -= load.start_cost_eur * pulp.lpSum(starts)
 
         # Final state of charge value [currency unit]
         for i, bat in enumerate(self.batteries):
@@ -943,7 +962,7 @@ class Optimizer:
 
     def _add_managed_load_constraints(self):
         """
-        Bound each managed load: how much, when, and for how long at a time.
+        Bound each managed load: how much, when, for how long at a time, how often.
 
         The demand is a ceiling rather than an equality on purpose. A window too narrow
         to hold it, or a price that never comes down, has to yield a short plan - the
@@ -976,21 +995,43 @@ class Optimizer:
                 # satisfied by a switch that is on while nothing runs, and the appliance
                 # gets scheduled in isolated slots anyway.
                 #
-                # So an appliance that asks for a minimum runtime is modelled as
-                # on/off at its rated power, which is what a compressor does. The
-                # demand ceiling may then be met a slot short rather than exactly;
-                # that is the honest answer for something that cannot half-run.
+                # So a load with a minimum run, or with starts priced, is modelled as
+                # on/off at its rated power, which is what a compressor does. The demand
+                # ceiling may then be met a slot short rather than exactly; that is the
+                # honest answer for something that cannot half-run.
                 self.problem += run[t] == cap * on[t]
 
-            # A start obliges the next min_runtime_slots-1 slots. The rising edge is
-            # `on[t] - on[t-1]`, with nothing before the horizon, so a run beginning in
-            # slot 0 counts as a start too.
-            span = int(load.min_runtime_slots)
-            for t in self.time_steps:
-                started = on[t] if t == 0 else on[t] - on[t - 1]
-                for step in range(1, span):
-                    if t + step < self.T:
-                        self.problem += on[t + step] >= started
+            self._add_switching_constraints(on, self.variables['ml_start'][i],
+                                            int(load.min_runtime_slots))
+
+    def _add_switching_constraints(self, on, starts, span):
+        """
+        How long a run lasts, how long a rest lasts, and what a start is worth avoiding.
+
+        The rising edge is `on[t] - on[t-1]`, with nothing before the horizon, so a run
+        beginning in slot 0 counts as a start. A *stop* in slot 0 does not: what the
+        appliance was doing before the window is not known here.
+        """
+        for t in self.time_steps:
+            started = on[t] if t == 0 else on[t] - on[t - 1]
+            for step in range(1, span):
+                if t + step < self.T:
+                    self.problem += on[t + step] >= started
+
+        # A stop obliges the same rest as a run, so the solver cannot drop a single slot
+        # wherever the tariff ticks up and leave the compressor cycling for nothing.
+        for t in range(1, self.T):
+            stopped = on[t - 1] - on[t]
+            for step in range(1, span):
+                if t + step < self.T:
+                    self.problem += on[t + step] <= 1 - stopped
+
+        if starts is None:
+            return
+        # One inequality is enough: the objective pays for starts, so the solver drives
+        # them to zero wherever it can and never needs the other direction pinned.
+        for t in self.time_steps:
+            self.problem += starts[t] >= (on[t] if t == 0 else on[t] - on[t - 1])
 
     def solve(self) -> Dict:
         """
