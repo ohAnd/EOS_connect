@@ -400,6 +400,11 @@ class ManagedLoadManager:
                 continue
             ctx = self._last_ctx_for.get(item.id)
             slots = ctx.slot_count if ctx else len(demand.feasible or [])
+            # Read from *now*, not from whenever the cycle last ran: how far into a run
+            # or a rest the appliance is decides what the next plan may change.
+            committed_on, committed_off = (
+                item.commitment(self._at_now(ctx, self._clock()[1])) if ctx else (0, 0)
+            )
             records.append({
                 "id": item.id,
                 "demand_wh": round(float(demand.total_wh), 1),
@@ -408,6 +413,8 @@ class ManagedLoadManager:
                 "feasible": _padded(demand.feasible, slots),
                 "min_runtime_slots": item.min_runtime_slots(ctx) if ctx else 1,
                 "urgent_wh": float(demand.total_wh) if demand.urgent else 0.0,
+                "committed_on_slots": committed_on,
+                "committed_off_slots": committed_off,
                 "start_cost_eur": (
                     START_COST_SLOTS * self._value_of(item)
                     * demand.max_power_w * (ctx.hours_per_slot() if ctx else 1.0)

@@ -393,3 +393,73 @@ def test_pricing_starts_creates_the_switch_it_needs():
     opt.create_model()
     assert opt.variables["ml_start"][0] is not None
     assert opt.variables["ml_on"][0] is not None
+
+
+# --- what the appliance is already doing -------------------------------------------------
+
+def test_a_run_already_under_way_is_not_stopped():
+    """
+    The seam between two plans is where it cycled. Each plan kept its own runs long
+    enough, but a fresh one knew nothing of the last, so a pump three minutes into a
+    thirty-minute run could be stopped by the next solve.
+    """
+    prices = [DEAR] * T                 # every slot too dear to choose freely
+    opt = _optimizer(
+        [_load(demand_wh=6000.0, max_power_w=1000.0, value_eur_per_wh=CHEAP,
+               min_runtime_slots=2, committed_on_slots=2)],
+        prices=prices, battery=False,
+    )
+    energy = _placed(opt.solve())
+    assert energy[0] > 0 and energy[1] > 0, energy[:4]
+
+
+def test_a_rest_already_under_way_is_not_interrupted():
+    prices = [CHEAP] * T                # every slot worth taking
+    opt = _optimizer(
+        [_load(demand_wh=12000.0, max_power_w=1000.0, value_eur_per_wh=DEAR,
+               min_runtime_slots=2, committed_off_slots=3)],
+        prices=prices,
+    )
+    energy = _placed(opt.solve())
+    assert all(value < 1.0 for value in energy[:3]), energy[:5]
+    assert sum(energy) > 1000.0, "it should still run once the rest is served"
+
+
+def test_a_commitment_never_outlives_the_rules_that_bound_the_load():
+    """
+    If the window closes while it is running, the window wins. Holding it on through a
+    slot it may not use would make the model infeasible and take the household's whole
+    schedule down with it.
+    """
+    mask = [False] * T
+    for hour in range(4, T):
+        mask[hour] = True
+    opt = _optimizer(
+        [_load(demand_wh=6000.0, max_power_w=1000.0, feasible=mask,
+               min_runtime_slots=2, committed_on_slots=4)],
+        prices=[CHEAP] * T,
+    )
+    result = opt.solve()
+    assert result["status"] == "Optimal"
+    assert all(value < 1.0 for value in _placed(result)[:4])
+
+
+def test_a_commitment_never_asks_for_more_than_the_load_wants():
+    """A nearly satisfied store must not be forced past its demand to serve a run."""
+    opt = _optimizer(
+        [_load(demand_wh=1000.0, max_power_w=1000.0, min_runtime_slots=4,
+               committed_on_slots=4)],
+        prices=[CHEAP] * T,
+    )
+    result = opt.solve()
+    assert result["status"] == "Optimal"
+    assert sum(_placed(result)) == pytest.approx(1000.0, rel=0.02)
+
+
+def test_no_commitment_leaves_the_solver_free():
+    opt = _optimizer(
+        [_load(demand_wh=6000.0, max_power_w=1000.0, value_eur_per_wh=CHEAP / 2,
+               min_runtime_slots=2)],
+        prices=[DEAR] * T, battery=False,
+    )
+    assert sum(_placed(opt.solve())) == pytest.approx(0.0, abs=1.0)

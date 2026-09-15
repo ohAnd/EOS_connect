@@ -45,6 +45,10 @@ class ReleaseGate:
         self.min_runtime_minutes = max(0, int(min_runtime_minutes or 0))
         self.released = False
         self.released_since = None
+        # The mirror of released_since. A plan is rebuilt from scratch every couple of
+        # minutes, so without knowing how long the appliance has been *off* nothing can
+        # stop the next plan restarting it moments after the last one stopped it.
+        self.blocked_since = None
         self._override_mode = None
         self._override_until = None
         self._last_reason = REASON_NO_DEMAND
@@ -127,12 +131,14 @@ class ReleaseGate:
     def _settle(self, released, reason, now):
         if released and not self.released:
             self.released_since = now
+            self.blocked_since = None
             logger.info("[LOADS] '%s' released (%s)", self.id, reason)
         elif not released and self.released:
             held = 0.0
             if self.released_since is not None:
                 held = (now - self.released_since).total_seconds() / 60.0
             self.released_since = None
+            self.blocked_since = now
             logger.info(
                 "[LOADS] '%s' blocked after %.0f minutes (%s)", self.id, held, reason
             )

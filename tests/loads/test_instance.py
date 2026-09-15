@@ -1388,3 +1388,95 @@ def test_past_slots_stay_past(make_manager, installation):
     reasons = manager.instance("pool").last_demand.slot_reasons
     current = manager._last_ctx.current_slot            # pylint: disable=protected-access
     assert all(r == "past" for r in reasons[:current])
+
+
+# --- what carries across a re-plan -------------------------------------------------------
+
+def test_a_running_load_commits_the_rest_of_its_minimum_run(make_manager, installation):
+    """
+    A plan knows nothing of the one before it. On the live pool that produced six- and
+    seven-minute stops out of fifty-nine plans in a day, none of which contained one.
+    """
+    manager = make_manager([dict(POOL, min_runtime_minutes=60)])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    load = manager.instance("pool")
+    ctx = manager._last_ctx                        # pylint: disable=protected-access
+    load.gate.released = True
+    load.gate.released_since = ctx.now - timedelta(minutes=15)
+
+    on_slots, off_slots = load.commitment(ctx)
+    assert on_slots == 1, "45 minutes left of an hour, at hourly slots"
+    assert off_slots == 0
+
+
+def test_a_blocked_load_commits_the_rest_of_its_rest(make_manager, installation):
+    manager = make_manager([dict(POOL, min_runtime_minutes=60)])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    load = manager.instance("pool")
+    ctx = manager._last_ctx                        # pylint: disable=protected-access
+    load.gate.released = False
+    load.gate.blocked_since = ctx.now - timedelta(minutes=20)
+
+    on_slots, off_slots = load.commitment(ctx)
+    assert off_slots == 1
+    assert on_slots == 0
+
+
+def test_a_served_minimum_commits_nothing(make_manager, installation):
+    manager = make_manager([dict(POOL, min_runtime_minutes=30)])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    load = manager.instance("pool")
+    ctx = manager._last_ctx                        # pylint: disable=protected-access
+    load.gate.released = True
+    load.gate.released_since = ctx.now - timedelta(hours=2)
+    assert load.commitment(ctx) == (0, 0)
+
+
+def test_no_minimum_runtime_commits_nothing(make_manager, installation):
+    manager = make_manager([dict(POOL, min_runtime_minutes=0)])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    load = manager.instance("pool")
+    load.gate.released = True
+    load.gate.released_since = manager._last_ctx.now   # pylint: disable=protected-access
+    assert load.commitment(manager._last_ctx) == (0, 0)   # pylint: disable=protected-access
+
+
+def test_the_commitment_reaches_the_optimizer(make_manager, installation):
+    manager = make_manager([dict(POOL, min_runtime_minutes=60)])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    load = manager.instance("pool")
+    load.gate.released = True
+    load.gate.released_since = manager._last_ctx.now    # pylint: disable=protected-access
+
+    record = manager.schedulable()[0]
+    assert record["committed_on_slots"] >= 1
+    assert record["committed_off_slots"] == 0
+
+
+def test_the_gate_remembers_when_it_went_quiet(make_manager, installation):
+    """The mirror of released_since, and it had no mirror before."""
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    load = manager.instance("pool")
+    ctx = manager._last_ctx                        # pylint: disable=protected-access
+    schedule = [0.0] * 48
+    schedule[ctx.current_slot] = 1500.0
+    manager.adopt_schedules({"pool": schedule})
+    assert load.gate.released is True
+    assert load.gate.blocked_since is None
+
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    assert load.gate.released is False
+    assert load.gate.blocked_since is not None

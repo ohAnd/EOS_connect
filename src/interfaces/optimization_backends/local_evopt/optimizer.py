@@ -271,6 +271,11 @@ class ManagedLoadConfig:
         min_runtime_slots: Shortest run the appliance may be started for. Above 1 this
             costs a binary per slot.
         urgent_wh: Energy that must be placed whatever it costs - frost protection.
+        committed_on_slots: Leading slots the appliance is already running through and
+            may not be stopped in - the remainder of a minimum run begun under an
+            earlier plan. Every plan is built from scratch, so without this the seam
+            between two of them is where the appliance cycles.
+        committed_off_slots: The mirror: leading slots it may not be restarted in.
         start_cost_eur: What one start is worth avoiding. Without it the objective is
             indifferent between a contiguous run and the same energy scattered over the
             day - every schedule of the same slots costs the same - so the solver
@@ -285,6 +290,8 @@ class ManagedLoadConfig:
     min_runtime_slots: int = 1
     urgent_wh: float = 0.0
     start_cost_eur: float = 0.0
+    committed_on_slots: int = 0
+    committed_off_slots: int = 0
 
 
 @dataclass
@@ -1001,19 +1008,55 @@ class Optimizer:
                 # honest answer for something that cannot half-run.
                 self.problem += run[t] == cap * on[t]
 
-            self._add_switching_constraints(on, self.variables['ml_start'][i],
-                                            int(load.min_runtime_slots))
+            self._add_commitment_constraints(load, on, feasible)
+            self._add_switching_constraints(
+                on, self.variables['ml_start'][i], int(load.min_runtime_slots),
+                already_running=load.committed_on_slots > 0,
+            )
 
-    def _add_switching_constraints(self, on, starts, span):
+    def _add_commitment_constraints(self, load, on, feasible):
+        """
+        Hold the head of the horizon to what the appliance is already doing.
+
+        Bounded rather than absolute, on both sides. A run is only held through slots
+        the load is actually allowed to use - if the window closes or the weather turns
+        while it is running, the rule that stopped it wins - and only as far as the
+        demand reaches, so committing can never ask for energy the load does not want.
+        Either would otherwise make the model infeasible and take the household's
+        schedule down with it.
+        """
+        held_on = min(int(load.committed_on_slots), self.T)
+        if held_on:
+            budget = max(0.0, load.demand_wh)
+            for t in range(held_on):
+                cap = load.max_power_w * self.time_series.dt[t] / 3600.0
+                allowed = t < len(feasible) and feasible[t]
+                if not allowed or cap <= 0 or budget < cap:
+                    break
+                self.problem += on[t] == 1
+                budget -= cap
+
+        for t in range(min(int(load.committed_off_slots), self.T)):
+            self.problem += on[t] == 0
+
+    def _add_switching_constraints(self, on, starts, span, already_running=False):
         """
         How long a run lasts, how long a rest lasts, and what a start is worth avoiding.
 
-        The rising edge is `on[t] - on[t-1]`, with nothing before the horizon, so a run
-        beginning in slot 0 counts as a start. A *stop* in slot 0 does not: what the
-        appliance was doing before the window is not known here.
+        The rising edge is `on[t] - on[t-1]`. Slot 0 has nothing before it, so a run
+        beginning there normally counts as a start - unless the appliance was *already*
+        running, in which case slot 0 continues a run somebody else began and charging
+        it as a start would demand a fresh minimum run the demand may not cover. A
+        *stop* in slot 0 is never counted: what came before the window is only known
+        when the caller says so.
         """
+        def edge(t):
+            if t == 0:
+                return 0 if already_running else on[0]
+            return on[t] - on[t - 1]
+
         for t in self.time_steps:
-            started = on[t] if t == 0 else on[t] - on[t - 1]
+            started = edge(t)
             for step in range(1, span):
                 if t + step < self.T:
                     self.problem += on[t + step] >= started
@@ -1031,7 +1074,7 @@ class Optimizer:
         # One inequality is enough: the objective pays for starts, so the solver drives
         # them to zero wherever it can and never needs the other direction pinned.
         for t in self.time_steps:
-            self.problem += starts[t] >= (on[t] if t == 0 else on[t] - on[t - 1])
+            self.problem += starts[t] >= edge(t)
 
     def solve(self) -> Dict:
         """

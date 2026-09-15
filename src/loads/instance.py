@@ -14,6 +14,7 @@ give up on `additional_load_1` in issues #34 and #201.
 """
 
 import logging
+import math
 from datetime import timedelta
 
 from .contribution import (
@@ -148,6 +149,36 @@ class ManagedLoad:
     def kind_is_contingent(self):
         """Whether this load's timing is ours to choose, rather than merely reported."""
         return self.type in CONTINGENT_TYPES
+
+    def commitment(self, ctx):
+        """
+        Slots at the head of the horizon the appliance is not free to change.
+
+        A plan is built from scratch every couple of minutes and knows nothing of the
+        one before it. Each plan on its own keeps its runs and its rests long enough,
+        but the appliance lives through a *sequence* of them, and the seam between two
+        is where it cycles: on a live pool the realised trace had six- and seven-minute
+        stops that no single plan ever contained - fifty-nine different plans in a day,
+        stitched together.
+
+        So the solver is told what the appliance is already doing. A run that has not
+        yet served its minimum keeps going; a rest that has not yet served its minimum
+        is not interrupted. Returns ``(on_slots, off_slots)``, at most one non-zero.
+        """
+        minutes = float(self.config.get("min_runtime_minutes", 0) or 0)
+        if minutes <= 0 or self.gate is None:
+            return 0, 0
+        per_slot = ctx.time_frame_base / 60.0
+
+        def remaining(since):
+            if since is None:
+                return 0
+            left = minutes - (ctx.now - since).total_seconds() / 60.0
+            return max(0, math.ceil(left / per_slot)) if left > 0 else 0
+
+        if self.gate.released:
+            return remaining(self.gate.released_since), 0
+        return 0, remaining(self.gate.blocked_since)
 
     def min_runtime_slots(self, ctx):
         """The configured minimum run, in slots at the running resolution."""
