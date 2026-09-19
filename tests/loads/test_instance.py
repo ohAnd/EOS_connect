@@ -6,6 +6,8 @@ says "runs at 13:00" while the gate releases at 16:00 would have the optimizer s
 battery around a load that never appears.
 """
 
+import math
+
 import pytest
 
 from datetime import timedelta
@@ -1366,6 +1368,66 @@ def test_a_feasible_slot_the_optimizer_skipped_says_why(make_manager, installati
     manager.adopt_schedules({"pool": [0.0] * 48})
     reasons = manager.instance("pool").last_demand.slot_reasons
     assert "costs more than it is worth" in reasons
+
+
+def test_slots_left_over_once_the_demand_is_met_are_not_a_price_verdict(
+    make_manager, installation
+):
+    """
+    The label the live card got wrong. "costs more than it is worth" was the catch-all
+    for every feasible unplanned slot while demand was non-zero, so a load that had
+    been given everything it asked for still reported its spare hours as priced out.
+
+    On the instance that read as four blocked evening hours under a price heading -
+    two of them *below* the configured cap - when the pool had simply finished: 36,280
+    Wh placed against 36,293 needed. The two cases look alike because the slots dropped
+    are the dearest either way, which is exactly why the label has to tell them apart.
+    """
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    # Warm enough that the demand fits the horizon with slots to spare; a colder pool
+    # wants more than the window holds and can never be covered.
+    load = _run(manager, installation, water_c=27.8)
+
+    demand = load.last_demand
+    ctx = manager._last_ctx                        # pylint: disable=protected-access
+    slot_wh = demand.max_power_w * ctx.hours_per_slot()
+    needed = math.ceil(demand.total_wh / slot_wh)
+
+    feasible = [i for i, ok in enumerate(demand.feasible)
+                if ok and i >= ctx.current_slot]
+    assert len(feasible) > needed, "fixture must leave spare slots to label"
+
+    schedule = [0.0] * ctx.slot_count
+    for index in feasible[:needed]:
+        schedule[index] = demand.max_power_w
+    manager.adopt_schedules({"pool": schedule})
+
+    reasons = load.last_demand.slot_reasons
+    spare = [reasons[i] for i in feasible[needed:]]
+    assert spare, "no spare slots were left to check"
+    assert all(r == "not needed" for r in spare), set(spare)
+    assert "costs more than it is worth" not in reasons
+
+
+def test_a_load_still_short_keeps_the_price_verdict(make_manager, installation):
+    """The other half: only a *covered* load gets the softer label."""
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    load = _run(manager, installation, water_c=20.0)
+
+    ctx = manager._last_ctx                        # pylint: disable=protected-access
+    demand = load.last_demand
+    feasible = [i for i, ok in enumerate(demand.feasible)
+                if ok and i >= ctx.current_slot]
+
+    # Well short of the demand, so the unplanned remainder really was passed over.
+    schedule = [0.0] * ctx.slot_count
+    for index in feasible[:10]:
+        schedule[index] = demand.max_power_w
+    manager.adopt_schedules({"pool": schedule})
+
+    assert "costs more than it is worth" in load.last_demand.slot_reasons
 
 
 def test_a_slot_the_load_may_not_use_keeps_its_own_reason(make_manager, installation):

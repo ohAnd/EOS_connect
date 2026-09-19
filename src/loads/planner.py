@@ -38,7 +38,9 @@ SLOT_DAILY_CAP = "daily runtime cap"
 SLOT_NOT_NEEDED = "not needed"
 # Feasible, and the optimizer looked at it and decided the energy was not worth what it
 # would have cost. Distinct from the per-slot cap: nothing refused this slot, it simply
-# lost on price against everything else in the horizon.
+# lost on price against everything else in the horizon. Only used while the load is
+# still short - a slot left over once the demand is met is SLOT_NOT_NEEDED, not a
+# price verdict.
 SLOT_NOT_WORTH_IT = "costs more than it is worth"
 
 # Reasons that are nobody's fault: the slot has gone, or the demand was already met.
@@ -63,6 +65,17 @@ def reasons_for_schedule(plan, demand, ctx):
     """
     mask = list(demand.feasible or [])
     detail = list(demand.feasible_reason or [])
+
+    # Once the plan covers the demand the leftover slots were not refused on price -
+    # there was simply nothing left to ask for, and saying "costs more than it is
+    # worth" of them reads as the load being priced out of hours it never wanted. The
+    # two look alike because the slots dropped are the dearest either way. Measured on
+    # a live pool: 36,280 Wh placed against 36,293 needed, and four blocked evening
+    # hours labelled a price verdict, two of them *below* the configured cap.
+    slot_wh = demand.max_power_w * ctx.hours_per_slot()
+    outstanding = demand.total_wh - sum(plan or ())
+    covered = outstanding < slot_wh if slot_wh > 0 else outstanding <= 0
+
     reasons = []
     for index in range(ctx.slot_count):
         if index < ctx.current_slot:
@@ -73,7 +86,7 @@ def reasons_for_schedule(plan, demand, ctx):
             reasons.append(
                 (detail[index] if index < len(detail) else None) or SLOT_INFEASIBLE
             )
-        elif demand.total_wh > 0:
+        elif demand.total_wh > 0 and not covered:
             reasons.append(SLOT_NOT_WORTH_IT)
         else:
             reasons.append(SLOT_NOT_NEEDED)
