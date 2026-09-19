@@ -1426,7 +1426,17 @@ def test_a_blocked_load_commits_the_rest_of_its_rest(make_manager, installation)
     assert on_slots == 0
 
 
-def test_a_served_minimum_commits_nothing(make_manager, installation):
+def test_a_served_minimum_still_holds_the_slot_it_is_running_in(make_manager, installation):
+    """
+    The hole the minimum-runtime carry left. Once the minimum lapses the solver used to
+    be told nothing, so `already_running` went false and continuing cost the same single
+    start as restarting one slot later - the solver is then indifferent, and a few cents
+    of preference is far inside its gap.
+
+    Replayed against the live request at the moment it happened: uncommitted, the plan
+    dropped the slot the pool was running in and began two slots later, for 0.2 kWh. It
+    stopped mid-slot and came back half an hour afterwards.
+    """
     manager = make_manager([dict(POOL, min_runtime_minutes=30)])
     manager.external_scheduler = True
     _run(manager, installation, water_c=20.0)
@@ -1435,10 +1445,11 @@ def test_a_served_minimum_commits_nothing(make_manager, installation):
     ctx = manager._last_ctx                        # pylint: disable=protected-access
     load.gate.released = True
     load.gate.released_since = ctx.now - timedelta(hours=2)
-    assert load.commitment(ctx) == (0, 0)
+    assert load.commitment(ctx) == (1, 0)
 
 
-def test_no_minimum_runtime_commits_nothing(make_manager, installation):
+def test_a_running_load_holds_its_slot_with_no_minimum_configured(make_manager, installation):
+    """No minimum to serve, but it is physically in the slot already."""
     manager = make_manager([dict(POOL, min_runtime_minutes=0)])
     manager.external_scheduler = True
     _run(manager, installation, water_c=20.0)
@@ -1446,7 +1457,23 @@ def test_no_minimum_runtime_commits_nothing(make_manager, installation):
     load = manager.instance("pool")
     load.gate.released = True
     load.gate.released_since = manager._last_ctx.now   # pylint: disable=protected-access
-    assert load.commitment(manager._last_ctx) == (0, 0)   # pylint: disable=protected-access
+    assert load.commitment(manager._last_ctx) == (1, 0)   # pylint: disable=protected-access
+
+
+def test_a_load_that_is_not_running_commits_nothing(make_manager, installation):
+    """
+    The held slot is for a run under way. A load standing still with its rest served is
+    free, or it could never be given a different plan.
+    """
+    manager = make_manager([dict(POOL, min_runtime_minutes=30)])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+
+    load = manager.instance("pool")
+    ctx = manager._last_ctx                        # pylint: disable=protected-access
+    load.gate.released = False
+    load.gate.blocked_since = ctx.now - timedelta(hours=2)
+    assert load.commitment(ctx) == (0, 0)
 
 
 def test_the_commitment_reaches_the_optimizer(make_manager, installation):
@@ -1461,6 +1488,12 @@ def test_the_commitment_reaches_the_optimizer(make_manager, installation):
     record = manager.schedulable()[0]
     assert record["committed_on_slots"] >= 1
     assert record["committed_off_slots"] == 0
+
+    # and still, once the minimum has long lapsed - the case the live pool was in
+    load.gate.released_since = (
+        manager._last_ctx.now - timedelta(hours=4)      # pylint: disable=protected-access
+    )
+    assert manager.schedulable()[0]["committed_on_slots"] == 1
 
 
 def test_the_gate_remembers_when_it_went_quiet(make_manager, installation):

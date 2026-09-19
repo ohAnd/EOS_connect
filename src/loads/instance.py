@@ -161,23 +161,30 @@ class ManagedLoad:
         stops that no single plan ever contained - fifty-nine different plans in a day,
         stitched together.
 
-        So the solver is told what the appliance is already doing. A run that has not
-        yet served its minimum keeps going; a rest that has not yet served its minimum
-        is not interrupted. Returns ``(on_slots, off_slots)``, at most one non-zero.
+        So the solver is told what the appliance is already doing. A run keeps going -
+        through its minimum if one is outstanding, and through the slot it is in
+        either way; a rest that has not yet served its minimum is not interrupted.
+        Returns ``(on_slots, off_slots)``, at most one non-zero.
         """
-        minutes = float(self.config.get("min_runtime_minutes", 0) or 0)
-        if minutes <= 0 or self.gate is None:
+        if self.gate is None:
             return 0, 0
+        minutes = float(self.config.get("min_runtime_minutes", 0) or 0)
         per_slot = ctx.time_frame_base / 60.0
 
         def remaining(since):
-            if since is None:
+            if since is None or minutes <= 0:
                 return 0
             left = minutes - (ctx.now - since).total_seconds() / 60.0
             return max(0, math.ceil(left / per_slot)) if left > 0 else 0
 
         if self.gate.released:
-            return remaining(self.gate.released_since), 0
+            # A run already under way owns the slot it is in, minimum served or not.
+            # Once the minimum lapses the solver is told nothing, so continuing and
+            # restarting one slot later cost it the same single start and it picks
+            # either - the difference is a few cents, far inside the solver's gap. On
+            # a live pool that dropped the running slot mid-slot for 0.2 kWh and cost
+            # a stop and a restart half an hour later.
+            return max(1, remaining(self.gate.released_since)), 0
         return 0, remaining(self.gate.blocked_since)
 
     def min_runtime_slots(self, ctx):
