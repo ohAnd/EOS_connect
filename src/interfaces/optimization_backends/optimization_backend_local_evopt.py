@@ -409,6 +409,7 @@ class LocalEVOptBackend(EVOptBackend):
                 urgent_wh=float(entry.get("urgent_wh", 0) or 0),
                 start_cost_eur=float(entry.get("start_cost_eur", 0) or 0),
                 committed_on_slots=max(0, int(entry.get("committed_on_slots", 0) or 0)),
+                already_running=bool(entry.get("already_running", False)),
                 committed_off_slots=max(0, int(entry.get("committed_off_slots", 0) or 0)),
             ))
         if configs:

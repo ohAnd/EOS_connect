@@ -161,10 +161,12 @@ class ManagedLoad:
         stops that no single plan ever contained - fifty-nine different plans in a day,
         stitched together.
 
-        So the solver is told what the appliance is already doing. A run keeps going -
-        through its minimum if one is outstanding, and through the slot it is in
-        either way; a rest that has not yet served its minimum is not interrupted.
-        Returns ``(on_slots, off_slots)``, at most one non-zero.
+        So the solver is told what the appliance is already doing. A run that has not
+        yet served its minimum keeps going; a rest that has not yet served its minimum
+        is not interrupted. Returns ``(on_slots, off_slots)``, at most one non-zero.
+
+        Only the *minimum* is held here. Whether a run is under way at all is
+        `is_running`, and the two must stay apart - see the note there.
         """
         if self.gate is None:
             return 0, 0
@@ -178,14 +180,27 @@ class ManagedLoad:
             return max(0, math.ceil(left / per_slot)) if left > 0 else 0
 
         if self.gate.released:
-            # A run already under way owns the slot it is in, minimum served or not.
-            # Once the minimum lapses the solver is told nothing, so continuing and
-            # restarting one slot later cost it the same single start and it picks
-            # either - the difference is a few cents, far inside the solver's gap. On
-            # a live pool that dropped the running slot mid-slot for 0.2 kWh and cost
-            # a stop and a restart half an hour later.
-            return max(1, remaining(self.gate.released_since)), 0
+            return remaining(self.gate.released_since), 0
         return 0, remaining(self.gate.blocked_since)
+
+    def is_running(self, ctx=None):          # pylint: disable=unused-argument
+        """
+        Whether the appliance is drawing right now, for the solver's benefit only.
+
+        Deliberately *not* folded into `commitment`. Holding a slot and knowing a run
+        is under way are different things, and binding them together latches: pinning
+        the head slot keeps the gate released, which pins it again on the next cycle,
+        so the load can never stop while it has demand and the slot is allowed. On a
+        live pool that ran it straight through an evening peak into the single dearest
+        slot of the day - 34.65 ct against a 30 ct limit - placing exactly the same
+        energy it would have placed anyway.
+
+        What the solver actually needs is the cheaper truth: a run already under way
+        costs nothing to continue, where stopping and restarting costs a start. That
+        breaks the tie toward continuing and still yields when stopping is worth real
+        money.
+        """
+        return bool(self.gate is not None and self.gate.released)
 
     def min_runtime_slots(self, ctx):
         """The configured minimum run, in slots at the running resolution."""

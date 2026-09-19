@@ -423,6 +423,7 @@ class ManagedLoadManager:
                 "urgent_wh": float(demand.total_wh) if demand.urgent else 0.0,
                 "committed_on_slots": committed_on,
                 "committed_off_slots": committed_off,
+                "already_running": item.is_running(),
                 "start_cost_eur": (
                     START_COST_SLOTS * self._value_of(item)
                     * demand.max_power_w * (ctx.hours_per_slot() if ctx else 1.0)

@@ -291,6 +291,12 @@ class ManagedLoadConfig:
     urgent_wh: float = 0.0
     start_cost_eur: float = 0.0
     committed_on_slots: int = 0
+    # Whether a run is under way. Separate from committed_on_slots on purpose: this
+    # only tells the solver that continuing costs no start, where committing *forces*
+    # the head slot on. Binding the two latches the load - the pin keeps the gate
+    # released, which pins again next cycle - and it ran a live pool through an
+    # evening peak it should have skipped.
+    already_running: bool = False
     committed_off_slots: int = 0
 
 
@@ -1011,7 +1017,7 @@ class Optimizer:
             self._add_commitment_constraints(load, on, feasible)
             self._add_switching_constraints(
                 on, self.variables['ml_start'][i], int(load.min_runtime_slots),
-                already_running=load.committed_on_slots > 0,
+                already_running=load.already_running or load.committed_on_slots > 0,
             )
 
     def _add_commitment_constraints(self, load, on, feasible):

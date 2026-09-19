@@ -456,6 +456,44 @@ def test_a_commitment_never_asks_for_more_than_the_load_wants():
     assert sum(_placed(result)) == pytest.approx(1000.0, rel=0.02)
 
 
+def test_a_running_load_is_still_free_to_stop_when_it_is_worth_it():
+    """
+    The regression that made the pool run at 34.65 ct against a 30 ct limit.
+
+    `already_running` used to be inferred from `committed_on_slots > 0`, so the only
+    way to tell the solver a run was under way was to *force* the head slot on. That
+    latches: the pin keeps the gate released, so the next cycle pins it again, and the
+    load cannot stop while it has demand and the slot is allowed. It ran a live pool
+    from 16:04 to 19:45 through a rising tariff, draining the battery 35 % to 16 %, and
+    placed exactly the same energy it would have placed anyway.
+
+    Knowing is not forcing. The flag must leave the first slot a free decision.
+    """
+    prices = [CHEAP] * T
+    prices[0] = DEAR * 4                 # right now is ruinous; later is not
+    opt = _optimizer(
+        # Worth more than the cheap slots, so running later is strictly better than
+        # not running - otherwise "placed nothing" would pass for "skipped slot 0".
+        [_load(demand_wh=6000.0, max_power_w=1000.0, value_eur_per_wh=DEAR,
+               min_runtime_slots=1, already_running=True)],
+        prices=prices, battery=False,
+    )
+    energy = _placed(opt.solve())
+    assert energy[0] < 1.0, "a running load must still be able to skip a dear slot"
+    assert sum(energy) > 1000.0, "and it should still run later"
+
+
+def test_being_told_it_runs_does_not_by_itself_pin_anything():
+    """`already_running` carries no obligation - only `committed_on_slots` does."""
+    prices = [DEAR] * T
+    opt = _optimizer(
+        [_load(demand_wh=6000.0, max_power_w=1000.0, value_eur_per_wh=CHEAP,
+               min_runtime_slots=1, already_running=True)],
+        prices=prices, battery=False,
+    )
+    assert sum(_placed(opt.solve())) < 1.0, "nothing is worth taking, so take nothing"
+
+
 def test_no_commitment_leaves_the_solver_free():
     opt = _optimizer(
         [_load(demand_wh=6000.0, max_power_w=1000.0, value_eur_per_wh=CHEAP / 2,
