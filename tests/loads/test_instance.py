@@ -1480,3 +1480,61 @@ def test_the_gate_remembers_when_it_went_quiet(make_manager, installation):
     manager.adopt_schedules({"pool": [0.0] * 48})
     assert load.gate.released is False
     assert load.gate.blocked_since is not None
+
+
+# --- the sun ----------------------------------------------------------------------------
+
+def test_a_sunny_horizon_needs_less_from_the_pump(make_manager, installation):
+    """
+    A store that gains heat from the sun needs less from the appliance. Measuring that
+    gain and never spending it would book the saving and ask for the energy anyway.
+    """
+    manager = make_manager([POOL])
+    installation.pv = [4000.0] * 48
+    _run(manager, installation, water_c=20.0)
+    load = manager.instance("pool")
+
+    load.model.calibrator.solar_gain = 0.0
+    without = load.model.demand(manager._last_ctx_for["pool"]).total_wh  # pylint: disable=protected-access
+    load.model.calibrator.solar_gain = 0.4
+    withsun = load.model.demand(manager._last_ctx_for["pool"]).total_wh  # pylint: disable=protected-access
+
+    assert withsun < without
+
+
+def test_no_learned_gain_changes_nothing(make_manager, installation):
+    """Until the fit can separate the sun, the forecast is what it always was."""
+    manager = make_manager([POOL])
+    installation.pv = [4000.0] * 48
+    _run(manager, installation, water_c=20.0)
+    load = manager.instance("pool")
+
+    assert load.model.calibrator.solar_gain == 0.0
+    ctx = manager._last_ctx_for["pool"]                  # pylint: disable=protected-access
+    before = load.model.demand(ctx).total_wh
+    installation.pv = [0.0] * 48
+    manager.run_cycle()
+    after = load.model.demand(manager._last_ctx_for["pool"]).total_wh   # pylint: disable=protected-access
+    assert before == pytest.approx(after, rel=0.01)
+
+
+def test_the_pv_counter_is_recorded_for_the_calibration(make_manager, installation):
+    readings = {"value": 1234.5}
+    manager = make_manager([POOL])
+    manager.sources.pv_counter_kwh = lambda: readings["value"]
+    _run(manager, installation, water_c=20.0)
+
+    samples = manager.instance("pool").model.calibrator._window   # pylint: disable=protected-access
+    assert samples, "no sample was recorded"
+    assert samples[-1]["pv_counter_kwh"] == pytest.approx(1234.5)
+
+
+def test_a_site_without_a_pv_meter_still_records_a_proxy(make_manager, installation):
+    """The forecast is weaker, but it still tells a bright window from a dark one."""
+    manager = make_manager([POOL])
+    installation.pv = [4000.0] * 48
+    _run(manager, installation, water_c=20.0)
+
+    samples = manager.instance("pool").model.calibrator._window   # pylint: disable=protected-access
+    assert samples[-1]["pv_counter_kwh"] is None
+    assert samples[-1]["solar_w"] > 0

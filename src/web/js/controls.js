@@ -801,7 +801,9 @@ class ControlsManager {
 
             const scheduled = Boolean(data.scheduled_by_optimizer);
             html += loads
-                .map(l => this._managedLoadCard(l, slotSeconds, currentSlot, scheduled))
+                .map(l => this._managedLoadCard(
+                    l, slotSeconds, currentSlot, scheduled,
+                    Boolean(data.pv_counter_available)))
                 .join('');
             showFullScreenOverlay(header, html);
         } catch (err) {
@@ -837,7 +839,7 @@ class ControlsManager {
      * @param {number} currentSlot - Index of the slot happening now
      * @returns {string} Card HTML
      */
-    _managedLoadCard(load, slotSeconds, currentSlot, scheduled = false) {
+    _managedLoadCard(load, slotSeconds, currentSlot, scheduled = false, counter = false) {
         const release = load.release || null;
         const detail = load.detail || {};
         const model = load.model || {};
@@ -863,7 +865,7 @@ class ControlsManager {
             </div>
             ${this._managedLoadEnergy(load, detail, scheduled)}
             ${this._managedLoadFacts(load, detail, model, release)}
-            ${this._managedLoadCalibration(load, model)}
+            ${this._managedLoadCalibration(load, model, counter)}
             ${this._managedLoadPlanStrip(load.plan || [], slotSeconds, currentSlot,
                                           load.plan_reasons || [])}
         </div>`;
@@ -1123,7 +1125,7 @@ class ControlsManager {
      * @param {Object} model - Its model status
      * @returns {string} HTML
      */
-    _managedLoadCalibration(load, model) {
+    _managedLoadCalibration(load, model, counter = false) {
         if (model.confidence === undefined || model.confidence === null) {
             return '';
         }
@@ -1141,6 +1143,7 @@ class ControlsManager {
                            cooling and ${model.cop_samples || 0} heating periods.`
                         : 'Still learning &mdash; the plan is running on the values from the configuration form.'}
                     ${this._managedLoadCoverNote(model)}
+                    ${this._managedLoadSunNote(model, counter)}
                     ${(model.fit_quality !== undefined && model.fit_quality < 0.5)
                         ? `<div style="color:#e0a030;">The readings do not fit the model
                            well &mdash; often a temperature sensor too coarse to measure
@@ -1166,6 +1169,25 @@ class ControlsManager {
      * @param {Object} model - The load's model status
      * @returns {string} HTML, empty when the store has no cover
      */
+    _managedLoadSunNote(model, hasCounter) {
+        // Only worth saying for a store that can see the sky. What the number means is
+        // not something anyone can act on, so this says whether the sun has been
+        // separated from everything else and, if not, what would help.
+        if (model.solar_gain === undefined || model.solar_gain === null) {
+            return '';
+        }
+        if (model.solar_identified) {
+            return `<div>The sun's contribution has been measured and is included in
+                    the forecast.</div>`;
+        }
+        const hint = hasCounter
+            ? ''
+            : ` It is being read from the PV forecast; a generation counter under
+               PV Auto-Scaling would measure it from the meter instead.`;
+        return `<div>The sun is not yet separated from everything else &mdash; that
+                needs both bright and dark days.${hint}</div>`;
+    }
+
     _managedLoadCoverNote(model) {
         const factor = Number(model.cover_loss_factor);
         if (!Number.isFinite(factor) || factor >= 1) {

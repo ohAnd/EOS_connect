@@ -61,6 +61,9 @@ class DemandContext:
     price_eur_per_wh: list = field(default_factory=list)
     feed_in_eur_per_wh: list = field(default_factory=list)
     pv_surplus_wh: list = field(default_factory=list)
+    # Per-slot PV forecast, standing in for the irradiance sensor nobody has. The
+    # fitted gain absorbs the array size, the water's absorptivity and the cover.
+    solar_wh: list = field(default_factory=list)
     readings: dict = field(default_factory=dict)
     history: list = field(default_factory=list)
 

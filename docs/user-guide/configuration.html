@@ -323,6 +323,34 @@
                         recorded samples carry those inputs, so without a reset they keep dragging
                         the fit until they age out of the retention window on their own.</p>
 
+                    <h3>The sun</h3>
+                    <p>An outdoor store gains heat from the sun, and on a pool that is
+                        worth kilowatts &mdash; enough that a model without a term for it
+                        blames the difference on the heat loss coefficient and gets that
+                        wrong instead. So the calibration learns what the sun adds,
+                        alongside everything else.</p>
+                    <p>Nobody has an irradiance sensor, so PV generation stands in for one.
+                        The fitted figure absorbs the array size, the water&rsquo;s
+                        absorptivity and whatever the cover lets through &mdash; none of
+                        which you need to know or enter. Two sources, in order of
+                        preference:</p>
+                    <ul>
+                        <li><strong>A cumulative PV counter</strong>, if you have set one
+                            under <em>PV Auto-Scaling</em>. Differenced across a
+                            measurement window it gives the exact average for that window,
+                            integrating passing cloud rather than sampling it. Nothing
+                            extra to configure on the load &mdash; it is the same household
+                            fact, read once.</li>
+                        <li><strong>The PV forecast</strong>, otherwise. Weaker, since it
+                            is a forecast and read at one moment, but quite enough to tell
+                            a bright window from a dark one. Nothing is wrong without a
+                            counter; the overlay simply says a meter would be sharper.</li>
+                    </ul>
+                    <p>The term stays at zero until the history holds <em>both</em> bright
+                        and dark windows. A run of overcast days says nothing about what
+                        full sun does, and a store that can never separate the two behaves
+                        exactly as it did before this existed.</p>
+
                     <h3>The cover</h3>
                     <p>A pool cover is worth roughly two thirds of the heat loss, and it goes on
                         and off on a daily rhythm. Reading the switch once and assuming that state

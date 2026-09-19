@@ -86,6 +86,11 @@ class ManagedLoadSources:
     pv_forecast: object = _noop           # () -> [Wh per slot]
     base_load: object = _noop             # () -> [Wh per slot]
     temperature_forecast: object = _noop  # () -> [degrees C, hourly]
+    # () -> cumulative PV generation in kWh, or None. Differenced across a calibration
+    # window it gives the exact mean irradiance over exactly that window, which is what
+    # the solar term in `loads.models.calibration` regresses against. The PV forecast
+    # stands in when there is no counter; neither leaves the term at zero.
+    pv_counter_kwh: object = _noop
     # (entry_config) -> {"entries": [{"start": datetime, "value": Wh}, ...],
     #                    "resolution_seconds": int} | None
     #
@@ -161,6 +166,7 @@ class ManagedLoadManager:
         self._warned_pull = set()
         self._warned_bias = set()
         self._warned_no_prices = False
+        self._hinted_pv_counter = False
         # Set when the optimizer can place contingent loads itself, which changes what
         # this module does with them: it computes the demand and defers the placing.
         self.external_scheduler = False
@@ -341,6 +347,8 @@ class ManagedLoadManager:
             ctx = self._context_for(item, ctx_base)
             self._last_ctx_for[item.id] = ctx
             self._pull_profile(item, ctx)
+            if uses_outdoor_ambient(item.type) and not self.has_pv_counter():
+                self._hint_pv_counter(item)
             self._record_sample(item, ctx)
             defer = self.external_scheduler and item.kind_is_contingent()
             if defer:
@@ -598,6 +606,7 @@ class ManagedLoadManager:
             price_eur_per_wh=self._prices(slot_count),
             feed_in_eur_per_wh=self._series(self.sources.feed_in_price, slot_count),
             pv_surplus_wh=self._surplus(slot_count),
+            solar_wh=self._series(self.sources.pv_forecast, slot_count),
             ambient_temp_c=[],
             readings={},
         )
@@ -616,6 +625,7 @@ class ManagedLoadManager:
             price_eur_per_wh=ctx_base.price_eur_per_wh,
             feed_in_eur_per_wh=ctx_base.feed_in_eur_per_wh,
             pv_surplus_wh=ctx_base.pv_surplus_wh,
+            solar_wh=ctx_base.solar_wh,
             ambient_temp_c=ambient,
             ambient_source=ambient_source,
             ambient_measured_c=measured,
@@ -840,6 +850,56 @@ class ManagedLoadManager:
             out.append(out[-1])
         return out
 
+    def has_pv_counter(self):
+        """Whether a cumulative PV meter is readable, for the card to say so."""
+        return self._pv_counter() is not None
+
+    def _hint_pv_counter(self, item):
+        """
+        Say once that a PV meter would sharpen the model, without nagging.
+
+        Not a warning: the PV forecast stands in perfectly well, and the calibration
+        works either way. But a meter differenced across a window measures exactly that
+        window, where a forecast is a guess about a whole slot, so a store that sits in
+        the sun learns what the sun does to it rather more precisely.
+        """
+        if self._hinted_pv_counter:
+            return
+        self._hinted_pv_counter = True
+        logger.info(
+            "[LOADS] '%s' sits outdoors and is learning what the sun adds to it from "
+            "the PV *forecast*. Setting a cumulative PV generation counter under PV "
+            "Auto-Scaling would measure that from the meter instead, which is more "
+            "precise. Nothing is wrong without it. | Config: #pv-autoscaling",
+            item.id,
+        )
+
+    def _pv_counter(self):
+        """The cumulative PV meter, or None when the site has not got one."""
+        try:
+            value = self.sources.pv_counter_kwh()
+        except Exception:  # pylint: disable=broad-except
+            logger.debug("[LOADS] PV counter unreadable", exc_info=True)
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _forecast_solar_w(self, ctx):
+        """
+        The forecast's irradiance proxy for this slot, as a fallback for the counter.
+
+        Weaker - a forecast, and a single point on it - but a site with no PV meter can
+        still tell a bright window from a dark one, which is all the fit needs.
+        """
+        series = ctx.solar_wh or []
+        if not series or not 0 <= ctx.current_slot < len(series):
+            return 0.0
+        return max(0.0, float(series[ctx.current_slot])) / max(
+            1e-9, ctx.hours_per_slot()
+        )
+
     def _surplus(self, slot_count):
         """PV generation left after the household base load, per slot."""
         pv = self._series(self.sources.pv_forecast, slot_count)
@@ -947,6 +1007,11 @@ class ManagedLoadManager:
                 if hasattr(item.model, "is_covered") else False,
                 # Kept alongside the value actually used, so the site-versus-model
                 # offset can be relearned after a restart instead of starting over.
+                # The counter, not a power: differencing two readings across a window
+                # averages exactly the window, where a point sample of a passing cloud
+                # would speak for the whole of it.
+                "pv_counter_kwh": self._pv_counter(),
+                "solar_w": self._forecast_solar_w(ctx),
                 "ambient_measured_c": ctx.ambient_measured_c,
                 "ambient_forecast_c": ctx.ambient_forecast_c,
             }
@@ -1217,6 +1282,8 @@ class ManagedLoadManager:
             # energy genuinely costs less; without it the load falls back to skipping
             # any hour above the figure, which is blunter and worth saying out loud.
             "scheduled_by_optimizer": bool(self.external_scheduler),
+            # Which irradiance proxy the calibration is learning the sun from.
+            "pv_counter_available": self.has_pv_counter(),
             "time_frame_base": self.time_frame_base,
             "cycle_seconds": self.cycle_seconds,
             "max_power_w": self.max_power_w,

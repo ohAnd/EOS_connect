@@ -437,6 +437,30 @@ def _managed_load_base_load():
     return load_interface.get_load_profile(slots)
 
 
+def _managed_load_pv_counter():
+    """
+    The household's cumulative PV meter, in kWh, for the solar term in the calibration.
+
+    Borrowed from the auto-scaler rather than configured again: it is the same
+    household fact, and a site that has told us once should not have to tell us twice.
+    Differencing it across a calibration window gives the exact mean irradiance over
+    exactly that window - a passing cloud integrated rather than sampled. None when
+    auto-scaling is off or no counter is set, and the calibration then falls back to
+    the PV forecast.
+    """
+    cfg = config_manager.config.get("pv_autoscaling", {}) or {}
+    sensor = str(cfg.get("sensor_entity_id", "") or "").strip()
+    if not sensor:
+        return None
+    raw = _managed_load_read_sensor(sensor)
+    if raw is None:
+        return None
+    try:
+        return float(str(raw).strip().split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
 def _managed_load_temperature_forecast():
     """
     The outdoor forecast, but only when there really is one.
@@ -487,6 +511,7 @@ load_manager.sources = ManagedLoadSources(
     pv_forecast=pv_interface.get_current_pv_forecast,
     base_load=_managed_load_base_load,
     temperature_forecast=_managed_load_temperature_forecast,
+    pv_counter_kwh=_managed_load_pv_counter,
     read_profile=_managed_load_read_profile,
 )
 load_manager.on_release_change = publish_managed_load_release

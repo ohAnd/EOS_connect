@@ -106,8 +106,23 @@ COVER_FACTOR_MIN = 0.05
 COVER_SPAN_MIN = 0.05
 COVER_MIN_ROWS = 5
 
-# How many unknowns the fit carries: COP intercept, COP slope, open loss, covered loss.
-UNKNOWNS = 4
+# A pool in the sun gains heat the loss model has no term for: full sun on thirteen
+# square metres of water is a few kilowatts, which is the size of the residual the fit
+# could never explain. There is no irradiance sensor here, so the PV forecast stands in
+# for one - the fitted coefficient absorbs the array size, the pool's absorptivity and
+# whatever the cover transmits, none of which need to be known separately.
+#
+# The prior is zero and the ridge pulls towards it, so a site whose data cannot support
+# the term reduces exactly to the model without it.
+SOLAR_GAIN_MAX = 5.0
+SOLAR_MIN_ROWS = 5
+# A row counts as sunny above this share of the brightest row seen. Not an absolute
+# figure: what matters is that the history contains both bright and dark windows.
+SOLAR_BRIGHT_SHARE = 0.25
+
+# How many unknowns the fit carries: COP intercept, COP slope, open loss, covered loss,
+# solar gain.
+UNKNOWNS = 5
 
 # Rows retained for the fit, and what a settled history looks like. Far fewer rows than
 # there are samples now that a window spans a measurable change rather than one cycle,
@@ -155,6 +170,26 @@ def _observed_ambient(sample):
         if math.isfinite(value):
             return value
     return float(sample["ambient_c"])
+
+
+def _window_solar_w(counters, solars, span_hours):
+    """
+    Mean irradiance proxy over the window, in watts.
+
+    A cumulative PV meter differenced end to end gives the *exact* mean over exactly
+    this window - a passing cloud is integrated rather than sampled - so it is used
+    wherever both ends read. A counter that went backwards is a meter reset or a
+    restart, not negative sunshine, and falls back to the sampled forecast.
+    """
+    ends = [value for value in (counters[0], counters[-1]) if value is not None]
+    if len(ends) == 2 and span_hours > 0:
+        try:
+            delta_kwh = float(ends[1]) - float(ends[0])
+        except (TypeError, ValueError):
+            delta_kwh = -1.0
+        if delta_kwh >= 0:
+            return delta_kwh * 1000.0 / span_hours
+    return sum(solars) / len(solars) if solars else 0.0
 
 
 def _was_covered(sample):
@@ -231,6 +266,10 @@ class ThermalCalibrator:
         self.cop_nominal = self.configured_cop_nominal
         self.air_coefficient = self.configured_air_coefficient
         self.cover_loss_factor = self.configured_cover_loss_factor
+        # Thermal watts gained per watt of the irradiance proxy. Zero until the data
+        # says otherwise, which is what keeps this change inert on a site that cannot
+        # identify it.
+        self.solar_gain = 0.0
 
         # Counts of what is *in the fit*, exposed as properties below. They used to be
         # independent counters, which drifted: ``restore`` seeded them from the previous
@@ -240,6 +279,7 @@ class ThermalCalibrator:
         self._restored_cop_samples = 0
         self.slope_identified = False
         self.cover_identified = False
+        self.solar_identified = False
         self._thin_state = None
         self.residual_w = None
         self.signal_w = None
@@ -397,12 +437,14 @@ class ThermalCalibrator:
         except (KeyError, TypeError, ValueError):
             return None
 
-        ambients, powers, covers = [], [], []
+        ambients, powers, covers, solars, counters = [], [], [], [], []
         for sample in window:
             try:
                 ambients.append(_observed_ambient(sample))
                 powers.append(float(sample.get("power_w", 0.0) or 0.0))
                 covers.append(1.0 if _was_covered(sample) else 0.0)
+                solars.append(max(0.0, float(sample.get("solar_w", 0.0) or 0.0)))
+                counters.append(sample.get("pv_counter_kwh"))
             except (KeyError, TypeError, ValueError):
                 return None
         if not ambients:
@@ -432,6 +474,7 @@ class ThermalCalibrator:
             # loss between the two coefficients. Not the multiplier: feeding back a
             # factor this estimator itself produced would close a loop around the fit.
             "covered_share": sum(covers) / len(covers),
+            "solar_w": _window_solar_w(counters, solars, span),
             "span_hours": span,
         }
 
@@ -474,6 +517,18 @@ class ThermalCalibrator:
         self._thin_state = None
         if not self.cover_identified:
             self._thin_state = "open" if open_rows < covered_rows else "covered"
+
+        # The sun separates from everything else only if the history holds both bright
+        # and dark windows. A run of overcast days says nothing about what full sun
+        # does, and fitting a gain from it would be reading noise.
+        solars = [row.get("solar_w", 0.0) for row in rows]
+        brightest = max(solars) if solars else 0.0
+        threshold = brightest * SOLAR_BRIGHT_SHARE
+        bright = sum(1 for value in solars if brightest > 0 and value >= threshold)
+        dark = len(solars) - bright
+        self.solar_identified = (
+            brightest > 0 and bright >= SOLAR_MIN_ROWS and dark >= SOLAR_MIN_ROWS
+        )
         return covered_share
 
     def _design(self, rows):
@@ -481,7 +536,8 @@ class ThermalCalibrator:
         The regressors, one row per window.
 
         x1 = P_el, x2 = T_air·P_el,
-        x3 = -A·(1-covered)·dT  (k while open), x4 = -A·covered·dT  (k while covered)
+        x3 = -A·(1-covered)·dT  (k while open), x4 = -A·covered·dT  (k while covered),
+        x5 = the irradiance proxy      (thermal watts gained per watt of it)
         """
         design = []
         for row in rows:
@@ -492,6 +548,7 @@ class ThermalCalibrator:
                 row["ambient_c"] * row["power_w"],
                 -drive * (1.0 - share),
                 -drive * share,
+                row.get("solar_w", 0.0),
             ))
         return design
 
@@ -552,6 +609,8 @@ class ThermalCalibrator:
         pinned = list(held)
         if not self.cover_identified:
             pinned[2 if self._thin_state == "open" else 3] = True
+        if not self.solar_identified:
+            pinned[4] = True
         for col in range(UNKNOWNS):
             strength = ridge * 1e9 if pinned[col] else ridge
             normal[col][col] += strength
@@ -572,7 +631,7 @@ class ThermalCalibrator:
         slope = nominal * self.configured_air_coefficient
         open_loss = self.configured_loss_coefficient
         return [nominal - slope * COP_REFERENCE_AMBIENT_C, slope,
-                open_loss, open_loss * self.configured_cover_loss_factor]
+                open_loss, open_loss * self.configured_cover_loss_factor, 0.0]
 
     def _weights(self, rows):
         """Exponential decay by age, so recent behaviour counts for more."""
@@ -588,7 +647,7 @@ class ThermalCalibrator:
 
     def _apply(self, estimate, rows, weights, design, targets):
         """Bound the solution, convert it to the reported form, and score the fit."""
-        intercept, slope, loss, covered_loss = estimate
+        intercept, slope, loss, covered_loss, solar = estimate
 
         loss = _clamp(loss, LOSS_COEFFICIENT_MIN, LOSS_COEFFICIENT_MAX)
         # A cover that made a pool lose heat faster would be a fitting artefact, so the
@@ -605,20 +664,32 @@ class ThermalCalibrator:
 
         self.loss_coefficient = loss
         self.cover_loss_factor = _clamp(covered_loss / loss, COVER_FACTOR_MIN, 1.0)
+        # Never negative: sunshine does not cool a pool, and a negative fit here would
+        # be the regression absorbing something else entirely.
+        self.solar_gain = _clamp(solar, 0.0, SOLAR_GAIN_MAX)
         self.cop_nominal = nominal
         self.air_coefficient = air_coefficient
         self.residual_w = self._residual(rows, weights, design, targets)
         self.signal_w = self._signal(weights, targets)
 
     def _residual(self, rows, weights, design, targets):
-        """Weighted RMS of what the fitted model fails to explain, in watts."""
+        """
+        Weighted RMS of what the fitted model fails to explain, in watts.
+
+        Every column, not the first three. This summed `range(3)` from back when the
+        fit had three unknowns, and was left behind when the loss split into covered
+        and open: the covered term is most of the loss on a covered store, so scoring
+        the fit without it charged the model for work it had actually done. On a live
+        pool that pinned the reported confidence near 0.4 whatever the data did, which
+        read as a calibration that had stopped learning.
+        """
         theta = self._theta()
         total_weight = sum(weights)
         if total_weight <= 0:
             return None
         error = 0.0
         for i, weight in enumerate(weights):
-            predicted = sum(design[i][col] * theta[col] for col in range(3))
+            predicted = sum(design[i][col] * theta[col] for col in range(UNKNOWNS))
             error += weight * (targets[i] - predicted) ** 2
         return round(math.sqrt(error / total_weight), 1)
 
@@ -636,7 +707,8 @@ class ThermalCalibrator:
         slope = self.cop_nominal * self.air_coefficient
         return [self.cop_nominal - slope * COP_REFERENCE_AMBIENT_C, slope,
                 self.loss_coefficient,
-                self.loss_coefficient * self.cover_loss_factor]
+                self.loss_coefficient * self.cover_loss_factor,
+                self.solar_gain]
 
     # -- what the fit is built from -----------------------------------------------------
 
@@ -701,6 +773,7 @@ class ThermalCalibrator:
         return {
             "loss_coefficient": round(self.loss_coefficient, 3),
             "cover_loss_factor": round(self.cover_loss_factor, 3),
+            "solar_gain": round(self.solar_gain, 4),
             "cop_nominal": round(self.cop_nominal, 3),
             "air_coefficient": round(self.air_coefficient, 5),
             "loss_samples": self.loss_samples,
@@ -708,6 +781,7 @@ class ThermalCalibrator:
             "confidence": self.confidence(),
             "slope_identified": self.slope_identified,
             "cover_identified": self.cover_identified,
+            "solar_identified": self.solar_identified,
             "residual_w": self.residual_w,
             "signal_w": self.signal_w,
             "fit_quality": self.fit_quality(),
@@ -726,6 +800,9 @@ class ThermalCalibrator:
         cover = state.get("cover_loss_factor")
         if isinstance(cover, (int, float)) and COVER_FACTOR_MIN <= cover <= 1.0:
             self.cover_loss_factor = float(cover)
+        solar = state.get("solar_gain")
+        if isinstance(solar, (int, float)) and 0.0 <= solar <= SOLAR_GAIN_MAX:
+            self.solar_gain = float(solar)
         air = state.get("air_coefficient")
         if isinstance(air, (int, float)):
             self.air_coefficient = _clamp(

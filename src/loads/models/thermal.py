@@ -365,8 +365,15 @@ class ThermalStorageModel(BaseDemandModel):
         working to hold, and using the current temperature would understate the demand of
         a store that is still cold. The mean COP is taken over the slots the appliance may
         actually run in, because those are the ambient temperatures it will see.
+
+        Sunshine is netted off. A store that gains heat from the sun needs less from the
+        appliance, and a model that measured that gain without ever spending it would
+        book the saving and then ask for the energy anyway. The gain is zero until the
+        calibration has both bright and dark windows to separate it from everything else.
         """
         hours = ctx.hours_per_slot()
+        solar = ctx.solar_wh or []
+        gain = self.calibrator.solar_gain
         losses = 0.0
         cops = []
         for index in range(max(0, ctx.current_slot), ctx.slot_count):
@@ -377,6 +384,9 @@ class ThermalStorageModel(BaseDemandModel):
                 self.calibrator.loss_coefficient, self.surface_m2, target, ambient,
                 cover[index] if isinstance(cover, list) else cover,
             ) * hours
+            if gain > 0 and index < len(solar):
+                # solar_wh is energy per slot; the gain was fitted against power.
+                losses -= gain * max(0.0, float(solar[index]))
             if feasible[index]:
                 cops.append(
                     cop_at(ambient, self.calibrator.cop_nominal,

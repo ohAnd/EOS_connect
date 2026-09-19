@@ -903,3 +903,44 @@ def test_the_skipped_reason_suggests_raising_the_limit(page):
     )
     shown = " ".join(page.text_content("#full_screen_content").split())
     assert "raise the price limit" in shown
+
+
+def _sun_note(page, model, counter):
+    page.evaluate(
+        """([model, counter]) => {
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadSunNote(model, counter);
+        }""",
+        [model, counter],
+    )
+    return " ".join(page.text_content("#full_screen_content").split())
+
+
+def test_a_measured_sun_is_reported_as_measured(page):
+    _open_overlay(page)
+    shown = _sun_note(page, {"solar_gain": 0.4, "solar_identified": True}, False)
+    assert "has been measured" in shown
+
+
+def test_an_unseparated_sun_says_what_it_needs(page):
+    """Both bright and dark days, not more days."""
+    _open_overlay(page)
+    shown = _sun_note(page, {"solar_gain": 0.0, "solar_identified": False}, True)
+    assert "both bright and dark days" in shown
+    assert "PV Auto-Scaling" not in shown, "no point suggesting what is already set"
+
+
+def test_a_site_without_a_meter_is_pointed_at_one(page):
+    """
+    A hint, not a warning: the forecast works. A meter differenced across a window
+    measures exactly that window, which is simply sharper.
+    """
+    _open_overlay(page)
+    shown = _sun_note(page, {"solar_gain": 0.0, "solar_identified": False}, False)
+    assert "PV Auto-Scaling" in shown
+    assert "generation counter" in shown
+
+
+def test_a_store_with_no_solar_term_says_nothing_about_the_sun(page):
+    _open_overlay(page)
+    assert _sun_note(page, {}, False) == ""

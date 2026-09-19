@@ -26,8 +26,19 @@ TRUE_AIR_COEFF = 0.03
 T0 = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
 
+TRUE_SOLAR_GAIN = 0.4          # thermal watts per watt of the irradiance proxy
+
+
+def _sun(moment, peak=6000.0):
+    """A crude day: nothing at night, a bell around noon."""
+    hour = moment.hour + moment.minute / 60.0
+    if not 6 <= hour <= 20:
+        return 0.0
+    return peak * math.sin(math.pi * (hour - 6) / 14.0)
+
+
 def _simulate(hours, step_minutes, medium_c, ambient_c, power_w, cover_factor=1.0,
-              start=T0, covered_when=None, forecast_ambient_c=None):
+              start=T0, covered_when=None, forecast_ambient_c=None, sun=None):
     """
     Roll the store forward and emit the samples a real installation would record.
 
@@ -55,12 +66,14 @@ def _simulate(hours, step_minutes, medium_c, ambient_c, power_w, cover_factor=1.
             "power_w": power_w,
             "cover_factor": factor,
             "covered": covered,
+            "solar_w": sun(moment) if sun else 0.0,
         })
         loss_w = TRUE_K * SURFACE * (temp - ambient_c) * factor
+        gain_w = TRUE_SOLAR_GAIN * sun(moment) if sun else 0.0
         thermal_w = 0.0
         if power_w >= IDLE_POWER_W:
             thermal_w = power_w * cop_at(ambient_c, TRUE_COP, TRUE_AIR_COEFF)
-        temp += (thermal_w - loss_w) * step_h / (WH_PER_M3_PER_K * VOLUME)
+        temp += (thermal_w + gain_w - loss_w) * step_h / (WH_PER_M3_PER_K * VOLUME)
         moment += timedelta(minutes=step_minutes)
     return samples
 
@@ -666,3 +679,77 @@ def test_the_state_with_evidence_keeps_what_it_learned():
     assert cal.loss_coefficient * cal.cover_loss_factor == pytest.approx(
         TRUE_K * 0.3, rel=0.1
     )
+
+
+# --- the sun ----------------------------------------------------------------------------
+
+def test_the_solar_gain_is_recovered_from_a_history_with_sun():
+    """
+    Full sun on this much water is a few kilowatts, which is the size of the residual
+    the loss model alone could never explain. There is no irradiance sensor, so the PV
+    forecast stands in for one and the fitted coefficient absorbs the array size, the
+    pool's absorptivity and whatever the cover lets through.
+    """
+    cal = _calibrator(loss=25.0)
+    samples = _simulate(
+        hours=96, step_minutes=15, medium_c=26.0, ambient_c=16.0, power_w=0.0,
+        sun=_sun,
+    )
+    cal.observe_series(samples)
+
+    assert cal.solar_identified is True
+    assert cal.solar_gain == pytest.approx(TRUE_SOLAR_GAIN, rel=0.2)
+
+
+def test_sun_absorbed_into_the_losses_is_what_it_used_to_cost():
+    """
+    Without the term the fit had to explain daytime warming with the only levers it
+    had, and the loss coefficient took the strain.
+    """
+    samples = _simulate(
+        hours=96, step_minutes=15, medium_c=26.0, ambient_c=16.0, power_w=0.0,
+        sun=_sun,
+    )
+    withsun = _calibrator(loss=25.0)
+    withsun.observe_series(samples)
+
+    blind = _calibrator(loss=25.0)
+    blind.observe_series([{**row, "solar_w": 0.0} for row in samples])
+
+    assert withsun.fit_quality() > blind.fit_quality()
+    assert abs(withsun.loss_coefficient - TRUE_K) < abs(blind.loss_coefficient - TRUE_K)
+
+
+def test_a_history_without_sun_leaves_the_term_at_zero():
+    """A site that cannot identify it reduces exactly to the model without it."""
+    cal = _calibrator(loss=25.0)
+    cal.observe_series(_simulate(
+        hours=60, step_minutes=15, medium_c=28.0, ambient_c=16.0, power_w=0.0))
+
+    assert cal.solar_identified is False
+    assert cal.solar_gain == pytest.approx(0.0, abs=1e-6)
+
+
+def test_unbroken_overcast_does_not_invent_a_gain():
+    """Every window equally dim says nothing about what full sun does."""
+    cal = _calibrator(loss=25.0)
+    cal.observe_series(_simulate(
+        hours=60, step_minutes=15, medium_c=28.0, ambient_c=16.0, power_w=0.0,
+        sun=lambda moment: 40.0))
+
+    assert cal.solar_identified is False
+    assert cal.solar_gain == pytest.approx(0.0, abs=1e-6)
+
+
+def test_the_gain_is_never_negative():
+    """Sunshine does not cool a pool; a negative fit would be absorbing something else."""
+    cal = _calibrator(loss=25.0)
+    samples = _simulate(
+        hours=96, step_minutes=15, medium_c=28.0, ambient_c=16.0, power_w=0.0,
+        sun=_sun,
+    )
+    # Invert the relationship: bright windows made to look like cooling ones.
+    for row in samples:
+        row["solar_w"] = 6000.0 - row["solar_w"]
+    cal.observe_series(samples)
+    assert cal.solar_gain >= 0.0
