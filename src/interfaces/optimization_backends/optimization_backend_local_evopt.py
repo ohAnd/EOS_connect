@@ -15,7 +15,10 @@ import logging
 import os
 import time
 
-from .optimization_backend_evopt import EVOptBackend
+from .optimization_backend_evopt import (
+    DEFAULT_TERMINAL_SOC_VALUE,
+    EVOptBackend,
+)
 from .local_evopt.optimizer import (
     BatteryConfig,
     CbcSolverUnavailableError,
@@ -41,8 +44,6 @@ DISCHARGING_STRATEGIES = {
     "discharge_before_import",
     "emergency_reserve",
 }
-
-
 class LocalEVOptBackend(EVOptBackend):
     """
     In-process MILP optimizer backend.
@@ -60,6 +61,8 @@ class LocalEVOptBackend(EVOptBackend):
         charging_strategy:        Strategy string for charging preferences.
         discharging_strategy:     Strategy string for discharging preferences.
         emergency_reserve_pct:    Minimum battery SOC at end-of-horizon (0-80 %).
+        terminal_soc_value:       How charge left at the end of the horizon is priced;
+                                  one of TERMINAL_SOC_VALUES.
         max_grid_import_w:        Hard grid import power ceiling in Watts (None = unlimited).
         max_grid_export_w:        Hard grid export power ceiling in Watts (None = unlimited).
     """
@@ -73,6 +76,7 @@ class LocalEVOptBackend(EVOptBackend):
         charging_strategy="charge_before_export",
         discharging_strategy="discharge_before_import",
         emergency_reserve_pct=0,
+        terminal_soc_value=DEFAULT_TERMINAL_SOC_VALUE,
         max_grid_import_w=None,
         max_grid_export_w=None,
     ):
@@ -81,6 +85,7 @@ class LocalEVOptBackend(EVOptBackend):
             base_url="local://",
             time_frame_base=time_frame_base,
             time_zone=time_zone,
+            terminal_soc_value=terminal_soc_value,
         )
         self.num_threads = num_threads
         self.time_limit = time_limit

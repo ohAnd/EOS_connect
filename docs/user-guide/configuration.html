@@ -97,7 +97,7 @@
                     </div>
 
                     <h3 id="local-evopt">Tuning the built-in optimizer</h3>
-                    <p>Two strategy settings shape its behaviour, and both have sensible defaults:</p>
+                    <p>Three settings shape its behaviour, and all have sensible defaults:</p>
                     <ul>
                         <li><code>eos.local_evopt_charging_strategy</code> &mdash; default
                             <code>charge_before_export</code>: fill the battery before selling surplus to
@@ -108,8 +108,43 @@
                             <code>discharge_before_import</code>: use stored energy before buying. Or
                             <code>emergency_reserve</code>, or <code>none</code>.</li>
                     </ul>
-                    <p>Set <code>eos.local_evopt_emergency_reserve_pct</code> above 0 to hold a floor of
-                        charge in reserve at the end of the planning horizon.</p>
+                    <p><code>eos.local_evopt_terminal_soc_value</code> &mdash; default
+                        <code>cheapest_ahead</code>: decides what charge still in the battery when the
+                        planning horizon runs out is worth. This matters more than it sounds. The
+                        optimizer plans a fixed window and then stops, so whatever it thinks the
+                        leftover charge is worth is what decides whether it saves energy for tomorrow
+                        or spends it tonight.</p>
+                    <ul>
+                        <li><code>cheapest_ahead</code> values it at the lowest electricity price in
+                            the horizon. Charging and discharging both lose a little to conversion, so
+                            this leaves a band around that price in which the battery simply holds:
+                            nothing is cheap enough to be worth buying just to store, and nothing near
+                            the bottom of the tariff is dear enough to be worth emptying into. It fits
+                            the way the planning window is cut &mdash; it always ends at midnight, and
+                            midnight is always followed by the cheapest hours of the night, so charge
+                            left over at the end can be bought back shortly afterwards for about the
+                            same price. On a day with cheap grid power available throughout, that
+                            means the battery is expected to end close to empty, and that is the
+                            correct answer rather than a fault.</li>
+                        <li><code>stored_price</code> is the old behaviour, kept so you can go back:
+                            leftover charge is valued at what it cost to put there. On a mostly
+                            solar-charged battery that is close to nothing, so the optimizer treats a
+                            full battery at the end of the horizon as near-worthless and empties it
+                            &mdash; even into cheap hours, and even when it means exporting solar
+                            surplus for the feed-in tariff rather than keeping it.</li>
+                    </ul>
+                    <p>The external EVopt server runs the same engine and is sent the same figure,
+                        so <code>eos.external_evopt_terminal_soc_value</code> does the same job when
+                        <code>eos.source</code> is <code>evopt</code>. Only the slots genuinely ahead
+                        are considered &mdash; in quarter-hourly mode the forecast wraps around, and
+                        yesterday's prices trailing the end of it are not offers you can still take.
+                    </p>
+
+                    <p>Set <code>eos.local_evopt_emergency_reserve_pct</code> above 0 to hold a hard
+                        floor of charge in reserve at the end of the planning horizon, for outage
+                        cover. It is a floor, not an economic signal &mdash; deciding how much charge
+                        is worth keeping is
+                        <code>eos.local_evopt_terminal_soc_value</code>&rsquo;s job.</p>
 
                     <div data-level="expert">
                         <p>If your grid connection is limited, cap it explicitly with

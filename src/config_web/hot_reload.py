@@ -47,6 +47,10 @@ Supported fields (Local EVopt strategies):
 - ``eos.local_evopt_charging_strategy``
 - ``eos.local_evopt_discharging_strategy``
 - ``eos.local_evopt_emergency_reserve_pct``
+- ``eos.local_evopt_terminal_soc_value``
+
+Supported fields (External EVopt):
+- ``eos.external_evopt_terminal_soc_value``
 
 PV Forecast Hot-Reload Behavior:
 - **Per-installation sources** (akkudoktor, openmeteo, solcast, victron, etc.): 
@@ -119,6 +123,12 @@ _LOCAL_EVOPT_FIELD_MAP = {
     "eos.local_evopt_charging_strategy": ("charging_strategy", str),
     "eos.local_evopt_discharging_strategy": ("discharging_strategy", str),
     "eos.local_evopt_emergency_reserve_pct": ("emergency_reserve_pct", int),
+    "eos.local_evopt_terminal_soc_value": ("terminal_soc_value", str),
+}
+
+# Map of external (HTTP) evopt keys to (backend_attr_name, coerce_fn)
+_EXTERNAL_EVOPT_FIELD_MAP = {
+    "eos.external_evopt_terminal_soc_value": ("terminal_soc_value", str),
 }
 
 # Optimizer keys whose change immediately invalidates the current result
@@ -275,6 +285,8 @@ class HotReloadAdapter:
             self._apply_optimizer(key, new_value)
         elif key in _LOCAL_EVOPT_FIELD_MAP:
             self._apply_local_evopt(key, new_value)
+        elif key in _EXTERNAL_EVOPT_FIELD_MAP:
+            self._apply_external_evopt(key, new_value)
         elif key in _PV_AUTOSCALER_FIELD_MAP:
             self._apply_pv_autoscaler(key, new_value)
         elif key.startswith(_PV_KEY_PREFIXES) or key in _PV_TEMPERATURE_KEYS:
@@ -525,6 +537,32 @@ class HotReloadAdapter:
         # Strategy changes immediately invalidate the current optimization result —
         # trigger a new run so the user sees the effect without waiting for the
         # next scheduled slot.
+        self._fire_run_trigger(key)
+
+    def _apply_external_evopt(self, key, new_value):
+        """Apply a change to the external (HTTP) EVopt backend."""
+        backend = getattr(self._optimizer, "backend", None)
+        backend_type = getattr(self._optimizer, "backend_type", None)
+        if backend is None or backend_type != "evopt":
+            logger.debug(
+                "[HotReload] Optimizer backend is not evopt (%s) — skipping %s",
+                backend_type, key,
+            )
+            return
+
+        attr, coerce = _EXTERNAL_EVOPT_FIELD_MAP[key]
+        try:
+            coerced = coerce(new_value)
+        except (TypeError, ValueError) as exc:
+            logger.warning("[HotReload] Cannot coerce %s=%r: %s", key, new_value, exc)
+            return
+
+        old_val = getattr(backend, attr, "?")
+        setattr(backend, attr, coerced)
+        self._applied_keys.append(key)
+        logger.info(
+            "[HotReload] Updated evopt.%s = %s (was %s)", attr, coerced, old_val,
+        )
         self._fire_run_trigger(key)
 
     def _fire_run_trigger(self, reason_key):
