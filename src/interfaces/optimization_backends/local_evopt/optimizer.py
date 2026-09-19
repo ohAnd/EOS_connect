@@ -37,6 +37,9 @@ Modifications made for EOS_connect integration (adapted from main branch, ~2025-
 - Per-slot tight Big-M bounds in energy-balance and battery constraints replace the
   upstream global M=1e6, tightening the LP relaxation and reducing B&B tree size
 - or 0.0 guard on pulp.value() calls in solve() to handle None results
+- get_clean_objective_value() measures the battery term from bat.s_initial
+  rather than s[0]; upstream's s[0] is the SOC *after* the first slot has
+  charged or discharged, so the first slot fell out of the reported delta
 - Module is invoked in-process; no HTTP server needed
 """
 
@@ -922,7 +925,31 @@ class Optimizer:
             }
 
     def get_clean_objective_value(self):
-        """Recalculate the objective value without penalties and strategy incentives."""
+        """Recalculate the objective value without penalties and strategy incentives.
+
+        The battery term is measured from ``bat.s_initial``, not from ``s[i][0]``.
+        Per the dynamics in _add_battery_constraints, ``s[i][0]`` is the SOC
+        *after* the first slot has charged or discharged::
+
+            s[i][0] == bat.s_initial + eta_c*c[i][0] - (1/eta_d)*d[i][0]
+
+        so differencing against it drops the first slot from the reported
+        delta, understating or overstating the battery contribution by
+        ``(s[i][0] - bat.s_initial) * p_a``.  With a 15-minute slot and a
+        10 kW charge limit that is up to ~2.3 kWh of SOC.
+
+        Harmless while this value is only reported, but it is also what the
+        managed-load counterfactual differences: two solves of the same horizon,
+        one with the loads and one without.  The error cancels only if both
+        solves happen to make the same first-slot decision, and placing a load
+        is exactly what changes it -- so the residual lands straight on the
+        measured ct/kWh.
+
+        Note the solved objective uses the level ``s[T-1] * p_a`` rather than a
+        delta.  That is equivalent for optimisation, since s_initial is a
+        constant and the two differ only by a constant, but the delta is the
+        right form for reporting what the plan actually cost.
+        """
         clean_objective = 0
         for t in self.time_steps:
             if self.grid.p_max_imp is not None:
@@ -940,7 +967,7 @@ class Optimizer:
         for i, bat in enumerate(self.batteries):
             clean_objective += (
                 (pulp.value(self.variables['s'][i][self.T - 1]) or 0.0)
-                - (pulp.value(self.variables['s'][i][0]) or 0.0)
+                - bat.s_initial
             ) * bat.p_a
         if self.is_grid_demand_rate_active:
             clean_objective += -self.grid.prc_p_exc_imp * (

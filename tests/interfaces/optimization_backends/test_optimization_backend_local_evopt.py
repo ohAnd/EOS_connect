@@ -1259,3 +1259,78 @@ class TestTerminalSocValueOnExternalEvopt:
             evopt, _ = e._transform_request_from_eos_to_evopt(req)
         # the 0.00001 slot rotated into the stale tail, so it must not win
         assert evopt["batteries"][0]["p_a"] == pytest.approx(0.0003)
+
+
+# ---------------------------------------------------------------------------
+# 12. Reported objective value
+# ---------------------------------------------------------------------------
+
+class TestCleanObjectiveBaseline:
+    """
+    get_clean_objective_value() must measure the battery from where it really
+    started. s[0] is the SOC *after* slot 0 has charged, so using it drops the
+    first slot from the reported delta.
+    """
+
+    @staticmethod
+    def _solved():
+        """A horizon whose first slot definitely charges.
+
+        Slot 0 must be *uniquely* the cheapest: if several slots share the
+        lowest price the solver is indifferent about which one to charge in,
+        and it does not reliably pick the first.
+        """
+        T = 8
+        p_N = [0.00008] + [0.00012] * 2 + [0.00040] * 5
+        ts = TimeSeriesData(
+            dt=[3600] * T, gt=[800.0] * T, ft=[0.0] * T,
+            p_N=p_N, p_E=[0.00008] * T,
+        )
+        battery = BatteryConfig(
+            s_min=500, s_max=10000, s_initial=4000, c_min=0,
+            c_max=5000, d_max=5000, p_a=0.0002,
+            charge_from_grid=True, discharge_to_grid=True, s_capacity=10000,
+        )
+        opt = Optimizer(
+            strategy=OptimizationStrategy(
+                charging_strategy="none", discharging_strategy="none"),
+            grid=GridConfig(), batteries=[battery], time_series=ts,
+        )
+        result = opt.solve()
+        assert result["status"] == "Optimal"
+        return opt, battery
+
+    def test_slot_zero_moves_energy_in_this_fixture(self):
+        """Guard: without slot-0 activity the fix would be untestable here."""
+        opt, _ = self._solved()
+        moved = (pulp.value(opt.variables["c"][0][0]) or 0.0) + (
+            pulp.value(opt.variables["d"][0][0]) or 0.0
+        )
+        assert moved > 1.0, "fixture no longer exercises the first slot"
+
+    def test_the_battery_term_is_measured_from_s_initial(self):
+        opt, battery = self._solved()
+        s_end = pulp.value(opt.variables["s"][0][opt.T - 1]) or 0.0
+
+        # Rebuild the non-battery part of the clean objective independently.
+        grid = 0.0
+        for t in opt.time_steps:
+            grid -= (pulp.value(opt.variables["n"][t]) or 0.0) * opt.time_series.p_N[t]
+            grid += (pulp.value(opt.variables["e"][t]) or 0.0) * opt.time_series.p_E[t]
+
+        battery_term = opt.get_clean_objective_value() - grid
+        assert battery_term == pytest.approx(
+            (s_end - battery.s_initial) * battery.p_a, abs=1e-9
+        )
+
+    def test_the_old_s0_baseline_would_have_differed(self):
+        """
+        Pins the size of the bug rather than just its absence: the discarded
+        formula gives a measurably different answer on this horizon.
+        """
+        opt, battery = self._solved()
+        s0 = pulp.value(opt.variables["s"][0][0]) or 0.0
+        slipped = (s0 - battery.s_initial) * battery.p_a
+        assert abs(slipped) > 1e-4, (
+            "slot 0 barely moved; this horizon no longer demonstrates the bug"
+        )
