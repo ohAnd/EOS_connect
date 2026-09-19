@@ -47,6 +47,7 @@ Supported fields (Local EVopt strategies):
 - ``eos.local_evopt_charging_strategy``
 - ``eos.local_evopt_discharging_strategy``
 - ``eos.local_evopt_emergency_reserve_pct``
+- ``eos.local_evopt_terminal_soc_value``
 
 PV Forecast Hot-Reload Behavior:
 - **Per-installation sources** (akkudoktor, openmeteo, solcast, victron, etc.): 
@@ -119,6 +120,7 @@ _LOCAL_EVOPT_FIELD_MAP = {
     "eos.local_evopt_charging_strategy": ("charging_strategy", str),
     "eos.local_evopt_discharging_strategy": ("discharging_strategy", str),
     "eos.local_evopt_emergency_reserve_pct": ("emergency_reserve_pct", int),
+    "eos.local_evopt_terminal_soc_value": ("terminal_soc_value", str),
 }
 
 # Optimizer keys whose change immediately invalidates the current result

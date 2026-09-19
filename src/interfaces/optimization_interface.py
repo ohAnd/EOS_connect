@@ -20,7 +20,10 @@ import logging
 from datetime import datetime, timedelta
 from .optimization_backends.optimization_backend_eos import EOSBackend
 from .optimization_backends.optimization_backend_evopt import EVOptBackend
-from .optimization_backends.optimization_backend_local_evopt import LocalEVOptBackend
+from .optimization_backends.optimization_backend_local_evopt import (
+    DEFAULT_TERMINAL_SOC_VALUE,
+    LocalEVOptBackend,
+)
 
 logger = logging.getLogger("__main__")
 
@@ -80,6 +83,9 @@ class OptimizationInterface:
             _discharging_strat = config.get(
                 "local_evopt_discharging_strategy", "discharge_before_import"
             )
+            _terminal_soc_value = config.get(
+                "local_evopt_terminal_soc_value", DEFAULT_TERMINAL_SOC_VALUE
+            )
             self.backend = LocalEVOptBackend(
                 time_frame_base=self.time_frame_base,
                 time_zone=self.time_zone,
@@ -90,6 +96,7 @@ class OptimizationInterface:
                 emergency_reserve_pct=config.get(
                     "local_evopt_emergency_reserve_pct", 0
                 ),
+                terminal_soc_value=_terminal_soc_value,
                 max_grid_import_w=_max_imp,
                 max_grid_export_w=_max_exp,
             )

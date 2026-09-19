@@ -9,6 +9,7 @@ Test scope:
     - maximize_self_consumption strategy reduces grid import vs 'none'
     - emergency_reserve strategy keeps end-of-horizon SOC above threshold
     - Grid import/export limits are respected in results
+    - Terminal SOC is valued at a forward price, not at what the charge cost
 
 All tests run fully in-process — no network, no mock HTTP.
 
@@ -18,6 +19,7 @@ Usage:
 
 # pylint: disable=protected-access
 
+import statistics
 import subprocess
 from datetime import datetime as _real_datetime
 from types import SimpleNamespace
@@ -27,7 +29,10 @@ import pytest
 import pulp
 import pytz
 
-from src.interfaces.optimization_backends.optimization_backend_local_evopt import LocalEVOptBackend
+from src.interfaces.optimization_backends.optimization_backend_local_evopt import (
+    TERMINAL_SOC_VALUES,
+    LocalEVOptBackend,
+)
 from src.interfaces.optimization_backends.local_evopt import optimizer as _optimizer_mod
 from src.interfaces.optimization_backends.local_evopt.optimizer import (
     BatteryConfig,
@@ -921,3 +926,275 @@ class TestSmartForecastExtension:
         # Should NOT extend (PV capacity is zero)
         assert len(extended["time_series"]["ft"]) == original_length, \
             "Should not extend when PV capacity is zero"
+
+
+# ---------------------------------------------------------------------------
+# 10. Terminal SOC valuation
+# ---------------------------------------------------------------------------
+
+def _solve_horizon(p_N, p_a, load_w=1000.0, pv_w=0.0, initial_pct=0.5,
+                   capacity_wh=10000.0):
+    """Solve one horizon and report where the battery ended and what it bought.
+
+    Everything except ``p_a`` is held fixed, so a difference between two calls
+    is attributable to the terminal valuation alone.
+    """
+    n = len(p_N)
+    ts = TimeSeriesData(
+        dt=[3600] * n,
+        gt=[load_w] * n,
+        ft=[pv_w] * n,
+        p_N=list(p_N),
+        p_E=[0.00008] * n,
+    )
+    battery = BatteryConfig(
+        s_min=500,
+        s_max=capacity_wh,
+        s_initial=capacity_wh * initial_pct,
+        c_min=0,
+        c_max=5000,
+        d_max=5000,
+        p_a=p_a,
+        charge_from_grid=True,
+        discharge_to_grid=True,
+        s_capacity=capacity_wh,
+    )
+    result = Optimizer(
+        strategy=OptimizationStrategy(
+            charging_strategy="charge_before_export",
+            discharging_strategy="discharge_before_import",
+        ),
+        grid=GridConfig(),
+        batteries=[battery],
+        time_series=ts,
+    ).solve()
+    assert result["status"] == "Optimal"
+    return {
+        "final_soc": result["batteries"][0]["state_of_charge"][-1],
+        "grid_import": sum(result["grid_import"]),
+    }
+
+
+class TestTerminalSocValuePolicies:
+    """The valuation helper itself — no solver involved."""
+
+    PRICES = [0.00019, 0.00025, 0.00030, 0.00025]
+    STORED = 0.0000731
+
+    def test_cheapest_ahead_is_the_lowest_price_in_the_horizon(self):
+        assert LocalEVOptBackend._terminal_soc_value_eur_per_wh(
+            "cheapest_ahead", self.PRICES, self.STORED
+        ) == pytest.approx(0.00019)
+
+    def test_stored_price_passes_the_old_value_through_untouched(self):
+        assert LocalEVOptBackend._terminal_soc_value_eur_per_wh(
+            "stored_price", self.PRICES, self.STORED
+        ) == pytest.approx(self.STORED)
+
+    @pytest.mark.parametrize("prices", [[], None, [0.0, 0.0, 0.0], [-0.0001, 0.0]])
+    def test_no_usable_forward_price_falls_back_to_the_stored_price(self, prices):
+        """
+        A missing, zero or negative-only price series carries no forward signal.
+        Deriving a valuation from it would put the terminal value at zero, which
+        is the very thing this change exists to stop.
+        """
+        assert LocalEVOptBackend._terminal_soc_value_eur_per_wh(
+            "cheapest_ahead", prices, self.STORED
+        ) == pytest.approx(self.STORED)
+
+    def test_negative_slots_are_skipped_not_treated_as_the_cheapest(self):
+        """
+        A negative price would drag the valuation to zero and bring the drain
+        straight back. The cheapest *positive* price is the forward signal.
+        """
+        assert LocalEVOptBackend._terminal_soc_value_eur_per_wh(
+            "cheapest_ahead", [-0.00005, 0.00019, 0.00030], self.STORED
+        ) == pytest.approx(0.00019)
+
+    def test_an_unknown_policy_falls_back_to_the_default(self):
+        assert LocalEVOptBackend._terminal_soc_value_eur_per_wh(
+            "totally_invalid_policy", self.PRICES, self.STORED
+        ) == pytest.approx(0.00019)
+
+
+class TestTerminalSocValueBehaviour:
+    """Real CBC solves: what the valuation does to the battery."""
+
+    STORED = 0.0000731  # a PV-charged battery's stored price, ~7.3 ct/kWh
+
+    def test_pv_surplus_is_stored_instead_of_dumped(self):
+        """
+        The bug in its clearest form. With PV covering the load and a flat
+        tariff, charge left at the end was valued at the stored price — below
+        the feed-in tariff — so the model exported the surplus and finished on
+        the floor. Valued at the cheapest price ahead it keeps the surplus,
+        and buys nothing to do it.
+        """
+        prices = [0.00025] * 16
+        old = _solve_horizon(prices, self.STORED, load_w=500.0, pv_w=1500.0,
+                             initial_pct=0.3)
+        new = _solve_horizon(
+            prices,
+            LocalEVOptBackend._terminal_soc_value_eur_per_wh(
+                "cheapest_ahead", prices, self.STORED
+            ),
+            load_w=500.0, pv_w=1500.0, initial_pct=0.3,
+        )
+        assert new["final_soc"] > old["final_soc"] + 2000
+        # and it cost nothing at the meter to do it
+        assert new["grid_import"] == pytest.approx(old["grid_import"], abs=1.0)
+
+    def test_the_battery_is_not_drained_into_cheap_hours(self):
+        """
+        Dear hours first, then a long cheap stretch, and a load small enough
+        that the battery is never forced to empty. At the stored price the
+        model dumped everything it had; at the cheapest price ahead it holds
+        a substantial charge through the cheap stretch.
+        """
+        prices = [0.00030] * 6 + [0.00019] * 10
+        old = _solve_horizon(prices, self.STORED, load_w=200.0)
+        new = _solve_horizon(
+            prices,
+            LocalEVOptBackend._terminal_soc_value_eur_per_wh(
+                "cheapest_ahead", prices, self.STORED
+            ),
+            load_w=200.0,
+        )
+        assert old["final_soc"] < 1000        # drained to the floor
+        assert new["final_soc"] > 3000        # holds a real charge
+
+    def test_a_flat_tariff_neither_drains_nor_hoards(self):
+        """
+        The degenerate case the valuation has to survive. With one price for
+        the whole horizon there is no arbitrage to chase, so the battery should
+        sit exactly where it started: not emptied, and not topped up from the
+        grid either.
+
+        This is what pins the formula to min(p_N) rather than the arithmetically
+        tempting min(p_N)/eta_c. The latter puts the charge threshold
+        eta_c * p_a exactly on the cheapest price, leaves every cheap slot an
+        exact tie, and lets the secondary strategy terms break it toward buying
+        — measured on this horizon, that filled the battery to 100 %.
+        """
+        prices = [0.00025] * 16
+        initial_wh = 10000.0 * 0.5
+        new = _solve_horizon(
+            prices,
+            LocalEVOptBackend._terminal_soc_value_eur_per_wh(
+                "cheapest_ahead", prices, self.STORED
+            ),
+            load_w=1000.0, initial_pct=0.5,
+        )
+        assert new["final_soc"] == pytest.approx(initial_wh, abs=100.0)
+
+    def test_a_median_valuation_would_overpay_and_is_not_offered(self):
+        """
+        Why only the cheapest price ahead is exposed.
+
+        Valuing terminal charge at the median of the horizon stockpiles far
+        harder, and the energy it buys costs more than the cheapest hour it
+        could have been bought in -- so it pays today for energy the horizon
+        itself shows going cheaper. Measured here, and on a live 36.5 h
+        horizon where it spent EUR 3.10 to hold 16.3 kWh at an effective
+        19.0 ct/kWh while the next morning offered 17.7 ct.
+        """
+        prices = [0.00018, 0.00022, 0.00030, 0.00028] * 4
+        median = statistics.median(prices)
+        cheapest_run = _solve_horizon(
+            prices,
+            LocalEVOptBackend._terminal_soc_value_eur_per_wh(
+                "cheapest_ahead", prices, self.STORED
+            ),
+            load_w=600.0, initial_pct=0.6,
+        )
+        median_run = _solve_horizon(
+            prices, median, load_w=600.0, initial_pct=0.6
+        )
+        assert median_run["final_soc"] > cheapest_run["final_soc"]
+        assert median_run["grid_import"] > cheapest_run["grid_import"]
+        # and the option is not reachable through config
+        assert "median_ahead" not in TERMINAL_SOC_VALUES
+        assert LocalEVOptBackend._terminal_soc_value_eur_per_wh(
+            "median_ahead", prices, self.STORED
+        ) == pytest.approx(min(prices))
+
+
+class TestTerminalSocValueWiring:
+    """The config knob reaches the BatteryConfig the solver is handed."""
+
+    def test_default_policy(self, berlin_tz):
+        b = LocalEVOptBackend(time_frame_base=3600, time_zone=berlin_tz)
+        assert b.terminal_soc_value == "cheapest_ahead"
+
+    def test_unknown_policy_falls_back_to_the_default(self, berlin_tz):
+        b = LocalEVOptBackend(
+            time_frame_base=3600,
+            time_zone=berlin_tz,
+            terminal_soc_value="not_a_policy",
+        )
+        assert b.terminal_soc_value == "cheapest_ahead"
+
+    @staticmethod
+    def _evopt_request():
+        return {
+            "eta_c": 0.95,
+            "eta_d": 0.95,
+            "time_series": {
+                "dt": [3600] * 4,
+                "gt": [500.0] * 4,
+                "ft": [0.0] * 4,
+                "p_N": [0.00019, 0.00025, 0.00030, 0.00025],
+                "p_E": [0.00008] * 4,
+            },
+            "batteries": [{
+                "s_min": 500, "s_max": 10000, "s_capacity": 10000,
+                "s_initial": 5000, "c_min": 0, "c_max": 5000, "d_max": 5000,
+                "p_a": 0.0000731,          # the stored price the transform emits
+                "charge_from_grid": True, "discharge_to_grid": True,
+            }],
+        }
+
+    def test_the_stored_price_is_replaced_before_the_solver_sees_it(self, berlin_tz):
+        b = LocalEVOptBackend(time_frame_base=3600, time_zone=berlin_tz)
+        opt = b._build_optimizer(self._evopt_request(), timeout=60)
+        assert opt.batteries[0].p_a == pytest.approx(0.00019)
+
+    def test_the_escape_hatch_keeps_the_stored_price(self, berlin_tz):
+        b = LocalEVOptBackend(
+            time_frame_base=3600, time_zone=berlin_tz,
+            terminal_soc_value="stored_price",
+        )
+        opt = b._build_optimizer(self._evopt_request(), timeout=60)
+        assert opt.batteries[0].p_a == pytest.approx(0.0000731)
+
+    def test_the_config_key_reaches_the_backend(self, berlin_tz):
+        """OptimizationInterface passes eos.local_evopt_terminal_soc_value through."""
+        from src.interfaces.optimization_interface import OptimizationInterface
+
+        interface = OptimizationInterface(
+            {"source": "local_evopt", "server": "localhost", "port": 8503,
+             "local_evopt_terminal_soc_value": "stored_price"},
+            3600, berlin_tz,
+        )
+        assert interface.backend.terminal_soc_value == "stored_price"
+
+    def test_an_absent_config_key_leaves_the_default(self, berlin_tz):
+        """Existing installs have no such key stored and must get the new default."""
+        from src.interfaces.optimization_interface import OptimizationInterface
+
+        interface = OptimizationInterface(
+            {"source": "local_evopt", "server": "localhost", "port": 8503},
+            3600, berlin_tz,
+        )
+        assert interface.backend.terminal_soc_value == "cheapest_ahead"
+
+    def test_a_hot_reloaded_junk_value_cannot_stick(self, berlin_tz):
+        """
+        config_web's hot-reload writes straight onto the backend attribute,
+        bypassing __init__. The valuation is coerced again at the point of use
+        so a bad value degrades to the default instead of reaching the solver.
+        """
+        b = LocalEVOptBackend(time_frame_base=3600, time_zone=berlin_tz)
+        b.terminal_soc_value = "garbage_from_a_hot_reload"
+        opt = b._build_optimizer(self._evopt_request(), timeout=60)
+        assert opt.batteries[0].p_a == pytest.approx(0.00019)
