@@ -29,8 +29,11 @@ import pytest
 import pulp
 import pytz
 
-from src.interfaces.optimization_backends.optimization_backend_local_evopt import (
+from src.interfaces.optimization_backends.optimization_backend_evopt import (
     TERMINAL_SOC_VALUES,
+    EVOptBackend,
+)
+from src.interfaces.optimization_backends.optimization_backend_local_evopt import (
     LocalEVOptBackend,
 )
 from src.interfaces.optimization_backends.local_evopt import optimizer as _optimizer_mod
@@ -1120,7 +1123,7 @@ class TestTerminalSocValueBehaviour:
 
 
 class TestTerminalSocValueWiring:
-    """The config knob reaches the BatteryConfig the solver is handed."""
+    """The config knob reaches the payload the solver is handed."""
 
     def test_default_policy(self, berlin_tz):
         b = LocalEVOptBackend(time_frame_base=3600, time_zone=berlin_tz)
@@ -1135,37 +1138,36 @@ class TestTerminalSocValueWiring:
         assert b.terminal_soc_value == "cheapest_ahead"
 
     @staticmethod
-    def _evopt_request():
-        return {
-            "eta_c": 0.95,
-            "eta_d": 0.95,
-            "time_series": {
-                "dt": [3600] * 4,
-                "gt": [500.0] * 4,
-                "ft": [0.0] * 4,
-                "p_N": [0.00019, 0.00025, 0.00030, 0.00025],
-                "p_E": [0.00008] * 4,
-            },
-            "batteries": [{
-                "s_min": 500, "s_max": 10000, "s_capacity": 10000,
-                "s_initial": 5000, "c_min": 0, "c_max": 5000, "d_max": 5000,
-                "p_a": 0.0000731,          # the stored price the transform emits
-                "charge_from_grid": True, "discharge_to_grid": True,
-            }],
-        }
+    def _p_a_from_transform(backend):
+        """Run the real EOS->EVopt transform and report the p_a it emits.
+
+        The valuation lives in the shared transform, not in _build_optimizer, so
+        that the external (HTTP) EVopt backend gets the same corrected price in
+        the payload it posts. Going through the transform is therefore the path
+        that both backends actually take.
+        """
+        dt_mock = _midnight_mock()
+        with patch(
+            "src.interfaces.optimization_backends."
+            "optimization_backend_evopt.datetime", dt_mock
+        ):
+            evopt, _errors = backend._transform_request_from_eos_to_evopt(
+                _make_eos_request(n_slots=48)
+            )
+        return evopt["batteries"][0]["p_a"]
 
     def test_the_stored_price_is_replaced_before_the_solver_sees_it(self, berlin_tz):
         b = LocalEVOptBackend(time_frame_base=3600, time_zone=berlin_tz)
-        opt = b._build_optimizer(self._evopt_request(), timeout=60)
-        assert opt.batteries[0].p_a == pytest.approx(0.00019)
+        # _make_eos_request prices every slot at 0.0003 and reports a stored
+        # price of 0.0002; the cheapest price ahead must win.
+        assert self._p_a_from_transform(b) == pytest.approx(0.0003)
 
     def test_the_escape_hatch_keeps_the_stored_price(self, berlin_tz):
         b = LocalEVOptBackend(
             time_frame_base=3600, time_zone=berlin_tz,
             terminal_soc_value="stored_price",
         )
-        opt = b._build_optimizer(self._evopt_request(), timeout=60)
-        assert opt.batteries[0].p_a == pytest.approx(0.0000731)
+        assert self._p_a_from_transform(b) == pytest.approx(0.0002)
 
     def test_the_config_key_reaches_the_backend(self, berlin_tz):
         """OptimizationInterface passes eos.local_evopt_terminal_soc_value through."""
@@ -1196,5 +1198,64 @@ class TestTerminalSocValueWiring:
         """
         b = LocalEVOptBackend(time_frame_base=3600, time_zone=berlin_tz)
         b.terminal_soc_value = "garbage_from_a_hot_reload"
-        opt = b._build_optimizer(self._evopt_request(), timeout=60)
-        assert opt.batteries[0].p_a == pytest.approx(0.00019)
+        assert self._p_a_from_transform(b) == pytest.approx(0.0003)
+
+
+class TestTerminalSocValueOnExternalEvopt:
+    """
+    The external (HTTP) EVopt server runs the same engine and would otherwise be
+    sent the same sunk-cost p_a. We own the payload, so it gets the fix too.
+    """
+
+    @staticmethod
+    def _payload(backend):
+        dt_mock = _midnight_mock()
+        with patch(
+            "src.interfaces.optimization_backends."
+            "optimization_backend_evopt.datetime", dt_mock
+        ):
+            evopt, _errors = backend._transform_request_from_eos_to_evopt(
+                _make_eos_request(n_slots=48)
+            )
+        return evopt
+
+    def test_the_posted_payload_carries_the_forward_value(self, berlin_tz):
+        e = EVOptBackend("http://evopt.invalid", 3600, berlin_tz)
+        assert self._payload(e)["batteries"][0]["p_a"] == pytest.approx(0.0003)
+
+    def test_the_escape_hatch_posts_the_stored_price(self, berlin_tz):
+        e = EVOptBackend("http://evopt.invalid", 3600, berlin_tz,
+                         terminal_soc_value="stored_price")
+        assert self._payload(e)["batteries"][0]["p_a"] == pytest.approx(0.0002)
+
+    def test_unknown_policy_falls_back_to_the_default(self, berlin_tz):
+        e = EVOptBackend("http://evopt.invalid", 3600, berlin_tz,
+                         terminal_soc_value="nonsense")
+        assert e.terminal_soc_value == "cheapest_ahead"
+
+    def test_the_stale_rotated_tail_cannot_drag_the_valuation_down(self, berlin_tz):
+        """
+        In 15-min mode the series is rotated, so the slots past n_result are
+        yesterday's prices reused. A cheap slot parked there is not a price
+        that is really ahead, and must not set the terminal value even though
+        the whole 192-slot series is posted to the server.
+        """
+        req = _make_eos_request(n_slots=192)
+        # midnight run -> n_result covers the whole series; push a bargain into
+        # the far tail and confirm it is excluded once "now" is late in the day.
+        req["ems"]["strompreis_euro_pro_wh"] = [0.0003] * 192
+        req["ems"]["strompreis_euro_pro_wh"][10] = 0.00001  # early today
+        e = EVOptBackend("http://evopt.invalid", 900, berlin_tz)
+        dt_mock = _midnight_mock()
+
+        class _Late(dt_mock):
+            @classmethod
+            def now(cls, tz=None):
+                naive = _real_datetime(2026, 6, 1, 20, 0, 0)
+                return tz.localize(naive) if tz is not None else naive
+
+        with patch("src.interfaces.optimization_backends."
+                   "optimization_backend_evopt.datetime", _Late):
+            evopt, _ = e._transform_request_from_eos_to_evopt(req)
+        # the 0.00001 slot rotated into the stale tail, so it must not win
+        assert evopt["batteries"][0]["p_a"] == pytest.approx(0.0003)

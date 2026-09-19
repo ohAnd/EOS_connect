@@ -15,7 +15,10 @@ import logging
 import os
 import time
 
-from .optimization_backend_evopt import EVOptBackend
+from .optimization_backend_evopt import (
+    DEFAULT_TERMINAL_SOC_VALUE,
+    EVOptBackend,
+)
 from .local_evopt.optimizer import (
     BatteryConfig,
     CbcSolverUnavailableError,
@@ -41,25 +44,6 @@ DISCHARGING_STRATEGIES = {
     "discharge_before_import",
     "emergency_reserve",
 }
-# How a Wh still in the battery at the end of the horizon is priced.  See
-# LocalEVOptBackend._terminal_soc_value_eur_per_wh for what each one means.
-TERMINAL_SOC_VALUES = {
-    "cheapest_ahead",
-    "stored_price",
-}
-DEFAULT_TERMINAL_SOC_VALUE = "cheapest_ahead"
-
-
-def coerce_terminal_soc_value(value):
-    """Fall back to the default for anything not in TERMINAL_SOC_VALUES.
-
-    Applied both in __init__ and at the point of use, because config_web's
-    hot-reload writes straight onto the backend attribute and would otherwise
-    make a junk value stick for the lifetime of the process.
-    """
-    return value if value in TERMINAL_SOC_VALUES else DEFAULT_TERMINAL_SOC_VALUE
-
-
 class LocalEVOptBackend(EVOptBackend):
     """
     In-process MILP optimizer backend.
@@ -101,6 +85,7 @@ class LocalEVOptBackend(EVOptBackend):
             base_url="local://",
             time_frame_base=time_frame_base,
             time_zone=time_zone,
+            terminal_soc_value=terminal_soc_value,
         )
         self.num_threads = num_threads
         self.time_limit = time_limit
@@ -113,7 +98,6 @@ class LocalEVOptBackend(EVOptBackend):
         else:
             self.discharging_strategy = "discharge_before_import"
         self.emergency_reserve_pct = max(0, min(80, int(emergency_reserve_pct or 0)))
-        self.terminal_soc_value = coerce_terminal_soc_value(terminal_soc_value)
         self.max_grid_import_w = max_grid_import_w
         self.max_grid_export_w = max_grid_export_w
         # Initialize rolling average runtime tracking (5-element circular buffer)
@@ -237,81 +221,6 @@ class LocalEVOptBackend(EVOptBackend):
     # Private helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _terminal_soc_value_eur_per_wh(policy, p_n, stored_price):
-        """What a Wh still in the battery at the end of the horizon is worth (EUR/Wh).
-
-        ``p_a`` is the coefficient on the terminal-SOC term of the objective
-        (local_evopt/optimizer.py) and on the battery-left-behind term of
-        get_clean_objective_value() -- and nothing else.  It is not a discharge
-        price; no constraint reads it.  Feeding it the *stored* price answers
-        "what did this energy cost?", a sunk cost, where the objective needs
-        "what will it be worth?".  A PV-charged battery reports a stored price
-        near zero, so the model concluded leftover charge was worthless and
-        drained to the floor every horizon while cheap hours sat unused ahead
-        of it.
-
-        The replacement is a forward price, and the round trip does the rest.
-        For a terminal value X, per Wh of SOC, the model
-
-            charges from slot t     iff  p_N[t] <  eta_c * X
-            discharges into slot t  iff  p_N[t] >  X / eta_d
-
-        so X always sits in a no-trade band eta_c*X .. X/eta_d that is exactly
-        the round-trip spread.  What matters is where real prices fall relative
-        to that band.
-
-        'cheapest_ahead' sets X = min(p_N), which puts the cheapest price ahead
-        strictly *inside* the band: nothing is cheap enough to be worth buying
-        purely to stockpile (that would need a price below eta_c * min), and
-        nothing below min/eta_d is dear enough to be worth draining into.
-
-        This is not merely the cautious choice; it is the one that matches the
-        shape of this horizon.  n_result always runs "from now to midnight
-        tomorrow" (see EVOptBackend._calculate_time_parameters), so the horizon
-        always ends at midnight, and midnight is always followed by the
-        overnight price trough.  Charge left at the end can therefore always be
-        rebought shortly afterwards at close to the cheapest price in the
-        window -- so that is what it is worth.  Valuing it higher means paying
-        today for energy the next few hours would have sold just as cheaply.
-
-        A median-of-the-horizon valuation was measured and rejected for the
-        same reason.  Against a live 36.5 h horizon (2026-09-19, 17.5-34.6
-        ct/kWh, 22 kWh battery) it came out at 20.18 ct, ended 81 % full, and
-        spent EUR 3.10 more to hold 16.3 kWh -- an effective 19.0 ct/kWh for
-        energy the following morning offered at 17.7 ct.  The battery ending
-        near its floor on such a day is the right answer, not a symptom.
-
-        Both properties being strict is the whole point, and it is why X is not
-        min(p_N)/eta_c -- the arithmetically tempting "replacement cost", which
-        looks like the conservative choice and is not.  It lands eta_c*X exactly
-        on min(p_N), so every slot at the cheapest price is an exact tie, and
-        the secondary strategy terms break the tie toward charging.  Measured on
-        a flat tariff that filled the battery from 50 % to 100 %, buying energy
-        for no modelled gain, where X = min(p_N) holds it at 50 %.
-
-        'stored_price' is the pre-fix behaviour, kept as an escape hatch.
-
-        min() is also the statistic least disturbed by how the horizon is
-        assembled: the synthetic morning extension repeats the last price flat,
-        which would drag a mean or a median toward it, but cannot move a
-        minimum because it only copies a value already in the series.
-
-        Only strictly positive prices are considered.  A zero or negative slot
-        would drag X to zero and bring the drain straight back, and a negative
-        price is a slot you want to charge in anyway -- which the band already
-        allows, since any negative price is below eta_c * X.
-        """
-        policy = coerce_terminal_soc_value(policy)
-        if policy == "stored_price":
-            return stored_price
-        prices = [float(p) for p in (p_n or []) if float(p) > 0]
-        if not prices:
-            # No forward signal at all; anything derived from it would be worse
-            # than what we already have.
-            return stored_price
-        return min(prices)
-
     def _build_optimizer(self, evopt_request, timeout):
         """Construct the Optimizer object from an EVopt-format request dict."""
         # Use configured strategies (may override what the transformation put in)
@@ -335,13 +244,6 @@ class LocalEVOptBackend(EVOptBackend):
             prc_p_exc_imp=_prc_raw if _prc_raw else None,
         )
 
-        # Read before the battery loop: the terminal valuation needs the price
-        # series, and the loop below needs the valuation.  By this point
-        # optimize() has already truncated the stale wrapped tail and appended
-        # the synthetic morning slots, so p_N is the real horizon ahead.
-        ts_data = evopt_request.get("time_series", {})
-        terminal_policy = coerce_terminal_soc_value(self.terminal_soc_value)
-
         batteries = []
         for bat_data in evopt_request.get("batteries", []):
             s_max = float(bat_data.get("s_max", 0))
@@ -361,23 +263,6 @@ class LocalEVOptBackend(EVOptBackend):
                 else None
             )
 
-            # The transform hands us the *stored* energy price here.  Replace
-            # it with a forward value; see _terminal_soc_value_eur_per_wh.
-            stored_price = float(bat_data.get("p_a", 0))
-            terminal_value = self._terminal_soc_value_eur_per_wh(
-                terminal_policy, ts_data.get("p_N"), stored_price
-            )
-            logger.debug(
-                "[OPT-LocalEVopt] Terminal SOC valued at %.6f EUR/Wh "
-                "(%.2f ct/kWh) by '%s'; stored price was %.6f EUR/Wh "
-                "(%.2f ct/kWh)",
-                terminal_value,
-                terminal_value * 100000.0,
-                terminal_policy,
-                stored_price,
-                stored_price * 100000.0,
-            )
-
             batteries.append(BatteryConfig(
                 charge_from_grid=bat_data.get("charge_from_grid", False),
                 discharge_to_grid=bat_data.get("discharge_to_grid", False),
@@ -390,11 +275,12 @@ class LocalEVOptBackend(EVOptBackend):
                 c_min=float(bat_data.get("c_min", 0)),
                 c_max=float(bat_data.get("c_max", 0)),
                 d_max=float(bat_data.get("d_max", 0)),
-                p_a=terminal_value,
+                p_a=float(bat_data.get("p_a", 0)),
                 c_priority=int(bat_data.get("c_priority", 0)),
                 s_reserve=s_reserve_wh,
             ))
 
+        ts_data = evopt_request.get("time_series", {})
         time_series = TimeSeriesData(
             dt=ts_data.get("dt", []),
             gt=ts_data.get("gt", []),

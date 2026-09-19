@@ -606,6 +606,23 @@ _ALL_FIELDS: list[FieldDef] = [
         labels=["restart_required"],
     ),
     FieldDef(
+        key="eos.external_evopt_terminal_soc_value",
+        field_type="select",
+        default="cheapest_ahead",
+        section="eos",
+        level="standard",
+        description="How charge left in the battery at the end of the planning "
+        "horizon is priced",
+        help_url="configuration.html#local-evopt",
+        validation={"choices": [
+            "cheapest_ahead",
+            "stored_price",
+        ]},
+        depends_on={"eos.source": "evopt"},
+        display_group="External Optimizer",
+        hot_reload=True,
+    ),
+    FieldDef(
         key="eos.external_evopt_max_grid_import_w",
         field_type="int",
         default=10000,

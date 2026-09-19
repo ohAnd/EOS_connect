@@ -121,6 +121,9 @@ class OptimizationInterface:
                 self.base_url, self.time_frame_base, self.time_zone,
                 max_grid_import_w=_max_imp,
                 max_grid_export_w=_max_exp,
+                terminal_soc_value=config.get(
+                    "external_evopt_terminal_soc_value", DEFAULT_TERMINAL_SOC_VALUE
+                ),
             )
             self.backend_type = "evopt"
             logger.info("[OPTIMIZATION] Using EVopt backend")

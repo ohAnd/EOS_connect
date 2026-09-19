@@ -133,6 +133,13 @@
                             &mdash; even into cheap hours, and even when it means exporting solar
                             surplus for the feed-in tariff rather than keeping it.</li>
                     </ul>
+                    <p>The external EVopt server runs the same engine and is sent the same figure,
+                        so <code>eos.external_evopt_terminal_soc_value</code> does the same job when
+                        <code>eos.source</code> is <code>evopt</code>. Only the slots genuinely ahead
+                        are considered &mdash; in quarter-hourly mode the forecast wraps around, and
+                        yesterday's prices trailing the end of it are not offers you can still take.
+                    </p>
+
                     <p>Set <code>eos.local_evopt_emergency_reserve_pct</code> above 0 to hold a hard
                         floor of charge in reserve at the end of the planning horizon, for outage
                         cover. It is a floor, not an economic signal &mdash; deciding how much charge

@@ -564,6 +564,27 @@
       "display_group": "Local Optimizer"
     },
     {
+      "key": "eos.external_evopt_terminal_soc_value",
+      "type": "select",
+      "default": "cheapest_ahead",
+      "section": "eos",
+      "level": "standard",
+      "description": "How charge left in the battery at the end of the planning horizon is priced",
+      "labels": [],
+      "help_url": "configuration.html#local-evopt",
+      "validation": {
+        "choices": [
+          "cheapest_ahead",
+          "stored_price"
+        ]
+      },
+      "depends_on": {
+        "eos.source": "evopt"
+      },
+      "hot_reload": true,
+      "display_group": "External Optimizer"
+    },
+    {
       "key": "eos.external_evopt_max_grid_import_w",
       "type": "int",
       "default": 10000,
