@@ -70,6 +70,17 @@ AMBIENT_CORRECTED = "forecast_corrected"
 # for it. Today's weather is not evidence about tomorrow's.
 NOWCAST_HALF_LIFE_HOURS = 6.0
 
+# How much of a single reading the departure takes on, as a half-life in minutes.
+#
+# The gate keys off the corrected curve, not off the thermometer, and that is
+# deliberate: a raw reading wandering across the cut-off would switch the appliance on
+# and off with it. So the curve has to be *accurate* rather than *live* - within a
+# fraction of a kelvin, where it used to be more than three out. Smoothing the
+# departure buys that: sensor noise averages away, while a real change works through
+# in a few cycles. Ten minutes lags a 2 K/h ramp by about half a kelvin, which is the
+# error budget; shorter starts chasing noise, longer starts missing the evening drop.
+RESIDUAL_HALF_LIFE_MIN = 10.0
+
 # Who made a release decision, recorded in the journal. The distinction is the first
 # thing you want when reviewing a day of toggling: an optimizer that keeps changing its
 # mind and this module falling back on its own plan look identical from the appliance.
@@ -191,6 +202,8 @@ class ManagedLoadManager:
         # The raw forecast beside the one actually used, kept per load so the card can
         # show what the correction did. Only outdoor loads ever populate it.
         self._ambient_trace = {}
+        # How far today is running from the typical day, smoothed: id -> (when, kelvin).
+        self._ambient_residual = {}
         self._stop = threading.Event()
         self._thread = None
 
@@ -765,11 +778,10 @@ class ManagedLoadManager:
         # is a measurement and stands, but a sensor reporting nonsense must not drag a
         # two-day horizon with it.
         if measured is not None and 0 <= slot < len(corrected):
-            residual = measured - corrected[slot]
-            corrected[slot] = measured
+            residual = self._smoothed_residual(item, ctx, measured - corrected[slot])
             projected = max(-MAX_OFFSET_K, min(MAX_OFFSET_K, residual))
             hours_per_slot = ctx.time_frame_base / 3600.0
-            for index in range(slot + 1, len(corrected)):
+            for index in range(slot, len(corrected)):
                 ahead = (index - slot) * hours_per_slot
                 corrected[index] += projected * 0.5 ** (ahead / NOWCAST_HALF_LIFE_HOURS)
 
@@ -779,6 +791,33 @@ class ManagedLoadManager:
             (slot % slots_per_day) // slots_per_hour
         ) else AMBIENT_FORECAST
         return corrected, source
+
+    def _smoothed_residual(self, item, ctx, gap):
+        """
+        Today's departure from the typical day, filtered.
+
+        The first reading is taken whole - there is nothing to average it against, and
+        after a restart the old value means nothing. Afterwards each one moves the
+        estimate by however much of a half-life has passed, so the filter follows wall
+        clock rather than cycle count and a change of poll interval cannot retune it.
+
+        A cycle that arrives no later than the last one still has to count for
+        something, or a fixed clock would freeze the estimate forever; one poll
+        interval is the floor.
+        """
+        previous = self._ambient_residual.get(item.id)
+        if previous is None:
+            smoothed = gap
+        else:
+            seen_at, value = previous
+            minutes = max(
+                (ctx.now - seen_at).total_seconds() / 60.0,
+                self.cycle_seconds / 60.0,
+            )
+            keep = 0.5 ** (minutes / RESIDUAL_HALF_LIFE_MIN)
+            smoothed = value * keep + gap * (1.0 - keep)
+        self._ambient_residual[item.id] = (ctx.now, smoothed)
+        return smoothed
 
     def ambient_series_state(self, item):
         """

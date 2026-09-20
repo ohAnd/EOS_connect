@@ -639,6 +639,20 @@ def test_an_hourly_forecast_is_still_expanded_for_quarter_hour_slots(make_manage
 
 # --- correcting the forecast to the site ------------------------------------------------
 
+def _settle(manager, sensor_c, cycles=20):
+    """
+    Run the cycle until the smoothed departure has stopped moving.
+
+    The model deliberately does not jump to a single reading - that is what would
+    switch an appliance on and off as a noisy sensor crossed a threshold - so a test
+    about the settled value has to let it settle.
+    """
+    series = source = None
+    for _ in range(cycles):
+        series, source = _ambient(manager, sensor_c)
+    return series, source
+
+
 def _ambient(manager, sensor_c=None):
     """Resolve the ambient series once, as the cycle would."""
     ctx = manager._context()  # pylint: disable=protected-access
@@ -670,78 +684,79 @@ def test_the_forecast_is_shifted_onto_the_sites_own_thermometer(make_manager, in
     manager = make_manager([POOL_WITH_AMBIENT])
     installation.temperature = [17.9] * 48
 
-    for _ in range(5):
-        _ambient(manager, 14.9)
-    series, source = _ambient(manager, 14.9)
+    series, source = _settle(manager, 14.9)
 
     current = manager._context().current_slot  # pylint: disable=protected-access
     assert source == "forecast_corrected"
     assert series[current] == pytest.approx(14.9, abs=0.05)
 
 
-def test_the_slot_happening_now_follows_the_thermometer_not_the_habit(
+def test_the_model_converges_on_the_thermometer_without_chasing_it(
     make_manager, installation
 ):
     """
-    The offset is a per-hour climatology: it describes a typical hour, learned across
-    days. On an untypical one it is simply wrong, and the current slot is the one slot
-    that never needed predicting - the sensor is reading it right now.
+    Two requirements that pull against each other, and both matter.
 
-    Live, that let the pool run at 8.3 C on a corrected 12.4 C, through hours the same
-    model marked "too cold to run" a day later. Early mornings had learned a positive
-    offset from sun on the sensor; a cold clear morning got the sunny correction.
+    *Accurate*: the offset is a per-hour climatology, so it describes a typical hour
+    learned across days. On an untypical one it is simply wrong - live, a site whose
+    sensor catches the morning sun had learned +4 K for 09:00 and read 8.9 C where the
+    typical day said 13.9, better than three kelvin out, with the cold cut-off between
+    the two. The settled figure has to be close to what the thermometer says.
+
+    *Not live*: the release keys off this curve, so a reading wandering across the
+    cut-off would switch the appliance on and off with it. A single sample must move
+    the model part of the way, never all of it.
     """
     manager = make_manager([POOL_WITH_AMBIENT])
     installation.temperature = [17.9] * 48
 
-    for _ in range(5):                       # teach it "this site runs 3 K warm here"
-        _ambient(manager, 20.9)
-    learned, _ = _ambient(manager, 20.9)
+    settled, _ = _settle(manager, 20.9)        # a typical day here runs 3 K warm
     current = manager._context().current_slot  # pylint: disable=protected-access
-    assert learned[current] == pytest.approx(20.9, abs=0.05)
+    assert settled[current] == pytest.approx(20.9, abs=0.2)
 
-    # Now a morning that breaks the habit: the same hour, 9 K colder than the rule.
-    series, _ = _ambient(manager, 11.9)
-    assert series[current] == pytest.approx(11.9, abs=0.05), (
-        "the current slot must take the measurement, not the learned offset"
-    )
+    # One cold sample: it must move, and it must not arrive.
+    once, _ = _ambient(manager, 11.9)
+    assert once[current] < settled[current] - 0.5, "a real change has to register"
+    assert once[current] > 13.0, "one sample must not carry the model the whole way"
+
+    # Held, it converges - within the half-kelvin the cut-off can live with.
+    converged, _ = _settle(manager, 11.9)
+    assert converged[current] == pytest.approx(11.9, abs=0.5)
 
 
-def test_the_measurement_anchors_now_and_loosens_its_grip_with_distance(
-    make_manager, installation
-):
+def test_the_departure_loosens_its_grip_with_distance(make_manager, installation):
     """
-    The measurement is ground truth for now, a strong hint for the next few hours, and
-    says nothing about tomorrow. Clamping the whole horizon to one reading would be
-    worse than the climatology it replaced; ignoring it beyond the current slot leaves
-    the planner sizing energy into hours it cannot use.
+    Today's anomaly is a property of the day, not of the instant - so it carries
+    forward, and it fades. Clamping the whole horizon to one reading would be worse
+    than the climatology it replaced; dropping it after the current slot leaves the
+    planner sizing energy into hours it cannot use.
     """
     manager = make_manager([POOL_WITH_AMBIENT])
     installation.temperature = [17.9] * 48
 
-    for _ in range(5):
-        _ambient(manager, 20.9)          # typical day here is 3 K warm
-    series, _ = _ambient(manager, 11.9)  # today is 9 K colder than typical
+    _settle(manager, 20.9)                     # typical day: 3 K warm
+    series, _ = _settle(manager, 11.9)         # today: 9 K colder than typical
 
     ctx = manager._context()                   # pylint: disable=protected-access
-    current = ctx.current_slot
-    per_hour = ctx.slots_per_hour()
+    current, per_hour = ctx.current_slot, ctx.slots_per_hour()
 
-    # Only the hour actually observed carries a learned offset; the rest have too
-    # little weight and stay on the raw forecast. So:
-    #   this hour   17.9 + 1.5 = 19.4   (six observations: five at +3.0, today's at -6)
-    #   other hours 17.9
-    #   today's departure = 11.9 - 19.4 = -7.5 K
-    forecast, this_hour = 17.9, 19.4
+    now = series[current]
+    assert now == pytest.approx(11.9, abs=0.5)
 
-    assert series[current] == pytest.approx(11.9, abs=0.05), "now is measured"
+    # The departure is measured against the climatology, which for an hour with no
+    # observations of its own is the bare forecast.
+    departure = now - 20.9
+    at_half_life = series[current + 6 * per_hour] - 17.9
+    assert 0.35 < at_half_life / departure < 0.65, (
+        f"expected about half of {departure:.1f} K, got {at_half_life:.2f}"
+    )
 
-    # One half-life out, half the departure survives: 17.9 - 3.75.
-    applied = series[current + 6 * per_hour] - forecast
-    assert -4.2 < applied < -3.3, f"expected about -3.75 K, got {applied:.2f}"
-
-    # A day out, back to what the typical day says about this hour.
-    assert series[current + 24 * per_hour] == pytest.approx(this_hour, abs=0.6)
+    # Not a full day out: 24 h later is the same hour of the clock, which carries its
+    # own learned offset, so the bare forecast is no longer the baseline there.
+    at_two_half_lives = series[current + 12 * per_hour] - 17.9
+    assert 0.15 < at_two_half_lives / departure < 0.35, (
+        f"expected about a quarter of {departure:.1f} K, got {at_two_half_lives:.2f}"
+    )
 
 
 def test_a_cold_morning_blocks_the_run_even_when_the_habit_says_otherwise(
@@ -791,15 +806,19 @@ def test_the_offset_is_learned_for_the_hour_it_was_seen_in(make_manager, install
     manager = make_manager([POOL_WITH_AMBIENT])
     installation.temperature = [17.9] * 48
 
-    for _ in range(5):
-        _ambient(manager, 14.9)
-    series, _ = _ambient(manager, 14.9)
+    # Deliberately few: past a dozen observations the whole-day average has enough
+    # weight to speak for hours never seen, which is its own documented behaviour and
+    # would mask the per-hour one this test is about.
+    series = None
+    for _ in range(6):
+        series, _ = _ambient(manager, 14.9)
 
     current = manager._context().current_slot  # pylint: disable=protected-access
-    # The hour that was observed is corrected...
-    assert series[current] == pytest.approx(14.9, abs=0.05)
-    # ...and one twelve hours later, never seen, is not yet touched.
-    assert series[(current + 12) % 24] == pytest.approx(17.9)
+    # The hour that was observed is pulled most of the way to the thermometer...
+    assert series[current] < 15.5, series[current]
+    # ...and one twelve hours later, never seen, keeps the forecast. Only the day's
+    # own departure reaches it, a quarter of it by then, not the -3 K this hour earns.
+    assert series[current + 12] > 17.0, series[current + 12]
 
 
 def test_the_shape_of_the_forecast_survives_once_the_anomaly_has_faded(
@@ -902,7 +921,7 @@ def test_the_measurement_is_reported_next_to_what_the_model_used(make_manager, i
     installation.sensors.update({
         "sensor.pool_water": 24.0, "sensor.pool_power": 0.0, "sensor.outside": 14.9,
     })
-    for _ in range(6):
+    for _ in range(20):
         manager.run_cycle()
 
     detail = manager.instance("pool").last_demand.detail
