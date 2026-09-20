@@ -139,11 +139,13 @@ def test_the_placeholder_curve_is_not_reported_as_a_forecast():
 
 # ── Where the temperature request gets its coordinates ──────────────────────────
 
-def _interface(pv_config, site_location=None):
+def _interface(pv_config, site_location=None, source="akkudoktor"):
     from src.interfaces.pv_interface import PvInterface
 
     iface = PvInterface.__new__(PvInterface)
     iface.config = pv_config
+    iface.config_source = {"source": source}
+    iface._warned_stale_location = False        # pylint: disable=protected-access
     iface.site_location = None
     if site_location is not None:
         from src.interfaces.pv_interface import _clean_site_location
@@ -169,6 +171,45 @@ def test_the_site_location_covers_a_source_with_no_installations():
     iface = _interface([], site_location=(52.52, 13.405))
     entry = _entry(iface)
     assert (entry["lat"], entry["lon"]) == (52.52, 13.405)
+
+
+def test_a_hidden_installation_does_not_outrank_the_site_location():
+    """
+    Switch a configured install from OpenMeteo to EVCC and the PV Installations
+    section is replaced by "not needed for evcc" - but the entries stay in the
+    database. They used to go on supplying the coordinates from behind that panel,
+    so the location in use was one the reader could no longer see or edit, while the
+    site location they had just been told to set was ignored.
+    """
+    iface = _interface(
+        [{"name": "RoofA", "lat": 47.5, "lon": 8.5}],
+        site_location=(52.52, 13.405),
+        source="evcc",
+    )
+    entry = _entry(iface)
+    assert (entry["lat"], entry["lon"]) == (52.52, 13.405)
+
+
+def test_a_hidden_installation_is_still_better_than_no_forecast(caplog):
+    """
+    With no site location set there is nothing else to ask with, and throwing away a
+    working forecast to make a point serves nobody. It is used - and said once, so it
+    cannot pass for the site location doing the work.
+    """
+    iface = _interface(
+        [{"name": "RoofA", "lat": 47.5, "lon": 8.5}], source="evcc",
+    )
+    with caplog.at_level("WARNING"):
+        entry = _entry(iface)
+    assert (entry["lat"], entry["lon"]) == (47.5, 8.5)
+    assert "stored installation 'RoofA'" in caplog.text
+    assert "Latitude and Longitude under System" in caplog.text
+
+    # Once a cycle would be noise; once is a warning.
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        _entry(iface)
+    assert "stored installation" not in caplog.text
 
 
 def test_a_pv_installation_still_wins_over_the_site_location():

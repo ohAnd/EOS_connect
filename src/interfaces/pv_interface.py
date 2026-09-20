@@ -283,6 +283,8 @@ class PvInterface:
         # Coordinates for this installation, used only when no PV entry carries any.
         # ``(lat, lon)`` or None. See ``__get_temperature_config_entry``.
         self.site_location = _clean_site_location(site_location)
+        # Said once, not once a cycle: the stored-installation fallback below.
+        self._warned_stale_location = False
         self.time_zone = timezone
         self.config_source = config_source
         # Set time_frame_base, defaulting to 3600 if None or not provided
@@ -1170,7 +1172,18 @@ class PvInterface:
         Returns:
             dict: An entry carrying lat/lon, or None when nothing supplies them.
         """
-        if self.config and len(self.config) > 0:
+        source = str(
+            (self.config_source or {}).get("source", "") or ""
+        ).strip().lower()
+        shown = source in LOCATION_BASED_PV_SOURCES
+
+        # A PV installation is the usual answer, but only while the user can see it.
+        # For a source that is not location-based the whole section is replaced by
+        # "not needed for evcc", so an entry left over from an earlier setup goes on
+        # quietly supplying the coordinates from behind that panel - and the reader,
+        # having been told no installation is needed, reasonably expects the site
+        # location to be what answers. Where one is set, it does.
+        if shown and self.config and len(self.config) > 0:
             first_entry = self.config[0]
             lat = first_entry.get("lat")
             lon = first_entry.get("lon")
@@ -1190,6 +1203,27 @@ class PvInterface:
                 "lat=%s, lon=%s", lat, lon,
             )
             return {"lat": lat, "lon": lon}
+
+        # Nothing the user can see supplies a coordinate. A stored installation still
+        # might, and dropping a working forecast to make a point would serve nobody -
+        # but it is a location they were told they no longer needed, so say so once
+        # rather than let it look like the site location is doing the work.
+        if not shown and self.config and len(self.config) > 0:
+            leftover = self.config[0]
+            lat, lon = leftover.get("lat"), leftover.get("lon")
+            if lat is not None and lon is not None:
+                if not self._warned_stale_location:
+                    self._warned_stale_location = True
+                    logger.warning(
+                        "[PV-IF] '%s' needs no PV installation, so the section is "
+                        "hidden - but the outside-temperature forecast is still using "
+                        "the coordinates of stored installation '%s' (%s, %s). Set "
+                        "Latitude and Longitude under System so the location is one "
+                        "you can see. | Config: #system",
+                        source or "this source",
+                        leftover.get("name", "unnamed"), lat, lon,
+                    )
+                return {"lat": lat, "lon": lon}
 
         return None
 
