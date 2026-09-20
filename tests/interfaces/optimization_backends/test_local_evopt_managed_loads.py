@@ -29,7 +29,8 @@ DEAR = 0.00045
 FEED_IN = 0.00008
 
 
-def _optimizer(loads=None, prices=None, pv=None, house=None, battery=True):
+def _optimizer(loads=None, prices=None, pv=None, house=None, battery=True,
+               budget_w=0.0):
     """A day of hourly slots, deliberately small so the tests stay readable."""
     grid = GridConfig(p_max_imp=20000, p_max_exp=20000)
     batteries = [
@@ -49,7 +50,7 @@ def _optimizer(loads=None, prices=None, pv=None, house=None, battery=True):
         strategy=OptimizationStrategy(), grid=grid, batteries=batteries,
         time_series=series, eta_c=0.95, eta_d=0.95,
         optimizer_settings=OptimizerSettings(time_limit=60), M=60000,
-        managed_loads=loads or [],
+        managed_loads=loads or [], managed_load_budget_w=budget_w,
     )
 
 
@@ -396,6 +397,69 @@ def test_pricing_starts_creates_the_switch_it_needs():
 
 
 # --- what the appliance is already doing -------------------------------------------------
+
+# ── The shared power budget ────────────────────────────────────────────────────
+
+def _two_loads(**kwargs):
+    return [_load(id="pool", demand_wh=12000.0, max_power_w=1500.0,
+                  value_eur_per_wh=DEAR, min_runtime_slots=1, **kwargs),
+            _load(id="sauna", demand_wh=12000.0, max_power_w=1500.0,
+                  value_eur_per_wh=DEAR, min_runtime_slots=1, **kwargs)]
+
+
+def _cheap_window():
+    prices = [DEAR] * T
+    for hour in (3, 4, 5, 6):
+        prices[hour] = CHEAP
+    return prices
+
+
+def _peak(result):
+    series = {e["id"]: e["energy"] for e in result["managed_loads"]}
+    return max(sum(series[k][t] for k in series) for t in range(T))
+
+
+def test_two_loads_do_not_stack_past_the_site_budget():
+    """
+    Without it both take the single cheapest hour and stack a sauna on top of a pool
+    pump - 3000 W where the house allows 1500, a peak the optimizer then sizes the
+    battery for. The budget belongs to the installation, not to a load, and it is not
+    the grid import limit: sun can cover a draw the grid never sees.
+    """
+    opt = _optimizer(_two_loads(), prices=_cheap_window(), battery=False,
+                     budget_w=1500.0)
+    assert _peak(opt.solve()) <= 1500.0 + 1e-6
+
+
+def test_no_budget_leaves_them_free():
+    opt = _optimizer(_two_loads(), prices=_cheap_window(), battery=False)
+    assert _peak(opt.solve()) > 1500.0
+
+
+def test_a_budget_below_one_appliance_does_not_silence_it():
+    """
+    A budget smaller than a single load is a misconfiguration. Read literally it would
+    stop that appliance ever running rather than sharing anything out, so the floor is
+    the largest load.
+    """
+    opt = _optimizer(_two_loads(), prices=_cheap_window(), battery=False,
+                     budget_w=200.0)
+    result = opt.solve()
+    assert result["status"] == "Optimal"
+    total = sum(sum(e["energy"]) for e in result["managed_loads"])
+    assert total > 1000.0, "the loads must still be able to run"
+    assert _peak(result) <= 1500.0 + 1e-6, "but not two at once"
+
+
+def test_one_load_is_never_constrained_by_the_shared_budget():
+    """Nothing to share out, and its own rating already bounds it."""
+    opt = _optimizer(
+        [_load(demand_wh=12000.0, max_power_w=1500.0, value_eur_per_wh=DEAR,
+               min_runtime_slots=1)],
+        prices=_cheap_window(), battery=False, budget_w=100.0,
+    )
+    assert sum(_placed(opt.solve())) > 1000.0
+
 
 # ── The daily runtime cap ───────────────────────────────────────────────────────
 

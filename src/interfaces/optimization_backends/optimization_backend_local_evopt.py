@@ -122,7 +122,8 @@ class LocalEVOptBackend(EVOptBackend):
     # a subclass check so a future backend can opt in without anyone editing the caller.
     schedules_managed_loads = True
 
-    def optimize(self, eos_request, timeout=180, managed_loads=None):
+    def optimize(self, eos_request, timeout=180, managed_loads=None,
+                 managed_load_budget_w=0.0):
         """
         Run the MILP optimizer in-process.
 
@@ -170,7 +171,10 @@ class LocalEVOptBackend(EVOptBackend):
             start_time = time.time()
 
             loads = self._managed_load_configs(managed_loads)
-            optimizer = self._build_optimizer(evopt_request, timeout, loads)
+            optimizer = self._build_optimizer(
+                evopt_request, timeout, loads,
+                managed_load_budget_w=managed_load_budget_w,
+            )
             evopt_response = optimizer.solve()
 
             elapsed = time.time() - start_time
@@ -241,7 +245,8 @@ class LocalEVOptBackend(EVOptBackend):
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _build_optimizer(self, evopt_request, timeout, managed_loads=None):
+    def _build_optimizer(self, evopt_request, timeout, managed_loads=None,
+                         managed_load_budget_w=0.0):
         """Construct the Optimizer object from an EVopt-format request dict."""
         # Use configured strategies (may override what the transformation put in)
         strategy = OptimizationStrategy(
@@ -369,6 +374,7 @@ class LocalEVOptBackend(EVOptBackend):
             optimizer_settings=settings,
             M=tight_M,
             managed_loads=managed_loads,
+            managed_load_budget_w=managed_load_budget_w,
         )
 
     def _managed_load_configs(self, managed_loads):

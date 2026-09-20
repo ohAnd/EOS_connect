@@ -1318,7 +1318,8 @@ class OptimizationScheduler:
         # them anyway.
         if getattr(eos_interface, "schedules_managed_loads", False):
             optimized_response, avg_runtime = eos_interface.optimize(
-                json_optimize_input, managed_loads=load_manager.schedulable()
+                json_optimize_input, managed_loads=load_manager.schedulable(),
+                managed_load_budget_w=load_manager.max_power_w
             )
         else:
             optimized_response, avg_runtime = eos_interface.optimize(json_optimize_input)

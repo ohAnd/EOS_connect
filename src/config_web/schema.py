@@ -2248,7 +2248,10 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description=(
             "Lower numbers are planned first and get the cheapest slots when several "
-            "managed loads compete for the same shared power budget"
+            "managed loads compete for the same shared power budget. Applies when this "
+            "module places the loads itself; the built-in optimizer places them "
+            "together against one objective, so there is no queue and the per-load "
+            "price limit is the lever instead"
         ),
         hot_reload=True,
         help_url="configuration.html#managed-loads",

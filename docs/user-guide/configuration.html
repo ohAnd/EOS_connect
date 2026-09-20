@@ -391,8 +391,11 @@
                             grid energy.</li>
                         <li><strong>Shared power budget</strong> (<em>Settings &rsaquo; Load</em>) &mdash;
                             without it a pool pump and a sauna both take the single cheapest hour and the
-                            forecast shows a peak your house cannot draw. Lower <strong>priority</strong>
-                            numbers are planned first.</li>
+                            forecast shows a peak your house cannot draw. Every optimizer honours it.
+                            Which load yields when they compete depends on who is placing them: lower
+                            <strong>priority</strong> numbers go first where this module plans, while
+                            the built-in optimizer weighs them by what each is worth &mdash; its
+                            <em>Max Price</em> &mdash; and priority does not apply.</li>
                     </ul>
 
                     <h3>Outdoor loads need an outdoor temperature</h3>

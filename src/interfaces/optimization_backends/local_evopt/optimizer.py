@@ -344,12 +344,14 @@ class Optimizer:
         M: float = 1e6,
         optimizer_settings: Optional[OptimizerSettings] = None,
         managed_loads: Optional[List[ManagedLoadConfig]] = None,
+        managed_load_budget_w: float = 0.0,
     ):
         self.settings = optimizer_settings or OptimizerSettings()
         self.strategy = strategy
         self.grid = grid
         self.batteries = batteries
         self.managed_loads = list(managed_loads or [])
+        self.managed_load_budget_w = max(0.0, float(managed_load_budget_w or 0.0))
         self.time_series = time_series
         self.eta_c = eta_c
         self.eta_d = eta_d
@@ -393,6 +395,7 @@ class Optimizer:
         self._add_energy_balance_constraints()
         self._add_battery_constraints()
         self._add_managed_load_constraints()
+        self._add_shared_budget_constraints()
 
     def _setup_variables(self):
         """Set up the variables of the MILP optimizer."""
@@ -1027,6 +1030,32 @@ class Optimizer:
                 on, self.variables['ml_start'][i], int(load.min_runtime_slots),
                 already_running=load.already_running or load.committed_on_slots > 0,
             )
+
+    def _add_shared_budget_constraints(self):
+        """
+        Hold every managed load together under one site limit.
+
+        A budget belongs to the installation, not to a load: it is what the wiring or
+        the contactor can carry, and it is separate from the grid import limit because
+        sun can cover a draw the grid never sees. Without it two loads both take the
+        single cheapest hour and stack a sauna on top of a pool pump - a peak the house
+        cannot draw, which the optimizer then sizes the battery for.
+
+        Never below the largest single load. A budget smaller than one appliance is a
+        misconfiguration, and reading it literally would silently stop that appliance
+        ever running rather than sharing anything out.
+        """
+        budget_w = self.managed_load_budget_w
+        if budget_w <= 0 or len(self.managed_loads) < 2:
+            return
+        floor_w = max(load.max_power_w for load in self.managed_loads)
+        effective_w = max(budget_w, floor_w)
+
+        for t in self.time_steps:
+            allowance = effective_w * self.time_series.dt[t] / 3600.0
+            self.problem += pulp.lpSum(
+                self.variables['ml'][i][t] for i in range(len(self.managed_loads))
+            ) <= allowance
 
     def _add_daily_cap_constraints(self, load, run, feasible):
         """

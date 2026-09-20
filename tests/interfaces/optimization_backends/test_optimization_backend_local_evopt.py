@@ -1513,9 +1513,11 @@ class TestManagedLoads:
         seen = []
         original = backend_hourly._build_optimizer
 
-        def spy(request, timeout, managed_loads=None):
+        # Tolerant of what else the builder takes: this counts solves, it does not
+        # pin the signature.
+        def spy(request, timeout, managed_loads=None, *args, **kwargs):
             seen.append(len(managed_loads or []))
-            return original(request, timeout, managed_loads)
+            return original(request, timeout, managed_loads, *args, **kwargs)
 
         backend_hourly._build_optimizer = spy
         self._solve(

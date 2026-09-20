@@ -125,3 +125,29 @@ def test_the_local_backend_does_claim_it():
     )
 
     assert LocalEVOptBackend.schedules_managed_loads is True
+
+
+def test_the_site_budget_reaches_a_backend_that_can_use_it():
+    """
+    It belongs to the installation, not to a load, so it travels beside the records
+    rather than inside each one - where two copies could disagree.
+    """
+    backend = MagicMock()
+    backend.schedules_managed_loads = True
+    backend.optimize.return_value = ({"ac_charge": []}, 1.0)
+
+    _interface("local_evopt", backend).optimize(
+        {"ems": {}}, managed_loads=RECORDS, managed_load_budget_w=3000.0
+    )
+    assert backend.optimize.call_args[1]["managed_load_budget_w"] == 3000.0
+
+
+def test_a_backend_that_cannot_schedule_is_never_offered_the_budget():
+    backend = MagicMock()
+    del backend.schedules_managed_loads
+    backend.optimize.return_value = ({"ac_charge": []}, 1.0)
+
+    _interface("eos_server", backend).optimize(
+        {"ems": {}}, managed_loads=RECORDS, managed_load_budget_w=3000.0
+    )
+    assert "managed_load_budget_w" not in backend.optimize.call_args[1]
