@@ -185,6 +185,48 @@ def _classify_updates(data):
     return updates, changed_keys, restart_required, hot_reloaded
 
 
+# Meta key on a save, carrying the new length of each list section the caller edited.
+# Keys beginning with an underscore are already the convention for request metadata
+# rather than configuration (see ``_restart_pending`` and ``_stale_keys``).
+LIST_LENGTH_KEY = "_list_lengths"
+
+
+def _prune_list_entries(lengths):
+    """
+    Drop the rows of list entries the caller no longer has.
+
+    The store is a flat key/value table and a save only ever upserted, so a removed
+    entry had nowhere to be expressed: the client deleted its keys locally, sent only
+    what remained, and the row survived. Removing the last installation therefore
+    reported "no changes to save", and removing an earlier one re-indexed the
+    survivors over the top while the highest index stayed behind - the list kept its
+    length and its final entry became a duplicate of its neighbour.
+
+    Declared rather than inferred. Treating any request carrying ``pv_forecast.*`` as
+    the whole truth would let a one-field PATCH from a script delete every other
+    entry; a caller that means to shorten the list says how long it now is.
+
+    Returns the keys deleted.
+    """
+    removed = []
+    if not isinstance(lengths, dict):
+        return removed
+    for section, length in lengths.items():
+        if section not in LIST_SECTIONS:
+            continue
+        try:
+            keep = max(0, int(length))
+        except (TypeError, ValueError):
+            continue
+        pattern = re.compile(rf"^{re.escape(section)}\.(\d+)\.")
+        for key in list(_store.get_all().keys()):
+            match = pattern.match(key)
+            if match and int(match.group(1)) >= keep:
+                _store.delete(key)
+                removed.append(key)
+    return removed
+
+
 def _notify_changes(before, updates):
     """Fire the hot-reload callbacks for the values that actually changed."""
     notify = getattr(_module, "notify_config_changed", None)
@@ -214,6 +256,10 @@ def update_config():
     data = flask_request.get_json(silent=True)
     if not data or not isinstance(data, dict):
         return jsonify({"error": "Request body must be a JSON object"}), 400
+
+    # Metadata, not configuration: pulled out before validation so it cannot be
+    # mistaken for an unknown key.
+    list_lengths = data.pop(LIST_LENGTH_KEY, None)
 
     # Validate values
     errors = _validate_updates(data)
@@ -266,9 +312,16 @@ def update_config():
     # way all along; this is the same sequence.
     if updates:
         _store.set_batch(updates)
+    # Before the rebuild, so the merged config is built from the shortened list rather
+    # than from one the caller has already discarded.
+    pruned = _prune_list_entries(list_lengths)
     _module.rebuild_config()
 
     _notify_changes(before, updates)
+    if pruned:
+        logger.info(
+            "[CONFIG] removed %d stored key(s) for entries the caller dropped", len(pruned)
+        )
 
     # Persist restart-required fields for banner across reloads
     if restart_required:
@@ -282,6 +335,7 @@ def update_config():
             "updated": changed_keys,
             "restart_required": restart_required,
             "hot_reloaded": hot_reloaded,
+            "removed": pruned,
             "warnings": advisories,
         }
     )

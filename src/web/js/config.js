@@ -1640,7 +1640,11 @@ class ConfigurationManager {
         this._clearValidationErrors();
 
         const changes = this._getChangedValues(section);
-        if (Object.keys(changes).length === 0) {
+        // Removing the last entry of a list changes no remaining value, so the diff is
+        // empty and the save used to stop here reporting "no changes" while the entry
+        // sat on screen already gone. The length is the change.
+        const lengths = this._listLengthsFor(section);
+        if (Object.keys(changes).length === 0 && !lengths) {
             this._showToast("No changes to save.", "info");
             return;
         }
@@ -1709,12 +1713,15 @@ class ConfigurationManager {
             console.error("[ConfigurationManager] Validation failed:", err);
         }
 
-        // Save
+        // Save. The length rides with the values, not through the validator above -
+        // it is metadata about the request, not a configured value.
         try {
             const res = await fetch("api/config/", {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(changes),
+                body: JSON.stringify(lengths
+                    ? { ...changes, _list_lengths: lengths }
+                    : changes),
             });
 
             if (!res.ok) {
@@ -1917,6 +1924,37 @@ class ConfigurationManager {
         if (fileInput) {
             fileInput.value = "";
         }
+    }
+
+    /**
+     * The new length of a list section, when the caller has shortened or grown it.
+     *
+     * Sent as metadata beside the values because the store is a flat key/value table:
+     * a removed entry has no key left to carry its own absence, so the request has to
+     * say how long the list now is and let the server drop the rest. Declared rather
+     * than inferred - a partial save from a script must not be read as "these are the
+     * only entries that should exist".
+     *
+     * @param {string} section - Section key
+     * @returns {Object|null} ``{section: count}``, or null when nothing changed
+     */
+    _listLengthsFor(section) {
+        if (!LIST_SECTIONS.has(section)) {
+            return null;
+        }
+        const count = values => {
+            const seen = new Set();
+            const prefix = new RegExp(`^${section}\\.(\\d+)\\.`);
+            for (const key of Object.keys(values)) {
+                const match = prefix.exec(key);
+                if (match) {
+                    seen.add(match[1]);
+                }
+            }
+            return seen.size;
+        };
+        const now = count(this.values);
+        return now === count(this.originalValues) ? null : { [section]: now };
     }
 
     /**
