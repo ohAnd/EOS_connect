@@ -203,7 +203,14 @@ class LoadInterface:
             )
 
     def __request_with_retries(
-        self, method, url, params=None, headers=None, timeout=None, item_label=""
+        self,
+        method,
+        url,
+        params=None,
+        headers=None,
+        timeout=None,
+        item_label="",
+        json_data=None,
     ):
         """
         Perform an HTTP request with retries and exponential backoff.
@@ -231,6 +238,7 @@ class LoadInterface:
                         url,
                         params=params,
                         headers=headers,
+                        json=json_data,
                         timeout=timeout,
                         verify=not self.ssl_ignore,
                     )
@@ -310,186 +318,256 @@ class LoadInterface:
         """
         Fetch historical energy data for a specific entity from Home Assistant.
 
-        Args:
-            entity_id (str): The ID of the entity to fetch data for.
-            start_time (datetime): The start time for the historical data.
-            end_time (datetime): The end time for the historical data.
+        Home Assistant's history REST endpoint only exposes recorder state
+        changes. For sensors with Recorder statistics, current and older data
+        can also be retrieved through the recorder.get_statistics action:
+        5-minute short-term statistics are preferred and hourly long-term
+        statistics are used when short-term statistics do not cover the
+        requested interval.
 
-        Returns:
-            list: A list of historical state changes for the entity.
+        The returned structure deliberately remains the same as the existing
+        history path (state + last_updated), so the load-profile processing
+        below does not need a separate statistics code path.
         """
-        historical_data = []
         if entity_id == "" or entity_id is None:
             return []
+
         headers = {
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json",
         }
         url = f"{self.url}/api/history/period/{start_time.isoformat()}"
 
+        def normalize_timestamp(value, reference):
+            try:
+                timestamp = datetime.fromisoformat(value) if isinstance(value, str) else value
+            except (ValueError, TypeError):
+                return None
+            return self.__normalize_history_timestamp(timestamp, reference)
+
         def filter_history(history_data):
             filtered = []
-
             for entry in history_data:
-                try:
-                    entry_time = self.__normalize_history_timestamp(
-                        datetime.fromisoformat(entry["last_updated"]),
-                        start_time,
-                    )
-                except (ValueError, TypeError, KeyError):
+                entry_time = normalize_timestamp(entry.get("last_updated"), start_time)
+                if entry_time is None:
                     continue
-
                 if start_time <= entry_time < end_time:
                     filtered.append(entry)
-
             return filtered
 
-        # First try to satisfy the request from an existing cache.
+        def normalize_statistics(rows, period):
+            """Convert HA recorder statistics rows into state-like samples."""
+            samples = []
+            for row in rows or []:
+                try:
+                    row_start = datetime.fromisoformat(row["start"])
+                    row_end = datetime.fromisoformat(row["end"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+
+                row_start = self.__normalize_history_timestamp(row_start, start_time)
+                row_end = self.__normalize_history_timestamp(row_end, end_time)
+
+                # For measurement sensors (e.g. sensor.hausverbrauch), mean is
+                # the average power for the statistics bucket. For total/energy
+                # sensors, change is the energy accumulated during the bucket;
+                # convert it to an average W value so the existing load-profile
+                # processing can consume it unchanged.
+                value = row.get("mean")
+                if value is None:
+                    value = row.get("state")
+                if value is None and row.get("change") is not None:
+                    try:
+                        value = float(row["change"]) * 1000.0 / (
+                            (row_end - row_start).total_seconds() / 3600.0
+                        )
+                    except (TypeError, ValueError, ZeroDivisionError):
+                        value = None
+
+                if value is None:
+                    continue
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    continue
+
+                if row_end <= start_time or row_start >= end_time:
+                    continue
+
+                # Statistics are interval values. Represent each bucket as a
+                # constant state from its start through its end. This gives
+                # __process_energy_data the same timestamped sample format as
+                # the history REST path and preserves the bucket's mean.
+                clipped_start = max(row_start, start_time)
+                clipped_end = min(row_end, end_time)
+                if clipped_end <= clipped_start:
+                    continue
+
+                samples.append(
+                    {
+                        "state": value,
+                        "last_updated": clipped_start.isoformat(),
+                        "attributes": {},
+                    }
+                )
+                samples.append(
+                    {
+                        "state": value,
+                        "last_updated": clipped_end.isoformat(),
+                        "attributes": {},
+                    }
+                )
+
+            # Collapse duplicate timestamps while retaining the last value.
+            deduped = {}
+            for sample in samples:
+                deduped[sample["last_updated"]] = sample
+            return sorted(deduped.values(), key=lambda entry: entry["last_updated"])
+
+        def normalize_history_values(history_values):
+            """Preserve the existing history unit/device-class conversions."""
+            if not history_values:
+                return []
+
+            try:
+                if (
+                    "attributes" in history_values[0]
+                    and "device_class" in history_values[0]["attributes"]
+                ):
+                    device_class = history_values[0]["attributes"]["device_class"]
+                    if device_class == "energy":
+                        start_idx = 0
+                        end_idx = len(history_values) - 1
+                        while start_idx < end_idx:
+                            try:
+                                float(history_values[start_idx]["state"])
+                                break
+                            except (ValueError, TypeError):
+                                start_idx += 1
+                        while start_idx < end_idx:
+                            try:
+                                float(history_values[end_idx]["state"])
+                                break
+                            except (ValueError, TypeError):
+                                end_idx -= 1
+
+                        first_state = float(history_values[start_idx]["state"])
+                        last_state = float(history_values[end_idx]["state"])
+                        first_time = datetime.fromisoformat(
+                            history_values[start_idx]["last_updated"]
+                        )
+                        last_time = datetime.fromisoformat(
+                            history_values[end_idx]["last_updated"]
+                        )
+                        duration_hours = (
+                            last_time - first_time
+                        ).total_seconds() / 3600.0
+
+                        if duration_hours > 0:
+                            power_w = max(
+                                0, (last_state - first_state) / duration_hours
+                            )
+                        else:
+                            power_w = 0.0
+
+                        history_values = [
+                            {**history_values[start_idx], "state": power_w},
+                            {**history_values[end_idx], "state": power_w},
+                        ]
+
+                if (
+                    history_values
+                    and "attributes" in history_values[0]
+                    and history_values[0]["attributes"].get("unit_of_measurement") == "kW"
+                ):
+                    for entry in history_values:
+                        try:
+                            entry["state"] = float(entry["state"]) * 1000
+                        except (ValueError, TypeError):
+                            continue
+
+                return history_values
+            except (ValueError, KeyError, TypeError):
+                logger.error(
+                    "[LOAD-IF] HOMEASSISTANT - Failed to process energy data for '%s'.",
+                    entity_id,
+                )
+                return []
+
+        def statistics_request(period):
+            statistics_url = f"{self.url}/api/services/recorder/get_statistics"
+            payload = {
+                "statistic_ids": [entity_id],
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat(),
+                "period": period,
+                "types": ["mean", "state", "change"],
+            }
+            response = self.__request_with_retries(
+                "post",
+                statistics_url,
+                params={"return_response": "true"},
+                headers=headers,
+                timeout=max(self.request_timeout, 30),
+                item_label=f"{entity_id} ({period} statistics)",
+                json_data=payload,
+            )
+            if response is None:
+                return []
+            try:
+                response_data = response.json()
+                rows = (
+                    response_data.get("service_response", {})
+                    .get("statistics", {})
+                    .get(entity_id, [])
+                )
+                return normalize_statistics(rows, period)
+            except (ValueError, TypeError, AttributeError):
+                logger.warning(
+                    "[LOAD-IF] HOMEASSISTANT - Invalid %s statistics response for '%s'.",
+                    period,
+                    entity_id,
+                )
+                return []
+
+        # First use the existing state-history path. It remains the preferred
+        # source because it has the original sample resolution and attributes.
         cached_history = self.__homeassistant_history_cache.get(entity_id)
         filtered_data = None
 
         if cached_history is not None:
             cached_start = self.__normalize_history_timestamp(
-                cached_history["start_time"],
-                start_time,
+                cached_history["start_time"], start_time
             )
             cached_end = self.__normalize_history_timestamp(
-                cached_history["end_time"],
-                end_time,
+                cached_history["end_time"], end_time
             )
-
-            requested_start = self.__normalize_history_timestamp(
-                start_time,
-                cached_start,
-            )
-            requested_end = self.__normalize_history_timestamp(
-                end_time,
-                cached_end,
-            )
-
-            # Only use the cache when it completely covers the requested
-            # interval and contains usable data. An empty cache must not
-            # suppress the Home Assistant request and its fallback.
+            requested_start = self.__normalize_history_timestamp(start_time, cached_start)
+            requested_end = self.__normalize_history_timestamp(end_time, cached_end)
             if cached_start <= requested_start and cached_end >= requested_end:
-                cached_filtered_data = filter_history(cached_history["data"])
+                cached_filtered = filter_history(cached_history["data"])
+                if len(cached_filtered) >= 2:
+                    filtered_data = cached_filtered
 
-                if cached_filtered_data:
-                    filtered_data = cached_filtered_data
-                    logger.debug(
-                        "[LOAD-IF] HOMEASSISTANT - Using cached history for '%s' "
-                        "from %s to %s.",
-                        entity_id,
-                        start_time,
-                        end_time,
-                    )
-
-        # Only contact Home Assistant if the cache cannot satisfy the request.
         if filtered_data is None:
-            params = {
-                "filter_entity_id": entity_id,
-                "end_time": end_time.isoformat(),
-            }
-
             response = self.__request_with_retries(
                 "get",
                 url,
-                params=params,
+                params={
+                    "filter_entity_id": entity_id,
+                    "end_time": end_time.isoformat(),
+                },
                 headers=headers,
                 item_label=entity_id,
             )
 
             historical_data = None
-            request_failed = response is None
-
             if response is not None:
                 try:
                     historical_data = response.json()
                 except (ValueError, TypeError):
                     historical_data = None
 
-            # Home Assistant can fail to answer a historical request at all
-            # (response is None) even though the same request succeeds when
-            # end_time is extended to the current time. Handle both a complete
-            # request failure and an empty/invalid response with one fallback.
-            if request_failed or not historical_data:
-                now = datetime.now(end_time.tzinfo)
-
-                if now > end_time:
-                    reason = "request failed" if request_failed else "empty response"
-                    logger.info(
-                        "[LOAD-IF] HOMEASSISTANT - History request for '%s' "
-                        "from %s to %s returned %s. Retrying once with "
-                        "end_time set to current time %s.",
-                        entity_id,
-                        start_time,
-                        end_time,
-                        reason,
-                        now,
-                    )
-
-                    fallback_params = {
-                        "filter_entity_id": entity_id,
-                        "end_time": now.isoformat(),
-                    }
-
-                    # The current-time fallback is the known workaround for
-                    # HA's historical API behaviour, so allow it more time than
-                    # the normal request while keeping it bounded.
-                    fallback_timeout = max(self.request_timeout, 30)
-
-                    fallback_response = self.__request_with_retries(
-                        "get",
-                        url,
-                        params=fallback_params,
-                        headers=headers,
-                        timeout=fallback_timeout,
-                        item_label=f"{entity_id} (current-time fallback)",
-                    )
-
-                    if fallback_response is not None:
-                        try:
-                            fallback_historical_data = fallback_response.json()
-                        except (ValueError, TypeError):
-                            fallback_historical_data = None
-
-                        if fallback_historical_data:
-                            historical_data = fallback_historical_data
-
-                            fallback_data = [
-                                {
-                                    "state": entry["state"],
-                                    "last_updated": entry["last_updated"],
-                                    "attributes": entry.get("attributes", {}),
-                                }
-                                for sublist in fallback_historical_data
-                                for entry in sublist
-                            ]
-                            fallback_data.sort(
-                                key=lambda entry: entry.get("last_updated", "")
-                            )
-
-                            self.__homeassistant_history_cache[entity_id] = {
-                                "start_time": start_time,
-                                "end_time": now,
-                                "data": fallback_data,
-                            }
-
-                            logger.info(
-                                "[LOAD-IF] HOMEASSISTANT - History fallback "
-                                "returned %d samples for '%s' and was cached "
-                                "through %s.",
-                                len(fallback_data),
-                                entity_id,
-                                now,
-                            )
-                        else:
-                            logger.error(
-                                "[LOAD-IF] HOMEASSISTANT - Current-time history "
-                                "fallback returned no usable data for '%s'.",
-                                entity_id,
-                            )
-
-        try:
             if historical_data:
                 history_data = [
                     {
@@ -500,167 +578,100 @@ class LoadInterface:
                     for sublist in historical_data
                     for entry in sublist
                 ]
-                history_data.sort(
-                    key=lambda entry: entry.get("last_updated", "")
-                )
+                history_data.sort(key=lambda entry: entry.get("last_updated", ""))
+                self.__homeassistant_history_cache[entity_id] = {
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "data": history_data,
+                }
+                filtered_data = filter_history(history_data)
 
-                existing_cache = self.__homeassistant_history_cache.get(entity_id)
-
-                if existing_cache is not None:
-                    existing_start = self.__normalize_history_timestamp(
-                        existing_cache["start_time"],
+            # The old current-time retry is retained, but only as a history
+            # source. If that still yields no data, use recorder statistics.
+            if not filtered_data:
+                now = datetime.now(end_time.tzinfo)
+                if now > end_time:
+                    logger.info(
+                        "[LOAD-IF] HOMEASSISTANT - History request for '%s' from %s to %s "
+                        "returned no usable data. Retrying with current end_time %s.",
+                        entity_id,
                         start_time,
-                    )
-                    existing_end = self.__normalize_history_timestamp(
-                        existing_cache["end_time"],
                         end_time,
+                        now,
                     )
-                    new_start = self.__normalize_history_timestamp(
-                        start_time,
-                        existing_start,
+                    fallback_response = self.__request_with_retries(
+                        "get",
+                        url,
+                        params={
+                            "filter_entity_id": entity_id,
+                            "end_time": now.isoformat(),
+                        },
+                        headers=headers,
+                        timeout=max(self.request_timeout, 30),
+                        item_label=f"{entity_id} (current-time fallback)",
                     )
-                    new_end = self.__normalize_history_timestamp(
-                        end_time,
-                        existing_end,
-                    )
-
-                    # Keep an existing wider cache unchanged. Otherwise merge
-                    # the newly fetched range with the existing cached range
-                    # so a narrower request can never discard old history.
-                    if existing_start <= new_start and existing_end >= new_end:
-                        cache_start = existing_cache["start_time"]
-                        cache_end = existing_cache["end_time"]
-                        merged_history_data = existing_cache["data"]
-                    else:
-                        merged_history_data = existing_cache["data"] + [
-                            entry
-                            for entry in history_data
-                            if entry not in existing_cache["data"]
+                    fallback_historical_data = None
+                    if fallback_response is not None:
+                        try:
+                            fallback_historical_data = fallback_response.json()
+                        except (ValueError, TypeError):
+                            fallback_historical_data = None
+                    if fallback_historical_data:
+                        fallback_data = [
+                            {
+                                "state": entry["state"],
+                                "last_updated": entry["last_updated"],
+                                "attributes": entry.get("attributes", {}),
+                            }
+                            for sublist in fallback_historical_data
+                            for entry in sublist
                         ]
-                        merged_history_data.sort(
-                            key=lambda entry: entry.get("last_updated", "")
-                        )
-                        cache_start = (
-                            start_time
-                            if new_start < existing_start
-                            else existing_cache["start_time"]
-                        )
-                        cache_end = (
-                            end_time
-                            if new_end > existing_end
-                            else existing_cache["end_time"]
-                        )
+                        fallback_data.sort(key=lambda entry: entry.get("last_updated", ""))
+                        self.__homeassistant_history_cache[entity_id] = {
+                            "start_time": start_time,
+                            "end_time": now,
+                            "data": fallback_data,
+                        }
+                        filtered_data = filter_history(fallback_data)
 
-                    self.__homeassistant_history_cache[entity_id] = {
-                        "start_time": cache_start,
-                        "end_time": cache_end,
-                        "data": merged_history_data,
-                    }
-                else:
-                    self.__homeassistant_history_cache[entity_id] = {
-                        "start_time": start_time,
-                        "end_time": end_time,
-                        "data": history_data,
-                    }
+            if filtered_data and len(filtered_data) >= 2:
+                return normalize_history_values(filtered_data)
 
-                filtered_data = filter_history(
-                    self.__homeassistant_history_cache[entity_id]["data"]
+            # State history is unavailable or contains too few samples to
+            # calculate an interval average. Use Recorder statistics instead. Prefer 5-minute short-term
+            # statistics; if they do not cover the requested interval, use the
+            # hourly long-term statistics. The latter are retained indefinitely
+            # and therefore cover the 14-day look-back used by the optimizer.
+            short_term_data = statistics_request("5minute")
+            if short_term_data:
+                first_time = normalize_timestamp(short_term_data[0]["last_updated"], start_time)
+                last_time = normalize_timestamp(short_term_data[-1]["last_updated"], end_time)
+                if first_time is not None and last_time is not None and first_time <= start_time and last_time >= end_time:
+                    logger.info(
+                        "[LOAD-IF] HOMEASSISTANT - Using 5-minute statistics for '%s' (%d samples).",
+                        entity_id,
+                        len(short_term_data),
+                    )
+                    return short_term_data
+
+            long_term_data = statistics_request("hour")
+            if long_term_data:
+                logger.info(
+                    "[LOAD-IF] HOMEASSISTANT - Using hourly statistics for '%s' (%d samples).",
+                    entity_id,
+                    len(long_term_data),
                 )
-            else:
-                filtered_data = []
+                return long_term_data
 
-            # if device_class is energy, convert to power
-            if (
-                filtered_data
-                and "attributes" in filtered_data[0]
-                and "device_class" in filtered_data[0]["attributes"]
-            ):
-                device_class = filtered_data[0]["attributes"]["device_class"]
-                if device_class == "power":
-                    pass
-                elif device_class == "energy":
-
-                    # convert energy (Wh) to power (W) over the time frame
-                    # 1. find the first entry with valid data
-                    # 2. find the last entry with valid data
-                    # 3. take the delta & compute W from Wh.
-                    # 4. overwrite the orginal data structure.
-                    start_idx = 0
-                    end_idx = len(filtered_data) - 1
-                    while start_idx < end_idx:
-                        try:
-                            float(filtered_data[start_idx]["state"])
-                            break
-                        except ValueError:
-                            start_idx += 1
-                    while start_idx < end_idx:
-                        try:
-                            float(filtered_data[end_idx]["state"])
-                            break
-                        except ValueError:
-                            end_idx -= 1
-                    first_state = float(filtered_data[start_idx]["state"])
-                    last_state = float(filtered_data[end_idx]["state"])
-                    first_time = datetime.fromisoformat(
-                        filtered_data[start_idx]["last_updated"]
-                    )
-                    last_time = datetime.fromisoformat(
-                        filtered_data[end_idx]["last_updated"]
-                    )
-                    duration_hours = (last_time - first_time).total_seconds() / 3600.0
-
-                    filtered_data_new = []
-                    if duration_hours > 0:
-                        power_w = (last_state - first_state) / duration_hours
-                        power_w = max(
-                            0, power_w
-                        )  # Prevent negative from counter resets
-                        filtered_data[start_idx]["state"] = power_w
-                        filtered_data[end_idx]["state"] = power_w
-                        filtered_data_new.append(filtered_data[start_idx])
-                        filtered_data_new.append(filtered_data[end_idx])
-                        logger.debug(
-                            "[LOAD-IF] HOMEASSISTANT - Converted energy to power for '%s': "
-                            "%.1f Wh over %.2f hours = %.1f W",
-                            entity_id,
-                            last_state - first_state,
-                            duration_hours,
-                            power_w,
-                        )
-                    else:
-                        filtered_data[start_idx]["state"] = 0.0
-                        filtered_data[end_idx]["state"] = 0.0
-                        filtered_data_new.append(filtered_data[start_idx])
-                        filtered_data_new.append(filtered_data[end_idx])
-                        logger.debug(
-                            "[LOAD-IF] HOMEASSISTANT - Duration is zero for energy to"
-                            + " power conversion for '%s', assuming 0W",
-                            entity_id,
-                        )
-
-                    filtered_data = filtered_data_new
-
-            # check if the data are delivered with unit kW and convert to W
-            if (
-                filtered_data
-                and "attributes" in filtered_data[0]
-                and "unit_of_measurement" in filtered_data[0]["attributes"]
-            ):
-                unit = filtered_data[0]["attributes"]["unit_of_measurement"]
-                if unit == "kW":
-                    for entry in filtered_data:
-                        try:
-                            entry["state"] = float(entry["state"]) * 1000
-                        except ValueError:
-                            continue
-            return filtered_data
-        except (ValueError, KeyError, TypeError) as e:
-            logger.error(
-                "[LOAD-IF] HOMEASSISTANT - Failed to process energy data for '%s': %s",
+            logger.warning(
+                "[LOAD-IF] HOMEASSISTANT - No history or recorder statistics available for '%s' from %s to %s.",
                 entity_id,
-                str(e),
+                start_time,
+                end_time,
             )
             return []
+
+        return filtered_data or []
 
     def __fill_missing_values_in_data(self, data, debug_sensor=None):
         """
