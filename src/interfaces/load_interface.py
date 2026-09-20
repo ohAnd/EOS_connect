@@ -398,6 +398,7 @@ class LoadInterface:
             )
 
             historical_data = None
+            request_failed = response is None
 
             if response is not None:
                 try:
@@ -405,21 +406,23 @@ class LoadInterface:
                 except (ValueError, TypeError):
                     historical_data = None
 
-            # A normal request can return an empty history even though the
-            # recorder contains the requested data. It can also fail completely
-            # after all retries (response is None). In both cases retry once
-            # with end_time set to the current time.
-            if not historical_data:
+            # Home Assistant can fail to answer a historical request at all
+            # (response is None) even though the same request succeeds when
+            # end_time is extended to the current time. Handle both a complete
+            # request failure and an empty/invalid response with one fallback.
+            if request_failed or not historical_data:
                 now = datetime.now(end_time.tzinfo)
 
                 if now > end_time:
-                    logger.debug(
-                        "[LOAD-IF] HOMEASSISTANT - History request returned "
-                        "no usable data for '%s' from %s to %s. "
-                        "Retrying with end_time set to current time %s.",
+                    reason = "request failed" if request_failed else "empty response"
+                    logger.info(
+                        "[LOAD-IF] HOMEASSISTANT - History request for '%s' "
+                        "from %s to %s returned %s. Retrying once with "
+                        "end_time set to current time %s.",
                         entity_id,
                         start_time,
                         end_time,
+                        reason,
                         now,
                     )
 
@@ -428,12 +431,18 @@ class LoadInterface:
                         "end_time": now.isoformat(),
                     }
 
+                    # The current-time fallback is the known workaround for
+                    # HA's historical API behaviour, so allow it more time than
+                    # the normal request while keeping it bounded.
+                    fallback_timeout = max(self.request_timeout, 30)
+
                     fallback_response = self.__request_with_retries(
                         "get",
                         url,
                         params=fallback_params,
                         headers=headers,
-                        item_label=entity_id,
+                        timeout=fallback_timeout,
+                        item_label=f"{entity_id} (current-time fallback)",
                     )
 
                     if fallback_response is not None:
@@ -454,6 +463,9 @@ class LoadInterface:
                                 for sublist in fallback_historical_data
                                 for entry in sublist
                             ]
+                            fallback_data.sort(
+                                key=lambda entry: entry.get("last_updated", "")
+                            )
 
                             self.__homeassistant_history_cache[entity_id] = {
                                 "start_time": start_time,
@@ -461,10 +473,18 @@ class LoadInterface:
                                 "data": fallback_data,
                             }
 
-                            logger.debug(
+                            logger.info(
                                 "[LOAD-IF] HOMEASSISTANT - History fallback "
-                                "returned %d samples for '%s'.",
+                                "returned %d samples for '%s' and was cached "
+                                "through %s.",
                                 len(fallback_data),
+                                entity_id,
+                                now,
+                            )
+                        else:
+                            logger.error(
+                                "[LOAD-IF] HOMEASSISTANT - Current-time history "
+                                "fallback returned no usable data for '%s'.",
                                 entity_id,
                             )
 
@@ -479,6 +499,9 @@ class LoadInterface:
                     for sublist in historical_data
                     for entry in sublist
                 ]
+                history_data.sort(
+                    key=lambda entry: entry.get("last_updated", "")
+                )
 
                 existing_cache = self.__homeassistant_history_cache.get(entity_id)
 
@@ -513,6 +536,9 @@ class LoadInterface:
                             for entry in history_data
                             if entry not in existing_cache["data"]
                         ]
+                        merged_history_data.sort(
+                            key=lambda entry: entry.get("last_updated", "")
+                        )
                         cache_start = (
                             start_time
                             if new_start < existing_start
