@@ -533,7 +533,11 @@
                             day it may run at all. 8 to 22 gives fourteen hours.</li>
                         <li><strong>Max Runtime Hours Per Day</strong> &mdash; a cap inside that
                             window. Set to 12 with a 14-hour window, twelve is what you get; the
-                            other two hours are simply never used. Set it to 0 for no cap.</li>
+                            other two hours are simply never used. Set it to 0 for no cap.
+                            <em>Not applied under the built-in optimizer</em>, which places these
+                            loads itself and is not given the cap &mdash; the log says so once per
+                            load. The window, the price limit and the temperature cut-off are
+                            applied by every optimizer.</li>
                         <li><strong>Min Ambient Temp</strong> &mdash; removes individual slots
                             the air is too cold for, wherever they fall.</li>
                     </ul>
@@ -671,10 +675,25 @@ attributes:
                         needed</strong> is split into what it takes to reach the target and what it
                         takes to hold it for the rest of the horizon &mdash; for a pool the second
                         part dominates, which is why a one-degree rise can read as tens of kWh. And
-                        <strong>Outside now</strong> names not just the air temperature but where it
-                        came from: the forecast, your own sensor, or a fixed guess. A prediction
-                        standing on a guess looks exactly like one standing on a forecast, so it
-                        says which.</p>
+                        the outside temperature names not just the air but where it came from: the
+                        forecast corrected to your site, your own sensor held flat, or a fixed
+                        guess. A prediction standing on a guess looks exactly like one standing on
+                        a forecast, so it says which.</p>
+                    <p>Under the planned slots, <strong>Temperatures</strong> draws the two curves
+                        the plan is built on, against the same clock. The upper one is the store
+                        itself &mdash; solid where it was measured, dashed where the plan takes it,
+                        with the target marked; that pair is the answer to &ldquo;why does it want
+                        so much energy?&rdquo;, because the climb and the standing loss are one
+                        number in the demand and two quite different shapes here. The lower one is
+                        the air: solid for the figure the model uses, dashed for the forecast as it
+                        arrived, so the gap between them is what the site has taught it. Hovering
+                        either gives the readings and, on the air, the difference between them.
+                        They are two plots rather than one because a pool moves four kelvin where
+                        the air outside moves twenty-three.</p>
+                    <p><strong>How this was worked out</strong> at the foot of the card folds away
+                        the workings &mdash; efficiency, power, where the forecast came from, and
+                        the calibration with its Reset. An override, an error, or an ambient figure
+                        that is a fixed guess never folds: those change what you should do.</p>
 
                     <h3>What it publishes</h3>
                     <ul>

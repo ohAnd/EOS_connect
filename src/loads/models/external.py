@@ -70,10 +70,6 @@ class ExternalPushModel(BaseDemandModel):
         self._push = None
         self._anchor = None
 
-    def has_push(self):
-        """Whether anything has been pushed to this instance yet."""
-        return self._push is not None
-
     def demand(self, ctx):
         if self._push is None:
             return self._nothing(ctx, REASON_NO_PUSH)

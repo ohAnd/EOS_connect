@@ -246,16 +246,6 @@ def build_model(entry):
     return preset["model"](entry.get("id"), entry)
 
 
-def is_thermal(type_name):
-    """Whether this type's demand comes from stored heat."""
-    return type_name in THERMAL_TYPES
-
-
-def is_external(type_name):
-    """Whether this type is fed from outside rather than from sensors."""
-    return type_name in EXTERNAL_TYPES
-
-
 def pulls_its_profile(entry):
     """
     Whether this entry fetches its own profile instead of waiting to be handed one.
