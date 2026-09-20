@@ -255,14 +255,34 @@ class LoadInterface:
                 time.sleep(sleep_seconds)
 
     def __normalize_history_timestamp(self, timestamp, reference_time):
-        """Normalize a history timestamp for comparison with a reference time."""
-        if reference_time.tzinfo is None and timestamp.tzinfo is not None:
-            return timestamp.replace(tzinfo=None)
+        """Normalize a history timestamp to the timezone semantics of a reference time.
 
-        if reference_time.tzinfo is not None and timestamp.tzinfo is None:
-            return timestamp.replace(tzinfo=reference_time.tzinfo)
+        Home Assistant Recorder timestamps are normally timezone-aware UTC values,
+        while the load-profile code historically uses naive local datetimes. Simply
+        stripping the UTC tzinfo is incorrect because it changes the represented
+        instant (for example 22:00 UTC becomes 22:00 local instead of 00:00 CEST).
+        Convert aware timestamps to the reference timezone first, and only then
+        remove tzinfo when the reference itself is naive.
+        """
+        if timestamp is None or reference_time is None:
+            return timestamp
 
-        return timestamp
+        timestamp_tz = timestamp.tzinfo
+        reference_tz = reference_time.tzinfo
+
+        if reference_tz is None:
+            if timestamp_tz is None:
+                return timestamp
+
+            # The existing load-profile code treats naive datetimes as local time.
+            # Convert HA's timezone-aware timestamp to the host's local timezone
+            # before dropping tzinfo so the wall-clock time remains correct.
+            return timestamp.astimezone().replace(tzinfo=None)
+
+        if timestamp_tz is None:
+            return timestamp.replace(tzinfo=reference_tz)
+
+        return timestamp.astimezone(reference_tz)
 
     # get load data from url persistance source
     def fetch_historical_energy_data(self, entity_id, start_time, end_time):
@@ -646,13 +666,17 @@ class LoadInterface:
             if short_term_data:
                 first_time = normalize_timestamp(short_term_data[0]["last_updated"], start_time)
                 last_time = normalize_timestamp(short_term_data[-1]["last_updated"], end_time)
-                if first_time is not None and last_time is not None and first_time <= start_time and last_time >= end_time:
-                    logger.info(
-                        "[LOAD-IF] HOMEASSISTANT - Using 5-minute statistics for '%s' (%d samples).",
-                        entity_id,
-                        len(short_term_data),
-                    )
-                    return short_term_data
+                if first_time is not None and last_time is not None:
+                    # normalize_statistics() clips the first/last bucket to the
+                    # requested interval, so a non-empty result that reaches both
+                    # boundaries covers the complete requested interval.
+                    if first_time <= start_time and last_time >= end_time:
+                        logger.info(
+                            "[LOAD-IF] HOMEASSISTANT - Using 5-minute statistics for '%s' (%d samples).",
+                            entity_id,
+                            len(short_term_data),
+                        )
+                        return short_term_data
 
             long_term_data = statistics_request("hour")
             if long_term_data:
@@ -663,7 +687,11 @@ class LoadInterface:
                 )
                 return long_term_data
 
-            logger.warning(
+            # A missing historical interval is an expected data-quality fallback
+            # condition and can occur for individual hourly requests. Do not emit a
+            # warning for every interval; callers already handle an empty result and
+            # the aggregate LOAD-IF warning is emitted at the appropriate level.
+            logger.debug(
                 "[LOAD-IF] HOMEASSISTANT - No history or recorder statistics available for '%s' from %s to %s.",
                 entity_id,
                 start_time,
