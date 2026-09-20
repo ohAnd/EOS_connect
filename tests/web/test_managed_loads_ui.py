@@ -359,18 +359,19 @@ def _bar_colours(page):
     )
 
 
-def _render_with_ambient(page, plan, reasons, ambient, water=None):
+def _render_with_ambient(page, plan, reasons, ambient, water=None, detail=None):
     _open_overlay(page)
     page.evaluate(
-        """([plan, reasons, ambient, water]) => {
+        """([plan, reasons, ambient, water, detail]) => {
             const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
                 reason: 'below target', energy_needed_wh: 9000, planned_wh: 1600,
-                plan: plan, plan_reasons: reasons, model: {}, release: null, detail: {},
+                plan: plan, plan_reasons: reasons, model: {}, release: null,
+                detail: detail || {},
                 ambient_series: ambient, water_series: water};
             document.getElementById('full_screen_content').innerHTML =
                 controlsManager._managedLoadCard(load, 3600, 0);
         }""",
-        [plan, reasons, ambient, water],
+        [plan, reasons, ambient, water, detail],
     )
 
 
@@ -426,6 +427,50 @@ WATER = {
     "projected_c": [None, None, 25.1, 26.4],
     "target_c": 29.0,
 }
+
+
+def test_a_value_sits_with_its_chart_not_in_a_distant_row(page):
+    """
+    On a wide screen a label on the left and its value on the right are a hand-span
+    apart, and the number only means anything beside the line it describes. Where a
+    chart carries the figure, the row is not repeated above it.
+    """
+    _render_with_ambient(page, [1600, 0, 0, 0], ['planned'] * 4, AMBIENT, WATER,
+                         detail={"temperature_c": 25.8, "target_temperature_c": 29.0,
+                                 "ambient_now_c": 8.9})
+    text = page.evaluate("() => document.getElementById('full_screen_content').innerText")
+    assert "Water 25.8" in text, text
+    assert "Outside 8.9" in text, text
+    # ...and the standalone rows are gone, provenance included - it is a working.
+    assert "Outside now" not in text, text
+    assert "Where that came from" not in text, text
+
+
+def test_a_value_with_no_chart_to_carry_it_keeps_its_row(page):
+    """An indoor load, or one with no forecast, still has to show the number."""
+    _render_with_ambient(page, [1600, 0, 0, 0], ['planned'] * 4, None, None,
+                         detail={"temperature_c": 25.8, "target_temperature_c": 29.0,
+                                 "ambient_now_c": 8.9})
+    text = page.evaluate("() => document.getElementById('full_screen_content').innerText")
+    assert "Outside now" in text, text
+    assert "Temperature" in text, text
+
+
+def test_the_slot_legend_sits_under_the_slots(page):
+    """Each legend belongs to its own chart, not to the bottom of the card."""
+    _render_with_ambient(page, [1600, 0, 0, 0],
+                         ['planned', 'too cold to run', 'planned', 'planned'],
+                         AMBIENT, WATER)
+    order = page.evaluate(
+        """() => {
+            const t = document.getElementById('full_screen_content').innerText;
+            return {will: t.indexOf('Will run'), temps: t.indexOf('Temperatures'),
+                    target: t.indexOf('Target 29')};
+        }"""
+    )
+    assert order["will"] > 0 and order["temps"] > 0
+    assert order["will"] < order["temps"], "the slot legend must precede the next chart"
+    assert order["temps"] < order["target"], "the target legend belongs to its own chart"
 
 
 def test_water_and_air_are_both_drawn_and_told_apart(page):
@@ -653,6 +698,9 @@ def test_calibration_offers_a_reset(page):
 
 def test_resetting_the_calibration_reaches_the_backend(page):
     _open_overlay(page)
+    # The calibration lives behind the fold now, which is also the real path a user
+    # takes to it: the summary names it, and opening is the first click.
+    page.click("#full_screen_content summary:has-text('How this was worked out')")
     before = page.text_content("#full_screen_content")
     assert "Still learning" in before
 
@@ -661,6 +709,42 @@ def test_resetting_the_calibration_reaches_the_backend(page):
 
     # The overlay reopens against the API, so a stale card would be a failure here.
     assert "Calibration 0%" in page.text_content("#full_screen_content")
+
+
+def test_the_fold_stays_open_when_the_card_is_rebuilt(page):
+    """
+    Reset lives inside the fold and reopens the overlay, so without this the section
+    would shut the moment you acted in it.
+    """
+    _open_overlay(page)
+    page.click("#full_screen_content summary:has-text('How this was worked out')")
+    page.click("#full_screen_content button:has-text('Reset')")
+    page.wait_for_timeout(400)
+
+    still_open = page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content details')]
+            .some(d => d.open)"""
+    )
+    assert still_open, "the fold closed under the reader"
+
+
+def test_what_the_reader_came_for_is_never_folded(page):
+    """
+    The fold is for workings. What it will do, when, and whether it can get there stay
+    where a first glance lands.
+    """
+    _open_overlay(page)
+    shown = page.evaluate(
+        """() => {
+            const root = document.getElementById('full_screen_content');
+            const folded = [...root.querySelectorAll('details')]
+                .map(d => d.textContent).join(' ');
+            return {all: root.textContent, folded: folded};
+        }"""
+    )
+    for visible in ("Energy needed", "Planned slots", "Temperature"):
+        assert visible in shown["all"]
+        assert visible not in shown["folded"], f"{visible} must not be behind the fold"
 
 
 def test_the_menu_offers_managed_loads_only_once_configured(page):

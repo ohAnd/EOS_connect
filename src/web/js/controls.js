@@ -37,6 +37,10 @@ class ControlsManager {
         // The dropdown menu reads this to decide whether to offer a Managed Loads
         // entry, and it can be opened before the first poll has landed.
         this.managedLoads = [];
+        // Which "how this was worked out" sections the reader has opened. The overlay
+        // re-renders after a calibration reset, and the Reset button lives inside that
+        // section - without this it would close the panel you just acted in.
+        this.openLoadDetails = new Set();
     }
 
     /**
@@ -844,6 +848,27 @@ class ControlsManager {
         const detail = load.detail || {};
         const model = load.model || {};
 
+        // When it next runs is the question the pill leaves open, so it belongs beside
+        // it rather than three rows down a table of physical constants.
+        let next = '';
+        if (release && release.next_release_start && !release.released) {
+            const when = new Date(release.next_release_start).toLocaleString(
+                navigator.language, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+            next = ` <span style="opacity:0.85;">&middot; next start
+                     <strong>${this.escapeHtml(when)}</strong></span>`;
+        }
+
+        // Which charts will carry their own numbers, so the table above them does not
+        // repeat what they already say.
+        const series = a => Array.isArray(a) && a.filter(
+            v => v !== null && v !== undefined).length >= 2;
+        const drawn = {
+            water: !!load.water_series && (series(load.water_series.history_c)
+                || series(load.water_series.projected_c)),
+            outside: !!load.ambient_series && (series(load.ambient_series.adapted_c)
+                || series(load.ambient_series.forecast_c)),
+        };
+
         let pill;
         if (!release) {
             pill = this._pill('#555', 'forecast only');
@@ -861,15 +886,73 @@ class ControlsManager {
                 ${pill}
             </div>
             <div style="opacity:0.75;font-size:0.9em;margin-bottom:12px;">
-                ${this.escapeHtml((release && release.reason) || load.reason || '')}
+                ${this.escapeHtml((release && release.reason) || load.reason || '')}${next}
             </div>
             ${this._managedLoadEnergy(load, detail, scheduled)}
-            ${this._managedLoadFacts(load, detail, model, release)}
-            ${this._managedLoadCalibration(load, model, counter)}
+            ${this._managedLoadFacts(load, detail, model, release, 'core', drawn)}
             ${this._managedLoadPlanStrip(load.plan || [], slotSeconds, currentSlot,
                                           load.plan_reasons || [], load.ambient_series,
-                                          load.water_series)}
+                                          load.water_series, detail)}
+            ${this._managedLoadWorkings(load, detail, model, release, counter)}
         </div>`;
+    }
+
+    /**
+     * The workings, folded away.
+     *
+     * The card had grown to six blocks of equal weight, and most of a first glance was
+     * spent on model internals: the efficiency of the moment, the coefficient the
+     * calibration has settled on, how far the forecast was shifted. Every one of them
+     * is worth having and none of them is what the reader came to find out. Folded,
+     * they stop competing with "will it get the energy, and when".
+     *
+     * What never folds: an override, an error, and an ambient figure that is a fixed
+     * guess rather than a measurement - those change what the reader should *do*.
+     *
+     * @param {Object} load - The load entry
+     * @param {Object} detail - Its model detail
+     * @param {Object} model - Its calibration state
+     * @param {Object} release - Its gate state
+     * @param {boolean} counter - Whether a PV counter is configured
+     * @returns {string} HTML, or "" when there is nothing behind the fold
+     */
+    _managedLoadWorkings(load, detail, model, release, counter) {
+        const rows = this._managedLoadFacts(load, detail, model, release, 'detail');
+        const calibration = this._managedLoadCalibration(load, model, counter);
+        if (!rows && !calibration) {
+            return '';
+        }
+        const key = String(load.id);
+        const open = this.openLoadDetails.has(key) ? ' open' : '';
+        const confidence = Number(model.confidence);
+        const summary = Number.isFinite(confidence)
+            ? `How this was worked out &middot; calibration ${Math.round(confidence * 100)}%`
+            : 'How this was worked out';
+
+        return `<details data-load="${this.escapeHtml(key)}"${open}
+                     ontoggle="controlsManager.rememberDisclosure(this)"
+                     style="margin-top:10px;border-top:1px solid rgba(255,255,255,0.08);
+                            padding-top:8px;">
+            <summary style="cursor:pointer;opacity:0.7;font-size:0.85em;
+                            list-style:none;">${summary}</summary>
+            <div style="margin-top:8px;">${rows}${calibration}</div>
+        </details>`;
+    }
+
+    /**
+     * Record a disclosure the reader opened or closed, so a re-render keeps it.
+     * @param {HTMLDetailsElement} el - The toggled element
+     */
+    rememberDisclosure(el) {
+        const key = el && el.dataset ? el.dataset.load : null;
+        if (!key) {
+            return;
+        }
+        if (el.open) {
+            this.openLoadDetails.add(key);
+        } else {
+            this.openLoadDetails.delete(key);
+        }
     }
 
     /**
@@ -913,7 +996,15 @@ class ControlsManager {
         let split = '';
         if (heatUp > 0 || losses > 0) {
             const hours = Number(detail.horizon_hours) || 0;
+            // Where it is starting from belongs here rather than in a table of its own.
+            // On a wide screen a label on the left and a value on the right are a
+            // hand-span apart, and the number only means anything beside the energy it
+            // explains.
+            const from = (detail.temperature_c !== undefined && detail.temperature_c !== null)
+                ? `<span style="opacity:0.85;">From ${detail.temperature_c}&nbsp;&deg;C:</span> `
+                : '';
             split = `<div style="opacity:0.7;font-size:0.85em;margin:2px 0 8px 0;line-height:1.5;">
+                ${from}
                 ${heatUp > 0 ? `${kwh(toElectric(heatUp))} to reach
                     ${detail.target_temperature_c}&nbsp;&deg;C` : ''}
                 ${heatUp > 0 && losses > 0 ? ' &middot; ' : ''}
@@ -1042,10 +1133,15 @@ class ControlsManager {
      * @param {Object|null} release - Its release state
      * @returns {string} HTML
      */
-    _managedLoadFacts(load, detail, model, release) {
+    _managedLoadFacts(load, detail, model, release, tier = 'core', drawn = {}) {
         const facts = [];
+        const core = tier === 'core';
+        // A number beside its own line beats a label on the left of a wide screen and a
+        // value a hand-span away on the right. Where a chart carries the figure in its
+        // caption, the row would only be saying it twice.
 
-        if (detail.temperature_c !== undefined && detail.temperature_c !== null) {
+        if (core && !drawn.water
+                && detail.temperature_c !== undefined && detail.temperature_c !== null) {
             facts.push(['Temperature',
                 `${detail.temperature_c} &deg;C &rarr; ${detail.target_temperature_c} &deg;C`]);
         }
@@ -1082,20 +1178,25 @@ class ControlsManager {
                    <span style="opacity:0.6;">&middot; model using ${detail.ambient_now_c} &deg;C</span>`
                 : `${detail.ambient_now_c} &deg;C`;
 
-            facts.push(['Outside now',
-                `${value}
-                 <div style="opacity:0.6;font-size:0.85em;${warn ? 'color:#e0a030;' : ''}">${note}${shift}</div>`]);
+            // A fixed guess is not a detail - a prediction standing on nothing must say
+            // so where it cannot be missed.
+            if (core) {
+                if (!drawn.outside || warn) {
+                    facts.push(['Outside now', warn
+                        ? `${value}
+                           <div style="opacity:0.6;font-size:0.85em;color:#e0a030;">${note}</div>`
+                        : value]);
+                }
+            } else if (!warn) {
+                facts.push(['Where that came from',
+                    `<span style="opacity:0.8;">${note}${shift}</span>`]);
+            }
         }
 
-        if (release && release.next_release_start) {
-            facts.push(['Next start', new Date(release.next_release_start)
-                .toLocaleString(navigator.language,
-                    { weekday: 'short', hour: '2-digit', minute: '2-digit' })]);
-        }
 
         // Both currencies. The rating is electrical and everything above it is derived
         // from heat, which made it the one number on the card that did not compare.
-        if (detail.electrical_power_w || model.rated_power_w) {
+        if (!core && (detail.electrical_power_w || model.rated_power_w)) {
             const electrical = detail.electrical_power_w || model.rated_power_w;
             const thermal = detail.thermal_power_w;
             facts.push(['Power', thermal
@@ -1103,14 +1204,14 @@ class ControlsManager {
                    <span style="opacity:0.8;">${(thermal / 1000).toFixed(1)} kW of heat</span>`
                 : `${electrical} W electrical`]);
         }
-        if (detail.mean_cop) {
+        if (!core && detail.mean_cop) {
             facts.push(['Efficiency now', `COP ${detail.mean_cop}`]);
         }
-        if (release && release.override) {
+        if (core && release && release.override) {
             facts.push(['Override', `${release.override} until ` + new Date(release.override_until)
                 .toLocaleTimeString(navigator.language, { hour: '2-digit', minute: '2-digit' })]);
         }
-        if (load.error) {
+        if (core && load.error) {
             facts.push(['Error', this.escapeHtml(load.error)]);
         }
 
@@ -1241,10 +1342,11 @@ class ControlsManager {
      * @param {string[]} slotReasons - Why each slot carries no energy, if known
      * @param {object} [ambient] - Forecast as retrieved and as used, for outdoor loads
      * @param {object} [water] - Store temperature so far and as projected
+     * @param {object} [detail] - Model detail, for the current values on the captions
      * @returns {string} Strip HTML, or "" when nothing is planned
      */
     _managedLoadPlanStrip(plan, slotSeconds, currentSlot, slotReasons = [], ambient = null,
-                          water = null) {
+                          water = null, detail = {}) {
         if (!plan.length) {
             return '';
         }
@@ -1347,11 +1449,11 @@ class ControlsManager {
                 ${gridHtml}
                 ${bars}
             </div>
+            ${this._managedLoadStripLegend(used)}
             ${this._managedLoadTemperaturePanel(ambient, water, plan.length, currentSlot,
-                gridHtml, i => `${dayName(slotStart(i))} ${hhmm(slotStart(i))}`)}
+                gridHtml, i => `${dayName(slotStart(i))} ${hhmm(slotStart(i))}`, detail)}
             <div style="position:relative;height:1.2em;margin-top:2px;">${tickHtml}</div>
             <div style="display:flex;font-size:0.8em;margin-top:2px;">${dayLabels.join('')}</div>
-            ${this._managedLoadStripLegend(used)}
         </div>`;
     }
 
@@ -1380,9 +1482,11 @@ class ControlsManager {
      * @param {number} currentSlot - Index of the slot happening now
      * @param {string} gridHtml - The strip's own gridlines, reused so they line up
      * @param {function(number): string} timeLabel - Slot index to a wall-clock label
+     * @param {object} detail - Model detail, so each caption carries its live value
      * @returns {string} Panel HTML, or "" when there is no temperature to show
      */
-    _managedLoadTemperaturePanel(ambient, water, slots, currentSlot, gridHtml, timeLabel) {
+    _managedLoadTemperaturePanel(ambient, water, slots, currentSlot, gridHtml, timeLabel,
+                                 detail = {}) {
         const take = arr => (Array.isArray(arr) ? arr.slice(0, slots).map(
             v => (v === null || v === undefined ? null : Number(v))) : []);
         const num = v => (v !== null && v !== undefined && Number.isFinite(Number(v))
@@ -1402,18 +1506,28 @@ class ControlsManager {
         const plots = [];
         if (history.concat(projected).filter(v => v !== null).length >= 2) {
             plots.push({
-                caption: 'Water &mdash; measured, then projected',
+                caption: `Water${detail.temperature_c === undefined
+                        || detail.temperature_c === null ? ''
+                        : ` <strong>${detail.temperature_c}&nbsp;&deg;C</strong>${
+                            target === null ? '' : ` &rarr; ${target}&nbsp;&deg;C`}`
+                    } &mdash; measured, then projected`,
                 lines: [{ values: projected, stroke: WATER, dash: '5 4' },
                         { values: history, stroke: WATER, dash: '' }],
-                refs: target === null ? [] : [{ at: target, stroke: WATER }],
+                refs: target === null ? []
+                    : [{ at: target, stroke: WATER, label: `Target ${target.toFixed(0)}°C` }],
             });
         }
         if (forecast.concat(adapted).filter(v => v !== null).length >= 2) {
             plots.push({
-                caption: 'Outside &mdash; corrected to your site, dashed as forecast',
+                caption: `Outside${detail.ambient_now_c === undefined
+                        || detail.ambient_now_c === null ? ''
+                        : ` <strong>${detail.ambient_now_c}&nbsp;&deg;C</strong>`
+                    } &mdash; corrected to your site, dashed as forecast`,
                 lines: [{ values: forecast, stroke: AIR_FAINT, dash: '5 4' },
                         { values: adapted, stroke: AIR, dash: '' }],
-                refs: cut === null ? [] : [{ at: cut, stroke: '#d03b3b' }],
+                refs: cut === null ? []
+                    : [{ at: cut, stroke: '#d03b3b',
+                         label: `Too cold below ${cut.toFixed(0)}°C` }],
             });
         }
         if (!plots.length) {
@@ -1442,24 +1556,11 @@ class ControlsManager {
         const boxes = plots.map(
             plot => this._managedLoadTempPlot(plot, n, gridHtml, hover)).join('');
 
-        const swatch = (stroke, dash) => `<svg width="18" height="6" aria-hidden="true">
-            <line x1="0" y1="3" x2="18" y2="3" stroke="${stroke}" stroke-width="2"
-                  ${dash ? `stroke-dasharray="${dash}"` : ''}/></svg>`;
-        const entry = (mark, text) => `<span style="display:inline-flex;align-items:center;
-            gap:5px;">${mark}${text}</span>`;
-
         return `<div style="margin-top:6px;">
             <div style="opacity:0.7;font-size:0.85em;margin-bottom:3px;">
                 Temperatures
             </div>
             ${boxes}
-            <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:5px;
-                        font-size:0.8em;opacity:0.75;">
-                ${target === null ? ''
-                    : entry(swatch(WATER, '2 2'), `Target ${target.toFixed(0)}°C`)}
-                ${cut === null ? ''
-                    : entry(swatch('#d03b3b', '2 2'), `Too cold below ${cut.toFixed(0)}°C`)}
-            </div>
         </div>`;
     }
 
@@ -1481,9 +1582,9 @@ class ControlsManager {
         if (!(hi > lo)) {
             hi = lo + 1;
         }
-        const pad = (hi - lo) * 0.15;
-        lo -= pad;
-        hi += pad;
+        const span = (hi - lo) || 1;
+        hi += span * 0.15;
+        lo -= span * 0.15;
 
         const xAt = i => ((i + 0.5) / n) * 100;
         const yAt = v => ((hi - v) / (hi - lo)) * 100;
@@ -1509,28 +1610,36 @@ class ControlsManager {
                         stroke-width="2"
                         ${l.dash ? `stroke-dasharray="${l.dash}"` : ''}
                         vector-effect="non-scaling-stroke" />`).join('');
+        // Every legend sits under the chart it belongs to, never pooled at the foot of
+        // the card where the reader has to work out which line it names.
+        const legend = plot.refs.filter(r => r.label).map(
+            r => `<span style="display:inline-flex;align-items:center;gap:5px;">
+                <svg width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18"
+                    y2="3" stroke="${r.stroke}" stroke-width="1"
+                    stroke-dasharray="2 2"/></svg>${r.label}</span>`).join('');
         const refs = plot.refs.map(
             r => `<line x1="0" y1="${yAt(r.at).toFixed(3)}"
                         x2="100" y2="${yAt(r.at).toFixed(3)}" stroke="${r.stroke}"
                         stroke-width="1" stroke-dasharray="2 2"
                         vector-effect="non-scaling-stroke" />`).join('');
 
-        return `<div style="position:relative;height:62px;background:rgba(0,0,0,0.15);
+        return `<div style="opacity:0.65;font-size:0.78em;margin:2px 0 2px 2px;">
+                ${plot.caption}</div>
+            <div style="position:relative;height:62px;background:rgba(0,0,0,0.15);
                     border-radius:4px;margin-bottom:3px;">
             ${gridHtml}
             <svg viewBox="0 0 100 100" preserveAspectRatio="none"
                  style="position:absolute;inset:0;width:100%;height:100%;">
                 ${refs}${lines}
             </svg>
-            <span style="position:absolute;top:2px;left:38px;font-size:0.72em;opacity:0.8;
-                         pointer-events:none;
-                         text-shadow:0 0 4px rgba(0,0,0,0.9);">${plot.caption}</span>
             <span style="position:absolute;top:2px;left:4px;font-size:0.7em;opacity:0.5;">
                 ${hi.toFixed(0)}°</span>
             <span style="position:absolute;bottom:2px;left:4px;font-size:0.7em;opacity:0.5;">
                 ${lo.toFixed(0)}°</span>
             <div style="position:absolute;inset:0;display:flex;">${hover}</div>
-        </div>`;
+        </div>
+        ${legend ? `<div style="display:flex;flex-wrap:wrap;gap:14px;
+            margin:-1px 0 5px 0;font-size:0.8em;opacity:0.75;">${legend}</div>` : ''}`;
     }
 
     /**
