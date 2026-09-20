@@ -606,53 +606,11 @@ class LoadInterface:
                 }
                 filtered_data = filter_history(history_data)
 
-            # The old current-time retry is retained, but only as a history
-            # source. If that still yields no data, use recorder statistics.
-            if not filtered_data:
-                now = datetime.now(end_time.tzinfo)
-                if now > end_time:
-                    logger.info(
-                        "[LOAD-IF] HOMEASSISTANT - History request for '%s' from %s to %s "
-                        "returned no usable data. Retrying with current end_time %s.",
-                        entity_id,
-                        start_time,
-                        end_time,
-                        now,
-                    )
-                    fallback_response = self.__request_with_retries(
-                        "get",
-                        url,
-                        params={
-                            "filter_entity_id": entity_id,
-                            "end_time": now.isoformat(),
-                        },
-                        headers=headers,
-                        timeout=max(self.request_timeout, 30),
-                        item_label=f"{entity_id} (current-time fallback)",
-                    )
-                    fallback_historical_data = None
-                    if fallback_response is not None:
-                        try:
-                            fallback_historical_data = fallback_response.json()
-                        except (ValueError, TypeError):
-                            fallback_historical_data = None
-                    if fallback_historical_data:
-                        fallback_data = [
-                            {
-                                "state": entry["state"],
-                                "last_updated": entry["last_updated"],
-                                "attributes": entry.get("attributes", {}),
-                            }
-                            for sublist in fallback_historical_data
-                            for entry in sublist
-                        ]
-                        fallback_data.sort(key=lambda entry: entry.get("last_updated", ""))
-                        self.__homeassistant_history_cache[entity_id] = {
-                            "start_time": start_time,
-                            "end_time": now,
-                            "data": fallback_data,
-                        }
-                        filtered_data = filter_history(fallback_data)
+            # Do not retry historical intervals with a current-time end_time.
+            # That fallback can make Home Assistant return a much larger history
+            # payload than requested and is especially expensive when this method
+            # is called for many hourly intervals. Recorder statistics below are
+            # the controlled fallback for sensors whose state history is empty.
 
             if filtered_data and len(filtered_data) >= 2:
                 return normalize_history_values(filtered_data)
@@ -676,6 +634,11 @@ class LoadInterface:
                             entity_id,
                             len(short_term_data),
                         )
+                        self.__homeassistant_history_cache[entity_id] = {
+                            "start_time": start_time,
+                            "end_time": end_time,
+                            "data": short_term_data,
+                        }
                         return short_term_data
 
             long_term_data = statistics_request("hour")
@@ -685,6 +648,11 @@ class LoadInterface:
                     entity_id,
                     len(long_term_data),
                 )
+                self.__homeassistant_history_cache[entity_id] = {
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "data": long_term_data,
+                }
                 return long_term_data
 
             # A missing historical interval is an expected data-quality fallback
@@ -992,6 +960,40 @@ class LoadInterface:
         # print(f'HA Car load data: {car_load_data}')
         return additional_load_data
 
+    def __prefetch_homeassistant_day(self, entity_id, start_time, end_time):
+        """Fetch one complete day once so hourly profile processing stays local.
+
+        The load-profile algorithm still processes one-hour slots, but the HA
+        data source is queried only once for the complete day. The normal
+        history/statistics method stores the result in the per-entity cache,
+        allowing the 24 hourly calls to be served without additional HA requests.
+        """
+        if not entity_id or self.src != "homeassistant":
+            return
+
+        cached = self.__homeassistant_history_cache.get(entity_id)
+        if cached is not None:
+            cached_start = self.__normalize_history_timestamp(
+                cached["start_time"], start_time
+            )
+            cached_end = self.__normalize_history_timestamp(
+                cached["end_time"], end_time
+            )
+            requested_start = self.__normalize_history_timestamp(start_time, cached_start)
+            requested_end = self.__normalize_history_timestamp(end_time, cached_end)
+            if cached_start <= requested_start and cached_end >= requested_end:
+                return
+
+        logger.debug(
+            "[LOAD-IF] HOMEASSISTANT - Prefetching '%s' for %s to %s once for the complete day.",
+            entity_id,
+            start_time,
+            end_time,
+        )
+        self.__fetch_historical_energy_data_from_homeassistant(
+            entity_id, start_time, end_time
+        )
+
     def get_load_profile_for_day(self, start_time, end_time):
         """
         Retrieves the load profile for a specific day by fetching energy data from Home Assistant
@@ -1017,6 +1019,19 @@ class LoadInterface:
         logger.debug(
             "[LOAD-IF] Creating day load profile from %s to %s", start_time, end_time
         )
+
+        # Fetch each Home Assistant source for the complete day once. The hourly
+        # loop below then reads only from the local cache. This prevents the
+        # previous 24-requests-per-sensor pattern and keeps statistics fallback
+        # requests bounded to one call per day and sensor.
+        if self.src == "homeassistant":
+            entities = [
+                self.load_sensor,
+                self.car_charge_load_sensor,
+                self.additional_load_1_sensor,
+            ]
+            for entity_id in dict.fromkeys(entity for entity in entities if entity):
+                self.__prefetch_homeassistant_day(entity_id, start_time, end_time)
 
         load_profile = []
         current_time_slot = start_time
