@@ -318,6 +318,7 @@ class LoadInterface:
         Returns:
             list: A list of historical state changes for the entity.
         """
+        historical_data = []
         if entity_id == "" or entity_id is None:
             return []
         headers = {
