@@ -518,6 +518,52 @@ def test_water_and_air_are_both_drawn_and_told_apart(page):
     assert sorted(p["dash"] for p in air) == [False, True]
 
 
+def test_each_plot_explains_its_own_two_lines(page):
+    """
+    Solid against dashed is the only thing telling the two apart in each plot, and an
+    unnamed dash pattern is a riddle. Both are in the legend, under their own chart.
+    """
+    _render_with_ambient(page, [1600, 0, 0, 0], ['planned'] * 4, AMBIENT, WATER)
+    text = page.evaluate("() => document.getElementById('full_screen_content').innerText")
+    for label in ("Measured", "Projected", "Corrected to your site", "As forecast"):
+        assert label in text, f"{label!r} missing from the legends"
+    # Solid first: the line the plan stands on, whatever order they are drawn in.
+    assert text.index("Measured") < text.index("Projected")
+    assert text.index("Corrected to your site") < text.index("As forecast")
+
+
+def test_the_outside_hover_shows_both_readings_and_the_gap(page):
+    """
+    The deviation is the reason this plot has two lines, so the hover has to carry it.
+    Showing only the corrected figure hid how far the model has learned the site sits
+    from what the forecast says.
+    """
+    _render_with_ambient(page, [1600, 0, 0, 0], ['planned'] * 4, AMBIENT, WATER)
+    tips = page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content div[data-temp-cell]')]
+            .map(e => e.getAttribute('title'))"""
+    )
+    outside = [t for t in tips if "forecast" in t and "model uses" in t]
+    assert outside, tips[:4]
+    # AMBIENT slot 0: forecast 13.0, adapted 8.0
+    assert "forecast 13.0" in outside[0], outside[0]
+    assert "model uses 8.0" in outside[0], outside[0]
+    assert "5.0 K" in outside[0], outside[0]
+
+
+def test_the_two_plots_no_longer_say_the_same_thing(page):
+    """They shared one tooltip row, so hovering either gave the identical text."""
+    _render_with_ambient(page, [1600, 0, 0, 0], ['planned'] * 4, AMBIENT, WATER)
+    tips = page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content div[data-temp-cell]')]
+            .map(e => e.getAttribute('title'))"""
+    )
+    water = [t for t in tips if "water" in t]
+    outside = [t for t in tips if "model uses" in t]
+    assert water and outside
+    assert not (set(water) & set(outside)), "the two plots still share a tooltip"
+
+
 def test_the_history_and_the_projection_do_not_join_across_the_gap(page):
     """
     History stops at now and the projection starts there. Bridging the two would draw
@@ -576,7 +622,7 @@ def test_every_slot_of_the_panel_is_hoverable(page):
                          ['planned', 'planned', 'planned', 'planned'], AMBIENT)
     tips = page.evaluate(
         """() => [...document.querySelectorAll('#full_screen_content div[data-temp-cell]')]
-            .map(e => e.getAttribute('title')).filter(t => t.includes('outside'))"""
+            .map(e => e.getAttribute('title')).filter(t => t.includes('model uses'))"""
     )
     assert len(tips) == 4, tips
     assert "below the 12.0" in tips[0], tips[0]

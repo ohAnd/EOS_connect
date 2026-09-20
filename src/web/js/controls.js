@@ -1512,6 +1512,9 @@ class ControlsManager {
         const AIR = 'rgba(255,255,255,0.92)';
         const AIR_FAINT = 'rgba(255,255,255,0.40)';
 
+        const at = (arr, i) => (arr.length && arr[i] !== null && arr[i] !== undefined
+            ? arr[i] : null);
+
         const plots = [];
         if (history.concat(projected).filter(v => v !== null).length >= 2) {
             plots.push({
@@ -1519,11 +1522,20 @@ class ControlsManager {
                         || detail.temperature_c === null ? ''
                         : ` <strong>${detail.temperature_c}&nbsp;&deg;C</strong>${
                             target === null ? '' : ` &rarr; ${target}&nbsp;&deg;C`}`
-                    } &mdash; measured, then projected`,
-                lines: [{ values: projected, stroke: WATER, dash: '5 4' },
-                        { values: history, stroke: WATER, dash: '' }],
+                    }`,
+                lines: [{ values: projected, stroke: WATER, dash: '5 4',
+                          label: 'Projected' },
+                        { values: history, stroke: WATER, dash: '',
+                          label: 'Measured' }],
                 refs: target === null ? []
                     : [{ at: target, stroke: WATER, label: `Target ${target.toFixed(0)}°C` }],
+                tip: i => {
+                    const measured = at(history, i);
+                    const value = measured !== null ? measured : at(projected, i);
+                    return value === null ? null
+                        : `water ${value.toFixed(1)}°C`
+                          + (measured === null ? ' (projected)' : '');
+                },
             });
         }
         if (forecast.concat(adapted).filter(v => v !== null).length >= 2) {
@@ -1531,12 +1543,32 @@ class ControlsManager {
                 caption: `Outside${detail.ambient_now_c === undefined
                         || detail.ambient_now_c === null ? ''
                         : ` <strong>${detail.ambient_now_c}&nbsp;&deg;C</strong>`
-                    } &mdash; corrected to your site, dashed as forecast`,
-                lines: [{ values: forecast, stroke: AIR_FAINT, dash: '5 4' },
-                        { values: adapted, stroke: AIR, dash: '' }],
+                    }`,
+                lines: [{ values: forecast, stroke: AIR_FAINT, dash: '5 4',
+                          label: 'As forecast' },
+                        { values: adapted, stroke: AIR, dash: '',
+                          label: 'Corrected to your site' }],
                 refs: cut === null ? []
                     : [{ at: cut, stroke: '#d03b3b',
                          label: `Too cold below ${cut.toFixed(0)}°C` }],
+                coldCheck: true,
+                // Both readings, and the gap between them. Showing only the corrected
+                // figure hides the very thing this plot is drawn to show - how far the
+                // model has learned your site sits from what the forecast says.
+                tip: i => {
+                    const raw = at(forecast, i);
+                    const used = at(adapted, i);
+                    if (raw === null && used === null) {
+                        return null;
+                    }
+                    if (raw === null || used === null) {
+                        return `outside ${(used === null ? raw : used).toFixed(1)}°C`;
+                    }
+                    const gap = used - raw;
+                    return `forecast ${raw.toFixed(1)}°C · model uses `
+                        + `${used.toFixed(1)}°C (${gap >= 0 ? '+' : '−'}`
+                        + `${Math.abs(gap).toFixed(1)} K)`;
+                },
             });
         }
         if (!plots.length) {
@@ -1544,17 +1576,13 @@ class ControlsManager {
         }
 
         const n = Math.max(slots, 1);
-        const at = (arr, i) => (arr.length && arr[i] !== null && arr[i] !== undefined
-            ? arr[i] : null);
-        const hover = Array.from({ length: n }, (_, i) => {
-            const w = at(history, i) !== null ? at(history, i) : at(projected, i);
-            const a = at(adapted, i);
+        const hoverFor = plot => Array.from({ length: n }, (_, i) => {
+            const body = plot.tip(i);
             const tip = [
                 timeLabel(i),
-                w === null ? null : `water ${w.toFixed(1)}°C${
-                    at(history, i) === null ? ' (projected)' : ''}`,
-                a === null ? null : `outside ${a.toFixed(1)}°C`,
-                (cut !== null && a !== null && a < cut)
+                body,
+                (plot.coldCheck && cut !== null && at(adapted, i) !== null
+                    && at(adapted, i) < cut)
                     ? `below the ${cut.toFixed(1)}°C minimum` : null,
                 i === currentSlot ? 'happening now' : null,
             ].filter(Boolean).join(' · ');
@@ -1563,7 +1591,7 @@ class ControlsManager {
         }).join('');
 
         const boxes = plots.map(
-            plot => this._managedLoadTempPlot(plot, n, gridHtml, hover)).join('');
+            plot => this._managedLoadTempPlot(plot, n, gridHtml, hoverFor(plot))).join('');
 
         return `<div style="margin-top:6px;">
             <div style="opacity:0.7;font-size:0.85em;margin-bottom:3px;">
@@ -1620,12 +1648,24 @@ class ControlsManager {
                         ${l.dash ? `stroke-dasharray="${l.dash}"` : ''}
                         vector-effect="non-scaling-stroke" />`).join('');
         // Every legend sits under the chart it belongs to, never pooled at the foot of
-        // the card where the reader has to work out which line it names.
-        const legend = plot.refs.filter(r => r.label).map(
-            r => `<span style="display:inline-flex;align-items:center;gap:5px;">
+        // the card where the reader has to work out which line it names. Both lines are
+        // in it, not only the reference level: they are told apart by stroke rather
+        // than by hue, and a dash pattern nobody has named is a riddle.
+        const entry = (stroke, dash, width, label) =>
+            `<span style="display:inline-flex;align-items:center;gap:5px;">
                 <svg width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18"
-                    y2="3" stroke="${r.stroke}" stroke-width="1"
-                    stroke-dasharray="2 2"/></svg>${r.label}</span>`).join('');
+                    y2="3" stroke="${stroke}" stroke-width="${width}"
+                    ${dash ? `stroke-dasharray="${dash}"` : ''}/></svg>${label}</span>`;
+        const legend = plot.lines
+            .filter(l => l.label && l.values.some(v => v !== null))
+            // Drawn dashed-first so the solid sits on top; read solid-first, because
+            // that is the line the plan is actually standing on.
+            .slice()
+            .sort((a, bLine) => (a.dash ? 1 : 0) - (bLine.dash ? 1 : 0))
+            .map(l => entry(l.stroke, l.dash, 2, l.label))
+            .concat(plot.refs.filter(r => r.label)
+                .map(r => entry(r.stroke, '2 2', 1, r.label)))
+            .join('');
         const refs = plot.refs.map(
             r => `<line x1="0" y1="${yAt(r.at).toFixed(3)}"
                         x2="100" y2="${yAt(r.at).toFixed(3)}" stroke="${r.stroke}"
