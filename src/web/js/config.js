@@ -545,7 +545,78 @@ class ConfigurationManager {
                 </div>
                 ${helpText}
                 <div class="config-field-error" id="cfg-err-${this._cssKey(f.key)}"></div>
-            </div>${this._renderEntityTester(f, entryValues)}`;
+            </div>${this._renderEntityTester(f, entryValues)}${
+                this._renderTemperatureCoordinateNotice(f)}`;
+    }
+
+    /**
+     * Say, where the provider is chosen, that it has nowhere to ask about.
+     *
+     * The outside-temperature forecast needs a coordinate. A location-based PV source
+     * already carries one, so for most installs the question never arises - but EVCC,
+     * Victron, Solcast and timeseries supply no `pv_forecast` entry at all, and then
+     * the only source is Latitude and Longitude under System. Both default to zero,
+     * which reads as "not set", so a fresh install of that shape picks a provider,
+     * saves, and silently gets a flat 15 C curve.
+     *
+     * The setting that fixes it is in a different section, which is exactly why the
+     * notice belongs here: this is the screen where the expectation is formed.
+     *
+     * @param {Object} f - The field being rendered
+     * @returns {string} A notice row, or "" when there is nothing to warn about
+     */
+    _renderTemperatureCoordinateNotice(f) {
+        if (f.key !== "pv_forecast_source.temperature_source") {
+            return "";
+        }
+        if (this.values["eos.temperature_forecast_enabled"] === false) {
+            return "";
+        }
+        const number = v => {
+            const n = Number(v);
+            return Number.isFinite(n) ? n : 0;
+        };
+        // Both zero is how a numeric field says "unset" - an empty box cannot.
+        const sited = number(this.values.latitude) !== 0
+            || number(this.values.longitude) !== 0;
+        if (sited) {
+            return "";
+        }
+        // A PV installation carries its own pair and is preferred over the site one -
+        // but only while the user can see it. For a source that is not location-based
+        // the whole PV Installations section is replaced by "not needed for evcc", and
+        // any entry left over from an earlier setup goes on quietly supplying the
+        // coordinates from behind that panel. Config nobody can see must not be what
+        // answers the question, so here the stored entries do not count.
+        const pvSource = this.values["pv_forecast_source.source"]
+            ?? this._getSchemaDefault("pv_forecast_source.source");
+        const shown = LOCATION_BASED_PV_SOURCES.includes(pvSource);
+        const fromPv = shown && Object.keys(this.values).some(
+            key => /^pv_forecast\.\d+\.lat$/.test(key) && number(this.values[key]) !== 0);
+        if (fromPv) {
+            return "";
+        }
+        const stale = !shown && Object.keys(this.values).some(
+            key => /^pv_forecast\.\d+\.lat$/.test(key) && number(this.values[key]) !== 0);
+
+        const body = stale
+            ? `Your <strong>${this._escapeHtml(String(pvSource))}</strong> source needs no
+               PV installation, so the section is hidden &mdash; but one is still stored
+               and is what this provider is asking with. Set
+               <strong>Latitude</strong> and <strong>Longitude</strong> under
+               <strong>System</strong> so the location is one you can see.`
+            : `No coordinates to ask with, so this provider will not be called and the
+               forecast stays a flat 15&nbsp;&deg;C. Your PV source supplies none, so
+               set <strong>Latitude</strong> and <strong>Longitude</strong> under
+               <strong>System</strong>.`;
+
+        return `<div class="config-field" style="border-left:3px solid #ffc107;
+                    padding-left:10px;margin-top:-4px;">
+            <div style="font-size:0.88em;opacity:0.9;">
+                <i class="fas fa-circle-info" style="color:#ffc107;"></i>
+                ${body}
+            </div>
+        </div>`;
     }
 
     /**

@@ -446,6 +446,31 @@ def test_a_value_sits_with_its_chart_not_in_a_distant_row(page):
     assert "Where that came from" not in text, text
 
 
+def test_a_number_with_no_chart_says_where_it_came_from(page):
+    """
+    The provenance rides with the number when nothing else can carry it. A sensor
+    reading held flat across a two-day horizon is not a forecast, and the card is the
+    only place that says so - the alternative is a figure that looks measured and is
+    silently constant from here to tomorrow night.
+    """
+    _render_with_ambient(page, [1600, 0, 0, 0], ['planned'] * 4, None, None,
+                         detail={"ambient_now_c": 20.7, "ambient_measured_c": 20.7,
+                                 "ambient_source": "sensor"})
+    text = page.evaluate("() => document.getElementById('full_screen_content').innerText")
+    assert "held flat" in text, text
+    assert "Latitude and Longitude under System" in text, text
+
+
+def test_nothing_to_go_on_at_all_names_both_ways_out(page):
+    """A fixed guess is not a measurement, and the card has to say what to do."""
+    _render_with_ambient(page, [1600, 0, 0, 0], ['planned'] * 4, None, None,
+                         detail={"ambient_now_c": 15.0, "ambient_source": "fallback"})
+    text = page.evaluate("() => document.getElementById('full_screen_content').innerText")
+    assert "fixed guess" in text
+    assert "Latitude and Longitude under System" in text
+    assert "ambient temperature sensor" in text
+
+
 def test_a_value_with_no_chart_to_carry_it_keeps_its_row(page):
     """An indoor load, or one with no forecast, still has to show the number."""
     _render_with_ambient(page, [1600, 0, 0, 0], ['planned'] * 4, None, None,

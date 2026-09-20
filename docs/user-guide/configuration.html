@@ -442,10 +442,18 @@
                     </div>
                     <p>The forecast is fetched for coordinates, which normally come from your
                         first PV installation. Sources that are not location-based &mdash; EVCC,
-                        Solcast, Victron, timeseries &mdash; have no installations, so set
+                        Solcast, Victron, timeseries &mdash; need no installations, so set
                         <em>Latitude</em> and <em>Longitude</em> under
                         <em>Settings &rsaquo; System</em> instead. Leave them at 0 if you do not
                         need them.</p>
+                    <p>If you switched to one of those sources <em>after</em> configuring
+                        installations, the old entries stay in the database. The
+                        <em>PV Installations</em> section stops showing them &mdash; they are no
+                        longer used for solar &mdash; but they are still what the temperature
+                        forecast asks with, which is a location you can no longer see or edit.
+                        <em>PV Source</em> says so when that happens; setting a site location
+                        under <em>System</em> puts the coordinates back where you can read
+                        them.</p>
                     <p><em>Settings &rsaquo; PV Source &rsaquo; Temperature source</em> chooses who
                         supplies the curve:</p>
                     <ul>

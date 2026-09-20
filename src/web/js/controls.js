@@ -1158,8 +1158,11 @@ class ControlsManager {
             const SOURCES = {
                 forecast: 'from the weather forecast',
                 forecast_corrected: 'forecast, corrected to your sensor',
-                sensor: 'from your sensor, held flat',
-                fallback: 'a fixed guess &mdash; no forecast and no sensor',
+                sensor: 'from your sensor, held flat &mdash; it cannot see tomorrow. '
+                    + 'Set Latitude and Longitude under System for a real forecast',
+                fallback: 'a fixed guess &mdash; no forecast and no sensor. '
+                    + 'Set Latitude and Longitude under System, or give this load an '
+                    + 'ambient temperature sensor',
             };
             const note = SOURCES[detail.ambient_source] || '';
             const warn = detail.ambient_source === 'fallback';
@@ -1180,12 +1183,18 @@ class ControlsManager {
 
             // A fixed guess is not a detail - a prediction standing on nothing must say
             // so where it cannot be missed.
+            // Where the figure came from travels with it. Behind the fold when a chart
+            // carries the number and its caption already says "corrected to your site";
+            // beside the number when there is no chart, because then this line is the
+            // only thing standing between a reading held flat for two days and a
+            // forecast that can see tomorrow.
             if (core) {
                 if (!drawn.outside || warn) {
-                    facts.push(['Outside now', warn
-                        ? `${value}
-                           <div style="opacity:0.6;font-size:0.85em;color:#e0a030;">${note}</div>`
-                        : value]);
+                    facts.push(['Outside now',
+                        `${value}
+                         <div style="opacity:0.6;font-size:0.85em;
+                                     ${warn ? 'color:#e0a030;' : ''}">${note}${
+                            warn ? '' : shift}</div>`]);
                 }
             } else if (!warn) {
                 facts.push(['Where that came from',
