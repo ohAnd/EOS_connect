@@ -332,7 +332,7 @@ def test_a_bar_says_why_it_is_empty(page):
         }"""
     )
     tips = page.evaluate(
-        """() => [...document.querySelectorAll('#full_screen_content div[title]')]
+        """() => [...document.querySelectorAll('#full_screen_content div[data-slot-bar]')]
             .map(e => e.getAttribute('title'))"""
     )
     assert any("above price cap" in t for t in tips)
@@ -354,23 +354,23 @@ def _render_strip(page, plan, reasons):
 
 def _bar_colours(page):
     return page.evaluate(
-        """() => [...document.querySelectorAll('#full_screen_content div[title]')]
+        """() => [...document.querySelectorAll('#full_screen_content div[data-slot-bar]')]
             .map(e => getComputedStyle(e).backgroundColor)"""
     )
 
 
-def _render_with_ambient(page, plan, reasons, ambient):
+def _render_with_ambient(page, plan, reasons, ambient, water=None):
     _open_overlay(page)
     page.evaluate(
-        """([plan, reasons, ambient]) => {
+        """([plan, reasons, ambient, water]) => {
             const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
                 reason: 'below target', energy_needed_wh: 9000, planned_wh: 1600,
                 plan: plan, plan_reasons: reasons, model: {}, release: null, detail: {},
-                ambient_series: ambient};
+                ambient_series: ambient, water_series: water};
             document.getElementById('full_screen_content').innerHTML =
                 controlsManager._managedLoadCard(load, 3600, 0);
         }""",
-        [plan, reasons, ambient],
+        [plan, reasons, ambient, water],
     )
 
 
@@ -418,7 +418,67 @@ def test_the_cut_off_is_drawn_and_named(page):
                          ['planned', 'too cold to run', 'planned', 'planned'], AMBIENT)
     text = page.evaluate("() => document.getElementById('full_screen_content').innerText")
     assert "Too cold below 12" in text
-    assert "Model uses" in text and "Forecast as retrieved" in text
+    assert "Outside" in text
+
+
+WATER = {
+    "history_c": [24.0, 24.2, None, None],
+    "projected_c": [None, None, 25.1, 26.4],
+    "target_c": 29.0,
+}
+
+
+def test_water_and_air_are_both_drawn_and_told_apart(page):
+    """
+    Entity by colour, provenance by line style. Four lines, two of each - and the gap
+    between water and air is the loss rate, which is the point of showing them together.
+    """
+    _render_with_ambient(page, [1600, 0, 0, 0],
+                         ['planned'] * 4, AMBIENT, WATER)
+    paths = page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content svg path')]
+            .map(p => ({dash: !!p.getAttribute('stroke-dasharray'),
+                        stroke: p.getAttribute('stroke')}))"""
+    )
+    assert len(paths) == 4, paths
+    water = [p for p in paths if p["stroke"] == "#c98500"]
+    assert len(water) == 2, paths
+    assert sorted(p["dash"] for p in water) == [False, True], "measured and projected"
+    air = [p for p in paths if p["stroke"] != "#c98500"]
+    assert sorted(p["dash"] for p in air) == [False, True]
+
+
+def test_the_history_and_the_projection_do_not_join_across_the_gap(page):
+    """
+    History stops at now and the projection starts there. Bridging the two would draw
+    a line through slots neither of them speaks for.
+    """
+    _render_with_ambient(page, [1600, 0, 0, 0], ['planned'] * 4, AMBIENT, WATER)
+    ds = page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content svg path')]
+            .filter(p => p.getAttribute('stroke') === '#c98500')
+            .map(p => p.getAttribute('d'))"""
+    )
+    for d in ds:
+        assert d.count("M") == 1, d          # one unbroken run each, no bridging
+    assert sum(d.count("L") for d in ds) == 2
+
+
+def test_the_target_is_drawn_and_named(page):
+    _render_with_ambient(page, [1600, 0, 0, 0], ['planned'] * 4, AMBIENT, WATER)
+    text = page.evaluate("() => document.getElementById('full_screen_content').innerText")
+    assert "Target 29" in text
+    assert "Water" in text
+
+
+def test_a_load_with_no_outdoor_forecast_still_shows_its_own_temperature(page):
+    """A hot-water tank indoors has no forecast to correct, but it still has a store."""
+    _render_with_ambient(page, [1600, 0, 0, 0], ['planned'] * 4, None, WATER)
+    paths = page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content svg path')]
+            .map(p => p.getAttribute('stroke'))"""
+    )
+    assert paths and all(p == "#c98500" for p in paths), paths
 
 
 def test_a_colder_reading_sits_below_the_forecast_on_the_panel(page):
@@ -445,8 +505,8 @@ def test_every_slot_of_the_panel_is_hoverable(page):
     _render_with_ambient(page, [1600, 0, 0, 0],
                          ['planned', 'planned', 'planned', 'planned'], AMBIENT)
     tips = page.evaluate(
-        """() => [...document.querySelectorAll('#full_screen_content div[title]')]
-            .map(e => e.getAttribute('title')).filter(t => t.includes('model uses'))"""
+        """() => [...document.querySelectorAll('#full_screen_content div[data-temp-cell]')]
+            .map(e => e.getAttribute('title')).filter(t => t.includes('outside'))"""
     )
     assert len(tips) == 4, tips
     assert "below the 12.0" in tips[0], tips[0]
@@ -492,7 +552,7 @@ def test_only_the_running_bars_carry_height(page):
                   ['planned', 'planned', 'above price cap', 'too cold to run'])
 
     heights = page.evaluate(
-        """() => [...document.querySelectorAll('#full_screen_content div[title]')]
+        """() => [...document.querySelectorAll('#full_screen_content div[data-slot-bar]')]
             .map(e => e.getBoundingClientRect().height)"""
     )
     assert heights[0] > heights[1] > heights[2]      # energy orders the blue bars
@@ -763,7 +823,7 @@ def test_the_plan_strip_names_both_days(page):
 def test_hovering_a_bar_gives_the_time_the_energy_and_the_running_total(page):
     _open_overlay(page)
     tips = page.evaluate(
-        """() => [...document.querySelectorAll('#full_screen_content div[title]')]
+        """() => [...document.querySelectorAll('#full_screen_content div[data-slot-bar]')]
             .map(e => e.getAttribute('title'))"""
     )
     planned = [t for t in tips if "planned" in t and "not planned" not in t]
@@ -784,7 +844,7 @@ def test_the_current_slot_is_marked_once_per_load(page):
     _open_overlay(page)
     marked, strips = page.evaluate(
         """() => {
-            const tips = [...document.querySelectorAll('#full_screen_content div[title]')]
+            const tips = [...document.querySelectorAll('#full_screen_content div[data-slot-bar]')]
                 .map(e => e.getAttribute('title'))
                 .filter(t => t.includes('happening now'));
             // The label itself, not every ancestor that contains it.

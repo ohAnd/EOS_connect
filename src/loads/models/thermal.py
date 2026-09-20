@@ -28,6 +28,7 @@ from .base import KIND_CONTINGENT, BaseDemandModel, EnergyDemand
 from .calibration import IDLE_POWER_W, ThermalCalibrator
 from .cover_habit import OBSERVED_HOURS, CoverHabit
 from .thermal_physics import (
+    WH_PER_M3_PER_K,
     cop_at,
     energy_to_raise_wh,
     loss_power_w,
@@ -395,6 +396,54 @@ class ThermalStorageModel(BaseDemandModel):
 
         mean_cop = sum(cops) / len(cops) if cops else self.calibrator.cop_nominal
         return losses, mean_cop
+
+    def project_medium(self, ctx, plan, start_c):
+        """
+        Where the store's own temperature goes, slot by slot, under a given plan.
+
+        The card needs this to answer "why does it want so much energy?". The demand
+        figure is a single number and says nothing about the shape behind it: a store
+        that has to climb four kelvin *and* hold there against a cold night is asking
+        for two different things at once, and only a curve separates them.
+
+        It is the same physics the demand is built from, integrated rather than
+        summed - heat in from whatever the plan runs, heat out to the air it is
+        standing in, sun netted off - so the line and the number cannot disagree.
+        Slots before now are the past and stay empty.
+        """
+        if self.volume_m3 <= 0:
+            return []
+        hours = ctx.hours_per_slot()
+        cover = self.cover_series(ctx, self.cover_factor(ctx.readings))
+        solar = ctx.solar_wh or []
+        gain = self.calibrator.solar_gain
+        capacity_wh_per_k = WH_PER_M3_PER_K * self.volume_m3
+
+        temperature = float(start_c)
+        projected = []
+        for index in range(ctx.slot_count):
+            if index < ctx.current_slot:
+                projected.append(None)
+                continue
+            ambient = self._ambient_at(ctx, index)
+            if ambient is None:
+                projected.append(round(temperature, 2))
+                continue
+
+            electrical_wh = float(plan[index]) if index < len(plan) else 0.0
+            gained = electrical_wh * cop_at(
+                ambient, self.calibrator.cop_nominal, self.calibrator.air_coefficient
+            )
+            gained -= loss_power_w(
+                self.calibrator.loss_coefficient, self.surface_m2, temperature, ambient,
+                cover[index] if isinstance(cover, list) else cover,
+            ) * hours
+            if gain > 0 and index < len(solar):
+                gained += gain * max(0.0, float(solar[index]))
+
+            temperature += gained / capacity_wh_per_k
+            projected.append(round(temperature, 2))
+        return projected
 
     def _control_state(self, current, target, readings, urgent):
         """The hysteresis: when may the appliance start, and when must it stop."""

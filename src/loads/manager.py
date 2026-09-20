@@ -16,6 +16,7 @@ which also makes the whole thing testable with four lambdas.
 import hashlib
 import logging
 import threading
+from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 
@@ -80,6 +81,10 @@ NOWCAST_HALF_LIFE_HOURS = 6.0
 # in a few cycles. Ten minutes lags a 2 K/h ramp by about half a kelvin, which is the
 # error budget; shorter starts chasing noise, longer starts missing the evening drop.
 RESIDUAL_HALF_LIFE_MIN = 10.0
+
+# Store temperatures kept in memory for the card. Two days at the shortest sensible
+# poll is well under this; the cap only stops an unbounded list on a long uptime.
+MEDIUM_HISTORY_MAX = 2000
 
 # Who made a release decision, recorded in the journal. The distinction is the first
 # thing you want when reviewing a day of toggling: an optimizer that keeps changing its
@@ -204,6 +209,9 @@ class ManagedLoadManager:
         self._ambient_trace = {}
         # How far today is running from the typical day, smoothed: id -> (when, kelvin).
         self._ambient_residual = {}
+        # Recent store temperatures, so the card can draw where the water has been as
+        # well as where the plan takes it: id -> deque of (when, celsius).
+        self._medium_history = {}
         self._stop = threading.Event()
         self._thread = None
 
@@ -792,6 +800,52 @@ class ManagedLoadManager:
         ) else AMBIENT_FORECAST
         return corrected, source
 
+    def _remember_medium(self, entry_id, when, medium_c):
+        """Keep the recent store temperature, bounded, for the card to draw."""
+        if when is None or medium_c is None:
+            return
+        try:
+            value = float(medium_c)
+        except (TypeError, ValueError):
+            return
+        seen = self._medium_history.get(entry_id)
+        if seen is None:
+            seen = self._medium_history[entry_id] = deque(maxlen=MEDIUM_HISTORY_MAX)
+        seen.append((when, value))
+
+    def medium_series_state(self, item, ctx):
+        """
+        Where the store's temperature has been, and where the plan takes it.
+
+        The pair is the answer to "why does it want so much energy?" - the climb to
+        target and the losses on the way are one number in the demand and two quite
+        different shapes here.
+        """
+        if ctx is None or not hasattr(item.model, "project_medium"):
+            return None
+        current = item.last_demand.detail.get("temperature_c") if item.last_demand else None
+        if current is None:
+            return None
+
+        history = [None] * ctx.slot_count
+        for when, value in self._medium_history.get(item.id, ()):
+            index = ctx.slot_of(when) if hasattr(ctx, "slot_of") else None
+            if index is None:
+                offset = (when - ctx.anchor).total_seconds()
+                index = int(offset // ctx.time_frame_base)
+            if 0 <= index < ctx.slot_count:
+                history[index] = round(float(value), 2)
+
+        projected = item.model.project_medium(ctx, item.last_plan or [], current)
+        target = item.last_demand.detail.get("target_temperature_c")
+        if not projected:
+            return None
+        return {
+            "history_c": history,
+            "projected_c": projected,
+            "target_c": None if target is None else round(float(target), 2),
+        }
+
     def _smoothed_residual(self, item, ctx, gap):
         """
         Today's departure from the typical day, filtered.
@@ -1120,6 +1174,7 @@ class ManagedLoadManager:
             return
 
         self.stats.samples_recorded += 1
+        self._remember_medium(item.id, sample.get("timestamp"), sample.get("medium_c"))
         if item.observe(sample):
             self.stats.calibration_updates += 1
 
@@ -1157,6 +1212,10 @@ class ManagedLoadManager:
             if samples and hasattr(item.model, "observe_history"):
                 restored += item.model.observe_history(samples)
             self._replay_ambient_bias(item, samples)
+            for sample in samples:
+                self._remember_medium(
+                    item.id, sample.get("timestamp"), sample.get("medium_c")
+                )
         if restored:
             logger.info(
                 "[LOADS] calibration seeded from %d recorded sample pairs", restored
@@ -1372,6 +1431,9 @@ class ManagedLoadManager:
         series = self.ambient_series_state(item)
         if series is not None:
             status["ambient_series"] = series
+        medium = self.medium_series_state(item, self._last_ctx_for.get(item.id))
+        if medium is not None:
+            status["water_series"] = medium
         return status
 
     def status(self):

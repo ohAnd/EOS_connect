@@ -867,7 +867,8 @@ class ControlsManager {
             ${this._managedLoadFacts(load, detail, model, release)}
             ${this._managedLoadCalibration(load, model, counter)}
             ${this._managedLoadPlanStrip(load.plan || [], slotSeconds, currentSlot,
-                                          load.plan_reasons || [], load.ambient_series)}
+                                          load.plan_reasons || [], load.ambient_series,
+                                          load.water_series)}
         </div>`;
     }
 
@@ -1239,9 +1240,11 @@ class ControlsManager {
      * @param {number} currentSlot - Index of the slot happening now
      * @param {string[]} slotReasons - Why each slot carries no energy, if known
      * @param {object} [ambient] - Forecast as retrieved and as used, for outdoor loads
+     * @param {object} [water] - Store temperature so far and as projected
      * @returns {string} Strip HTML, or "" when nothing is planned
      */
-    _managedLoadPlanStrip(plan, slotSeconds, currentSlot, slotReasons = [], ambient = null) {
+    _managedLoadPlanStrip(plan, slotSeconds, currentSlot, slotReasons = [], ambient = null,
+                          water = null) {
         if (!plan.length) {
             return '';
         }
@@ -1299,7 +1302,8 @@ class ControlsManager {
                 : style.height;
             const radius = v > 0 ? 'border-radius:2px 2px 0 0;' : '';
 
-            return `<div title="${this.escapeHtml(tip)}" style="flex:1 1 0;height:${height}%;
+            return `<div data-slot-bar title="${this.escapeHtml(tip)}"
+                style="flex:1 1 0;height:${height}%;
                 background:${style.color};align-self:flex-end;${radius}
                 ${isNow ? 'outline:1px solid #fff;outline-offset:-1px;' : ''}"></div>`;
         }).join('');
@@ -1343,8 +1347,8 @@ class ControlsManager {
                 ${gridHtml}
                 ${bars}
             </div>
-            ${this._managedLoadAmbientPanel(ambient, plan.length, currentSlot, gridHtml,
-                i => `${dayName(slotStart(i))} ${hhmm(slotStart(i))}`)}
+            ${this._managedLoadTemperaturePanel(ambient, water, plan.length, currentSlot,
+                gridHtml, i => `${dayName(slotStart(i))} ${hhmm(slotStart(i))}`)}
             <div style="position:relative;height:1.2em;margin-top:2px;">${tickHtml}</div>
             <div style="display:flex;font-size:0.8em;margin-top:2px;">${dayLabels.join('')}</div>
             ${this._managedLoadStripLegend(used)}
@@ -1352,147 +1356,180 @@ class ControlsManager {
     }
 
     /**
-     * The outdoor temperature behind the plan: as retrieved, and as the model uses it.
+     * The temperatures behind the plan: the store's own, and the air it stands in.
      *
-     * Its own panel rather than an overlay on the strip. The bars carry energy in their
+     * Its own row rather than an overlay on the strip. The bars carry energy in their
      * height, so a temperature drawn in the same box would be a second y-scale sharing
      * one space - the reader cannot tell which axis a mark belongs to, and a crossing
-     * means nothing. Two panels on one x-axis says the same thing and stays readable.
+     * means nothing.
      *
-     * The two lines are one quantity from two sources, so they separate by line style
-     * rather than colour: the slot strip above already spends three categorical hues,
-     * and no fourth clears the all-pairs separation floors against them (violet sits
-     * 9.8 from the strip's blue under normal vision, yellow 10.6 from its orange).
-     * Style costs no hue and reads in greyscale.
+     * Two stacked plots rather than one, for the same reason in a quieter form. Both
+     * are degrees, so one axis would be honest - but a pool moves four kelvin where the
+     * air outside moves twenty-three, and drawn together the water flattens into a band
+     * at the top of the box with its climb to target invisible. That climb is the
+     * question being asked. Each plot gets the range it needs and they share the x-axis.
+     *
+     * Entity by colour, provenance by line style: water carries the one hue, air stays
+     * in ink, and solid-versus-dashed is measured-versus-projected in both. The strip
+     * above spends the three categorical slots that clear the all-pairs floors, so this
+     * row is its own one-hue palette rather than a fourth slot competing with them.
      *
      * @param {object} ambient - forecast_c, adapted_c, min_ambient_c
-     * @param {number} slots - Length of the plan, so both panels span the same time
+     * @param {object} water - history_c, projected_c, target_c
+     * @param {number} slots - Length of the plan, so every plot spans the same time
      * @param {number} currentSlot - Index of the slot happening now
      * @param {string} gridHtml - The strip's own gridlines, reused so they line up
      * @param {function(number): string} timeLabel - Slot index to a wall-clock label
-     * @returns {string} Panel HTML, or "" when this load has no outdoor forecast
+     * @returns {string} Panel HTML, or "" when there is no temperature to show
      */
-    _managedLoadAmbientPanel(ambient, slots, currentSlot, gridHtml, timeLabel) {
-        if (!ambient) {
-            return '';
-        }
-        const forecast = (ambient.forecast_c || []).slice(0, slots).map(Number);
-        const adapted = (ambient.adapted_c || []).slice(0, slots).map(Number);
-        if (forecast.length < 2 || adapted.length < 2) {
-            return '';
-        }
-        const cut = ambient.min_ambient_c;
-        const hasCut = cut !== null && cut !== undefined && Number.isFinite(Number(cut));
+    _managedLoadTemperaturePanel(ambient, water, slots, currentSlot, gridHtml, timeLabel) {
+        const take = arr => (Array.isArray(arr) ? arr.slice(0, slots).map(
+            v => (v === null || v === undefined ? null : Number(v))) : []);
+        const num = v => (v !== null && v !== undefined && Number.isFinite(Number(v))
+            ? Number(v) : null);
 
-        const all = forecast.concat(adapted);
-        if (hasCut) {
-            all.push(Number(cut));
+        const forecast = take(ambient && ambient.forecast_c);
+        const adapted = take(ambient && ambient.adapted_c);
+        const history = take(water && water.history_c);
+        const projected = take(water && water.projected_c);
+        const cut = num(ambient && ambient.min_ambient_c);
+        const target = num(water && water.target_c);
+
+        const WATER = '#c98500';
+        const AIR = 'rgba(255,255,255,0.92)';
+        const AIR_FAINT = 'rgba(255,255,255,0.40)';
+
+        const plots = [];
+        if (history.concat(projected).filter(v => v !== null).length >= 2) {
+            plots.push({
+                caption: 'Water &mdash; measured, then projected',
+                lines: [{ values: projected, stroke: WATER, dash: '5 4' },
+                        { values: history, stroke: WATER, dash: '' }],
+                refs: target === null ? [] : [{ at: target, stroke: WATER }],
+            });
         }
+        if (forecast.concat(adapted).filter(v => v !== null).length >= 2) {
+            plots.push({
+                caption: 'Outside &mdash; corrected to your site, dashed as forecast',
+                lines: [{ values: forecast, stroke: AIR_FAINT, dash: '5 4' },
+                        { values: adapted, stroke: AIR, dash: '' }],
+                refs: cut === null ? [] : [{ at: cut, stroke: '#d03b3b' }],
+            });
+        }
+        if (!plots.length) {
+            return '';
+        }
+
+        const n = Math.max(slots, 1);
+        const at = (arr, i) => (arr.length && arr[i] !== null && arr[i] !== undefined
+            ? arr[i] : null);
+        const hover = Array.from({ length: n }, (_, i) => {
+            const w = at(history, i) !== null ? at(history, i) : at(projected, i);
+            const a = at(adapted, i);
+            const tip = [
+                timeLabel(i),
+                w === null ? null : `water ${w.toFixed(1)}°C${
+                    at(history, i) === null ? ' (projected)' : ''}`,
+                a === null ? null : `outside ${a.toFixed(1)}°C`,
+                (cut !== null && a !== null && a < cut)
+                    ? `below the ${cut.toFixed(1)}°C minimum` : null,
+                i === currentSlot ? 'happening now' : null,
+            ].filter(Boolean).join(' · ');
+            return `<div data-temp-cell title="${this.escapeHtml(tip)}"
+                style="flex:1 1 0;"></div>`;
+        }).join('');
+
+        const boxes = plots.map(
+            plot => this._managedLoadTempPlot(plot, n, gridHtml, hover)).join('');
+
+        const swatch = (stroke, dash) => `<svg width="18" height="6" aria-hidden="true">
+            <line x1="0" y1="3" x2="18" y2="3" stroke="${stroke}" stroke-width="2"
+                  ${dash ? `stroke-dasharray="${dash}"` : ''}/></svg>`;
+        const entry = (mark, text) => `<span style="display:inline-flex;align-items:center;
+            gap:5px;">${mark}${text}</span>`;
+
+        return `<div style="margin-top:6px;">
+            <div style="opacity:0.7;font-size:0.85em;margin-bottom:3px;">
+                Temperatures
+            </div>
+            ${boxes}
+            <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:5px;
+                        font-size:0.8em;opacity:0.75;">
+                ${target === null ? ''
+                    : entry(swatch(WATER, '2 2'), `Target ${target.toFixed(0)}°C`)}
+                ${cut === null ? ''
+                    : entry(swatch('#d03b3b', '2 2'), `Too cold below ${cut.toFixed(0)}°C`)}
+            </div>
+        </div>`;
+    }
+
+    /**
+     * One temperature plot, scaled to its own series. See the panel above for why the
+     * water and the air do not share a box.
+     *
+     * @param {object} plot - caption, lines (values/stroke/dash) and reference levels
+     * @param {number} n - Slots on the x-axis, shared with every other plot
+     * @param {string} gridHtml - The strip's gridlines
+     * @param {string} hover - The shared row of hover targets
+     * @returns {string} One plot box
+     */
+    _managedLoadTempPlot(plot, n, gridHtml, hover) {
+        const all = [].concat(...plot.lines.map(l => l.values)).filter(v => v !== null)
+            .concat(plot.refs.map(r => r.at));
         let lo = Math.min(...all);
         let hi = Math.max(...all);
         if (!(hi > lo)) {
             hi = lo + 1;
         }
-        const pad = (hi - lo) * 0.12;
+        const pad = (hi - lo) * 0.15;
         lo -= pad;
         hi += pad;
 
-        const n = Math.max(forecast.length, adapted.length);
         const xAt = i => ((i + 0.5) / n) * 100;
         const yAt = v => ((hi - v) / (hi - lo)) * 100;
-        const path = arr => arr
-            .map((v, i) => `${i ? 'L' : 'M'}${xAt(i).toFixed(3)},${yAt(v).toFixed(3)}`)
-            .join(' ');
 
-        // Direct-labelled where the two are furthest apart, which is also the place a
-        // reader is asking the question. At the right-hand end they converge by design,
-        // so labels there would sit on top of each other.
-        let apart = 0;
-        for (let i = 0; i < Math.min(forecast.length, adapted.length); i++) {
-            if (Math.abs(forecast[i] - adapted[i]) > Math.abs(forecast[apart] - adapted[apart])) {
-                apart = i;
-            }
-        }
-        const labelSide = xAt(apart) > 60 ? 'right:' : 'left:';
-        const labelX = xAt(apart) > 60 ? (100 - xAt(apart)) : xAt(apart);
-        // Two labels at the same height are one unreadable label. Push them apart to a
-        // legible gap around their midpoint, and keep both inside the box.
-        const clamp = v => Math.max(12, Math.min(88, v));
-        let hiY = yAt(Math.max(forecast[apart], adapted[apart]));
-        let loY = yAt(Math.min(forecast[apart], adapted[apart]));
-        const MIN_GAP = 26;
-        if (loY - hiY < MIN_GAP) {
-            const mid = (hiY + loY) / 2;
-            hiY = mid - MIN_GAP / 2;
-            loY = mid + MIN_GAP / 2;
-        }
-        const yFor = series => (series[apart] >= forecast[apart]
-            && series[apart] >= adapted[apart]) ? clamp(hiY) : clamp(loY);
-        const tag = (top, text, weight) => `
-            <span style="position:absolute;top:${top}%;${labelSide}calc(${labelX}% + 8px);
-                         transform:translateY(-50%);font-size:0.72em;white-space:nowrap;
-                         opacity:${weight};pointer-events:none;
-                         text-shadow:0 0 4px rgba(0,0,0,0.9),0 0 4px rgba(0,0,0,0.9);
-                         ">${text}</span>`;
+        // Gaps are real: history stops at now and the projection starts there. Breaking
+        // the path rather than bridging it keeps the seam honest.
+        const path = values => {
+            let out = '';
+            let pen = false;
+            values.forEach((v, i) => {
+                if (v === null) {
+                    pen = false;
+                    return;
+                }
+                out += `${pen ? 'L' : 'M'}${xAt(i).toFixed(3)},${yAt(v).toFixed(3)}`;
+                pen = true;
+            });
+            return out;
+        };
 
-        const cutLine = hasCut ? `
-            <line x1="0" y1="${yAt(Number(cut)).toFixed(3)}"
-                  x2="100" y2="${yAt(Number(cut)).toFixed(3)}"
-                  stroke="#d03b3b" stroke-width="1" stroke-dasharray="2 2"
-                  vector-effect="non-scaling-stroke" />` : '';
+        const lines = plot.lines.filter(l => l.values.some(v => v !== null)).map(
+            l => `<path d="${path(l.values)}" fill="none" stroke="${l.stroke}"
+                        stroke-width="2"
+                        ${l.dash ? `stroke-dasharray="${l.dash}"` : ''}
+                        vector-effect="non-scaling-stroke" />`).join('');
+        const refs = plot.refs.map(
+            r => `<line x1="0" y1="${yAt(r.at).toFixed(3)}"
+                        x2="100" y2="${yAt(r.at).toFixed(3)}" stroke="${r.stroke}"
+                        stroke-width="1" stroke-dasharray="2 2"
+                        vector-effect="non-scaling-stroke" />`).join('');
 
-        const hover = Array.from({ length: n }, (_, i) => {
-            const below = hasCut && adapted[i] < Number(cut);
-            const tip = [
-                timeLabel(i),
-                `forecast ${forecast[i].toFixed(1)} \u00b0C`,
-                `model uses ${adapted[i].toFixed(1)} \u00b0C`,
-                below ? `below the ${Number(cut).toFixed(1)} \u00b0C minimum` : null,
-                i === currentSlot ? 'happening now' : null,
-            ].filter(Boolean).join(' \u00b7 ');
-            return `<div title="${this.escapeHtml(tip)}" style="flex:1 1 0;"></div>`;
-        }).join('');
-
-        return `<div style="margin-top:6px;">
-            <div style="opacity:0.7;font-size:0.85em;margin-bottom:3px;">
-                Outdoor temperature &mdash; what the forecast said, and what the model uses
-            </div>
-            <div style="position:relative;height:74px;background:rgba(0,0,0,0.15);
-                        border-radius:4px;">
-                ${gridHtml}
-                <svg viewBox="0 0 100 100" preserveAspectRatio="none"
-                     style="position:absolute;inset:0;width:100%;height:100%;">
-                    ${cutLine}
-                    <path d="${path(forecast)}" fill="none" stroke="rgba(255,255,255,0.40)"
-                          stroke-width="2" stroke-dasharray="5 4"
-                          vector-effect="non-scaling-stroke" />
-                    <path d="${path(adapted)}" fill="none" stroke="rgba(255,255,255,0.92)"
-                          stroke-width="2" vector-effect="non-scaling-stroke" />
-                </svg>
-                ${tag(yFor(forecast), 'forecast', 0.65)}
-                ${tag(yFor(adapted), 'model uses', 0.95)}
-                <span style="position:absolute;top:2px;left:4px;font-size:0.7em;opacity:0.5;">
-                    ${hi.toFixed(0)}\u00b0</span>
-                <span style="position:absolute;bottom:2px;left:4px;font-size:0.7em;opacity:0.5;">
-                    ${lo.toFixed(0)}\u00b0</span>
-                <div style="position:absolute;inset:0;display:flex;">${hover}</div>
-            </div>
-            <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:5px;
-                        font-size:0.8em;opacity:0.75;">
-                <span style="display:inline-flex;align-items:center;gap:5px;">
-                    <svg width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18" y2="3"
-                        stroke="rgba(255,255,255,0.92)" stroke-width="2"/></svg>
-                    Model uses</span>
-                <span style="display:inline-flex;align-items:center;gap:5px;">
-                    <svg width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18" y2="3"
-                        stroke="rgba(255,255,255,0.40)" stroke-width="2"
-                        stroke-dasharray="5 4"/></svg>
-                    Forecast as retrieved</span>
-                ${hasCut ? `<span style="display:inline-flex;align-items:center;gap:5px;">
-                    <svg width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18" y2="3"
-                        stroke="#d03b3b" stroke-width="1" stroke-dasharray="2 2"/></svg>
-                    Too cold below ${Number(cut).toFixed(0)}\u00b0C</span>` : ''}
-            </div>
+        return `<div style="position:relative;height:62px;background:rgba(0,0,0,0.15);
+                    border-radius:4px;margin-bottom:3px;">
+            ${gridHtml}
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+                 style="position:absolute;inset:0;width:100%;height:100%;">
+                ${refs}${lines}
+            </svg>
+            <span style="position:absolute;top:2px;left:38px;font-size:0.72em;opacity:0.8;
+                         pointer-events:none;
+                         text-shadow:0 0 4px rgba(0,0,0,0.9);">${plot.caption}</span>
+            <span style="position:absolute;top:2px;left:4px;font-size:0.7em;opacity:0.5;">
+                ${hi.toFixed(0)}°</span>
+            <span style="position:absolute;bottom:2px;left:4px;font-size:0.7em;opacity:0.5;">
+                ${lo.toFixed(0)}°</span>
+            <div style="position:absolute;inset:0;display:flex;">${hover}</div>
         </div>`;
     }
 
