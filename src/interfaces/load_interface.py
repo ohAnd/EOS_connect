@@ -1043,6 +1043,7 @@ class LoadInterface:
                 self.__prefetch_homeassistant_day(entity_id, start_time, end_time)
 
         load_profile = []
+        day_has_data = False
         current_time_slot = start_time
 
         while current_time_slot < end_time:
@@ -1064,6 +1065,12 @@ class LoadInterface:
                     self.src,
                 )
                 return []
+
+            # Distinguish missing source data from a valid zero-consumption
+            # interval. The old logic represented both cases as 0 Wh, which
+            # made a complete statistics response look like missing history.
+            if energy_data:
+                day_has_data = True
 
             car_load_energy = 0
             # check if car load sensor is configured
@@ -1198,6 +1205,16 @@ class LoadInterface:
                 round(sum_controlable_energy_load_wh, 1),
             )
             current_time_slot += timedelta(seconds=self.time_frame_base)
+
+        if not day_has_data:
+            logger.debug(
+                "[LOAD-IF] No source data returned for '%s' from %s to %s.",
+                self.load_sensor,
+                start_time,
+                end_time,
+            )
+            return []
+
         if not load_profile:
             logger.error(
                 "[LOAD-IF] No load profile data available for the specified day - % s to % s",
@@ -1289,8 +1306,16 @@ class LoadInterface:
             else:
                 load_profile.append(round(value, 3))
 
-        # Check if load profile contains useful values (not all zeros)
-        if not load_profile or all(value == 0 for value in load_profile):
+        # An all-zero profile can be valid data. Missing history is represented
+        # by an empty day profile, so use data availability rather than the
+        # numeric value to decide whether the historical fallback is needed.
+        historical_profiles = (
+            load_profile_one_week_before,
+            load_profile_two_week_before,
+            load_profile_tomorrow_one_week_before,
+            load_profile_tomorrow_two_week_before,
+        )
+        if not any(historical_profiles):
             logger.info(
                 "[LOAD-IF] No historical data available from 7 and 14 days ago. "
                 + "This is normal for new installations - using yesterday's data as fallback. "
@@ -1306,7 +1331,7 @@ class LoadInterface:
             )
 
             # Double yesterday's profile to create 48 hours
-            if yesterday_profile and not all(value == 0 for value in yesterday_profile):
+            if yesterday_profile:
                 load_profile = yesterday_profile + yesterday_profile
                 logger.info(
                     "[LOAD-IF] Using yesterday's consumption pattern doubled"
