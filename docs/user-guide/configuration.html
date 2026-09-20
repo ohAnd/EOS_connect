@@ -730,15 +730,26 @@ attributes:
                     <h2 id="backup-restore"><i class="fas fa-box-archive" aria-hidden="true"></i> Backup and
                         restore</h2>
                     <p><em>Menu &rsaquo; Backup &amp; Restore</em> writes one file containing your whole
-                        install: every setting, plus the measured PV yield history that the forecast
-                        auto-scaler learns from.</p>
+                        install: every setting, the measured PV yield history that the forecast
+                        auto-scaler learns from, and what each managed load has learned about its
+                        appliance.</p>
                     <ul>
                         <li>That history is stored nowhere else and is purged on a rolling window
                             (7&nbsp;days by default), so a backup is the only way to keep it.</li>
+                        <li>Every load that reads a temperature learns &mdash; a pool, a sauna, a
+                            hot-water tank, a buffer tank &mdash; and that learning is the slowest
+                            thing on the install to rebuild. A heat-loss figure needs weeks of
+                            overnight cooling and a spread of weather before it means anything, and
+                            a covered store has to be seen both covered and open before the cover is
+                            worth anything to the model. Restoring takes effect at the next restart,
+                            because each load rebuilds its calibration from the recorded samples when
+                            it starts.</li>
                         <li>Restoring <strong>previews first</strong> &mdash; including which settings it
                             would remove &mdash; and writes nothing until you confirm.</li>
                         <li>An old backup's yield history can be shifted into the current window, so
                             auto-scaling works from the first run instead of waiting a week.</li>
+                        <li>Each dataset has its own checkbox on both sides, so you can back up
+                            everything and restore only the part you meant to.</li>
                     </ul>
                     <div class="alert alert-danger">
                         <p><strong>The backup file holds your API tokens and inverter password in plain

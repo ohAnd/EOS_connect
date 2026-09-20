@@ -71,8 +71,9 @@ cd EOS_connect
 docker compose up -d</code></pre>
                     </div>
                     <div class="alert alert-warning">
-                        <p><strong>Keep the <code>./data:/app/data</code> volume.</strong> Your settings
-                            and the PV yield history the forecast auto-scaler learns from both live in
+                        <p><strong>Keep the <code>./data:/app/data</code> volume.</strong> Your settings,
+                            the PV yield history the forecast auto-scaler learns from, and what each
+                            managed load has learned about its appliance all live in
                             <code>data/eos_connect.db</code>. Without that mount the database sits on the
                             container's writable layer and is destroyed every time the container is
                             recreated &mdash; which is exactly what an update does. Your settings then

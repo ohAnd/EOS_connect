@@ -20,6 +20,33 @@ from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("__main__")
 
+
+def _learning_rows(payload):
+    """
+    The sample and model rows a backup carries, ignoring anything malformed.
+
+    A file written by an older build, or hand-edited, must degrade to "restores what it
+    can" rather than refusing the whole backup - the settings in it are worth having
+    even if a row is not.
+    """
+    if not isinstance(payload, dict):
+        return [], []
+
+    def rows(name, required):
+        out = []
+        for row in payload.get(name) or []:
+            if not isinstance(row, dict):
+                continue
+            if any(row.get(field) in (None, "") for field in required):
+                continue
+            out.append({field: str(row[field]) for field in required})
+        return out
+
+    return (
+        rows("samples", ("load_id", "timestamp", "payload")),
+        rows("model", ("load_id", "key", "value", "updated_at")),
+    )
+
 _SAMPLES_TABLE = """
     CREATE TABLE IF NOT EXISTS managed_load_samples (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -289,6 +316,81 @@ class ManagedLoadStore:
             (str(load_id),),
         )
         return rows[0][0] if rows else 0
+
+    # -- backup -----------------------------------------------------------------------
+
+    def export_learning(self):
+        """
+        Everything a restore would need to keep a load's education.
+
+        Samples and fitted coefficients, not decisions: a decision is what *we* did and
+        feeds nothing, where a sample is what the *world* did and is the only thing a
+        calibrator can be rebuilt from. A pool takes weeks of overnight cooling and
+        varied weather before its loss coefficient means anything, so losing this to a
+        reinstall costs a season, not an afternoon.
+
+        Rows travel as they are stored - timestamps and JSON payloads untouched - so a
+        restore is a copy rather than a re-derivation.
+        """
+        samples = [
+            {"load_id": load_id, "timestamp": timestamp, "payload": payload}
+            for load_id, timestamp, payload in self._store.query(
+                "SELECT load_id, timestamp, payload FROM managed_load_samples "
+                "ORDER BY timestamp ASC"
+            )
+        ]
+        model = [
+            {"load_id": load_id, "key": key, "value": value, "updated_at": updated_at}
+            for load_id, key, value, updated_at in self._store.query(
+                "SELECT load_id, key, value, updated_at FROM managed_load_model"
+            )
+        ]
+        return {"samples": samples, "model": model}
+
+    def plan_import_learning(self, payload):
+        """What `import_learning` would do, without doing it."""
+        samples, model = _learning_rows(payload)
+        return {
+            "samples": len(samples),
+            "model": len(model),
+            "loads": sorted({row["load_id"] for row in samples + model}),
+        }
+
+    def import_learning(self, payload, replace=True):
+        """
+        Restore recorded samples and fitted coefficients.
+
+        Replaces by default rather than appending: a backup is a picture of a moment,
+        and merging one into a store that has since recorded its own observations would
+        fit the calibration to two overlapping histories of the same appliance.
+        """
+        samples, model = _learning_rows(payload)
+        loads = sorted({row["load_id"] for row in samples + model})
+
+        if replace:
+            for load_id in loads:
+                self._store.execute(
+                    "DELETE FROM managed_load_samples WHERE load_id = ?", (load_id,)
+                )
+                self._store.execute(
+                    "DELETE FROM managed_load_model WHERE load_id = ?", (load_id,)
+                )
+
+        for row in samples:
+            self._store.execute(
+                "INSERT INTO managed_load_samples (load_id, timestamp, payload) "
+                "VALUES (?, ?, ?)",
+                (row["load_id"], row["timestamp"], row["payload"]),
+            )
+        for row in model:
+            self._store.execute(
+                "INSERT INTO managed_load_model (load_id, key, value, updated_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(load_id, key) DO UPDATE SET value = excluded.value, "
+                "updated_at = excluded.updated_at",
+                (row["load_id"], row["key"], row["value"], row["updated_at"]),
+            )
+        return {"samples": len(samples), "model": len(model), "loads": loads}
 
     # -- model state -------------------------------------------------------------------
 
