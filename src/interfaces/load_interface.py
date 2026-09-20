@@ -84,6 +84,13 @@ class LoadInterface:
         self.time_zone = None
         self.request_timeout = request_timeout  # Store configurable timeout
 
+        # Cache for Home Assistant history.
+        # Home Assistant may return empty results or time out for historical
+        # intervals although the recorder contains the requested data.
+        # Once a complete history range has been retrieved, subsequent
+        # hourly requests can be served locally from this cache.
+        self.__homeassistant_history_cache = {}
+
         logger.debug("[LOAD-IF] Initializing LoadInterface with source: %s", self.src)
         logger.debug("[LOAD-IF] Using URL: %s", self.url)
         logger.debug("[LOAD-IF] Using access token: %s", self.access_token)
@@ -239,6 +246,16 @@ class LoadInterface:
                 sleep_seconds = sleep_seconds + random.uniform(0, sleep_seconds * 0.5)
                 time.sleep(sleep_seconds)
 
+    def __normalize_history_timestamp(self, timestamp, reference_time):
+        """Normalize a history timestamp for comparison with a reference time."""
+        if reference_time.tzinfo is None and timestamp.tzinfo is not None:
+            return timestamp.replace(tzinfo=None)
+
+        if reference_time.tzinfo is not None and timestamp.tzinfo is None:
+            return timestamp.replace(tzinfo=reference_time.tzinfo)
+
+        return timestamp
+
     # get load data from url persistance source
     def fetch_historical_energy_data(self, entity_id, start_time, end_time):
         """
@@ -308,24 +325,222 @@ class LoadInterface:
             "Content-Type": "application/json",
         }
         url = f"{self.url}/api/history/period/{start_time.isoformat()}"
-        params = {"filter_entity_id": entity_id, "end_time": end_time.isoformat()}
-        response = self.__request_with_retries(
-            "get", url, params=params, headers=headers, item_label=entity_id
-        )
-        if response is None:
-            # Do not log error here; already logged in __request_with_retries
-            return []
+
+        def filter_history(history_data):
+            filtered = []
+
+            for entry in history_data:
+                try:
+                    entry_time = self.__normalize_history_timestamp(
+                        datetime.fromisoformat(entry["last_updated"]),
+                        start_time,
+                    )
+                except (ValueError, TypeError, KeyError):
+                    continue
+
+                if start_time <= entry_time < end_time:
+                    filtered.append(entry)
+
+            return filtered
+
+        # First try to satisfy the request from an existing cache.
+        cached_history = self.__homeassistant_history_cache.get(entity_id)
+        filtered_data = None
+
+        if cached_history is not None:
+            cached_start = self.__normalize_history_timestamp(
+                cached_history["start_time"],
+                start_time,
+            )
+            cached_end = self.__normalize_history_timestamp(
+                cached_history["end_time"],
+                end_time,
+            )
+
+            requested_start = self.__normalize_history_timestamp(
+                start_time,
+                cached_start,
+            )
+            requested_end = self.__normalize_history_timestamp(
+                end_time,
+                cached_end,
+            )
+
+            # Only use the cache when it completely covers the requested
+            # interval and contains usable data. An empty cache must not
+            # suppress the Home Assistant request and its fallback.
+            if cached_start <= requested_start and cached_end >= requested_end:
+                cached_filtered_data = filter_history(cached_history["data"])
+
+                if cached_filtered_data:
+                    filtered_data = cached_filtered_data
+                    logger.debug(
+                        "[LOAD-IF] HOMEASSISTANT - Using cached history for '%s' "
+                        "from %s to %s.",
+                        entity_id,
+                        start_time,
+                        end_time,
+                    )
+
+        # Only contact Home Assistant if the cache cannot satisfy the request.
+        if filtered_data is None:
+            params = {
+                "filter_entity_id": entity_id,
+                "end_time": end_time.isoformat(),
+            }
+
+            response = self.__request_with_retries(
+                "get",
+                url,
+                params=params,
+                headers=headers,
+                item_label=entity_id,
+            )
+
+            historical_data = None
+
+            if response is not None:
+                try:
+                    historical_data = response.json()
+                except (ValueError, TypeError):
+                    historical_data = None
+
+            # A normal request can return an empty history even though the
+            # recorder contains the requested data. It can also fail completely
+            # after all retries (response is None). In both cases retry once
+            # with end_time set to the current time.
+            if not historical_data:
+                now = datetime.now(end_time.tzinfo)
+
+                if now > end_time:
+                    logger.debug(
+                        "[LOAD-IF] HOMEASSISTANT - History request returned "
+                        "no usable data for '%s' from %s to %s. "
+                        "Retrying with end_time set to current time %s.",
+                        entity_id,
+                        start_time,
+                        end_time,
+                        now,
+                    )
+
+                    fallback_params = {
+                        "filter_entity_id": entity_id,
+                        "end_time": now.isoformat(),
+                    }
+
+                    fallback_response = self.__request_with_retries(
+                        "get",
+                        url,
+                        params=fallback_params,
+                        headers=headers,
+                        item_label=entity_id,
+                    )
+
+                    if fallback_response is not None:
+                        try:
+                            fallback_historical_data = fallback_response.json()
+                        except (ValueError, TypeError):
+                            fallback_historical_data = None
+
+                        if fallback_historical_data:
+                            historical_data = fallback_historical_data
+
+                            fallback_data = [
+                                {
+                                    "state": entry["state"],
+                                    "last_updated": entry["last_updated"],
+                                    "attributes": entry.get("attributes", {}),
+                                }
+                                for sublist in fallback_historical_data
+                                for entry in sublist
+                            ]
+
+                            self.__homeassistant_history_cache[entity_id] = {
+                                "start_time": start_time,
+                                "end_time": now,
+                                "data": fallback_data,
+                            }
+
+                            logger.debug(
+                                "[LOAD-IF] HOMEASSISTANT - History fallback "
+                                "returned %d samples for '%s'.",
+                                len(fallback_data),
+                                entity_id,
+                            )
+
         try:
-            historical_data = response.json()
-            filtered_data = [
-                {
-                    "state": entry["state"],
-                    "last_updated": entry["last_updated"],
-                    "attributes": entry.get("attributes", {}),
-                }
-                for sublist in historical_data
-                for entry in sublist
-            ]
+            if historical_data:
+                history_data = [
+                    {
+                        "state": entry["state"],
+                        "last_updated": entry["last_updated"],
+                        "attributes": entry.get("attributes", {}),
+                    }
+                    for sublist in historical_data
+                    for entry in sublist
+                ]
+
+                existing_cache = self.__homeassistant_history_cache.get(entity_id)
+
+                if existing_cache is not None:
+                    existing_start = self.__normalize_history_timestamp(
+                        existing_cache["start_time"],
+                        start_time,
+                    )
+                    existing_end = self.__normalize_history_timestamp(
+                        existing_cache["end_time"],
+                        end_time,
+                    )
+                    new_start = self.__normalize_history_timestamp(
+                        start_time,
+                        existing_start,
+                    )
+                    new_end = self.__normalize_history_timestamp(
+                        end_time,
+                        existing_end,
+                    )
+
+                    # Keep an existing wider cache unchanged. Otherwise merge
+                    # the newly fetched range with the existing cached range
+                    # so a narrower request can never discard old history.
+                    if existing_start <= new_start and existing_end >= new_end:
+                        cache_start = existing_cache["start_time"]
+                        cache_end = existing_cache["end_time"]
+                        merged_history_data = existing_cache["data"]
+                    else:
+                        merged_history_data = existing_cache["data"] + [
+                            entry
+                            for entry in history_data
+                            if entry not in existing_cache["data"]
+                        ]
+                        cache_start = (
+                            start_time
+                            if new_start < existing_start
+                            else existing_cache["start_time"]
+                        )
+                        cache_end = (
+                            end_time
+                            if new_end > existing_end
+                            else existing_cache["end_time"]
+                        )
+
+                    self.__homeassistant_history_cache[entity_id] = {
+                        "start_time": cache_start,
+                        "end_time": cache_end,
+                        "data": merged_history_data,
+                    }
+                else:
+                    self.__homeassistant_history_cache[entity_id] = {
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "data": history_data,
+                    }
+
+                filtered_data = filter_history(
+                    self.__homeassistant_history_cache[entity_id]["data"]
+                )
+            else:
+                filtered_data = []
 
             # if device_class is energy, convert to power
             if (
