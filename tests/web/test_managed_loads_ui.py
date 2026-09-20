@@ -359,6 +359,99 @@ def _bar_colours(page):
     )
 
 
+def _render_with_ambient(page, plan, reasons, ambient):
+    _open_overlay(page)
+    page.evaluate(
+        """([plan, reasons, ambient]) => {
+            const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
+                reason: 'below target', energy_needed_wh: 9000, planned_wh: 1600,
+                plan: plan, plan_reasons: reasons, model: {}, release: null, detail: {},
+                ambient_series: ambient};
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadCard(load, 3600, 0);
+        }""",
+        [plan, reasons, ambient],
+    )
+
+
+AMBIENT = {
+    "forecast_c": [13.0, 14.0, 16.0, 18.0],
+    "adapted_c": [8.0, 10.5, 13.5, 16.5],
+    "min_ambient_c": 12.0,
+}
+
+
+def test_the_temperature_panel_draws_both_readings(page):
+    """
+    Two lines, because the question is what the correction *did*: the forecast as it
+    arrived and the figure the model actually planned against.
+    """
+    _render_with_ambient(page, [1600, 0, 0, 0],
+                         ['planned', 'too cold to run', 'planned', 'planned'], AMBIENT)
+    paths = page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content svg path')]
+            .map(p => ({d: p.getAttribute('d'),
+                        dash: p.getAttribute('stroke-dasharray'),
+                        stroke: p.getAttribute('stroke')}))"""
+    )
+    assert len(paths) == 2, paths
+    solid = [p for p in paths if not p["dash"]]
+    dashed = [p for p in paths if p["dash"]]
+    assert len(solid) == 1 and len(dashed) == 1, paths
+    # Identity is line style, not hue - the strip above already spends the palette.
+    assert solid[0]["d"].count("L") == 3
+    assert dashed[0]["d"].count("L") == 3
+
+
+def test_the_panel_is_absent_without_an_outdoor_forecast(page):
+    """Indoor loads have no forecast to correct, so there is nothing to show."""
+    _open_overlay(page)
+    _render_strip(page, [1600, 0, 0, 0], ['planned', 'not needed', 'planned', 'planned'])
+    assert page.evaluate(
+        "() => document.querySelectorAll('#full_screen_content svg path').length"
+    ) == 0
+
+
+def test_the_cut_off_is_drawn_and_named(page):
+    """Colour alone never carries it: the line has a label and a legend entry."""
+    _render_with_ambient(page, [1600, 0, 0, 0],
+                         ['planned', 'too cold to run', 'planned', 'planned'], AMBIENT)
+    text = page.evaluate("() => document.getElementById('full_screen_content').innerText")
+    assert "Too cold below 12" in text
+    assert "Model uses" in text and "Forecast as retrieved" in text
+
+
+def test_a_colder_reading_sits_below_the_forecast_on_the_panel(page):
+    """
+    The whole point of the picture. Lower temperature must draw lower, so the shape
+    tells the reader which way the correction went without reading a number.
+    """
+    _render_with_ambient(page, [1600, 0, 0, 0],
+                         ['planned', 'planned', 'planned', 'planned'], AMBIENT)
+    ys = page.evaluate(
+        """() => {
+            const paths = [...document.querySelectorAll('#full_screen_content svg path')];
+            const first = p => parseFloat(p.getAttribute('d').split(',')[1]);
+            const solid = paths.find(p => !p.getAttribute('stroke-dasharray'));
+            const dashed = paths.find(p => p.getAttribute('stroke-dasharray'));
+            return {adapted: first(solid), forecast: first(dashed)};
+        }"""
+    )
+    # y grows downward in the viewBox, so the colder adapted line has the larger y.
+    assert ys["adapted"] > ys["forecast"], ys
+
+
+def test_every_slot_of_the_panel_is_hoverable(page):
+    _render_with_ambient(page, [1600, 0, 0, 0],
+                         ['planned', 'planned', 'planned', 'planned'], AMBIENT)
+    tips = page.evaluate(
+        """() => [...document.querySelectorAll('#full_screen_content div[title]')]
+            .map(e => e.getAttribute('title')).filter(t => t.includes('model uses'))"""
+    )
+    assert len(tips) == 4, tips
+    assert "below the 12.0" in tips[0], tips[0]
+
+
 def test_the_strip_colours_a_capped_slot_differently_from_a_disallowed_one(page):
     """
     Blue says it will run. A slot that could have run but was rationed, and one that

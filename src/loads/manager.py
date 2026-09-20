@@ -19,7 +19,7 @@ import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 
-from .ambient_bias import IMPLAUSIBLE_GAP_K, AmbientBias
+from .ambient_bias import IMPLAUSIBLE_GAP_K, MAX_OFFSET_K, AmbientBias
 from .contribution import (
     SOURCE_API, SOURCE_PULL, LoadContributionRegistry, ttl_from_minutes,
 )
@@ -55,6 +55,20 @@ AMBIENT_SENSOR = "sensor"
 AMBIENT_FALLBACK = "fallback"
 # A forecast shifted to agree with the site's own thermometer.
 AMBIENT_CORRECTED = "forecast_corrected"
+
+# How fast today's departure from the typical day fades across the horizon.
+#
+# The per-hour offset is a climatology: it describes a *typical* hour, averaged over
+# days. On an untypical day it is wrong for the whole day, not only for now. Live, a
+# site whose sensor catches the morning sun had learned +4 K for 09:00; on a cold
+# clear morning it read 8.9 C where the typical-day estimate said 13.9 - a 5 K
+# anomaly - and the planner went on sizing energy into morning slots that would be
+# below the 12 C cut-off by the time they arrived.
+#
+# Six hours keeps the rest of today anchored to what the thermometer actually says
+# and lets tomorrow revert to the climatology, which is the only thing that can speak
+# for it. Today's weather is not evidence about tomorrow's.
+NOWCAST_HALF_LIFE_HOURS = 6.0
 
 # Who made a release decision, recorded in the journal. The distinction is the first
 # thing you want when reviewing a day of toggling: an optimizer that keeps changing its
@@ -174,6 +188,9 @@ class ManagedLoadManager:
         self._last_ctx_for = {}
         # Per-hour forecast-versus-sensor offset, one learner per instance.
         self._ambient_bias = {}
+        # The raw forecast beside the one actually used, kept per load so the card can
+        # show what the correction did. Only outdoor loads ever populate it.
+        self._ambient_trace = {}
         self._stop = threading.Event()
         self._thread = None
 
@@ -737,10 +754,51 @@ class ManagedLoadManager:
             hour = (index % slots_per_day) // slots_per_hour
             corrected.append(value + bias.offset(hour))
 
+        # What the thermometer says now, and how far that carries.
+        #
+        # The slot happening now needs no predicting at all - it takes the reading. The
+        # rest of today is shifted by the same departure, fading with distance, because
+        # an anomaly is a property of the day and not of the instant: it is what stops
+        # the planner sizing energy into hours that will be too cold to use it.
+        #
+        # The projection is clamped where the reading itself is not - the current slot
+        # is a measurement and stands, but a sensor reporting nonsense must not drag a
+        # two-day horizon with it.
+        if measured is not None and 0 <= slot < len(corrected):
+            residual = measured - corrected[slot]
+            corrected[slot] = measured
+            projected = max(-MAX_OFFSET_K, min(MAX_OFFSET_K, residual))
+            hours_per_slot = ctx.time_frame_base / 3600.0
+            for index in range(slot + 1, len(corrected)):
+                ahead = (index - slot) * hours_per_slot
+                corrected[index] += projected * 0.5 ** (ahead / NOWCAST_HALF_LIFE_HOURS)
+
+        self._ambient_trace[item.id] = (list(raw), list(corrected))
+
         source = AMBIENT_CORRECTED if bias.offset(
             (slot % slots_per_day) // slots_per_hour
         ) else AMBIENT_FORECAST
         return corrected, source
+
+    def ambient_series_state(self, item):
+        """
+        The forecast as retrieved and as used, for the card to draw.
+
+        Two readings of the same quantity, so the card separates them by line style
+        rather than by colour - there is no third categorical hue to spend beside the
+        three the slot strip already uses, and a reader comparing "what the model was
+        told" with "what it believes" is not comparing two different things.
+        """
+        trace = self._ambient_trace.get(item.id)
+        if not trace:
+            return None
+        raw, used = trace
+        cut_off = item.config.get("min_ambient_temp_c")
+        return {
+            "forecast_c": [round(float(v), 1) for v in raw],
+            "adapted_c": [round(float(v), 1) for v in used],
+            "min_ambient_c": None if cut_off is None else float(cut_off),
+        }
 
     def ambient_bias_state(self, entry_id):
         """What has been learned about this site's offset, for the API."""
@@ -1272,6 +1330,9 @@ class ManagedLoadManager:
         bias = self.ambient_bias_state(item.id)
         if bias is not None:
             status["ambient_bias"] = bias
+        series = self.ambient_series_state(item)
+        if series is not None:
+            status["ambient_series"] = series
         return status
 
     def status(self):

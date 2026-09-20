@@ -679,6 +679,110 @@ def test_the_forecast_is_shifted_onto_the_sites_own_thermometer(make_manager, in
     assert series[current] == pytest.approx(14.9, abs=0.05)
 
 
+def test_the_slot_happening_now_follows_the_thermometer_not_the_habit(
+    make_manager, installation
+):
+    """
+    The offset is a per-hour climatology: it describes a typical hour, learned across
+    days. On an untypical one it is simply wrong, and the current slot is the one slot
+    that never needed predicting - the sensor is reading it right now.
+
+    Live, that let the pool run at 8.3 C on a corrected 12.4 C, through hours the same
+    model marked "too cold to run" a day later. Early mornings had learned a positive
+    offset from sun on the sensor; a cold clear morning got the sunny correction.
+    """
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = [17.9] * 48
+
+    for _ in range(5):                       # teach it "this site runs 3 K warm here"
+        _ambient(manager, 20.9)
+    learned, _ = _ambient(manager, 20.9)
+    current = manager._context().current_slot  # pylint: disable=protected-access
+    assert learned[current] == pytest.approx(20.9, abs=0.05)
+
+    # Now a morning that breaks the habit: the same hour, 9 K colder than the rule.
+    series, _ = _ambient(manager, 11.9)
+    assert series[current] == pytest.approx(11.9, abs=0.05), (
+        "the current slot must take the measurement, not the learned offset"
+    )
+
+
+def test_the_measurement_anchors_now_and_loosens_its_grip_with_distance(
+    make_manager, installation
+):
+    """
+    The measurement is ground truth for now, a strong hint for the next few hours, and
+    says nothing about tomorrow. Clamping the whole horizon to one reading would be
+    worse than the climatology it replaced; ignoring it beyond the current slot leaves
+    the planner sizing energy into hours it cannot use.
+    """
+    manager = make_manager([POOL_WITH_AMBIENT])
+    installation.temperature = [17.9] * 48
+
+    for _ in range(5):
+        _ambient(manager, 20.9)          # typical day here is 3 K warm
+    series, _ = _ambient(manager, 11.9)  # today is 9 K colder than typical
+
+    ctx = manager._context()                   # pylint: disable=protected-access
+    current = ctx.current_slot
+    per_hour = ctx.slots_per_hour()
+
+    # Only the hour actually observed carries a learned offset; the rest have too
+    # little weight and stay on the raw forecast. So:
+    #   this hour   17.9 + 1.5 = 19.4   (six observations: five at +3.0, today's at -6)
+    #   other hours 17.9
+    #   today's departure = 11.9 - 19.4 = -7.5 K
+    forecast, this_hour = 17.9, 19.4
+
+    assert series[current] == pytest.approx(11.9, abs=0.05), "now is measured"
+
+    # One half-life out, half the departure survives: 17.9 - 3.75.
+    applied = series[current + 6 * per_hour] - forecast
+    assert -4.2 < applied < -3.3, f"expected about -3.75 K, got {applied:.2f}"
+
+    # A day out, back to what the typical day says about this hour.
+    assert series[current + 24 * per_hour] == pytest.approx(this_hour, abs=0.6)
+
+
+def test_a_cold_morning_blocks_the_run_even_when_the_habit_says_otherwise(
+    make_manager, installation
+):
+    """
+    The whole point of fixing the current slot, end to end: no release below the
+    minimum temperature, whatever the learned offset believes.
+
+    Reproduces the live numbers. The pool preset cuts off at 12.0 C. Early mornings had
+    learned a positive offset - sun on the sensor on clear days - so a forecast of 11.6
+    was corrected up to 12.4 and cleared the cut-off by 0.4 K, while the thermometer
+    read 8.3, some 3.7 K below it. The pool ran through hours the same model marked
+    "too cold to run" a day later.
+    """
+    pool = dict(POOL_WITH_AMBIENT, min_ambient_temp_c=12.0)
+    manager = make_manager([pool])
+    installation.temperature = [11.6] * 48
+
+    # Teach the hour a warm habit, as a run of sunny mornings would. Enough of them
+    # that today's single cold reading cannot drag the learned offset under the
+    # cut-off by itself - otherwise the test would pass on the bias moving, and prove
+    # nothing about the current slot carrying the measurement.
+    #   20 warm at +0.8, one cold at -3.3  ->  (16.0 - 3.3) / 21 = +0.605
+    #   corrected = 11.6 + 0.605 = 12.2, still clear of the 12.0 cut-off
+    for _ in range(20):
+        _ambient(manager, 12.4)
+
+    installation.sensors.update({"sensor.pool_water": 24.0, "sensor.pool_power": 0.0})
+    installation.sensors["sensor.outside"] = 8.3          # today is not sunny
+    manager.run_cycle()
+
+    load = manager.instance("pool")
+    ctx = manager._last_ctx                        # pylint: disable=protected-access
+    current = ctx.current_slot
+    demand = load.last_demand
+
+    assert demand.feasible[current] is False, "a run below the cut-off must be refused"
+    assert demand.slot_reasons[current] == "too cold to run"
+
+
 def test_the_offset_is_learned_for_the_hour_it_was_seen_in(make_manager, installation):
     """
     The point of learning it per hour: a site that runs cold overnight and close to the
@@ -698,15 +802,33 @@ def test_the_offset_is_learned_for_the_hour_it_was_seen_in(make_manager, install
     assert series[(current + 12) % 24] == pytest.approx(17.9)
 
 
-def test_the_shape_of_the_forecast_survives_the_shift(make_manager, installation):
-    """Only the level moves - the diurnal curve is the reason to use a forecast at all."""
+def test_the_shape_of_the_forecast_survives_once_the_anomaly_has_faded(
+    make_manager, installation
+):
+    """
+    The diurnal curve is the reason to use a forecast at all, so it has to come back.
+
+    Today's departure from the typical day is carried forward and fades, which does
+    bend the curve near the present - that is the blend doing its job. What must not
+    happen is the bend persisting: far enough out the series has to be the plain
+    corrected forecast again, or a cold morning would be projected onto tomorrow
+    afternoon.
+    """
     manager = make_manager([POOL_WITH_AMBIENT])
     installation.temperature = [10.0 + h for h in range(48)]
 
     series, _ = _ambient(manager, 5.0)
+    current = manager._context().current_slot  # pylint: disable=protected-access
 
-    spans = [series[i + 1] - series[i] for i in range(10)]
-    assert all(abs(step - 1.0) < 1e-6 for step in spans)
+    # Far end: back on the forecast, and still rising 1 K per slot.
+    tail = [series[i + 1] - series[i] for i in range(len(series) - 6, len(series) - 1)]
+    assert all(abs(step - 1.0) < 0.05 for step in tail), tail
+    assert series[-1] == pytest.approx(10.0 + len(series) - 1, abs=0.2)
+
+    # And it is a fade, not a distortion: the shift shrinks with every slot.
+    shift = [series[i] - (10.0 + i) for i in range(current, len(series))]
+    assert all(abs(b) <= abs(a) + 1e-9 for a, b in zip(shift, shift[1:])), shift[:8]
+    assert abs(shift[-1]) < 0.2, "the anomaly must be spent by the far horizon"
 
 
 def test_the_correction_is_smoothed_rather_than_snapped(make_manager, installation):

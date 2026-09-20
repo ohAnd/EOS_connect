@@ -123,6 +123,40 @@ def test_released_since_is_set_on_start_and_cleared_on_stop():
     assert stopped["released_since"] is None
 
 
+def test_released_since_does_not_creep_forward_while_the_run_continues():
+    """
+    The property the whole minimum-runtime commitment rests on, and it is load-bearing
+    in a way that is easy to break by accident.
+
+    `commitment` pins the head of the horizon for whatever is left of the minimum,
+    measured from `released_since`. If that timestamp were refreshed on every
+    evaluation the remainder would never reach zero, the pin would never lift, and a
+    running load could never be stopped - it would keep itself released, and the next
+    plan would pin it again. That latch ran a live pool through an evening peak into a
+    34.65 ct slot under a 30 ct limit before it was caught.
+
+    Nothing here would fail loudly if it regressed: the load would simply never stop.
+    """
+    gate = ReleaseGate("pool", min_runtime_minutes=15)
+    first = gate.evaluate(planned=True, urgent=False, now=T0)
+
+    for minute in (1, 5, 20, 90, 600):
+        again = gate.evaluate(planned=True, urgent=False, now=_at(minute))
+        assert again["released"] is True
+        assert again["released_since"] == first["released_since"], (
+            f"released_since moved at +{minute} min - the minimum would never expire"
+        )
+
+
+def test_a_fresh_release_after_a_stop_does_restart_the_clock():
+    """The other half: a genuinely new run gets its own minimum."""
+    gate = ReleaseGate("pool", min_runtime_minutes=15)
+    gate.evaluate(planned=True, urgent=False, now=T0)
+    gate.evaluate(planned=False, urgent=False, now=_at(20))
+    restarted = gate.evaluate(planned=True, urgent=False, now=_at(40))
+    assert restarted["released_since"] == _at(40).isoformat()
+
+
 def test_status_reports_without_changing_the_decision():
     gate = ReleaseGate("pool", min_runtime_minutes=15)
     gate.evaluate(planned=True, urgent=False, now=T0)

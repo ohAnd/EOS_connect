@@ -867,7 +867,7 @@ class ControlsManager {
             ${this._managedLoadFacts(load, detail, model, release)}
             ${this._managedLoadCalibration(load, model, counter)}
             ${this._managedLoadPlanStrip(load.plan || [], slotSeconds, currentSlot,
-                                          load.plan_reasons || [])}
+                                          load.plan_reasons || [], load.ambient_series)}
         </div>`;
     }
 
@@ -1238,9 +1238,10 @@ class ControlsManager {
      * @param {number} slotSeconds - Seconds per slot
      * @param {number} currentSlot - Index of the slot happening now
      * @param {string[]} slotReasons - Why each slot carries no energy, if known
+     * @param {object} [ambient] - Forecast as retrieved and as used, for outdoor loads
      * @returns {string} Strip HTML, or "" when nothing is planned
      */
-    _managedLoadPlanStrip(plan, slotSeconds, currentSlot, slotReasons = []) {
+    _managedLoadPlanStrip(plan, slotSeconds, currentSlot, slotReasons = [], ambient = null) {
         if (!plan.length) {
             return '';
         }
@@ -1342,9 +1343,156 @@ class ControlsManager {
                 ${gridHtml}
                 ${bars}
             </div>
+            ${this._managedLoadAmbientPanel(ambient, plan.length, currentSlot, gridHtml,
+                i => `${dayName(slotStart(i))} ${hhmm(slotStart(i))}`)}
             <div style="position:relative;height:1.2em;margin-top:2px;">${tickHtml}</div>
             <div style="display:flex;font-size:0.8em;margin-top:2px;">${dayLabels.join('')}</div>
             ${this._managedLoadStripLegend(used)}
+        </div>`;
+    }
+
+    /**
+     * The outdoor temperature behind the plan: as retrieved, and as the model uses it.
+     *
+     * Its own panel rather than an overlay on the strip. The bars carry energy in their
+     * height, so a temperature drawn in the same box would be a second y-scale sharing
+     * one space - the reader cannot tell which axis a mark belongs to, and a crossing
+     * means nothing. Two panels on one x-axis says the same thing and stays readable.
+     *
+     * The two lines are one quantity from two sources, so they separate by line style
+     * rather than colour: the slot strip above already spends three categorical hues,
+     * and no fourth clears the all-pairs separation floors against them (violet sits
+     * 9.8 from the strip's blue under normal vision, yellow 10.6 from its orange).
+     * Style costs no hue and reads in greyscale.
+     *
+     * @param {object} ambient - forecast_c, adapted_c, min_ambient_c
+     * @param {number} slots - Length of the plan, so both panels span the same time
+     * @param {number} currentSlot - Index of the slot happening now
+     * @param {string} gridHtml - The strip's own gridlines, reused so they line up
+     * @param {function(number): string} timeLabel - Slot index to a wall-clock label
+     * @returns {string} Panel HTML, or "" when this load has no outdoor forecast
+     */
+    _managedLoadAmbientPanel(ambient, slots, currentSlot, gridHtml, timeLabel) {
+        if (!ambient) {
+            return '';
+        }
+        const forecast = (ambient.forecast_c || []).slice(0, slots).map(Number);
+        const adapted = (ambient.adapted_c || []).slice(0, slots).map(Number);
+        if (forecast.length < 2 || adapted.length < 2) {
+            return '';
+        }
+        const cut = ambient.min_ambient_c;
+        const hasCut = cut !== null && cut !== undefined && Number.isFinite(Number(cut));
+
+        const all = forecast.concat(adapted);
+        if (hasCut) {
+            all.push(Number(cut));
+        }
+        let lo = Math.min(...all);
+        let hi = Math.max(...all);
+        if (!(hi > lo)) {
+            hi = lo + 1;
+        }
+        const pad = (hi - lo) * 0.12;
+        lo -= pad;
+        hi += pad;
+
+        const n = Math.max(forecast.length, adapted.length);
+        const xAt = i => ((i + 0.5) / n) * 100;
+        const yAt = v => ((hi - v) / (hi - lo)) * 100;
+        const path = arr => arr
+            .map((v, i) => `${i ? 'L' : 'M'}${xAt(i).toFixed(3)},${yAt(v).toFixed(3)}`)
+            .join(' ');
+
+        // Direct-labelled where the two are furthest apart, which is also the place a
+        // reader is asking the question. At the right-hand end they converge by design,
+        // so labels there would sit on top of each other.
+        let apart = 0;
+        for (let i = 0; i < Math.min(forecast.length, adapted.length); i++) {
+            if (Math.abs(forecast[i] - adapted[i]) > Math.abs(forecast[apart] - adapted[apart])) {
+                apart = i;
+            }
+        }
+        const labelSide = xAt(apart) > 60 ? 'right:' : 'left:';
+        const labelX = xAt(apart) > 60 ? (100 - xAt(apart)) : xAt(apart);
+        // Two labels at the same height are one unreadable label. Push them apart to a
+        // legible gap around their midpoint, and keep both inside the box.
+        const clamp = v => Math.max(12, Math.min(88, v));
+        let hiY = yAt(Math.max(forecast[apart], adapted[apart]));
+        let loY = yAt(Math.min(forecast[apart], adapted[apart]));
+        const MIN_GAP = 26;
+        if (loY - hiY < MIN_GAP) {
+            const mid = (hiY + loY) / 2;
+            hiY = mid - MIN_GAP / 2;
+            loY = mid + MIN_GAP / 2;
+        }
+        const yFor = series => (series[apart] >= forecast[apart]
+            && series[apart] >= adapted[apart]) ? clamp(hiY) : clamp(loY);
+        const tag = (top, text, weight) => `
+            <span style="position:absolute;top:${top}%;${labelSide}calc(${labelX}% + 8px);
+                         transform:translateY(-50%);font-size:0.72em;white-space:nowrap;
+                         opacity:${weight};pointer-events:none;
+                         text-shadow:0 0 4px rgba(0,0,0,0.9),0 0 4px rgba(0,0,0,0.9);
+                         ">${text}</span>`;
+
+        const cutLine = hasCut ? `
+            <line x1="0" y1="${yAt(Number(cut)).toFixed(3)}"
+                  x2="100" y2="${yAt(Number(cut)).toFixed(3)}"
+                  stroke="#d03b3b" stroke-width="1" stroke-dasharray="2 2"
+                  vector-effect="non-scaling-stroke" />` : '';
+
+        const hover = Array.from({ length: n }, (_, i) => {
+            const below = hasCut && adapted[i] < Number(cut);
+            const tip = [
+                timeLabel(i),
+                `forecast ${forecast[i].toFixed(1)} \u00b0C`,
+                `model uses ${adapted[i].toFixed(1)} \u00b0C`,
+                below ? `below the ${Number(cut).toFixed(1)} \u00b0C minimum` : null,
+                i === currentSlot ? 'happening now' : null,
+            ].filter(Boolean).join(' \u00b7 ');
+            return `<div title="${this.escapeHtml(tip)}" style="flex:1 1 0;"></div>`;
+        }).join('');
+
+        return `<div style="margin-top:6px;">
+            <div style="opacity:0.7;font-size:0.85em;margin-bottom:3px;">
+                Outdoor temperature &mdash; what the forecast said, and what the model uses
+            </div>
+            <div style="position:relative;height:74px;background:rgba(0,0,0,0.15);
+                        border-radius:4px;">
+                ${gridHtml}
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+                     style="position:absolute;inset:0;width:100%;height:100%;">
+                    ${cutLine}
+                    <path d="${path(forecast)}" fill="none" stroke="rgba(255,255,255,0.40)"
+                          stroke-width="2" stroke-dasharray="5 4"
+                          vector-effect="non-scaling-stroke" />
+                    <path d="${path(adapted)}" fill="none" stroke="rgba(255,255,255,0.92)"
+                          stroke-width="2" vector-effect="non-scaling-stroke" />
+                </svg>
+                ${tag(yFor(forecast), 'forecast', 0.65)}
+                ${tag(yFor(adapted), 'model uses', 0.95)}
+                <span style="position:absolute;top:2px;left:4px;font-size:0.7em;opacity:0.5;">
+                    ${hi.toFixed(0)}\u00b0</span>
+                <span style="position:absolute;bottom:2px;left:4px;font-size:0.7em;opacity:0.5;">
+                    ${lo.toFixed(0)}\u00b0</span>
+                <div style="position:absolute;inset:0;display:flex;">${hover}</div>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:5px;
+                        font-size:0.8em;opacity:0.75;">
+                <span style="display:inline-flex;align-items:center;gap:5px;">
+                    <svg width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18" y2="3"
+                        stroke="rgba(255,255,255,0.92)" stroke-width="2"/></svg>
+                    Model uses</span>
+                <span style="display:inline-flex;align-items:center;gap:5px;">
+                    <svg width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18" y2="3"
+                        stroke="rgba(255,255,255,0.40)" stroke-width="2"
+                        stroke-dasharray="5 4"/></svg>
+                    Forecast as retrieved</span>
+                ${hasCut ? `<span style="display:inline-flex;align-items:center;gap:5px;">
+                    <svg width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18" y2="3"
+                        stroke="#d03b3b" stroke-width="1" stroke-dasharray="2 2"/></svg>
+                    Too cold below ${Number(cut).toFixed(0)}\u00b0C</span>` : ''}
+            </div>
         </div>`;
     }
 
