@@ -371,7 +371,7 @@ class LoadInterface:
                 entry_time = normalize_timestamp(entry.get("last_updated"), start_time)
                 if entry_time is None:
                     continue
-                if start_time <= entry_time < end_time:
+                if start_time <= entry_time <= end_time:
                     filtered.append(entry)
             return filtered
 
@@ -1044,6 +1044,17 @@ class LoadInterface:
 
         load_profile = []
         day_has_data = False
+
+        # The complete-day prefetch is the authoritative indication that
+        # historical source data exists. Individual hourly cache slices can
+        # legitimately be empty at a boundary even though the day-level
+        # statistics response contains valid data.
+        if self.src == "homeassistant":
+            cached_load = self.__homeassistant_history_cache.get(self.load_sensor)
+            if cached_load:
+                cached_data = cached_load.get("data") or []
+                if cached_data:
+                    day_has_data = True
         current_time_slot = start_time
 
         while current_time_slot < end_time:
