@@ -196,7 +196,6 @@ class ManagedLoadManager:
         self._warned_pull = set()
         self._warned_bias = set()
         self._warned_no_prices = False
-        self._warned_daily_cap = set()
         self._hinted_pv_counter = False
         # Set when the optimizer can place contingent loads itself, which changes what
         # this module does with them: it computes the demand and defers the placing.
@@ -391,7 +390,6 @@ class ManagedLoadManager:
             self._record_sample(item, ctx)
             defer = self.external_scheduler and item.kind_is_contingent()
             if defer:
-                self._warn_unenforced_daily_cap(item)
                 if item.waiting_for_schedule_since is None:
                     item.waiting_for_schedule_since = ctx_base.now
                 if item.schedule_is_stale(ctx_base.now, self._schedule_max_age()):
@@ -464,6 +462,14 @@ class ManagedLoadManager:
                 "committed_on_slots": committed_on,
                 "committed_off_slots": committed_off,
                 "already_running": item.is_running(),
+                "max_slots_per_day": item.max_slots_per_day(ctx) if ctx else 0,
+                # A label per slot rather than a boundary index: it rides the same
+                # rotation into solver space as the feasibility mask, so the solver
+                # groups by integers and never has to reason about the clock.
+                "day_index": (
+                    [index // ctx.slots_per_day() for index in range(slots)]
+                    if ctx else []
+                ),
                 "start_cost_eur": (
                     START_COST_SLOTS * self._value_of(item)
                     * demand.max_power_w * (ctx.hours_per_slot() if ctx else 1.0)
@@ -899,25 +905,6 @@ class ManagedLoadManager:
         """What has been learned about this site's offset, for the API."""
         bias = self._ambient_bias.get(entry_id)
         return bias.state() if bias else None
-
-    def _warn_unenforced_daily_cap(self, item):
-        """
-        Say once when a daily runtime cap is configured but nothing applies it.
-
-        The cap reaches the fallback planner and not the solver, so under the built-in
-        optimizer it is silently inert - and the pool preset ships it set to 12, which
-        means a user on defaults believes in a limit that is not there.
-        """
-        hours = float(item.config.get("max_runtime_hours_per_day", 0) or 0)
-        if hours <= 0 or item.id in self._warned_daily_cap:
-            return
-        self._warned_daily_cap.add(item.id)
-        logger.warning(
-            "[LOADS] '%s' has a %.0f h/day runtime cap, but the optimizer places this "
-            "load and the cap is not passed to it - it is not being applied. The price "
-            "limit and the allowed hours still are. | Config: #managed-loads",
-            item.id, hours,
-        )
 
     def _warn_if_implausible(self, item, gap):
         """Say once when the sensor and the forecast cannot be describing the same air."""

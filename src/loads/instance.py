@@ -202,6 +202,16 @@ class ManagedLoad:
         """
         return bool(self.gate is not None and self.gate.released)
 
+    def max_slots_per_day(self, ctx):
+        """
+        The daily runtime cap in slots, 0 for none.
+
+        Same figure the fallback planner works from, so the two agree whichever one
+        ends up placing the load.
+        """
+        hours = float(self.config.get("max_runtime_hours_per_day", 0) or 0)
+        return int(hours * ctx.slots_per_hour()) if hours > 0 else 0
+
     def min_runtime_slots(self, ctx):
         """The configured minimum run, in slots at the running resolution."""
         minutes = float(self.config.get("min_runtime_minutes", 0) or 0)
@@ -209,13 +219,10 @@ class ManagedLoad:
 
     def _resolved_options(self, ctx):
         """Turn the minute- and hour-based config into slot counts for this resolution."""
-        slots_per_hour = ctx.slots_per_hour()
-        min_runtime_slots = self.min_runtime_slots(ctx)
-        max_hours = float(self.config.get("max_runtime_hours_per_day", 0) or 0)
         return PlanOptions(
             strategy=self.config.get("strategy"),
-            min_runtime_slots=min_runtime_slots,
-            max_slots_per_day=int(max_hours * slots_per_hour),
+            min_runtime_slots=self.min_runtime_slots(ctx),
+            max_slots_per_day=self.max_slots_per_day(ctx),
             max_price_eur_per_wh=self.max_price_eur_per_wh,
         )
 

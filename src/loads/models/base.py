@@ -75,6 +75,10 @@ class DemandContext:
         """Fraction of an hour one slot covers - the W to Wh conversion factor."""
         return self.time_frame_base / 3600.0
 
+    def slots_per_day(self):
+        """Slots in a local day. Slot 0 is midnight, so `index // this` is the day."""
+        return max(1, 86400 // self.time_frame_base)
+
 
 @dataclass
 class EnergyDemand:

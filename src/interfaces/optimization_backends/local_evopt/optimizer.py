@@ -290,6 +290,12 @@ class ManagedLoadConfig:
     min_runtime_slots: int = 1
     urgent_wh: float = 0.0
     start_cost_eur: float = 0.0
+    # Cap on slots this load may run in one calendar day, 0 for none, with a label per
+    # slot saying which day it belongs to. A label rather than a boundary because it
+    # makes the same rotation into solver space as everything else indexed by slot;
+    # -1 marks a slot that belongs to no day and is never capped.
+    max_slots_per_day: int = 0
+    day_index: list = None
     committed_on_slots: int = 0
     # Whether a run is under way. Separate from committed_on_slots on purpose: this
     # only tells the solver that continuing costs no start, where committing *forces*
@@ -991,11 +997,13 @@ class Optimizer:
             if load.urgent_wh > 0:
                 self.problem += pulp.lpSum(run) >= min(load.urgent_wh, load.demand_wh)
 
+            feasible = load.feasible or [True] * self.T
+            self._add_daily_cap_constraints(load, run, feasible)
+
             on = self.variables['ml_on'][i]
             if on is None:
                 continue
 
-            feasible = load.feasible or [True] * self.T
             for t in self.time_steps:
                 cap = load.max_power_w * self.time_series.dt[t] / 3600.0
                 allowed = t < len(feasible) and feasible[t]
@@ -1019,6 +1027,55 @@ class Optimizer:
                 on, self.variables['ml_start'][i], int(load.min_runtime_slots),
                 already_running=load.already_running or load.committed_on_slots > 0,
             )
+
+    def _add_daily_cap_constraints(self, load, run, feasible):
+        """
+        Hold a load to its allowed hours per calendar day.
+
+        The cap reached the fallback planner and not the solver, so under this backend
+        it was silently inert - and the pool preset ships it set to twelve, so a user
+        on defaults believed in a limit that was not there.
+
+        Written against the energy rather than the on/off binary because that binary
+        only exists for a load with a minimum run or a priced start; a load without
+        either is modelled continuously and would slip the cap entirely. N slots at
+        rated power is the same limit either way, and it is what the fallback planner
+        means by it.
+
+        Never below what the head of the horizon is already committed to: a load part
+        way through a run it may not abandon, on a day whose allowance is spent, would
+        otherwise make the model infeasible and take the household's schedule with it.
+        This is a comfort limit, not one worth failing the whole solve over.
+        """
+        cap = int(load.max_slots_per_day or 0)
+        days = load.day_index or []
+        if cap <= 0 or not days:
+            return
+
+        held = min(int(load.committed_on_slots or 0), self.T)
+        grouped = {}
+        for t in self.time_steps:
+            if t >= len(days):
+                continue
+            day = days[t]
+            if day is None or day < 0:
+                continue
+            grouped.setdefault(day, []).append(t)
+
+        for day, slots in grouped.items():
+            usable = [t for t in slots if t < len(feasible) and feasible[t]]
+            if not usable:
+                continue
+            allowed = max(cap, sum(1 for t in slots if t < held))
+            if len(usable) <= allowed:
+                continue
+            # Slots are not all the same length once the horizon changes resolution,
+            # so the allowance is the dearest `allowed` of them, not a slot count.
+            budget = sum(sorted(
+                (load.max_power_w * self.time_series.dt[t] / 3600.0 for t in usable),
+                reverse=True,
+            )[:allowed])
+            self.problem += pulp.lpSum(run[t] for t in usable) <= budget
 
     def _add_commitment_constraints(self, load, on, feasible):
         """

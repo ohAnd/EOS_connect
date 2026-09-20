@@ -408,6 +408,8 @@ class LocalEVOptBackend(EVOptBackend):
                 min_runtime_slots=max(1, int(entry.get("min_runtime_slots", 1) or 1)),
                 urgent_wh=float(entry.get("urgent_wh", 0) or 0),
                 start_cost_eur=float(entry.get("start_cost_eur", 0) or 0),
+                max_slots_per_day=max(0, int(entry.get("max_slots_per_day", 0) or 0)),
+                day_index=self.to_solver_slots(entry.get("day_index"), fill=-1),
                 committed_on_slots=max(0, int(entry.get("committed_on_slots", 0) or 0)),
                 already_running=bool(entry.get("already_running", False)),
                 committed_off_slots=max(0, int(entry.get("committed_off_slots", 0) or 0)),

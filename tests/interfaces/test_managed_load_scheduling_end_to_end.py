@@ -156,3 +156,56 @@ def test_nothing_reaches_an_external_backend(wired):
         time_frame_base=3600, timezone=BERLIN,
     )
     assert external.schedules_managed_loads is False
+
+
+def test_the_daily_cap_reaches_the_solver(wired):
+    """
+    Where it went missing. The cap was read into the fallback planner's options and
+    never put in the record the optimizer is handed, so under the built-in backend it
+    was silently inert - with the pool preset shipping it set to twelve.
+    """
+    manager, _, _ = wired
+    manager.instance("pool").config["max_runtime_hours_per_day"] = 3
+    manager.run_cycle()
+
+    record = manager.schedulable()[0]
+    ctx = manager._last_ctx                     # pylint: disable=protected-access
+    assert record["max_slots_per_day"] == 3 * ctx.slots_per_hour()
+
+    # A label per slot, so it rotates into solver space with everything else.
+    assert len(record["day_index"]) == ctx.slot_count
+    assert record["day_index"][0] == 0
+    assert record["day_index"][-1] == (ctx.slot_count - 1) // ctx.slots_per_day()
+
+
+def test_no_cap_configured_sends_none(wired):
+    manager, _, _ = wired
+    manager.instance("pool").config["max_runtime_hours_per_day"] = 0
+    manager.run_cycle()
+    assert manager.schedulable()[0]["max_slots_per_day"] == 0
+
+
+def test_the_placed_plan_honours_the_cap(wired):
+    """The whole trip: configured hours in, a plan no longer than that out."""
+    import math
+    from unittest.mock import patch
+
+    manager, interface, prices = wired
+    manager.instance("pool").config["max_runtime_hours_per_day"] = 3
+    manager.run_cycle()
+
+    path = "src.interfaces.optimization_backends.optimization_backend_evopt.datetime"
+    with patch(path, _clock()):
+        response, _ = interface.optimize(
+            _eos_request(prices), managed_loads=manager.schedulable()
+        )
+    manager.adopt_schedules(response["managed_loads"])
+
+    plan = manager.instance("pool").last_plan
+    ctx = manager._last_ctx                     # pylint: disable=protected-access
+    per_day = ctx.slots_per_day()
+    for day in range(math.ceil(len(plan) / per_day)):
+        window = plan[day * per_day:(day + 1) * per_day]
+        assert sum(1 for v in window if v > 0) <= 3 * ctx.slots_per_hour(), (
+            f"day {day} exceeded the cap: {window}"
+        )

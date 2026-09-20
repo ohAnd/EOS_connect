@@ -397,6 +397,78 @@ def test_pricing_starts_creates_the_switch_it_needs():
 
 # --- what the appliance is already doing -------------------------------------------------
 
+# ── The daily runtime cap ───────────────────────────────────────────────────────
+
+# T is 24 hourly slots, so a "day" here is twelve slots and the horizon holds two.
+_DAYS = [0] * 12 + [1] * 12
+
+
+def test_a_daily_cap_holds_the_load_to_its_hours():
+    """
+    The cap reached the fallback planner and not the solver, so under this backend it
+    was silently inert - and the pool preset ships it set to twelve, which means a
+    user on defaults believed in a limit that was not there.
+    """
+    opt = _optimizer(
+        [_load(demand_wh=20000.0, max_power_w=1000.0, value_eur_per_wh=DEAR,
+               min_runtime_slots=1, max_slots_per_day=4, day_index=_DAYS)],
+        prices=[CHEAP] * T, battery=False,
+    )
+    energy = _placed(opt.solve())
+    assert sum(1 for v in energy[:12] if v > 1.0) <= 4, energy[:12]
+    assert sum(1 for v in energy[12:] if v > 1.0) <= 4, energy[12:]
+
+
+def test_each_day_gets_its_own_allowance():
+    """Not a cap on the horizon: two days at four hours is eight, not four."""
+    opt = _optimizer(
+        [_load(demand_wh=20000.0, max_power_w=1000.0, value_eur_per_wh=DEAR,
+               min_runtime_slots=1, max_slots_per_day=4, day_index=_DAYS)],
+        prices=[CHEAP] * T, battery=False,
+    )
+    assert sum(1 for v in _placed(opt.solve()) if v > 1.0) > 4
+
+
+def test_no_cap_leaves_the_solver_free():
+    opt = _optimizer(
+        [_load(demand_wh=20000.0, max_power_w=1000.0, value_eur_per_wh=DEAR,
+               min_runtime_slots=1, max_slots_per_day=0, day_index=_DAYS)],
+        prices=[CHEAP] * T, battery=False,
+    )
+    assert sum(1 for v in _placed(opt.solve()) if v > 1.0) > 8
+
+
+def test_a_spent_day_never_makes_the_model_infeasible():
+    """
+    A load three minutes into a run it may not abandon, on a day whose allowance is
+    already gone, must not fail the solve - that would take the household's whole
+    schedule down over a comfort limit.
+    """
+    opt = _optimizer(
+        # A minimum run, so the load carries the on/off binary the commitment needs -
+        # without one there is nothing to hold and nothing to conflict with.
+        [_load(demand_wh=20000.0, max_power_w=1000.0, value_eur_per_wh=DEAR,
+               min_runtime_slots=2, max_slots_per_day=1, day_index=_DAYS,
+               committed_on_slots=3)],
+        prices=[CHEAP] * T, battery=False,
+    )
+    result = opt.solve()
+    assert result["status"] == "Optimal", result["status"]
+    energy = _placed(result)
+    assert all(v > 1.0 for v in energy[:3]), "the commitment still holds"
+
+
+def test_slots_belonging_to_no_day_are_never_capped():
+    """Padding past the end of the horizon carries -1 and must not join a group."""
+    opt = _optimizer(
+        [_load(demand_wh=20000.0, max_power_w=1000.0, value_eur_per_wh=DEAR,
+               min_runtime_slots=1, max_slots_per_day=2,
+               day_index=[-1] * T)],
+        prices=[CHEAP] * T, battery=False,
+    )
+    assert sum(1 for v in _placed(opt.solve()) if v > 1.0) > 2
+
+
 def test_a_run_already_under_way_is_not_stopped():
     """
     The seam between two plans is where it cycled. Each plan kept its own runs long
