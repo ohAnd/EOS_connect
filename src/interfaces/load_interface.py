@@ -516,10 +516,19 @@ class LoadInterface:
 
         def statistics_request(period):
             statistics_url = f"{self.url}/api/services/recorder/get_statistics"
+
+            # Home Assistant may omit the final hourly bucket when the requested
+            # end_time is exactly aligned with the day boundary. Request one
+            # additional hour for hourly statistics; normalize_statistics()
+            # clips the result back to the original requested interval.
+            statistics_end_time = end_time
+            if period == "hour":
+                statistics_end_time = end_time + timedelta(hours=1)
+
             payload = {
                 "statistic_ids": [entity_id],
                 "start_time": start_time.isoformat(),
-                "end_time": end_time.isoformat(),
+                "end_time": statistics_end_time.isoformat(),
                 "period": period,
                 "types": ["mean", "state", "change"],
             }
