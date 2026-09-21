@@ -1111,6 +1111,13 @@ class OptimizationScheduler:
 
     def __init__(self, update_interval):
         self.update_interval = update_interval
+        # The managed-load records ride alongside the request they were sent with.
+        # Without them a captured request cannot be replayed: the record carries the
+        # gate state and the commitment, and those are what change between two solves
+        # that see an identical request.
+        self.last_managed_loads = json.dumps(
+            {"status": "Awaiting first optimization run"}, indent=4
+        )
         self.last_request_response = {
             "request": json.dumps(
                 {
@@ -1148,6 +1155,10 @@ class OptimizationScheduler:
         self._update_thread_data_loop = None
         self._stop_event_data_loop = threading.Event()
         self.__start_update_service_data_loop()
+
+    def get_last_managed_loads(self):
+        """The managed-load records sent with the last request, as JSON text."""
+        return self.last_managed_loads
 
     def get_last_request_response(self):
         """
@@ -1316,9 +1327,11 @@ class OptimizationScheduler:
         # beside the request rather than inside it: that dict is posted verbatim to an
         # EOS server, which validates what it is sent, and no other backend could use
         # them anyway.
+        managed_records = None
         if getattr(eos_interface, "schedules_managed_loads", False):
+            managed_records = load_manager.schedulable()
             optimized_response, avg_runtime = eos_interface.optimize(
-                json_optimize_input, managed_loads=load_manager.schedulable(),
+                json_optimize_input, managed_loads=managed_records,
                 managed_load_budget_w=load_manager.max_power_w
             )
         else:
@@ -1350,6 +1363,15 @@ class OptimizationScheduler:
         optimized_response["timestamp"] = datetime.now(time_zone).isoformat()
         self.last_request_response["response"] = json.dumps(
             optimized_response, indent=4
+        )
+        self.last_managed_loads = json.dumps(
+            {
+                "timestamp": json_optimize_input["timestamp"],
+                "budget_w": load_manager.max_power_w,
+                "records": managed_records if managed_records is not None else [],
+            },
+            indent=4,
+            default=str,
         )
         self.__set_state_response()
 
@@ -1959,6 +1981,21 @@ def get_optimize_response():
     """
     return Response(
         optimization_scheduler.get_last_request_response()["response"],
+        content_type="application/json",
+    )
+
+
+@app.route("/json/managed_loads_request.json", methods=["GET"])
+def get_managed_loads_request():
+    """
+    The managed-load records sent with the last optimization request.
+
+    Diagnostic. A captured request alone cannot be replayed - the record carries the
+    gate state, the commitment and the demand, and those are what differ between two
+    solves that see an identical request.
+    """
+    return Response(
+        optimization_scheduler.get_last_managed_loads(),
         content_type="application/json",
     )
 
