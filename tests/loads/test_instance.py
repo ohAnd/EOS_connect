@@ -1911,3 +1911,59 @@ def test_a_stale_schedule_lets_the_fallback_take_over_again(make_manager, instal
 
     _run(manager, installation, water_c=20.0)
     assert any(load.last_plan), "the fallback never took over"
+
+
+# --- profiles other than the pool --------------------------------------------------------
+
+SAUNA = dict(POOL, id="sauna", type="sauna", volume_m3=0.08, surface_m2=12.0,
+             rated_power_w=6000.0, target_temp=90.0, min_ambient_temp_c=None,
+             deadline_hours=6, min_runtime_minutes=15)
+
+
+def test_a_deadline_bounds_what_the_store_is_asked_to_hold(make_manager, installation):
+    """
+    A store with a deadline has to be at target *by* then, not held there for two
+    days. Integrating the standing loss to the end of the horizon regardless asked a
+    sauna for 177 kWh - 29 hours of running in a 42 hour horizon - when what it wanted
+    was to be hot in six. Invisible on a pool, whose losses really do run all horizon.
+    """
+    manager = make_manager([SAUNA])
+    _run(manager, installation, water_c=85.0)
+
+    demand = manager.instance("sauna").last_demand
+    hours_at_rated = demand.total_wh / 6000.0
+    assert hours_at_rated < 8, f"{demand.total_wh / 1000:.1f} kWh is not a session"
+
+
+def test_no_deadline_still_holds_for_the_whole_horizon(make_manager, installation):
+    """A pool has no deadline and genuinely does leak all horizon - unchanged."""
+    manager = make_manager([POOL])
+    installation.temperature = [10.0] * 48
+    _run(manager, installation, water_c=24.0)
+
+    detail = manager.instance("pool").last_demand.detail
+    assert detail["standing_losses_wh_thermal"] > detail["heat_up_wh_thermal"]
+
+
+def test_the_projection_stops_where_the_appliance_does(make_manager, installation):
+    """
+    It integrates the plan, and the appliance stops at target. Without that a 6 kW
+    heater in 80 litres was drawn reaching 120 C against a 90 C setting - a slot is
+    16 K for a sauna where it is four hundredths of a kelvin for a pool.
+    """
+    manager = make_manager([SAUNA])
+    manager.external_scheduler = True
+    installation.sensors["sensor.pool_water"] = 20.0
+    manager.run_cycle()
+    load = manager.instance("sauna")
+    ctx = manager._last_ctx_for["sauna"]           # pylint: disable=protected-access
+
+    plan = [0.0] * ctx.slot_count
+    for index in range(ctx.current_slot, min(ctx.current_slot + 8, ctx.slot_count)):
+        plan[index] = 6000.0 * ctx.hours_per_slot()
+    manager.adopt_schedules({"sauna": plan})
+
+    projected = [v for v in load.model.project_medium(ctx, load.last_plan, 20.0)
+                 if v is not None]
+    assert max(projected) <= 90.0 + 1e-6, f"overshot to {max(projected):.1f}"
+    assert max(projected) > 80.0, "it should still reach the target"

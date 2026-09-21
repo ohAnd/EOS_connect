@@ -264,16 +264,6 @@ class ThermalStorageModel(BaseDemandModel):
             and current <= float(self.frost_protection_temp_c)
         )
 
-        heat_up_wh = energy_to_raise_wh(self.volume_m3, target - current)
-        losses_wh, mean_cop = self._horizon_losses(ctx, target, cover, feasible)
-
-        thermal_wh = max(0.0, heat_up_wh + losses_wh)
-        total_wh = thermal_to_electrical_wh(thermal_wh, mean_cop)
-
-        active, reason = self._control_state(current, target, ctx.readings, urgent)
-        if not any(feasible):
-            reason = REASON_OUT_OF_SEASON
-
         deadline_slot = None
         if self.deadline_hours:
             deadline_slot = min(
@@ -281,6 +271,18 @@ class ThermalStorageModel(BaseDemandModel):
                 ctx.current_slot
                 + int(round(float(self.deadline_hours) * 3600 / ctx.time_frame_base)),
             )
+
+        heat_up_wh = energy_to_raise_wh(self.volume_m3, target - current)
+        losses_wh, mean_cop = self._horizon_losses(
+            ctx, target, cover, feasible, until=deadline_slot
+        )
+
+        thermal_wh = max(0.0, heat_up_wh + losses_wh)
+        total_wh = thermal_to_electrical_wh(thermal_wh, mean_cop)
+
+        active, reason = self._control_state(current, target, ctx.readings, urgent)
+        if not any(feasible):
+            reason = REASON_OUT_OF_SEASON
 
         return EnergyDemand(
             kind=self.kind,
@@ -358,7 +360,7 @@ class ThermalStorageModel(BaseDemandModel):
                 series.append(1.0 - probability * (1.0 - self.effective_cover_factor()))
         return series
 
-    def _horizon_losses(self, ctx, target, cover, feasible):
+    def _horizon_losses(self, ctx, target, cover, feasible, until=None):
         """
         Thermal energy lost between now and the end of the horizon, and the COP to use.
 
@@ -375,9 +377,15 @@ class ThermalStorageModel(BaseDemandModel):
         hours = ctx.hours_per_slot()
         solar = ctx.solar_wh or []
         gain = self.calibrator.solar_gain
+        # A store with a deadline is asked to be at target *by* then, not held there
+        # for two days. Integrating to the end of the horizon regardless asked a sauna
+        # for 177 kWh of standing loss - 29 hours of running in a 42 hour horizon -
+        # when what it wanted was to be hot in six.
+        last = ctx.slot_count if until is None else min(ctx.slot_count, until + 1)
+
         losses = 0.0
         cops = []
-        for index in range(max(0, ctx.current_slot), ctx.slot_count):
+        for index in range(max(0, ctx.current_slot), last):
             ambient = self._ambient_at(ctx, index)
             if ambient is None:
                 continue
@@ -397,7 +405,7 @@ class ThermalStorageModel(BaseDemandModel):
         mean_cop = sum(cops) / len(cops) if cops else self.calibrator.cop_nominal
         return losses, mean_cop
 
-    def project_medium(self, ctx, plan, start_c):
+    def project_medium(self, ctx, plan, start_c, target=None):
         """
         Where the store's own temperature goes, slot by slot, under a given plan.
 
@@ -413,6 +421,8 @@ class ThermalStorageModel(BaseDemandModel):
         """
         if self.volume_m3 <= 0:
             return []
+        if target is None:
+            target = self.target_temperature(ctx.readings)
         hours = ctx.hours_per_slot()
         cover = self.cover_series(ctx, self.cover_factor(ctx.readings))
         solar = ctx.solar_wh or []
@@ -442,6 +452,11 @@ class ThermalStorageModel(BaseDemandModel):
                 gained += gain * max(0.0, float(solar[index]))
 
             temperature += gained / capacity_wh_per_k
+            # The appliance stops at target; a projection that does not says a sauna
+            # will reach 120 C against a 90 C setting. Invisible on a pool at four
+            # hundredths of a kelvin per slot, plain on a 6 kW heater in 80 litres.
+            if target is not None and temperature > target:
+                temperature = float(target)
             projected.append(round(temperature, 2))
         return projected
 
