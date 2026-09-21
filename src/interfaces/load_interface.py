@@ -577,6 +577,29 @@ class LoadInterface:
                 cached_filtered = filter_history(cached_history["data"])
                 if len(cached_filtered) >= 2:
                     filtered_data = cached_filtered
+                elif (
+                    len(cached_filtered) == 1
+                    and start_time.hour == 23
+                    and start_time.minute == 0
+                    and start_time.second == 0
+                    and end_time == start_time + timedelta(hours=1)
+                    and cached_filtered[0].get("last_updated") is not None
+                ):
+                    # The complete-day statistics cache can contain the final
+                    # 23:00 bucket with its start sample but no explicit
+                    # 00:00 boundary. For this final slot, the statistics
+                    # value is constant over the bucket, so use the same
+                    # value at the slot end instead of falling through to
+                    # another HA history/statistics request and producing
+                    # an artificial 0 Wh hour.
+                    cached_filtered = [
+                        cached_filtered[0],
+                        {
+                            **cached_filtered[0],
+                            "last_updated": end_time.isoformat(),
+                        },
+                    ]
+                    filtered_data = cached_filtered
 
         if filtered_data is None:
             response = self.__request_with_retries(
