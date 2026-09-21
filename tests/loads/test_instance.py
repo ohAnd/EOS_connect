@@ -1832,3 +1832,82 @@ def test_a_blocker_hiding_affordable_slots_is_still_named(make_manager, installa
     assert summary is not None
     if summary.get("limited_by"):
         assert summary["limited_by"] == "outside allowed hours", summary["counts"]
+
+
+def test_one_affordable_slot_does_not_outvote_a_hundred_unaffordable(
+    make_manager, installation
+):
+    """
+    A pool short of 45 kWh was told it was "limited by costs more than it is worth
+    (1 slot)" - the single affordable slot some other rule had blocked, outranking the
+    119 the price cap had put out of reach. Price ranks on the same footing now, so
+    the count it carries is the whole of what is unaffordable.
+    """
+    manager = make_manager([dict(POOL, max_price_ct_kwh=25.0)])
+    manager.external_scheduler = True
+    installation.prices = [0.00045] * 48        # every slot far above the cap
+    load = _run(manager, installation, water_c=20.0)
+
+    summary = load.plan_summary()
+    if summary and summary.get("limited_by"):
+        assert summary["limited_by"] == "above price cap", summary["counts"]
+        # And it reports the scale of the problem, not a single slot.
+        assert summary["limited_slots"] > 1, summary
+
+
+def test_a_deferred_cycle_does_not_overwrite_the_adopted_plan(make_manager, installation):
+    """
+    Two planners were writing the same field in turn.
+
+    While the optimizer places a load, every manager cycle still runs the fallback
+    planner - deliberately, so something is ready if no schedule arrives - but it
+    stored that placement in `last_plan`, the field the adopted schedule uses and the
+    card and API publish. The optimizer wrote its answer back a minute later, and the
+    two alternated: on a live pool, 21 slots and 8.4 kWh appearing and vanishing every
+    couple of minutes with the inputs unchanged.
+    """
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    load = manager.instance("pool")
+    ctx = manager._last_ctx                        # pylint: disable=protected-access
+
+    adopted = [0.0] * ctx.slot_count
+    adopted[ctx.current_slot] = 1500.0
+    manager.adopt_schedules({"pool": adopted})
+    assert load.last_plan[ctx.current_slot] == 1500.0
+
+    # A cycle with the optimizer still in charge must leave that alone.
+    _run(manager, installation, water_c=20.0)
+    assert load.last_plan[ctx.current_slot] == 1500.0, (
+        "the fallback planner overwrote the adopted schedule"
+    )
+
+
+def test_before_any_schedule_arrives_the_fallback_still_shows(make_manager, installation):
+    """
+    The other half. With nothing adopted yet there is nothing to protect, and a card
+    with no plan at all would be worse than one showing what the load would do by
+    itself.
+    """
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    load = _run(manager, installation, water_c=20.0)
+    assert any(load.last_plan), "no plan at all before the first schedule"
+
+
+def test_a_stale_schedule_lets_the_fallback_take_over_again(make_manager, installation):
+    """When the optimizer goes quiet the load must be able to decide for itself."""
+    from datetime import timedelta
+
+    manager = make_manager([POOL])
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    load = manager.instance("pool")
+    ctx = manager._last_ctx                        # pylint: disable=protected-access
+
+    manager.adopt_schedules({"pool": [0.0] * ctx.slot_count})
+    load.last_schedule_at = ctx.now - timedelta(hours=2)      # long gone quiet
+
+    _run(manager, installation, water_c=20.0)
+    assert any(load.last_plan), "the fallback never took over"

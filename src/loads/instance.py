@@ -295,7 +295,14 @@ class ManagedLoad:
         else:
             plan, release = self._plan_and_gate(demand, ctx, budget_wh)
 
-        self.last_plan = plan
+        # Only the planner that is actually placing this load publishes. This used to
+        # store the fallback's placement every cycle, while the optimizer wrote its own
+        # over the top a minute later: the two alternated in the same field, so the
+        # card, the API and the summary flipped between them for as long as the load
+        # was scheduled. On a live pool that read as 21 slots and 8.4 kWh appearing and
+        # vanishing every couple of minutes with the inputs unchanged.
+        if not (defer_gate and self.last_schedule_at is not None):
+            self.last_plan = plan
         self.last_release = release
 
         if not any(plan):
@@ -515,25 +522,27 @@ class ManagedLoad:
                 continue
             usable[reason] = usable.get(reason, 0) + 1
 
-        blocking = [] if covered else [
-            (count, reason) for reason, count in usable.items() if count
-        ]
-        # Nothing blocked that the load could have paid for: the price limit is what
-        # binds, even when it never appears in the counts - whichever rule matched
-        # first owns the slot, so a cold night hides the fact that it was also dear.
+        # Price competes on the same footing, carrying every blocked slot the load
+        # could not have paid for - whichever rule matched first owns a slot, so a
+        # cold night hides the fact that it was also dear and the cap would otherwise
+        # never appear at all. Letting them rank together stops one affordable slot
+        # behind some other rule outvoting a hundred unaffordable ones: a pool short
+        # of 45 kWh was told it was limited by a single slot that "costs more than it
+        # is worth".
+        unaffordable = sum(
+            1 for index, reason in enumerate(reasons)
+            if reason not in NON_BLOCKING_REASONS
+            and index < len(affordable) and not affordable[index]
+        )
+        candidates = [(count, reason) for reason, count in usable.items() if count]
+        if unaffordable:
+            candidates.append((unaffordable, SLOT_PRICE))
+        blocking = [] if covered else candidates
         if not covered and not blocking:
-            unaffordable = sum(
-                1 for index, reason in enumerate(reasons)
-                if reason not in NON_BLOCKING_REASONS
-                and index < len(affordable) and not affordable[index]
-            )
-            if unaffordable:
-                blocking = [(unaffordable, SLOT_PRICE)]
-            else:
-                blocking = [
-                    (count, reason) for reason, count in counts.items()
-                    if reason not in NON_BLOCKING_REASONS and count
-                ]
+            blocking = [
+                (count, reason) for reason, count in counts.items()
+                if reason not in NON_BLOCKING_REASONS and count
+            ]
         blocking.sort(reverse=True)
 
         # What the appliance could deliver if every limit were lifted at once - every
