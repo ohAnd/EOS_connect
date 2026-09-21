@@ -33,6 +33,7 @@ from .planner import (
     SLOT_DEADLINE,
     SLOT_PAST,
     SLOT_PLANNED,
+    SLOT_PRICE,
     PlanOptions,
     plan_contingent,
 )
@@ -84,6 +85,8 @@ class ManagedLoad:
 
         self.last_plan = []
         self.last_slot_capacity_wh = 0.0
+        # Per slot: could the load have paid for it? Ranks the blockers honestly.
+        self.last_affordable = []
         # When a schedule last arrived from outside, and when this load first started
         # waiting for one. A gate that is only ever settled by someone else freezes the
         # moment they stop answering - but a load that has never been scheduled is not
@@ -326,6 +329,7 @@ class ManagedLoad:
             else plan_price(self.last_plan, list(ctx.price_eur_per_wh or []))
         )
         self.last_cost_is_measured = measured is not None
+        self._remember_affordable(ctx)
         self.last_cost_is_shared = bool((cost or {}).get("shared"))
         # The reasons have to describe this plan too. They came from the fallback
         # planner, which had refused the very slots the optimizer went on to use.
@@ -339,6 +343,9 @@ class ManagedLoad:
         """The placement, without settling the gate on it."""
         options = self._resolved_options(ctx)
         self.last_slot_capacity_wh = demand.max_power_w * ctx.hours_per_slot()
+        # Whichever planner ends up placing this load, the summary answers the same
+        # question and needs the same footing.
+        self._remember_affordable(ctx)
         return plan_contingent(demand, ctx, options, budget_wh=budget_wh)
 
     def _gate_on(self, demand, ctx, plan):
@@ -442,6 +449,34 @@ class ManagedLoad:
             return False
         return bool(self.model.observe(sample))
 
+    def _remember_affordable(self, ctx):
+        """
+        Which slots the load could pay for, whatever else is blocking them.
+
+        Needed to answer "what is holding this back?" honestly. A slot excluded for
+        being too cold is only worth reporting if the load could have afforded it -
+        and on a day where every overnight hour is dearer than the limit, relaxing the
+        cold cut-off frees nothing at all.
+
+        Sun counts: a slot the roof covers is affordable whatever the tariff says,
+        which is why the optimizer takes 30 ct slots in the middle of a sunny
+        afternoon.
+        """
+        cap = self.max_price_eur_per_wh
+        prices = list(ctx.price_eur_per_wh or [])
+        surplus = list(ctx.pv_surplus_wh or [])
+        draw = self.last_slot_capacity_wh or 0.0
+
+        worth = []
+        for index in range(ctx.slot_count):
+            if cap is None:
+                worth.append(True)
+                continue
+            covered = index < len(surplus) and surplus[index] >= draw > 0
+            priced = index < len(prices) and prices[index] <= cap
+            worth.append(bool(covered or priced))
+        self.last_affordable = worth
+
     # -- reporting ------------------------------------------------------------------------
 
     def plan_summary(self):
@@ -466,10 +501,39 @@ class ManagedLoad:
         needed = self.last_demand.total_wh
         covered = sum(self.last_plan or []) >= needed - 1.0
 
+        # Ranked by the slots relaxing it would actually free, not by how many it
+        # excluded. On a live pool 56 slots were "too cold to run" and every one of
+        # them was also dearer than the limit, so the card sent its owner to lower the
+        # cold cut-off - which would have run the pump in freezing air and gained
+        # nothing. The price cap was what cost them the 35 kWh.
+        affordable = self.last_affordable or []
+        usable = {}
+        for index, reason in enumerate(reasons):
+            if reason in NON_BLOCKING_REASONS:
+                continue
+            if index < len(affordable) and not affordable[index]:
+                continue
+            usable[reason] = usable.get(reason, 0) + 1
+
         blocking = [] if covered else [
-            (count, reason) for reason, count in counts.items()
-            if reason not in NON_BLOCKING_REASONS and count
+            (count, reason) for reason, count in usable.items() if count
         ]
+        # Nothing blocked that the load could have paid for: the price limit is what
+        # binds, even when it never appears in the counts - whichever rule matched
+        # first owns the slot, so a cold night hides the fact that it was also dear.
+        if not covered and not blocking:
+            unaffordable = sum(
+                1 for index, reason in enumerate(reasons)
+                if reason not in NON_BLOCKING_REASONS
+                and index < len(affordable) and not affordable[index]
+            )
+            if unaffordable:
+                blocking = [(unaffordable, SLOT_PRICE)]
+            else:
+                blocking = [
+                    (count, reason) for reason, count in counts.items()
+                    if reason not in NON_BLOCKING_REASONS and count
+                ]
         blocking.sort(reverse=True)
 
         # What the appliance could deliver if every limit were lifted at once - every

@@ -1793,3 +1793,42 @@ def test_a_site_without_a_pv_meter_still_records_a_proxy(make_manager, installat
     samples = manager.instance("pool").model.calibrator._window   # pylint: disable=protected-access
     assert samples[-1]["pv_counter_kwh"] is None
     assert samples[-1]["solar_w"] > 0
+
+
+# --- which setting is actually holding it back ------------------------------------------
+
+def test_the_limit_named_is_one_that_would_free_something(make_manager, installation):
+    """
+    Ranked by what relaxing it would free, not by how many slots it excluded.
+
+    On a live pool 56 slots read "too cold to run" and every one of them was also
+    dearer than the price limit. The card sent its owner to lower the cold cut-off,
+    which would have run the pump in freezing air and gained nothing - the price cap
+    was what cost them 35 kWh.
+    """
+    manager = make_manager([dict(POOL, min_ambient_temp_c=12.0, max_price_ct_kwh=25.0)])
+    manager.external_scheduler = True
+    # Dear everywhere, so nothing the cold rule blocks could have been afforded.
+    installation.prices = [0.00040] * 48
+    installation.temperature = [5.0] * 48
+    load = _run(manager, installation, water_c=20.0)
+
+    summary = load.plan_summary()
+    if summary and summary.get("limited_by"):
+        assert summary["limited_by"] != "too cold to run", (
+            "named a rule whose relaxation frees nothing: " + str(summary["counts"])
+        )
+
+
+def test_a_blocker_hiding_affordable_slots_is_still_named(make_manager, installation):
+    """The other half: where the slots behind a rule *are* affordable, say so."""
+    manager = make_manager([dict(POOL, window_start=10, window_end=12,
+                                 max_price_ct_kwh=40.0)])
+    manager.external_scheduler = True
+    installation.prices = [0.00010] * 48          # everything well under the cap
+    load = _run(manager, installation, water_c=20.0)
+
+    summary = load.plan_summary()
+    assert summary is not None
+    if summary.get("limited_by"):
+        assert summary["limited_by"] == "outside allowed hours", summary["counts"]
