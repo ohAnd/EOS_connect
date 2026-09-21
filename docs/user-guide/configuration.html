@@ -313,8 +313,14 @@
                         readings do not fit &mdash; most often a temperature sensor too coarse to
                         see how slowly the store changes &mdash; confidence stays low and the
                         overlay says so, rather than reporting a confident wrong answer.</p>
-                    <p>A <em>calibration confidence</em> figure on the API, on MQTT and in the
-                        overlay tells you when the estimate has settled. It survives restarts, and is
+                    <p>The overlay says where the calibration stands: <em>learning</em> with a
+                        count while it still needs observations, then <em>measured</em>, followed
+                        by whatever remains assumed &mdash; a cover it has not seen both on and
+                        off cannot be measured, and is named rather than hidden. There is no
+                        percentage to wait on: part of a pool's behaviour is never explainable
+                        (rain, wind, swimmers), so a bar would never fill. A numeric
+                        <em>confidence</em> is still on the API and MQTT for anything that wants
+                        one. It survives restarts, and is
                         seeded from up to two weeks of recorded samples.</p>
                     <p>If the inputs it was learning from turn out to have been wrong &mdash; an
                         ambient temperature that was not what you thought, say &mdash; use

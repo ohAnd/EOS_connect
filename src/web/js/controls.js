@@ -10,6 +10,10 @@
 // Three hues, not one per reason: on a timeline any two states can end up adjacent, and
 // the palette is only safe to three under that condition. The exact reason rides on the
 // hover instead, so grouping costs nothing.
+// Observations the calibrator wants before it trusts its own coverage. Mirrors
+// CONFIDENCE_TARGET_SAMPLES in src/loads/models/calibration.py.
+const CALIBRATION_TARGET_SAMPLES = 30;
+
 const MANAGED_LOAD_SLOT_STYLE = {
     // Height carries the energy for this one; the rest are fixed-height bands.
     planned: { color: '#3987e5', height: 0, label: 'Will run' },
@@ -924,10 +928,10 @@ class ControlsManager {
         }
         const key = String(load.id);
         const open = this.openLoadDetails.has(key) ? ' open' : '';
-        const confidence = Number(model.confidence);
-        const summary = Number.isFinite(confidence)
-            ? `How this was worked out &middot; calibration ${Math.round(confidence * 100)}%`
-            : 'How this was worked out';
+        const summary = (model.confidence === undefined || model.confidence === null)
+            ? 'How this was worked out'
+            : 'How this was worked out &middot; calibration '
+              + this._managedLoadCalibrationState(model).headline;
 
         return `<details data-load="${this.escapeHtml(key)}"${open}
                      ontoggle="controlsManager.rememberDisclosure(this)"
@@ -1240,26 +1244,18 @@ class ControlsManager {
         if (model.confidence === undefined || model.confidence === null) {
             return '';
         }
-        const pct = Math.round(model.confidence * 100);
-        const settled = pct >= 50;
+        const state = this._managedLoadCalibrationState(model);
 
         return `<div style="display:flex;align-items:center;justify-content:space-between;
                             gap:12px;padding:8px 0 0 0;margin-top:8px;
                             border-top:1px solid rgba(255,255,255,0.08);">
             <div style="min-width:0;">
-                <div style="opacity:0.7;">Calibration ${pct}%</div>
+                <div style="opacity:0.7;">Calibration &mdash; ${state.headline}</div>
                 <div style="opacity:0.6;font-size:0.85em;">
-                    ${settled
-                        ? `Heat loss and efficiency measured from ${model.loss_samples || 0}
-                           cooling and ${model.cop_samples || 0} heating periods.`
-                        : 'Still learning &mdash; the plan is running on the values from the configuration form.'}
+                    ${state.detail}
                     ${this._managedLoadCoverNote(model)}
                     ${this._managedLoadSunNote(model, counter)}
-                    ${(model.fit_quality !== undefined && model.fit_quality < 0.5)
-                        ? `<div style="color:#e0a030;">The readings do not fit the model
-                           well &mdash; often a temperature sensor too coarse to measure
-                           how slowly this store changes.</div>`
-                        : ''}
+                    ${state.warning}
                 </div>
             </div>
             <button class="config-btn" style="flex:0 0 auto;"
@@ -1268,6 +1264,58 @@ class ControlsManager {
                 <i class="fas fa-rotate-left"></i> Reset
             </button>
         </div>`;
+    }
+
+    /**
+     * Where the calibration is, said as a state rather than a percentage.
+     *
+     * The confidence figure is `coverage x variety x fit_quality`, and only the first
+     * two are progress toward anything. Fit quality is how much of the water's
+     * behaviour the model can *ever* explain, and it is permanently short of 1 -
+     * rain, wind, swimmers, top-up water, a straight-line COP against a real
+     * compressor map. Multiplying them gives a number shaped like a progress bar that
+     * can never fill, so a reader waits for 100% that will not come.
+     *
+     * Worse, it gave the wrong advice at exactly the wrong moment: a pool with every
+     * observation it could get, blocked only on never having been seen uncovered,
+     * read 33% and was told "still learning, running on your configured values".
+     * Waiting was the one thing that could not help.
+     *
+     * So: gathering observations is a count and completes. Everything after is
+     * measured-versus-assumed, which ends when nothing is assumed and needs no
+     * percentage at all.
+     *
+     * @param {Object} model - The load's model status
+     * @returns {{headline: string, detail: string, warning: string}}
+     */
+    _managedLoadCalibrationState(model) {
+        const loss = Number(model.loss_samples) || 0;
+        const cop = Number(model.cop_samples) || 0;
+        const fit = Number(model.fit_quality);
+
+        // The sampling phase: it has not yet watched the store both cool and heat
+        // enough times to tell the two apart. Here waiting really is the answer.
+        if (!loss || !cop) {
+            const seen = loss + cop;
+            return {
+                headline: `learning (${seen} of ${CALIBRATION_TARGET_SAMPLES} observations)`,
+                detail: 'The plan is running on the values from your configuration form.',
+                warning: '',
+            };
+        }
+
+        const detail = `Heat loss from ${loss} cooling and efficiency from ${cop} `
+            + 'heating periods, measured rather than assumed.';
+
+        // A poor fit after the observations are in is not "keep waiting" - it is
+        // either something still held at a guess, which the notes below name, or
+        // inputs that were wrong and want a Reset.
+        const warning = (Number.isFinite(fit) && fit < 0.5)
+            ? `<div style="color:#e0a030;">Only part of this store's behaviour is
+               explained so far. Anything still assumed is named above; if the readings
+               it learned from were wrong, Reset starts again.</div>`
+            : '';
+        return { headline: 'measured', detail, warning };
     }
 
     /**

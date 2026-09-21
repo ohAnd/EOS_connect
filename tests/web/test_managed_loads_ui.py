@@ -773,13 +773,16 @@ def test_resetting_the_calibration_reaches_the_backend(page):
     # takes to it: the summary names it, and opening is the first click.
     page.click("#full_screen_content summary:has-text('How this was worked out')")
     before = page.text_content("#full_screen_content")
-    assert "Still learning" in before
+    assert "running on the values from your configuration form" in before
 
     page.click("#full_screen_content button:has-text('Reset')")
     page.wait_for_timeout(400)
 
     # The overlay reopens against the API, so a stale card would be a failure here.
-    assert "Calibration 0%" in page.text_content("#full_screen_content")
+    # A reset puts it back to nothing observed, which is the one case where
+    # waiting really is the answer - so it says so with a count, not a percentage.
+    after = page.text_content("#full_screen_content")
+    assert "learning (0 of 30 observations)" in after, after
 
 
 def test_the_fold_stays_open_when_the_card_is_rebuilt(page):
@@ -1252,3 +1255,61 @@ def test_a_site_without_a_meter_is_pointed_at_one(page):
 def test_a_store_with_no_solar_term_says_nothing_about_the_sun(page):
     _open_overlay(page)
     assert _sun_note(page, {}, False) == ""
+
+
+# ----------------------------------------------------------------------
+# Calibration: a state, not a percentage
+# ----------------------------------------------------------------------
+
+def _calibration_text(page, model):
+    return page.evaluate(
+        """([model]) => controlsManager._managedLoadCalibration(
+               {id: 'pool'}, model, false)""",
+        [model],
+    )
+
+
+def test_nothing_observed_yet_says_so_with_a_count(page):
+    """Here waiting really is the answer, and a count says how long."""
+    _open_overlay(page)
+    html = _calibration_text(page, {"confidence": 0.0, "loss_samples": 0,
+                                    "cop_samples": 4, "fit_quality": 1.0})
+    assert "learning (4 of 30 observations)" in html
+    assert "configuration form" in html
+
+
+def test_once_measured_it_stops_counting_toward_anything(page):
+    """
+    No percentage past the sampling phase. The old figure was
+    coverage x variety x fit_quality, and fit quality can never reach 1 - rain, wind,
+    swimmers, a straight-line COP - so the bar could not fill and a reader waited for
+    a 100% that was never coming.
+    """
+    _open_overlay(page)
+    html = _calibration_text(page, {"confidence": 0.33, "loss_samples": 17,
+                                    "cop_samples": 31, "fit_quality": 0.33})
+    assert "measured" in html
+    assert "17 cooling" in html and "31 heating" in html
+    assert "%" not in html, html
+
+
+def test_a_poor_fit_no_longer_tells_the_reader_to_wait(page):
+    """
+    The case that prompted this: every observation gathered, blocked only on never
+    having been seen uncovered, and the card said "still learning" - the one thing
+    that could not help.
+    """
+    _open_overlay(page)
+    html = _calibration_text(page, {"confidence": 0.33, "loss_samples": 17,
+                                    "cop_samples": 31, "fit_quality": 0.33,
+                                    "cover_identified": False})
+    assert "learning" not in html.lower()
+    assert "Only part of this store" in html
+
+
+def test_a_good_fit_carries_no_warning(page):
+    _open_overlay(page)
+    html = _calibration_text(page, {"confidence": 0.8, "loss_samples": 40,
+                                    "cop_samples": 20, "fit_quality": 0.9})
+    assert "Only part of this store" not in html
+    assert "measured" in html
