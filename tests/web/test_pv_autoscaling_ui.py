@@ -118,6 +118,27 @@ def _open_overlay(page, viewport):
     page.wait_for_selector(".pv-scale-history")
 
 
+def test_the_main_menu_opens_the_panel(page):
+    """
+    The tile's badges only carry a figure after the first optimization cycle, so the menu
+    is the entry point that always works.
+    """
+    page.route(
+        "**/api/pv_autoscaling/status*",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps(_STATUS)
+        ),
+    )
+    page.set_viewport_size(DESKTOP)
+    page.wait_for_function("typeof statisticsManager !== 'undefined' && statisticsManager")
+
+    page.evaluate("() => showMainMenu('v', 'b', 'g')")
+    page.click("#main-dropdown-menu div:has-text('PV Auto-Scaling')")
+
+    page.wait_for_selector(".pv-scale-tiles")
+    assert page.query_selector("#main-dropdown-menu") is None
+
+
 def _overflowing(page):
     """Every descendant of the overlay content whose own content is wider than it is."""
     return page.evaluate(

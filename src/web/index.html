@@ -183,7 +183,7 @@
                         style="cursor: pointer;min-width: 20px;">...</span>
                 </div>
                 <div class="content">
-                    <table style="width: 100%; text-align: left;padding-top: 10px;">
+                    <table style="width: 100%; text-align: left;">
                         <tr>
                             <th class="top_box_info_text_head" style="text-align: left;">Overall State</th>
                             <th style="text-align: right;" id="control_overall"></th>
@@ -208,6 +208,23 @@
                     </table>
                 </div>
             </div>
+            <!--
+                Managed loads. Hidden until at least one is configured, so an install
+                without a pool or a pushed heating profile looks exactly as it did.
+            -->
+            <div class="top-box" id="managed_loads_box" style="display: none;">
+                <div class="header"><i class="fa-solid fa-sliders"></i>
+                    <span class="header-title">Managed Loads</span>
+                    <span class="header_notification" id="managed_loads_total"
+                        onclick="showManagedLoadsMenu()"
+                        style="cursor: pointer;min-width: 20px;">...</span>
+                </div>
+                <div class="content">
+                    <table style="width: 100%; text-align: left;">
+                        <tbody id="managed_loads_rows"></tbody>
+                    </table>
+                </div>
+            </div>
             <div class="top-box">
                 <div class="header"><i id="battery_icon_main"></i> Battery State
                     <span class="header_notification" id="battery_usable_capacity"
@@ -216,7 +233,7 @@
                         style="cursor: pointer; min-width: 20px;">...</span>
                 </div>
                 <div class="content">
-                    <table style="width: 100%; text-align: left;padding-top: 10px;">
+                    <table style="width: 100%; text-align: left;">
                         <tr id="next_charge_header">
                             <th class="top_box_info_text_head" style="text-align: left;">Next AC Charge</th>
                             <th style="text-align: right;" id="next_charge_time">... next charge time</th>
@@ -239,7 +256,12 @@
                             </td>
                         </tr>
                         <tr>
-                            <td class="top_box_info_text"><i>Dynamic Max AC+DC Charge Power</i></td>
+                            <!-- Shortened, with the full phrase on hover: at 30 characters this
+                                 was the longest label in the row and it set the font size for
+                                 every tile, since nothing may grow past the point where it
+                                 wraps. -->
+                            <td class="top_box_info_text"
+                                title="Dynamic maximum AC+DC charge power"><i>Dynamic Max Charge</i></td>
                             <td colspan="2" style="text-align: right;" id="current_max_charge_dyn">--</td>
                         </tr>
                     </table>
@@ -252,7 +274,7 @@
                 </div>
                 <div class="content" style="text-align: center;">
                     <span id="ecar_charging_table_off">no car connected</span>
-                    <table style="width: 100%; text-align: left;padding-top: 10px;" id="ecar_charging_table_single">
+                    <table style="width: 100%; text-align: left;" id="ecar_charging_table_single">
                         <tr>
                             <!-- <th style="text-align: left;">Vehicle</th> -->
                             <th class="top_box_info_text_head" style="text-align: left; cursor: help;" colspan="2"
@@ -300,7 +322,7 @@
                             </td>
                         </tr>
                     </table>
-                    <table style="width: 100%; text-align: left;padding-top: 10px;" id="ecar_charging_table_multiple">
+                    <table style="width: 100%; text-align: left;" id="ecar_charging_table_multiple">
                         <!-- will be filled with multiple vehicles -->
                     </table>
                 </div>
@@ -324,9 +346,10 @@
                         title="PV Auto-Scaling details"></i>
                 </div>
                 <div class="content">
-                    <table style="width: 100%; text-align: left;padding-top: 10px;">
+                    <table style="width: 100%; text-align: left;">
                         <tr>
-                            <th class="top_box_info_text_head" style="text-align: left;">Expense (rest of the day)</th>
+                            <th class="top_box_info_text_head" style="text-align: left;"
+                                title="Expense for the rest of the day">Expense</th>
                             <th style="text-align: right;" id="expense_summary">0.00 ...</th>
                         </tr>
                         <tr>

@@ -157,20 +157,36 @@ _PV_KEY_PREFIXES = (
 # temperature forecast.
 _PV_TEMPERATURE_KEYS = {
     "eos.temperature_forecast_enabled",
+    # The site location only feeds the temperature request, and the PV interface is
+    # what makes it - so a change to either reloads the same interface.
+    "latitude",
+    "longitude",
+}
+
+# Managed loads. Every entry key is ``managed_loads.<n>.<field>``, and the change is
+# applied by handing the manager the rebuilt entry rather than by poking at attributes:
+# a target temperature, a strategy and an allowed window are all read out of the entry
+# config on the next planning cycle anyway, so re-seating the config is the whole job.
+#
+# The shared power budget lives in the load section because it applies to all of them at
+# once, and is held on the manager itself.
+_MANAGED_LOAD_PREFIX = "managed_loads."
+_MANAGED_LOAD_GLOBAL_KEYS = {
+    "load.managed_loads_max_power_w",
 }
 
 
-def _wants_temperature_forecast(eos_config):
+def _wants_temperature_forecast(eos_config, also_needed=False):
     """
-    Whether an outside-temperature forecast should be fetched for the optimizer.
+    Whether an outside-temperature forecast should be fetched.
 
     Inline copy of ``interfaces.pv_interface.wants_temperature_forecast`` - this module
     imports nothing cross-package on purpose.  The two are pinned equal by
     ``tests/interfaces/test_pv_interface_temperature_gating.py``.
     """
     if not isinstance(eos_config, dict):
-        return False
-    if eos_config.get("source", "eos_server") != "eos_server":
+        return bool(also_needed)
+    if not also_needed and eos_config.get("source", "eos_server") != "eos_server":
         return False
     return _coerce_bool(eos_config.get("temperature_forecast_enabled", True))
 
@@ -216,6 +232,7 @@ class HotReloadAdapter:
         battery_interface: Running BatteryInterface instance (or None).
         pv_interface: Running PvInterface instance (or None).
         optimization_interface: Running OptimizationInterface instance (or None).
+        load_manager: Running ManagedLoadManager instance (or None).
         config_provider: Callable that returns the current merged config dict (or None).
         on_run_trigger: Optional callable() invoked after a hot-reload that makes the
             current optimization result stale (e.g. strategy change).  Typically wired
@@ -234,12 +251,14 @@ class HotReloadAdapter:
         config_provider=None,
         on_run_trigger=None,
         pv_reload_debounce_seconds=0.3,
+        load_manager=None,
     ):
         self._price = price_interface
         self._battery = battery_interface
         self._pv = pv_interface
         self._optimizer = optimization_interface
         self._feed_in_price = feed_in_price_interface
+        self._load_manager = load_manager
         self._config_provider = config_provider
         self.on_run_trigger = on_run_trigger
         self._pv_reload_debounce_seconds = pv_reload_debounce_seconds
@@ -291,8 +310,48 @@ class HotReloadAdapter:
             self._apply_pv_autoscaler(key, new_value)
         elif key.startswith(_PV_KEY_PREFIXES) or key in _PV_TEMPERATURE_KEYS:
             self._schedule_pv_reload(key, new_value)
+        elif key.startswith(_MANAGED_LOAD_PREFIX) or key in _MANAGED_LOAD_GLOBAL_KEYS:
+            self._apply_managed_load(key)
         else:
             return  # Not a hot-reloadable key — skip silently
+
+    def _apply_managed_load(self, key):
+        """
+        Re-seat a managed load's configuration, or the shared power budget.
+
+        Nothing is applied field by field: the planner reads the entry's config afresh
+        every cycle, so replacing the config dict *is* the update, and it cannot drift
+        out of step with whatever fields are added later. Changes that need a restart -
+        an id, a type, a sensor - are labelled that way in the schema and never reach
+        here.
+        """
+        if self._load_manager is None:
+            return
+
+        config = self._config_provider() if self._config_provider else None
+        if not isinstance(config, dict):
+            return
+
+        if key in _MANAGED_LOAD_GLOBAL_KEYS:
+            budget = config.get("load", {}).get("managed_loads_max_power_w", 0)
+            try:
+                self._load_manager.max_power_w = max(0.0, float(budget or 0))
+            except (TypeError, ValueError):
+                return
+            self._applied_keys.append(key)
+            logger.info("[HotReload] managed load power budget set to %s W", budget)
+            return
+
+        for entry in config.get("managed_loads", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            instance = self._load_manager.instance(entry.get("id"))
+            if instance is None:
+                continue
+            instance.reconfigure(entry)
+
+        self._applied_keys.append(key)
+        logger.info("[HotReload] managed load configuration reloaded (%s)", key)
 
     def _apply_price(self, key, new_value):
         """Apply a price-related config change."""
@@ -940,9 +999,16 @@ class HotReloadAdapter:
                 config=config.get("pv_forecast", []),
                 config_special=config.get("evcc", {}),
                 temperature_forecast_enabled=_wants_temperature_forecast(
-                    config.get("eos", {})
+                    config.get("eos", {}),
+                    also_needed=bool(
+                        self._load_manager is not None
+                        and self._load_manager.needs_outdoor_temperature()
+                    ),
                 ),
                 timezone=config.get("time_zone", "UTC"),
+                site_location=(
+                    config.get("latitude", 0.0), config.get("longitude", 0.0)
+                ),
             )
             self._applied_keys.extend(pending_keys)
             logger.info(

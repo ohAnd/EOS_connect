@@ -43,6 +43,11 @@ from interfaces.inverters import create_inverter
 from interfaces.inverters.null_inverter import NullInverter
 from interfaces.inverters.evcc_inverter import EvccInverter
 from interfaces.pv_autoscaler import PvAutoscaler, TIMEFRAME_IDS, timeframe_bounds
+from interfaces.load_profile_source import fetch_profile
+from interfaces.state_source import fetch_remote_state, fetch_remote_state_details
+from loads import api as loads_api
+from loads import mqtt_topics as managed_load_topics
+from loads.manager import ManagedLoadManager, ManagedLoadSources
 from config_web import ConfigWebModule
 
 # Check Python version early
@@ -191,12 +196,32 @@ inverter_interface = interface_factory.create_inverter_interface(
     config_manager.config["inverter"], critical=True
 )
 
+# Managed loads are built before the load interface because the interface needs to know
+# which power sensors to strip out of the household base load: their predicted
+# consumption is added back on top, and counting the same appliance twice is exactly
+# what makes a heat pump in `additional_load_1` worse than not configuring it at all.
+# Its forecast sources are attached further down, once the interfaces they read from
+# exist.
+load_manager = interface_factory.create_managed_load_manager(
+    entries=config_manager.config.get("managed_loads", []),
+    time_frame_base=time_frame_base,
+    time_zone=time_zone,
+    store=config_web.managed_load_store,
+    cycle_seconds=config_manager.config.get("load", {}).get(
+        "managed_loads_cycle_seconds", 300
+    ),
+    max_power_w=config_manager.config.get("load", {}).get(
+        "managed_loads_max_power_w", 0
+    ),
+) or ManagedLoadManager([], time_frame_base, time_zone)
+
 load_interface = interface_factory.create_load_interface(
     config_manager.config.get("load", {}),
     time_frame_base,
     time_zone,
     request_timeout=config_manager.config.get("request_timeout", 10),
     critical=True,
+    extra_subtract_sensors=load_manager.subtract_sensors(),
 )
 
 battery_config = dict(config_manager.config["battery"])
@@ -262,8 +287,25 @@ feed_in_price_interface = interface_factory.create_feed_in_price_interface(
     feed_in_config, time_frame_base, time_zone, evcc_interface, critical=False
 ) or FeedInPriceInterface(feed_in_config, time_frame_base, time_zone, evcc_interface)
 
+def site_location():
+    """
+    Coordinates for this installation, or None.
+
+    Only the outside-temperature forecast needs them, and only when no PV installation
+    already carries a pair - which is every PV source that is not location-based
+    (EVCC, Solcast, Victron, timeseries). ``PvInterface`` prefers a PV entry, so this is
+    a fallback rather than an override: an existing install keeps working untouched.
+    """
+    lat = config_manager.config.get("latitude", 0.0)
+    lon = config_manager.config.get("longitude", 0.0)
+    return (lat, lon)
+
+
+# The optimizer is not the only consumer: an outdoor managed load needs the curve too,
+# and the default backend does not ask for one.
 temperature_forecast_enabled = wants_temperature_forecast(
-    config_manager.config.get("eos", {})
+    config_manager.config.get("eos", {}),
+    also_needed=load_manager.needs_outdoor_temperature(),
 )
 
 pv_interface = interface_factory.create_pv_interface(
@@ -275,6 +317,7 @@ pv_interface = interface_factory.create_pv_interface(
     temperature_forecast_enabled,
     config_manager.config.get("time_zone", "UTC"),
     critical=False,
+    site_location=site_location(),
 ) or PvInterface(
     config_manager.config["pv_forecast_source"],
     config_manager.config["pv_forecast"],
@@ -285,6 +328,7 @@ pv_interface = interface_factory.create_pv_interface(
     },
     temperature_forecast_enabled,
     config_manager.config.get("time_zone", "UTC"),
+    site_location=site_location(),
 )
 
 # Initialize PV autoscaler and attach to PvInterface (best-effort)
@@ -349,6 +393,143 @@ try:
 except Exception:
     logger.exception("[Main] Failed to initialize PvAutoscaler")
     pv_autoscaler = None
+
+# Managed loads: sensor access, forecasts and the release publisher.
+#
+# Everything the manager needs arrives as a callable, which is what keeps the `loads`
+# package free of imports from `interfaces` - it asks for "the price series" and does
+# not care which interface produced it.
+def _managed_load_read_sensor(sensor):
+    """Read one entity for a managed load, through the configured data source."""
+    load_config = config_manager.config.get("load", {})
+    return fetch_remote_state(
+        source=load_config.get("source", ""),
+        sensor=sensor,
+        url=load_config.get("url", ""),
+        access_token=load_config.get("access_token", ""),
+        request_timeout=config_manager.config.get("request_timeout", 10),
+        ssl_ignore=bool(load_config.get("ssl_ignore", False)),
+    )
+
+
+def _managed_load_read_sensor_details(sensor):
+    """Read one entity together with its unit, so a kWh counter can be spotted."""
+    load_config = config_manager.config.get("load", {})
+    return fetch_remote_state_details(
+        source=load_config.get("source", ""),
+        sensor=sensor,
+        url=load_config.get("url", ""),
+        access_token=load_config.get("access_token", ""),
+        request_timeout=config_manager.config.get("request_timeout", 10),
+        ssl_ignore=bool(load_config.get("ssl_ignore", False)),
+    )
+
+
+def _managed_load_base_load():
+    """
+    The household base load, for working out the PV surplus in each slot.
+
+    This is the profile *without* managed loads - they were subtracted from the history
+    when it was built - which is exactly what "surplus available to a managed load"
+    should be measured against.
+    """
+    slots = EOS_TGT_DURATION * (3600 // time_frame_base)
+    return load_interface.get_load_profile(slots)
+
+
+def _managed_load_pv_counter():
+    """
+    The household's cumulative PV meter, in kWh, for the solar term in the calibration.
+
+    Borrowed from the auto-scaler rather than configured again: it is the same
+    household fact, and a site that has told us once should not have to tell us twice.
+    Differencing it across a calibration window gives the exact mean irradiance over
+    exactly that window - a passing cloud integrated rather than sampled. None when
+    auto-scaling is off or no counter is set, and the calibration then falls back to
+    the PV forecast.
+    """
+    cfg = config_manager.config.get("pv_autoscaling", {}) or {}
+    sensor = str(cfg.get("sensor_entity_id", "") or "").strip()
+    if not sensor:
+        return None
+    raw = _managed_load_read_sensor(sensor)
+    if raw is None:
+        return None
+    try:
+        return float(str(raw).strip().split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def _managed_load_temperature_forecast():
+    """
+    The outdoor forecast, but only when there really is one.
+
+    `get_current_temp_forecast` falls back to a static 15 degree curve, which is
+    indistinguishable from a real one and outranked a user's own outdoor sensor. Handing
+    back nothing instead lets the manager fall through to that sensor, which is a real
+    measurement even if it cannot see into tomorrow.
+    """
+    if not pv_interface.has_real_temperature_forecast():
+        return []
+    return pv_interface.get_current_temp_forecast()
+
+
+def _managed_load_read_profile(entry):
+    """
+    Fetch one managed load's forecast from the source configured for it.
+
+    The manager owns *when* this happens; all this does is answer. Raising is how a
+    failure is reported - the manager keeps the previous profile and warns once, rather
+    than blanking the forecast because Home Assistant happened to be restarting.
+    """
+    load_config = config_manager.config.get("load", {})
+    return fetch_profile(
+        entry,
+        data_source=config_manager.config.get("data_source", {}),
+        time_zone=time_zone,
+        ssl_ignore=bool(load_config.get("ssl_ignore", False)),
+    )
+
+
+def publish_managed_load_release(load_id, release):
+    """Publish one managed load's release decision when it changes."""
+    logger.info(
+        "[MAIN] Managed load '%s' is %s (%s)",
+        load_id,
+        "RELEASED" if release.get("released") else "BLOCKED",
+        release.get("reason"),
+    )
+    mqtt_interface.update_publish_topics(managed_load_topics.build_values(load_manager))
+
+
+load_manager.sources = ManagedLoadSources(
+    read_sensor=_managed_load_read_sensor,
+    read_sensor_details=_managed_load_read_sensor_details,
+    price=price_interface.get_current_prices,
+    feed_in_price=feed_in_price_interface.get_current_feedin_prices,
+    pv_forecast=pv_interface.get_current_pv_forecast,
+    base_load=_managed_load_base_load,
+    temperature_forecast=_managed_load_temperature_forecast,
+    pv_counter_kwh=_managed_load_pv_counter,
+    read_profile=_managed_load_read_profile,
+)
+load_manager.on_release_change = publish_managed_load_release
+# The built-in optimizer places contingent loads itself, which means this module must
+# stop putting them into the household profile and start handing them over instead.
+load_manager.external_scheduler = getattr(
+    eos_interface, "schedules_managed_loads", False
+)
+
+if load_manager.enabled_ids():
+    mqtt_interface.register_topics(managed_load_topics.build_topics(load_manager))
+    load_manager.check_power_sensors()
+    load_manager.backfill()
+    load_manager.start()
+    logger.info(
+        "[MAIN] Managed loads active: %s", ", ".join(load_manager.enabled_ids())
+    )
+
 
 # Callback functions for event handling
 def charging_state_callback(new_state):
@@ -645,6 +826,10 @@ def create_optimize_request():
         einspeiseverguetung_euro_pro_wh = feed_in_price_interface.get_current_feedin_prices()
         slots_per_hour = 3600 // time_frame_base
         gesamtlast = load_interface.get_load_profile(EOS_TGT_DURATION * slots_per_hour)
+        # Managed loads join the household profile here, and nowhere else. Applied
+        # before the partial-slot scaling below so the in-progress slot is discounted
+        # once, consistently, for base load and contributions alike.
+        gesamtlast = load_manager.apply(gesamtlast, time_frame_base)
 
         eos_source_for_scale = config_manager.config.get("eos", {}).get("source", "eos_server")
         if eos_source_for_scale in ("evopt", "local_evopt"):
@@ -926,6 +1111,13 @@ class OptimizationScheduler:
 
     def __init__(self, update_interval):
         self.update_interval = update_interval
+        # The managed-load records ride alongside the request they were sent with.
+        # Without them a captured request cannot be replayed: the record carries the
+        # gate state and the commitment, and those are what change between two solves
+        # that see an identical request.
+        self.last_managed_loads = json.dumps(
+            {"status": "Awaiting first optimization run"}, indent=4
+        )
         self.last_request_response = {
             "request": json.dumps(
                 {
@@ -963,6 +1155,10 @@ class OptimizationScheduler:
         self._update_thread_data_loop = None
         self._stop_event_data_loop = threading.Event()
         self.__start_update_service_data_loop()
+
+    def get_last_managed_loads(self):
+        """The managed-load records sent with the last request, as JSON text."""
+        return self.last_managed_loads
 
     def get_last_request_response(self):
         """
@@ -1127,7 +1323,19 @@ class OptimizationScheduler:
         mqtt_interface.update_publish_topics(
             {"optimization/state": {"value": self.get_current_state()["request_state"]}}
         )
-        optimized_response, avg_runtime = eos_interface.optimize(json_optimize_input)
+        # Contingent loads reach a solver that can place them as something to schedule,
+        # beside the request rather than inside it: that dict is posted verbatim to an
+        # EOS server, which validates what it is sent, and no other backend could use
+        # them anyway.
+        managed_records = None
+        if getattr(eos_interface, "schedules_managed_loads", False):
+            managed_records = load_manager.schedulable()
+            optimized_response, avg_runtime = eos_interface.optimize(
+                json_optimize_input, managed_loads=managed_records,
+                managed_load_budget_w=load_manager.max_power_w
+            )
+        else:
+            optimized_response, avg_runtime = eos_interface.optimize(json_optimize_input)
         # Store the runtime for use in sleep calculation (defensive against None)
         try:
             if avg_runtime is None:
@@ -1156,6 +1364,15 @@ class OptimizationScheduler:
         self.last_request_response["response"] = json.dumps(
             optimized_response, indent=4
         )
+        self.last_managed_loads = json.dumps(
+            {
+                "timestamp": json_optimize_input["timestamp"],
+                "budget_w": load_manager.max_power_w,
+                "records": managed_records if managed_records is not None else [],
+            },
+            indent=4,
+            default=str,
+        )
         self.__set_state_response()
 
         with open(
@@ -1170,6 +1387,15 @@ class OptimizationScheduler:
             error,
             dyn_override_array,
         ) = eos_interface.examine_response_to_control_data(optimized_response)
+        # Settle each load's gate on what the optimizer decided, before anything else
+        # acts on the response. A load the optimizer did not answer for keeps the plan
+        # the managed-load module worked out on its own.
+        if optimized_response.get("managed_loads"):
+            load_manager.adopt_schedules(
+                optimized_response["managed_loads"],
+                cost=optimized_response.get("managed_loads_cost"),
+            )
+
         if error is not True:
             setting_control_data(ac_charge_demand, dc_charge_demand, discharge_allowed)
             # Store the override array for API response
@@ -1613,6 +1839,14 @@ try:
 except (ValueError, RuntimeError):
     logger.exception("[Main] Config web API registration failed — config UI unavailable")
 
+# Managed loads REST API. Registered even with nothing configured, so a caller gets a
+# 404 with an explanation rather than a bare Flask 404 that says nothing.
+try:
+    loads_api.init_api(load_manager)
+    app.register_blueprint(loads_api.loads_bp)
+except (ValueError, RuntimeError):
+    logger.exception("[Main] Managed loads API registration failed")
+
 # Register hot-reload: live config changes are applied without restart
 from config_web.hot_reload import HotReloadAdapter  # pylint: disable=wrong-import-position
 
@@ -1622,6 +1856,7 @@ hot_reload_adapter = HotReloadAdapter(
     pv_interface=pv_interface,
     optimization_interface=eos_interface,
     feed_in_price_interface=feed_in_price_interface,
+    load_manager=load_manager,
     config_provider=config_web.get_config,
 )
 # Wire the run trigger so hot-reload changes that affect optimizer behaviour
@@ -1750,6 +1985,21 @@ def get_optimize_response():
     )
 
 
+@app.route("/json/managed_loads_request.json", methods=["GET"])
+def get_managed_loads_request():
+    """
+    The managed-load records sent with the last optimization request.
+
+    Diagnostic. A captured request alone cannot be replayed - the record carries the
+    gate state, the commitment and the demand, and those are what differ between two
+    solves that see an identical request.
+    """
+    return Response(
+        optimization_scheduler.get_last_managed_loads(),
+        content_type="application/json",
+    )
+
+
 @app.route("/json/optimize_request.test.json", methods=["GET"])
 def get_optimize_request_test():
     """
@@ -1872,9 +2122,42 @@ def get_controls():
             "source", "eos_server"
         ),
         "used_time_frame_base": time_frame_base,
+        # A compact summary per managed load. The full plan and the calibration state
+        # live behind /api/managed_loads; this is what the dashboard card needs.
+        "managed_loads": [
+            {
+                "id": item.id,
+                "type": item.type,
+                "reason": item.last_demand.reason if item.last_demand else None,
+                "energy_needed_wh": (
+                    round(item.last_demand.total_wh, 1) if item.last_demand else 0.0
+                ),
+                "planned_wh": round(sum(item.last_plan), 1) if item.last_plan else 0.0,
+                "released": (
+                    item.last_release.get("released") if item.last_release else None
+                ),
+                "next_release_start": (
+                    item.last_release.get("next_release_start")
+                    if item.last_release
+                    else None
+                ),
+                "temperature_c": (
+                    (item.last_demand.detail or {}).get("temperature_c")
+                    if item.last_demand
+                    else None
+                ),
+                "target_temperature_c": (
+                    (item.last_demand.detail or {}).get("target_temperature_c")
+                    if item.last_demand
+                    else None
+                ),
+            }
+            for item in load_manager.instances
+            if item.enabled
+        ],
         "eos_connect_version": __version__,
         "timestamp": datetime.now(time_zone).isoformat(),
-        "api_version": "0.0.5",
+        "api_version": "0.0.6",
     }
     return Response(
         json.dumps(response_data, indent=4), content_type="application/json"
@@ -2432,6 +2715,7 @@ if __name__ == "__main__":
         logger.info("[Main] Shutting down EOS Connect (user requested)")
         optimization_scheduler.shutdown()
         base_control.shutdown()
+        load_manager.shutdown()
         if http_server:
             http_server.stop()
             logger.info("[Main] HTTP server stopped")

@@ -6,6 +6,7 @@ configuration, and the interface layer must be able to use them without pulling 
 the config web application (and with it Flask).
 """
 
+from .managed_load_store import ManagedLoadStore
 from .pv_yield_store import PvYieldStore
 
-__all__ = ["PvYieldStore"]
+__all__ = ["ManagedLoadStore", "PvYieldStore"]

@@ -1334,3 +1334,193 @@ class TestCleanObjectiveBaseline:
         assert abs(slipped) > 1e-4, (
             "slot 0 barely moved; this horizon no longer demonstrates the bug"
         )
+
+
+# ---------------------------------------------------------------------------
+# Managed loads the backend places itself
+# ---------------------------------------------------------------------------
+
+class TestManagedLoads:
+    """Contingent loads handed to the solver beside the request, not inside it."""
+
+    @staticmethod
+    def _load(n_slots=48, **kwargs):
+        record = {
+            "id": "pool",
+            "demand_wh": 6000.0,
+            "max_power_w": 1500.0,
+            "value_eur_per_wh": 0.0005,
+            "feasible": [True] * n_slots,
+            "min_runtime_slots": 1,
+            "urgent_wh": 0.0,
+        }
+        record.update(kwargs)
+        return record
+
+    def _solve(self, backend, request, loads, hour=0):
+        dt_mock = _midnight_mock()
+        if hour:
+            real_now = dt_mock.now
+
+            class _AtHour(_real_datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    moment = real_now(tz)
+                    return moment.replace(hour=hour)
+
+            dt_mock = _AtHour
+        path = "src.interfaces.optimization_backends.optimization_backend_evopt.datetime"
+        with patch(path, dt_mock):
+            return backend.optimize(request, timeout=60, managed_loads=loads)
+
+    def test_the_backend_declares_that_it_can_place_them(self, backend_hourly):
+        assert backend_hourly.schedules_managed_loads is True
+
+    def test_a_schedule_comes_back_in_eos_slot_space(self, backend_hourly):
+        """48 slots from local midnight, like every other array the app handles."""
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48), [self._load()]
+        )
+        assert "pool" in result["managed_loads"]
+        assert len(result["managed_loads"]["pool"]) == 48
+
+    def test_the_mask_is_read_in_the_callers_slot_space(self, backend_hourly):
+        """
+        The sharp edge. A mask allowing only 09:00-11:00 must place energy there and
+        nowhere else - getting the rotation wrong schedules the right number of hours
+        in the wrong ones, and nothing fails loudly when it does.
+        """
+        mask = [False] * 48
+        for hour in (9, 10, 11):
+            mask[hour] = True
+        result, _ = self._solve(
+            backend_hourly,
+            _make_eos_request(n_slots=48, pv_value=0.0),
+            [self._load(feasible=mask, demand_wh=3000.0)],
+            hour=6,
+        )
+        energy = result["managed_loads"]["pool"]
+        assert sum(energy) > 0
+        assert all(value < 1.0 for hour, value in enumerate(energy) if not mask[hour])
+
+    def test_slots_already_past_carry_nothing(self, backend_hourly):
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48), [self._load()], hour=8
+        )
+        assert all(value < 1.0 for value in result["managed_loads"]["pool"][:8])
+
+    def test_no_managed_loads_leaves_the_response_shape_alone(self, backend_hourly):
+        result, _ = self._solve(backend_hourly, _make_eos_request(n_slots=48), None)
+        assert result["managed_loads"] == {}
+        assert "ac_charge" in result
+
+    def test_a_load_with_no_power_or_no_demand_is_skipped(self, backend_hourly):
+        loads = [
+            self._load(id="nopower", max_power_w=0),
+            self._load(id="nodemand", demand_wh=0),
+        ]
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48), loads
+        )
+        assert result["managed_loads"] == {}
+
+    def test_unreadable_numbers_skip_one_load_rather_than_the_solve(self, backend_hourly):
+        loads = [
+            self._load(id="broken", demand_wh="lots"),
+            self._load(id="pool"),
+        ]
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48), loads
+        )
+        assert "broken" not in result["managed_loads"]
+        assert "pool" in result["managed_loads"]
+
+    def test_several_loads_each_get_their_own_schedule(self, backend_hourly):
+        loads = [self._load(id="pool"), self._load(id="sauna", demand_wh=3000.0)]
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48), loads
+        )
+        assert set(result["managed_loads"]) == {"pool", "sauna"}
+
+    def test_quarter_hour_resolution_returns_the_full_horizon(self, backend_15min):
+        result, _ = self._solve(
+            backend_15min,
+            _make_eos_request(n_slots=192),
+            [self._load(n_slots=192)],
+        )
+        assert len(result["managed_loads"]["pool"]) == 192
+
+    # -- what the household actually pays extra ------------------------------------
+
+    def test_the_cost_is_measured_against_a_run_without_the_load(self, backend_hourly):
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48, pv_value=0.0),
+            [self._load()],
+        )
+        cost = result["managed_loads_cost"]
+        assert cost is not None
+        assert cost["energy_wh"] > 0
+        assert cost["eur_per_wh"] > 0
+        assert cost["shared"] is False
+
+    def test_nothing_placed_means_no_cost_to_report(self, backend_hourly):
+        """No second solve either - there is nothing to measure."""
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48),
+            [self._load(value_eur_per_wh=0.0)],
+        )
+        assert result["managed_loads_cost"] is None
+
+    def test_sun_makes_the_load_cheaper_not_dearer(self, backend_hourly):
+        """
+        The whole reason this is measured rather than read off the tariff. The hours a
+        load occupies on a sunny day are not cheaper hours - often they are dearer -
+        so the tariff of those hours moves the wrong way. What the household actually
+        pays does not.
+        """
+        rates = []
+        for pv in (0.0, 4000.0):
+            result, _ = self._solve(
+                backend_hourly,
+                _make_eos_request(n_slots=48, pv_value=pv, load_value=400.0),
+                [self._load(value_eur_per_wh=0.0005)],
+            )
+            cost = result["managed_loads_cost"]
+            rates.append(cost["eur_per_wh"] if cost else 0.0)
+        assert rates[1] < rates[0], "a sunny day must not cost more"
+
+    def test_the_measured_rate_stays_under_what_the_energy_was_worth(self, backend_hourly):
+        """The promise the price limit makes, checked on the figure the card shows."""
+        value = 0.0004
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48, pv_value=0.0),
+            [self._load(value_eur_per_wh=value)],
+        )
+        assert result["managed_loads_cost"]["eur_per_wh"] <= value + 1e-9
+
+    def test_two_loads_report_a_shared_figure(self, backend_hourly):
+        loads = [self._load(id="pool"), self._load(id="sauna", demand_wh=3000.0)]
+        result, _ = self._solve(
+            backend_hourly, _make_eos_request(n_slots=48, pv_value=0.0), loads
+        )
+        assert result["managed_loads_cost"]["shared"] is True
+
+    def test_the_baseline_is_solved_without_the_loads(self, backend_hourly):
+        """
+        Guards the thing that would quietly ruin the number: a baseline that still had
+        the loads in it would measure zero, and the card would report the pool as free.
+        """
+        seen = []
+        original = backend_hourly._build_optimizer
+
+        # Tolerant of what else the builder takes: this counts solves, it does not
+        # pin the signature.
+        def spy(request, timeout, managed_loads=None, *args, **kwargs):
+            seen.append(len(managed_loads or []))
+            return original(request, timeout, managed_loads, *args, **kwargs)
+
+        backend_hourly._build_optimizer = spy
+        self._solve(
+            backend_hourly, _make_eos_request(n_slots=48, pv_value=0.0), [self._load()]
+        )
+        assert seen == [1, 0], f"expected one solve with and one without, got {seen}"

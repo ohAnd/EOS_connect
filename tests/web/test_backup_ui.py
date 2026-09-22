@@ -162,8 +162,11 @@ def test_deselecting_a_dataset_leaves_it_out_of_the_download(server, page, tmp_p
     info.value.save_as(str(path))
     data = json.loads(path.read_text())
 
-    assert data["_datasets"] == ["settings"]
+    # Named rather than listed in full: the roster grows, and this test is about one
+    # box removing one dataset, not about how many others exist.
+    assert "pv_yield_history" not in data["_datasets"]
     assert "pv_yield_history" not in data
+    assert "settings" in data["_datasets"]
 
 
 # ----------------------------------------------------------------------
@@ -261,14 +264,71 @@ def test_merge_mode_keeps_settings_the_file_lacks(server, page, tmp_path):
     assert server.store.has_key("eos.port")
 
 
+def test_restoring_learning_says_it_needs_a_restart(page):
+    """
+    The rows land in the database, but a calibrator is rebuilt from them once, at
+    startup. Without saying so the card would report a restored education that the
+    running model has not got.
+    """
+    _open_panel(page)
+    html = page.evaluate(
+        """() => {
+            // Put it back: the page is shared with every other test in this file.
+            const previous = backupManager.result;
+            try {
+                backupManager.result = {
+                    managed_load_learning: {available: true, samples: 42, model: 1},
+                };
+                return backupManager._resultBody();
+            } finally {
+                backupManager.result = previous;
+            }
+        }"""
+    )
+    assert "Restart required" in html
+    assert "42" in html
+
+
+def test_a_dataset_this_host_cannot_supply_does_not_sit_ticked(page):
+    """
+    Its checkbox is disabled, so nobody can untick it - and left ticked it kept
+    "Restore now" alive with nothing behind it.
+    """
+    _open_panel(page)
+    state = page.evaluate(
+        """() => {
+            const out = {};
+            for (const key of Object.keys(backupManager.forRestore)) {
+                const info = (backupManager.info || {})[key];
+                out[key] = {
+                    unavailable: !!info && info.available === false,
+                    selected: backupManager.forRestore[key],
+                };
+            }
+            return out;
+        }"""
+    )
+    for key, entry in state.items():
+        if entry["unavailable"]:
+            assert entry["selected"] is False, f"{key} is unavailable but ticked"
+
+
 def test_restore_button_is_disabled_when_nothing_is_selected(page, tmp_path):
     """Asking for nothing must not quietly restore everything."""
     path, _ = _write_backup(tmp_path, page)
 
     _open_panel(page)
     _choose_file(page, path)
-    page.uncheck("#ds-restore-settings")
-    page.uncheck("#ds-restore-pv_yield_history")
+    # Every dataset, whatever the roster holds - the point is "nothing selected".
+    # By selector rather than by handle: the card re-renders on each change, so a
+    # handle taken before the first uncheck is stale by the second.
+    keys = page.evaluate(
+        """() => [...document.querySelectorAll('input[id^="ds-restore-"]')]
+            .map(e => e.id)"""
+    )
+    for box_id in keys:
+        if page.is_checked(f"#{box_id}"):
+            page.uncheck(f"#{box_id}")
     page.wait_for_selector("text=Nothing is selected")
 
     assert page.is_disabled("button:has-text('Restore now')")

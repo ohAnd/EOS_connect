@@ -160,6 +160,8 @@ function showMainMenu(version, backend, granularity) {
     // Create dropdown menu
     const dropdown = document.createElement('div');
     dropdown.id = 'main-dropdown-menu';
+    // The size is in rem, not em: the menu is appended into a .top-box, whose own text is
+    // sized from the tile's width for the tiles' sake and is no basis for a menu.
     dropdown.style.cssText = `
         position: absolute;
         top: 45px;
@@ -171,8 +173,7 @@ function showMainMenu(version, backend, granularity) {
         z-index: 1000;
         min-width: 180px;
         padding: 8px 0;
-        // font-size: 0.9em;
-        font-size: ${isMobile() ? '1.1em' : '0.9em'};
+        font-size: ${isMobile() ? '0.8rem' : '0.85rem'};
     `;
 
     dropdown.innerHTML = `
@@ -181,6 +182,26 @@ function showMainMenu(version, backend, granularity) {
             onmouseout="this.style.backgroundColor='transparent'">
             <i class="fa-solid fa-sliders" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
             <span>Override Controls</span>
+        </div>
+
+        <!-- Managed Loads and PV Auto-Scaling sit with Override Controls: all three are
+             what the optimizer is doing right now. They were below Alarms, which is
+             where diagnostics live. Managed Loads appears only once a load is
+             configured; PV Auto-Scaling always does. -->
+        ${(typeof controlsManager !== 'undefined' && controlsManager
+            && (controlsManager.managedLoads || []).length) ? `
+        <div onclick="showManagedLoadsMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;"
+            onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'"
+            onmouseout="this.style.backgroundColor='transparent'">
+            <i class="fa-solid fa-sliders" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
+            <span>Managed Loads</span>
+        </div>` : ''}
+
+        <div onclick="showPvAutoscalingMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;"
+            onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.5)'"
+            onmouseout="this.style.backgroundColor='transparent'">
+            <i class="fa-solid fa-arrows-up-down" style="margin-right: 10px; color: #cccccc; width: 16px;"></i>
+            <span>PV Auto-Scaling</span>
         </div>
 
         <div onclick="showBatteryOverviewMenu(); closeDropdownMenu();" style="cursor: pointer; padding: 10px 15px; transition: background-color 0.2s; display: flex; align-items: center;" 
@@ -602,6 +623,22 @@ function showOverrideControlsMenu() {
         controlsManager.showOverrideMenuFullScreen();
     } else {
         showFullScreenOverlay("Override Controls", "<div style='text-align: center; color: #888; padding: 20px;'>Controls system not initialized</div>");
+        setTimeout(() => closeFullScreenOverlay(), 2000);
+    }
+}
+
+/**
+ * Show PV auto-scaling menu using StatisticsManager
+ *
+ * The same overlay the Statistics tile's badges open. It is reachable from the menu too
+ * because those badges are only filled in after the first optimization cycle, which is
+ * exactly when a user wants to check whether autoscaling is collecting.
+ */
+function showPvAutoscalingMenu() {
+    if (typeof statisticsManager !== 'undefined' && statisticsManager) {
+        statisticsManager.showPvAutoscalingOverlay();
+    } else {
+        showFullScreenOverlay("PV Auto-Scaling", "<div style='text-align: center; color: #888; padding: 20px;'>Statistics system not initialized</div>");
         setTimeout(() => closeFullScreenOverlay(), 2000);
     }
 }

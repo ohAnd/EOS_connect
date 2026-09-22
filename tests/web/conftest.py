@@ -33,6 +33,7 @@ import logging
 import os
 import socket
 import threading
+from zoneinfo import ZoneInfo
 
 import pytest
 from flask import Flask, jsonify, make_response, render_template_string, send_from_directory
@@ -42,6 +43,8 @@ from src.config_web.backup import backup_bp, init_backup
 from src.config_web.migration import migrate_yaml_to_store
 from src.config_web.schema import ConfigSchema
 from src.config_web.store import ConfigStore
+from src.loads.api import init_api as init_loads_api, loads_bp
+from src.loads.manager import ManagedLoadManager, ManagedLoadSources
 from src.persistence import PvYieldStore
 
 from tests.config_web.test_api import _FakeModule, _sample_config
@@ -112,7 +115,38 @@ def _build_app(store, schema, module):
     init_backup(store, schema, module)
     app.register_blueprint(config_bp)
     app.register_blueprint(backup_bp)
+
+    # A real managed-load manager, so the overlay is exercised against the same JSON
+    # the app serves rather than against a stub that cannot get its shape wrong. The
+    # sensors are fixed values: this is about the UI, not about reading Home Assistant.
+    app.register_blueprint(loads_bp)
+    init_loads_api(_managed_load_manager())
     return app
+
+
+def _managed_load_manager():
+    """A pool and a sauna, warm enough to have something to plan."""
+    entries = [
+        {
+            "id": "pool", "type": "pool_heatpump", "enabled": True,
+            "temp_sensor": "sensor.pool", "power_sensor": "sensor.pool_power",
+            "target_temp": 28.0, "window_start": None, "window_end": None,
+            "season_start": None, "season_end": None, "min_ambient_temp_c": None,
+        },
+        {
+            "id": "sauna", "type": "sauna", "enabled": True,
+            "temp_sensor": "sensor.sauna", "target_temp": 90.0,
+        },
+    ]
+    readings = {"sensor.pool": 24.2, "sensor.pool_power": 0.0, "sensor.sauna": 88.5}
+    manager = ManagedLoadManager(
+        entries,
+        time_frame_base=3600,
+        time_zone=ZoneInfo("Europe/Berlin"),
+        sources=ManagedLoadSources(read_sensor=readings.get),
+    )
+    manager.run_cycle()
+    return manager
 
 
 class _Server:  # pylint: disable=too-few-public-methods
@@ -207,7 +241,13 @@ def _launch_browser(driver):
 
 def _open_page(browser, url):
     """A page on *url* with the dashboard's CDN traffic blocked."""
-    page = browser.new_page()
+    # Pinned, because the dashboard reads the clock. `chart.js` turns the server's
+    # timestamp into a slot index with `Date.getHours()`, which answers in the
+    # *browser's* zone - so a chart assertion that holds on a developer's machine in
+    # Berlin fails on a CI runner in UTC, six hours off and entirely plausible looking.
+    # UTC is the choice because that is what CI already runs under: pinning it makes a
+    # local run agree with the one that decides whether the branch is green.
+    page = browser.new_page(timezone_id="UTC")
     # The page pulls FontAwesome, Chart.js and a font from CDNs. Blocking them keeps
     # the tests offline and fast; none of them affect the behaviour under test.
     page.route("**://cdnjs.cloudflare.com/**", lambda route: route.abort())

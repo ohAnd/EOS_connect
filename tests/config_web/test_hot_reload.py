@@ -490,6 +490,9 @@ class TestHotReloadPv:
             config_special={"url": "http://evcc:7070"},
             temperature_forecast_enabled=True,
             timezone="Europe/Berlin",
+            # Carried through every reload so a live PV change cannot drop the site
+            # coordinates the temperature request falls back to. Both zero = not set.
+            site_location=(0.0, 0.0),
         )
         assert "pv_forecast_source.source" in adapter.last_applied
 

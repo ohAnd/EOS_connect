@@ -159,16 +159,40 @@ class OptimizationInterface:
             },
         ]
 
-    def optimize(self, eos_request, timeout=None):
+    @property
+    def schedules_managed_loads(self):
+        """
+        Whether the backend can place contingent loads itself.
+
+        Read through to the backend rather than declared here: this class is a facade
+        over three of them and only the in-process solver can do it. Answering for
+        them from out here would mean remembering to update two places.
+        """
+        return bool(getattr(self.backend, "schedules_managed_loads", False))
+
+    def optimize(self, eos_request, timeout=None, managed_loads=None,
+                 managed_load_budget_w=0.0):
         """
         Main entry point for optimization.
         Accepts EOS-format request, returns EOS-format response.
         If timeout is not provided, uses the configured timeout value.
+
+        *managed_loads* are contingent loads for the backend to schedule, and only
+        reach one that says it can - they are passed beside the request rather than
+        inside it because that dict is posted verbatim to an EOS server, which
+        validates what it is sent. *managed_load_budget_w* travels the same way: it
+        belongs to the installation rather than to any one load.
         """
         if timeout is None:
             timeout = self.timeout
         self.last_eos_request = eos_request  # Store for dynamic override logic
-        eos_response, avg_runtime = self.backend.optimize(eos_request, timeout)
+        if managed_loads is not None and self.schedules_managed_loads:
+            eos_response, avg_runtime = self.backend.optimize(
+                eos_request, timeout, managed_loads=managed_loads,
+                managed_load_budget_w=managed_load_budget_w,
+            )
+        else:
+            eos_response, avg_runtime = self.backend.optimize(eos_request, timeout)
         return eos_response, avg_runtime
 
     def examine_response_to_control_data(self, optimized_response_in):

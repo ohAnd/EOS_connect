@@ -206,19 +206,574 @@
                     </div>
                 </div>
 
+                <div class="content-section" data-level="standard">
+                    <h2 id="managed-loads"><i class="fas fa-sliders" aria-hidden="true"></i> Managed
+                        loads</h2>
+                    <p>The household load forecast is built from what the same weekday drew 7 and 14 days
+                        ago. That models a base load well and anything weather- or state-driven badly: a
+                        heat pump switched to cooling, a cold snap, a pool heated to a target temperature.
+                        <em>Settings &rsaquo; Managed Loads</em> is where you add those, one card each.</p>
+
+                    <h3>Two kinds</h3>
+                    <ul>
+                        <li><strong>Scheduled</strong> &mdash; &ldquo;this needs a certain amount of
+                            energy, you pick when&rdquo;. EOS Connect works out how much, places it in the
+                            cheapest hours the appliance is allowed to run in, and publishes a
+                            <strong>released / blocked</strong> signal you can wire to a relay.
+                            <em>Pool heat pump, sauna, hot water tank, buffer tank, external energy
+                                budget.</em></li>
+                        <li><strong>Forecast only</strong> &mdash; &ldquo;this is what it <em>will</em>
+                            draw, I cannot move it&rdquo;. The values are added to the forecast exactly as
+                            given, either fetched from an entity you name or pushed in by your own
+                            automation. There is no release signal, because the timing was never ours to
+                            choose. <em>External load profile &mdash; use it for space heating and air
+                                conditioning.</em></li>
+                    </ul>
+
+                    <h3>The power sensor</h3>
+                    <p>Every sensor field in EOS Connect takes <strong>watts</strong>, and this one is no
+                        exception. It is not only used to subtract the appliance from the base load &mdash;
+                        it answers two questions a meter reading cannot: is this running <em>right now</em>,
+                        and how fast is the store warming for the power going in. That second one is where
+                        the measured efficiency comes from.</p>
+                    <p>If you only have a kWh counter, add a <strong>derivative</strong> helper in Home
+                        Assistant and point the field at that. Pointing it straight at the counter is
+                        caught and reported on the alerts panel: 1234&nbsp;W and 1234&nbsp;kWh are the same
+                        number, so it would otherwise look like an appliance that never switches off.</p>
+
+                    <div class="alert alert-info">
+                        <p>A managed load with a sensor has its own consumption <strong>removed from the
+                                household base load</strong> before its forecast is added back, so the same
+                            appliance is never counted twice. A heated store does this from its power
+                            sensor; an external load profile only when you point <em>Replaces sensor</em>
+                            at a meter, because what you send it is often just an extra on top rather than
+                            the whole appliance. This is what makes a managed load different from
+                            <em>Additional Load</em>, which models a shiftable appliance such as a
+                            dishwasher &mdash; a runtime and a total, for the optimizer to place. Do not
+                            configure the same sensor as both.</p>
+                    </div>
+
+                    <h3>Heated stores</h3>
+                    <p>A pool heat pump, a sauna, a hot water tank and a buffer tank are the same problem
+                        with different numbers, so they share one model. Pick the type closest to your
+                        appliance and it starts from sensible values.</p>
+                    <p>You supply the volume, the surface losing heat, the rated power and a rough
+                        efficiency. Those are a starting point, not an answer &mdash; nobody knows their
+                        pool's heat loss coefficient. EOS Connect measures them from ordinary
+                        operation.</p>
+                    <p>Every pair of consecutive readings is one equation of the same energy
+                        balance: what the store gained equals what the appliance put in, minus what
+                        leaked out. The heat loss and the efficiency are both unknowns in it, and
+                        they are solved for <strong>together</strong> across the recorded history
+                        rather than one after the other.</p>
+                    <p>That matters because the obvious order does not work. Measuring the losses
+                        while the appliance is off and then using them to measure the efficiency
+                        while it is on sounds right, but a pool held at its target barely changes
+                        temperature while heating &mdash; so the <em>assumed</em> loss dominates the
+                        efficiency measurement, and a wrong starting guess stays wrong. Solving both
+                        at once has no such bootstrap.</p>
+                    <p>Readings are grouped into windows long enough for the temperature to have
+                        actually moved, rather than paired cycle by cycle. This matters more than
+                        it sounds: a store's temperature is read to some finite precision, and the
+                        calculation divides that reading by the elapsed time. On an 18&nbsp;m&sup3;
+                        pool sampled every five minutes, one 0.1&nbsp;&deg;C step of the sensor
+                        works out as 25&nbsp;kW &mdash; against a real heat loss of about
+                        1&nbsp;kW. Every reading was then rounding noise many times larger than the
+                        thing being measured. The sensor's precision is measured from the data, so
+                        the window sizes itself: minutes for a sauna, hours for a pool.</p>
+                    <p>Two things keep it honest where the history is thin. The configured values
+                        act as a weak prior worth a couple of samples, so an under-determined fit
+                        falls back to what you entered instead of to noise. And the appliance has to
+                        be seen both <strong>running and idle</strong>, across a range of outdoor
+                        temperatures, before the two can really be separated: a colder day raises
+                        the losses and lowers the efficiency at the same time, so a pump that never
+                        stops cannot tell you which.</p>
+                    <p>What is fitted is <strong>two</strong> loss coefficients, not one: the
+                        store uncovered, and the store covered. The fraction between them is the
+                        one number nobody can look up &mdash; a supplier&rsquo;s data sheet is for
+                        still air over new material &mdash; so it is measured rather than trusted.
+                        Holding it at the configured guess turned out to be the worst place to be
+                        wrong: a pool covered five nights in six gives a fit that is almost entirely
+                        about the covered state, so the error in that one constant had nowhere to
+                        accumulate but in the uncovered coefficient, which then climbed refit after
+                        refit until the predicted standing losses made the target unreachable. Both
+                        states have to actually occur before they separate; until then the
+                        calibration panel says the cover is still assumed rather than measured.</p>
+                    <p>The fit learns from the <strong>sensor</strong>, never from the forecast.
+                        Both are recorded on every sample, and they are for different jobs: the
+                        bias-corrected forecast is the right input for a slot nobody has measured
+                        yet, and the wrong one for a slot that has already happened. The correction
+                        only removes the average error for that hour of the day, and what it leaves
+                        would go straight into the temperature difference that fixes the loss
+                        coefficient &mdash; worst of all overnight, where the correction is largest
+                        and where the idle windows that pin the losses down mostly are.</p>
+                    <p>The <strong>confidence</strong> figure accounts for all of that: how many
+                        windows there are, whether they include both running and idle periods, and
+                        how much of the measured behaviour the fit actually explains. If the
+                        readings do not fit &mdash; most often a temperature sensor too coarse to
+                        see how slowly the store changes &mdash; confidence stays low and the
+                        overlay says so, rather than reporting a confident wrong answer.</p>
+                    <p>The overlay says where the calibration stands: <em>learning</em> with a
+                        count while it still needs observations, then <em>measured</em>, followed
+                        by whatever remains assumed &mdash; a cover it has not seen both on and
+                        off cannot be measured, and is named rather than hidden. There is no
+                        percentage to wait on: part of a pool's behaviour is never explainable
+                        (rain, wind, swimmers), so a bar would never fill. A numeric
+                        <em>confidence</em> is still on the API and MQTT for anything that wants
+                        one. It survives restarts, and is
+                        seeded from up to two weeks of recorded samples.</p>
+                    <p>If the inputs it was learning from turn out to have been wrong &mdash; an
+                        ambient temperature that was not what you thought, say &mdash; use
+                        <strong>Reset</strong> on the overlay card, or
+                        <code>POST /api/managed_loads/&lt;id&gt;/calibration/reset</code>. The
+                        recorded samples carry those inputs, so without a reset they keep dragging
+                        the fit until they age out of the retention window on their own.</p>
+
+                    <h3>The sun</h3>
+                    <p>An outdoor store gains heat from the sun, and on a pool that is
+                        worth kilowatts &mdash; enough that a model without a term for it
+                        blames the difference on the heat loss coefficient and gets that
+                        wrong instead. So the calibration learns what the sun adds,
+                        alongside everything else.</p>
+                    <p>Nobody has an irradiance sensor, so PV generation stands in for one.
+                        The fitted figure absorbs the array size, the water&rsquo;s
+                        absorptivity and whatever the cover lets through &mdash; none of
+                        which you need to know or enter. Two sources, in order of
+                        preference:</p>
+                    <ul>
+                        <li><strong>A cumulative PV counter</strong>, if you have set one
+                            under <em>PV Auto-Scaling</em>. Differenced across a
+                            measurement window it gives the exact average for that window,
+                            integrating passing cloud rather than sampling it. Nothing
+                            extra to configure on the load &mdash; it is the same household
+                            fact, read once.</li>
+                        <li><strong>The PV forecast</strong>, otherwise. Weaker, since it
+                            is a forecast and read at one moment, but quite enough to tell
+                            a bright window from a dark one. Nothing is wrong without a
+                            counter; the overlay simply says a meter would be sharper.</li>
+                    </ul>
+                    <p>The term stays at zero until the history holds <em>both</em> bright
+                        and dark windows. A run of overcast days says nothing about what
+                        full sun does, and a store that can never separate the two behaves
+                        exactly as it did before this existed.</p>
+
+                    <h3>The cover</h3>
+                    <p>A pool cover is worth roughly two thirds of the heat loss, and it goes on
+                        and off on a daily rhythm. Reading the switch once and assuming that state
+                        for the whole two-day horizon gets most of it wrong &mdash; planning at
+                        nine in the evening, with the cover just pulled over, predicts a covered
+                        pool through the whole of the next afternoon.</p>
+                    <p>Two sources answer better than one, and they are good over different
+                        distances:</p>
+                    <ul>
+                        <li>the <strong>switch</strong>, for the next couple of hours. It is
+                            reliable about now and says little about tomorrow;</li>
+                        <li>the <strong>habit</strong> beyond that &mdash; how often the cover has
+                            actually been on at that hour of the day, learned from the samples
+                            already recorded for calibration. Nothing to configure, and nothing to
+                            keep in step by hand.</li>
+                    </ul>
+                    <p>The habit is blended rather than switched: an hour covered four nights in
+                        five is planned as four fifths of a cover, which is more honest than
+                        rounding it either way. Recent days count for more, so a cover that starts
+                        being left off shows up within a week. An hour with too little history
+                        &mdash; fewer than about three days &mdash; defers to the switch instead of
+                        being guessed at.</p>
+
+                    <h3>When it may run</h3>
+                    <ul>
+                        <li><strong>Allowed window</strong> and <strong>season</strong> &mdash; a pool pump
+                            defaults to daylight hours in the swimming season. Nobody wants it audible at
+                            03:00 for two cents.</li>
+                        <li><strong>Minimum runtime</strong> &mdash; the plan is recalculated every few
+                            minutes; without this a compressor would be cycled every time the cheapest hour
+                            moved.</li>
+                        <li><strong>Minimum ambient temperature</strong> &mdash; an air source heat pump
+                            barely works in the cold and its heat exchanger can freeze.</li>
+                        <li><strong>Frost protection</strong> &mdash; below this the appliance runs
+                            immediately and price stops mattering.</li>
+                        <li><strong>Strategy</strong> &mdash; <em>Combined</em> uses the grid price but
+                            values your own PV surplus at the feed-in tariff, so free solar beats cheap
+                            grid energy.</li>
+                        <li><strong>Shared power budget</strong> (<em>Settings &rsaquo; Load</em>) &mdash;
+                            without it a pool pump and a sauna both take the single cheapest hour and the
+                            forecast shows a peak your house cannot draw. Every optimizer honours it.
+                            Which load yields when they compete depends on who is placing them: lower
+                            <strong>priority</strong> numbers go first where this module plans, while
+                            the built-in optimizer weighs them by what each is worth &mdash; its
+                            <em>Max Price</em> &mdash; and priority does not apply.</li>
+                    </ul>
+
+                    <h3>Outdoor loads need an outdoor temperature</h3>
+                    <p>A pool's losses and its heat pump's efficiency both turn on the air
+                        temperature, so an outdoor managed load is only as good as the
+                        temperature it is given. It takes the best of three, in order:</p>
+                    <ol>
+                        <li>the <strong>outside-temperature forecast</strong>, which is the only
+                            one that can see into tomorrow &mdash; and the horizon is two days
+                            long;</li>
+                        <li>the load's own <strong>Ambient Temp Sensor</strong>, held flat. It
+                            cannot see ahead, but it measures this actual site;</li>
+                        <li>a fixed fallback, which is a guess and is reported as one on the
+                            alerts panel.</li>
+                    </ol>
+                    <p>When you have <em>both</em>, they are combined rather than ranked. A
+                        regional forecast knows the <strong>shape</strong> &mdash; that tonight
+                        drops to 11&nbsp;&deg;C and tomorrow reaches 22 &mdash; while your own
+                        thermometer knows the <strong>level</strong> at your site. The forecast is
+                        shifted so it agrees with your sensor, which keeps both. On a pool a
+                        3&nbsp;K difference is around a quarter of the standing loss, so it is
+                        not a rounding matter.</p>
+                    <p>The shift is <strong>learned per hour of the day</strong>, not taken from
+                        the latest reading and not averaged into one number. That matters because
+                        such a gap is rarely constant: at one installation the station read
+                        4&nbsp;K below every model tried &mdash; ICON-D2, ICON-EU, ECMWF and GFS
+                        all agreed with each other and none with the garden &mdash; which is what
+                        cold air draining into a hollow overnight looks like. By mid-afternoon the
+                        same site sat close to the model. A single average is wrong at both ends of
+                        that, and applied across a two-day horizon it puts a night-time correction
+                        on tomorrow's afternoon.</p>
+                    <p>An hour needs a few days of agreement before its own offset is used; until
+                        then it falls back to the site's all-day average, and before there is even
+                        that, to no correction. Recent days count for more, so a sensor being moved
+                        works its way in within a week. The offset is bounded at 8&nbsp;K, and a
+                        reading more than 20&nbsp;K from the forecast is discarded rather than
+                        learned from &mdash; the two are not describing the same air &mdash; with
+                        the alerts panel saying so. The overlay shows the measurement, the value
+                        the model used, and the offset applied for that hour.</p>
+                    <div class="alert alert-info">
+                        <p>If your own thermometer disagrees with the forecast, it is usually
+                            right: a weather model resolves a grid cell of a few kilometres and
+                            cannot see your hollow, your ridge or your courtyard. The same
+                            discrepancy is familiar from phone weather apps. Nothing needs
+                            configuring &mdash; give it a day and the correction appears on its
+                            own.</p>
+                    </div>
+                    <p>The forecast is fetched for coordinates, which normally come from your
+                        first PV installation. Sources that are not location-based &mdash; EVCC,
+                        Solcast, Victron, timeseries &mdash; need no installations, so set
+                        <em>Latitude</em> and <em>Longitude</em> under
+                        <em>Settings &rsaquo; System</em> instead. Leave them at 0 if you do not
+                        need them.</p>
+                    <p>If you switched to one of those sources <em>after</em> configuring
+                        installations, the old entries stay in the database and the
+                        <em>PV Installations</em> section stops showing them. A site location
+                        under <em>System</em> then wins: the coordinates in use are the ones
+                        you can see. With no site location set, a stored entry is still used
+                        rather than losing the forecast altogether &mdash; but that is a
+                        location you can no longer read or edit, so <em>PV Source</em> says so
+                        and the log warns once.</p>
+                    <p><em>Settings &rsaquo; PV Source &rsaquo; Temperature source</em> chooses who
+                        supplies the curve:</p>
+                    <ul>
+                        <li><strong>Open-Meteo</strong> (default) publishes the air temperature
+                            directly, needs no API key, and returns whole local days &mdash; which is
+                            already how EOS Connect indexes a forecast.</li>
+                        <li><strong>Akkudoktor</strong> derives it from a PV forecast query against
+                            <code>api.akkudoktor.net/forecast</code>, which proxies a weather
+                            provider that rate-limits it. When that provider refuses, the API
+                            relays a 429 and <em>nobody</em> gets a forecast, whatever their own
+                            request rate &mdash; and because the temperature rides on a solar query,
+                            a solar rate limit takes it down too. EOS Connect backs off with a
+                            doubling hold rather than asking every fifteen minutes, reports it once
+                            rather than once a cycle, and resumes on its own.</li>
+                    </ul>
+                    <div class="alert alert-info">
+                        <p>One curve is fetched and shared by the optimizer and by every outdoor
+                            managed load, so this is a single choice for both rather than one each.
+                            While no forecast is available, an outdoor managed load falls back to
+                            its <em>Ambient Temp Sensor</em> &mdash; which is the best reason to
+                            configure one.</p>
+                    </div>
+
+                    <div class="alert alert-info">
+                        <p>The forecast used to be fetched only for the EOS Server backend, since
+                            EVopt does not consume temperature. Managed loads changed that: an
+                            outdoor load now asks for the curve on its own account, whichever
+                            optimizer you run. <code>eos.temperature_forecast_enabled</code> is
+                            still the way to stop the requests entirely.</p>
+                    </div>
+
+                    <h3>What the price limit means</h3>
+                    <p><strong>Max Price</strong> is a limit on what you pay per kWh for
+                        this load&rsquo;s energy. What it can guarantee depends on which
+                        optimizer is running, and the overlay says which rule is in force:</p>
+                    <ul>
+                        <li><strong>Built-in optimizer</strong> &mdash; the load stops being
+                            part of the household forecast and becomes something the solver
+                            schedules, alongside the battery and everything else. It runs in
+                            any hour where the energy genuinely costs less than your limit
+                            &mdash; including an expensive hour served from a battery that was
+                            charged cheaply for the purpose, which is a trade only something
+                            seeing both sides can make. What you actually pay per kWh comes in
+                            under the figure you set, and the overlay reports it &mdash;
+                            measured, by solving the same horizon again without the load and
+                            taking the difference in your own bill. On a sunny day that falls
+                            towards your <em>feed-in tariff</em> rather than to zero, because
+                            self-consumed solar still costs you the export you gave up; on a
+                            dark one it rises towards the limit. With more than one load
+                            scheduled the total is split between them by energy, which the
+                            card says.</li>
+                        <li><strong>External optimizer</strong> &mdash; EOS Connect cannot
+                            reach inside EOS Server or a remote EVopt, so the rule is simpler:
+                            skip any hour whose own price is above the limit, and hand the
+                            resulting plan over as part of the load forecast. Safe, but blunt
+                            &mdash; it refuses a dear hour even when the rest of the day was
+                            nearly free, and it cannot arrange cheap energy in advance. The
+                            overlay then shows the tariff of the hours the load runs in, which
+                            is a rougher guide: it cannot see that the energy came off your
+                            roof, so a sunny day can read dearer than a dark one.</li>
+                    </ul>
+                    <p>Everything else about a managed load behaves the same either way: the
+                        allowed window, the minimum outside temperature, the minimum runtime
+                        and frost protection are limits the solver is given, not rules it may
+                        trade away. The one setting that stops applying under the built-in
+                        optimizer is <strong>Priority</strong>: loads are placed together
+                        rather than one after another, so there is no queue to be near the
+                        front of.</p>
+                    <p>Set it to <strong>0</strong> for no limit; frost protection ignores it
+                        either way.</p>
+
+                    <h3>How long it is allowed to run</h3>
+                    <p>Three settings bound the runtime and they stack, so the tightest one
+                        wins. It is worth knowing which is binding before changing anything:</p>
+                    <ul>
+                        <li><strong>Window Start / Window End</strong> &mdash; the hours of the
+                            day it may run at all. 8 to 22 gives fourteen hours.</li>
+                        <li><strong>Max Runtime Hours Per Day</strong> &mdash; a cap inside that
+                            window. Set to 12 with a 14-hour window, twelve is what you get; the
+                            other two hours are simply never used. Set it to 0 for no cap.</li>
+                        <li><strong>Min Ambient Temp</strong> &mdash; removes individual slots
+                            the air is too cold for, wherever they fall.</li>
+                    </ul>
+                    <p>Compare <em>Energy needed</em> with <em>Planned</em> in the overlay to see
+                        whether they bind:</p>
+                    <ul>
+                        <li><strong>Planned equals needed</strong> &mdash; the plan covers the
+                            demand; the settings are not in the way.</li>
+                        <li><strong>Planned is lower</strong> &mdash; the load cannot get all
+                            the energy it needs, and the card names the setting responsible:
+                            the price cap, the allowed hours, the minimum outside temperature,
+                            the season, the daily runtime cap or the shared power limit,
+                            whichever ruled out the most slots &mdash; unless no setting would
+                            help, in which case it says that instead. A load can want more energy
+                            than the appliance could deliver running flat out through every slot
+                            left, and naming the setting that excluded the most of them is then
+                            true and useless: you raise it and the store still never reaches
+                            target. The strip colours each slot
+                            by what became of it &mdash; blue where the load will run, with the
+                            bar height showing how much, amber where you are rationing it
+                            (price cap, daily runtime cap, shared power limit), green where it
+                            is simply not allowed to run then (outside the hours, out of
+                            season, too cold), and faint grey where nothing was needed.
+                            Hovering any bar gives the exact reason for that slot.</li>
+                        <li><strong>Planned is lower and the pump runs flat out anyway</strong>
+                            &mdash; the appliance is undersized for the losses rather than
+                            short of time. A cover changes that faster than a bigger pump.</li>
+                    </ul>
+                    <div class="alert alert-info">
+                        <p><em>Energy needed</em> covers the rest of the optimization horizon,
+                            not a day. It shrinks through the day and steps back up at midnight,
+                            so compare it with <em>Planned</em> beside it rather than with
+                            yesterday's figure.</p>
+                    </div>
+
+                    <h3>Getting a forecast in</h3>
+                    <p>If you already model something elsewhere &mdash; a heating curve against the
+                        outdoor temperature forecast in Home Assistant, say &mdash; add an
+                        <strong>External load profile</strong> and hand EOS Connect the result. It does not
+                        need to know anything about heat pumps, cooling or washing days.</p>
+                    <p>There are two ways round, and <strong>Profile source</strong> on the load chooses
+                        between them:</p>
+                    <ul>
+                        <li><strong>Fetched</strong> &mdash; you name an entity and EOS Connect reads it
+                            every few minutes. Pick this if what you have is a template sensor holding the
+                            numbers. Nothing to write, and nothing to keep running.</li>
+                        <li><strong>Pushed</strong> &mdash; your automation sends the numbers when it has
+                            them. Pick this if the forecast is produced on its own schedule, or by
+                            something outside Home Assistant.</li>
+                    </ul>
+
+                    <h4>Fetching it from an entity</h4>
+                    <p>Set <strong>Profile source</strong> to <em>timeseries</em> and give it the entity,
+                        the path to the array inside it, and what the values are measured in. It is the
+                        same arrangement as the price and PV sources, and it takes the same format &mdash;
+                        see <a href="#timeseries-templates">Home Assistant Template Snippets</a> for
+                        ready-made templates you can adapt.</p>
+                    <pre><code>Entity      sensor.heat_pump_forecast
+Path        attributes.forecast
+Unit        W                          &mdash; or kW, Wh, kWh
+
+attributes:
+  forecast:
+    - start: "2026-01-15T00:00:00+01:00"
+      value: 0
+    - start: "2026-01-15T01:00:00+01:00"
+      value: 1400
+    ...</code></pre>
+                    <p>Put the array in an <strong>attribute</strong>, not the entity's state: a Home
+                        Assistant state is capped at 255 characters, which a 48-value series will not fit.
+                        Each entry needs a <code>start</code>; <code>end</code> is worked out from the next
+                        one. Publish as far ahead as you can model &mdash; EOS Connect plans 48 hours, and
+                        uses whatever part of that you cover.</p>
+                    <div class="alert alert-info">
+                        <p>If the entity cannot be read, the last good forecast stays in place rather than
+                            the load dropping out of the plan &mdash; a Home Assistant restart should not
+                            move your battery. It is only given up after <strong>TTL minutes</strong>, at
+                            which point the load simply stops contributing. The first failure is written to
+                            the log; repeats are not, so one dead sensor cannot bury everything else.</p>
+                    </div>
+
+                    <h4>Pushing it in</h4>
+                    <p>Leave <strong>Profile source</strong> on <em>push</em> and send it:</p>
+                    <pre><code>POST /api/managed_loads/&lt;id&gt;/push
+
+{"value_wh": 1500}                       one hourly average, applied across the horizon
+{"values": [0, 0, 1200, 1400, ...]}      24 or 48 hourly values, or 96 or 192 quarter-hourly
+{"total_wh": 8000, "deadline_hours": 12} an energy budget for EOS Connect to place</code></pre>
+                    <p>The resolution is inferred from how many values you send and resampled to whatever
+                        the optimizer is running on, so your sender keeps working if you change the slot
+                        length. Add <code>"unit": "W"</code> for average power, <code>"start": "now"</code>
+                        if the series begins at the current slot rather than midnight, and
+                        <code>"ttl_minutes"</code> to control how long it stays valid. The response echoes
+                        the normalised series back so you can check the alignment.</p>
+                    <p>The same payload can be published to
+                        <code>eos_connect/managed_load/&lt;id&gt;/set</code>, including as a bare number.
+                        Retained messages are honoured on this topic, so a pushed forecast survives a
+                        restart.</p>
+                    <div class="alert alert-info">
+                        <p>Values may be <strong>negative</strong>, whichever way they arrive. That is how
+                            you correct the forecast downwards &mdash; the difference between a heat pump's
+                            heating and cooling modes, for instance.</p>
+                    </div>
+
+                    <h4>Extra load, or the whole appliance?</h4>
+                    <p>This is the one thing worth getting right, and it is invisible from the sending
+                        end. What you send is <strong>added</strong> to the household load forecast, slot
+                        by slot. The household forecast is built from your own measured history, which
+                        already contains whatever the appliance was doing over the last fortnight.</p>
+                    <ul>
+                        <li>Sending only the <strong>extra</strong> &mdash; the difference cooling makes
+                            over heating, say &mdash; is the ordinary case. Leave <strong>Replaces
+                                sensor</strong> empty.</li>
+                        <li>Sending the appliance's <strong>whole</strong> consumption means its history
+                            has to come out of the household forecast first, or it is counted twice. Set
+                            <strong>Replaces sensor</strong> to the meter measuring it, in watts.</li>
+                    </ul>
+                    <div class="alert alert-warning">
+                        <p>Setting <em>Replaces sensor</em> while sending only the extra bit is the
+                            mistake to watch for: the whole measured consumption leaves the base load and
+                            only the difference comes back, so the forecast ends up far too low.</p>
+                    </div>
+
+                    <h3>On the dashboard</h3>
+                    <p>Configured managed loads get their own tile, the same size as the four it
+                        shares the row with, showing one line per load with its state and, in the
+                        header, the energy planned across all of them. It is a summary by design.
+                        Click the header figure, or pick <em>Menu &rsaquo; Managed
+                        Loads</em>, for the full picture: why each load is in the state it is,
+                        what it still needs, when it will next run, how far the calibration has
+                        settled, and which slots of the next two days it is planned for &mdash; with the
+                        time of day along the axis, and the exact window, energy and running total
+                        on hovering a bar.</p>
+                    <p>Two things on that card are worth reading carefully. <strong>Energy
+                        needed</strong> is split into what it takes to reach the target and what it
+                        takes to hold it for the rest of the horizon &mdash; for a pool the second
+                        part dominates, which is why a one-degree rise can read as tens of kWh. And
+                        the outside temperature names not just the air but where it came from: the
+                        forecast corrected to your site, your own sensor held flat, or a fixed
+                        guess. A prediction standing on a guess looks exactly like one standing on
+                        a forecast, so it says which.</p>
+                    <p>Under the planned slots, <strong>Temperatures</strong> draws the two curves
+                        the plan is built on, against the same clock. The upper one is the store
+                        itself &mdash; solid where it was measured, dashed where the plan takes it,
+                        with the target marked; that pair is the answer to &ldquo;why does it want
+                        so much energy?&rdquo;, because the climb and the standing loss are one
+                        number in the demand and two quite different shapes here. The lower one is
+                        the air: solid for the figure the model uses, dashed for the forecast as it
+                        arrived, so the gap between them is what the site has taught it. Hovering
+                        either gives the readings and, on the air, the difference between them.
+                        They are two plots rather than one because a pool moves four kelvin where
+                        the air outside moves twenty-three.</p>
+                    <p><strong>How this was worked out</strong> at the foot of the card folds away
+                        the workings &mdash; efficiency, power, where the forecast came from, and
+                        the calibration with its Reset. An override, an error, or an ambient figure
+                        that is a fixed guess never folds: those change what you should do.</p>
+
+                    <h3>What it publishes</h3>
+                    <ul>
+                        <li>MQTT, per load, discovered by Home Assistant automatically:
+                            <code>managed_load/&lt;id&gt;/released</code> (a binary sensor),
+                            <code>/state</code>, <code>/reason</code>, <code>/next_release_start</code>,
+                            <code>/energy_needed_wh</code>, <code>/temperature</code>,
+                            <code>/target_temperature</code> and
+                            <code>/calibration_confidence</code>.</li>
+                        <li><code>GET /api/managed_loads</code> for the full picture: the plan slot by
+                            slot, the release state and the calibration.</li>
+                        <li><code>POST /api/managed_loads/&lt;id&gt;/override</code> with
+                            <code>{"mode": "release" &#124; "block" &#124; "clear", "minutes": 60}</code>,
+                            or publish the same to
+                            <code>eos_connect/managed_load/&lt;id&gt;/override/set</code>. An override wins
+                            over everything, frost protection included.</li>
+                    </ul>
+
+                    <h3>Why did it run then?</h3>
+                    <p>A released/blocked signal tells you <em>that</em> something changed and never
+                        <em>which plan</em> said so &mdash; and by the time you look, that plan has been
+                        replaced several times over. So every release decision is written to the
+                        database as it is made, together with the plan behind it:</p>
+                    <pre><code>GET /api/managed_loads/&lt;id&gt;/decisions?hours=24
+
+{
+  "count": 712,
+  "distinct_plans": 34,        &mdash; how many different plans it held
+  "release_changes": 9,        &mdash; how often the appliance was switched
+  "decisions": [
+    {"timestamp": "...", "origin": "optimizer", "released": true,
+     "reason": "planned cheap slot", "current_slot": 77, "planned_now": true,
+     "plan_hash": "4fa96012", "planned_slots": [150, 151, 160, 161, 162],
+     "planned_wh": 2000.0, "demand_wh": 35733.5}
+  ]
+}</code></pre>
+                    <p>The two summary numbers are usually the whole answer. A high
+                        <strong>distinct_plans</strong> against a low <strong>release_changes</strong>
+                        means the optimizer keeps changing its mind but the minimum runtime is
+                        absorbing it. Both high means that churn is reaching the appliance.</p>
+                    <p><strong>origin</strong> separates the two things that look identical from the
+                        appliance: <code>optimizer</code> is a schedule the solver produced,
+                        <code>self</code> is EOS Connect falling back on its own plan because the
+                        solver went quiet. <strong>planned_now</strong> says whether the slot that was
+                        current at that moment actually carried energy &mdash; a release with
+                        <code>planned_now: false</code> is being held by the minimum runtime or an
+                        override, not by the plan.</p>
+                    <p>Kept for seven days and purged on start. It is written for reading after the
+                        fact; nothing uses it to run the house.</p>
+                </div>
+
                 <div class="content-section">
                     <h2 id="backup-restore"><i class="fas fa-box-archive" aria-hidden="true"></i> Backup and
                         restore</h2>
                     <p><em>Menu &rsaquo; Backup &amp; Restore</em> writes one file containing your whole
-                        install: every setting, plus the measured PV yield history that the forecast
-                        auto-scaler learns from.</p>
+                        install: every setting, the measured PV yield history that the forecast
+                        auto-scaler learns from, and what each managed load has learned about its
+                        appliance.</p>
                     <ul>
                         <li>That history is stored nowhere else and is purged on a rolling window
                             (7&nbsp;days by default), so a backup is the only way to keep it.</li>
+                        <li>Every load that reads a temperature learns &mdash; a pool, a sauna, a
+                            hot-water tank, a buffer tank &mdash; and that learning is the slowest
+                            thing on the install to rebuild. A heat-loss figure needs weeks of
+                            overnight cooling and a spread of weather before it means anything, and
+                            a covered store has to be seen both covered and open before the cover is
+                            worth anything to the model. Restoring takes effect at the next restart,
+                            because each load rebuilds its calibration from the recorded samples when
+                            it starts.</li>
                         <li>Restoring <strong>previews first</strong> &mdash; including which settings it
                             would remove &mdash; and writes nothing until you confirm.</li>
                         <li>An old backup's yield history can be shifted into the current window, so
                             auto-scaling works from the first run instead of waiting a week.</li>
+                        <li>Each dataset has its own checkbox on both sides, so you can back up
+                            everything and restore only the part you meant to.</li>
                     </ul>
                     <div class="alert alert-danger">
                         <p><strong>The backup file holds your API tokens and inverter password in plain

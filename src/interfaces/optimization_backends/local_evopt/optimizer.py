@@ -41,6 +41,9 @@ Modifications made for EOS_connect integration (adapted from main branch, ~2025-
   rather than s[0]; upstream's s[0] is the SOC *after* the first slot has
   charged or discharged, so the first slot fell out of the reported delta
 - Module is invoked in-process; no HTTP server needed
+- Added ManagedLoadConfig and the variables, constraints and objective term that let
+  the solver *place* a contingent load (pool heat pump, sauna, hot-water tank) rather
+  than being handed it as fixed demand, so the battery and the load are decided together
 """
 
 import logging
@@ -235,6 +238,75 @@ class BatteryConfig:
 
 
 @dataclass
+class ManagedLoadConfig:
+    """
+    A load whose *timing* is the optimizer's to choose (EOS_connect extension).
+
+    The household profile `gt` is fixed: it says what the house will draw and the
+    optimizer works around it. A pool heat pump, a sauna or a hot-water tank is not
+    like that - it needs a quantity of energy by a deadline and does not care when,
+    which makes it something the solver should be placing rather than being told.
+
+    Placing it here rather than in `gt` is what lets the battery and the load be
+    decided together: charging at 14 ct to run a pump through a 30 ct evening is a
+    trade only something that sees both can make. Every attempt to make that call
+    from outside had to guess what energy would cost, and the guess is what the
+    solver is computing.
+
+    Nothing here is specific to any appliance. What the energy is *for* lives in the
+    demand model that produced these numbers.
+
+    Attributes:
+        id: Instance id, echoed back on the result so schedules can be matched up.
+        demand_wh: Energy wanted over the horizon. An upper bound, not a target - a
+            window too narrow to hold it must yield a short plan, not an infeasible
+            model.
+        value_eur_per_wh: What a Wh delivered here is worth. The solver runs the load
+            in a slot exactly when the marginal cost of supplying it is below this, so
+            it doubles as the price limit: the energy actually bought comes in under
+            this figure by construction. Set it above any plausible tariff to mean
+            "no limit".
+        feasible: Per-slot mask - window, ambient temperature, season.
+        max_power_w: Draw while running, which sets the per-slot ceiling.
+        min_runtime_slots: Shortest run the appliance may be started for. Above 1 this
+            costs a binary per slot.
+        urgent_wh: Energy that must be placed whatever it costs - frost protection.
+        committed_on_slots: Leading slots the appliance is already running through and
+            may not be stopped in - the remainder of a minimum run begun under an
+            earlier plan. Every plan is built from scratch, so without this the seam
+            between two of them is where the appliance cycles.
+        committed_off_slots: The mirror: leading slots it may not be restarted in.
+        start_cost_eur: What one start is worth avoiding. Without it the objective is
+            indifferent between a contiguous run and the same energy scattered over the
+            day - every schedule of the same slots costs the same - so the solver
+            returns whichever the search reaches first, and the appliance cycles.
+    """
+
+    id: str = ""
+    demand_wh: float = 0.0
+    value_eur_per_wh: float = 0.0
+    feasible: Optional[List[bool]] = None
+    max_power_w: float = 0.0
+    min_runtime_slots: int = 1
+    urgent_wh: float = 0.0
+    start_cost_eur: float = 0.0
+    # Cap on slots this load may run in one calendar day, 0 for none, with a label per
+    # slot saying which day it belongs to. A label rather than a boundary because it
+    # makes the same rotation into solver space as everything else indexed by slot;
+    # -1 marks a slot that belongs to no day and is never capped.
+    max_slots_per_day: int = 0
+    day_index: list = None
+    committed_on_slots: int = 0
+    # Whether a run is under way. Separate from committed_on_slots on purpose: this
+    # only tells the solver that continuing costs no start, where committing *forces*
+    # the head slot on. Binding the two latches the load - the pin keeps the gate
+    # released, which pins again next cycle - and it ran a live pool through an
+    # evening peak it should have skipped.
+    already_running: bool = False
+    committed_off_slots: int = 0
+
+
+@dataclass
 class TimeSeriesData:
     """Time series input data for optimization including load, production, and prices."""
     dt: List[int]          # Time step length [s]
@@ -271,11 +343,15 @@ class Optimizer:
         eta_d: float = 0.95,
         M: float = 1e6,
         optimizer_settings: Optional[OptimizerSettings] = None,
+        managed_loads: Optional[List[ManagedLoadConfig]] = None,
+        managed_load_budget_w: float = 0.0,
     ):
         self.settings = optimizer_settings or OptimizerSettings()
         self.strategy = strategy
         self.grid = grid
         self.batteries = batteries
+        self.managed_loads = list(managed_loads or [])
+        self.managed_load_budget_w = max(0.0, float(managed_load_budget_w or 0.0))
         self.time_series = time_series
         self.eta_c = eta_c
         self.eta_d = eta_d
@@ -318,6 +394,8 @@ class Optimizer:
         self._setup_target_function()
         self._add_energy_balance_constraints()
         self._add_battery_constraints()
+        self._add_managed_load_constraints()
+        self._add_shared_budget_constraints()
 
     def _setup_variables(self):
         """Set up the variables of the MILP optimizer."""
@@ -448,6 +526,50 @@ class Optimizer:
             else:
                 self.variables['z_c'][i] = None
 
+        # One per load: whether this slot begins a run. Only created when starts are
+        # priced, since otherwise it is a binary the objective never reads.
+        self.variables['ml_start'] = {}
+        for i, load in enumerate(self.managed_loads):
+            self.variables['ml_start'][i] = (
+                [pulp.LpVariable(f"ml_start_{i}_{t}", cat='Binary')
+                 for t in self.time_steps]
+                if load.start_cost_eur > 0 else None
+            )
+
+        # Managed loads: energy placed in each slot, and whether the appliance is
+        # running there. The mask is applied as an upper bound of zero rather than by
+        # leaving the variable out, so every list stays T long and the result can be
+        # read back positionally.
+        self.variables['ml'] = {}
+        self.variables['ml_on'] = {}
+        for i, load in enumerate(self.managed_loads):
+            per_slot = [
+                load.max_power_w * self.time_series.dt[t] / 3600.0
+                for t in self.time_steps
+            ]
+            feasible = load.feasible or [True] * self.T
+            self.variables['ml'][i] = [
+                pulp.LpVariable(
+                    f"ml_{i}_{t}",
+                    lowBound=0,
+                    upBound=per_slot[t] if (
+                        t < len(feasible) and feasible[t]
+                    ) else 0.0,
+                )
+                for t in self.time_steps
+            ]
+            # Worth a binary when something actually reads the on/off state: a minimum
+            # run to enforce, or starts being priced. Without either, the appliance may
+            # be placed in any slot and the switch carries nothing the continuous
+            # variable does not already have.
+            if load.min_runtime_slots > 1 or load.start_cost_eur > 0:
+                self.variables['ml_on'][i] = [
+                    pulp.LpVariable(f"ml_on_{i}_{t}", cat='Binary')
+                    for t in self.time_steps
+                ]
+            else:
+                self.variables['ml_on'][i] = None
+
         # Binary variable to lock charging against discharging
         self.variables['z_cd'] = {}
         for i, bat in enumerate(self.batteries):
@@ -477,6 +599,20 @@ class Optimizer:
         # Grid export revenue [currency unit]
         for t in self.time_steps:
             objective += self.variables['e'][t] * self.time_series.p_E[t]
+
+        # Managed load value [currency unit]
+        #
+        # This single term is the whole price rule. The solver adds a Wh here only when
+        # supplying it costs less than the Wh is worth - and "costs" is whatever the
+        # cheapest source in that slot really is, grid import, forgone export, or a
+        # battery it may charge earlier for exactly this purpose. So the energy bought
+        # for the load comes in under `value_eur_per_wh` by construction; there is no
+        # separate cap to enforce, and no averaging window to argue about.
+        for i, load in enumerate(self.managed_loads):
+            objective += load.value_eur_per_wh * pulp.lpSum(self.variables['ml'][i])
+            starts = self.variables['ml_start'][i]
+            if starts is not None:
+                objective -= load.start_cost_eur * pulp.lpSum(starts)
 
         # Final state of charge value [currency unit]
         for i, bat in enumerate(self.batteries):
@@ -638,9 +774,15 @@ class Optimizer:
             if self.grid.p_max_exp is not None:
                 e_grid_exp = self.variables['e'][t] + self.variables['e_exp_lim_exc'][t]
 
+            # Managed loads sit on the demand side beside gt. They are not in gt:
+            # the point is that the solver chooses when they draw.
+            managed_draw = pulp.lpSum(
+                self.variables['ml'][i][t] for i in range(len(self.managed_loads))
+            )
+
             self.problem += (
                 battery_net_discharge + self.time_series.ft[t] + e_grid_imp
-                == e_grid_exp + self.time_series.gt[t]
+                == e_grid_exp + self.time_series.gt[t] + managed_draw
             )
 
         # Grid flow direction constraints — per-slot tight M
@@ -653,7 +795,10 @@ class Optimizer:
         for t in self.time_steps:
             _dt_h = self.time_series.dt[t] / 3600.0
             _m_exp_t = self.time_series.ft[t] + _total_d_max * _dt_h
-            _m_imp_t = self.time_series.gt[t] + _total_c_max * _dt_h
+            _m_imp_t = (
+                self.time_series.gt[t] + _total_c_max * _dt_h
+                + sum(load.max_power_w for load in self.managed_loads) * _dt_h
+            )
             self.problem += self.variables['e'][t] <= _m_exp_t * self.variables['y'][t]
             self.problem += self.variables['n'][t] <= _m_imp_t * (1 - self.variables['y'][t])
 
@@ -837,6 +982,192 @@ class Optimizer:
                     >= bat.s_reserve
                 )
 
+    def _add_managed_load_constraints(self):
+        """
+        Bound each managed load: how much, when, for how long at a time, how often.
+
+        The demand is a ceiling rather than an equality on purpose. A window too narrow
+        to hold it, or a price that never comes down, has to yield a short plan - the
+        caller can see the shortfall and say so. An equality would make the whole model
+        infeasible and take the household's schedule down with it.
+        """
+        for i, load in enumerate(self.managed_loads):
+            run = self.variables['ml'][i]
+            self.problem += pulp.lpSum(run) <= max(0.0, load.demand_wh)
+
+            # Frost protection and the like: energy that must be placed whatever it
+            # costs, so it is a floor the value term cannot argue with.
+            if load.urgent_wh > 0:
+                self.problem += pulp.lpSum(run) >= min(load.urgent_wh, load.demand_wh)
+
+            feasible = load.feasible or [True] * self.T
+            self._add_daily_cap_constraints(load, run, feasible)
+
+            on = self.variables['ml_on'][i]
+            if on is None:
+                continue
+
+            for t in self.time_steps:
+                cap = load.max_power_w * self.time_series.dt[t] / 3600.0
+                allowed = t < len(feasible) and feasible[t]
+                if not allowed or cap <= 0:
+                    self.problem += on[t] == 0
+                    continue
+                # The switch *is* the draw, not merely a permission to draw. Binding it
+                # one way only - run <= cap * on - leaves the binary free: the solver
+                # sets it everywhere at no cost, every minimum-run constraint is then
+                # satisfied by a switch that is on while nothing runs, and the appliance
+                # gets scheduled in isolated slots anyway.
+                #
+                # So a load with a minimum run, or with starts priced, is modelled as
+                # on/off at its rated power, which is what a compressor does. The demand
+                # ceiling may then be met a slot short rather than exactly; that is the
+                # honest answer for something that cannot half-run.
+                self.problem += run[t] == cap * on[t]
+
+            self._add_commitment_constraints(load, on, feasible)
+            self._add_switching_constraints(
+                on, self.variables['ml_start'][i], int(load.min_runtime_slots),
+                already_running=load.already_running or load.committed_on_slots > 0,
+            )
+
+    def _add_shared_budget_constraints(self):
+        """
+        Hold every managed load together under one site limit.
+
+        A budget belongs to the installation, not to a load: it is what the wiring or
+        the contactor can carry, and it is separate from the grid import limit because
+        sun can cover a draw the grid never sees. Without it two loads both take the
+        single cheapest hour and stack a sauna on top of a pool pump - a peak the house
+        cannot draw, which the optimizer then sizes the battery for.
+
+        Never below the largest single load. A budget smaller than one appliance is a
+        misconfiguration, and reading it literally would silently stop that appliance
+        ever running rather than sharing anything out.
+        """
+        budget_w = self.managed_load_budget_w
+        if budget_w <= 0 or len(self.managed_loads) < 2:
+            return
+        floor_w = max(load.max_power_w for load in self.managed_loads)
+        effective_w = max(budget_w, floor_w)
+
+        for t in self.time_steps:
+            allowance = effective_w * self.time_series.dt[t] / 3600.0
+            self.problem += pulp.lpSum(
+                self.variables['ml'][i][t] for i in range(len(self.managed_loads))
+            ) <= allowance
+
+    def _add_daily_cap_constraints(self, load, run, feasible):
+        """
+        Hold a load to its allowed hours per calendar day.
+
+        The cap reached the fallback planner and not the solver, so under this backend
+        it was silently inert - and the pool preset ships it set to twelve, so a user
+        on defaults believed in a limit that was not there.
+
+        Written against the energy rather than the on/off binary because that binary
+        only exists for a load with a minimum run or a priced start; a load without
+        either is modelled continuously and would slip the cap entirely. N slots at
+        rated power is the same limit either way, and it is what the fallback planner
+        means by it.
+
+        Never below what the head of the horizon is already committed to: a load part
+        way through a run it may not abandon, on a day whose allowance is spent, would
+        otherwise make the model infeasible and take the household's schedule with it.
+        This is a comfort limit, not one worth failing the whole solve over.
+        """
+        cap = int(load.max_slots_per_day or 0)
+        days = load.day_index or []
+        if cap <= 0 or not days:
+            return
+
+        held = min(int(load.committed_on_slots or 0), self.T)
+        grouped = {}
+        for t in self.time_steps:
+            if t >= len(days):
+                continue
+            day = days[t]
+            if day is None or day < 0:
+                continue
+            grouped.setdefault(day, []).append(t)
+
+        for day, slots in grouped.items():
+            usable = [t for t in slots if t < len(feasible) and feasible[t]]
+            if not usable:
+                continue
+            allowed = max(cap, sum(1 for t in slots if t < held))
+            if len(usable) <= allowed:
+                continue
+            # Slots are not all the same length once the horizon changes resolution,
+            # so the allowance is the dearest `allowed` of them, not a slot count.
+            budget = sum(sorted(
+                (load.max_power_w * self.time_series.dt[t] / 3600.0 for t in usable),
+                reverse=True,
+            )[:allowed])
+            self.problem += pulp.lpSum(run[t] for t in usable) <= budget
+
+    def _add_commitment_constraints(self, load, on, feasible):
+        """
+        Hold the head of the horizon to what the appliance is already doing.
+
+        Bounded rather than absolute, on both sides. A run is only held through slots
+        the load is actually allowed to use - if the window closes or the weather turns
+        while it is running, the rule that stopped it wins - and only as far as the
+        demand reaches, so committing can never ask for energy the load does not want.
+        Either would otherwise make the model infeasible and take the household's
+        schedule down with it.
+        """
+        held_on = min(int(load.committed_on_slots), self.T)
+        if held_on:
+            budget = max(0.0, load.demand_wh)
+            for t in range(held_on):
+                cap = load.max_power_w * self.time_series.dt[t] / 3600.0
+                allowed = t < len(feasible) and feasible[t]
+                if not allowed or cap <= 0 or budget < cap:
+                    break
+                self.problem += on[t] == 1
+                budget -= cap
+
+        for t in range(min(int(load.committed_off_slots), self.T)):
+            self.problem += on[t] == 0
+
+    def _add_switching_constraints(self, on, starts, span, already_running=False):
+        """
+        How long a run lasts, how long a rest lasts, and what a start is worth avoiding.
+
+        The rising edge is `on[t] - on[t-1]`. Slot 0 has nothing before it, so a run
+        beginning there normally counts as a start - unless the appliance was *already*
+        running, in which case slot 0 continues a run somebody else began and charging
+        it as a start would demand a fresh minimum run the demand may not cover. A
+        *stop* in slot 0 is never counted: what came before the window is only known
+        when the caller says so.
+        """
+        def edge(t):
+            if t == 0:
+                return 0 if already_running else on[0]
+            return on[t] - on[t - 1]
+
+        for t in self.time_steps:
+            started = edge(t)
+            for step in range(1, span):
+                if t + step < self.T:
+                    self.problem += on[t + step] >= started
+
+        # A stop obliges the same rest as a run, so the solver cannot drop a single slot
+        # wherever the tariff ticks up and leave the compressor cycling for nothing.
+        for t in range(1, self.T):
+            stopped = on[t - 1] - on[t]
+            for step in range(1, span):
+                if t + step < self.T:
+                    self.problem += on[t + step] <= 1 - stopped
+
+        if starts is None:
+            return
+        # One inequality is enough: the objective pays for starts, so the solver drives
+        # them to zero wherever it can and never needs the other direction pinned.
+        for t in self.time_steps:
+            self.problem += starts[t] >= edge(t)
+
     def solve(self) -> Dict:
         """
         Creates the MILP model if none exists and solves the optimization problem.
@@ -895,6 +1226,15 @@ class Optimizer:
                 'flow_direction': [],
                 'grid_import_overshoot': e_grid_imp_overshoot,
                 'grid_export_overshoot': e_grid_exp_overshoot,
+                'managed_loads': [
+                    {
+                        'id': load.id,
+                        'energy': [
+                            pulp.value(var) or 0.0 for var in self.variables['ml'][i]
+                        ],
+                    }
+                    for i, load in enumerate(self.managed_loads)
+                ],
             }
             for i, bat in enumerate(self.batteries):
                 result['batteries'].append({

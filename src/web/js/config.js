@@ -20,6 +20,25 @@ let LOCATION_BASED_PV_SOURCES = ["akkudoktor", "openmeteo", "openmeteo_local", "
 
 const LEVEL_ORDER = { getting_started: 0, standard: 1, expert: 2 };
 
+// Sections stored as a list of entries rather than a flat group of keys. Their schema
+// fields are the template for ONE entry; the stored keys are indexed
+// ("managed_loads.0.type"). Mirrors LIST_SECTIONS in schema.py.
+const LIST_SECTIONS = new Set(["pv_forecast", "managed_loads"]);
+
+// Entry cards for a list section, keyed by section: which icon each card shows and
+// which field supplies its title.
+const LIST_SECTION_CARDS = {
+    managed_loads: {
+        icon: "fa-sliders",
+        titleField: "id",
+        addLabel: "Add Managed Load",
+        description:
+            "Appliances EOS Connect forecasts and, where the timing is ours to choose, " +
+            "releases. Each one is added to the household load forecast and gets its " +
+            "own MQTT topics.",
+    },
+};
+
 // ── Subsection mapping (display_group → subsection_group) ──────
 // Groups related display_groups under logical subsections.
 // Allows automatic rendering of subsection headers.
@@ -128,7 +147,7 @@ class ConfigurationManager {
 
         // Fill missing keys with schema defaults
         for (const f of this.schema) {
-            if (!(f.key in this.values) && f.key.indexOf("pv_forecast.") !== 0) {
+            if (!(f.key in this.values) && !LIST_SECTIONS.has(f.section)) {
                 this.values[f.key] = f.default;
             }
         }
@@ -321,6 +340,8 @@ class ConfigurationManager {
         if (contentEl) {
             if (section === "pv_forecast") {
                 contentEl.innerHTML = this._renderPvForecastSection();
+            } else if (LIST_SECTIONS.has(section)) {
+                contentEl.innerHTML = this._renderListSection(section);
             } else {
                 contentEl.innerHTML = this._renderSection(section);
                 // Initialize dynamic descriptions for this section
@@ -459,9 +480,9 @@ class ConfigurationManager {
      * @param {Object} f - Field definition from schema
      * @returns {string} Field HTML
      */
-    _renderField(f) {
+    _renderField(f, entryValues = null) {
         const val = this.values[f.key] ?? f.default;
-        const isHidden = this._isDependencyHidden(f) ? " hidden" : "";
+        const isHidden = this._isDependencyHidden(f, entryValues) ? " hidden" : "";
 
         let inputHtml;
         switch (f.type) {
@@ -524,7 +545,78 @@ class ConfigurationManager {
                 </div>
                 ${helpText}
                 <div class="config-field-error" id="cfg-err-${this._cssKey(f.key)}"></div>
-            </div>${this._renderEntityTester(f)}`;
+            </div>${this._renderEntityTester(f, entryValues)}${
+                this._renderTemperatureCoordinateNotice(f)}`;
+    }
+
+    /**
+     * Say, where the provider is chosen, that it has nowhere to ask about.
+     *
+     * The outside-temperature forecast needs a coordinate. A location-based PV source
+     * already carries one, so for most installs the question never arises - but EVCC,
+     * Victron, Solcast and timeseries supply no `pv_forecast` entry at all, and then
+     * the only source is Latitude and Longitude under System. Both default to zero,
+     * which reads as "not set", so a fresh install of that shape picks a provider,
+     * saves, and silently gets a flat 15 C curve.
+     *
+     * The setting that fixes it is in a different section, which is exactly why the
+     * notice belongs here: this is the screen where the expectation is formed.
+     *
+     * @param {Object} f - The field being rendered
+     * @returns {string} A notice row, or "" when there is nothing to warn about
+     */
+    _renderTemperatureCoordinateNotice(f) {
+        if (f.key !== "pv_forecast_source.temperature_source") {
+            return "";
+        }
+        if (this.values["eos.temperature_forecast_enabled"] === false) {
+            return "";
+        }
+        const number = v => {
+            const n = Number(v);
+            return Number.isFinite(n) ? n : 0;
+        };
+        // Both zero is how a numeric field says "unset" - an empty box cannot.
+        const sited = number(this.values.latitude) !== 0
+            || number(this.values.longitude) !== 0;
+        if (sited) {
+            return "";
+        }
+        // A PV installation carries its own pair and is preferred over the site one -
+        // but only while the user can see it. For a source that is not location-based
+        // the whole PV Installations section is replaced by "not needed for evcc", and
+        // any entry left over from an earlier setup goes on quietly supplying the
+        // coordinates from behind that panel. Config nobody can see must not be what
+        // answers the question, so here the stored entries do not count.
+        const pvSource = this.values["pv_forecast_source.source"]
+            ?? this._getSchemaDefault("pv_forecast_source.source");
+        const shown = LOCATION_BASED_PV_SOURCES.includes(pvSource);
+        const fromPv = shown && Object.keys(this.values).some(
+            key => /^pv_forecast\.\d+\.lat$/.test(key) && number(this.values[key]) !== 0);
+        if (fromPv) {
+            return "";
+        }
+        const stale = !shown && Object.keys(this.values).some(
+            key => /^pv_forecast\.\d+\.lat$/.test(key) && number(this.values[key]) !== 0);
+
+        const body = stale
+            ? `Your <strong>${this._escapeHtml(String(pvSource))}</strong> source needs no
+               PV installation, so the section is hidden &mdash; but one is still stored
+               and is what this provider is asking with. Set
+               <strong>Latitude</strong> and <strong>Longitude</strong> under
+               <strong>System</strong> so the location is one you can see.`
+            : `No coordinates to ask with, so this provider will not be called and the
+               forecast stays a flat 15&nbsp;&deg;C. Your PV source supplies none, so
+               set <strong>Latitude</strong> and <strong>Longitude</strong> under
+               <strong>System</strong>.`;
+
+        return `<div class="config-field" style="border-left:3px solid #ffc107;
+                    padding-left:10px;margin-top:-4px;">
+            <div style="font-size:0.88em;opacity:0.9;">
+                <i class="fas fa-circle-info" style="color:#ffc107;"></i>
+                ${body}
+            </div>
+        </div>`;
     }
 
     /**
@@ -541,16 +633,23 @@ class ConfigurationManager {
      * a stray control rather than part of the field.
      *
      * @param {Object} f - Field definition
+     * @param {Object|null} entryValues - Values of the list entry this field belongs to,
+     *     for resolving entry-relative dependencies
      * @returns {string} Row HTML, or "" for anything that is not a sensor field
      */
-    _renderEntityTester(f) {
+    _renderEntityTester(f, entryValues = null) {
         if (f.type !== "sensor") {
             return "";
         }
         const cssKey = this._cssKey(f.key);
         // The test belongs to its field: when the field is not applicable, neither is
         // the button. _updateDependencies keeps the two in step after a change.
-        const hidden = this._isDependencyHidden(f) ? " hidden" : "";
+        //
+        // The entry scope has to be passed through as well. Without it a field whose
+        // dependency is relative ("type" meaning this card's type) resolves to
+        // undefined here, so the tester rendered permanently hidden while the field
+        // it belongs to was visible.
+        const hidden = this._isDependencyHidden(f, entryValues) ? " hidden" : "";
 
         return `
             <div class="config-field config-entity-tester${hidden}" data-entity-tester="${f.key}">
@@ -887,6 +986,177 @@ class ConfigurationManager {
         return html;
     }
 
+    // ── Generic list sections ───────────────────────────────────
+
+    /**
+     * Whether a stored key belongs to an entry of a list section.
+     * @param {string} section - Section key
+     * @param {string} key - Stored config key
+     * @returns {boolean}
+     */
+    _isEntryKey(section, key) {
+        return new RegExp(`^${section}\\.\\d+\\.`).test(key);
+    }
+
+    /**
+     * Collect the entries of a list section from the current values.
+     * @param {string} section - Section key
+     * @returns {Object[]} One value map per entry, ordered by index
+     */
+    _getListEntries(section) {
+        const byIndex = {};
+        const re = new RegExp(`^${section}\\.(\\d+)\\.(.+)$`);
+        for (const [k, v] of Object.entries(this.values)) {
+            const m = k.match(re);
+            if (m) {
+                const idx = parseInt(m[1], 10);
+                if (!byIndex[idx]) {
+                    byIndex[idx] = {};
+                }
+                byIndex[idx][m[2]] = v;
+            }
+        }
+        return Object.keys(byIndex)
+            .sort((a, b) => a - b)
+            .map(k => byIndex[k]);
+    }
+
+    /**
+     * Render a list section as one card per entry.
+     *
+     * Unlike the PV installations, entries here are heterogeneous: which fields apply
+     * depends on the entry's own type, so every field is rendered with the entry as its
+     * dependency scope.
+     *
+     * @param {string} section - Section key
+     * @returns {string} Section HTML
+     */
+    _renderListSection(section) {
+        const meta = CONFIG_SECTIONS[section] || {};
+        const card = LIST_SECTION_CARDS[section] || {};
+        const maxLvl = LEVEL_ORDER[this.level] ?? 2;
+        const fields = this.schema
+            .filter(f => f.section === section)
+            .filter(f => (LEVEL_ORDER[f.level] ?? 2) <= maxLvl);
+
+        const entries = this._getListEntries(section);
+
+        let html = `<div class="config-restart-banner" id="cfg-restart-banner">
+            <i class="fas fa-rotate"></i>
+            <span id="cfg-restart-msg">Restart required for changes to take effect.</span>
+        </div>`;
+
+        html += `<div class="config-section-title">
+            <i class="fa-solid ${meta.icon || card.icon || "fa-sliders"}" style="color:#4a9eff;"></i>
+            ${meta.label || section}
+        </div>
+        <div class="config-section-desc">${card.description || ""}</div>`;
+
+        if (entries.length === 0) {
+            html += `<div class="config-section-desc" style="opacity:0.75;">
+                Nothing configured yet.
+            </div>`;
+        } else {
+            entries.forEach((entry, idx) => {
+                html += this._renderEntryCard(section, idx, fields, entry, card);
+            });
+        }
+
+        html += `<button class="config-pv-add" onclick="configurationManager._addListEntry('${section}')">
+            <i class="fas fa-plus"></i> ${card.addLabel || "Add Entry"}
+        </button>`;
+
+        html += this._renderActions(section);
+        return html;
+    }
+
+    /**
+     * Render one entry card of a list section.
+     * @param {string} section - Section key
+     * @param {number} idx - Entry index
+     * @param {Object[]} fieldDefs - Visible field definitions (templates)
+     * @param {Object} values - This entry's values
+     * @param {Object} card - Card metadata from LIST_SECTION_CARDS
+     * @returns {string} Card HTML
+     */
+    _renderEntryCard(section, idx, fieldDefs, values, card) {
+        const titleField = card.titleField || "name";
+        const title = values[titleField] || `Entry ${idx + 1}`;
+
+        let html = `<div class="config-pv-card" data-entry-section="${section}" data-entry-idx="${idx}">
+            <div class="config-pv-card-header">
+                <span><i class="fas ${card.icon || "fa-sliders"}" style="margin-right:8px;color:#4a9eff;"></i>${this._escapeHtml(title)}</span>
+                <button class="config-btn config-btn-danger" style="padding:4px 10px;font-size:0.8em;"
+                    onclick="configurationManager._removeListEntry('${section}', ${idx})">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>`;
+
+        for (const f of fieldDefs) {
+            const subKey = f.key.split(".").pop();
+            const pf = { ...f, key: `${section}.${idx}.${subKey}` };
+            html += this._renderField(pf, values);
+        }
+
+        html += "</div>";
+        return html;
+    }
+
+    /**
+     * Add an entry to a list section, seeded from the schema defaults.
+     * @param {string} section - Section key
+     */
+    _addListEntry(section) {
+        const entries = this._getListEntries(section);
+        const newIdx = entries.length;
+        const card = LIST_SECTION_CARDS[section] || {};
+        const titleField = card.titleField || "name";
+
+        for (const f of this.schema.filter(x => x.section === section)) {
+            const subKey = f.key.split(".").pop();
+            let value = f.default;
+            if (subKey === titleField && !value) {
+                // An id has to be unique — it becomes an MQTT topic and a URL path.
+                value = `${section.replace(/s$/, "")}_${newIdx + 1}`;
+            }
+            this.values[`${section}.${newIdx}.${subKey}`] = value;
+            // Deliberately not added to originalValues, so every field counts as
+            // changed and is sent on save.
+        }
+
+        this._selectSection(section);
+    }
+
+    /**
+     * Remove an entry from a list section and close the gap in the indexes.
+     * @param {string} section - Section key
+     * @param {number} idx - Entry index to remove
+     */
+    _removeListEntry(section, idx) {
+        const prefix = `${section}.${idx}.`;
+        for (const k of Object.keys(this.values)) {
+            if (k.startsWith(prefix)) {
+                delete this.values[k];
+            }
+        }
+
+        // Re-index so the stored keys stay contiguous — the merger reads them in index
+        // order and a gap would silently drop everything after it.
+        const remaining = this._getListEntries(section);
+        for (const k of Object.keys(this.values)) {
+            if (this._isEntryKey(section, k)) {
+                delete this.values[k];
+            }
+        }
+        remaining.forEach((entry, newIdx) => {
+            for (const [subKey, val] of Object.entries(entry)) {
+                this.values[`${section}.${newIdx}.${subKey}`] = val;
+            }
+        });
+
+        this._selectSection(section);
+    }
+
     /**
      * Render a single PV installation card.
      * @param {number} idx - Installation index
@@ -1143,12 +1413,18 @@ class ConfigurationManager {
      * @param {Object} f - Field definition
      * @returns {boolean} True if hidden
      */
-    _isDependencyHidden(f) {
+    _isDependencyHidden(f, entryValues = null) {
         if (!f.depends_on) {
             return false;
         }
         for (const [depKey, allowed] of Object.entries(f.depends_on)) {
-            const currentVal = this.values[depKey] ?? this._getSchemaDefault(depKey);
+            // A key without a dot is resolved *within the entry*: in managed_loads,
+            // "type" means this card's type. Two cards of different types have to be
+            // judged independently, which is why pv_forecast never needed this — its
+            // entries are all the same shape.
+            const currentVal = depKey.includes(".")
+                ? (this.values[depKey] ?? this._getSchemaDefault(depKey))
+                : (entryValues ? entryValues[depKey] : undefined);
 
             if (allowed === "!empty") {
                 if (!currentVal || currentVal === "") {
@@ -1183,6 +1459,23 @@ class ConfigurationManager {
         if (!this.schema) {
             return;
         }
+
+        // Changing an entry's own governing field (its type) changes which fields apply
+        // to that card and to no other, and the per-field toggle below cannot express
+        // that. Re-rendering the section is both simpler and correct.
+        const entryMatch = changedKey.match(/^(\w+)\.\d+\.(.+)$/);
+        if (entryMatch && LIST_SECTIONS.has(entryMatch[1])) {
+            const section = entryMatch[1];
+            const governs = this.schema.some(
+                f => f.section === section && f.depends_on
+                    && Object.keys(f.depends_on).includes(entryMatch[2])
+            );
+            if (governs) {
+                this._selectSection(section);
+                return;
+            }
+        }
+
         for (const f of this.schema) {
             if (f.depends_on && changedKey in f.depends_on) {
                 const hidden = this._isDependencyHidden(f);
@@ -1347,7 +1640,11 @@ class ConfigurationManager {
         this._clearValidationErrors();
 
         const changes = this._getChangedValues(section);
-        if (Object.keys(changes).length === 0) {
+        // Removing the last entry of a list changes no remaining value, so the diff is
+        // empty and the save used to stop here reporting "no changes" while the entry
+        // sat on screen already gone. The length is the change.
+        const lengths = this._listLengthsFor(section);
+        if (Object.keys(changes).length === 0 && !lengths) {
             this._showToast("No changes to save.", "info");
             return;
         }
@@ -1416,12 +1713,15 @@ class ConfigurationManager {
             console.error("[ConfigurationManager] Validation failed:", err);
         }
 
-        // Save
+        // Save. The length rides with the values, not through the validator above -
+        // it is metadata about the request, not a configured value.
         try {
             const res = await fetch("api/config/", {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(changes),
+                body: JSON.stringify(lengths
+                    ? { ...changes, _list_lengths: lengths }
+                    : changes),
             });
 
             if (!res.ok) {
@@ -1500,8 +1800,8 @@ class ConfigurationManager {
      * @param {string} section - Section key
      */
     _resetSection(section) {
-        const fields = section === "pv_forecast"
-            ? Object.keys(this.values).filter(k => k.match(/^pv_forecast\.\d+\./))
+        const fields = LIST_SECTIONS.has(section)
+            ? Object.keys(this.values).filter(k => this._isEntryKey(section, k))
             : this._fieldsForSection(section).map(f => f.key);
 
         for (const key of fields) {
@@ -1627,6 +1927,37 @@ class ConfigurationManager {
     }
 
     /**
+     * The new length of a list section, when the caller has shortened or grown it.
+     *
+     * Sent as metadata beside the values because the store is a flat key/value table:
+     * a removed entry has no key left to carry its own absence, so the request has to
+     * say how long the list now is and let the server drop the rest. Declared rather
+     * than inferred - a partial save from a script must not be read as "these are the
+     * only entries that should exist".
+     *
+     * @param {string} section - Section key
+     * @returns {Object|null} ``{section: count}``, or null when nothing changed
+     */
+    _listLengthsFor(section) {
+        if (!LIST_SECTIONS.has(section)) {
+            return null;
+        }
+        const count = values => {
+            const seen = new Set();
+            const prefix = new RegExp(`^${section}\\.(\\d+)\\.`);
+            for (const key of Object.keys(values)) {
+                const match = prefix.exec(key);
+                if (match) {
+                    seen.add(match[1]);
+                }
+            }
+            return seen.size;
+        };
+        const now = count(this.values);
+        return now === count(this.originalValues) ? null : { [section]: now };
+    }
+
+    /**
      * Get changed values for a section.
      * @param {string} section - Section key
      * @returns {Object} Changed key-value pairs
@@ -1634,10 +1965,10 @@ class ConfigurationManager {
     _getChangedValues(section) {
         const changes = {};
 
-        if (section === "pv_forecast") {
-            // For PV, capture all pv_forecast.N.field keys
+        if (LIST_SECTIONS.has(section)) {
+            // Capture every <section>.N.field key that differs from what was loaded.
             for (const [k, v] of Object.entries(this.values)) {
-                if (/^pv_forecast\.\d+\./.test(k)) {
+                if (this._isEntryKey(section, k)) {
                     if (String(v) !== String(this.originalValues[k] ?? "")) {
                         changes[k] = v;
                     }

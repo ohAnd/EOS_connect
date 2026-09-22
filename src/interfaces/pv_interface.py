@@ -36,6 +36,13 @@ import requests
 import pandas as pd
 import numpy as np
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
+from .temperature_forecast import (
+    AKKUDOKTOR,
+    DEFAULT_TEMPERATURE_PROVIDER,
+    OPENMETEO,
+    TemperatureForecastError,
+    fetch_openmeteo_temperature,
+)
 
 # PV sources that derive the forecast from a physical installation's coordinates, and
 # therefore need at least one entry in ``pv_forecast``.  Every other source carries its
@@ -103,6 +110,17 @@ AKKUDOKTOR_BODY_EXCERPT_CHARS = 200
 # Retry-After and documents no quota, so the wait is a fixed, deliberately modest guess:
 # too short only wastes one request, while too long strands a recovered API.
 AKKUDOKTOR_RATE_LIMIT_HOLD_S = 900
+
+# The first hold is the same length as the PV update interval, so on its own it never
+# actually suppresses anything: it expires exactly in time for the next cycle to ask
+# again, get the same 429, and re-arm it. When the limit is upstream of akkudoktor -
+# which it is; /forecast answers "status code 429" for every location, from any address,
+# while /prices on the same host is fine - that condition lasts hours or days, and a
+# fixed hold means ninety-six pointless requests a day for as long as it does.
+#
+# So it doubles on each consecutive refusal, up to six hours. A recovery clears it, and
+# the first attempt after one is immediate.
+AKKUDOKTOR_RATE_LIMIT_HOLD_MAX_S = 6 * 60 * 60
 
 
 class _AkkudoktorRateLimit(Exception):
@@ -189,23 +207,55 @@ logger.info("[PV-IF] loading module ")
 EOS_API_GET_PV_FORECAST = "https://api.akkudoktor.net/forecast"
 
 
-def wants_temperature_forecast(eos_config):
+def _clean_site_location(site_location):
     """
-    True when an outside-temperature curve should be fetched for the optimizer.
+    Validate a ``(lat, lon)`` pair, or None.
+
+    Both zero means "not set". Null Island is a real coordinate and a real user could
+    sit on the Greenwich meridian, but nobody is at 0,0 - and a numeric field needs a
+    value that means unset, since an empty number box does not.
+    """
+    if not site_location:
+        return None
+    try:
+        lat, lon = float(site_location[0]), float(site_location[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if lat == 0.0 and lon == 0.0:
+        return None
+    if not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        logger.warning(
+            "[PV-IF] Site location %s, %s is not a valid coordinate - ignoring it",
+            lat, lon,
+        )
+        return None
+    return (lat, lon)
+
+
+def wants_temperature_forecast(eos_config, also_needed=False):
+    """
+    True when an outside-temperature curve should be fetched.
 
     EOS asks for one and models the house more precisely with it, so it is on by default
-    there.  EVopt - local or external - does not use temperature at all, so nothing is
+    there.  EVopt - local or external - does not use temperature at all, so nothing was
     fetched for it.  ``eos.temperature_forecast_enabled`` lets an EOS user opt out
     anyway, which is the only way to stop EOS Connect talking to the forecast provider;
-    the static 15 degree default is sent instead.
+    the static 15 degree default is used instead.
+
+    *also_needed* covers a second consumer that has nothing to do with the optimizer: a
+    managed load that sits outdoors.  A pool heat pump's losses and its efficiency both
+    turn on the air temperature over the next two days, and with the default backend
+    being ``local_evopt`` the rule above left it reading a flat 15 degrees - a weather
+    forecast that does not follow the weather.  It therefore overrides the source check,
+    but not the explicit opt-out below, which stays the way to stop the requests.
 
     ``config_web.hot_reload`` holds an inline copy of this rule (it imports nothing from
     ``interfaces`` by design).  The two are pinned equal by
     ``tests/interfaces/test_pv_interface_temperature_gating.py``.
     """
     if not isinstance(eos_config, dict):
-        return False
-    if eos_config.get("source", "eos_server") != "eos_server":
+        return bool(also_needed)
+    if not also_needed and eos_config.get("source", "eos_server") != "eos_server":
         return False
     value = eos_config.get("temperature_forecast_enabled", True)
     if isinstance(value, str):
@@ -227,14 +277,24 @@ class PvInterface:
         config_special,
         temperature_forecast_enabled=False,
         timezone="UTC",
+        site_location=None,
     ):
         self.config = config
+        # Coordinates for this installation, used only when no PV entry carries any.
+        # ``(lat, lon)`` or None. See ``__get_temperature_config_entry``.
+        self.site_location = _clean_site_location(site_location)
+        # Said once, not once a cycle: the stored-installation fallback below.
+        self._warned_stale_location = False
         self.time_zone = timezone
         self.config_source = config_source
         # Set time_frame_base, defaulting to 3600 if None or not provided
         self.time_frame_base = time_frame_base if time_frame_base is not None else 3600
         self.config_special = config_special
         self.temperature_forecast_enabled = temperature_forecast_enabled
+        self.temperature_source = str(
+            (config_source or {}).get("temperature_source")
+            or DEFAULT_TEMPERATURE_PROVIDER
+        ).strip().lower()
         # Extract source type value first (breaks taint chain from config dict)
         source_type = (
             self.config_source.get("source", "akkudoktor")
@@ -264,6 +324,13 @@ class PvInterface:
             "source": None,
         }
         self.temp_forecast_array = self.__get_default_temperature_forecast()
+
+        # How long the next akkudoktor refusal holds for. Doubles while they keep
+        # coming, so a limit that is upstream of the API - and therefore lasts hours -
+        # is not met with a request every fifteen minutes for as long as it does.
+        self._akkudoktor_hold_seconds = AKKUDOKTOR_RATE_LIMIT_HOLD_S
+        # Whether the current run of refusals has been reported. Once, not once a cycle.
+        self._akkudoktor_limit_reported = False
 
         # Cache mechanism for fallback on API failures (similar to PriceInterface)
         # When Akkudoktor is unavailable, reuse last successful forecast
@@ -369,6 +436,7 @@ class PvInterface:
         config_special,
         temperature_forecast_enabled,
         timezone,
+        site_location=None,
     ):
         """
         Reload PV configuration at runtime without restarting the full application.
@@ -382,6 +450,8 @@ class PvInterface:
                 "config_source": self.config_source,
                 "config_special": self.config_special,
                 "temperature_forecast_enabled": self.temperature_forecast_enabled,
+                "temperature_source": self.temperature_source,
+                "site_location": self.site_location,
                 "time_zone": self.time_zone,
                 "update_interval": self.update_interval,
                 "configuration_valid": self.configuration_valid,
@@ -395,6 +465,11 @@ class PvInterface:
             self.config_source = config_source
             self.config_special = config_special
             self.temperature_forecast_enabled = temperature_forecast_enabled
+            self.temperature_source = str(
+                (config_source or {}).get("temperature_source")
+                or DEFAULT_TEMPERATURE_PROVIDER
+            ).strip().lower()
+            self.site_location = _clean_site_location(site_location)
             self.time_zone = timezone
             self.pv_forcast_request_error = {
                 "error": None,
@@ -421,6 +496,8 @@ class PvInterface:
             # anything real.  It re-arms on the next 429 if we are still blocked.
             self._forecast_solar_hold_until = None
             self._akkudoktor_hold_until = None
+            self._akkudoktor_hold_seconds = AKKUDOKTOR_RATE_LIMIT_HOLD_S
+            self._akkudoktor_limit_reported = False
 
             try:
                 self.__configure_update_interval()
@@ -440,6 +517,8 @@ class PvInterface:
                 self.temperature_forecast_enabled = old_state[
                     "temperature_forecast_enabled"
                 ]
+                self.temperature_source = old_state["temperature_source"]
+                self.site_location = old_state["site_location"]
                 self.time_zone = old_state["time_zone"]
                 self.update_interval = old_state["update_interval"]
                 self.configuration_valid = old_state["configuration_valid"]
@@ -894,9 +973,7 @@ class PvInterface:
             if self.temperature_forecast_enabled:
                 temp_config = self.__get_temperature_config_entry()
                 if temp_config and not self.__temperature_forecast_is_fresh():
-                    temp_result = self.__get_pv_forecast_akkudoktor_api(
-                        tgt_value="temperature", pv_config_entry=temp_config
-                    )
+                    temp_result = self.__fetch_temperature(temp_config)
                     # Reject empty/None results and physically implausible values
                     # (e.g. PV Watts leaking into the temperature array) as a
                     # fail-safe on top of the target-aware cache/counter below.
@@ -999,9 +1076,23 @@ class PvInterface:
             return False
         return (time.monotonic() - self._last_temp_fetch) < TEMP_REFRESH_INTERVAL_S
 
+    def has_real_temperature_forecast(self):
+        """
+        Whether the temperature array holds a fetched forecast or the static default.
+
+        The two are indistinguishable to a caller - both are 48 plausible-looking
+        numbers - and treating the 15 degree default as a forecast is worse than having
+        none: a consumer with a real outdoor sensor of its own will prefer the fake
+        curve over its own measurement, which is exactly what happened to managed loads.
+        """
+        return bool(self.temperature_forecast_enabled and self.last_successful_temp_forecast)
+
     def get_current_temp_forecast(self):
         """
         Returns the current temperature forecast array.
+
+        Falls back to a static 15 degree curve when no forecast has been fetched. Ask
+        `has_real_temperature_forecast` first if that distinction matters to you.
         """
         # logger.debug(
         #     "[PV-IF] Returning current temp forecast: %s", self.temp_forecast_array
@@ -1067,14 +1158,32 @@ class PvInterface:
 
     def __get_temperature_config_entry(self):
         """
-        Extracts temperature configuration from PV entries.
-        Returns the first config entry (which already has all defaults set by validation).
-        Temperature uses this full config to match the standard PV request format.
+        Where to ask for the outside temperature.
+
+        A PV installation is the usual answer and stays first, so nothing changes for an
+        install that has one. But ``pv_forecast`` is empty for every source that is not
+        location-based - EVCC, Solcast, Victron, timeseries - and a temperature consumer
+        that is not the optimizer (a pool heat pump) then had no coordinates at all. The
+        site location covers that case.
+
+        Only ``lat`` and ``lon`` are read for a temperature request; the rest of the
+        query is canonical, so a bare pair is a complete answer.
 
         Returns:
-            dict: Full configuration entry with all parameters, or None if no valid config found
+            dict: An entry carrying lat/lon, or None when nothing supplies them.
         """
-        if self.config and len(self.config) > 0:
+        source = str(
+            (self.config_source or {}).get("source", "") or ""
+        ).strip().lower()
+        shown = source in LOCATION_BASED_PV_SOURCES
+
+        # A PV installation is the usual answer, but only while the user can see it.
+        # For a source that is not location-based the whole section is replaced by
+        # "not needed for evcc", so an entry left over from an earlier setup goes on
+        # quietly supplying the coordinates from behind that panel - and the reader,
+        # having been told no installation is needed, reasonably expects the site
+        # location to be what answers. Where one is set, it does.
+        if shown and self.config and len(self.config) > 0:
             first_entry = self.config[0]
             lat = first_entry.get("lat")
             lon = first_entry.get("lon")
@@ -1086,6 +1195,35 @@ class PvInterface:
                     lon,
                 )
                 return first_entry
+
+        if self.site_location is not None:
+            lat, lon = self.site_location
+            logger.debug(
+                "[PV-IF] Using the configured site location for temperature: "
+                "lat=%s, lon=%s", lat, lon,
+            )
+            return {"lat": lat, "lon": lon}
+
+        # Nothing the user can see supplies a coordinate. A stored installation still
+        # might, and dropping a working forecast to make a point would serve nobody -
+        # but it is a location they were told they no longer needed, so say so once
+        # rather than let it look like the site location is doing the work.
+        if not shown and self.config and len(self.config) > 0:
+            leftover = self.config[0]
+            lat, lon = leftover.get("lat"), leftover.get("lon")
+            if lat is not None and lon is not None:
+                if not self._warned_stale_location:
+                    self._warned_stale_location = True
+                    logger.warning(
+                        "[PV-IF] '%s' needs no PV installation, so the section is "
+                        "hidden - but the outside-temperature forecast is still using "
+                        "the coordinates of stored installation '%s' (%s, %s). Set "
+                        "Latitude and Longitude under System so the location is one "
+                        "you can see. | Config: #system",
+                        source or "this source",
+                        leftover.get("name", "unnamed"), lat, lon,
+                    )
+                return {"lat": lat, "lon": lon}
 
         return None
 
@@ -1862,6 +2000,59 @@ class PvInterface:
         )
         return hourly
 
+    def __fetch_temperature(self, temp_config):
+        """
+        Ask the configured provider for the outside-temperature curve.
+
+        Returns the array at the running slot resolution, or an empty list. The caller
+        already treats empty as "use the previous curve, else the default", so a failure
+        here needs no special handling - only a provider that is honest about failing.
+        """
+        if self.temperature_source == AKKUDOKTOR:
+            return self.__get_pv_forecast_akkudoktor_api(
+                tgt_value="temperature", pv_config_entry=temp_config
+            )
+
+        try:
+            hourly = fetch_openmeteo_temperature(
+                latitude=temp_config["lat"],
+                longitude=temp_config["lon"],
+                timezone=self.time_zone,
+                hours=48,
+            )
+        except TemperatureForecastError as exc:
+            self.consecutive_temp_failures += 1
+            logger.warning("[PV-IF] %s", exc)
+            self._log_error_diagnostics("request", OPENMETEO, target="temperature")
+            return []
+
+        result = self.__expand_temperature_to_slots(hourly)
+        self.last_successful_temp_forecast = list(result)
+        self.consecutive_temp_failures = 0
+        self._last_temp_fetch = time.monotonic()
+        logger.debug(
+            "[PV-IF] Temperature forecast fetched from Open-Meteo (%d values)",
+            len(result),
+        )
+        return result
+
+    def __expand_temperature_to_slots(self, hourly):
+        """Repeat each hourly value across the slots of that hour."""
+        if self.time_frame_base != 900:
+            return list(hourly)
+        expanded = []
+        for value in hourly:
+            expanded.extend([value] * 4)
+        return expanded
+
+    def __akkudoktor_limit_cleared(self):
+        """A successful fetch ends the run of refusals, so reset the escalation."""
+        if self._akkudoktor_hold_seconds != AKKUDOKTOR_RATE_LIMIT_HOLD_S:
+            logger.info("[PV-IF] akkudoktor.net is answering again")
+        self._akkudoktor_hold_until = None
+        self._akkudoktor_hold_seconds = AKKUDOKTOR_RATE_LIMIT_HOLD_S
+        self._akkudoktor_limit_reported = False
+
     def __akkudoktor_hold_remaining(self):
         """Seconds left on an active akkudoktor rate-limit hold; 0 when clear."""
         if self._akkudoktor_hold_until is None:
@@ -1981,19 +2172,26 @@ class PvInterface:
                 request_func, error_handler, retries, delay
             )
         except _AkkudoktorRateLimit as exc:
-            self._akkudoktor_hold_until = datetime.now() + timedelta(
-                seconds=exc.hold_seconds
+            hold = self._akkudoktor_hold_seconds
+            self._akkudoktor_hold_until = datetime.now() + timedelta(seconds=hold)
+            # Escalate for the next one. Capped, so it always recovers on its own.
+            self._akkudoktor_hold_seconds = min(
+                self._akkudoktor_hold_seconds * 2, AKKUDOKTOR_RATE_LIMIT_HOLD_MAX_S
             )
+            if self._akkudoktor_limit_reported:
+                logger.debug(
+                    "[PV-IF] akkudoktor.net still rate limited - holding for %d s", hold
+                )
+                return self.__akkudoktor_hold_response(tgt_value, pv_config_entry, hold)
+            self._akkudoktor_limit_reported = True
             logger.warning(
                 "[PV-IF] akkudoktor.net relayed an upstream 429 (as HTTP 500) -"
                 " pausing requests for %d s. The request is not at fault; the weather"
-                " provider behind the API is rate limiting it.",
-                exc.hold_seconds,
+                " provider behind the API is rate limiting it. Requests back off while"
+                " it lasts, and resume on their own once it clears.",
             )
             self._log_error_diagnostics("rate_limit", "akkudoktor", target=tgt_value)
-            return self.__akkudoktor_hold_response(
-                tgt_value, pv_config_entry, exc.hold_seconds
-            )
+            return self.__akkudoktor_hold_response(tgt_value, pv_config_entry, hold)
 
         if failure["occurred"]:
             # day_values is whatever _handle_interface_error picked as the fallback: a
@@ -2110,6 +2308,9 @@ class PvInterface:
                 self.last_successful_temp_forecast = list(result)
                 self.consecutive_temp_failures = 0
                 self._last_temp_fetch = time.monotonic()
+
+            # Any answer at all ends a run of refusals, whichever target asked for it.
+            self.__akkudoktor_limit_cleared()
 
             return result
 

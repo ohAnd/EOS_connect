@@ -3,10 +3,48 @@
  * Handles all control-related functionality including override controls, mode changes, and UI interactions
  */
 
+// Plan-strip colours. Slots 1-3 of the validated categorical palette, stepped for a
+// dark surface; checked all-pairs against this dashboard's card background
+// (worst CVD deltaE 9.4, normal-vision 20.9, all at or above 3:1 contrast).
+//
+// Three hues, not one per reason: on a timeline any two states can end up adjacent, and
+// the palette is only safe to three under that condition. The exact reason rides on the
+// hover instead, so grouping costs nothing.
+// Observations the calibrator wants before it trusts its own coverage. Mirrors
+// CONFIDENCE_TARGET_SAMPLES in src/loads/models/calibration.py.
+const CALIBRATION_TARGET_SAMPLES = 30;
+
+const MANAGED_LOAD_SLOT_STYLE = {
+    // Height carries the energy for this one; the rest are fixed-height bands.
+    planned: { color: '#3987e5', height: 0, label: 'Will run' },
+    capped:  { color: '#d95926', height: 14, label: 'Capped' },
+    blocked: { color: '#199e70', height: 14, label: 'Not allowed then' },
+    idle:    { color: 'rgba(255,255,255,0.12)', height: 6, label: 'Not needed' },
+};
+
+// You are rationing it: a limit you set on how much or how dear.
+const MANAGED_LOAD_CAPPED_REASONS = new Set([
+    'above price cap', 'costs more than it is worth', 'daily runtime cap',
+    'shared power budget',
+]);
+
+// It is not allowed to run then, whatever the price.
+const MANAGED_LOAD_BLOCKED_REASONS = new Set([
+    'outside allowed hours', 'out of season', 'too cold to run', 'after deadline',
+    'not allowed',
+]);
+
 class ControlsManager {
     constructor() {
         this.menuControlEventListener = null;
         this.toastContainer = null;
+        // The dropdown menu reads this to decide whether to offer a Managed Loads
+        // entry, and it can be opened before the first poll has landed.
+        this.managedLoads = [];
+        // Which "how this was worked out" sections the reader has opened. The overlay
+        // re-renders after a calibration reset, and the Reset button lives inside that
+        // section - without this it would close the panel you just acted in.
+        this.openLoadDetails = new Set();
     }
 
     /**
@@ -596,12 +634,1167 @@ class ControlsManager {
         // When EVCC is active, never show dynamic override indicators
         this.updateModeIcon(inverterModeNum, overrideActive, controlsData.battery.max_charge_power_dyn, isEVCCActive ? false : dynOverrideActive);
 
+        this.updateManagedLoads(controlsData.managed_loads);
+
         // Show experimental banner if optimization source is ??? (t.b.d.) - was introduced in early phase of evopt
         if (controlsData.used_optimization_source === "tbd") {
             document.getElementById("experimental-banner").style.display = "flex";
         } else {
             document.getElementById("experimental-banner").style.display = "none";
         }
+    }
+
+    /**
+     * Render the managed loads summary tile.
+     *
+     * A summary, deliberately: one line per load with its name and its state, and
+     * everything else behind the overlay. The first cut put the temperature, the
+     * target, the next start and the energy on every row, which wrapped to three lines
+     * per load at 1680px and took so much width that Statistics and Battery State
+     * started wrapping too.
+     *
+     * @param {Object[]|undefined} loads - The managed_loads array from current_controls
+     */
+    updateManagedLoads(loads) {
+        const box = document.getElementById('managed_loads_box');
+        const rows = document.getElementById('managed_loads_rows');
+        if (!box || !rows) {
+            return;
+        }
+
+        this.managedLoads = Array.isArray(loads) ? loads : [];
+        if (this.managedLoads.length === 0) {
+            box.style.display = 'none';
+            return;
+        }
+        box.style.display = '';
+
+        // More than this and the tile grows taller than its neighbours; the rest are
+        // one click away in the overlay.
+        const MAX_ROWS = 4;
+        const shown = this.managedLoads.slice(0, MAX_ROWS);
+        const hidden = this.managedLoads.length - shown.length;
+
+        let totalWh = 0;
+        for (const load of this.managedLoads) {
+            totalWh += Number(load.planned_wh) || 0;
+        }
+
+        let html = shown.map(load => {
+            const state = this.managedLoadState(load);
+            return `<tr>
+                <td class="top_box_info_text managed-load-name" title="${this.escapeHtml(this.managedLoadTooltip(load))}">
+                    ${this.escapeHtml(load.id)}
+                </td>
+                <td class="managed-load-state">${state.icon} ${state.short}</td>
+            </tr>`;
+        }).join('');
+
+        if (hidden > 0) {
+            html += `<tr><td colspan="2" class="top_box_info_text managed-load-more">
+                +${hidden} more
+            </td></tr>`;
+        }
+
+        rows.innerHTML = html;
+
+        const totalEl = document.getElementById('managed_loads_total');
+        if (totalEl) {
+            totalEl.innerHTML = `${(totalWh / 1000).toFixed(1)} <span style="font-size: 0.8em;">kWh</span>`;
+            totalEl.title = 'Energy planned for managed loads — click for details';
+        }
+    }
+
+    /**
+     * Icon and short label for one load's current state.
+     * @param {Object} load - One managed_loads entry
+     * @returns {{icon: string, short: string, label: string}}
+     */
+    managedLoadState(load) {
+        if (load.released === true) {
+            return {
+                icon: '<i style="color:#32CD32;" class="fa-solid fa-play"></i>',
+                short: 'on',
+                label: 'Released',
+            };
+        }
+        if (load.released === false) {
+            const next = load.next_release_start
+                ? new Date(load.next_release_start).toLocaleTimeString(navigator.language, {
+                    hour: '2-digit', minute: '2-digit'
+                })
+                : 'off';
+            return {
+                icon: '<i style="color:#888;" class="fa-solid fa-pause"></i>',
+                short: next,
+                label: 'Blocked',
+            };
+        }
+        // No release signal at all: a pushed profile is a forecast, not something we
+        // switch on and off.
+        return {
+            icon: '<i style="color:#888;" class="fa-solid fa-chart-line"></i>',
+            short: 'fc',
+            label: 'Forecast only',
+        };
+    }
+
+    /**
+     * The detail that no longer fits on the tile row, as a hover title.
+     * @param {Object} load - One managed_loads entry
+     * @returns {string} Plain text
+     */
+    managedLoadTooltip(load) {
+        const parts = [load.id];
+        if (load.temperature_c !== null && load.temperature_c !== undefined) {
+            parts.push(`${load.temperature_c}°C of ${load.target_temperature_c}°C`);
+        }
+        const needed = Number(load.energy_needed_wh) || 0;
+        if (needed > 0) {
+            parts.push(`${(needed / 1000).toFixed(1)} kWh needed`);
+        }
+        if (load.reason) {
+            parts.push(load.reason);
+        }
+        return parts.join(' — ');
+    }
+
+    /**
+     * Show every managed load in a full-screen overlay.
+     *
+     * The tile is a summary by necessity - it shares a row with four others. This is
+     * where the rest lives: why each load is in the state it is, what it still needs,
+     * when it will next run, and how far the calibration has settled.
+     */
+    async showManagedLoadsOverlay() {
+        const header = '<i class="fa-solid fa-sliders"></i> Managed Loads';
+        try {
+            const res = await fetch('api/managed_loads/?nocache=' + Date.now());
+            if (res.status === 404) {
+                showFullScreenOverlay(header, this._managedLoadsEmptyHtml());
+                return;
+            }
+            if (!res.ok) {
+                showFullScreenOverlay(header,
+                    "<div style='color:#dc3545;'>Failed to load managed load details.</div>");
+                return;
+            }
+
+            const data = await res.json();
+            const loads = (data.loads || []).filter(l => l.enabled);
+            if (loads.length === 0) {
+                showFullScreenOverlay(header, this._managedLoadsEmptyHtml());
+                return;
+            }
+
+            const slotSeconds = Number(data.time_frame_base) || 3600;
+            const now = new Date();
+            const currentSlot = Math.floor(
+                (now.getHours() * 3600 + now.getMinutes() * 60) / slotSeconds
+            );
+
+            const total = Number(data.contribution_total_wh) || 0;
+            const budget = Number(data.max_power_w) || 0;
+            // "Added to the load forecast" is only true of the loads that are in it.
+            // Where the optimizer schedules them they are not part of the forecast at
+            // all - they are something it is deciding the timing of.
+            const headline = Boolean(data.scheduled_by_optimizer)
+                ? 'scheduled by the optimizer, with the battery and the house'
+                : `<strong>${(total / 1000).toFixed(1)} kWh</strong> added to the load forecast`;
+
+            let html = `<div style="margin-bottom: 16px; opacity: 0.85;">
+                ${loads.length} load${loads.length === 1 ? '' : 's'} &middot; ${headline}
+                ${budget > 0 ? `&middot; shared limit ${budget} W` : ''}
+            </div>`;
+
+            const scheduled = Boolean(data.scheduled_by_optimizer);
+            html += loads
+                .map(l => this._managedLoadCard(
+                    l, slotSeconds, currentSlot, scheduled,
+                    Boolean(data.pv_counter_available)))
+                .join('');
+            showFullScreenOverlay(header, html);
+        } catch (err) {
+            console.error('[ControlsManager] Managed loads overlay failed:', err);
+            showFullScreenOverlay(header,
+                "<div style='color:#dc3545;'>Failed to load managed load details.</div>");
+        }
+    }
+
+    /**
+     * What the overlay shows when nothing is configured.
+     * @returns {string} HTML
+     */
+    _managedLoadsEmptyHtml() {
+        return `<div style="opacity: 0.85; line-height: 1.6;">
+            <p>No managed loads are configured yet.</p>
+            <p>A managed load is an appliance the household load forecast cannot follow on
+               its own &mdash; a pool heat pump, a sauna, a hot water tank, or a heating
+               profile pushed in from Home Assistant.</p>
+            <p>Add one under <strong>Menu &rsaquo; Configuration &rsaquo; Managed Loads</strong>.</p>
+        </div>`;
+    }
+
+    /**
+     * One load's detail card.
+     *
+     * Laid out to answer the questions in the order they get asked: what is it doing,
+     * how much energy does that take and can it actually get it, what is the model
+     * standing on, and how much of the model is measured rather than assumed.
+     *
+     * @param {Object} load - An entry from GET /api/managed_loads
+     * @param {number} slotSeconds - Seconds per optimizer slot
+     * @param {number} currentSlot - Index of the slot happening now
+     * @returns {string} Card HTML
+     */
+    _managedLoadCard(load, slotSeconds, currentSlot, scheduled = false, counter = false) {
+        const release = load.release || null;
+        const detail = load.detail || {};
+        const model = load.model || {};
+
+        // When it next runs is the question the pill leaves open, so it belongs beside
+        // it rather than three rows down a table of physical constants.
+        let next = '';
+        if (release && release.next_release_start && !release.released) {
+            const when = new Date(release.next_release_start).toLocaleString(
+                navigator.language, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+            next = ` <span style="opacity:0.85;">&middot; next start
+                     <strong>${this.escapeHtml(when)}</strong></span>`;
+        }
+
+        // Which charts will carry their own numbers, so the table above them does not
+        // repeat what they already say.
+        const series = a => Array.isArray(a) && a.filter(
+            v => v !== null && v !== undefined).length >= 2;
+        const drawn = {
+            water: !!load.water_series && (series(load.water_series.history_c)
+                || series(load.water_series.projected_c)),
+            outside: !!load.ambient_series && (series(load.ambient_series.adapted_c)
+                || series(load.ambient_series.forecast_c)),
+        };
+
+        let pill;
+        if (!release) {
+            pill = this._pill('#555', 'forecast only');
+        } else if (release.released) {
+            pill = this._pill('#2e7d32', 'running');
+        } else {
+            pill = this._pill('#555', 'blocked');
+        }
+
+        return `<div style="background:rgb(54,54,54);border-radius:10px;padding:14px;margin-bottom:14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;
+                        margin-bottom:6px;flex-wrap:wrap;">
+                <strong style="font-size:1.1em;">${this.escapeHtml(load.id)}</strong>
+                <span style="opacity:0.6;font-size:0.85em;">${this.escapeHtml(load.type)}</span>
+                ${pill}
+            </div>
+            <div style="opacity:0.75;font-size:0.9em;margin-bottom:12px;">
+                ${this.escapeHtml((release && release.reason) || load.reason || '')}${next}
+            </div>
+            ${this._managedLoadEnergy(load, detail, scheduled)}
+            ${this._managedLoadFacts(load, detail, model, release, 'core', drawn)}
+            ${this._managedLoadPlanStrip(load.plan || [], slotSeconds, currentSlot,
+                                          load.plan_reasons || [], load.ambient_series,
+                                          load.water_series, detail)}
+            ${this._managedLoadWorkings(load, detail, model, release, counter)}
+        </div>`;
+    }
+
+    /**
+     * The workings, folded away.
+     *
+     * The card had grown to six blocks of equal weight, and most of a first glance was
+     * spent on model internals: the efficiency of the moment, the coefficient the
+     * calibration has settled on, how far the forecast was shifted. Every one of them
+     * is worth having and none of them is what the reader came to find out. Folded,
+     * they stop competing with "will it get the energy, and when".
+     *
+     * What never folds: an override, an error, and an ambient figure that is a fixed
+     * guess rather than a measurement - those change what the reader should *do*.
+     *
+     * @param {Object} load - The load entry
+     * @param {Object} detail - Its model detail
+     * @param {Object} model - Its calibration state
+     * @param {Object} release - Its gate state
+     * @param {boolean} counter - Whether a PV counter is configured
+     * @returns {string} HTML, or "" when there is nothing behind the fold
+     */
+    _managedLoadWorkings(load, detail, model, release, counter) {
+        const rows = this._managedLoadFacts(load, detail, model, release, 'detail');
+        const calibration = this._managedLoadCalibration(load, model, counter);
+        if (!rows && !calibration) {
+            return '';
+        }
+        const key = String(load.id);
+        const open = this.openLoadDetails.has(key) ? ' open' : '';
+        const summary = (model.confidence === undefined || model.confidence === null)
+            ? 'How this was worked out'
+            : 'How this was worked out &middot; calibration '
+              + this._managedLoadCalibrationState(model).headline;
+
+        return `<details data-load="${this.escapeHtml(key)}"${open}
+                     ontoggle="controlsManager.rememberDisclosure(this)"
+                     style="margin-top:10px;border-top:1px solid rgba(255,255,255,0.08);
+                            padding-top:8px;">
+            <summary style="cursor:pointer;opacity:0.7;font-size:0.85em;
+                            list-style:none;">${summary}</summary>
+            <div style="margin-top:8px;">${rows}${calibration}</div>
+        </details>`;
+    }
+
+    /**
+     * Record a disclosure the reader opened or closed, so a re-render keeps it.
+     * @param {HTMLDetailsElement} el - The toggled element
+     */
+    rememberDisclosure(el) {
+        const key = el && el.dataset ? el.dataset.load : null;
+        if (!key) {
+            return;
+        }
+        if (el.open) {
+            this.openLoadDetails.add(key);
+        } else {
+            this.openLoadDetails.delete(key);
+        }
+    }
+
+    /**
+     * A coloured pill.
+     * @param {string} colour - CSS background
+     * @param {string} text - Label
+     * @returns {string} HTML
+     */
+    _pill(colour, text) {
+        return `<span style="background:${colour};padding:3px 10px;border-radius:12px;
+                     font-size:0.8em;">${this.escapeHtml(text)}</span>`;
+    }
+
+    /**
+     * The energy block: what is needed, split into why, against what can be delivered.
+     *
+     * "Energy needed" on its own was the most misread number on the page. For a pool it
+     * is dominated by standing losses over the rest of the horizon, not by the gap to
+     * the target, so a 1.3 degree rise reads as 77 kWh and looks absurd. Splitting it
+     * and saying how long the horizon is makes it ordinary.
+     *
+     * @param {Object} load - The load entry
+     * @param {Object} detail - Its model detail
+     * @returns {string} HTML
+     */
+    _managedLoadEnergy(load, detail, scheduled = false) {
+        const needed = Number(load.energy_needed_wh) || 0;
+        const planned = Number(load.planned_wh) || 0;
+        if (needed <= 0 && planned <= 0) {
+            return '';
+        }
+
+        const cop = Number(detail.mean_cop) || 0;
+        const kwh = wh => `${(wh / 1000).toFixed(1)} kWh`;
+        // The split is thermal; divide by the same COP the model used so the parts add
+        // up to the electrical total shown above them.
+        const toElectric = thermal => (cop > 0 ? thermal / cop : 0);
+        const heatUp = Number(detail.heat_up_wh_thermal) || 0;
+        const losses = Number(detail.standing_losses_wh_thermal) || 0;
+
+        let split = '';
+        if (heatUp > 0 || losses > 0) {
+            const hours = Number(detail.horizon_hours) || 0;
+            // Where it is starting from belongs here rather than in a table of its own.
+            // On a wide screen a label on the left and a value on the right are a
+            // hand-span apart, and the number only means anything beside the energy it
+            // explains.
+            const from = (detail.temperature_c !== undefined && detail.temperature_c !== null)
+                ? `<span style="opacity:0.85;">From ${detail.temperature_c}&nbsp;&deg;C:</span> `
+                : '';
+            split = `<div style="opacity:0.7;font-size:0.85em;margin:2px 0 8px 0;line-height:1.5;">
+                ${from}
+                ${heatUp > 0 ? `${kwh(toElectric(heatUp))} to reach
+                    ${detail.target_temperature_c}&nbsp;&deg;C` : ''}
+                ${heatUp > 0 && losses > 0 ? ' &middot; ' : ''}
+                ${losses > 0 ? `${kwh(toElectric(losses))} to hold it
+                    ${hours ? `for the next ${Math.round(hours)}&nbsp;h` : ''}` : ''}
+            </div>`;
+        }
+
+        // Planned against needed, as a state rather than two numbers to compare.
+        let coverage = '';
+        if (needed > 0) {
+            const pct = Math.min(100, Math.round((planned / needed) * 100));
+            const short = pct < 98;
+            const colour = short ? '#e0a030' : '#4a9eff';
+            coverage = `
+                <div style="height:6px;background:rgba(255,255,255,0.12);border-radius:3px;
+                            overflow:hidden;margin-top:8px;">
+                    <div style="width:${pct}%;height:100%;background:${colour};"></div>
+                </div>
+                <div style="font-size:0.85em;opacity:0.75;margin-top:4px;">
+                    ${short
+                        ? `Planned ${kwh(planned)} &mdash; covers ${pct}% of it.
+                           ${this._managedLoadLimit(load)}`
+                        : `Planned ${kwh(planned)} &mdash; fully covered.`}
+                    ${this._managedLoadPlanPrice(load, scheduled)}
+                </div>`;
+        }
+
+        return `<div style="background:rgba(0,0,0,0.15);border-radius:6px;padding:10px;
+                            margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;">
+                <span style="opacity:0.7;">Energy needed</span>
+                <strong>${kwh(needed)}</strong>
+            </div>
+            ${split}
+            ${coverage}
+        </div>`;
+    }
+
+    /**
+     * What the plan works out to per kWh.
+     *
+     * Worth its own line because the price limit is on the *average*: the pump can
+     * legitimately be scheduled into the day's dearest hour, paid for by the free ones
+     * around it. Without this number next to it that reads as a fault.
+     *
+     * @param {Object} load - An entry from GET /api/managed_loads
+     * @returns {string} HTML, empty when nothing was placed
+     */
+    _managedLoadPlanPrice(load, scheduled) {
+        const raw = load.plan_summary && load.plan_summary.avg_price_ct_kwh;
+        // Explicitly, because Number(null) is 0 and would have this claim the plan
+        // averages nothing per kWh whenever no slot was placed at all.
+        if (raw === null || raw === undefined) {
+            return '';
+        }
+        const price = Number(raw);
+        if (!Number.isFinite(price)) {
+            return '';
+        }
+        // Two different figures, and the difference matters most on the days people
+        // ask about. Measured, it is what the household pays extra for this load -
+        // it falls towards the feed-in tariff on a sunny day, because self-consumed
+        // sun costs only the export it gave up. Unmeasured, it is the tariff of the
+        // hours the load occupies, which cannot see where the energy came from and so
+        // reads *dearer* on a sunny day than a dark one. Saying "costs" for the second
+        // would point the user at the wrong number on exactly the day they look.
+        const summary = load.plan_summary || {};
+        if (!summary.price_is_measured) {
+            return `<div style="opacity:0.75;">Runs in hours averaging
+                    ${price.toFixed(1)}&nbsp;ct/kWh on the tariff.</div>`;
+        }
+        const shared = summary.price_is_shared
+            ? ' &mdash; shared with the other scheduled loads by energy'
+            : '';
+        return `<div style="opacity:0.75;">Costs ${price.toFixed(1)}&nbsp;ct/kWh of
+                extra household spending${shared}.</div>`;
+    }
+
+    /**
+     * Why a load cannot get all the energy it needs, named rather than guessed.
+     *
+     * This used to read "widen its window or raise the daily cap" whatever the cause,
+     * which is wrong advice whenever something else did the excluding: a price cap can
+     * rule out four fifths of a horizon while the window stands wide open.
+     *
+     * @param {Object} load - An entry from GET /api/managed_loads
+     * @returns {string} A sentence naming the limiting setting
+     */
+    _managedLoadLimit(load) {
+        const summary = load.plan_summary;
+        if (!summary || !summary.limited_by) {
+            return 'It cannot get enough runtime in the hours available.';
+        }
+        // Naming a setting is only useful if changing it would help. When the demand is
+        // above what the appliance could deliver running flat out through every slot
+        // left, no setting closes the gap, and pointing at the one that excluded the
+        // most slots sends the user to loosen something that was never the problem.
+        if (summary.over_committed) {
+            const reach = `${((Number(summary.reachable_wh) || 0) / 1000).toFixed(1)} kWh`;
+            return `It needs more than it can deliver: <strong>${reach}</strong> is all
+                    that fits in the hours left, running without a break. No setting
+                    closes that gap &mdash; the appliance is undersized for the target,
+                    or the store is losing more heat than it is being given.`;
+        }
+        const REMEDY = {
+            'above price cap': 'raise or clear the price cap',
+            'costs more than it is worth': 'raise the price limit, so the energy is worth more to you than it costs',
+            'outside allowed hours': 'widen the allowed window',
+            'too cold to run': 'lower the minimum outside temperature, if the appliance allows it',
+            'out of season': 'extend the season',
+            'daily runtime cap': 'raise the daily runtime cap',
+            'shared power budget': 'raise the shared power limit, or lower another load\u2019s priority',
+            'after deadline': 'allow more time before the deadline',
+        };
+        const remedy = REMEDY[summary.limited_by];
+        return `Limited by <strong>${this.escapeHtml(summary.limited_by)}</strong>
+                (${summary.limited_slots} of ${summary.slots} slots)${remedy ? ` &mdash; ${remedy}` : ''}.`;
+    }
+
+    /**
+     * The measured inputs and the appliance's rating.
+     * @param {Object} load - The load entry
+     * @param {Object} detail - Its model detail
+     * @param {Object} model - Its model status
+     * @param {Object|null} release - Its release state
+     * @returns {string} HTML
+     */
+    _managedLoadFacts(load, detail, model, release, tier = 'core', drawn = {}) {
+        const facts = [];
+        const core = tier === 'core';
+        // A number beside its own line beats a label on the left of a wide screen and a
+        // value a hand-span away on the right. Where a chart carries the figure in its
+        // caption, the row would only be saying it twice.
+
+        if (core && !drawn.water
+                && detail.temperature_c !== undefined && detail.temperature_c !== null) {
+            facts.push(['Temperature',
+                `${detail.temperature_c} &deg;C &rarr; ${detail.target_temperature_c} &deg;C`]);
+        }
+
+        // The input that drives everything, and where it came from. Without the second
+        // half a prediction standing on a guessed constant looks exactly like one
+        // standing on a forecast.
+        //
+        // Both numbers are shown when they differ, because "Outside now" promises a
+        // measurement: reading 17.9 from a regional forecast while the thermometer in
+        // the garden says 14.9 is not a rounding difference -- on a pool it is a
+        // quarter of the standing loss.
+        if (detail.ambient_now_c !== undefined && detail.ambient_now_c !== null) {
+            const SOURCES = {
+                forecast: 'from the weather forecast',
+                forecast_corrected: 'forecast, corrected to your sensor',
+                sensor: 'from your sensor, held flat &mdash; it cannot see tomorrow. '
+                    + 'Set Latitude and Longitude under System for a real forecast',
+                fallback: 'a fixed guess &mdash; no forecast and no sensor. '
+                    + 'Set Latitude and Longitude under System, or give this load an '
+                    + 'ambient temperature sensor',
+            };
+            const note = SOURCES[detail.ambient_source] || '';
+            const warn = detail.ambient_source === 'fallback';
+            const measured = detail.ambient_measured_c;
+            const differs = measured !== undefined && measured !== null
+                && Math.abs(measured - detail.ambient_now_c) >= 0.5;
+
+            const offset = detail.ambient_offset_k;
+            const shift = (offset !== undefined && offset !== null && Math.abs(offset) >= 0.1)
+                ? ` <span style="opacity:0.6;">(${offset > 0 ? '+' : ''}${offset} K
+                    learned for this hour)</span>`
+                : '';
+
+            const value = differs
+                ? `${measured} &deg;C measured
+                   <span style="opacity:0.6;">&middot; model using ${detail.ambient_now_c} &deg;C</span>`
+                : `${detail.ambient_now_c} &deg;C`;
+
+            // A fixed guess is not a detail - a prediction standing on nothing must say
+            // so where it cannot be missed.
+            // Where the figure came from travels with it. Behind the fold when a chart
+            // carries the number and its caption already says "corrected to your site";
+            // beside the number when there is no chart, because then this line is the
+            // only thing standing between a reading held flat for two days and a
+            // forecast that can see tomorrow.
+            if (core) {
+                if (!drawn.outside || warn) {
+                    facts.push(['Outside now',
+                        `${value}
+                         <div style="opacity:0.6;font-size:0.85em;
+                                     ${warn ? 'color:#e0a030;' : ''}">${note}${
+                            warn ? '' : shift}</div>`]);
+                }
+            } else if (!warn) {
+                facts.push(['Where that came from',
+                    `<span style="opacity:0.8;">${note}${shift}</span>`]);
+            }
+        }
+
+
+        // Both currencies. The rating is electrical and everything above it is derived
+        // from heat, which made it the one number on the card that did not compare.
+        if (!core && (detail.electrical_power_w || model.rated_power_w)) {
+            const electrical = detail.electrical_power_w || model.rated_power_w;
+            const thermal = detail.thermal_power_w;
+            facts.push(['Power', thermal
+                ? `${electrical} W electrical &rarr;
+                   <span style="opacity:0.8;">${(thermal / 1000).toFixed(1)} kW of heat</span>`
+                : `${electrical} W electrical`]);
+        }
+        if (!core && detail.mean_cop) {
+            facts.push(['Efficiency now', `COP ${detail.mean_cop}`]);
+        }
+        if (core && release && release.override) {
+            facts.push(['Override', `${release.override} until ` + new Date(release.override_until)
+                .toLocaleTimeString(navigator.language, { hour: '2-digit', minute: '2-digit' })]);
+        }
+        if (core && load.error) {
+            facts.push(['Error', this.escapeHtml(load.error)]);
+        }
+
+        return facts.map(([k, v]) => `
+            <div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;">
+                <span style="opacity:0.7;">${k}</span><span style="text-align:right;">${v}</span>
+            </div>`).join('');
+    }
+
+    /**
+     * How much of the model is measured rather than assumed, and a way to start over.
+     * @param {string} load - The load entry
+     * @param {Object} model - Its model status
+     * @returns {string} HTML
+     */
+    _managedLoadCalibration(load, model, counter = false) {
+        if (model.confidence === undefined || model.confidence === null) {
+            return '';
+        }
+        const state = this._managedLoadCalibrationState(model);
+
+        return `<div style="display:flex;align-items:center;justify-content:space-between;
+                            gap:12px;padding:8px 0 0 0;margin-top:8px;
+                            border-top:1px solid rgba(255,255,255,0.08);">
+            <div style="min-width:0;">
+                <div style="opacity:0.7;">Calibration &mdash; ${state.headline}</div>
+                <div style="opacity:0.6;font-size:0.85em;">
+                    ${state.detail}
+                    ${this._managedLoadCoverNote(model)}
+                    ${this._managedLoadSunNote(model, counter)}
+                    ${state.warning}
+                </div>
+            </div>
+            <button class="config-btn" style="flex:0 0 auto;"
+                    onclick="controlsManager.resetManagedLoadCalibration('${this.escapeHtml(load.id)}')"
+                    title="Discard what has been learned and start again from the configured values">
+                <i class="fas fa-rotate-left"></i> Reset
+            </button>
+        </div>`;
+    }
+
+    /**
+     * Where the calibration is, said as a state rather than a percentage.
+     *
+     * The confidence figure is `coverage x variety x fit_quality`, and only the first
+     * two are progress toward anything. Fit quality is how much of the water's
+     * behaviour the model can *ever* explain, and it is permanently short of 1 -
+     * rain, wind, swimmers, top-up water, a straight-line COP against a real
+     * compressor map. Multiplying them gives a number shaped like a progress bar that
+     * can never fill, so a reader waits for 100% that will not come.
+     *
+     * Worse, it gave the wrong advice at exactly the wrong moment: a pool with every
+     * observation it could get, blocked only on never having been seen uncovered,
+     * read 33% and was told "still learning, running on your configured values".
+     * Waiting was the one thing that could not help.
+     *
+     * So: gathering observations is a count and completes. Everything after is
+     * measured-versus-assumed, which ends when nothing is assumed and needs no
+     * percentage at all.
+     *
+     * @param {Object} model - The load's model status
+     * @returns {{headline: string, detail: string, warning: string}}
+     */
+    _managedLoadCalibrationState(model) {
+        const loss = Number(model.loss_samples) || 0;
+        const cop = Number(model.cop_samples) || 0;
+        const fit = Number(model.fit_quality);
+
+        // The sampling phase: it has not yet watched the store both cool and heat
+        // enough times to tell the two apart. Here waiting really is the answer.
+        if (!loss || !cop) {
+            const seen = loss + cop;
+            return {
+                headline: `learning (${seen} of ${CALIBRATION_TARGET_SAMPLES} observations)`,
+                detail: 'The plan is running on the values from your configuration form.',
+                warning: '',
+            };
+        }
+
+        const detail = `Heat loss from ${loss} cooling and efficiency from ${cop} `
+            + 'heating periods, measured rather than assumed.';
+
+        // A poor fit after the observations are in is not "keep waiting" - it is
+        // either something still held at a guess, which the notes below name, or
+        // inputs that were wrong and want a Reset.
+        const warning = (Number.isFinite(fit) && fit < 0.5)
+            ? `<div style="color:#e0a030;">Only part of this store's behaviour is
+               explained so far. Anything still assumed is named above; if the readings
+               it learned from were wrong, Reset starts again.</div>`
+            : '';
+        return { headline: 'measured', detail, warning };
+    }
+
+    /**
+     * What the calibration has worked out about the cover, if the store has one.
+     *
+     * Worth its own line because it is the one figure nobody can look up - a supplier's
+     * data sheet is for still air over new material - and because holding it at a guess
+     * is what let its error accumulate in the loss coefficient instead.
+     *
+     * @param {Object} model - The load's model status
+     * @returns {string} HTML, empty when the store has no cover
+     */
+    _managedLoadSunNote(model, hasCounter) {
+        // Only worth saying for a store that can see the sky. What the number means is
+        // not something anyone can act on, so this says whether the sun has been
+        // separated from everything else and, if not, what would help.
+        if (model.solar_gain === undefined || model.solar_gain === null) {
+            return '';
+        }
+        if (model.solar_identified) {
+            return `<div>The sun's contribution has been measured and is included in
+                    the forecast.</div>`;
+        }
+        const hint = hasCounter
+            ? ''
+            : ` It is being read from the PV forecast; a generation counter under
+               PV Auto-Scaling would measure it from the meter instead.`;
+        return `<div>The sun is not yet separated from everything else &mdash; that
+                needs both bright and dark days.${hint}</div>`;
+    }
+
+    _managedLoadCoverNote(model) {
+        const factor = Number(model.cover_loss_factor);
+        if (!Number.isFinite(factor) || factor >= 1) {
+            return '';
+        }
+        const cut = Math.round((1 - factor) * 100);
+        return model.cover_identified
+            ? `<div>The cover measures out at ${cut}% off the heat loss.</div>`
+            : `<div>The cover is still assumed to cut the heat loss by ${cut}% &mdash;
+               it has not yet been seen both on and off for long enough to measure.</div>`;
+    }
+
+    /**
+     * Discard a load's learned coefficients and its recorded samples.
+     *
+     * Worth doing when the inputs it was fitted against turn out to have been wrong -
+     * the samples carry those inputs, so they keep dragging the fit until they age out
+     * of the retention window on their own.
+     *
+     * @param {string} loadId - Which load
+     */
+    async resetManagedLoadCalibration(loadId) {
+        try {
+            const res = await fetch(`api/managed_loads/${encodeURIComponent(loadId)}/calibration/reset`,
+                { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) {
+                this.showToast(data.error || 'Reset failed.', 'error');
+                return;
+            }
+            this.showToast(`${loadId}: calibration reset — learning again from scratch.`, 'info');
+            // Reopen so the card shows the reset state rather than the stale one.
+            this.showManagedLoadsOverlay();
+        } catch (err) {
+            console.error('[ControlsManager] Calibration reset failed:', err);
+            this.showToast('Reset request failed.', 'error');
+        }
+    }
+
+    /**
+     * A strip showing which slots of the horizon this load is planned to run in.
+     *
+     * The bars alone answer "roughly when"; the axis and the hover answer "exactly
+     * when", which is the question you have once you are deciding whether the plan is
+     * sensible.
+     *
+     * @param {number[]} plan - Wh per slot, starting at local midnight today
+     * @param {number} slotSeconds - Seconds per slot
+     * @param {number} currentSlot - Index of the slot happening now
+     * @param {string[]} slotReasons - Why each slot carries no energy, if known
+     * @param {object} [ambient] - Forecast as retrieved and as used, for outdoor loads
+     * @param {object} [water] - Store temperature so far and as projected
+     * @param {object} [detail] - Model detail, for the current values on the captions
+     * @returns {string} Strip HTML, or "" when nothing is planned
+     */
+    _managedLoadPlanStrip(plan, slotSeconds, currentSlot, slotReasons = [], ambient = null,
+                          water = null, detail = {}) {
+        if (!plan.length) {
+            return '';
+        }
+        const peak = Math.max(...plan.map(v => Number(v) || 0));
+        // A plan with nothing in it still has something to say -- which is why nothing
+        // is in it. Returning early here hid the strip in the one case where it was the
+        // most informative thing on the card: a price cap that ruled out the lot.
+        const blocked = slotReasons.some(
+            r => r && r !== 'planned' && r !== 'not needed' && r !== 'past'
+        );
+        if (peak <= 0 && !blocked) {
+            return '';
+        }
+
+        const slotsPerHour = Math.max(1, Math.round(3600 / slotSeconds));
+        const slotsPerDay = 24 * slotsPerHour;
+
+        // Slot 0 is local midnight today, by the same convention the optimizer array
+        // uses, so a slot index converts straight to a wall-clock time.
+        const midnight = new Date();
+        midnight.setHours(0, 0, 0, 0);
+        const slotStart = i => new Date(midnight.getTime() + i * slotSeconds * 1000);
+
+        const hhmm = d => d.toLocaleTimeString(navigator.language,
+            { hour: '2-digit', minute: '2-digit' });
+        const dayName = d => d.toLocaleDateString(navigator.language,
+            { weekday: 'short', day: 'numeric', month: 'short' });
+
+        let running = 0;
+        const used = new Set();
+        const bars = plan.map((value, i) => {
+            const v = Number(value) || 0;
+            running += v;
+            const from = slotStart(i);
+            const to = slotStart(i + 1);
+            const isNow = i === currentSlot;
+            const why = slotReasons[i];
+            const kind = v > 0 ? 'planned' : this._managedLoadSlotKind(why);
+            used.add(kind);
+            const style = MANAGED_LOAD_SLOT_STYLE[kind];
+
+            const tip = [
+                `${dayName(from)} ${hhmm(from)}\u2013${hhmm(to)}`,
+                v > 0 ? `${Math.round(v)} Wh planned`
+                      : (why && why !== 'planned' ? why : 'not planned'),
+                v > 0 ? `${(running / 1000).toFixed(1)} kWh cumulative` : null,
+                isNow ? 'happening now' : null,
+            ].filter(Boolean).join(' \u00b7 ');
+
+            // Energy is carried by height on the blue bars only. Everything else is a
+            // fixed-height band with square corners, so a colour can never be misread
+            // as a quantity -- the rounded top is what says "this much".
+            const height = v > 0
+                ? Math.max(22, Math.round((v / Math.max(peak, 1)) * 100))
+                : style.height;
+            const radius = v > 0 ? 'border-radius:2px 2px 0 0;' : '';
+
+            return `<div data-slot-bar title="${this.escapeHtml(tip)}"
+                style="flex:1 1 0;height:${height}%;
+                background:${style.color};align-self:flex-end;${radius}
+                ${isNow ? 'outline:1px solid #fff;outline-offset:-1px;' : ''}"></div>`;
+        }).join('');
+
+        // A tick every six hours: enough to read the shape against the clock without
+        // crowding a strip that is only a few hundred pixels wide.
+        const TICK_HOURS = 6;
+        const ticks = [];
+        for (let hour = 0; hour * slotsPerHour < plan.length; hour += TICK_HOURS) {
+            const slot = hour * slotsPerHour;
+            ticks.push({
+                left: (slot / plan.length) * 100,
+                label: String(slotStart(slot).getHours()).padStart(2, '0'),
+                major: hour % 24 === 0,
+            });
+        }
+
+        const tickHtml = ticks.map(t => `
+            <span style="position:absolute;left:${t.left}%;transform:translateX(-50%);
+                         font-size:0.75em;opacity:${t.major ? 0.85 : 0.5};
+                         ${t.major ? 'font-weight:600;' : ''}">${t.label}</span>`).join('');
+
+        const gridHtml = ticks.map(t => `
+            <div style="position:absolute;top:0;bottom:0;left:${t.left}%;
+                        border-left:1px ${t.major ? 'dashed' : 'dotted'}
+                        rgba(255,255,255,${t.major ? 0.35 : 0.15});"></div>`).join('');
+
+        const dayLabels = [];
+        for (let day = 0; day * slotsPerDay < plan.length; day++) {
+            const span = Math.min(slotsPerDay, plan.length - day * slotsPerDay);
+            dayLabels.push(`<span style="flex:${span} 1 0;text-align:center;opacity:0.65;">
+                ${dayName(slotStart(day * slotsPerDay))}</span>`);
+        }
+
+        return `<div style="margin-top:12px;">
+            <div style="opacity:0.7;font-size:0.85em;margin-bottom:4px;">
+                Planned slots &mdash; hover a bar for the time and energy
+            </div>
+            <div style="position:relative;display:flex;align-items:flex-end;gap:1px;height:44px;
+                        background:rgba(0,0,0,0.15);border-radius:4px;padding:2px;">
+                ${gridHtml}
+                ${bars}
+            </div>
+            ${this._managedLoadStripLegend(used)}
+            ${this._managedLoadTemperaturePanel(ambient, water, plan.length, currentSlot,
+                gridHtml, i => `${dayName(slotStart(i))} ${hhmm(slotStart(i))}`, detail)}
+            <div style="position:relative;height:1.2em;margin-top:2px;">${tickHtml}</div>
+            <div style="display:flex;font-size:0.8em;margin-top:2px;">${dayLabels.join('')}</div>
+        </div>`;
+    }
+
+    /**
+     * The temperatures behind the plan: the store's own, and the air it stands in.
+     *
+     * Its own row rather than an overlay on the strip. The bars carry energy in their
+     * height, so a temperature drawn in the same box would be a second y-scale sharing
+     * one space - the reader cannot tell which axis a mark belongs to, and a crossing
+     * means nothing.
+     *
+     * Two stacked plots rather than one, for the same reason in a quieter form. Both
+     * are degrees, so one axis would be honest - but a pool moves four kelvin where the
+     * air outside moves twenty-three, and drawn together the water flattens into a band
+     * at the top of the box with its climb to target invisible. That climb is the
+     * question being asked. Each plot gets the range it needs and they share the x-axis.
+     *
+     * Entity by colour, provenance by line style: water carries the one hue, air stays
+     * in ink, and solid-versus-dashed is measured-versus-projected in both. The strip
+     * above spends the three categorical slots that clear the all-pairs floors, so this
+     * row is its own one-hue palette rather than a fourth slot competing with them.
+     *
+     * @param {object} ambient - forecast_c, adapted_c, min_ambient_c
+     * @param {object} water - history_c, projected_c, target_c
+     * @param {number} slots - Length of the plan, so every plot spans the same time
+     * @param {number} currentSlot - Index of the slot happening now
+     * @param {string} gridHtml - The strip's own gridlines, reused so they line up
+     * @param {function(number): string} timeLabel - Slot index to a wall-clock label
+     * @param {object} detail - Model detail, so each caption carries its live value
+     * @returns {string} Panel HTML, or "" when there is no temperature to show
+     */
+    _managedLoadTemperaturePanel(ambient, water, slots, currentSlot, gridHtml, timeLabel,
+                                 detail = {}) {
+        const take = arr => (Array.isArray(arr) ? arr.slice(0, slots).map(
+            v => (v === null || v === undefined ? null : Number(v))) : []);
+        const num = v => (v !== null && v !== undefined && Number.isFinite(Number(v))
+            ? Number(v) : null);
+
+        const forecast = take(ambient && ambient.forecast_c);
+        const adapted = take(ambient && ambient.adapted_c);
+        const history = take(water && water.history_c);
+        const projected = take(water && water.projected_c);
+        const cut = num(ambient && ambient.min_ambient_c);
+        const target = num(water && water.target_c);
+
+        const WATER = '#c98500';
+        const AIR = 'rgba(255,255,255,0.92)';
+        const AIR_FAINT = 'rgba(255,255,255,0.40)';
+
+        const at = (arr, i) => (arr.length && arr[i] !== null && arr[i] !== undefined
+            ? arr[i] : null);
+
+        const plots = [];
+        if (history.concat(projected).filter(v => v !== null).length >= 2) {
+            plots.push({
+                caption: `Water${detail.temperature_c === undefined
+                        || detail.temperature_c === null ? ''
+                        : ` <strong>${detail.temperature_c}&nbsp;&deg;C</strong>${
+                            target === null ? '' : ` &rarr; ${target}&nbsp;&deg;C`}`
+                    }`,
+                lines: [{ values: projected, stroke: WATER, dash: '5 4',
+                          label: 'Projected' },
+                        { values: history, stroke: WATER, dash: '',
+                          label: 'Measured' }],
+                refs: target === null ? []
+                    : [{ at: target, stroke: WATER, label: `Target ${target.toFixed(0)}°C` }],
+                tip: i => {
+                    const measured = at(history, i);
+                    const value = measured !== null ? measured : at(projected, i);
+                    return value === null ? null
+                        : `water ${value.toFixed(1)}°C`
+                          + (measured === null ? ' (projected)' : '');
+                },
+            });
+        }
+        if (forecast.concat(adapted).filter(v => v !== null).length >= 2) {
+            plots.push({
+                caption: `Outside${detail.ambient_now_c === undefined
+                        || detail.ambient_now_c === null ? ''
+                        : ` <strong>${detail.ambient_now_c}&nbsp;&deg;C</strong>`
+                    }`,
+                lines: [{ values: forecast, stroke: AIR_FAINT, dash: '5 4',
+                          label: 'As forecast' },
+                        { values: adapted, stroke: AIR, dash: '',
+                          label: 'Corrected to your site' }],
+                refs: cut === null ? []
+                    : [{ at: cut, stroke: '#d03b3b',
+                         label: `Too cold below ${cut.toFixed(0)}°C` }],
+                coldCheck: true,
+                // Both readings, and the gap between them. Showing only the corrected
+                // figure hides the very thing this plot is drawn to show - how far the
+                // model has learned your site sits from what the forecast says.
+                tip: i => {
+                    const raw = at(forecast, i);
+                    const used = at(adapted, i);
+                    if (raw === null && used === null) {
+                        return null;
+                    }
+                    if (raw === null || used === null) {
+                        return `outside ${(used === null ? raw : used).toFixed(1)}°C`;
+                    }
+                    const gap = used - raw;
+                    return `forecast ${raw.toFixed(1)}°C · model uses `
+                        + `${used.toFixed(1)}°C (${gap >= 0 ? '+' : '−'}`
+                        + `${Math.abs(gap).toFixed(1)} K)`;
+                },
+            });
+        }
+        if (!plots.length) {
+            return '';
+        }
+
+        const n = Math.max(slots, 1);
+        const hoverFor = plot => Array.from({ length: n }, (_, i) => {
+            const body = plot.tip(i);
+            const tip = [
+                timeLabel(i),
+                body,
+                (plot.coldCheck && cut !== null && at(adapted, i) !== null
+                    && at(adapted, i) < cut)
+                    ? `below the ${cut.toFixed(1)}°C minimum` : null,
+                i === currentSlot ? 'happening now' : null,
+            ].filter(Boolean).join(' · ');
+            return `<div data-temp-cell title="${this.escapeHtml(tip)}"
+                style="flex:1 1 0;"></div>`;
+        }).join('');
+
+        const boxes = plots.map(
+            plot => this._managedLoadTempPlot(plot, n, gridHtml, hoverFor(plot))).join('');
+
+        return `<div style="margin-top:6px;">
+            <div style="opacity:0.7;font-size:0.85em;margin-bottom:3px;">
+                Temperatures
+            </div>
+            ${boxes}
+        </div>`;
+    }
+
+    /**
+     * One temperature plot, scaled to its own series. See the panel above for why the
+     * water and the air do not share a box.
+     *
+     * @param {object} plot - caption, lines (values/stroke/dash) and reference levels
+     * @param {number} n - Slots on the x-axis, shared with every other plot
+     * @param {string} gridHtml - The strip's gridlines
+     * @param {string} hover - The shared row of hover targets
+     * @returns {string} One plot box
+     */
+    _managedLoadTempPlot(plot, n, gridHtml, hover) {
+        const all = [].concat(...plot.lines.map(l => l.values)).filter(v => v !== null)
+            .concat(plot.refs.map(r => r.at));
+        let lo = Math.min(...all);
+        let hi = Math.max(...all);
+        if (!(hi > lo)) {
+            hi = lo + 1;
+        }
+        const span = (hi - lo) || 1;
+        hi += span * 0.15;
+        lo -= span * 0.15;
+
+        const xAt = i => ((i + 0.5) / n) * 100;
+        const yAt = v => ((hi - v) / (hi - lo)) * 100;
+
+        // Gaps are real: history stops at now and the projection starts there. Breaking
+        // the path rather than bridging it keeps the seam honest.
+        const path = values => {
+            let out = '';
+            let pen = false;
+            values.forEach((v, i) => {
+                if (v === null) {
+                    pen = false;
+                    return;
+                }
+                out += `${pen ? 'L' : 'M'}${xAt(i).toFixed(3)},${yAt(v).toFixed(3)}`;
+                pen = true;
+            });
+            return out;
+        };
+
+        const lines = plot.lines.filter(l => l.values.some(v => v !== null)).map(
+            l => `<path d="${path(l.values)}" fill="none" stroke="${l.stroke}"
+                        stroke-width="2"
+                        ${l.dash ? `stroke-dasharray="${l.dash}"` : ''}
+                        vector-effect="non-scaling-stroke" />`).join('');
+        // Every legend sits under the chart it belongs to, never pooled at the foot of
+        // the card where the reader has to work out which line it names. Both lines are
+        // in it, not only the reference level: they are told apart by stroke rather
+        // than by hue, and a dash pattern nobody has named is a riddle.
+        const entry = (stroke, dash, width, label) =>
+            `<span style="display:inline-flex;align-items:center;gap:5px;">
+                <svg width="18" height="6" aria-hidden="true"><line x1="0" y1="3" x2="18"
+                    y2="3" stroke="${stroke}" stroke-width="${width}"
+                    ${dash ? `stroke-dasharray="${dash}"` : ''}/></svg>${label}</span>`;
+        const legend = plot.lines
+            .filter(l => l.label && l.values.some(v => v !== null))
+            // Drawn dashed-first so the solid sits on top; read solid-first, because
+            // that is the line the plan is actually standing on.
+            .slice()
+            .sort((a, bLine) => (a.dash ? 1 : 0) - (bLine.dash ? 1 : 0))
+            .map(l => entry(l.stroke, l.dash, 2, l.label))
+            .concat(plot.refs.filter(r => r.label)
+                .map(r => entry(r.stroke, '2 2', 1, r.label)))
+            .join('');
+        const refs = plot.refs.map(
+            r => `<line x1="0" y1="${yAt(r.at).toFixed(3)}"
+                        x2="100" y2="${yAt(r.at).toFixed(3)}" stroke="${r.stroke}"
+                        stroke-width="1" stroke-dasharray="2 2"
+                        vector-effect="non-scaling-stroke" />`).join('');
+
+        return `<div style="opacity:0.65;font-size:0.78em;margin:2px 0 2px 2px;">
+                ${plot.caption}</div>
+            <div style="position:relative;height:62px;background:rgba(0,0,0,0.15);
+                    border-radius:4px;margin-bottom:3px;">
+            ${gridHtml}
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+                 style="position:absolute;inset:0;width:100%;height:100%;">
+                ${refs}${lines}
+            </svg>
+            <span style="position:absolute;top:2px;left:4px;font-size:0.7em;opacity:0.5;">
+                ${hi.toFixed(0)}°</span>
+            <span style="position:absolute;bottom:2px;left:4px;font-size:0.7em;opacity:0.5;">
+                ${lo.toFixed(0)}°</span>
+            <div style="position:absolute;inset:0;display:flex;">${hover}</div>
+        </div>
+        ${legend ? `<div style="display:flex;flex-wrap:wrap;gap:14px;
+            margin:-1px 0 5px 0;font-size:0.8em;opacity:0.75;">${legend}</div>` : ''}`;
+    }
+
+    /**
+     * Which of the four visual states a slot is in.
+     *
+     * Grouped rather than one colour per reason: the palette is only safe to three
+     * categorical hues when any two can end up side by side, which on a timeline they
+     * can. The exact reason is on the hover, so nothing is lost.
+     *
+     * @param {string|undefined} reason - The planner's reason for this slot
+     * @returns {string} A key of MANAGED_LOAD_SLOT_STYLE
+     */
+    _managedLoadSlotKind(reason) {
+        if (MANAGED_LOAD_CAPPED_REASONS.has(reason)) {
+            return 'capped';
+        }
+        if (MANAGED_LOAD_BLOCKED_REASONS.has(reason)) {
+            return 'blocked';
+        }
+        return 'idle';
+    }
+
+    /**
+     * Name the states actually on the strip. Identity is never colour alone.
+     * @param {Set<string>} used - Kinds present in this plan
+     * @returns {string} Legend HTML
+     */
+    _managedLoadStripLegend(used) {
+        const order = ['planned', 'capped', 'blocked', 'idle'];
+        const items = order.filter(kind => used.has(kind)).map(kind => {
+            const style = MANAGED_LOAD_SLOT_STYLE[kind];
+            return `<span style="display:inline-flex;align-items:center;gap:5px;">
+                <span style="width:9px;height:9px;border-radius:2px;
+                             background:${style.color};"></span>${style.label}</span>`;
+        });
+        // A single state still needs naming unless it is the one the heading already
+        // names. A strip of uniformly orange bars with no legend is colour alone.
+        if (!items.length || (items.length === 1 && used.has('planned'))) {
+            return '';
+        }
+        return `<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:6px;
+                            font-size:0.8em;opacity:0.75;">${items.join('')}</div>`;
+    }
+
+    /**
+     * Escape text taken from configuration before putting it in the DOM.
+     * @param {string} str - Raw text
+     * @returns {string} Escaped text
+     */
+    escapeHtml(str) {
+        if (str === null || str === undefined) {
+            return '';
+        }
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
     }
 
     /**
@@ -771,3 +1964,16 @@ class ControlsManager {
 }
 
 // ControlsManager instance is created in main.js during initialization
+
+
+/**
+ * Open the managed loads overlay.
+ *
+ * Global because the dropdown menu and the tile's header chip both call it inline, the
+ * same way showBatteryOverviewMenu and the rest are reached.
+ */
+function showManagedLoadsMenu() {
+    if (typeof controlsManager !== 'undefined' && controlsManager) {
+        controlsManager.showManagedLoadsOverlay();
+    }
+}

@@ -23,6 +23,7 @@ from .local_evopt.optimizer import (
     BatteryConfig,
     CbcSolverUnavailableError,
     GridConfig,
+    ManagedLoadConfig,
     OptimizationStrategy,
     Optimizer,
     OptimizerSettings,
@@ -50,6 +51,10 @@ class LocalEVOptBackend(EVOptBackend):
 
     Inherits all EOS↔EVopt request/response transformation logic from EVOptBackend
     and replaces the HTTP call with a direct call to the bundled PuLP/CBC solver.
+
+    This is the one backend that can *schedule* a managed load rather than being handed
+    it as fixed demand, because the model is right here and a contingent load is only a
+    few more variables in it. See `schedules_managed_loads`.
 
     Args:
         time_frame_base:          Slot duration in seconds (900 or 3600).
@@ -112,7 +117,13 @@ class LocalEVOptBackend(EVOptBackend):
             self.cbc_path = None
             logger.error("[OPT-LocalEVopt] %s", exc)
 
-    def optimize(self, eos_request, timeout=180):
+    # Told apart from the other backends by the caller, which then keeps contingent
+    # loads out of `gesamtlast` and passes them here instead. An attribute rather than
+    # a subclass check so a future backend can opt in without anyone editing the caller.
+    schedules_managed_loads = True
+
+    def optimize(self, eos_request, timeout=180, managed_loads=None,
+                 managed_load_budget_w=0.0):
         """
         Run the MILP optimizer in-process.
 
@@ -121,6 +132,11 @@ class LocalEVOptBackend(EVOptBackend):
         3. Solve in-process using PuLP/CBC
         4. Transform EVopt response → EOS format (inherited transformation)
         5. Return (eos_response, avg_runtime)
+
+        *managed_loads* are contingent loads for the solver to place. They are passed
+        beside the request rather than inside it: that dict goes over the wire verbatim
+        to an EOS server, which validates what it is sent, and nothing outside this
+        solver can use them anyway.
         """
         evopt_request, errors = self._transform_request_from_eos_to_evopt(eos_request)
         if errors:
@@ -154,7 +170,11 @@ class LocalEVOptBackend(EVOptBackend):
         try:
             start_time = time.time()
 
-            optimizer = self._build_optimizer(evopt_request, timeout)
+            loads = self._managed_load_configs(managed_loads)
+            optimizer = self._build_optimizer(
+                evopt_request, timeout, loads,
+                managed_load_budget_w=managed_load_budget_w,
+            )
             evopt_response = optimizer.solve()
 
             elapsed = time.time() - start_time
@@ -191,6 +211,10 @@ class LocalEVOptBackend(EVOptBackend):
             eos_response = self._transform_response_from_evopt_to_eos(
                 evopt_response, evopt_request, eos_request
             )
+            eos_response["managed_loads"] = self._managed_load_schedules(evopt_response)
+            eos_response["managed_loads_cost"] = self._managed_load_cost(
+                optimizer, evopt_request, evopt_response, timeout
+            )
             return eos_response, avg_runtime
 
         except CbcSolverUnavailableError as exc:
@@ -221,7 +245,8 @@ class LocalEVOptBackend(EVOptBackend):
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _build_optimizer(self, evopt_request, timeout):
+    def _build_optimizer(self, evopt_request, timeout, managed_loads=None,
+                         managed_load_budget_w=0.0):
         """Construct the Optimizer object from an EVopt-format request dict."""
         # Use configured strategies (may override what the transformation put in)
         strategy = OptimizationStrategy(
@@ -348,7 +373,122 @@ class LocalEVOptBackend(EVOptBackend):
             eta_d=float(evopt_request.get("eta_d", 0.95)),
             optimizer_settings=settings,
             M=tight_M,
+            managed_loads=managed_loads,
+            managed_load_budget_w=managed_load_budget_w,
         )
+
+    def _managed_load_configs(self, managed_loads):
+        """
+        Turn the records the manager produced into solver configs.
+
+        The masks arrive in EOS slot space - 192 slots from local midnight - and the
+        solver works in a horizon that starts now, so every per-slot field makes the
+        same trip as the price and load series. Getting this wrong does not fail
+        loudly: it schedules the right number of hours in the wrong ones.
+        """
+        configs = []
+        for entry in managed_loads or []:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                power = float(entry.get("max_power_w", 0) or 0)
+                demand = float(entry.get("demand_wh", 0) or 0)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "[OPT-LocalEVopt] managed load %r has unreadable numbers - skipping",
+                    entry.get("id"),
+                )
+                continue
+            if power <= 0 or demand <= 0:
+                continue
+
+            mask = entry.get("feasible")
+            configs.append(ManagedLoadConfig(
+                id=str(entry.get("id", "")),
+                demand_wh=demand,
+                value_eur_per_wh=float(entry.get("value_eur_per_wh", 0) or 0),
+                feasible=(
+                    self.to_solver_slots(mask, fill=False) if mask else None
+                ),
+                max_power_w=power,
+                min_runtime_slots=max(1, int(entry.get("min_runtime_slots", 1) or 1)),
+                urgent_wh=float(entry.get("urgent_wh", 0) or 0),
+                start_cost_eur=float(entry.get("start_cost_eur", 0) or 0),
+                max_slots_per_day=max(0, int(entry.get("max_slots_per_day", 0) or 0)),
+                day_index=self.to_solver_slots(entry.get("day_index"), fill=-1),
+                committed_on_slots=max(0, int(entry.get("committed_on_slots", 0) or 0)),
+                already_running=bool(entry.get("already_running", False)),
+                committed_off_slots=max(0, int(entry.get("committed_off_slots", 0) or 0)),
+            ))
+        if configs:
+            logger.debug(
+                "[OPT-LocalEVopt] scheduling %d managed load(s): %s",
+                len(configs), ", ".join(c.id for c in configs),
+            )
+        return configs
+
+    def _managed_load_cost(self, optimizer, evopt_request, evopt_response, timeout):
+        """
+        What the household actually pays extra for the loads, per Wh.
+
+        Measured against the counterfactual: solve the same horizon again with the
+        loads taken out, and take the difference in the household's own economics -
+        grid bought, export sold, battery left behind. That is the number the price
+        limit is a promise about, and the only one that behaves the way people expect:
+        on a sunny day it falls towards the feed-in tariff, because self-consumed sun
+        costs the export it gave up, and on a dark one it rises towards the cap.
+
+        The tariff of the hours the load happens to occupy is *not* that number. It
+        ignores where the energy came from, so a sunny day reads higher than a dark one
+        - which is backwards, and was what the card showed.
+
+        A second solve is affordable here: both together take under a fifth of a second
+        on a two-day quarter-hourly horizon. Returns None rather than a wrong figure if
+        either solve is not optimal.
+        """
+        schedules = evopt_response.get("managed_loads") or []
+        placed_wh = sum(sum(entry.get("energy", []) or []) for entry in schedules)
+        if placed_wh <= 0:
+            return None
+
+        try:
+            baseline = self._build_optimizer(evopt_request, timeout, None)
+            baseline_response = baseline.solve()
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("[OPT-LocalEVopt] baseline solve failed - reporting no cost")
+            return None
+        if str(baseline_response.get("status", "")).lower() != "optimal":
+            logger.debug(
+                "[OPT-LocalEVopt] baseline solve was %s - reporting no cost",
+                baseline_response.get("status"),
+            )
+            return None
+
+        extra_eur = (
+            baseline.get_clean_objective_value() - optimizer.get_clean_objective_value()
+        )
+        per_wh = extra_eur / placed_wh
+        # Shared between the loads by energy. Exact with one, and an allocation with
+        # more - their true individual costs are not separable, since two loads
+        # competing for the same sunny hour change what each other can have. Measured
+        # against leave-one-out solves on a deliberately split pair, the allocation
+        # came within 1.4 ct/kWh, because a battery makes energy fungible across the
+        # horizon and the marginal costs converge.
+        return {
+            "total_eur": round(extra_eur, 4),
+            "energy_wh": round(placed_wh, 1),
+            "eur_per_wh": per_wh,
+            "shared": len([e for e in schedules if sum(e.get("energy", []) or []) > 0]) > 1,
+        }
+
+    def _managed_load_schedules(self, evopt_response):
+        """The solved schedules, back in EOS slot space for everyone downstream."""
+        schedules = {}
+        for entry in evopt_response.get("managed_loads", []) or []:
+            schedules[entry.get("id", "")] = self.from_solver_slots(
+                entry.get("energy", [])
+            )
+        return schedules
 
     @staticmethod
     def _infeasible_eos_response(evopt_response):
