@@ -25,7 +25,7 @@ from .contribution import (
     SOURCE_PULL,
     LoadContribution,
 )
-from .gate import ReleaseGate
+from .gate import OverrideNotSupported, ReleaseGate
 from .planner import (
     NON_BLOCKING_REASONS,
     plan_price,
@@ -445,7 +445,7 @@ class ManagedLoad:
     def set_override(self, mode, minutes, now):
         """Force this load released or blocked. Profile-kind loads have no gate."""
         if self.gate is None:
-            raise ValueError(
+            raise OverrideNotSupported(
                 f"managed load '{self.id}' has no release signal to override"
             )
         self.gate.set_override(mode, minutes, now)

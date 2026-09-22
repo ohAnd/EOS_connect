@@ -16,7 +16,7 @@ import logging
 from flask import Blueprint, jsonify, request as flask_request
 
 from .contribution import SOURCE_API
-from .gate import OVERRIDE_BLOCK, OVERRIDE_RELEASE
+from .gate import OVERRIDE_BLOCK, OVERRIDE_RELEASE, OverrideNotSupported
 from .injection import InjectionError, PushedProfile, describe
 
 logger = logging.getLogger("__main__")
@@ -214,9 +214,16 @@ def override(load_id):
 
     try:
         state = _manager.set_override(load_id, mode, minutes)
+    except OverrideNotSupported:
+        return jsonify({
+            "error": f"managed load '{load_id}' has no release signal to override"
+        }), 400
     except InjectionError as exc:
         return jsonify({"error": str(exc)}), 404
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    except ValueError:
+        # Applying an override re-plans, so anything underneath can raise a ValueError.
+        # Ours are answered above; the rest are a fault here, not the caller's business.
+        logger.exception("[LOADS] override for '%s' could not be applied", load_id)
+        return jsonify({"error": "The override could not be applied"}), 500
 
     return jsonify({"id": load_id, "override": state})

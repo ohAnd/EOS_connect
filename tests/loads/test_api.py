@@ -306,3 +306,21 @@ def test_a_broken_journal_does_not_leak_the_exception(client):
 
     assert response.status_code == 500
     assert "database is locked" not in response.get_json()["error"]
+
+
+def test_an_unexpected_fault_does_not_reach_the_caller(client, monkeypatch):
+    """
+    Applying an override re-plans, and the whole solver runs underneath. A ValueError
+    from down there used to be handed back verbatim, so an HTTP caller could read
+    internal state out of a route that only ever needed to say yes or no.
+    """
+    def explode(*_args, **_kwargs):
+        raise ValueError("/srv/secret/path row 4 column 'grid_price' is NaN")
+
+    monkeypatch.setattr(loads_api._manager, "set_override", explode)
+    response = _post(client, "/api/managed_loads/pool/override", {"mode": "release"})
+
+    assert response.status_code == 500
+    body = response.get_json()["error"]
+    assert "secret" not in body and "NaN" not in body
+    assert body == "The override could not be applied"

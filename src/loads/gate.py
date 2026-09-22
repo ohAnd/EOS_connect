@@ -22,6 +22,16 @@ STATE_BLOCKED = "blocked"
 OVERRIDE_RELEASE = "release"
 OVERRIDE_BLOCK = "block"
 
+
+class OverrideNotSupported(ValueError):
+    """
+    Asked to override a load that has no release signal.
+
+    Its own type, so the route can answer it precisely instead of echoing whatever
+    ValueError happened to surface - applying an override re-plans, and everything
+    that runs underneath is entitled to raise one.
+    """
+
 # Reasons, surfaced verbatim on MQTT and the dashboard so a user can always answer
 # "why is it running right now".
 REASON_OVERRIDE = "manual override"

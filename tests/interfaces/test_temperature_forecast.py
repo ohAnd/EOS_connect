@@ -6,6 +6,7 @@ enough for something a heat pump plans against: akkudoktor's /forecast relays it
 upstream provider's rate limit and refuses everyone at once when it triggers.
 """
 
+import logging
 import types
 
 import pytest
@@ -134,3 +135,18 @@ def test_the_schema_offers_exactly_the_providers_that_exist():
 
     assert sorted(TEMPERATURE_SOURCES) == sorted(tf.TEMPERATURE_PROVIDERS)
     assert tf.DEFAULT_TEMPERATURE_PROVIDER in TEMPERATURE_SOURCES
+
+
+def test_the_log_does_not_carry_the_users_address(captured, caplog):
+    """
+    Debug logs get pasted into bug reports, and precise coordinates are a home
+    address. The line is there to say how many values came back, not where from.
+    """
+    with caplog.at_level(logging.DEBUG, logger="__main__"):
+        tf.fetch_openmeteo_temperature(52.516275, 13.377704, hours=48)
+
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert "52.51" not in logged and "13.37" not in logged
+    assert "48 hourly values" in logged
+    # The request itself of course still carries them.
+    assert captured["params"]["latitude"] == 52.516275

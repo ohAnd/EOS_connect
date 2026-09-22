@@ -104,8 +104,7 @@ def fetch_openmeteo_temperature(latitude, longitude, timezone="UTC", hours=48,
     while len(numbers) < hours:
         numbers.append(numbers[-1])
 
-    logger.debug(
-        "[TEMP-FC] Open-Meteo returned %d hourly values for %s, %s",
-        len(numbers), latitude, longitude,
-    )
+    # Without the coordinates: they are the user's home address, and debug logs get
+    # pasted into bug reports. The count is what this line was ever for.
+    logger.debug("[TEMP-FC] Open-Meteo returned %d hourly values", len(numbers))
     return numbers
