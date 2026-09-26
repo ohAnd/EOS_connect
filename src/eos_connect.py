@@ -758,6 +758,33 @@ except (KeyError, TypeError, ValueError) as e:
 # sys.exit(0)  # exit if the interfaces are not initialized correctly
 
 
+def _deferred_inverter_initialization():
+    """
+    Initialize the inverter interface in a background thread after web server starts.
+    
+    This prevents the app from hanging if the inverter is unreachable during startup.
+    If initialization fails, the app falls back to NullInverter for display-only mode.
+    """
+    global inverter_interface  # pylint: disable=global-statement
+
+    logger.info("[Main] Starting deferred inverter initialization in background...")
+
+    # Attempt initialization with timeout
+    success = interface_factory.initialize_inverter_deferred(
+        inverter_interface, timeout_seconds=30
+    )
+
+    if not success:
+        logger.error(
+            "[Main] Inverter initialization failed; switching to NullInverter (display-only mode)"
+        )
+        # Fall back to NullInverter for display-only mode
+        inverter_interface = NullInverter(config_manager.config["inverter"])
+        logger.info("[Main] Switched to NullInverter; inverter control is disabled")
+    else:
+        logger.info("[Main] Inverter is ready for control")
+
+
 # summarize all date
 def create_optimize_request():
     """
@@ -2716,6 +2743,16 @@ if __name__ == "__main__":
         logger.info(
             "[Main] Web interface available at: http://localhost:%s", actual_port
         )
+
+        # Start deferred inverter initialization in background thread
+        # This prevents hang if inverter is unreachable
+        inverter_init_thread = threading.Thread(
+            target=_deferred_inverter_initialization,
+            daemon=True,
+            name="InverterInit",
+        )
+        inverter_init_thread.start()
+        logger.info("[Main] Inverter initialization thread started (runs in background)")
 
         # Start serving
         logger.info("[Main] Starting EOS Connect web server...")

@@ -537,12 +537,10 @@ class InterfaceFactory:
         try:
             interface = creator_func()
 
-            # For inverter interface, also initialize it if not None
+            # For inverter interface, skip initialization here (deferred to background)
+            # This prevents app hang when inverter is unreachable at startup
             if component_name == "inverter_interface" and interface is not None:
-                try:
-                    interface.initialize()
-                except Exception as e:
-                    raise Exception(f"Inverter initialization failed: {str(e)}")
+                interface._deferred_init_required = True  # pylint: disable=protected-access
 
             self.created_interfaces[component_name] = interface
             logger.info("[Factory] Successfully created %s", component_name)
@@ -551,7 +549,7 @@ class InterfaceFactory:
             )
             return interface
 
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-except
             error_detail = str(e)
             full_message = f"{error_message}: {error_detail}{additional_message}"
 
@@ -583,6 +581,67 @@ class InterfaceFactory:
                 component_name,
             )
             return None
+
+    def initialize_inverter_deferred(self, inverter_interface, timeout_seconds: int = 30):
+        """
+        Initialize inverter interface in background with reduced timeout to prevent app hang.
+        
+        This is called after the web server starts, so if it takes time or fails, the UI is
+        still responsive and the user can fix configuration without restarting the container.
+        
+        Args:
+            inverter_interface: The inverter interface instance to initialize
+            timeout_seconds: Maximum time to wait for initialization (default 30 seconds)
+            
+        Returns:
+            True if initialization succeeded, False otherwise
+        """
+        if inverter_interface is None or not hasattr(inverter_interface, '_deferred_init_required'):
+            return True
+
+        if not inverter_interface._deferred_init_required:
+            return True
+
+        try:
+            logger.info(
+                "[Factory] Starting deferred inverter initialization (timeout=%ds)",
+                timeout_seconds,
+            )
+
+            # Set startup mode flag to reduce timeouts and retries
+            inverter_interface._startup_mode = True
+            inverter_interface._startup_timeout = timeout_seconds
+
+            # Try to initialize with reduced timeouts
+            inverter_interface.initialize()
+
+            # Clear flags on success
+            inverter_interface._deferred_init_required = False
+            inverter_interface._startup_mode = False
+
+            logger.info("[Factory] Inverter initialization completed successfully")
+            return True
+
+        except Exception as e:
+            logger.error(
+                "[Factory] Inverter initialization failed (will use NullInverter): %s",
+                str(e),
+            )
+
+            # Register error for startup panel
+            self.validator.add_error(
+                category="connectivity",
+                component="inverter_interface",
+                severity="error",
+                title="Inverter initialization failed",
+                message=f"Could not initialize inverter: {str(e)}",
+                action_required=True,
+                config_link="#inverter",
+            )
+
+            inverter_interface._deferred_init_required = False
+            inverter_interface._startup_mode = False
+            return False
 
     def _report_degraded_configuration(self, interface, component_name, config_link):
         """
