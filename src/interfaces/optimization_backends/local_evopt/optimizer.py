@@ -397,13 +397,29 @@ class Optimizer:
         self._add_managed_load_constraints()
         self._add_shared_budget_constraints()
 
+    def _new_var(self, name, lowBound=None, upBound=None, cat=pulp.LpContinuous):
+        # pylint: disable=invalid-name
+        """A decision variable owned by this model.
+
+        PuLP deprecated bare ``LpVariable(...)`` construction in favour of
+        ``LpProblem.add_variable`` and warns once per variable - which, at a few
+        thousand variables per run, drowns everything else in the test log. The new
+        method only exists in recent PuLP and ``requirements.txt`` still allows 2.7,
+        so fall back to the classic constructor when it is missing. Argument names
+        follow PuLP's own spelling so the call sites read unchanged.
+        """
+        adder = getattr(self.problem, "add_variable", None)
+        if adder is not None:
+            return adder(name, lowBound, upBound, cat)
+        return pulp.LpVariable(name, lowBound=lowBound, upBound=upBound, cat=cat)
+
     def _setup_variables(self):
         """Set up the variables of the MILP optimizer."""
         # Charging power variables [Wh]
         self.variables['c'] = {}
         for i, bat in enumerate(self.batteries):
             self.variables['c'][i] = [
-                pulp.LpVariable(
+                self._new_var(
                     f"c_{i}_{t}",
                     lowBound=0,
                     upBound=bat.c_max * self.time_series.dt[t] / 3600.
@@ -415,7 +431,7 @@ class Optimizer:
         self.variables['d'] = {}
         for i, bat in enumerate(self.batteries):
             self.variables['d'][i] = [
-                pulp.LpVariable(
+                self._new_var(
                     f"d_{i}_{t}",
                     lowBound=0,
                     upBound=bat.d_max * self.time_series.dt[t] / 3600.
@@ -427,7 +443,7 @@ class Optimizer:
         self.variables['s'] = {}
         for i, bat in enumerate(self.batteries):
             self.variables['s'][i] = [
-                pulp.LpVariable(f"s_{i}_{t}", lowBound=0, upBound=bat.s_capacity)
+                self._new_var(f"s_{i}_{t}", lowBound=0, upBound=bat.s_capacity)
                 for t in self.time_steps
             ]
 
@@ -440,7 +456,7 @@ class Optimizer:
             if self.batteries[i].s_goal is not None:
                 for t in self.time_steps:
                     if self.batteries[i].s_goal[t] > 0:
-                        self.variables['s_goal_pen'][i][t] = pulp.LpVariable(
+                        self.variables['s_goal_pen'][i][t] = self._new_var(
                             f"s_goal_pen_{i}_{t}", lowBound=0
                         )
 
@@ -455,20 +471,20 @@ class Optimizer:
         for i, bat in enumerate(self.batteries):
             if bat.p_demand is not None:
                 for t in self.time_steps:
-                    self.variables['p_demand_pen'][i][t] = pulp.LpVariable(
+                    self.variables['p_demand_pen'][i][t] = self._new_var(
                         f"p_demand_pen_{i}_{t}", lowBound=0
                     )
-                    self.variables['z_p_demand'][i][t] = pulp.LpVariable(
+                    self.variables['z_p_demand'][i][t] = self._new_var(
                         f"z_p_demand_{i}_{t}", cat='Binary'
                     )
 
         # penalty variable for staying above max SOC and below min SOC
         self.variables['s_max_pen'] = [
-            [pulp.LpVariable(f"s_max_pen_{i}_{t}", lowBound=0) for t in self.time_steps]
+            [self._new_var(f"s_max_pen_{i}_{t}", lowBound=0) for t in self.time_steps]
             for i in range(len(self.batteries))
         ]
         self.variables['s_min_pen'] = [
-            [pulp.LpVariable(f"s_min_pen_{i}_{t}", lowBound=0) for t in self.time_steps]
+            [self._new_var(f"s_min_pen_{i}_{t}", lowBound=0) for t in self.time_steps]
             for i in range(len(self.batteries))
         ]
 
@@ -479,40 +495,40 @@ class Optimizer:
         ]
         for i, bat in enumerate(self.batteries):
             if bat.s_reserve > 0:
-                self.variables['s_reserve_pen'][i] = pulp.LpVariable(
+                self.variables['s_reserve_pen'][i] = self._new_var(
                     f"s_reserve_pen_{i}", lowBound=0
                 )
 
         # Grid import/export variables [Wh]
-        self.variables['n'] = [pulp.LpVariable(f"n_{t}", lowBound=0) for t in self.time_steps]
-        self.variables['e'] = [pulp.LpVariable(f"e_{t}", lowBound=0) for t in self.time_steps]
+        self.variables['n'] = [self._new_var(f"n_{t}", lowBound=0) for t in self.time_steps]
+        self.variables['e'] = [self._new_var(f"e_{t}", lowBound=0) for t in self.time_steps]
 
         # penalty variables for exceeding grid power limits (W)
         # for grid import
         if self.grid.p_max_imp is not None:
             self.variables['e_imp_lim_exc'] = [
-                pulp.LpVariable(f"p_imp_pen_{t}", lowBound=0) for t in self.time_steps
+                self._new_var(f"p_imp_pen_{t}", lowBound=0) for t in self.time_steps
             ]
             self.variables['z_imp_lim'] = [
-                pulp.LpVariable(f"z_imp_lim_{t}", cat='Binary') for t in self.time_steps
+                self._new_var(f"z_imp_lim_{t}", cat='Binary') for t in self.time_steps
             ]
 
         # for grid export
         if self.grid.p_max_exp is not None:
             self.variables['e_exp_lim_exc'] = [
-                pulp.LpVariable(f"e_exp_lim_exc_{t}", lowBound=0) for t in self.time_steps
+                self._new_var(f"e_exp_lim_exc_{t}", lowBound=0) for t in self.time_steps
             ]
             self.variables['z_exp_lim'] = [
-                pulp.LpVariable(f"z_exp_lim_{t}", cat='Binary') for t in self.time_steps
+                self._new_var(f"z_exp_lim_{t}", cat='Binary') for t in self.time_steps
             ]
 
         # for demand rate calculation
         if self.is_grid_demand_rate_active:
-            self.variables['p_max_imp_exc'] = pulp.LpVariable("p_max_imp_exc", lowBound=0)
+            self.variables['p_max_imp_exc'] = self._new_var("p_max_imp_exc", lowBound=0)
 
         # Binary variable: power flow direction to / from grid
         self.variables['y'] = [
-            pulp.LpVariable(f"y_{t}", cat='Binary') for t in self.time_steps
+            self._new_var(f"y_{t}", cat='Binary') for t in self.time_steps
         ]
 
         # Binary variable for charging activation (only when c_min > 0)
@@ -520,7 +536,7 @@ class Optimizer:
         for i, bat in enumerate(self.batteries):
             if bat.c_min > 0:
                 self.variables['z_c'][i] = [
-                    pulp.LpVariable(f"z_c_{i}_{t}", cat='Binary')
+                    self._new_var(f"z_c_{i}_{t}", cat='Binary')
                     for t in self.time_steps
                 ]
             else:
@@ -531,7 +547,7 @@ class Optimizer:
         self.variables['ml_start'] = {}
         for i, load in enumerate(self.managed_loads):
             self.variables['ml_start'][i] = (
-                [pulp.LpVariable(f"ml_start_{i}_{t}", cat='Binary')
+                [self._new_var(f"ml_start_{i}_{t}", cat='Binary')
                  for t in self.time_steps]
                 if load.start_cost_eur > 0 else None
             )
@@ -549,7 +565,7 @@ class Optimizer:
             ]
             feasible = load.feasible or [True] * self.T
             self.variables['ml'][i] = [
-                pulp.LpVariable(
+                self._new_var(
                     f"ml_{i}_{t}",
                     lowBound=0,
                     upBound=per_slot[t] if (
@@ -564,7 +580,7 @@ class Optimizer:
             # variable does not already have.
             if load.min_runtime_slots > 1 or load.start_cost_eur > 0:
                 self.variables['ml_on'][i] = [
-                    pulp.LpVariable(f"ml_on_{i}_{t}", cat='Binary')
+                    self._new_var(f"ml_on_{i}_{t}", cat='Binary')
                     for t in self.time_steps
                 ]
             else:
@@ -574,7 +590,7 @@ class Optimizer:
         self.variables['z_cd'] = {}
         for i, bat in enumerate(self.batteries):
             self.variables['z_cd'][i] = [
-                pulp.LpVariable(f"z_cd_{i}_{t}", cat='Binary')
+                self._new_var(f"z_cd_{i}_{t}", cat='Binary')
                 for t in self.time_steps
             ]
 
