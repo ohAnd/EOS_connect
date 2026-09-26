@@ -61,7 +61,7 @@ Supported data sources and integrations:
 
 - **Home Assistant:** MQTT publishing (dashboard, control, auto-discovery) and direct API integration for sensor/entity data collection.
 - **OpenHAB:** MQTT publishing (dashboard, control, auto-discovery via MQTT binding) and direct API integration for item data collection.
-- **EVCC:** Reads charging modes and loadpoint states so the battery plan works around the car, and can act as the gateway for battery control (`/api/batterymode`). EOS Connect never commands a loadpoint itself.
+- **EVCC:** Reads charging modes and loadpoint states so the battery plan works around the car, and can act as the gateway for battery control (`/api/batterymode`). EOS Connect never commands a loadpoint itself. Supports both legacy EVCC mode names and EVCC 0.316.0+'s `smart`/`alwaysCharge` scheme. [Learn more →](https://ohAnd.github.io/EOS_connect/advanced/index.html#evcc)
 - **Inverter Interfaces:** Victron MultiPlus (3-phase ESS via Modbus/TCP), Fronius GEN24 (with automatic firmware detection), legacy fallback, generic Home Assistant inverter control (e.g., Marstek, Sungrow, Goodwe), and more via MQTT/web API/EVCC external inverter control.
 
 

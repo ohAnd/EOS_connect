@@ -2104,6 +2104,7 @@ def get_controls():
             "charging_state": base_control.get_current_evcc_charging_state(),
             "charging_mode": base_control.get_current_evcc_charging_mode(),
             "current_sessions": evcc_interface.get_current_detail_data(),
+            "mode_style": evcc_interface.get_mode_style(),
         },
         "battery": {
             "soc": current_battery_soc,

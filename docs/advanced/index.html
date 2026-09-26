@@ -701,6 +701,13 @@ mosquitto_pub -h broker -t eos_connect/control/overall_state/set -m "-2"</code><
                         releases it with a <code>DELETE</code> when the override ends. Use this when EVCC
                         already owns your battery &mdash; it keeps both systems from issuing contradictory
                         commands.</p>
+                    <p>EOS Connect reads the loadpoint charging mode to decide whether the car may draw down
+                        the battery. It supports both EVCC's legacy mode names (<code>pv</code>,
+                        <code>minpv</code>) and the scheme introduced in EVCC 0.316.0
+                        (<code>smart</code> combined with the <code>alwaysCharge</code> flag), translating the
+                        latter internally so the same battery-priority logic applies either way. The dashboard
+                        badge shows &ldquo;Smart&rdquo;/&ldquo;Smart+&rdquo; when talking to a 0.316.0+ instance,
+                        or &ldquo;PV&rdquo;/&ldquo;Min+PV&rdquo; for older versions.</p>
 
                     <h3 id="openhab">openHAB</h3>
                     <p>openHAB works as a data source: set <code>data_source.type</code> to
