@@ -221,8 +221,29 @@ load_interface = interface_factory.create_load_interface(
     time_zone,
     request_timeout=config_manager.config.get("request_timeout", 10),
     critical=True,
-    extra_subtract_sensors=load_manager.subtract_sensors(),
+    # Passed unbound: enabling or disabling a managed load is hot-reloadable, and a
+    # disabled one stops contributing its forecast immediately. Capturing the list
+    # here would leave its history subtracted from the base load until a restart,
+    # which reads as a household that is lighter than it really is.
+    extra_subtract_sensors=load_manager.subtract_sensors,
 )
+
+# Build the load profile now rather than inside the first optimizer run. It is derived
+# from four finished historical days, so it changes only at midnight and the interface
+# holds it until then - but the build itself reads the recorder, and on a large one
+# that is the slowest thing in a run. Paying for it here keeps it out of the loop.
+#
+# Starting up matters more than starting up with a profile: the optimizer loop retries
+# on its own, and the same failure there is caught and logged rather than fatal.
+if load_interface is not None:
+    try:
+        load_interface.refresh_load_profile()
+    except (requests.exceptions.RequestException, ValueError, KeyError) as e:
+        logger.warning(
+            "[Main] Could not build the load profile at startup (%s); "
+            "the first optimization run will try again.",
+            e,
+        )
 
 battery_config = dict(config_manager.config["battery"])
 # price.feed_in_price is ct/kWh; BatteryPriceHandler.pv_cost_euro_per_kwh expects €/kWh
