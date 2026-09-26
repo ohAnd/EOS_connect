@@ -735,3 +735,68 @@ def test_two_callers_at_once_build_the_profile_once():
     assert len(results) == 4
     assert all(result == results[0] for result in results)
     assert len(fake.history_calls) == 4, "one sensor x four days, built once"
+
+
+def test_disabling_a_managed_load_takes_effect_without_a_restart():
+    """`managed_loads.enabled` is hot-reloadable; the base load has to follow.
+
+    A disabled managed load stops contributing its forecast at once. If its history
+    kept being subtracted, the household would read lighter than it is until the next
+    restart - and with the profile now held for a day, longer still.
+    """
+    day_start = datetime(2026, 3, 3, 0, 0, tzinfo=timezone.utc)
+    today = day_start.replace(hour=9)
+    attributes = {"unit_of_measurement": "W"}
+    house = [value + 1000 for value in DAY_VALUES]
+    fake = FakeHomeAssistant(
+        {
+            "sensor.house": _series(
+                day_start - timedelta(days=15), house * 16, 15, attributes
+            ),
+            "sensor.pool": _series(
+                day_start - timedelta(days=15), [400] * 96 * 16, 15, attributes
+            ),
+        },
+        {entity: attributes for entity in ("sensor.house", "sensor.pool")},
+    )
+
+    enabled = {"sensor.pool"}
+    interface = LoadInterface(
+        dict(HA_CONFIG), 3600, "UTC", extra_subtract_sensors=lambda: sorted(enabled)
+    )
+
+    with _connected(fake), _frozen(today):
+        with_pool = interface.get_load_profile(48)
+        enabled.clear()
+        without_pool = interface.get_load_profile(48)
+
+    assert with_pool != without_pool, "the switch has to reach the profile"
+    # 400 W of pool per hour is no longer taken out of the household.
+    assert without_pool[0] == pytest.approx(with_pool[0] + 400, rel=0.01)
+
+
+def test_the_sensor_list_is_read_fresh_not_captured():
+    """A plain list still works - that is what every existing caller passes."""
+    interface = LoadInterface(
+        dict(HA_CONFIG), 3600, "UTC", extra_subtract_sensors=["sensor.a", " sensor.b "]
+    )
+    assert interface.extra_subtract_sensors == ["sensor.a", "sensor.b"]
+
+    live = ["sensor.a"]
+    interface = LoadInterface(
+        dict(HA_CONFIG), 3600, "UTC", extra_subtract_sensors=lambda: live
+    )
+    assert interface.extra_subtract_sensors == ["sensor.a"]
+    live.append("sensor.c")
+    assert interface.extra_subtract_sensors == ["sensor.a", "sensor.c"]
+
+
+def test_a_broken_sensor_provider_does_not_take_the_profile_down():
+    """The provider is someone else's object; a failure there is not fatal here."""
+    def boom():
+        raise KeyError("managed loads not ready")
+
+    interface = LoadInterface(
+        dict(HA_CONFIG), 3600, "UTC", extra_subtract_sensors=boom
+    )
+    assert interface.extra_subtract_sensors == []

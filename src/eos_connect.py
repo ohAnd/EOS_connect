@@ -221,7 +221,11 @@ load_interface = interface_factory.create_load_interface(
     time_zone,
     request_timeout=config_manager.config.get("request_timeout", 10),
     critical=True,
-    extra_subtract_sensors=load_manager.subtract_sensors(),
+    # Passed unbound: enabling or disabling a managed load is hot-reloadable, and a
+    # disabled one stops contributing its forecast immediately. Capturing the list
+    # here would leave its history subtracted from the base load until a restart,
+    # which reads as a household that is lighter than it really is.
+    extra_subtract_sensors=load_manager.subtract_sensors,
 )
 
 # Build the load profile now rather than inside the first optimizer run. It is derived

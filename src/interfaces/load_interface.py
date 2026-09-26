@@ -49,13 +49,11 @@ class LoadInterface:
         # household base load for the same reason the two above do: their predicted
         # consumption is added back on top, and counting the appliance twice is exactly
         # what makes a heat pump in `additional_load_1` worse than not configuring it.
-        # The list arrives from the caller so this interface stays unaware of what a
-        # managed load is.
-        self.extra_subtract_sensors = [
-            str(sensor).strip()
-            for sensor in (extra_subtract_sensors or [])
-            if str(sensor or "").strip()
-        ]
+        # It arrives from the caller so this interface stays unaware of what a managed
+        # load is - as a callable where the set can change while running, because
+        # enabling and disabling a managed load is a hot-reloadable setting and a
+        # disabled one stops contributing its forecast the moment it is switched off.
+        self.__extra_subtract_source = extra_subtract_sensors
         raw_token = config.get("access_token", "")
         # Strip leading/trailing whitespace that can be introduced by YAML >- block
         # scalar style when long tokens wrap across multiple lines
@@ -118,6 +116,10 @@ class LoadInterface:
         # optimizer run, 480 times a day at the default refresh time.
         self.__profile_cache = None
         self.__profile_day = None
+        # The managed load sensors the held profile was built against. They can be
+        # switched off while running, and a profile that still has a disabled load
+        # subtracted from it understates the household for the rest of the day.
+        self.__profile_sensors = None
         # A profile that fell back to the built-in curve is not worth holding until
         # midnight; this is when it may be attempted again.
         self.__profile_retry_after = None
@@ -307,6 +309,32 @@ class LoadInterface:
                 sleep_seconds = self.retry_backoff * (2 ** (attempt - 1))
                 sleep_seconds = sleep_seconds + random.uniform(0, sleep_seconds * 0.5)
                 time.sleep(sleep_seconds)
+
+    @property
+    def extra_subtract_sensors(self):
+        """Power sensors of the managed loads currently contributing a forecast.
+
+        Resolved on every read rather than captured at construction: a managed load
+        can be disabled from the web UI without a restart, and from that moment its
+        prediction is no longer added on top - so its history must stop being taken
+        out of the base load too, or the household is left looking lighter than it is.
+        """
+        source = self.__extra_subtract_source
+        if callable(source):
+            try:
+                source = source()
+            except (TypeError, ValueError, AttributeError, KeyError) as e:
+                logger.warning(
+                    "[LOAD-IF] Could not read the managed load sensors (%s); "
+                    "leaving the base load untouched this time.",
+                    e,
+                )
+                return []
+        return [
+            str(sensor).strip()
+            for sensor in (source or [])
+            if str(sensor or "").strip()
+        ]
 
     def __now(self):
         """Current local time, in the frame the load profile is built in.
@@ -1599,6 +1627,7 @@ class LoadInterface:
                 now = self.__now()
                 self.__profile_cache = profile
                 self.__profile_day = now.date()
+                self.__profile_sensors = tuple(self.extra_subtract_sensors)
                 # A profile built from real history stands until midnight. One that
                 # fell back to the built-in curve gets another attempt shortly, so a
                 # source that was briefly unreachable at startup does not freeze the
@@ -1611,8 +1640,12 @@ class LoadInterface:
             return list(self.__profile_cache)
 
     def __profile_needs_rebuild(self):
-        """True when the held profile is missing, from another day, or degraded."""
+        """True when the held profile is missing, stale, degraded, or out of date."""
         if self.__profile_cache is None or self.__profile_day is None:
+            return True
+        if tuple(self.extra_subtract_sensors) != self.__profile_sensors:
+            # A managed load was enabled or disabled. Its history is subtracted from
+            # the profile, so the held one no longer describes the same household.
             return True
         now = self.__now()
         if now.date() != self.__profile_day:
