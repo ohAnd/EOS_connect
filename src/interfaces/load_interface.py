@@ -7,6 +7,7 @@ load profiles based on historical energy consumption data.
 from datetime import datetime, timedelta, timezone
 import logging
 from urllib.parse import quote
+import threading
 import time
 import math
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -24,6 +25,12 @@ class LoadInterface:
     such as OpenHAB and Home Assistant. It also supports creating load profiles based on the
     retrieved energy data.
     """
+
+    # How long a profile that fell back to the built-in curve is kept before another
+    # attempt. Roughly one optimizer interval: long enough that a source which is down
+    # is not hammered on every run, short enough that a brief outage at startup does
+    # not cost the whole day.
+    __PROFILE_RETRY_SECONDS = 300
 
     def __init__(
         self,
@@ -84,12 +91,41 @@ class LoadInterface:
         self.time_zone = None
         self.request_timeout = request_timeout  # Store configurable timeout
 
-        # Cache for Home Assistant history.
-        # Home Assistant may return empty results or time out for historical
-        # intervals although the recorder contains the requested data.
-        # Once a complete history range has been retrieved, subsequent
-        # hourly requests can be served locally from this cache.
+        # One fetched day of Home Assistant samples per entity, keyed by entity id.
+        # Issue #302: asking the history endpoint once per slot means 24 requests
+        # per sensor per day, which times out against a large recorder and drags
+        # the other interfaces down with it. The day is fetched once and every
+        # slot is then cut out of the cached series locally.
         self.__homeassistant_history_cache = {}
+        # unit_of_measurement / device_class per entity. Recorder statistics rows
+        # carry no unit, so the statistics fallback has to learn it from the
+        # entity itself to return watts like the history path does.
+        self.__homeassistant_attribute_cache = {}
+        # Set once the recorder.get_statistics action answers 4xx, so an older
+        # Home Assistant is asked exactly once instead of once per sensor per day.
+        self.__statistics_unsupported = False
+        # Same idea for a statistics call that times out, but only for the current
+        # profile build - the next one tries again.
+        self.__statistics_failed_this_build = False
+        # True only while __prefetch_homeassistant_day is fetching, which is the one
+        # caller whose result may be cached. Set around a single synchronous call,
+        # and the profile rebuild that drives it already holds __profile_lock.
+        self.__prefetching = False
+
+        # The finished load profile, and the local calendar day it describes.
+        # Every value in it comes from four fixed historical days, so it only
+        # changes at midnight - but it used to be rebuilt from scratch on every
+        # optimizer run, 480 times a day at the default refresh time.
+        self.__profile_cache = None
+        self.__profile_day = None
+        # A profile that fell back to the built-in curve is not worth holding until
+        # midnight; this is when it may be attempted again.
+        self.__profile_retry_after = None
+        self.__profile_degraded = False
+        # Held across a rebuild so a second caller waits for the result instead of
+        # starting a second one. get_load_profile() reaches this from the optimizer
+        # loop and, via the managed-load base load, from the load manager.
+        self.__profile_lock = threading.Lock()
 
         logger.debug("[LOAD-IF] Initializing LoadInterface with source: %s", self.src)
         logger.debug("[LOAD-IF] Using URL: %s", self.url)
@@ -211,11 +247,17 @@ class LoadInterface:
         timeout=None,
         item_label="",
         json_data=None,
+        status_sink=None,
     ):
         """
         Perform an HTTP request with retries and exponential backoff.
         Returns the requests.Response on success, or None on final failure.
+
+        `status_sink`, when given, is a list the final HTTP status is appended to.
+        A caller needs it to tell "this endpoint does not exist" from "the network
+        was briefly unhappy" — both of which return None.
         """
+        # pylint: disable=too-many-arguments,too-many-positional-arguments
         # Use instance timeout if not explicitly provided
         if timeout is None:
             timeout = self.request_timeout
@@ -245,6 +287,18 @@ class LoadInterface:
                 response.raise_for_status()
                 return response
             except requests.exceptions.RequestException as e:
+                # A 4xx is an answer, not a hiccup: the entity does not exist, the
+                # token is wrong, or the action is unknown to this Home Assistant
+                # version. Retrying five times with backoff only delays startup and
+                # fills the log. 429 is the exception - that one does mean "later".
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status is not None and 400 <= status < 500 and status != 429:
+                    if status_sink is not None:
+                        status_sink.append(status)
+                    self.__log_request_failure(
+                        url, self.max_retries, self.max_retries, e, item_label
+                    )
+                    return None
                 self.__log_request_failure(
                     url, attempt, self.max_retries, e, item_label
                 )
@@ -254,35 +308,59 @@ class LoadInterface:
                 sleep_seconds = sleep_seconds + random.uniform(0, sleep_seconds * 0.5)
                 time.sleep(sleep_seconds)
 
-    def __normalize_history_timestamp(self, timestamp, reference_time):
-        """Normalize a history timestamp to the timezone semantics of a reference time.
+    def __now(self):
+        """Current local time, in the frame the load profile is built in.
 
-        Home Assistant Recorder timestamps are normally timezone-aware UTC values,
-        while the load-profile code historically uses naive local datetimes. Simply
-        stripping the UTC tzinfo is incorrect because it changes the represented
-        instant (for example 22:00 UTC becomes 22:00 local instead of 00:00 CEST).
-        Convert aware timestamps to the reference timezone first, and only then
-        remove tzinfo when the reference itself is naive.
+        Naive when no time zone is configured, which is what the day boundaries
+        below have always used. One place for it so a test can move the clock
+        without patching datetime for the whole module.
         """
-        if timestamp is None or reference_time is None:
-            return timestamp
+        if self.time_zone is None:
+            return datetime.now()
+        return datetime.now(self.time_zone)
 
-        timestamp_tz = timestamp.tzinfo
-        reference_tz = reference_time.tzinfo
+    def __to_utc(self, value):
+        """Return `value` as a timezone-aware UTC instant, or None.
 
-        if reference_tz is None:
-            if timestamp_tz is None:
-                return timestamp
+        Everything in the Home Assistant path - cache bounds, slot boundaries,
+        sample ordering - is compared as UTC. Mixing naive and aware datetimes is
+        what lets a `time_zone: UTC` setup on a host in another zone shift every
+        slot boundary without anyone noticing, and it is also why the repeated
+        hour at the end of DST cannot be resolved by wall clock alone.
 
-            # The existing load-profile code treats naive datetimes as local time.
-            # Convert HA's timezone-aware timestamp to the host's local timezone
-            # before dropping tzinfo so the wall-clock time remains correct.
-            return timestamp.astimezone().replace(tzinfo=None)
+        A naive datetime is the caller's local wall clock: the configured
+        `time_zone` if there is one, otherwise the host's.
+        """
+        if value is None:
+            return None
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value)
+            except (ValueError, TypeError):
+                return None
+        if not isinstance(value, datetime):
+            return None
+        if value.tzinfo is None:
+            if self.time_zone is None:
+                # A naive datetime is local time; astimezone() attaches the host zone.
+                value = value.astimezone()
+            elif hasattr(self.time_zone, "localize"):
+                # pytz: replace(tzinfo=...) would attach the zone's LMT offset.
+                value = self.time_zone.localize(value)
+            else:
+                value = value.replace(tzinfo=self.time_zone)
+        return value.astimezone(timezone.utc)
 
-        if timestamp_tz is None:
-            return timestamp.replace(tzinfo=reference_tz)
-
-        return timestamp.astimezone(reference_tz)
+    @staticmethod
+    def __as_float(value):
+        """Parse a sensor/statistics value, or None when it is not a number."""
+        if value is None:
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return None if math.isnan(number) else number
 
     # get load data from url persistance source
     def fetch_historical_energy_data(self, entity_id, start_time, end_time):
@@ -332,374 +410,441 @@ class LoadInterface:
             logger.error("[LOAD-IF] OPENHAB - Failed to process energy data: %s", e)
             return []
 
+    # --- Home Assistant -----------------------------------------------------
+    #
+    # The day is fetched once per sensor and every slot is then cut out of that
+    # cached series (issue #302). The slice has to answer a slot exactly the way a
+    # per-slot request to the history endpoint used to, otherwise the profile
+    # handed to the optimizer changes - the caching is meant to save requests, not
+    # to produce different numbers.
+
+    def __homeassistant_headers(self):
+        """Auth headers for the Home Assistant REST API."""
+        return {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+
     def __fetch_historical_energy_data_from_homeassistant(
         self, entity_id, start_time, end_time
     ):
         """
         Fetch historical energy data for a specific entity from Home Assistant.
 
-        Home Assistant's history REST endpoint only exposes recorder state
-        changes. For sensors with Recorder statistics, current and older data
-        can also be retrieved through the recorder.get_statistics action:
-        5-minute short-term statistics are preferred and hourly long-term
-        statistics are used when short-term statistics do not cover the
-        requested interval.
+        Args:
+            entity_id (str): The ID of the entity to fetch data for.
+            start_time (datetime): The start time for the historical data.
+            end_time (datetime): The end time for the historical data.
 
-        The returned structure deliberately remains the same as the existing
-        history path (state + last_updated), so the load-profile processing
-        below does not need a separate statistics code path.
+        Returns:
+            list: A list of historical state changes for the entity, states in W.
+
+        Served from the cached day series when `__prefetch_homeassistant_day` has
+        already fetched a range covering this interval; otherwise the state
+        history endpoint is queried, with recorder statistics as the fallback for
+        sensors whose state history has been purged.
         """
         if entity_id == "" or entity_id is None:
             return []
 
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json",
-        }
-        url = f"{self.url}/api/history/period/{start_time.isoformat()}"
+        start_utc = self.__to_utc(start_time)
+        end_utc = self.__to_utc(end_time)
+        if start_utc is None or end_utc is None:
+            return []
 
-        def normalize_timestamp(value, reference):
-            try:
-                timestamp = datetime.fromisoformat(value) if isinstance(value, str) else value
-            except (ValueError, TypeError):
-                return None
-            return self.__normalize_history_timestamp(timestamp, reference)
+        cached = self.__cached_samples(entity_id, start_utc, end_utc)
+        if cached is not None:
+            return self.__slice_series(cached, entity_id, start_utc, end_utc)
 
-        def filter_history(history_data):
-            filtered = []
-            for entry in history_data:
-                entry_time = normalize_timestamp(entry.get("last_updated"), start_time)
-                if entry_time is None:
-                    continue
-                if start_time <= entry_time <= end_time:
-                    filtered.append(entry)
-            return filtered
-
-        def normalize_statistics(rows, period):
-            """Convert HA recorder statistics rows into state-like samples."""
-            samples = []
-            for row in rows or []:
-                try:
-                    row_start = datetime.fromisoformat(row["start"])
-                    row_end = datetime.fromisoformat(row["end"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-
-                row_start = self.__normalize_history_timestamp(row_start, start_time)
-                row_end = self.__normalize_history_timestamp(row_end, end_time)
-
-                # For measurement sensors (e.g. sensor.hausverbrauch), mean is
-                # the average power for the statistics bucket. For total/energy
-                # sensors, change is the energy accumulated during the bucket;
-                # convert it to an average W value so the existing load-profile
-                # processing can consume it unchanged.
-                value = row.get("mean")
-                if value is None:
-                    value = row.get("state")
-                if value is None and row.get("change") is not None:
-                    try:
-                        value = float(row["change"]) * 1000.0 / (
-                            (row_end - row_start).total_seconds() / 3600.0
-                        )
-                    except (TypeError, ValueError, ZeroDivisionError):
-                        value = None
-
-                if value is None:
-                    continue
-                try:
-                    value = float(value)
-                except (TypeError, ValueError):
-                    continue
-
-                if row_end <= start_time or row_start >= end_time:
-                    continue
-
-                # Statistics are interval values. Represent each bucket as a
-                # constant state from its start through its end. This gives
-                # __process_energy_data the same timestamped sample format as
-                # the history REST path and preserves the bucket's mean.
-                clipped_start = max(row_start, start_time)
-                clipped_end = min(row_end, end_time)
-                if clipped_end <= clipped_start:
-                    continue
-
-                samples.append(
-                    {
-                        "state": value,
-                        "last_updated": clipped_start.isoformat(),
-                        "attributes": {},
-                    }
-                )
-                samples.append(
-                    {
-                        "state": value,
-                        "last_updated": clipped_end.isoformat(),
-                        "attributes": {},
-                    }
-                )
-
-            # Collapse duplicate timestamps while retaining the last value.
-            deduped = {}
-            for sample in samples:
-                deduped[sample["last_updated"]] = sample
-            return sorted(deduped.values(), key=lambda entry: entry["last_updated"])
-
-        def normalize_history_values(history_values):
-            """Preserve the existing history unit/device-class conversions."""
-            if not history_values:
-                return []
-
-            try:
-                if (
-                    "attributes" in history_values[0]
-                    and "device_class" in history_values[0]["attributes"]
-                ):
-                    device_class = history_values[0]["attributes"]["device_class"]
-                    if device_class == "energy":
-                        start_idx = 0
-                        end_idx = len(history_values) - 1
-                        while start_idx < end_idx:
-                            try:
-                                float(history_values[start_idx]["state"])
-                                break
-                            except (ValueError, TypeError):
-                                start_idx += 1
-                        while start_idx < end_idx:
-                            try:
-                                float(history_values[end_idx]["state"])
-                                break
-                            except (ValueError, TypeError):
-                                end_idx -= 1
-
-                        first_state = float(history_values[start_idx]["state"])
-                        last_state = float(history_values[end_idx]["state"])
-                        first_time = datetime.fromisoformat(
-                            history_values[start_idx]["last_updated"]
-                        )
-                        last_time = datetime.fromisoformat(
-                            history_values[end_idx]["last_updated"]
-                        )
-                        duration_hours = (
-                            last_time - first_time
-                        ).total_seconds() / 3600.0
-
-                        if duration_hours > 0:
-                            power_w = max(
-                                0, (last_state - first_state) / duration_hours
-                            )
-                        else:
-                            power_w = 0.0
-
-                        history_values = [
-                            {**history_values[start_idx], "state": power_w},
-                            {**history_values[end_idx], "state": power_w},
-                        ]
-
-                if (
-                    history_values
-                    and "attributes" in history_values[0]
-                    and history_values[0]["attributes"].get("unit_of_measurement") == "kW"
-                ):
-                    for entry in history_values:
-                        try:
-                            entry["state"] = float(entry["state"]) * 1000
-                        except (ValueError, TypeError):
-                            continue
-
-                return history_values
-            except (ValueError, KeyError, TypeError):
-                logger.error(
-                    "[LOAD-IF] HOMEASSISTANT - Failed to process energy data for '%s'.",
-                    entity_id,
-                )
-                return []
-
-        def statistics_request(period):
-            statistics_url = f"{self.url}/api/services/recorder/get_statistics"
-
-            # Home Assistant may omit the final hourly bucket when the requested
-            # end_time is exactly aligned with the day boundary. Request one
-            # additional hour for hourly statistics; normalize_statistics()
-            # clips the result back to the original requested interval.
-            statistics_end_time = end_time
-            if period == "hour":
-                statistics_end_time = end_time + timedelta(hours=1)
-
-            payload = {
-                "statistic_ids": [entity_id],
-                "start_time": start_time.isoformat(),
-                "end_time": statistics_end_time.isoformat(),
-                "period": period,
-                "types": ["mean", "state", "change"],
+        samples = self.__fetch_homeassistant_series(entity_id, start_utc, end_utc)
+        if samples and self.__prefetching:
+            # Only the day prefetch fills the cache - see __prefetch_homeassistant_day.
+            self.__homeassistant_history_cache[entity_id] = {
+                "start": start_utc,
+                "end": end_utc,
+                "samples": samples,
             }
-            response = self.__request_with_retries(
-                "post",
-                statistics_url,
-                params={"return_response": "true"},
-                headers=headers,
-                timeout=max(self.request_timeout, 30),
-                item_label=f"{entity_id} ({period} statistics)",
-                json_data=payload,
-            )
-            if response is None:
-                return []
-            try:
-                response_data = response.json()
-                rows = (
-                    response_data.get("service_response", {})
-                    .get("statistics", {})
-                    .get(entity_id, [])
-                )
-                return normalize_statistics(rows, period)
-            except (ValueError, TypeError, AttributeError):
-                logger.warning(
-                    "[LOAD-IF] HOMEASSISTANT - Invalid %s statistics response for '%s'.",
-                    period,
-                    entity_id,
-                )
-                return []
-
-        # First use the existing state-history path. It remains the preferred
-        # source because it has the original sample resolution and attributes.
-        cached_history = self.__homeassistant_history_cache.get(entity_id)
-        filtered_data = None
-
-        if cached_history is not None:
-            cached_start = self.__normalize_history_timestamp(
-                cached_history["start_time"], start_time
-            )
-            cached_end = self.__normalize_history_timestamp(
-                cached_history["end_time"], end_time
-            )
-            requested_start = self.__normalize_history_timestamp(start_time, cached_start)
-            requested_end = self.__normalize_history_timestamp(end_time, cached_end)
-            if cached_start <= requested_start and cached_end >= requested_end:
-                cached_filtered = filter_history(cached_history["data"])
-                if len(cached_filtered) >= 2:
-                    filtered_data = cached_filtered
-                elif (
-                    len(cached_filtered) == 1
-                    and start_time.hour == 23
-                    and start_time.minute == 0
-                    and start_time.second == 0
-                    and end_time == start_time + timedelta(hours=1)
-                    and cached_filtered[0].get("last_updated") is not None
-                ):
-                    # The complete-day statistics cache can contain the final
-                    # 23:00 bucket with its start sample but no explicit
-                    # 00:00 boundary. For this final slot, the statistics
-                    # value is constant over the bucket, so use the same
-                    # value at the slot end instead of falling through to
-                    # another HA history/statistics request and producing
-                    # an artificial 0 Wh hour.
-                    cached_filtered = [
-                        cached_filtered[0],
-                        {
-                            **cached_filtered[0],
-                            "last_updated": end_time.isoformat(),
-                        },
-                    ]
-                    filtered_data = cached_filtered
-
-        if filtered_data is None:
-            response = self.__request_with_retries(
-                "get",
-                url,
-                params={
-                    "filter_entity_id": entity_id,
-                    "end_time": end_time.isoformat(),
-                },
-                headers=headers,
-                item_label=entity_id,
-            )
-
-            historical_data = None
-            if response is not None:
-                try:
-                    historical_data = response.json()
-                except (ValueError, TypeError):
-                    historical_data = None
-
-            if historical_data:
-                history_data = [
-                    {
-                        "state": entry["state"],
-                        "last_updated": entry["last_updated"],
-                        "attributes": entry.get("attributes", {}),
-                    }
-                    for sublist in historical_data
-                    for entry in sublist
-                ]
-                history_data.sort(key=lambda entry: entry.get("last_updated", ""))
-                self.__homeassistant_history_cache[entity_id] = {
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "data": history_data,
-                }
-                filtered_data = filter_history(history_data)
-
-            # Do not retry historical intervals with a current-time end_time.
-            # That fallback can make Home Assistant return a much larger history
-            # payload than requested and is especially expensive when this method
-            # is called for many hourly intervals. Recorder statistics below are
-            # the controlled fallback for sensors whose state history is empty.
-
-            if filtered_data and len(filtered_data) >= 2:
-                return normalize_history_values(filtered_data)
-
-            # State history is unavailable or contains too few samples to
-            # calculate an interval average. Use Recorder statistics instead. Prefer 5-minute short-term
-            # statistics; if they do not cover the requested interval, use the
-            # hourly long-term statistics. The latter are retained indefinitely
-            # and therefore cover the 14-day look-back used by the optimizer.
-            short_term_data = statistics_request("5minute")
-            if short_term_data:
-                first_time = normalize_timestamp(short_term_data[0]["last_updated"], start_time)
-                last_time = normalize_timestamp(short_term_data[-1]["last_updated"], end_time)
-                if first_time is not None and last_time is not None:
-                    # normalize_statistics() clips the first/last bucket to the
-                    # requested interval, so a non-empty result that reaches both
-                    # boundaries covers the complete requested interval.
-                    if first_time <= start_time and last_time >= end_time:
-                        logger.info(
-                            "[LOAD-IF] HOMEASSISTANT - Using 5-minute statistics for '%s' (%d samples).",
-                            entity_id,
-                            len(short_term_data),
-                        )
-                        self.__homeassistant_history_cache[entity_id] = {
-                            "start_time": start_time,
-                            "end_time": end_time,
-                            "data": short_term_data,
-                        }
-                        return short_term_data
-
-            long_term_data = statistics_request("hour")
-            if long_term_data:
-                logger.info(
-                    "[LOAD-IF] HOMEASSISTANT - Using hourly statistics for '%s' (%d samples).",
-                    entity_id,
-                    len(long_term_data),
-                )
-                self.__homeassistant_history_cache[entity_id] = {
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "data": long_term_data,
-                }
-                return long_term_data
-
-            # A missing historical interval is an expected data-quality fallback
-            # condition and can occur for individual hourly requests. Do not emit a
-            # warning for every interval; callers already handle an empty result and
-            # the aggregate LOAD-IF warning is emitted at the appropriate level.
+        if not samples:
+            # An absent interval is an ordinary data-quality condition here: it is
+            # one slot of many, the caller handles an empty result, and the
+            # aggregate complaint is raised once in __create_load_profile_weekdays.
             logger.debug(
-                "[LOAD-IF] HOMEASSISTANT - No history or recorder statistics available for '%s' from %s to %s.",
+                "[LOAD-IF] HOMEASSISTANT - No history or recorder statistics for "
+                "'%s' from %s to %s.",
                 entity_id,
                 start_time,
                 end_time,
             )
             return []
 
-        return filtered_data or []
+        # Whatever Home Assistant returned for the range it was asked for is the
+        # answer, unfiltered - the same bytes the per-slot request produced before
+        # the cache existed. Only a slice taken out of a *cached* series has to
+        # reconstruct the interval boundaries itself.
+        return self.__convert_history_units(
+            [dict(sample) for _, sample in samples], entity_id
+        )
+
+    def __cached_samples(self, entity_id, start_utc, end_utc):
+        """Cached (utc, sample) pairs covering the interval, or None."""
+        entry = self.__homeassistant_history_cache.get(entity_id)
+        if not entry:
+            return None
+        if entry["start"] <= start_utc and entry["end"] >= end_utc:
+            return entry["samples"]
+        return None
+
+    def __fetch_homeassistant_series(self, entity_id, start_utc, end_utc):
+        """Fetch one range from Home Assistant as sorted (utc, sample) pairs.
+
+        State history is preferred: it has the original sample resolution and the
+        attributes the unit conversion needs. When it is missing or too short to
+        integrate, recorder statistics stand in - 5-minute buckets first, hourly
+        long-term statistics second. Long-term statistics are never purged, so
+        they still cover the optimizer's 14-day look-back when state history for
+        that day is long gone.
+        """
+        samples = self.__fetch_homeassistant_history(entity_id, start_utc, end_utc)
+        if len(samples) >= 2:
+            return samples
+
+        short_term = self.__fetch_statistics(entity_id, start_utc, end_utc, "5minute")
+        if self.__covers(short_term, start_utc, end_utc):
+            logger.info(
+                "[LOAD-IF] HOMEASSISTANT - Using 5-minute statistics for '%s' (%d samples).",
+                entity_id,
+                len(short_term),
+            )
+            return short_term
+
+        hourly = self.__fetch_statistics(entity_id, start_utc, end_utc, "hour")
+        if hourly:
+            logger.info(
+                "[LOAD-IF] HOMEASSISTANT - Using hourly statistics for '%s' (%d samples).",
+                entity_id,
+                len(hourly),
+            )
+            return hourly
+        return short_term or samples
+
+    @staticmethod
+    def __covers(samples, start_utc, end_utc):
+        """True when the samples reach both ends of the requested interval."""
+        return bool(samples) and samples[0][0] <= start_utc and samples[-1][0] >= end_utc
+
+    def __fetch_homeassistant_history(self, entity_id, start_utc, end_utc):
+        """State history from /api/history/period as sorted (utc, sample) pairs."""
+        response = self.__request_with_retries(
+            "get",
+            f"{self.url}/api/history/period/{start_utc.isoformat()}",
+            params={
+                "filter_entity_id": entity_id,
+                "end_time": end_utc.isoformat(),
+            },
+            headers=self.__homeassistant_headers(),
+            item_label=entity_id,
+        )
+        if response is None:
+            # Do not log error here; already logged in __request_with_retries
+            return []
+        try:
+            historical_data = response.json()
+        except (ValueError, TypeError):
+            historical_data = None
+        if not historical_data:
+            return []
+
+        samples = []
+        try:
+            for sublist in historical_data:
+                for entry in sublist:
+                    stamp = self.__to_utc(entry["last_updated"])
+                    if stamp is None:
+                        continue
+                    samples.append(
+                        (
+                            stamp,
+                            {
+                                "state": entry["state"],
+                                "last_updated": entry["last_updated"],
+                                "attributes": entry.get("attributes", {}),
+                            },
+                        )
+                    )
+        except (ValueError, KeyError, TypeError):
+            logger.error(
+                "[LOAD-IF] HOMEASSISTANT - Failed to process energy data for '%s'.",
+                entity_id,
+            )
+            return []
+
+        samples.sort(key=lambda pair: pair[0])
+        return samples
+
+    def __entity_attributes(self, entity_id):
+        """Attributes of an entity, fetched once per process."""
+        if entity_id in self.__homeassistant_attribute_cache:
+            return self.__homeassistant_attribute_cache[entity_id]
+
+        attributes = {}
+        response = self.__request_with_retries(
+            "get",
+            f"{self.url}/api/states/{entity_id}",
+            headers=self.__homeassistant_headers(),
+            item_label=f"{entity_id} (attributes)",
+        )
+        if response is not None:
+            try:
+                attributes = response.json().get("attributes", {}) or {}
+            except (ValueError, TypeError, AttributeError):
+                attributes = {}
+        self.__homeassistant_attribute_cache[entity_id] = attributes
+        return attributes
+
+    def __statistics_unit_factor(self, entity_id):
+        """Multiplier that brings statistics values to W / Wh.
+
+        Statistics rows carry no unit, so it comes from the entity. The same
+        factor serves `mean` (kW to W) and `change` (kWh to Wh) because the unit
+        itself says which of the two the row holds.
+        """
+        unit = str(
+            self.__entity_attributes(entity_id).get("unit_of_measurement", "")
+        ).strip()
+        return 1000.0 if unit in ("kW", "kWh") else 1.0
+
+    def __fetch_statistics(self, entity_id, start_utc, end_utc, period):
+        """Recorder statistics for a range, as sorted (utc, sample) pairs in W."""
+        if self.__statistics_unsupported or self.__statistics_failed_this_build:
+            return []
+
+        # Home Assistant omits the bucket that starts exactly at end_time, which
+        # is the one covering the last slot of the day. Ask for one period more
+        # and clip the result back to the requested interval.
+        padding = timedelta(hours=1) if period == "hour" else timedelta(minutes=5)
+        refused = []
+        response = self.__request_with_retries(
+            "post",
+            f"{self.url}/api/services/recorder/get_statistics",
+            params={"return_response": "true"},
+            headers=self.__homeassistant_headers(),
+            timeout=max(self.request_timeout, 30),
+            item_label=f"{entity_id} ({period} statistics)",
+            json_data={
+                "statistic_ids": [entity_id],
+                "start_time": start_utc.isoformat(),
+                "end_time": (end_utc + padding).isoformat(),
+                "period": period,
+                "types": ["mean", "change", "state"],
+            },
+            status_sink=refused,
+        )
+        if response is None:
+            # A 4xx means this Home Assistant has no recorder.get_statistics action at
+            # all, so stop asking for the rest of the process. Anything else - a
+            # timeout, most likely the same overloaded recorder this whole change is
+            # about - stays retryable, but not within this build: the fallback is
+            # reached once per sensor per day, and eight 30-second timeouts in a row
+            # would turn one unreachable Home Assistant into a stalled startup.
+            if refused:
+                logger.info(
+                    "[LOAD-IF] HOMEASSISTANT - recorder.get_statistics is unavailable "
+                    "(HTTP %s); continuing with state history only.",
+                    refused[0],
+                )
+                self.__statistics_unsupported = True
+            else:
+                self.__statistics_failed_this_build = True
+            return []
+
+        try:
+            rows = (
+                response.json()
+                .get("service_response", {})
+                .get("statistics", {})
+                .get(entity_id, [])
+            )
+        except (ValueError, TypeError, AttributeError):
+            logger.warning(
+                "[LOAD-IF] HOMEASSISTANT - Invalid %s statistics response for '%s'.",
+                period,
+                entity_id,
+            )
+            return []
+
+        return self.__statistics_rows_to_samples(entity_id, rows, start_utc, end_utc)
+
+    def __statistics_row_power(self, row, factor, hours, previous_state):
+        """Average power for one statistics bucket, and the meter reading to carry.
+
+        Order matters. A total_increasing sensor has no `mean` but does have both
+        `state` and `change`; taking `state` is how a 100 kWh meter reading turns
+        into 100 kW. `state` is only meaningful as a difference between buckets,
+        which is why the previous one is threaded through.
+        """
+        state = self.__as_float(row.get("state"))
+        value = self.__as_float(row.get("mean"))
+        if value is not None:
+            value *= factor
+        else:
+            change = self.__as_float(row.get("change"))
+            if change is not None:
+                value = change * factor / hours
+            elif state is not None and previous_state is not None:
+                value = (state - previous_state) * factor / hours
+        return value, state if state is not None else previous_state
+
+    def __statistics_rows_to_samples(self, entity_id, rows, start_utc, end_utc):
+        """Turn statistics buckets into the sample shape the history path produces.
+
+        `mean` is the average power over a measurement bucket. `change` is the
+        energy accumulated in the bucket and divides into an average power. `state`
+        is the meter reading at the end of the bucket - usable only as a difference
+        between consecutive buckets, never as a value in its own right, which is
+        what made a 100 kWh counter arrive at the optimizer as 100 kW.
+        """
+        factor = self.__statistics_unit_factor(entity_id)
+        deduped = {}
+        previous_state = None
+
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            row_start = self.__to_utc(row.get("start"))
+            row_end = self.__to_utc(row.get("end"))
+            if row_start is None or row_end is None or row_end <= row_start:
+                continue
+
+            hours = (row_end - row_start).total_seconds() / 3600.0
+            value, previous_state = self.__statistics_row_power(
+                row, factor, hours, previous_state
+            )
+            if value is None:
+                continue
+
+            if row_end <= start_utc or row_start >= end_utc:
+                continue
+            clipped_start = max(row_start, start_utc)
+            clipped_end = min(row_end, end_utc)
+            if clipped_end <= clipped_start:
+                continue
+
+            # A bucket is a constant value across its span. Two samples, one at
+            # each edge, give __process_energy_data the same timestamped shape the
+            # history path produces and preserve the bucket's average exactly.
+            for stamp in (clipped_start, clipped_end):
+                deduped[stamp] = {
+                    "state": value,
+                    "last_updated": stamp.isoformat(),
+                    "attributes": {},
+                }
+
+        return [(stamp, deduped[stamp]) for stamp in sorted(deduped)]
+
+    def __slice_series(self, samples, entity_id, start_utc, end_utc):
+        """Cut one slot out of a cached day series.
+
+        Home Assistant opens every history period with the state in effect at
+        `start_time`, and holds the last state to the end of the period. A plain
+        timestamp filter does neither, which is what left the last slot of a day
+        holding a single sample - no duration to integrate, so 0 Wh - and what the
+        hard-coded 23:00 special case was patching around. Reconstructing both
+        edges instead covers every slot, at any `time_frame_base`.
+        """
+        before = None
+        inside = []
+        for stamp, sample in samples:
+            if stamp < start_utc:
+                before = sample
+            elif stamp <= end_utc:
+                inside.append((stamp, sample))
+
+        # Copies throughout: the unit conversion below rewrites "state" in place,
+        # and adjacent slots share their boundary sample with the cached series.
+        window = [dict(sample) for _, sample in inside]
+        if before is not None and (not inside or inside[0][0] > start_utc):
+            opening = dict(before)
+            opening["last_updated"] = start_utc.isoformat()
+            window.insert(0, opening)
+        if not window:
+            return []
+
+        # Convert before padding: for an energy counter the conversion is a delta
+        # across the samples it is given, so a synthetic closing sample repeating
+        # the last meter reading would flatten the slot's rate.
+        window = self.__convert_history_units(window, entity_id)
+        if not window:
+            return []
+
+        last_stamp = self.__to_utc(window[-1]["last_updated"])
+        if last_stamp is not None and last_stamp < end_utc:
+            closing = dict(window[-1])
+            closing["last_updated"] = end_utc.isoformat()
+            window.append(closing)
+        return window
+
+    def __convert_history_units(self, history_values, entity_id):
+        """Bring history samples to W, exactly as the per-slot path always did.
+
+        An energy counter becomes the average power over the samples given; a kW
+        reading is scaled to W. Operates on the caller's list, which must already
+        be a copy of anything held in the cache.
+        """
+        if not history_values:
+            return []
+
+        try:
+            first_attributes = history_values[0].get("attributes") or {}
+            if first_attributes.get("device_class") == "energy":
+                start_idx = 0
+                end_idx = len(history_values) - 1
+                while start_idx < end_idx:
+                    if self.__as_float(history_values[start_idx].get("state")) is not None:
+                        break
+                    start_idx += 1
+                while start_idx < end_idx:
+                    if self.__as_float(history_values[end_idx].get("state")) is not None:
+                        break
+                    end_idx -= 1
+
+                first_state = float(history_values[start_idx]["state"])
+                last_state = float(history_values[end_idx]["state"])
+                first_time = datetime.fromisoformat(
+                    history_values[start_idx]["last_updated"]
+                )
+                last_time = datetime.fromisoformat(
+                    history_values[end_idx]["last_updated"]
+                )
+                duration_hours = (last_time - first_time).total_seconds() / 3600.0
+
+                if duration_hours > 0:
+                    # Counter resets must not read as negative consumption.
+                    power_w = max(0.0, (last_state - first_state) / duration_hours)
+                else:
+                    power_w = 0.0
+
+                history_values = [
+                    {**history_values[start_idx], "state": power_w},
+                    {**history_values[end_idx], "state": power_w},
+                ]
+
+            if history_values:
+                unit = (history_values[0].get("attributes") or {}).get(
+                    "unit_of_measurement"
+                )
+                if unit == "kW":
+                    for entry in history_values:
+                        value = self.__as_float(entry.get("state"))
+                        if value is not None:
+                            entry["state"] = value * 1000
+
+            return history_values
+        except (ValueError, KeyError, TypeError):
+            logger.error(
+                "[LOAD-IF] HOMEASSISTANT - Failed to process energy data for '%s'.",
+                entity_id,
+            )
+            return []
 
     def __fill_missing_values_in_data(self, data, debug_sensor=None):
         """
@@ -993,28 +1138,31 @@ class LoadInterface:
         return additional_load_data
 
     def __prefetch_homeassistant_day(self, entity_id, start_time, end_time):
-        """Fetch one complete day once so hourly profile processing stays local.
+        """Fetch one whole day up front so the slot loop stays local.
 
-        The load-profile algorithm still processes one-hour slots, but the HA
-        data source is queried only once for the complete day. The normal
-        history/statistics method stores the result in the per-entity cache,
-        allowing the 24 hourly calls to be served without additional HA requests.
+        The profile is still built slot by slot, but the day is requested once and
+        every slot is then cut out of the cached series. This is the only writer of
+        that cache: it is the only caller that asks for a complete, finished day.
+        A rolling window ending at "now" - what `fetch_historical_energy_data` gets
+        from the battery price handler - must keep going out to Home Assistant, or it
+        would be answered from a frozen snapshot. That is why the fetch below is the
+        only one allowed to fill the cache, flagged rather than passed as an argument
+        so the normal fetch entry point stays the single place a range is requested.
         """
         if not entity_id or self.src != "homeassistant":
             return
 
-        cached = self.__homeassistant_history_cache.get(entity_id)
-        if cached is not None:
-            cached_start = self.__normalize_history_timestamp(
-                cached["start_time"], start_time
-            )
-            cached_end = self.__normalize_history_timestamp(
-                cached["end_time"], end_time
-            )
-            requested_start = self.__normalize_history_timestamp(start_time, cached_start)
-            requested_end = self.__normalize_history_timestamp(end_time, cached_end)
-            if cached_start <= requested_start and cached_end >= requested_end:
-                return
+        start_utc = self.__to_utc(start_time)
+        end_utc = self.__to_utc(end_time)
+        if start_utc is None or end_utc is None:
+            return
+        if self.__cached_samples(entity_id, start_utc, end_utc) is not None:
+            return
+
+        # Drop the previous day before refetching. Nothing is written when a fetch
+        # comes back empty, so a stale entry left here would answer this day's
+        # coverage check with the wrong day's data.
+        self.__homeassistant_history_cache.pop(entity_id, None)
 
         logger.debug(
             "[LOAD-IF] HOMEASSISTANT - Prefetching '%s' for %s to %s once for the complete day.",
@@ -1022,9 +1170,13 @@ class LoadInterface:
             start_time,
             end_time,
         )
-        self.__fetch_historical_energy_data_from_homeassistant(
-            entity_id, start_time, end_time
-        )
+        self.__prefetching = True
+        try:
+            self.__fetch_historical_energy_data_from_homeassistant(
+                entity_id, start_time, end_time
+            )
+        finally:
+            self.__prefetching = False
 
     def get_load_profile_for_day(self, start_time, end_time):
         """
@@ -1052,32 +1204,22 @@ class LoadInterface:
             "[LOAD-IF] Creating day load profile from %s to %s", start_time, end_time
         )
 
-        # Fetch each Home Assistant source for the complete day once. The hourly
-        # loop below then reads only from the local cache. This prevents the
-        # previous 24-requests-per-sensor pattern and keeps statistics fallback
-        # requests bounded to one call per day and sensor.
+        # Fetch every Home Assistant sensor this day needs exactly once. The slot
+        # loop below then reads from the local cache, instead of the 24 requests
+        # per sensor that made a large recorder time out (issue #302). Managed
+        # loads belong in here too: they are subtracted per slot further down, so
+        # leaving them out would keep the request storm for anyone using them.
         if self.src == "homeassistant":
             entities = [
                 self.load_sensor,
                 self.car_charge_load_sensor,
                 self.additional_load_1_sensor,
+                *self.extra_subtract_sensors,
             ]
             for entity_id in dict.fromkeys(entity for entity in entities if entity):
                 self.__prefetch_homeassistant_day(entity_id, start_time, end_time)
 
         load_profile = []
-        day_has_data = False
-
-        # The complete-day prefetch is the authoritative indication that
-        # historical source data exists. Individual hourly cache slices can
-        # legitimately be empty at a boundary even though the day-level
-        # statistics response contains valid data.
-        if self.src == "homeassistant":
-            cached_load = self.__homeassistant_history_cache.get(self.load_sensor)
-            if cached_load:
-                cached_data = cached_load.get("data") or []
-                if cached_data:
-                    day_has_data = True
         current_time_slot = start_time
 
         while current_time_slot < end_time:
@@ -1099,12 +1241,6 @@ class LoadInterface:
                     self.src,
                 )
                 return []
-
-            # Distinguish missing source data from a valid zero-consumption
-            # interval. The old logic represented both cases as 0 Wh, which
-            # made a complete statistics response look like missing history.
-            if energy_data:
-                day_has_data = True
 
             car_load_energy = 0
             # check if car load sensor is configured
@@ -1240,15 +1376,6 @@ class LoadInterface:
             )
             current_time_slot += timedelta(seconds=self.time_frame_base)
 
-        if not day_has_data:
-            logger.debug(
-                "[LOAD-IF] No source data returned for '%s' from %s to %s.",
-                self.load_sensor,
-                start_time,
-                end_time,
-            )
-            return []
-
         if not load_profile:
             logger.error(
                 "[LOAD-IF] No load profile data available for the specified day - % s to % s",
@@ -1269,11 +1396,8 @@ class LoadInterface:
         Returns:
             list: A list of 48 values representing the combined load profile for the specified days.
         """
-        # Use datetime.now() without timezone or with proper timezone object
-        if self.time_zone is None:
-            now = datetime.now()
-        else:
-            now = datetime.now(self.time_zone)
+        now = self.__now()
+        self.__statistics_failed_this_build = False
 
         day_one_week_before = now.replace(
             hour=0, minute=0, second=0, microsecond=0
@@ -1340,16 +1464,11 @@ class LoadInterface:
             else:
                 load_profile.append(round(value, 3))
 
-        # An all-zero profile can be valid data. Missing history is represented
-        # by an empty day profile, so use data availability rather than the
-        # numeric value to decide whether the historical fallback is needed.
-        historical_profiles = (
-            load_profile_one_week_before,
-            load_profile_two_week_before,
-            load_profile_tomorrow_one_week_before,
-            load_profile_tomorrow_two_week_before,
-        )
-        if not any(historical_profiles):
+        # Check if load profile contains useful values (not all zeros). An all-zero
+        # profile is how a source that answers but has nothing to say looks — Home
+        # Assistant returns 200 and an empty list for an entity that does not exist
+        # — so it has to keep triggering the fallback and the warning below.
+        if not load_profile or all(value == 0 for value in load_profile):
             logger.info(
                 "[LOAD-IF] No historical data available from 7 and 14 days ago. "
                 + "This is normal for new installations - using yesterday's data as fallback. "
@@ -1365,7 +1484,7 @@ class LoadInterface:
             )
 
             # Double yesterday's profile to create 48 hours
-            if yesterday_profile:
+            if yesterday_profile and not all(value == 0 for value in yesterday_profile):
                 load_profile = yesterday_profile + yesterday_profile
                 logger.info(
                     "[LOAD-IF] Using yesterday's consumption pattern doubled"
@@ -1398,11 +1517,17 @@ class LoadInterface:
                         + " and collects sensor data."
                     )
                 load_profile = self._get_default_profile()
+                # Nothing was read. Recorded so the caller knows this result is not
+                # worth holding until midnight the way a real profile is.
+                self.__profile_degraded = True
                 logger.info(
                     "[LOAD-IF] Temporary default profile active -"
                     + " will improve with collected data"
                 )
 
+        # The four days of raw samples have served their purpose. Nothing until the
+        # next rebuild reads them, and they are the largest thing this interface holds.
+        self.__homeassistant_history_cache.clear()
         return load_profile
 
     def get_load_profile(self, tgt_duration, start_time=None):
@@ -1422,6 +1547,9 @@ class LoadInterface:
 
         Returns:
             list: A list of energy consumption values for the specified duration.
+
+        The profile itself is built once per day and held; see
+        `refresh_load_profile`. This returns a copy of it.
         """
         if self.src == "default":
             logger.info("[LOAD-IF] Using load source default")
@@ -1433,13 +1561,65 @@ class LoadInterface:
                     self.src,
                 )
                 return self._get_default_profile()[:tgt_duration]
-            return self.__create_load_profile_weekdays()
+            return self.refresh_load_profile()
 
         logger.error(
             "[LOAD-IF] Load source '%s' currently not supported. Using default.",
             self.src,
         )
         return self._get_default_profile()[:tgt_duration]
+
+    def refresh_load_profile(self, force=False):
+        """
+        The current load profile, rebuilt from the recorder only when it has to be.
+
+        Every value comes from four fixed historical days, so the profile describes a
+        calendar day and changes only at midnight. Rebuilding it on each optimizer run
+        re-read the same finished days hundreds of times a day and re-ran the whole
+        per-slot aggregation on top.
+
+        Call it once at startup so the first optimizer run finds a profile ready; after
+        that `get_load_profile` keeps it current on its own.
+
+        Args:
+            force (bool): Rebuild even if the held profile is still valid.
+
+        Returns:
+            list: A copy of the profile. Callers adjust what they get back - the EOS
+            request builder discounts the in-progress slot - and handing out the held
+            list itself would let that accumulate, shrinking the slot on every run.
+        """
+        if self.src not in ("openhab", "homeassistant") or not self.load_sensor:
+            return self._get_default_profile()
+
+        with self.__profile_lock:
+            if force or self.__profile_needs_rebuild():
+                self.__profile_degraded = False
+                profile = self.__create_load_profile_weekdays()
+                now = self.__now()
+                self.__profile_cache = profile
+                self.__profile_day = now.date()
+                # A profile built from real history stands until midnight. One that
+                # fell back to the built-in curve gets another attempt shortly, so a
+                # source that was briefly unreachable at startup does not freeze the
+                # optimizer onto a synthetic curve for the rest of the day.
+                self.__profile_retry_after = (
+                    now + timedelta(seconds=self.__PROFILE_RETRY_SECONDS)
+                    if self.__profile_degraded
+                    else None
+                )
+            return list(self.__profile_cache)
+
+    def __profile_needs_rebuild(self):
+        """True when the held profile is missing, from another day, or degraded."""
+        if self.__profile_cache is None or self.__profile_day is None:
+            return True
+        now = self.__now()
+        if now.date() != self.__profile_day:
+            return True
+        if self.__profile_retry_after is not None and now >= self.__profile_retry_after:
+            return True
+        return False
 
     def _get_default_profile(self):
         """

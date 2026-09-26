@@ -256,6 +256,34 @@ log_level: info             # debug, info, warning, error</code></pre>
                             and shows the current value, which distinguishes a wrong entity name from a
                             connection or token problem. The log also names any sensor that fell back to
                             a built-in default.</p>
+
+                        <h3 id="tb-ha-history">Home Assistant history times out on startup</h3>
+                        <p>On a large recorder database &mdash; MariaDB with years of history is the
+                            usual case &mdash; building the load profile could flood Home Assistant with
+                            requests until they timed out:</p>
+                        <pre><code>[LOAD-IF] Request failed after 5 attempts for
+  http://homeassistant:8123/api/history/period/2026-09-12T00:00:00
+[LOAD-IF] DATA ERROR household load smaller than controllables
+[BATTERY-IF] HOMEASSISTANT - Error fetching battery SOC: Request timed out.</code></pre>
+                        <p>The load profile is built from four fixed days of history &mdash; the same
+                            weekday one and two weeks back, plus the following day &mdash; so it only
+                            changes at midnight. It is now built once per day and held, instead of being
+                            rebuilt on every optimizer run, and each sensor's history is fetched once for
+                            the whole day instead of once per hourly slot. In the log you should see
+                            <code>[LOAD-IF] creating load profile for weekdays &hellip;</code> once a day,
+                            not every few minutes.</p>
+                        <p>Nothing to configure. If you still see the messages above, the recorder itself
+                            is the bottleneck &mdash; check its purge settings.</p>
+
+                        <h3 id="tb-ha-purged">Older days come back empty</h3>
+                        <p>Home Assistant's recorder purges detailed state history after
+                            <code>purge_keep_days</code> (10 by default), while the load profile looks
+                            back 14 days. For days whose history is gone, EOS Connect falls back to
+                            recorder <em>statistics</em>, which are kept indefinitely.</p>
+                        <p>That fallback calls the <code>recorder.get_statistics</code> action, so the
+                            long-lived access token needs permission to call services. On a Home Assistant
+                            too old to offer it, the log says so once and the profile simply uses the days
+                            it can still read.</p>
                     </div>
 
                     <div data-level="expert">
