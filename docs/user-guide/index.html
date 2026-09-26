@@ -257,6 +257,24 @@ log_level: info             # debug, info, warning, error</code></pre>
                             connection or token problem. The log also names any sensor that fell back to
                             a built-in default.</p>
 
+                        <h3 id="tb-battery-frozen">The battery stops updating after a sensor drops out</h3>
+                        <p><strong>Symptom:</strong> SOC, battery temperature and the dynamic
+                            charge power all freeze at their last values and never move again, while
+                            the rest of EOS Connect keeps running. A restart fixes it until the next
+                            time.</p>
+                        <p><strong>Cause:</strong> an entity that goes unavailable reports an empty
+                            state. Reading it crashed the background thread that refreshes the
+                            battery, and nothing restarts that thread.</p>
+                        <p><strong>Fix:</strong> update EOS Connect. An unreadable reading is now
+                            treated like any other failed fetch &mdash; the last known value is kept
+                            and the log says which sensor it was:</p>
+                        <pre><code>[BATTERY-IF] HOMEASSISTANT - Error fetching battery SOC:
+  sensor returned an empty state. Failure count: 1/5. Using last known SOC = 42%.</code></pre>
+                        <p>After five failures in a row the SOC falls back to 5&nbsp;% so the
+                            optimizer works from a safe assumption rather than a stale one. If the
+                            message repeats, the entity itself is the problem &mdash; check it in
+                            Home Assistant or OpenHAB.</p>
+
                         <h3 id="tb-ha-history">Home Assistant history times out on startup</h3>
                         <p>On a large recorder database &mdash; MariaDB with years of history is the
                             usual case &mdash; building the load profile could flood Home Assistant with
