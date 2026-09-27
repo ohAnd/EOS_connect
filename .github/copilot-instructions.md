@@ -72,7 +72,8 @@ This is now documented explicitly so it cannot be missed.
 
 #### Structure
 
-- GitHub Pages documentation is in `/docs` folder
+- GitHub Pages documentation is in `/docs` folder, published from both `main` and
+  `develop` (see "Documentation for unreleased work")
 - Structure: 4 main sections (what-is, user-guide, advanced, developer)
 - Use HTML for documentation pages (better styling control than Markdown)
 - **README.md**: Concise quick-start with links to full GitHub Pages docs (primary entry point)
@@ -201,14 +202,27 @@ When making ANY code changes:
 
 **If ANY of these steps are skipped, the preparation is INCOMPLETE.**
 
-### Testing Phase Documentation
+### Documentation for unreleased work
 
-- **ENERGYFORECAST_TESTING.md**: Temporary file for develop branch testing
-  - Contains Smart Price Prediction testing guide
-  - **MUST BE DELETED** when merging to main
-  - Full documentation already exists in `/docs/user-guide/configuration.html#energyforecast`
-  - Purpose: Provide accessible docs while feature is on develop (GitHub Pages shows main only)
-  - **Reminder**: Check for and remove any similar `*_TESTING.md` files before merging features to main
+GitHub Pages publishes the site **twice** (`.github/workflows/pages.yml`):
+
+| URL | Branch |
+| --- | --- |
+| `ohand.github.io/EOS_connect/` | `main` |
+| `ohand.github.io/EOS_connect/develop/` | `develop` |
+
+- Document a feature in `/docs` on `develop` and it is readable immediately, at the
+  `/develop/` URL. Do **not** add a `*_TESTING.md` at the repo root for this — that
+  workaround existed only because Pages used to show `main` only, and it left stale
+  duplicates behind (`ENERGYFORECAST_TESTING.md`, now gone).
+- **Never** mark a page as a preview and never add a `robots` meta. The banner comes
+  from `docs/assets/js/site.js` (raised from the URL path) and the `noindex` from the
+  publish workflow, so nothing has to be stripped when the PR reaches `main`.
+- In-app documentation links resolve through `src/docs_links.py` and follow the
+  running build, so a `-develop` image links into `/develop/` on its own. Never
+  hardcode a documentation URL; use `docsUrl()` (`src/web/js/constants.js`) in the
+  frontend and `current_docs_url()` in Python.
+- See `docs/developer/index.html#docs-publishing`.
 
 ### Config Schema Maintenance
 

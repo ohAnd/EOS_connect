@@ -340,3 +340,142 @@ def test_table_of_contents_is_generated(page, docs_url):
              .map(a => !!document.getElementById(decodeURIComponent(a.hash.slice(1))))"""
     )
     assert all(targets), "a generated contents entry points at no element"
+
+
+# --------------------------------------------------------------- develop preview
+
+# ``.github/workflows/pages.yml`` publishes the released docs at the root and the
+# develop docs under ``/develop/``. ``site.js`` raises the banner from that URL
+# segment alone, so the same file is byte-identical on both branches and a docs PR
+# from develop to main carries nothing that has to be stripped.
+
+
+def test_no_banner_on_the_released_site(page, docs_url):
+    """Production must look exactly as it did before this existed."""
+    _open(page, docs_url, "user-guide/index.html")
+    assert page.locator(".preview-banner").count() == 0
+    assert not page.locator("body.docs-preview").count()
+    # Every preview rule keys off --banner-h, so a zero here is what guarantees
+    # the released site is untouched: no reserved space, no shifted anchors.
+    assert page.evaluate(
+        "() => getComputedStyle(document.body).getPropertyValue('--banner-h').trim()"
+    ) in ("0", "0rem", "0px")
+    assert page.evaluate(
+        "() => getComputedStyle(document.body).paddingTop"
+    ) == "0px"
+    assert page.locator(".nav-header").bounding_box()["y"] == pytest.approx(0, abs=1)
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_banner_shows_on_every_preview_page(browser, preview_docs_url, path):
+    """Every page gets the banner — it comes from shared chrome, not from markup."""
+    context = browser.new_context(viewport=DESKTOP)
+    page = context.new_page()
+    try:
+        _open(page, preview_docs_url, path)
+        banner = page.locator(".preview-banner")
+        assert banner.is_visible(), f"{path} shows no development-preview banner"
+        assert "Development preview" in banner.inner_text()
+        assert page.locator("body.docs-preview").count() == 1
+    finally:
+        context.close()
+
+
+def test_banner_starts_above_the_header_without_covering_it(page, preview_docs_url):
+    """At rest the banner is the topmost chrome and the header sits clear below it.
+
+    The header is *not* sticky on this site despite its ``position: sticky``:
+    ``#site-nav`` wraps it at exactly its own height, so it has no travel. That is
+    pre-existing and deliberately left alone, which is why the banner holds its own
+    position (``position: fixed``) instead of relying on the header.
+    """
+    _open(page, preview_docs_url, "user-guide/configuration.html")
+
+    banner_box = page.locator(".preview-banner").bounding_box()
+    header_box = page.locator(".nav-header").bounding_box()
+
+    assert banner_box["y"] == pytest.approx(0, abs=1)
+    assert header_box["y"] >= banner_box["y"] + banner_box["height"] - 1, (
+        "the banner covers the top of the navigation header"
+    )
+
+
+def test_banner_stays_visible_while_scrolling(page, preview_docs_url):
+    """A reader must not be able to scroll away from the 'this is unreleased' mark."""
+    _open(page, preview_docs_url, "user-guide/configuration.html")
+    page.evaluate("() => window.scrollTo(0, 1500)")
+    page.wait_for_function("() => window.scrollY > 1000")
+
+    banner = page.locator(".preview-banner")
+    assert banner.is_visible(), "the preview banner scrolled out of view"
+    assert banner.bounding_box()["y"] == pytest.approx(0, abs=1)
+
+
+def test_banner_offers_the_released_documentation(page, preview_docs_url):
+    """A reader who landed on the preview by accident needs a way back."""
+    _open(page, preview_docs_url, "index.html")
+    link = page.locator(".preview-banner-link")
+    assert link.is_visible()
+    assert link.get_attribute("href") == "https://ohand.github.io/EOS_connect/"
+
+
+def test_preview_renders_without_a_build_stamp(browser, preview_docs_url):
+    """build-info.json only exists once published; its absence must be silent."""
+    context = browser.new_context(viewport=DESKTOP)
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    try:
+        _open(page, preview_docs_url, "user-guide/index.html")
+        page.wait_for_timeout(300)
+        assert page.locator(".preview-banner").is_visible()
+        assert page.locator(".preview-build").inner_text().strip() == ""
+        assert not errors, f"JavaScript errors on the preview page: {errors}"
+    finally:
+        context.close()
+
+
+def test_deep_linked_anchor_is_not_hidden_behind_the_banner(page, preview_docs_url):
+    """--scroll-offset grows with the banner, or the app's deep links land behind it.
+
+    This is the same anchor src/interfaces/timeseries_normalizer.py points its error
+    messages at, which on a develop build now resolves into the preview site.
+    """
+    page.goto(
+        preview_docs_url
+        + "user-guide/configuration.html?level=expert#timeseries-templates",
+        wait_until="domcontentloaded",
+    )
+    page.wait_for_function("() => !!document.querySelector('.preview-banner')")
+    page.wait_for_timeout(500)
+
+    target_top = page.evaluate(
+        "() => document.getElementById('timeseries-templates').getBoundingClientRect().top"
+    )
+    banner_bottom = page.evaluate(
+        "() => document.querySelector('.preview-banner').getBoundingClientRect().bottom"
+    )
+    assert target_top >= banner_bottom - 1, (
+        f"the deep-linked heading sits at {target_top}px, behind a banner reaching "
+        f"{banner_bottom}px"
+    )
+
+
+def test_navigation_stays_inside_the_preview(page, preview_docs_url):
+    """Relative links must keep a preview reader on preview pages."""
+    _open(page, preview_docs_url, "user-guide/index.html")
+    page.locator(".nav-menu a", has_text="Advanced").first.click()
+    page.wait_for_function("() => !!document.querySelector('.nav-header')")
+
+    assert "/develop/advanced/" in page.url, f"navigation left the preview: {page.url}"
+    assert page.locator(".preview-banner").is_visible(), (
+        "the banner vanished after navigating within the preview"
+    )
+
+
+def test_level_switcher_still_works_under_the_preview_path(page, preview_docs_url):
+    """The deeper path must not break the disclosure level or the contents."""
+    _open(page, preview_docs_url, "user-guide/configuration.html")
+    page.locator(".level-option[data-level-value='expert']").click()
+    assert page.locator("body[data-active-level='expert']").count() == 1
+    assert page.locator(".toc-link").count() > 1

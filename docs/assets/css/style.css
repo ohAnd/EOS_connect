@@ -75,7 +75,10 @@
     /* Layout. One sticky offset, used by everything that needs to clear the
      * header — previously this was three different magic numbers. */
     --header-h: 4rem;
-    --scroll-offset: 5rem;
+    /* Height of the development-preview banner. Zero unless body.docs-preview is
+     * set, which is what keeps the released site pixel-identical to before. */
+    --banner-h: 0rem;
+    --scroll-offset: calc(5rem + var(--banner-h));
     --content-max: 1400px;
     --tap: 44px;
 }
@@ -285,6 +288,68 @@ tbody tr:hover {
 
 .skip-link:focus {
     left: 0;
+}
+
+/* ---------------------------------------------------- Development preview */
+
+/* Raised by docs/assets/js/site.js when the page is served from the /develop/
+ * copy of the site. Everything below keys off --banner-h, so nothing here can
+ * affect the released site even if the class were somehow set there. */
+body.docs-preview {
+    --banner-h: 2.25rem;
+    /* The banner is fixed, so it is out of flow and would otherwise cover the top
+     * of the page. Set from the measured height by site.js:syncBannerHeight. */
+    padding-top: var(--banner-h);
+}
+
+.preview-banner {
+    /* Fixed rather than sticky: the banner mounts inside #site-nav, which is only
+     * as tall as its contents, so a sticky banner would have no travel and would
+     * scroll away with the header (which, for the same reason, has never stuck).
+     * Fixed keeps it visible without touching any released-site rule. */
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    /* Above .nav-header's 1000, below .skip-link's 10001. */
+    z-index: 1001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    min-height: var(--banner-h);
+    padding: 0.25rem 1.25rem;
+    font-size: 0.85rem;
+    line-height: 1.3;
+    /* Opaque first: the translucent fill below is what the contrast ratios were
+     * measured against, and a browser without backdrop-filter must not fall back
+     * to something lighter. */
+    background-color: #5a4a1e;
+    background-color: rgba(241, 177, 0, 0.22);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border-bottom: 1px solid rgba(241, 177, 0, 0.5);
+    color: var(--text-strong);
+}
+
+.preview-banner i {
+    color: var(--warning);
+}
+
+.preview-banner-text {
+    text-align: center;
+}
+
+/* Filled in from develop/build-info.json; stays empty when that file is absent. */
+.preview-build {
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.preview-banner-link {
+    color: var(--accent-text);
+    white-space: nowrap;
 }
 
 /* --------------------------------------------------------------- Navigation */
@@ -1001,9 +1066,9 @@ img {
      * disclosure: force it open and drop the summary. */
     .toc-sidebar {
         position: sticky;
-        top: calc(var(--header-h) + 1rem);
+        top: calc(var(--header-h) + var(--banner-h) + 1rem);
         height: fit-content;
-        max-height: calc(100vh - var(--header-h) - 2rem);
+        max-height: calc(100vh - var(--header-h) - var(--banner-h) - 2rem);
         overflow-y: auto;
     }
 

@@ -28,11 +28,21 @@ import logging
 
 import pytz
 
+try:  # running from src/ as a script — src/ is on sys.path
+    from docs_links import current_docs_url
+except ImportError:  # imported as src.interfaces (tests)
+    from ..docs_links import current_docs_url
+
 logger = logging.getLogger("__main__")
 
-# Anchor in docs/user-guide/configuration.html holding the ready-made HA template
-# snippets. Referenced from error messages, so a format mismatch points at the fix.
-TEMPLATE_DOCS_ANCHOR = "configuration.html#timeseries-templates"
+# Section of the configuration guide holding the ready-made HA template snippets.
+# Referenced from error messages, so a format mismatch points at the fix. Resolved
+# through docs_links so a develop build names the develop copy of the site — the
+# messages used to carry a bare "configuration.html#…", which said nothing about
+# which of the two published sites to open.
+TEMPLATE_DOCS_URL = current_docs_url(
+    "user-guide/configuration.html#timeseries-templates"
+)
 
 # Price units → EUR/Wh, the unit the optimizer and the web UI work in internally.
 PRICE_UNIT_TO_EUR_PER_WH = {
@@ -167,7 +177,7 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
                 f"missing required field '{field}' in the first entry "
                 f"({_describe_available_keys(first)}). The expected format is "
                 f"{{start, end, value}} — shape the source with a Home Assistant "
-                f"template sensor, see {TEMPLATE_DOCS_ANCHOR}"
+                f"template sensor, see {TEMPLATE_DOCS_URL}"
             )
 
     entries = []
@@ -206,7 +216,7 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
             label,
             naive_seen,
             getattr(tz, "zone", str(tz)),
-            TEMPLATE_DOCS_ANCHOR,
+            TEMPLATE_DOCS_URL,
         )
 
     entries.sort(key=lambda item: item["start"])

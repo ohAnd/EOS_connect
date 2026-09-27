@@ -17,6 +17,12 @@
      * Never hand-write the version. site.js renders the badge from one constant.
      * Never hand-write a table of contents. site.js builds it from the h2[id]
        and h3[id] in <main>.
+     * Never mark a page as a development preview, and never add a robots meta.
+       The site is published twice — released from main, preview from develop
+       under /develop/ (.github/workflows/pages.yml). site.js raises the banner
+       from the URL and the workflow injects the noindex, so a page written on
+       develop needs nothing, and carries nothing to strip when it reaches main.
+       See developer/index.html#docs-publishing.
      * Wrap any wide block (tables, diagrams) in <div class="scroll-x">.
 
      Depth levels — cumulative, mirroring ConfigSchema.get_by_level()

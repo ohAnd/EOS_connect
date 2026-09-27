@@ -20,6 +20,7 @@ from flask import (
     send_from_directory,
 )
 from version import __version__
+from docs_links import docs_base_url
 from config import ConfigManager
 from log_handler import MemoryLogHandler
 from startup_validator import StartupValidator
@@ -1928,7 +1929,12 @@ def main_page():
     """
     with open(base_path + "/web/index.html", "r", encoding="utf-8") as html_file:
         rendered_html = render_template_string(
-            html_file.read(), asset_version=f"{__version__}-{int(time.time())}"
+            html_file.read(),
+            asset_version=f"{__version__}-{int(time.time())}",
+            # Resolved here rather than in the browser: the version only reaches the
+            # frontend through /json/current_controls.json, which lands after the
+            # menu and the config panel have already built their documentation links.
+            docs_base_url=docs_base_url(__version__),
         )
     response = make_response(rendered_html)
     response.headers["Cache-Control"] = "no-cache, must-revalidate"

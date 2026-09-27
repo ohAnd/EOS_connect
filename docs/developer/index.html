@@ -304,8 +304,10 @@ battery_interface = factory.create_battery_interface(
                         <p><strong>How <code>help_url</code> is consumed, on both sides.</strong> In the
                             application, <code>src/web/js/config.js</code> splits the value at the
                             <code>#</code> and builds
-                            <code>https://ohand.github.io/EOS_connect/user-guide/&lt;page&gt;?level=&lt;current&gt;#&lt;anchor&gt;</code>
-                            for the "Learn more" link next to each setting. On this site,
+                            <code>&lt;docs-base&gt;user-guide/&lt;page&gt;?level=&lt;current&gt;#&lt;anchor&gt;</code>
+                            for the "Learn more" link next to each setting, where
+                            <code>&lt;docs-base&gt;</code> is whichever copy of this site matches the running
+                            build (<a href="#docs-publishing">below</a>). On this site,
                             <code>docs/assets/js/config-reference.js</code> reads the exported JSON and
                             <em>groups the reference tables by that same anchor</em>, so the parameter tables on
                             the configuration page are generated, never hand-written. An anchor that does not
@@ -521,6 +523,13 @@ scripts/install_playwright_deps_userspace.sh      # the alternative, without roo
                                     <td>Push to <code>main</code></td>
                                     <td>Full pytest with Chromium, then the release image.</td>
                                 </tr>
+                                <tr>
+                                    <td><code>pages.yml</code></td>
+                                    <td>Push to <code>main</code> or <code>develop</code> touching
+                                        <code>docs/</code> or <code>src/version.py</code></td>
+                                    <td>Publishes this site twice &mdash; see
+                                        <a href="#docs-publishing">how the docs are published</a>.</td>
+                                </tr>
                             </tbody>
                         </table>
                     </div>
@@ -528,6 +537,113 @@ scripts/install_playwright_deps_userspace.sh      # the alternative, without roo
                         <code>python -m playwright install --with-deps chromium</code> before running
                         <code>python -m pytest -v tests/</code>, so <code>tests/web/</code> genuinely runs in
                         CI. A fifth workflow, <code>docker-image.yml</code>, is manual-dispatch only.</p>
+                </div>
+
+                <div class="content-section">
+                    <h2 id="docs-publishing"><i class="fas fa-book-open" aria-hidden="true"></i>
+                        How this site is published</h2>
+
+                    <p>This site is published twice, from two branches, into one GitHub Pages
+                        deployment:</p>
+
+                    <div class="scroll-x">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>URL</th>
+                                    <th>Branch</th>
+                                    <th>Who reads it</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>ohand.github.io/EOS_connect/</code></td>
+                                    <td><code>main</code></td>
+                                    <td>Everyone on a release.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>ohand.github.io/EOS_connect/develop/</code></td>
+                                    <td><code>develop</code></td>
+                                    <td>Anyone running a <code>-develop</code> image, and anyone reviewing
+                                        documentation before it ships.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p>Before this existed, only <code>main</code> was published, so documentation written
+                        on <code>develop</code> was invisible until release &mdash; which is why features
+                        used to ship with their docs already stale.</p>
+
+                    <h3 id="docs-publishing-nothing-to-remember">Nothing to remember at merge time</h3>
+
+                    <p>None of what marks the preview copy is committed to <code>docs/</code>. That is
+                        deliberate: anything committed would travel to <code>main</code> on the next merge
+                        and mark the <em>released</em> site instead. A docs PR from <code>develop</code> to
+                        <code>main</code> therefore needs no cleanup of any kind.</p>
+
+                    <div class="scroll-x">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>What marks the preview</th>
+                                    <th>Where it comes from</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>The banner across the top</td>
+                                    <td><code>docs/assets/js/site.js</code> raises it when the URL contains a
+                                        <code>develop/</code> segment. The file is byte-identical on both
+                                        branches.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>noindex</code>, so the preview never competes with the real
+                                        docs in search results</td>
+                                    <td>Injected into the preview copy by <code>pages.yml</code>. A
+                                        <code>robots.txt</code> cannot do this: a project page shares
+                                        <code>ohand.github.io</code>, whose root is not ours.</td>
+                                </tr>
+                                <tr>
+                                    <td>The version and commit shown in the banner</td>
+                                    <td><code>pages.yml</code> writes <code>develop/build-info.json</code>
+                                        from the develop checkout's <code>src/version.py</code>. The banner
+                                        renders without it, which is what happens from a checkout.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-warning">
+                        <p><strong>A Pages deployment replaces the whole site.</strong>
+                            <code>pages.yml</code> therefore checks out <em>both</em> branches on every run,
+                            whichever one triggered it. A run that published only <code>develop/</code> would
+                            delete the production documentation.</p>
+                    </div>
+
+                    <h3 id="docs-publishing-app-links">The application's links follow the build</h3>
+
+                    <p>The app links into whichever copy matches the binary that is running, so a develop
+                        build never sends a user to documentation for a release that does not describe the
+                        feature they are looking at.</p>
+
+                    <p><code>src/docs_links.py</code> decides which base applies from the
+                        <code>-develop</code> suffix that <code>docker_develop.yml</code> writes into
+                        <code>src/version.py</code>. <code>eos_connect.py</code> resolves it once per page
+                        load and writes it onto <code>&lt;body data-docs-base&gt;</code>; every link is then
+                        built from it by <code>docsUrl()</code> in <code>src/web/js/constants.js</code>.
+                        It is resolved server-side because the version only reaches the browser through
+                        <code>/json/current_controls.json</code>, which lands after the menu and the
+                        configuration panel have already rendered their links.</p>
+
+                    <p>The same helper builds the documentation URL that
+                        <code>src/interfaces/timeseries_normalizer.py</code> puts into its error messages.</p>
+
+                    <div class="alert alert-info">
+                        <p><strong>The one exception is <code>README.md</code>.</strong> GitHub renders it
+                            per branch and gives no injection point, so its documentation links always point
+                            at the released site &mdash; on both branches.</p>
+                    </div>
                 </div>
 
                 <div class="content-section">

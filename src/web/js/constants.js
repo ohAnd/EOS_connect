@@ -25,6 +25,29 @@ const EOS_CONNECT_ICONS = [
     { icon: "fa-sun", color: COLOR_DYN_OVERRIDE_PV_GREATER_LOAD, title: "Dynamic Override (PV > Load)" }
 ];
 
+// Documentation base URL.
+//
+// The docs are published twice: the released site at the root, and the develop
+// state under /develop/ (.github/workflows/pages.yml). A develop build has to link
+// into the preview copy, or its help points at docs for a release that does not
+// describe the feature yet.
+//
+// eos_connect.py resolves which one applies from src/version.py and writes it onto
+// <body data-docs-base>, so no link below has to know about branches, and nothing
+// here changes when develop is merged to main. The fallback covers the test
+// harness in tests/web/conftest.py and any page served without the template.
+const DOCS_BASE_URL = (document.body && document.body.getAttribute("data-docs-base"))
+    || "https://ohand.github.io/EOS_connect/";
+
+/**
+ * Absolute URL of a documentation page for the running build.
+ * @param {string} [path] - Site-relative path, e.g. "user-guide/configuration.html".
+ * @returns {string} Absolute URL, ending in "/" when path is omitted.
+ */
+function docsUrl(path) {
+    return DOCS_BASE_URL + (path || "");
+}
+
 // Global managers - will be initialized in main.js
 let controlsManager;
 let scheduleManager;
