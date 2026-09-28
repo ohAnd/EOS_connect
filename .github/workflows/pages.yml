@@ -78,6 +78,35 @@ jobs:
           find _site/"$PREVIEW_DIR" -name '*.html' -print0 | xargs -0 sed -i \
             's|<head>|<head>\n    <meta name="robots" content="noindex, nofollow">|'
 
+      - name: Stamp the asset links so a deploy is not served from cache
+        # The pages are static HTML and reference assets/js/site.js and
+        # assets/css/style.css by bare path, so a browser holding the previous copy
+        # keeps using it after a deploy. site.js owns the nav, the contents sidebar
+        # and the detail-level filter, and config-reference.js renders every
+        # parameter table from the schema — a stale copy of either is a visibly
+        # broken page, not a cosmetic lag.
+        #
+        # Applied here rather than committed: the query has to change per deploy,
+        # and a version written into a page would both go stale and trip
+        # test_current_version_is_not_hand_written. Each copy gets the commit of the
+        # branch it was built from, so the two sites version independently.
+        run: |
+          set -euo pipefail
+          stamp() {  # stamp <html-file-list-from-stdin> <revision>
+            xargs -0 sed -i \
+              -e "s|\(assets/js/[a-z-]*\.js\)\"|\1?v=$1\"|g" \
+              -e "s|\(assets/css/[a-z-]*\.css\)\"|\1?v=$1\"|g"
+          }
+          # The preview copy lives inside the root copy, so each pass names the
+          # other out. Both revisions are independent: the two sites are built from
+          # different branches and cache separately.
+          find _site/"$PREVIEW_DIR" -name '*.html' -print0 \
+            | stamp "$(git -C preview-src rev-parse --short HEAD)"
+          find _site -name '*.html' -not -path "_site/$PREVIEW_DIR/*" -print0 \
+            | stamp "$(git -C main-src rev-parse --short HEAD)"
+          grep -ho 'assets/js/site\.js?v=[0-9a-f]*' \
+            _site/index.html _site/"$PREVIEW_DIR"/index.html
+
       - name: Write the preview build stamp
         # The version comes from the develop checkout's src/version.py, which CI
         # rewrites on every develop build (docker_develop.yml), so the banner shows
