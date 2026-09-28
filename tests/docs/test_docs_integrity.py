@@ -465,3 +465,54 @@ def test_readme_deep_links_resolve():
             broken.append(f"{url} (no such anchor)")
 
     assert not broken, "README links into the docs that go nowhere:\n  " + "\n  ".join(broken)
+
+
+def test_pages_reruns_after_the_image_builds():
+    """The preview banner names the build it documents, and only a rerun makes
+    that true.
+
+    ``src/version.py`` is rewritten after the push that started the build, by the
+    ``[AUTO]`` commit the image workflows push with ``GITHUB_TOKEN`` - and GitHub
+    starts no workflow run from an event that token created, so the path filter on
+    that file never fires. A ``workflow_run`` trigger is what actually reruns the
+    publish once the version is current.
+
+    ``workflow_run`` matches on the *name* of the other workflow, so a rename
+    there silently stops the rerun and the banner quietly goes a build stale.
+    """
+    workflows = REPO / ".github/workflows"
+    pages = workflows / "pages.yml"
+    listed = re.search(
+        r"workflow_run:\s*\n\s*workflows:\s*\[([^\]]*)\]", pages.read_text(encoding="utf-8")
+    )
+    assert listed, "pages.yml has no workflow_run trigger; the banner would stay stale"
+    named = {n.strip().strip('"\'') for n in listed.group(1).split(",") if n.strip()}
+
+    building = {
+        re.search(r"^name:\s*(.+)$", (workflows / f).read_text(encoding="utf-8"), re.M)
+        .group(1)
+        .strip()
+        for f in ("docker_main.yml", "docker_develop.yml")
+    }
+    assert named == building, (
+        f"pages.yml waits for {sorted(named)}, the image workflows are called "
+        f"{sorted(building)}"
+    )
+
+
+def test_the_version_bump_cannot_trigger_the_publish():
+    """The comments above rest on the bump being pushed with GITHUB_TOKEN.
+
+    Swap in a personal access token there and the [AUTO] commit starts triggering
+    workflows - which would make docker_develop.yml, triggered by every push to
+    develop with no path filter, run itself in a loop.
+    """
+    for name in ("docker_main.yml", "docker_develop.yml"):
+        text = (REPO / ".github/workflows" / name).read_text(encoding="utf-8")
+        step = re.search(r"Commit version file and push changes(.*?)\n\n", text, re.S)
+        assert step, f"{name} no longer has the version commit step"
+        assert "secrets.GITHUB_TOKEN" in step.group(1), (
+            f"{name} pushes the version bump with something other than GITHUB_TOKEN; "
+            "that makes [AUTO] commits trigger workflows, and docker_develop.yml "
+            "has no path filter to stop it looping"
+        )

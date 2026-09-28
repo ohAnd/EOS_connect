@@ -674,6 +674,64 @@ scripts/install_playwright_deps_userspace.sh      # the alternative, without roo
                             delete the production documentation.</p>
                     </div>
 
+                    <h3 id="docs-publishing-versions">Which version each copy shows</h3>
+
+                    <p>Two different numbers, from two different places, and they answer two different
+                        questions:</p>
+
+                    <div class="scroll-x">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Shown where</th>
+                                    <th>Comes from</th>
+                                    <th>Shape</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>The badge beside the logo, on both copies</td>
+                                    <td><code>VERSION</code> in <code>site.js</code>, one constant the
+                                        release bump rewrites. Pinned to
+                                        <code>VERSION_PREFIX</code> in <code>docker_develop.yml</code> by
+                                        <code>test_version_badge_matches_release_prefix</code>.</td>
+                                    <td><code>&lt;major&gt;.&lt;minor&gt;.&lt;release&gt;</code></td>
+                                </tr>
+                                <tr>
+                                    <td>The preview banner, on the develop copy only</td>
+                                    <td><code>develop/build-info.json</code>, written from the develop
+                                        checkout's <code>src/version.py</code>.</td>
+                                    <td><code>&lt;release&gt;.&lt;build&gt;-develop</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p>The badge names the release <em>line</em>, which is what a reader wants to know: it
+                        says which version of the software these pages describe. The banner names the exact
+                        build, because on a preview that is the thing you are checking against. The released
+                        copy deliberately shows no build number &mdash; <code>main</code> builds
+                        <code>0.3.&lt;run number&gt;</code>, a counter that moves on every merge and tells a
+                        reader nothing about which features are documented here.</p>
+
+                    <p>The shapes are written out rather than shown as real numbers on purpose:
+                        <code>test_current_version_is_not_hand_written</code> fails on any page that
+                        contains the current version, because a copy of it here would be one more place to
+                        forget at release time.</p>
+
+                    <div class="alert alert-info">
+                        <p><strong>Why the publish runs twice.</strong> The build number reaches
+                            <code>src/version.py</code> only <em>after</em> the push that started the build,
+                            in the <code>[AUTO]</code> commit the image workflows push with
+                            <code>GITHUB_TOKEN</code> &mdash; and GitHub starts no workflow run from an event
+                            that token created. So the run that the docs push started reads the previous
+                            build number. <code>pages.yml</code> therefore also listens on
+                            <code>workflow_run</code> for those two workflows finishing, and publishes again
+                            with the version current. That trigger only fires for the copy of the file on the
+                            default branch, so it is dormant until <code>pages.yml</code> reaches
+                            <code>main</code>.</p>
+                    </div>
+
                     <h3 id="docs-publishing-app-links">The application's links follow the build</h3>
 
                     <p>The app links into whichever copy matches the binary that is running, so a develop
