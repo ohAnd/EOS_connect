@@ -27,12 +27,22 @@
         expert: "Expert"
     };
 
-    /* Human titles for the anchors the schema's help_url values point at. Any
-     * anchor missing here still renders, using the section label as a fallback. */
+    /* Human titles for the anchors the schema's help_url values point at.
+     *
+     * Every anchor needs one. A missing entry falls back to the section label,
+     * which was invisible while a section had a single anchor and became twelve
+     * headings all reading "Managed Loads" the moment its settings were split
+     * across the paragraphs that explain them. test_reference_headings_are_distinct
+     * is what catches the next one. */
     var ANCHOR_TITLE = {
         "data-source": "Data Source",
         "load": "Load",
         "eos": "Optimizer",
+        "optimizer-choice": "Choosing an Optimizer",
+        "local-evopt": "Built-in Optimizer",
+        "time-slot-config": "Planning Resolution",
+        "dyn-override": "Dynamic PV Override",
+        "temperature-forecast": "Outside Temperature",
         "price": "Price",
         "price-sources": "Price Sources",
         "energyforecast": "Smart Price Prediction",
@@ -45,7 +55,19 @@
         "inverter": "Inverter",
         "evcc": "EVCC",
         "mqtt": "MQTT",
-        "system": "System"
+        "system": "System",
+        "managed-loads": "Managed Loads",
+        "managed-load-profiles": "Appliance Profiles",
+        "managed-loads-sensor": "Power Sensor",
+        "managed-loads-operation": "When a Load May Run",
+        "managed-loads-runtime": "Runtime Limits",
+        "managed-loads-price-limit": "Price Limit",
+        "managed-loads-calibration": "Measured Behaviour",
+        "managed-loads-cover": "Cover",
+        "managed-loads-ambient": "Outdoor Temperature",
+        "managed-loads-external": "External Load Profiles",
+        "managed-loads-fetch": "Fetched Profiles",
+        "managed-loads-replaces-sensor": "Replaced Sensor"
     };
 
     /* Every string the per-profile tables render. Collected rather than scattered
@@ -60,6 +82,43 @@
         },
         unknown: function (type) {
             return "No profile named \u201c" + type + "\u201d in the schema.";
+        }
+    };
+
+    /* Which topic page explains each section. The A-Z reference lists every
+     * setting in one place for looking a name up; this is what turns that lookup
+     * into an answer. Keys are schema section names, values are page files beside
+     * this one under user-guide/ - the same page a field's help_url names. */
+    var SECTION_PAGE = {
+        data_source: { href: "config-data.html", label: "Data & sensors" },
+        load: { href: "config-data.html", label: "Data & sensors" },
+        battery: { href: "config-battery.html", label: "Battery & inverter" },
+        inverter: { href: "config-battery.html", label: "Battery & inverter" },
+        price: { href: "config-price.html", label: "Prices" },
+        pv_forecast_source: { href: "config-solar.html", label: "Solar forecast" },
+        pv_forecast: { href: "config-solar.html", label: "Solar forecast" },
+        pv_autoscaling: { href: "config-solar.html", label: "Solar forecast" },
+        eos: { href: "config-optimizer.html", label: "Optimizer" },
+        managed_loads: { href: "config-managed-loads.html", label: "Managed loads" },
+        system: { href: "config-system.html", label: "System & MQTT" },
+        mqtt: { href: "config-system.html", label: "System & MQTT" },
+        evcc: { href: "config-system.html", label: "System & MQTT" }
+    };
+
+    /* Strings the per-section mounts and the "explained on" links render. Kept
+     * together rather than inline, so a later translation pass has one place. */
+    var SECTION_TEXT = {
+        explainedOn: function (label) { return "Explained on " + label; },
+        allHidden: function (n) {
+            return n + " setting" + (n === 1 ? " is" : "s are") +
+                " above your current detail level.";
+        },
+        someHidden: function (n) {
+            return n + " more setting" + (n === 1 ? "" : "s") +
+                " at a higher detail level.";
+        },
+        unknown: function (what) {
+            return "No settings named “" + what + "” in the schema.";
         }
     };
 
@@ -269,27 +328,47 @@
                 shown += visible.length;
                 hidden += all.length - visible.length;
 
-                // The heading is rendered even when every field in it is above
-                // the current level, so the anchor the app links to always
-                // resolves. Only the table is dropped.
+                // A group with nothing to show is dropped whole - heading and all.
+                // The heading used to be kept so the anchor the app links to
+                // always resolved here; every one of them is now a written
+                // heading on its own topic page, so keeping an empty one only
+                // padded the list with repeated titles and "nothing here" notes.
+                if (!visible.length) { return; }
+
                 var title = ANCHOR_TITLE[anchor] || meta.label || anchor;
                 if (anchor !== primary) {
                     inner += "<h3" + idAttr(anchor) + ">" + esc(title) + "</h3>";
                 }
-                inner += visible.length
-                    ? table(visible)
-                    : "<p class=\"level-note\">" + all.length + " setting" +
-                      (all.length === 1 ? "" : "s") +
-                      " here are above your current detail level. Switch to " +
-                      "Expert to see them.</p>";
+                inner += table(visible);
             });
+
+            // A section whose every group was dropped still gets its heading and
+            // its link - the reader is told why it is empty rather than left to
+            // wonder whether the section exists at all.
+            if (!inner) {
+                var total = group.anchors.reduce(function (n, a) {
+                    return n + group.byAnchor[a].length;
+                }, 0);
+                inner = "<p class=\"level-note\">" +
+                    esc(SECTION_TEXT.allHidden(total)) + "</p>";
+            }
+
+            // This list answers "what is this setting called"; the topic page
+            // answers "what is it for". Without the link the reader who found a
+            // name here has nowhere to go with it.
+            var where = SECTION_PAGE[name];
+            var explained = where
+                ? "<p class=\"param-explained\"><a href=\"" + esc(where.href) + "\">" +
+                  esc(SECTION_TEXT.explainedOn(where.label)) +
+                  " <i class=\"fas fa-arrow-right\" aria-hidden=\"true\"></i></a></p>"
+                : "";
 
             // The heading carries the primary anchor where there is one; otherwise
             // a prefixed id that cannot collide with a help_url anchor.
             html += "<section class=\"param-section\">" +
                 "<h2" + sectionId[name] + ">" +
                 "<i class=\"fas " + esc(meta.icon || "fa-cog") + "\" aria-hidden=\"true\"></i> " +
-                esc(meta.label || name) + "</h2>" + inner + "</section>";
+                esc(meta.label || name) + "</h2>" + explained + inner + "</section>";
         });
 
         var legend =
@@ -307,6 +386,55 @@
             (hidden ? " — " + hidden + " more at a higher detail level." : ".") + "</p>";
 
         return summary + legend + html;
+    }
+
+    /* ------------------------------------------------ per-section parameters */
+
+    /* A topic page mounts the settings it explains right under the prose:
+     *
+     *   <div data-schema-section="battery"></div>
+     *   <div data-schema-section="battery" data-schema-anchor="battery-price"></div>
+     *
+     * Without data-schema-anchor the whole section renders; with it, only the one
+     * anchor group. Headings are never emitted here - the prose above the mount is
+     * the heading, and it owns the anchor. */
+    function renderSection(schema, section, anchor, maxLevel) {
+        var all = (schema.fields || []).filter(function (f) {
+            if (f.section !== section) { return false; }
+            return !anchor || anchorOf(f) === anchor;
+        });
+        if (!all.length) {
+            return "<p class=\"level-note\">" +
+                esc(SECTION_TEXT.unknown(anchor ? section + "#" + anchor : section)) +
+                "</p>";
+        }
+
+        var visible = all.filter(function (f) {
+            return (LEVEL_ORDER[f.level] === undefined ? 2 : LEVEL_ORDER[f.level]) <= maxLevel;
+        });
+        if (!visible.length) {
+            return "<p class=\"level-note\">" +
+                esc(SECTION_TEXT.allHidden(all.length)) + "</p>";
+        }
+
+        var note = all.length > visible.length
+            ? "<p class=\"level-note\">" +
+              esc(SECTION_TEXT.someHidden(all.length - visible.length)) + "</p>"
+            : "";
+        return table(visible) + note;
+    }
+
+    function renderSections(schema, level) {
+        var maxLevel = LEVEL_ORDER[level] === undefined ? 2 : LEVEL_ORDER[level];
+        var mounts = document.querySelectorAll("[data-schema-section]");
+        Array.prototype.forEach.call(mounts, function (node) {
+            node.innerHTML = renderSection(
+                schema,
+                node.getAttribute("data-schema-section"),
+                node.getAttribute("data-schema-anchor"),
+                maxLevel
+            );
+        });
     }
 
     /* ------------------------------------------------ per-profile parameters */
@@ -402,7 +530,8 @@
     function mount() {
         var container = document.getElementById("schema-reference");
         var profiles = document.querySelectorAll("[data-managed-load-profile]");
-        if (!container && !profiles.length) { return; }
+        var sections = document.querySelectorAll("[data-schema-section]");
+        if (!container && !profiles.length && !sections.length) { return; }
 
         fetch("../assets/data/config_schema.json")
             .then(function (res) {
@@ -413,6 +542,7 @@
                 var drawn = false;
                 var draw = function () {
                     var level = document.body.getAttribute("data-active-level") || "standard";
+                    renderSections(schema, level);
                     renderProfiles(schema, level);
                     if (container) {
                         // Cleared first: idAttr() asks the document whether an anchor
@@ -452,6 +582,9 @@
                     "disk rather than over HTTP, your browser will block that request.</p></div>";
                 if (container) { container.innerHTML = warning; }
                 Array.prototype.forEach.call(profiles, function (node) {
+                    node.innerHTML = warning;
+                });
+                Array.prototype.forEach.call(sections, function (node) {
                     node.innerHTML = warning;
                 });
             });

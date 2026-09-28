@@ -24,14 +24,31 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 DOCS = REPO / "docs"
 
+CONFIG_PAGES = [
+    "user-guide/configuration.html",
+    "user-guide/config-data.html",
+    "user-guide/config-battery.html",
+    "user-guide/config-price.html",
+    "user-guide/config-solar.html",
+    "user-guide/config-optimizer.html",
+    "user-guide/config-managed-loads.html",
+    "user-guide/config-system.html",
+]
+
+USER_GUIDE_PAGES = [
+    "user-guide/index.html",
+    "user-guide/install.html",
+    "user-guide/first-run.html",
+    "user-guide/daily-use.html",
+    "user-guide/troubleshooting.html",
+]
+
 PAGES = [
     "index.html",
     "what-is/index.html",
-    "user-guide/index.html",
-    "user-guide/configuration.html",
     "advanced/index.html",
     "developer/index.html",
-]
+] + USER_GUIDE_PAGES + CONFIG_PAGES
 
 PHONE = {"width": 360, "height": 740}
 DESKTOP = {"width": 1440, "height": 900}
@@ -248,16 +265,22 @@ def test_app_deep_links_reach_their_anchor(page, docs_url):
     running application. 57 of 127 of them pointed at nothing before this.
     """
     schema = json.loads((DOCS / "assets/data/config_schema.json").read_text())
-    anchors = sorted({
-        f["help_url"].split("#", 1)[1]
-        for f in schema["fields"] if "#" in (f.get("help_url") or "")
-    })
+    by_page = {}
+    for field in schema["fields"]:
+        url = field.get("help_url") or ""
+        if "#" in url:
+            target, anchor = url.split("#", 1)
+            by_page.setdefault(target, set()).add(anchor)
 
-    _open(page, docs_url, "user-guide/configuration.html", level="expert")
-    page.wait_for_selector("#schema-reference h2")
-    rendered = set(page.evaluate("() => [...document.querySelectorAll('[id]')].map(e => e.id)"))
+    missing = []
+    for target, anchors in sorted(by_page.items()):
+        _open(page, docs_url, "user-guide/" + target, level="expert")
+        page.wait_for_timeout(400)
+        rendered = set(page.evaluate(
+            "() => [...document.querySelectorAll('[id]')].map(e => e.id)"
+        ))
+        missing += [f"{target}#{a}" for a in sorted(anchors) if a not in rendered]
 
-    missing = [a for a in anchors if a not in rendered]
     assert not missing, f"help_url anchors that do not exist: {missing}"
 
 
@@ -267,9 +290,9 @@ def test_deep_link_into_hidden_content_raises_the_level(page, docs_url):
     src/interfaces/timeseries_normalizer.py points error messages at
     #timeseries-templates, which lives in a Standard-level block.
     """
-    _open(page, docs_url, "user-guide/configuration.html", level="getting_started")
+    _open(page, docs_url, "user-guide/config-data.html", level="getting_started")
     page.goto(
-        docs_url + "user-guide/configuration.html?level=getting_started#timeseries-templates",
+        docs_url + "user-guide/config-data.html?level=getting_started#timeseries-templates",
         wait_until="domcontentloaded",
     )
     page.wait_for_timeout(400)
@@ -443,7 +466,7 @@ def test_deep_linked_anchor_is_not_hidden_behind_the_banner(page, preview_docs_u
     """
     page.goto(
         preview_docs_url
-        + "user-guide/configuration.html?level=expert#timeseries-templates",
+        + "user-guide/config-data.html?level=expert#timeseries-templates",
         wait_until="domcontentloaded",
     )
     page.wait_for_function("() => !!document.querySelector('.preview-banner')")
@@ -509,7 +532,7 @@ def test_every_profile_renders_its_own_settings(page, docs_url, profile):
         and profile in ((f.get("depends_on") or {}).get("type") or [profile])
     }
 
-    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    _open(page, docs_url, "user-guide/config-managed-loads.html", level="expert")
     mount = page.locator(f"[data-managed-load-profile='{profile}']")
     page.wait_for_selector(f"[data-managed-load-profile='{profile}'] table")
 
@@ -541,7 +564,7 @@ def test_profile_tables_show_the_profile_starting_values(page, docs_url):
     schema = json.loads((DOCS / "assets/data/config_schema.json").read_text())
     presets = schema["managed_load_presets"]
 
-    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    _open(page, docs_url, "user-guide/config-managed-loads.html", level="expert")
     page.wait_for_selector("[data-managed-load-profile='sauna'] table")
 
     for profile in ("pool_heatpump", "sauna"):
@@ -563,7 +586,7 @@ def test_the_type_row_names_the_profile_it_is_in(page, docs_url, profile):
     pool_heatpump, which is the one value in that table that cannot be changed
     without making it a different table.
     """
-    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    _open(page, docs_url, "user-guide/config-managed-loads.html", level="expert")
     page.wait_for_selector(f"[data-managed-load-profile='{profile}'] table")
 
     shown = _profile_row(page, profile, "type").locator("td").all_inner_texts()[2]
@@ -576,23 +599,24 @@ def test_a_preset_of_none_reads_as_no_limit(page, docs_url):
     A sauna has no allowed window at all; rendering its window_start as the
     schema's 8 would document a restriction that is not applied.
     """
-    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    _open(page, docs_url, "user-guide/config-managed-loads.html", level="expert")
     page.wait_for_selector("[data-managed-load-profile='sauna'] table")
 
     row = _profile_row(page, "sauna", "window_start")
     assert "no limit" in row.locator("td").all_inner_texts()[2]
 
 
-def test_the_rendered_page_has_no_duplicate_ids(page, docs_url):
-    """The generated reference must not claim an anchor the prose already owns.
+@pytest.mark.parametrize("path", CONFIG_PAGES)
+def test_the_rendered_page_has_no_duplicate_ids(page, docs_url, path):
+    """Generated tables must not claim an anchor the prose already owns.
 
     Both are driven by help_url, so every anchor the application links to exists
     twice by construction unless config-reference.js yields the id. Two elements
     with one id put the section twice in the contents and send the deep link to
     whichever came first.
     """
-    _open(page, docs_url, "user-guide/configuration.html", level="expert")
-    page.wait_for_selector("#schema-reference table")
+    _open(page, docs_url, path, level="expert")
+    page.wait_for_timeout(400)
 
     dupes = page.evaluate(
         "() => { const seen = {}; "
@@ -605,7 +629,7 @@ def test_the_rendered_page_has_no_duplicate_ids(page, docs_url):
 
 def test_profile_tables_follow_the_detail_level(page, docs_url):
     """The per-profile tables are subject to the same disclosure as everything else."""
-    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    _open(page, docs_url, "user-guide/config-managed-loads.html", level="expert")
     page.wait_for_selector("[data-managed-load-profile='pool_heatpump'] table")
     expert = page.locator("[data-managed-load-profile='pool_heatpump'] tbody tr").count()
 
@@ -617,3 +641,144 @@ def test_profile_tables_follow_the_detail_level(page, docs_url):
         f"pool heat pump shows {standard} settings at Standard and {expert} at "
         "Expert; the level filter is not reaching the profile tables"
     )
+
+
+@pytest.mark.parametrize("path", CONFIG_PAGES)
+def test_every_schema_section_mount_renders_a_table(page, docs_url, path):
+    """An empty mount is invisible: the prose reads on, the settings are gone."""
+    _open(page, docs_url, path, level="expert")
+    page.wait_for_timeout(400)
+
+    empty = page.evaluate(
+        "() => [...document.querySelectorAll('[data-schema-section]')]"
+        "  .filter(n => !n.querySelector('table'))"
+        "  .map(n => n.getAttribute('data-schema-section') + '#' +"
+        "            (n.getAttribute('data-schema-anchor') || ''))"
+    )
+    assert not empty, f"{path} has mounts that rendered no table: {empty}"
+
+
+def test_the_reference_points_each_section_at_its_page(page, docs_url):
+    """The A-Z list answers "what is it called"; the link is what answers "why".
+
+    Without it the reader who found a name in the full list has nowhere to go
+    with it, which is the whole reason the list is allowed to stay complete.
+    """
+    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    page.wait_for_selector("#schema-reference table")
+
+    targets = page.evaluate(
+        "() => [...document.querySelectorAll('#schema-reference .param-explained a')]"
+        "  .map(a => a.getAttribute('href'))"
+    )
+    assert len(targets) >= 13, f"only {len(targets)} sections link to a topic page"
+    assert all(t.startswith("config-") for t in targets), targets
+
+
+@pytest.mark.parametrize("level", ["getting_started", "standard", "expert"])
+def test_reference_headings_are_distinct_within_a_section(page, docs_url, level):
+    """Two groups in one section must not carry the same title.
+
+    The A-Z list groups fields by their help_url anchor and titles each group from
+    ANCHOR_TITLE, falling back to the section label. That fallback was invisible
+    while a section had one anchor; splitting managed_loads across the paragraphs
+    that explain it turned it into twelve consecutive headings all reading
+    "Managed Loads", each above a "nothing here at this level" note.
+
+    Titles repeating across *different* sections is fine and expected - an anchor
+    can serve fields from two sections, and the section heading above tells them
+    apart.
+    """
+    _open(page, docs_url, "user-guide/configuration.html", level=level)
+    page.wait_for_selector("#schema-reference table")
+    page.wait_for_timeout(300)
+
+    sections = page.evaluate(
+        "() => [...document.querySelectorAll('#schema-reference section')].map(s => ({"
+        "  name: s.querySelector('h2').textContent.trim(),"
+        "  groups: [...s.querySelectorAll('h3')].map(h => h.textContent.trim())"
+        "}))"
+    )
+    assert sections, "the reference rendered no sections at all"
+
+    repeated = {
+        s["name"]: sorted({g for g in s["groups"] if s["groups"].count(g) > 1})
+        for s in sections
+        if any(s["groups"].count(g) > 1 for g in s["groups"])
+    }
+    assert not repeated, f"sections with repeated group headings: {repeated}"
+
+
+@pytest.mark.parametrize("level", ["getting_started", "standard", "expert"])
+def test_the_reference_shows_no_empty_groups(page, docs_url, level):
+    """A heading with no table under it is noise, not navigation.
+
+    Every anchor the application links to is a written heading on a topic page
+    now, so the reference has no reason to render one it cannot fill.
+    """
+    _open(page, docs_url, "user-guide/configuration.html", level=level)
+    page.wait_for_selector("#schema-reference table")
+    page.wait_for_timeout(300)
+
+    empty = page.evaluate(
+        "() => [...document.querySelectorAll('#schema-reference h3')]"
+        "  .filter(h => h.nextElementSibling === null ||"
+        "               !h.nextElementSibling.querySelector('table'))"
+        "  .map(h => h.textContent.trim())"
+    )
+    assert not empty, f"group headings with no table: {empty}"
+
+
+@pytest.mark.parametrize("level", ["getting_started", "standard", "expert"])
+@pytest.mark.parametrize("path", CONFIG_PAGES)
+def test_no_setting_is_shown_above_the_chosen_level(page, docs_url, path, level):
+    """Nothing painted may carry a level badge higher than the one selected.
+
+    Three mechanisms filter by level and they are easy to get out of step: CSS on
+    ``data-level`` blocks, the row filter in the generated tables, and the
+    per-profile tables. This asserts the result rather than any one of them - it
+    reads the badge off every row the browser actually painted.
+    """
+    order = {"getting started": 0, "standard": 1, "expert": 2}
+    _open(page, docs_url, path, level=level)
+    page.wait_for_timeout(500)
+
+    shown = page.evaluate(
+        "() => [...document.querySelectorAll('table.param-table tbody tr')]"
+        "  .filter(tr => tr.offsetParent !== null && tr.querySelector('.badge-level'))"
+        "  .map(tr => ({key: tr.querySelector('td.param-key').textContent.trim(),"
+        "               level: tr.querySelector('.badge-level').textContent.trim()}))"
+    )
+    # Not every page has settings at every level, so an empty result is only
+    # suspicious at Expert - where a page showing nothing means a mount that
+    # failed rather than a level that excludes everything.
+    if level == "expert":
+        assert shown, f"{path} painted no parameter rows at Expert"
+
+    too_deep = sorted({
+        f"{r['key']} ({r['level']})"
+        for r in shown
+        if order.get(r["level"].lower(), 2) > order[level.replace("_", " ")]
+    })
+    assert not too_deep, f"{path} at {level} shows deeper settings: {too_deep}"
+
+
+@pytest.mark.parametrize("level", ["getting_started", "standard", "expert"])
+@pytest.mark.parametrize("path", CONFIG_PAGES)
+def test_the_contents_lists_nothing_hidden(page, docs_url, path, level):
+    """Every entry in "on this page" must lead somewhere visible.
+
+    buildTOC() filters on what is rendered, and the generated tables render after
+    it first runs - so a heading that the level filter later empties, or one the
+    reference stopped emitting, would linger in the sidebar as a dead entry.
+    """
+    _open(page, docs_url, path, level=level)
+    page.wait_for_timeout(500)
+
+    ghosts = page.evaluate(
+        "() => [...document.querySelectorAll('.toc-link')]"
+        "  .map(a => a.getAttribute('href'))"
+        "  .filter(h => { const el = document.getElementById(h.slice(1));"
+        "                 return !el || el.offsetParent === null; })"
+    )
+    assert not ghosts, f"{path} at {level} lists hidden headings: {ghosts}"

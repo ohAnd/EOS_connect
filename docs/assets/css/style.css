@@ -448,6 +448,55 @@ body.docs-preview {
     min-height: var(--tap);
 }
 
+/* Second nav row, rendered by site.js only inside a section that has children.
+ * Darker than the header rather than lighter: white already clears AA on
+ * #727272 at 4.81:1, and darkening only raises that. */
+.subnav {
+    background-color: rgba(0, 0, 0, 0.22);
+    border-top: 1px solid var(--border);
+}
+
+.subnav-container {
+    max-width: var(--content-max);
+    margin: 0 auto;
+    padding: 0 1.25rem;
+}
+
+.subnav-menu {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    /* Eight labels do not fit a phone. Scrolling the row itself is the same
+     * answer .scroll-x gives elsewhere, and keeps the page body from scrolling
+     * sideways — which is what test_no_horizontal_scroll_on_phone measures. */
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+.subnav-menu a {
+    color: #fff;
+    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.5rem;
+    white-space: nowrap;
+}
+
+.subnav-menu a:hover {
+    color: #fff;
+    text-decoration: underline;
+}
+
+.subnav-menu a.active {
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 0.3em;
+    text-decoration-thickness: 2px;
+}
+
 /* No-JS fallback: site.js injects the real nav, so without it readers still
  * need a way out of the page. */
 .nav-fallback {
@@ -876,6 +925,23 @@ body[data-active-level="expert"] [data-level="expert"] {
 
 .param-desc {
     color: var(--text-secondary);
+}
+
+/* The "I want to ..." index on the configuration overview. Wider line spacing
+ * than an ordinary list: every item is a link and a thumb has to hit one. */
+.task-index {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.task-index li {
+    margin-bottom: 0.5rem;
+}
+
+/* "Explained on <topic page>" under a section heading in the A-Z reference. */
+.param-explained {
+    margin: -0.25rem 0 0.75rem;
+    font-size: 0.9rem;
 }
 
 .param-legend {

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System & MQTT - EOS Connect</title>
+    <meta name="description" content="The web port, timezone and logging, the MQTT broker, and the EVCC connection.">
+    <meta property="og:title" content="System & MQTT - EOS Connect">
+    <meta property="og:description" content="The web port, timezone and logging, the MQTT broker, and the EVCC connection.">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="https://ohAnd.github.io/EOS_connect/assets/images/logo.png">
+    <link rel="icon" href="../assets/images/icon.png">
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+
+<body data-page="configuration" data-subpage="system" data-root="../" data-levels>
+    <div id="site-nav"></div>
+    <noscript>
+        <div class="nav-fallback">
+            <a href="../index.html">Home</a>
+            <a href="../what-is/index.html">What Is</a>
+            <a href="index.html">User Guide</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="../advanced/index.html">Advanced</a>
+            <a href="../developer/index.html">Developer</a>
+        </div>
+    </noscript>
+
+    <div class="container">
+        <div class="page-wrapper">
+            <aside class="toc-sidebar">
+                <div id="site-toc"></div>
+            </aside>
+
+            <main class="main-content" id="main">
+
+                <div class="hero">
+                    <h1>System &amp; MQTT</h1>
+                    <p>How EOS Connect runs, how it talks to your broker, and the one address that connects it to EVCC.</p>
+                </div>
+
+                <div id="site-level"></div>
+
+                <div class="content-section">
+                    <h2 id="system-purpose"><i class="fas fa-crosshairs" aria-hidden="true"></i> What this
+                        is for</h2>
+                    <ul>
+                        <li>I want EOS Connect reachable on the port and timezone I expect, with logs I
+                            can read.</li>
+                        <li>I want every state it holds published to MQTT and picked up by Home Assistant
+                            on its own.</li>
+                        <li>I run EVCC and want the two to work together.</li>
+                    </ul>
+                </div>
+
+                <div class="content-section">
+                    <h2 id="system"><i class="fas fa-gears" aria-hidden="true"></i> System</h2>
+                    <p>The web port, the timezone, the log level and how often everything is recomputed.
+                        Three of these &mdash; timezone, port and log level &mdash; are also the
+                        <a href="install.html#bootstrap-config">bootstrap settings</a>, because they are
+                        needed before the settings database is open. The site coordinates here are used
+                        when your PV source is not a location-based one; see
+                        <a href="config-solar.html#temperature-forecast">outside temperature</a>.</p>
+                    <div data-schema-section="system"></div>
+                </div>
+
+                <div class="content-section" data-level="standard">
+                    <h2 id="mqtt"><i class="fas fa-tower-broadcast" aria-hidden="true"></i> MQTT</h2>
+                    <p>The broker connection, and whether Home Assistant should discover the entities by
+                        itself. Every topic EOS Connect publishes and every command topic it listens on is
+                        listed under <a href="../advanced/index.html#mqtt">MQTT</a>.</p>
+                    <div data-schema-section="mqtt"></div>
+                </div>
+
+                <div class="content-section" data-level="standard">
+                    <h2 id="evcc"><i class="fas fa-car" aria-hidden="true"></i> EVCC</h2>
+                    <p>One address, which unlocks EVCC in four separate roles: as the inverter EOS Connect
+                        controls, as a price source, as a PV forecast source, and as the reader of your car
+                        charging load. What each role needs is under
+                        <a href="../advanced/index.html#evcc">EVCC</a>.</p>
+                    <div data-schema-section="evcc"></div>
+                </div>
+
+            </main>
+        </div>
+    </div>
+
+    <div id="site-footer"></div>
+    <script src="../assets/js/site.js"></script>
+    <script src="../assets/js/config-reference.js"></script>
+</body>
+
+</html>

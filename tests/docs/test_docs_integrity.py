@@ -86,60 +86,80 @@ def test_internal_links_resolve():
 def test_schema_help_urls_resolve():
     """Each field's in-app "Learn more" button must reach a real anchor.
 
-    src/web/js/config.js turns help_url into a link to the published docs. When
-    an anchor goes missing the button silently lands at the top of the page.
+    src/web/js/config.js turns help_url into a link to the published docs,
+    prefixing ``user-guide/`` and nothing else, so the value names a page beside
+    configuration.html. When an anchor goes missing the button silently lands at
+    the top of whichever page it named.
     """
     schema = json.loads(SCHEMA_JSON.read_text(encoding="utf-8"))
-    config_page = DOCS / "user-guide/configuration.html"
-    available = _ids(config_page.read_text(encoding="utf-8")) | _generated_anchors()
+    generated = _generated_anchors()
 
+    ids_for = {}
+    missing_pages = {}
     missing = {}
     for field in schema["fields"]:
         url = field.get("help_url") or ""
         if "#" not in url:
             continue
         page, anchor = url.split("#", 1)
-        assert page == "configuration.html", (
-            f"{field['key']} points help_url at {page!r}; only configuration.html "
-            "is handled by this check"
-        )
-        if anchor not in available:
-            missing.setdefault(anchor, []).append(field["key"])
+        if page not in ids_for:
+            path = DOCS / "user-guide" / page
+            ids_for[page] = _ids(path.read_text(encoding="utf-8")) if path.exists() else None
+        if ids_for[page] is None:
+            missing_pages.setdefault(page, []).append(field["key"])
+            continue
+        if anchor not in ids_for[page] and anchor not in generated:
+            missing.setdefault(url, []).append(field["key"])
 
+    assert not missing_pages, "help_url names a page that does not exist:\n  " + "\n  ".join(
+        f"user-guide/{p} ({len(k)} field(s), e.g. {k[0]})"
+        for p, k in sorted(missing_pages.items())
+    )
     assert not missing, "help_url anchors with no matching element:\n  " + "\n  ".join(
-        f"#{a} ({len(k)} field(s), e.g. {k[0]})" for a, k in sorted(missing.items())
+        f"{u} ({len(k)} field(s), e.g. {k[0]})" for u, k in sorted(missing.items())
     )
 
 
-def test_managed_load_help_urls_reach_prose_not_the_reference():
-    """A managed load's settings are explained in prose, and must stay that way.
+def test_every_field_has_a_help_url():
+    """A field with no help_url renders no "Learn more" button at all.
 
-    ``_generated_anchors()`` counts any help_url anchor as present, because the
-    reference at the foot of the page renders a heading for every one of them.
-    That is the right answer for a section whose anchor the reference owns, and
-    the wrong one here: these anchors were split across the Managed Loads prose
-    so a "Learn more" button lands on the paragraph that explains the setting
-    rather than on one heading shared by all thirty-nine. Misspell one in the
-    page and the reference would quietly absorb it.
+    Six did, and they were the ones that most needed one: the alternative source
+    a load or a battery can be read from, with its URL and token. The button is
+    the only route from a setting to its explanation, so every setting gets one.
     """
     schema = json.loads(SCHEMA_JSON.read_text(encoding="utf-8"))
-    config_page = DOCS / "user-guide/configuration.html"
-    written = _ids(config_page.read_text(encoding="utf-8"))
+    bare = [f["key"] for f in schema["fields"] if "#" not in (f.get("help_url") or "")]
+    assert not bare, f"fields with no help_url anchor: {bare}"
 
-    wanted = {}
+
+def test_help_urls_reach_prose_not_the_generated_reference():
+    """Every anchor the application links to must be written into a page.
+
+    ``_generated_anchors()`` counts any help_url anchor as present, because the
+    A-Z reference on the overview renders a heading for each one. That check
+    cannot tell an explained setting from an unexplained one, which is how 75% of
+    the fields came to point at a bare table heading. This one can: the anchor has
+    to exist as a hand-written id on the page the field names.
+    """
+    schema = json.loads(SCHEMA_JSON.read_text(encoding="utf-8"))
+
+    written = {}
+    missing = {}
     for field in schema["fields"]:
         url = field.get("help_url") or ""
         if "#" not in url:
             continue
-        anchor = url.split("#", 1)[1]
-        if anchor.startswith("managed-load"):
-            wanted.setdefault(anchor, []).append(field["key"])
+        page, anchor = url.split("#", 1)
+        if page not in written:
+            path = DOCS / "user-guide" / page
+            written[page] = _ids(path.read_text(encoding="utf-8")) if path.exists() else set()
+        if anchor not in written[page]:
+            missing.setdefault(url, []).append(field["key"])
 
-    assert wanted, "no managed-load help_url anchors found at all"
-    missing = {a: k for a, k in wanted.items() if a not in written}
     assert not missing, (
-        "managed-load help_url anchors with no heading in the page:\n  " +
-        "\n  ".join(f"#{a} ({len(k)} field(s), e.g. {k[0]})" for a, k in sorted(missing.items()))
+        "help_url anchors with no heading of their own:\n  " +
+        "\n  ".join(f"{u} ({len(k)} field(s), e.g. {k[0]})"
+                    for u, k in sorted(missing.items()))
     )
 
 
@@ -152,13 +172,43 @@ def test_every_managed_load_type_has_a_profile_section():
     """
     schema = json.loads(SCHEMA_JSON.read_text(encoding="utf-8"))
     types = set(schema["managed_load_presets"])
-    html = (DOCS / "user-guide/configuration.html").read_text(encoding="utf-8")
+    html = (DOCS / "user-guide/config-managed-loads.html").read_text(encoding="utf-8")
     mounted = set(re.findall(r'data-managed-load-profile="([^"]+)"', html))
 
     assert mounted == types, (
         f"undocumented type(s): {sorted(types - mounted)}; "
         f"documented but unknown: {sorted(mounted - types)}"
     )
+
+
+def test_schema_section_mounts_name_real_sections():
+    """``data-schema-section`` renders nothing for a section that does not exist.
+
+    It would fail quietly - an empty div where a parameter table should be - so
+    the mounts are checked against the schema instead.
+    """
+    schema = json.loads(SCHEMA_JSON.read_text(encoding="utf-8"))
+    known = {f["section"] for f in schema["fields"]}
+    anchors_of = {}
+    for field in schema["fields"]:
+        url = field.get("help_url") or ""
+        if "#" in url:
+            anchors_of.setdefault(field["section"], set()).add(url.split("#", 1)[1])
+
+    bad = []
+    for page in _published_pages():
+        html = page.read_text(encoding="utf-8")
+        for mount in re.findall(r"<div ([^>]*data-schema-section=[^>]*)>", html):
+            section = re.search(r'data-schema-section="([^"]+)"', mount).group(1)
+            anchor = re.search(r'data-schema-anchor="([^"]+)"', mount)
+            if section not in known:
+                bad.append(f"{page.name}: unknown section {section!r}")
+            elif anchor and anchor.group(1) not in anchors_of.get(section, set()):
+                bad.append(
+                    f"{page.name}: no field in {section!r} uses anchor "
+                    f"{anchor.group(1)!r}"
+                )
+    assert not bad, "schema mounts that would render nothing:\n  " + "\n  ".join(bad)
 
 
 def test_version_badge_matches_release_prefix():
@@ -351,3 +401,67 @@ def test_banner_offset_is_a_no_op_off_the_preview_path():
         f"--banner-h defaults to {default!r}; it must be zero so the released site "
         "renders exactly as before"
     )
+
+
+# ------------------------------------------------------------------ navigation
+
+SITE_JS = DOCS / "assets/js/site.js"
+
+
+def _nav_children():
+    """The href of every second-level nav entry in site.js, across all sections."""
+    js = SITE_JS.read_text(encoding="utf-8")
+    blocks = re.findall(r"children:\s*\[(.*?)\]", js, re.S)
+    assert blocks, "site.js has no nav children array"
+    return [h for block in blocks for h in re.findall(r'href:\s*"([^"]+)"', block)]
+
+
+def test_every_nav_child_is_a_real_page():
+    """A mistyped href in NAV is a 404 the moment someone clicks it.
+
+    The nav is built in JavaScript from string literals, so nothing else would
+    catch it - not the link check either, which only reads hrefs out of HTML.
+    """
+    missing = [h for h in _nav_children() if not (DOCS / h).exists()]
+    assert not missing, f"nav points at pages that do not exist: {missing}"
+
+
+def test_every_sub_page_is_in_the_nav():
+    """A page nobody links to is a page nobody reads.
+
+    The second-level row is how a reader moves between the pages of a section, so
+    one that is not listed there is reachable only by knowing its URL.
+    """
+    listed = {h.split("/")[-1] for h in _nav_children() if h.startswith("user-guide/")}
+    on_disk = {p.name for p in (DOCS / "user-guide").glob("*.html")}
+    assert on_disk == listed, (
+        f"not in the nav: {sorted(on_disk - listed)}; "
+        f"in the nav but not on disk: {sorted(listed - on_disk)}"
+    )
+
+
+def test_readme_deep_links_resolve():
+    """README links into the published docs by absolute URL.
+
+    Nothing else checks them: they are absolute, so the internal-link check skips
+    them, and they only break for a reader, never for a test. Moving a section
+    between pages is exactly when they break.
+    """
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    prefix = "https://ohAnd.github.io/EOS_connect/"
+
+    # Deliberately not falling back on _generated_anchors(): an anchor that the
+    # A-Z reference happens to mint on some other page is not an explanation, and
+    # a README link that lands on one is exactly the failure this catches.
+    broken = []
+    for url in re.findall(r"https://ohAnd\.github\.io/EOS_connect/[^)\]\s]+", readme):
+        rel = url[len(prefix):]
+        path, _, anchor = rel.partition("#")
+        dest = DOCS / path
+        if not dest.exists():
+            broken.append(f"{url} (no such page)")
+            continue
+        if anchor and anchor not in _ids(dest.read_text(encoding="utf-8")):
+            broken.append(f"{url} (no such anchor)")
+
+    assert not broken, "README links into the docs that go nowhere:\n  " + "\n  ".join(broken)

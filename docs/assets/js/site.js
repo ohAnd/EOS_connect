@@ -22,11 +22,40 @@
      * instead of a badge in each of six pages. */
     var VERSION = "0.3.39";
 
+    /* A nav entry may carry `children`, which renders as a second row under the
+     * header while the reader is inside that entry. The pages in it declare the
+     * PARENT's key in data-page and their own in data-subpage, so the first row
+     * still marks exactly one item and only the second row moves. */
     var NAV = [
         { key: "home", href: "index.html", label: "Home" },
         { key: "what-is", href: "what-is/index.html", label: "What Is" },
-        { key: "user-guide", href: "user-guide/index.html", label: "User Guide" },
-        { key: "configuration", href: "user-guide/configuration.html", label: "Configuration" },
+        {
+            key: "user-guide",
+            href: "user-guide/index.html",
+            label: "User Guide",
+            children: [
+                { key: "overview", href: "user-guide/index.html", label: "Overview" },
+                { key: "install", href: "user-guide/install.html", label: "Install" },
+                { key: "first-run", href: "user-guide/first-run.html", label: "First run" },
+                { key: "daily-use", href: "user-guide/daily-use.html", label: "Living with it" },
+                { key: "troubleshooting", href: "user-guide/troubleshooting.html", label: "Troubleshooting" }
+            ]
+        },
+        {
+            key: "configuration",
+            href: "user-guide/configuration.html",
+            label: "Configuration",
+            children: [
+                { key: "overview", href: "user-guide/configuration.html", label: "Overview" },
+                { key: "data", href: "user-guide/config-data.html", label: "Data & sensors" },
+                { key: "battery", href: "user-guide/config-battery.html", label: "Battery & inverter" },
+                { key: "price", href: "user-guide/config-price.html", label: "Prices" },
+                { key: "solar", href: "user-guide/config-solar.html", label: "Solar forecast" },
+                { key: "optimizer", href: "user-guide/config-optimizer.html", label: "Optimizer" },
+                { key: "managed-loads", href: "user-guide/config-managed-loads.html", label: "Managed loads" },
+                { key: "system", href: "user-guide/config-system.html", label: "System & MQTT" }
+            ]
+        },
         { key: "advanced", href: "advanced/index.html", label: "Advanced" },
         { key: "developer", href: "developer/index.html", label: "Developer" }
     ];
@@ -62,6 +91,7 @@
 
     /* Only ever compared against NAV keys, never written into markup. */
     var page = body.getAttribute("data-page") || "";
+    var subpage = body.getAttribute("data-subpage") || "";
 
     function escapeHtml(text) {
         return String(text === null || text === undefined ? "" : text)
@@ -154,12 +184,33 @@
         var mount = document.getElementById("site-nav");
         if (!mount) { return; }
 
+        var current = null;
         var items = NAV.map(function (item) {
             var active = item.key === page;
+            if (active) { current = item; }
             return "<li><a href=\"" + root + item.href + "\"" +
                 (active ? " class=\"active\" aria-current=\"page\"" : "") +
                 ">" + item.label + "</a></li>";
         }).join("");
+
+        /* The second row exists only inside a section that has one, and carries
+         * its own classes: site.js takes the FIRST .nav-menu for the hamburger,
+         * and a second one would hand that button the wrong element. It is not
+         * sticky either - the header never actually sticks (#site-nav wraps it at
+         * its own height), so this row scrolls away with it and costs nothing
+         * from --scroll-offset. */
+        var subnav = "";
+        if (current && current.children) {
+            var subItems = current.children.map(function (child) {
+                var active = child.key === subpage;
+                return "<li><a href=\"" + root + child.href + "\"" +
+                    (active ? " class=\"active\" aria-current=\"page\"" : "") +
+                    ">" + child.label + "</a></li>";
+            }).join("");
+            subnav = "<nav class=\"subnav\" aria-label=\"" + escapeHtml(current.label) +
+                " sections\"><div class=\"subnav-container\">" +
+                "<ul class=\"subnav-menu\">" + subItems + "</ul></div></nav>";
+        }
 
         var external =
             "<li><a href=\"https://github.com/ohAnd/EOS_connect\" target=\"_blank\" rel=\"noopener\">" +
@@ -181,7 +232,7 @@
             "<button class=\"mobile-menu-toggle\" type=\"button\" aria-expanded=\"false\" " +
             "aria-controls=\"nav-menu\" aria-label=\"Toggle navigation\">☰</button>" +
             "<ul class=\"nav-menu\" id=\"nav-menu\">" + items + external + "</ul>" +
-            "</div></nav>";
+            "</div>" + subnav + "</nav>";
 
         var toggle = mount.querySelector(".mobile-menu-toggle");
         var menu = mount.querySelector(".nav-menu");

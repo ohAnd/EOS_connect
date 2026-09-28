@@ -10,7 +10,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#data-source",
+      "help_url": "config-data.html#data-source",
       "validation": {
         "choices": [
           "homeassistant",
@@ -32,7 +32,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#data-source",
+      "help_url": "config-data.html#data-source",
       "validation": {
         "pattern": "^https?://.+"
       },
@@ -55,7 +55,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#data-source",
+      "help_url": "config-data.html#data-source",
       "validation": {},
       "depends_on": {
         "data_source.type": [
@@ -75,7 +75,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#data-source",
+      "help_url": "config-data.html#data-source",
       "validation": {},
       "depends_on": {
         "data_source.type": [
@@ -97,7 +97,7 @@
         "deprecated",
         "restart_required"
       ],
-      "help_url": "",
+      "help_url": "config-data.html#load",
       "validation": {
         "choices": [
           "homeassistant",
@@ -121,7 +121,7 @@
         "deprecated",
         "restart_required"
       ],
-      "help_url": "",
+      "help_url": "config-data.html#load",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -138,7 +138,7 @@
         "deprecated",
         "restart_required"
       ],
-      "help_url": "",
+      "help_url": "config-data.html#load",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -154,7 +154,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#load",
+      "help_url": "config-data.html#load",
       "validation": {},
       "depends_on": {
         "data_source.type": [
@@ -175,7 +175,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#load",
+      "help_url": "config-data.html#load",
       "validation": {},
       "depends_on": {
         "data_source.type": [
@@ -196,7 +196,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#load",
+      "help_url": "config-data.html#load",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -212,7 +212,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#load",
+      "help_url": "config-data.html#load",
       "validation": {
         "min": 0
       },
@@ -232,7 +232,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#load",
+      "help_url": "config-data.html#load",
       "validation": {
         "min": 0
       },
@@ -250,7 +250,7 @@
       "level": "standard",
       "description": "Total power all managed loads together may be planned for, in watts (0 = no limit). Stops a pool pump and a sauna both being scheduled into the same cheap hour and forecasting a peak the house cannot draw",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-operation",
+      "help_url": "config-managed-loads.html#managed-loads-operation",
       "validation": {
         "min": 0,
         "max": 100000
@@ -269,7 +269,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads-operation",
+      "help_url": "config-managed-loads.html#managed-loads-operation",
       "validation": {
         "min": 30,
         "max": 3600
@@ -288,7 +288,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#optimizer-choice",
       "validation": {
         "choices": [
           "local_evopt",
@@ -310,7 +310,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#optimizer-choice",
       "validation": {},
       "depends_on": {
         "eos.source": [
@@ -331,7 +331,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#optimizer-choice",
       "validation": {
         "min": 1,
         "max": 65535
@@ -355,7 +355,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#time-slot-config",
       "validation": {
         "choices": [
           900,
@@ -374,7 +374,7 @@
       "level": "standard",
       "description": "Timeout for optimization requests in seconds",
       "labels": [],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#eos",
       "validation": {
         "min": 10,
         "max": 600
@@ -391,7 +391,7 @@
       "level": "standard",
       "description": "Fetch the outside temperature forecast (Akkudoktor) and send it to EOS - improves model accuracy; when off a static 15 °C curve is sent",
       "labels": [],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-solar.html#temperature-forecast",
       "validation": {},
       "depends_on": {
         "eos.source": "eos_server"
@@ -407,7 +407,7 @@
       "level": "standard",
       "description": "Allow discharge when PV forecast exceeds load, even if optimizer says avoid",
       "labels": [],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#dyn-override",
       "validation": {},
       "depends_on": null,
       "hot_reload": true,
@@ -423,7 +423,7 @@
       "labels": [
         "experimental"
       ],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#eos",
       "validation": {},
       "depends_on": null,
       "hot_reload": true,
@@ -437,7 +437,7 @@
       "level": "standard",
       "description": "Charging strategy for the built-in optimizer",
       "labels": [],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#local-evopt",
       "validation": {
         "choices": [
           "charge_before_export",
@@ -461,7 +461,7 @@
       "level": "standard",
       "description": "Discharging strategy for the built-in optimizer",
       "labels": [],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#local-evopt",
       "validation": {
         "choices": [
           "discharge_before_import",
@@ -483,7 +483,7 @@
       "level": "standard",
       "description": "Minimum battery SOC to maintain at end-of-horizon (% of capacity, 0 = disabled)",
       "labels": [],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#local-evopt",
       "validation": {
         "min": 0,
         "max": 80
@@ -502,7 +502,7 @@
       "level": "standard",
       "description": "How charge left in the battery at the end of the planning horizon is priced",
       "labels": [],
-      "help_url": "configuration.html#local-evopt",
+      "help_url": "config-optimizer.html#local-evopt",
       "validation": {
         "choices": [
           "cheapest_ahead",
@@ -525,7 +525,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#eos",
       "validation": {
         "min": 0,
         "max": 100000
@@ -546,7 +546,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#eos",
       "validation": {
         "min": 0,
         "max": 100000
@@ -567,7 +567,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#eos",
       "validation": {
         "min": 0,
         "max": 32
@@ -588,7 +588,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#eos",
       "validation": {
         "min": 0,
         "max": 600
@@ -607,7 +607,7 @@
       "level": "standard",
       "description": "How charge left in the battery at the end of the planning horizon is priced",
       "labels": [],
-      "help_url": "configuration.html#local-evopt",
+      "help_url": "config-optimizer.html#local-evopt",
       "validation": {
         "choices": [
           "cheapest_ahead",
@@ -630,7 +630,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#eos",
       "validation": {
         "min": 0,
         "max": 100000
@@ -651,7 +651,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#eos",
+      "help_url": "config-optimizer.html#eos",
       "validation": {
         "min": 0,
         "max": 100000
@@ -670,7 +670,7 @@
       "level": "getting_started",
       "description": "Data source for electricity prices",
       "labels": [],
-      "help_url": "configuration.html#price",
+      "help_url": "config-price.html#price",
       "validation": {
         "choices": [
           "tibber",
@@ -696,7 +696,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#price",
+      "help_url": "config-price.html#price",
       "validation": {},
       "depends_on": {
         "price.source": [
@@ -715,7 +715,7 @@
       "level": "standard",
       "description": "Fixed cost addition in ct per kWh",
       "labels": [],
-      "help_url": "configuration.html#price",
+      "help_url": "config-price.html#price",
       "validation": {},
       "depends_on": null,
       "hot_reload": true,
@@ -729,7 +729,7 @@
       "level": "standard",
       "description": "Relative cost multiplier applied to (base + fixed adder). E.g. 0.05 = 5%",
       "labels": [],
-      "help_url": "configuration.html#price",
+      "help_url": "config-price.html#price",
       "validation": {},
       "depends_on": null,
       "hot_reload": true,
@@ -745,7 +745,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#price",
+      "help_url": "config-price.html#price",
       "validation": {},
       "depends_on": {
         "price.source": [
@@ -765,7 +765,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#energyforecast",
+      "help_url": "config-price.html#energyforecast",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -781,7 +781,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#energyforecast",
+      "help_url": "config-price.html#energyforecast",
       "validation": {},
       "depends_on": {
         "price.energyforecast_enabled": [
@@ -801,7 +801,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#energyforecast",
+      "help_url": "config-price.html#energyforecast",
       "validation": {
         "choices": [
           "DE-LU",
@@ -830,7 +830,7 @@
       "level": "standard",
       "description": "Use centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
       "labels": [],
-      "help_url": "configuration.html#price-sources",
+      "help_url": "config-price.html#price-sources",
       "validation": {},
       "depends_on": {
         "price.source": [
@@ -848,7 +848,7 @@
       "level": "getting_started",
       "description": "Home Assistant sensor entity containing price timeseries data (e.g., sensor.grid_prices)",
       "labels": [],
-      "help_url": "configuration.html#price-sources",
+      "help_url": "config-price.html#price-sources",
       "validation": {},
       "depends_on": {
         "price.source": [
@@ -869,7 +869,7 @@
       "level": "standard",
       "description": "JSON path to timeseries array in response. For HA sensors: 'attributes.data'. For custom HTTP servers: 'data', 'prices', 'values', etc. (default: 'attributes.data')",
       "labels": [],
-      "help_url": "configuration.html#price-sources",
+      "help_url": "config-price.html#price-sources",
       "validation": {},
       "depends_on": {
         "price.source": [
@@ -887,7 +887,7 @@
       "level": "getting_started",
       "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: endpoint URL returning JSON timeseries. Must return a JSON array in EVCC's {start, end, value} format; 'end' is optional. The unit of 'value' is set by price.value_unit.",
       "labels": [],
-      "help_url": "configuration.html#price-sources",
+      "help_url": "config-price.html#price-sources",
       "validation": {
         "pattern": "^https?://.+"
       },
@@ -910,7 +910,7 @@
       "level": "standard",
       "description": "Optional bearer token for API authentication (used as Authorization: Bearer [token]). Leave empty for unauthenticated endpoints.",
       "labels": [],
-      "help_url": "configuration.html#price-sources",
+      "help_url": "config-price.html#price-sources",
       "validation": {},
       "depends_on": {
         "price.source": [
@@ -931,7 +931,7 @@
       "level": "getting_started",
       "description": "Unit of the 'value' field in the timeseries. Default matches EVCC's /api/tariff/grid and the common Home Assistant price integrations (EUR/kWh). Pick EUR/Wh only for a source that already delivers the internal unit.",
       "labels": [],
-      "help_url": "configuration.html#price-sources",
+      "help_url": "config-price.html#price-sources",
       "validation": {
         "choices": [
           "EUR/kWh",
@@ -955,7 +955,7 @@
       "level": "standard",
       "description": "Source for feed-in (export) prices",
       "labels": [],
-      "help_url": "configuration.html#price",
+      "help_url": "config-price.html#price",
       "validation": {
         "choices": [
           "fixed",
@@ -976,7 +976,7 @@
       "level": "getting_started",
       "description": "Fixed feed-in price for the grid in ct/kWh",
       "labels": [],
-      "help_url": "configuration.html#price",
+      "help_url": "config-price.html#price",
       "validation": {},
       "depends_on": {
         "price.feed_in_source": [
@@ -994,7 +994,7 @@
       "level": "standard",
       "description": "Stromzone for Elpris (DK1 or DK2)",
       "labels": [],
-      "help_url": "configuration.html#price",
+      "help_url": "config-price.html#price",
       "validation": {
         "choices": [
           "DK1",
@@ -1017,7 +1017,7 @@
       "level": "standard",
       "description": "Static adjustment to feed-in price in ct/kWh (e.g., +3.5 for transport costs)",
       "labels": [],
-      "help_url": "configuration.html#price",
+      "help_url": "config-price.html#price",
       "validation": {
         "min": -10.0,
         "max": 10.0
@@ -1039,7 +1039,7 @@
       "level": "expert",
       "description": "Relative multiplier for feed-in price (1.0 = no change, 1.05 = +5%)",
       "labels": [],
-      "help_url": "configuration.html#price",
+      "help_url": "config-price.html#price",
       "validation": {
         "min": 0.5,
         "max": 1.5
@@ -1061,7 +1061,7 @@
       "level": "standard",
       "description": "Clamp negative market prices to feed-in price of 0",
       "labels": [],
-      "help_url": "configuration.html#price",
+      "help_url": "config-price.html#price",
       "validation": {},
       "depends_on": {
         "price.feed_in_source": [
@@ -1091,7 +1091,7 @@
         "deprecated",
         "restart_required"
       ],
-      "help_url": "",
+      "help_url": "config-battery.html#battery",
       "validation": {
         "choices": [
           "homeassistant",
@@ -1115,7 +1115,7 @@
         "deprecated",
         "restart_required"
       ],
-      "help_url": "",
+      "help_url": "config-battery.html#battery",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -1132,7 +1132,7 @@
         "deprecated",
         "restart_required"
       ],
-      "help_url": "",
+      "help_url": "config-battery.html#battery",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -1148,7 +1148,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery",
+      "help_url": "config-battery.html#battery",
       "validation": {},
       "depends_on": {
         "data_source.type": [
@@ -1169,7 +1169,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery",
+      "help_url": "config-battery.html#battery",
       "validation": {
         "min": 100,
         "max": 1000000
@@ -1188,7 +1188,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery",
+      "help_url": "config-battery.html#battery",
       "validation": {
         "min": 0.1,
         "max": 1.0
@@ -1207,7 +1207,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery",
+      "help_url": "config-battery.html#battery",
       "validation": {
         "min": 0.1,
         "max": 1.0
@@ -1226,7 +1226,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery",
+      "help_url": "config-battery.html#battery",
       "validation": {
         "min": 100,
         "max": 100000
@@ -1243,7 +1243,7 @@
       "level": "getting_started",
       "description": "Minimum battery SOC in percent",
       "labels": [],
-      "help_url": "configuration.html#battery",
+      "help_url": "config-battery.html#battery",
       "validation": {
         "min": 0,
         "max": 100
@@ -1260,7 +1260,7 @@
       "level": "getting_started",
       "description": "Maximum battery SOC in percent",
       "labels": [],
-      "help_url": "configuration.html#battery",
+      "help_url": "config-battery.html#battery",
       "validation": {
         "min": 0,
         "max": 100
@@ -1279,7 +1279,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery",
+      "help_url": "config-battery.html#battery",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -1295,7 +1295,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery",
+      "help_url": "config-battery.html#battery",
       "validation": {},
       "depends_on": {
         "data_source.type": [
@@ -1316,7 +1316,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery",
+      "help_url": "config-battery.html#battery",
       "validation": {
         "min": 0.0
       },
@@ -1334,7 +1334,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery",
+      "help_url": "config-battery.html#battery",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -1350,7 +1350,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery-price",
+      "help_url": "config-battery.html#battery-price",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -1366,7 +1366,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery-price",
+      "help_url": "config-battery.html#battery-price",
       "validation": {
         "min": 60,
         "max": 86400
@@ -1389,7 +1389,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery-price",
+      "help_url": "config-battery.html#battery-price",
       "validation": {
         "min": 1,
         "max": 720
@@ -1412,7 +1412,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery-price",
+      "help_url": "config-battery.html#battery-price",
       "validation": {},
       "depends_on": {
         "battery.price_calculation_enabled": [
@@ -1432,7 +1432,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery-price",
+      "help_url": "config-battery.html#battery-price",
       "validation": {},
       "depends_on": {
         "battery.price_calculation_enabled": [
@@ -1452,7 +1452,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery-price",
+      "help_url": "config-battery.html#battery-price",
       "validation": {},
       "depends_on": {
         "battery.price_calculation_enabled": [
@@ -1472,7 +1472,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery-price",
+      "help_url": "config-battery.html#battery-price",
       "validation": {},
       "depends_on": {
         "battery.price_calculation_enabled": [
@@ -1492,7 +1492,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#battery-price",
+      "help_url": "config-battery.html#battery-price",
       "validation": {},
       "depends_on": {
         "battery.price_calculation_enabled": [
@@ -1510,7 +1510,7 @@
       "level": "expert",
       "description": "Minimum battery power to consider as charging (W)",
       "labels": [],
-      "help_url": "configuration.html#battery-price",
+      "help_url": "config-battery.html#battery-price",
       "validation": {
         "min": 0.0
       },
@@ -1530,7 +1530,7 @@
       "level": "expert",
       "description": "Minimum grid surplus to consider as grid charging (W)",
       "labels": [],
-      "help_url": "configuration.html#battery-price",
+      "help_url": "config-battery.html#battery-price",
       "validation": {
         "min": 0.0
       },
@@ -1550,7 +1550,7 @@
       "level": "expert",
       "description": "Include feed-in price as opportunity cost for PV-sourced energy",
       "labels": [],
-      "help_url": "configuration.html#battery-price",
+      "help_url": "config-battery.html#battery-price",
       "validation": {},
       "depends_on": {
         "battery.price_calculation_enabled": [
@@ -1568,7 +1568,7 @@
       "level": "getting_started",
       "description": "Solar forecast data provider. 'default' needs no setup at all - it serves a fixed demo curve for a typical 4 kW array so a new install runs straight away. Switch to a real provider when you are ready.",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast",
+      "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {
         "choices": [
           "akkudoktor",
@@ -1594,7 +1594,7 @@
       "level": "getting_started",
       "description": "API key for the forecast provider",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast",
+      "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {},
       "depends_on": {
         "pv_forecast_source.source": [
@@ -1621,7 +1621,7 @@
       "level": "getting_started",
       "description": "Resource ID / Installation ID (Solcast: comma-separated list; Victron: single VRM ID)",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast",
+      "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {
         "max_length": 1000,
         "required": true
@@ -1643,7 +1643,7 @@
       "level": "standard",
       "description": "Apply scaling factor from EVCC forecast API to correct PV forecast values using real measured data. If disabled, no scaling applied (scale = 1.0).",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast-evcc",
+      "help_url": "config-solar.html#pv-forecast-evcc",
       "validation": {},
       "depends_on": {
         "pv_forecast_source.source": [
@@ -1661,7 +1661,7 @@
       "level": "standard",
       "description": "Use centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast-sources",
+      "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {},
       "depends_on": {
         "pv_forecast_source.source": [
@@ -1679,7 +1679,7 @@
       "level": "getting_started",
       "description": "Home Assistant sensor entity containing PV forecast timeseries data (e.g., sensor.pv_forecast)",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast-sources",
+      "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {},
       "depends_on": {
         "pv_forecast_source.source": [
@@ -1700,7 +1700,7 @@
       "level": "standard",
       "description": "JSON path to timeseries array in response. For HA sensors: 'attributes.data'. For custom HTTP servers: 'data', 'forecast', 'values', etc. (default: 'attributes.data')",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast-sources",
+      "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {},
       "depends_on": {
         "pv_forecast_source.source": [
@@ -1718,7 +1718,7 @@
       "level": "getting_started",
       "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: endpoint URL returning JSON timeseries. Must return a JSON array in EVCC's {start, end, value} format; 'end' is optional. The unit of 'value' is set by pv_forecast_source.value_unit.",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast-sources",
+      "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {
         "pattern": "^https?://.+"
       },
@@ -1741,7 +1741,7 @@
       "level": "standard",
       "description": "Optional bearer token for API authentication (used as Authorization: Bearer [token]). Leave empty for unauthenticated endpoints.",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast-sources",
+      "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {},
       "depends_on": {
         "pv_forecast_source.source": [
@@ -1762,7 +1762,7 @@
       "level": "getting_started",
       "description": "Unit of the 'value' field in the timeseries. Default matches EVCC's solar forecast and the usual Home Assistant PV sensors, which report power (W) per slot. Pick Wh/kWh for a source that reports energy per slot instead.",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast-sources",
+      "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {
         "choices": [
           "W",
@@ -1787,7 +1787,7 @@
       "level": "standard",
       "description": "Where the outside-temperature forecast comes from. Open-Meteo needs no key and publishes the temperature directly. Akkudoktor derives it from a PV forecast query and relays its upstream provider's rate limit, which refuses everyone at once when it triggers. One curve is fetched and shared by the optimizer and by any outdoor managed load",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-ambient",
+      "help_url": "config-solar.html#temperature-forecast",
       "validation": {
         "choices": [
           "openmeteo",
@@ -1806,7 +1806,7 @@
       "level": "getting_started",
       "description": "User-defined name for this PV installation (must be unique)",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast",
+      "help_url": "config-solar.html#pv-forecast",
       "validation": {},
       "depends_on": {
         "pv_forecast_source.source": [
@@ -1827,7 +1827,7 @@
       "level": "getting_started",
       "description": "Latitude of the PV installation",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast",
+      "help_url": "config-solar.html#pv-forecast",
       "validation": {
         "min": -90,
         "max": 90
@@ -1851,7 +1851,7 @@
       "level": "getting_started",
       "description": "Longitude of the PV installation",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast",
+      "help_url": "config-solar.html#pv-forecast",
       "validation": {
         "min": -180,
         "max": 180
@@ -1875,7 +1875,7 @@
       "level": "getting_started",
       "description": "Panel azimuth angle (-180 to 180, 0=south, 90=west, -90=east)",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast",
+      "help_url": "config-solar.html#pv-forecast",
       "validation": {
         "min": -180,
         "max": 180
@@ -1899,7 +1899,7 @@
       "level": "getting_started",
       "description": "Panel tilt angle (0=flat, 90=vertical)",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast",
+      "help_url": "config-solar.html#pv-forecast",
       "validation": {
         "min": 0,
         "max": 90
@@ -1923,7 +1923,7 @@
       "level": "getting_started",
       "description": "Peak power of PV system in Wp",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast",
+      "help_url": "config-solar.html#pv-forecast",
       "validation": {
         "min": 1
       },
@@ -1946,7 +1946,7 @@
       "level": "standard",
       "description": "Inverter power in W",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast",
+      "help_url": "config-solar.html#pv-forecast",
       "validation": {
         "min": 1
       },
@@ -1969,7 +1969,7 @@
       "level": "standard",
       "description": "Inverter efficiency (0.0 to 1.0)",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast",
+      "help_url": "config-solar.html#pv-forecast",
       "validation": {
         "min": 0.1,
         "max": 1.0
@@ -1993,7 +1993,7 @@
       "level": "standard",
       "description": "Comma-separated horizon values for shading calculation",
       "labels": [],
-      "help_url": "configuration.html#pv-forecast",
+      "help_url": "config-solar.html#pv-forecast",
       "validation": {},
       "depends_on": {
         "pv_forecast_source.source": [
@@ -2016,7 +2016,7 @@
       "labels": [
         "experimental"
       ],
-      "help_url": "configuration.html#pv-autoscaling",
+      "help_url": "config-solar.html#pv-autoscaling",
       "validation": {},
       "depends_on": null,
       "hot_reload": true,
@@ -2030,7 +2030,7 @@
       "level": "getting_started",
       "description": "Use centrally configured Data Source for sensor access instead of manual URL/token",
       "labels": [],
-      "help_url": "configuration.html#pv-autoscaling",
+      "help_url": "config-solar.html#pv-autoscaling",
       "validation": {},
       "depends_on": {
         "pv_autoscaling.enabled": [
@@ -2048,7 +2048,7 @@
       "level": "getting_started",
       "description": "Entity/item for the cumulative PV generation counter (kWh) - REQUIRED for autoscaling to work",
       "labels": [],
-      "help_url": "configuration.html#pv-autoscaling",
+      "help_url": "config-solar.html#pv-autoscaling",
       "validation": {
         "required": true
       },
@@ -2068,7 +2068,7 @@
       "level": "standard",
       "description": "Data source type (Home Assistant or OpenHAB) for reading PV sensor",
       "labels": [],
-      "help_url": "configuration.html#pv-autoscaling",
+      "help_url": "config-solar.html#pv-autoscaling",
       "validation": {
         "choices": [
           "homeassistant",
@@ -2094,7 +2094,7 @@
       "level": "standard",
       "description": "Override URL for data source (used when not reusing central Data Source)",
       "labels": [],
-      "help_url": "configuration.html#pv-autoscaling",
+      "help_url": "config-solar.html#pv-autoscaling",
       "validation": {},
       "depends_on": {
         "pv_autoscaling.enabled": [
@@ -2115,7 +2115,7 @@
       "level": "standard",
       "description": "Bearer token for manual data source access (only when not using central data source)",
       "labels": [],
-      "help_url": "configuration.html#pv-autoscaling",
+      "help_url": "config-solar.html#pv-autoscaling",
       "validation": {},
       "depends_on": {
         "pv_autoscaling.enabled": [
@@ -2136,7 +2136,7 @@
       "level": "expert",
       "description": "Skip TLS certificate verification for the manual data source (self-signed certificates)",
       "labels": [],
-      "help_url": "configuration.html#pv-autoscaling",
+      "help_url": "config-solar.html#pv-autoscaling",
       "validation": {},
       "depends_on": {
         "pv_autoscaling.enabled": [
@@ -2157,7 +2157,7 @@
       "level": "standard",
       "description": "How many days of measured PV yield to retain for scaling (1-14 days)",
       "labels": [],
-      "help_url": "configuration.html#pv-autoscaling",
+      "help_url": "config-solar.html#pv-autoscaling",
       "validation": {
         "min": 1,
         "max": 14
@@ -2178,7 +2178,7 @@
       "level": "expert",
       "description": "Minimum scaling multiplier to prevent collapse (e.g., 0.2)",
       "labels": [],
-      "help_url": "configuration.html#pv-autoscaling",
+      "help_url": "config-solar.html#pv-autoscaling",
       "validation": {
         "min": 0.0,
         "max": 10.0
@@ -2199,7 +2199,7 @@
       "level": "expert",
       "description": "Maximum scaling multiplier to prevent runaway (e.g., 2.5)",
       "labels": [],
-      "help_url": "configuration.html#pv-autoscaling",
+      "help_url": "config-solar.html#pv-autoscaling",
       "validation": {
         "min": 1.0,
         "max": 20.0
@@ -2220,7 +2220,7 @@
       "level": "expert",
       "description": "Minimum recorded hours required before scaling is applied",
       "labels": [],
-      "help_url": "configuration.html#pv-autoscaling",
+      "help_url": "config-solar.html#pv-autoscaling",
       "validation": {
         "min": 1,
         "max": 168
@@ -2243,7 +2243,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#inverter",
+      "help_url": "config-battery.html#inverter",
       "validation": {
         "choices": [
           "fronius_gen24",
@@ -2268,7 +2268,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#inverter",
+      "help_url": "config-battery.html#inverter",
       "validation": {},
       "depends_on": {
         "inverter.type": [
@@ -2290,7 +2290,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#inverter",
+      "help_url": "config-battery.html#inverter",
       "validation": {},
       "depends_on": {
         "inverter.type": [
@@ -2311,7 +2311,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#inverter",
+      "help_url": "config-battery.html#inverter",
       "validation": {},
       "depends_on": {
         "inverter.type": [
@@ -2332,7 +2332,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#inverter",
+      "help_url": "config-battery.html#inverter",
       "validation": {
         "min": 0,
         "max": 100000
@@ -2351,7 +2351,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#inverter",
+      "help_url": "config-battery.html#inverter",
       "validation": {
         "min": 0,
         "max": 100000
@@ -2370,7 +2370,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#inverter",
+      "help_url": "config-battery.html#inverter",
       "validation": {},
       "depends_on": {
         "inverter.type": [
@@ -2390,7 +2390,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#inverter",
+      "help_url": "config-battery.html#inverter",
       "validation": {},
       "depends_on": {
         "inverter.type": [
@@ -2410,7 +2410,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#inverter",
+      "help_url": "config-battery.html#inverter",
       "validation": {},
       "depends_on": {
         "inverter.type": [
@@ -2430,7 +2430,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#evcc",
+      "help_url": "config-system.html#evcc",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -2446,7 +2446,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#mqtt",
+      "help_url": "config-system.html#mqtt",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -2462,7 +2462,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#mqtt",
+      "help_url": "config-system.html#mqtt",
       "validation": {},
       "depends_on": {
         "mqtt.enabled": [
@@ -2483,7 +2483,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#mqtt",
+      "help_url": "config-system.html#mqtt",
       "validation": {
         "min": 1,
         "max": 65535
@@ -2507,7 +2507,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#mqtt",
+      "help_url": "config-system.html#mqtt",
       "validation": {},
       "depends_on": {
         "mqtt.enabled": [
@@ -2528,7 +2528,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#mqtt",
+      "help_url": "config-system.html#mqtt",
       "validation": {},
       "depends_on": {
         "mqtt.enabled": [
@@ -2549,7 +2549,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#mqtt",
+      "help_url": "config-system.html#mqtt",
       "validation": {},
       "depends_on": {
         "mqtt.enabled": [
@@ -2570,7 +2570,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#mqtt",
+      "help_url": "config-system.html#mqtt",
       "validation": {},
       "depends_on": {
         "mqtt.enabled": [
@@ -2591,7 +2591,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#mqtt",
+      "help_url": "config-system.html#mqtt",
       "validation": {},
       "depends_on": {
         "mqtt.enabled": [
@@ -2615,7 +2615,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#system",
+      "help_url": "config-system.html#system",
       "validation": {
         "min": 1,
         "max": 60
@@ -2634,7 +2634,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#system",
+      "help_url": "config-system.html#system",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -2650,7 +2650,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#system",
+      "help_url": "config-system.html#system",
       "validation": {
         "min": 1024,
         "max": 65535
@@ -2669,7 +2669,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#system",
+      "help_url": "config-system.html#system",
       "validation": {
         "choices": [
           "debug",
@@ -2690,7 +2690,7 @@
       "level": "standard",
       "description": "Latitude of this installation. Only needed for the outside-temperature forecast when no PV installation supplies coordinates - a pool heat pump uses it to predict its losses. Leave both at 0 if you do not need it",
       "labels": [],
-      "help_url": "configuration.html#system",
+      "help_url": "config-system.html#system",
       "validation": {
         "min": -90,
         "max": 90
@@ -2707,7 +2707,7 @@
       "level": "standard",
       "description": "Longitude of this installation. See Latitude",
       "labels": [],
-      "help_url": "configuration.html#system",
+      "help_url": "config-system.html#system",
       "validation": {
         "min": -180,
         "max": 180
@@ -2726,7 +2726,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#system",
+      "help_url": "config-system.html#system",
       "validation": {
         "min": 5,
         "max": 120
@@ -2745,7 +2745,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "config-managed-loads.html#managed-loads",
       "validation": {
         "pattern": "^[a-z0-9_]{1,32}$"
       },
@@ -2763,7 +2763,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-load-profiles",
+      "help_url": "config-managed-loads.html#managed-load-profiles",
       "validation": {
         "choices": [
           "pool_heatpump",
@@ -2786,7 +2786,7 @@
       "level": "getting_started",
       "description": "Include this load in the forecast and control it",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "config-managed-loads.html#managed-loads",
       "validation": {},
       "depends_on": null,
       "hot_reload": true,
@@ -2802,7 +2802,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads-sensor",
+      "help_url": "config-managed-loads.html#managed-loads-sensor",
       "validation": {},
       "depends_on": {
         "type": [
@@ -2825,7 +2825,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads-replaces-sensor",
+      "help_url": "config-managed-loads.html#managed-loads-replaces-sensor",
       "validation": {},
       "depends_on": {
         "type": [
@@ -2846,7 +2846,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads-sensor",
+      "help_url": "config-managed-loads.html#managed-loads-sensor",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -2860,7 +2860,7 @@
       "level": "expert",
       "description": "Lower numbers are planned first and get the cheapest slots when several managed loads compete for the same shared power budget. Applies when this module places the loads itself; the built-in optimizer places them together against one objective, so there is no queue and the per-load price limit is the lever instead",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-operation",
+      "help_url": "config-managed-loads.html#managed-loads-operation",
       "validation": {
         "min": 1,
         "max": 999
@@ -2879,7 +2879,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-load-profiles",
+      "help_url": "config-managed-loads.html#managed-load-profiles",
       "validation": {},
       "depends_on": {
         "type": [
@@ -2900,7 +2900,7 @@
       "level": "getting_started",
       "description": "Target temperature in degrees Celsius",
       "labels": [],
-      "help_url": "configuration.html#managed-load-profiles",
+      "help_url": "config-managed-loads.html#managed-load-profiles",
       "validation": {
         "min": 0,
         "max": 120
@@ -2926,7 +2926,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-load-profiles",
+      "help_url": "config-managed-loads.html#managed-load-profiles",
       "validation": {},
       "depends_on": {
         "type": [
@@ -2947,7 +2947,7 @@
       "level": "standard",
       "description": "How far below target the medium must fall before heating starts, in kelvin - stops the appliance hunting around its setpoint",
       "labels": [],
-      "help_url": "configuration.html#managed-load-profiles",
+      "help_url": "config-managed-loads.html#managed-load-profiles",
       "validation": {
         "min": 0.1,
         "max": 20
@@ -2973,7 +2973,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads-ambient",
+      "help_url": "config-managed-loads.html#managed-loads-ambient",
       "validation": {},
       "depends_on": {
         "type": [
@@ -2996,7 +2996,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-load-profiles",
+      "help_url": "config-managed-loads.html#managed-load-profiles",
       "validation": {
         "min": 0.01,
         "max": 1000
@@ -3022,7 +3022,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-load-profiles",
+      "help_url": "config-managed-loads.html#managed-load-profiles",
       "validation": {
         "min": 0.1,
         "max": 1000
@@ -3048,7 +3048,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads-calibration",
+      "help_url": "config-managed-loads.html#managed-loads-calibration",
       "validation": {
         "min": 0.1,
         "max": 200
@@ -3072,7 +3072,7 @@
       "level": "getting_started",
       "description": "Electrical power the appliance draws while running, in watts. For a load whose profile is fetched or pushed it is not used to plan anything - it is the reference the incoming values are sanity-checked against, which is what catches a source publishing watts where watt-hours were expected",
       "labels": [],
-      "help_url": "configuration.html#managed-load-profiles",
+      "help_url": "config-managed-loads.html#managed-load-profiles",
       "validation": {
         "min": 1,
         "max": 100000
@@ -3091,7 +3091,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-load-profiles",
+      "help_url": "config-managed-loads.html#managed-load-profiles",
       "validation": {
         "min": 0.8,
         "max": 8
@@ -3117,7 +3117,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads-calibration",
+      "help_url": "config-managed-loads.html#managed-loads-calibration",
       "validation": {
         "min": -0.06,
         "max": 0.06
@@ -3143,7 +3143,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads-cover",
+      "help_url": "config-managed-loads.html#managed-loads-cover",
       "validation": {},
       "depends_on": {
         "type": [
@@ -3161,7 +3161,7 @@
       "level": "standard",
       "description": "Fraction of the heat loss that remains while the cover is closed. A starting point only: once the store has been seen both covered and uncovered, this is measured from its own cooling and the measured value is what the forecast uses. The calibration panel says which it is on.",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-cover",
+      "help_url": "config-managed-loads.html#managed-loads-cover",
       "validation": {
         "min": 0.05,
         "max": 1.0
@@ -3182,7 +3182,7 @@
       "level": "standard",
       "description": "How the cheapest slots are chosen. Combined uses the grid price but values PV surplus at the feed-in tariff, so your own solar wins over cheap grid energy - recommended. Cheapest slots looks at the grid price only. PV surplus takes the sunniest slots first and falls back to price when there is no surplus",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-operation",
+      "help_url": "config-managed-loads.html#managed-loads-operation",
       "validation": {
         "choices": [
           "combined",
@@ -3210,7 +3210,7 @@
       "level": "standard",
       "description": "Shortest time the appliance stays released once started - protects the compressor from being cycled every time the plan is recalculated",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-operation",
+      "help_url": "config-managed-loads.html#managed-loads-operation",
       "validation": {
         "min": 0,
         "max": 720
@@ -3235,7 +3235,7 @@
       "level": "standard",
       "description": "Cap on released hours per day (0 = no cap)",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-runtime",
+      "help_url": "config-managed-loads.html#managed-loads-runtime",
       "validation": {
         "min": 0,
         "max": 24
@@ -3260,7 +3260,7 @@
       "level": "standard",
       "description": "First hour of the day the appliance may run (leave equal to end for no limit)",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-runtime",
+      "help_url": "config-managed-loads.html#managed-loads-runtime",
       "validation": {
         "min": 0,
         "max": 23
@@ -3285,7 +3285,7 @@
       "level": "standard",
       "description": "Hour of the day after which the appliance may no longer run",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-runtime",
+      "help_url": "config-managed-loads.html#managed-loads-runtime",
       "validation": {
         "min": 0,
         "max": 23
@@ -3310,7 +3310,7 @@
       "level": "standard",
       "description": "Hours from now by which the target must be reached (0 = anywhere in the next two days). A sauna wanted this evening sets it; a pool does not",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-operation",
+      "help_url": "config-managed-loads.html#managed-loads-operation",
       "validation": {
         "min": 0,
         "max": 48
@@ -3335,7 +3335,7 @@
       "level": "expert",
       "description": "Never pay more than this per kWh for this load's energy, in ct/kWh (0 = no limit). With the built-in optimizer the load is scheduled against this figure directly, so it runs whenever the energy actually costs less; with an external optimizer it is a simpler rule that skips any hour above it. Ignored when frost protection is active",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-price-limit",
+      "help_url": "config-managed-loads.html#managed-loads-price-limit",
       "validation": {
         "min": 0,
         "max": 200
@@ -3360,7 +3360,7 @@
       "level": "standard",
       "description": "Never run below this ambient temperature - an air source heat pump barely works in the cold and its heat exchanger can freeze",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-runtime",
+      "help_url": "config-managed-loads.html#managed-loads-runtime",
       "validation": {
         "min": -30,
         "max": 40
@@ -3384,7 +3384,7 @@
       "level": "standard",
       "description": "Run immediately regardless of price when the medium falls to this temperature",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-operation",
+      "help_url": "config-managed-loads.html#managed-loads-operation",
       "validation": {
         "min": -20,
         "max": 40
@@ -3408,7 +3408,7 @@
       "level": "standard",
       "description": "First day of the season, as MM-DD (leave empty for all year)",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-operation",
+      "help_url": "config-managed-loads.html#managed-loads-operation",
       "validation": {
         "pattern": "^$|^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
       },
@@ -3428,7 +3428,7 @@
       "level": "standard",
       "description": "Last day of the season, as MM-DD",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-operation",
+      "help_url": "config-managed-loads.html#managed-loads-operation",
       "validation": {
         "pattern": "^$|^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
       },
@@ -3448,7 +3448,7 @@
       "level": "standard",
       "description": "How long pushed data stays valid. After this the load stops being counted, so a sender that goes quiet cannot hold a stale forecast forever",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-external",
+      "help_url": "config-managed-loads.html#managed-loads-external",
       "validation": {
         "min": 1,
         "max": 10080
@@ -3470,7 +3470,7 @@
       "level": "getting_started",
       "description": "Where this load's profile comes from. 'push' waits for an external system to hand one over; 'timeseries' names an entity EOS Connect reads itself, the same way the price and PV sources do",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-external",
+      "help_url": "config-managed-loads.html#managed-loads-external",
       "validation": {
         "choices": [
           "push",
@@ -3493,7 +3493,7 @@
       "level": "standard",
       "description": "Read the profile through the Home Assistant connection already configured under Data Source, instead of repeating a URL and a token here",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-fetch",
+      "help_url": "config-managed-loads.html#managed-loads-fetch",
       "validation": {},
       "depends_on": {
         "type": [
@@ -3514,7 +3514,7 @@
       "level": "getting_started",
       "description": "Entity holding the load forecast, for example sensor.heat_pump_forecast. The array itself lives in one of its attributes - a Home Assistant state is capped at 255 characters and a 96-value series does not fit",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-fetch",
+      "help_url": "config-managed-loads.html#managed-loads-fetch",
       "validation": {},
       "depends_on": {
         "type": [
@@ -3538,7 +3538,7 @@
       "level": "getting_started",
       "description": "Where the array sits inside the entity, in dot notation - 'attributes.data' for the usual template sensor, 'attributes.forecast' when you named it that",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-fetch",
+      "help_url": "config-managed-loads.html#managed-loads-fetch",
       "validation": {},
       "depends_on": {
         "type": [
@@ -3559,7 +3559,7 @@
       "level": "standard",
       "description": "Endpoint returning the forecast, when it does not come from the central Home Assistant connection",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-fetch",
+      "help_url": "config-managed-loads.html#managed-loads-fetch",
       "validation": {},
       "depends_on": {
         "type": [
@@ -3583,7 +3583,7 @@
       "level": "standard",
       "description": "Bearer token for that endpoint, if it needs one",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-fetch",
+      "help_url": "config-managed-loads.html#managed-loads-fetch",
       "validation": {},
       "depends_on": {
         "type": [
@@ -3607,7 +3607,7 @@
       "level": "getting_started",
       "description": "What the fetched values are measured in. 'W' and 'kW' are average power over each entry; 'Wh' and 'kWh' are energy within it. Getting this wrong is a factor of four on quarter-hourly data, so it is checked against the rated power above",
       "labels": [],
-      "help_url": "configuration.html#managed-loads-fetch",
+      "help_url": "config-managed-loads.html#managed-loads-fetch",
       "validation": {
         "choices": [
           "W",

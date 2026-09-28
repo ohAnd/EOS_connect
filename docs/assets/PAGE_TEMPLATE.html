@@ -39,7 +39,16 @@
      Available classes: hero, content-section, card-grid, block-card, card-header,
      icon, feature-grid, feature-item, alert (alert-info/-warning/-success/-danger),
      btn, btn-primary, badge (badge-restart/-deprecated/-experimental/-hot/-level),
-     scroll-x, level-note.
+     scroll-x, level-note, task-index.
+
+     Parameter tables are never hand-written. Load assets/js/config-reference.js
+     and mount them from the schema:
+
+       <div data-schema-section="battery"></div>
+       <div data-schema-section="battery" data-schema-anchor="battery-price"></div>
+
+     The prose heading above the mount owns the anchor; the generated table adds
+     no heading of its own. See developer/index.html#schema.
 ============================================================================ -->
 <!DOCTYPE html>
 <html lang="en">
@@ -58,9 +67,16 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
 </head>
 
-<!-- data-page: home | what-is | user-guide | configuration | advanced | developer
-     data-root: "" at docs/, "../" one directory down
-     data-levels: present only if this page offers the depth switcher -->
+<!-- data-page:    home | what-is | user-guide | configuration | advanced | developer
+     data-subpage: only inside a section that has a second nav row. Today that is
+                   configuration, whose pages declare data-page="configuration"
+                   (so the first row still marks exactly one item) plus their own
+                   key from NAV[].children in site.js: overview | data | battery |
+                   price | solar | optimizer | managed-loads | system.
+     data-root:    "" at docs/, "../" one directory down. There is no third value:
+                   site.js compares the attribute against those two literals, and
+                   the integrity tests only discover pages one level deep.
+     data-levels:  present only if this page offers the depth switcher -->
 
 <body data-page="PAGE-KEY" data-root="../">
     <div id="site-nav"></div>

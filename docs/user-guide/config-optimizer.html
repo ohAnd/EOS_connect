@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Optimizer - EOS Connect</title>
+    <meta name="description" content="Which solver plans your battery, how finely it plans, and the limits it must respect.">
+    <meta property="og:title" content="Optimizer - EOS Connect">
+    <meta property="og:description" content="Which solver plans your battery, how finely it plans, and the limits it must respect.">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="https://ohAnd.github.io/EOS_connect/assets/images/logo.png">
+    <link rel="icon" href="../assets/images/icon.png">
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+
+<body data-page="configuration" data-subpage="optimizer" data-root="../" data-levels>
+    <div id="site-nav"></div>
+    <noscript>
+        <div class="nav-fallback">
+            <a href="../index.html">Home</a>
+            <a href="../what-is/index.html">What Is</a>
+            <a href="index.html">User Guide</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="../advanced/index.html">Advanced</a>
+            <a href="../developer/index.html">Developer</a>
+        </div>
+    </noscript>
+
+    <div class="container">
+        <div class="page-wrapper">
+            <aside class="toc-sidebar">
+                <div id="site-toc"></div>
+            </aside>
+
+            <main class="main-content" id="main">
+
+                <div class="hero">
+                    <h1>Optimizer</h1>
+                    <p>Which solver decides what your battery does next, how finely it plans, and the limits it has to stay inside.</p>
+                </div>
+
+                <div id="site-level"></div>
+
+                <div class="content-section">
+                    <h2 id="optimizer-purpose"><i class="fas fa-crosshairs" aria-hidden="true"></i> What
+                        this is for</h2>
+                    <ul>
+                        <li>I want the battery to charge when power is cheap and carry me through the
+                            expensive hours.</li>
+                        <li>I want to choose between the solver built into EOS Connect and one I already
+                            run myself.</li>
+                        <li>I want to keep the plan inside the import and export limits my grid operator
+                            gave me.</li>
+                    </ul>
+                    <p>Everything on this page sits under <code>eos.*</code>. What the optimizer is
+                        <em>given</em> &mdash; prices, forecasts, measured load &mdash; is configured on the
+                        other pages in this section.</p>
+                </div>
+
+                <div class="content-section">
+                    <h2 id="optimizer-choice"><i class="fas fa-brain" aria-hidden="true"></i> Choosing an
+                        optimizer</h2>
+                    <p>The optimizer decides what your battery does next. Set it in
+                        <code>eos.source</code>.</p>
+
+                    <div class="feature-grid">
+                        <div class="feature-item">
+                            <h4><i class="fas fa-microchip" aria-hidden="true"></i> local_evopt</h4>
+                            <p><strong>The default.</strong> A mixed-integer solver running inside EOS
+                                Connect. Nothing else to install or keep alive.</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-server" aria-hidden="true"></i> eos_server</h4>
+                            <p>Akkudoktor EOS, running separately. The most detailed house model, and the
+                                only backend that uses the outside-temperature forecast.</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-bolt" aria-hidden="true"></i> evopt</h4>
+                            <p>An external EVopt server. Lightweight, fast, and useful if you already run
+                                one.</p>
+                        </div>
+                    </div>
+
+                    <div data-schema-section="eos" data-schema-anchor="optimizer-choice"></div>
+
+                    <h3 id="local-evopt">Tuning the built-in optimizer</h3>
+                    <p>Three settings shape its behaviour, and all have sensible defaults:</p>
+                    <ul>
+                        <li><code>eos.local_evopt_charging_strategy</code> &mdash; default
+                            <code>charge_before_export</code>: fill the battery before selling surplus to
+                            the grid. Alternatives are <code>discharge_before_import</code>,
+                            <code>maximize_self_consumption</code>, <code>attenuate_grid_peaks</code> and
+                            <code>none</code>.</li>
+                        <li><code>eos.local_evopt_discharging_strategy</code> &mdash; default
+                            <code>discharge_before_import</code>: use stored energy before buying. Or
+                            <code>emergency_reserve</code>, or <code>none</code>.</li>
+                    </ul>
+                    <p><code>eos.local_evopt_terminal_soc_value</code> &mdash; default
+                        <code>cheapest_ahead</code>: decides what charge still in the battery when the
+                        planning horizon runs out is worth. This matters more than it sounds. The
+                        optimizer plans a fixed window and then stops, so whatever it thinks the
+                        leftover charge is worth is what decides whether it saves energy for tomorrow
+                        or spends it tonight.</p>
+                    <ul>
+                        <li><code>cheapest_ahead</code> values it at the lowest electricity price in
+                            the horizon. Charging and discharging both lose a little to conversion, so
+                            this leaves a band around that price in which the battery simply holds:
+                            nothing is cheap enough to be worth buying just to store, and nothing near
+                            the bottom of the tariff is dear enough to be worth emptying into. It fits
+                            the way the planning window is cut &mdash; it always ends at midnight, and
+                            midnight is always followed by the cheapest hours of the night, so charge
+                            left over at the end can be bought back shortly afterwards for about the
+                            same price. On a day with cheap grid power available throughout, that
+                            means the battery is expected to end close to empty, and that is the
+                            correct answer rather than a fault.</li>
+                        <li><code>stored_price</code> is the old behaviour, kept so you can go back:
+                            leftover charge is valued at what it cost to put there. On a mostly
+                            solar-charged battery that is close to nothing, so the optimizer treats a
+                            full battery at the end of the horizon as near-worthless and empties it
+                            &mdash; even into cheap hours, and even when it means exporting solar
+                            surplus for the feed-in tariff rather than keeping it.</li>
+                    </ul>
+                    <p>The external EVopt server runs the same engine and is sent the same figure,
+                        so <code>eos.external_evopt_terminal_soc_value</code> does the same job when
+                        <code>eos.source</code> is <code>evopt</code>. Only the slots genuinely ahead
+                        are considered &mdash; in quarter-hourly mode the forecast wraps around, and
+                        yesterday's prices trailing the end of it are not offers you can still take.
+                    </p>
+
+                    <p>Set <code>eos.local_evopt_emergency_reserve_pct</code> above 0 to hold a hard
+                        floor of charge in reserve at the end of the planning horizon, for outage
+                        cover. It is a floor, not an economic signal &mdash; deciding how much charge
+                        is worth keeping is
+                        <code>eos.local_evopt_terminal_soc_value</code>&rsquo;s job.</p>
+
+                    <div data-level="expert">
+                        <p>If your grid connection is limited, cap it explicitly with
+                            <code>eos.local_evopt_max_grid_import_w</code> and
+                            <code>eos.local_evopt_max_grid_export_w</code>. Both default to
+                            <code>0</code>, meaning "use the inverter's own limit".
+                            <code>eos.local_evopt_num_threads</code> and
+                            <code>eos.local_evopt_time_limit</code> bound the CBC solver on slow hardware;
+                            <code>0</code> means no limit.</p>
+                        <div class="alert alert-warning">
+                            <p>The external-EVopt equivalents,
+                                <code>eos.external_evopt_max_grid_import_w</code> and
+                                <code>eos.external_evopt_max_grid_export_w</code>, ship with a default of
+                                <strong>10000&nbsp;W</strong>, not <code>0</code>. The fallback to the
+                                inverter limit therefore never fires unless you set them to
+                                <code>0</code> yourself.</p>
+                        </div>
+                    </div>
+
+                    <div data-schema-section="eos" data-schema-anchor="local-evopt"></div>
+
+                    <h3 id="time-slot-config">Planning resolution</h3>
+                    <p><code>eos.time_frame</code> sets how finely the day is sliced:
+                        <code>3600</code> seconds (hourly, the default) or <code>900</code> (quarter-hourly).
+                        Quarter-hourly follows a volatile tariff more closely and costs more computation.
+                        Changing it needs a restart.</p>
+
+                    <div data-schema-section="eos" data-schema-anchor="time-slot-config"></div>
+
+                    <h3 id="dyn-override">Dynamic PV override</h3>
+                    <p>Set <code>eos.dyn_override_discharge_allowed_pv_greater_load</code> to allow
+                        discharging in any slot where forecast solar exceeds forecast load, even if the
+                        optimizer planned to hold. It stops the battery sitting idle through a bright but
+                        intermittently cloudy afternoon that the plan treated as one flat block. Off by
+                        default.</p>
+                    <p>It never overrides a slot where grid charging was requested, and a manual override
+                        you set in the dashboard always wins over it.</p>
+                    <div data-schema-section="eos" data-schema-anchor="dyn-override"></div>
+                </div>
+
+
+                <div class="content-section">
+                    <h2 id="eos"><i class="fas fa-server" aria-hidden="true"></i> The rest of the
+                        optimizer settings</h2>
+                    <p>Timeouts, solver limits, and the import and export ceilings your grid operator
+                        sets &mdash; the last of these are explained under
+                        <a href="../advanced/index.html#smart-grid-limits">Grid import and export
+                        limits</a>.</p>
+                    <div data-schema-section="eos" data-schema-anchor="eos"></div>
+                </div>
+
+            </main>
+        </div>
+    </div>
+
+    <div id="site-footer"></div>
+    <script src="../assets/js/site.js"></script>
+    <script src="../assets/js/config-reference.js"></script>
+</body>
+
+</html>

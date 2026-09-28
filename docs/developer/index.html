@@ -253,8 +253,8 @@ battery_interface = factory.create_battery_interface(
                                 </tr>
                                 <tr>
                                     <td><code>help_url</code></td>
-                                    <td><code>configuration.html#anchor</code>. 167 of the 173 fields have one,
-                                        using 29 distinct anchors.</td>
+                                    <td><code>config-battery.html#battery-price</code> &mdash; a page under
+                                        <code>user-guide/</code> and a fragment. All 173 fields have one.</td>
                                 </tr>
                                 <tr>
                                     <td><code>validation</code>, <code>depends_on</code></td>
@@ -286,8 +286,11 @@ battery_interface = factory.create_battery_interface(
                             <code>level</code> &mdash; a field with no level is treated as expert.</li>
                         <li>If it should apply without a restart, set <code>hot_reload=True</code> and add the
                             handler in <code>src/config_web/hot_reload.py</code>.</li>
-                        <li>Point <code>help_url</code> at an anchor on
-                            <a href="../user-guide/configuration.html">the configuration page</a>.</li>
+                        <li>Point <code>help_url</code> at a heading on the
+                            <a href="../user-guide/configuration.html">configuration page</a> that explains
+                            the field &mdash; <code>config-battery.html#battery-price</code>, not the
+                            section's catch-all anchor. It is a page under <code>user-guide/</code> plus a
+                            fragment; <code>config.js</code> supplies the rest of the URL.</li>
                         <li>Run the export and commit the result:</li>
                     </ol>
                     <div class="scroll-x">
@@ -309,14 +312,39 @@ battery_interface = factory.create_battery_interface(
                             <code>&lt;docs-base&gt;</code> is whichever copy of this site matches the running
                             build (<a href="#docs-publishing">below</a>). On this site,
                             <code>docs/assets/js/config-reference.js</code> reads the exported JSON and
-                            <em>groups the reference tables by that same anchor</em>, so the parameter tables on
-                            the configuration page are generated, never hand-written. An anchor that does not
-                            exist in <code>docs/user-guide/configuration.html</code> gives the in-app link
-                            nowhere to land.</p>
+                            <em>groups the reference tables by that same anchor</em>, so every parameter table
+                            in the documentation is generated, never hand-written. An anchor that does not
+                            exist on the page the value names gives the in-app link nowhere to land.</p>
                     </div>
 
+                    <h3 id="settings-pages">Which page a setting is explained on</h3>
+                    <p>Configuration is one page per topic under <code>docs/user-guide/</code>, listed in
+                        <code>NAV[].children</code> in <code>site.js</code> and rendered as a second nav row.
+                        Each page carries its own sections' parameters <em>and</em> the explanation of them,
+                        so configuring one thing never means reading two pages.
+                        <code>configuration.html</code> is the way in: it holds the "I want to&hellip;" index
+                        and the complete A-Z list of every setting, for looking a name up when you do not
+                        know its topic.</p>
+                    <p>A table is mounted where the prose explains it:</p>
+                    <div class="scroll-x">
+                        <pre><code>&lt;h2 id="battery-price"&gt;What your stored energy cost&lt;/h2&gt;
+&lt;p&gt;&hellip;&lt;/p&gt;
+&lt;div data-schema-section="battery" data-schema-anchor="battery-price"&gt;&lt;/div&gt;</code></pre>
+                    </div>
+                    <p>Without <code>data-schema-anchor</code> the whole section renders. The mount emits no
+                        heading of its own: the prose above it is the heading, and
+                        <code>idAttr()</code> makes the generated markup yield any anchor the page already
+                        owns &mdash; which is what keeps one id from being written twice.</p>
+                    <p>Three tests hold this together.
+                        <code>test_help_urls_reach_prose_not_the_generated_reference</code> requires every
+                        <code>help_url</code> anchor to be a hand-written id on the page it names, so a
+                        setting cannot quietly point at a bare table heading;
+                        <code>test_every_field_has_a_help_url</code> requires every field to have one at all;
+                        and <code>test_every_config_page_is_in_the_nav</code> requires the nav and the
+                        directory to agree.</p>
+
                     <h3 id="generated-profile-tables">Generated tables for a list section</h3>
-                    <p>The Managed Loads part of the configuration page carries a parameter table
+                    <p>The Managed Loads page carries a parameter table
                         <em>per appliance profile</em> rather than one table for the section, and those are
                         generated too. Nothing lists which settings a sauna has: every
                         <code>managed_loads.*</code> FieldDef already declares

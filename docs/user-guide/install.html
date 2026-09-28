@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Install - EOS Connect</title>
+    <meta name="description" content="Three ways to install EOS Connect, and the handful of settings that live outside its database.">
+    <meta property="og:title" content="Install - EOS Connect">
+    <meta property="og:description" content="Three ways to install EOS Connect, and the handful of settings that live outside its database.">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="https://ohAnd.github.io/EOS_connect/assets/images/logo.png">
+    <link rel="icon" href="../assets/images/icon.png">
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+
+<body data-page="user-guide" data-subpage="install" data-root="../" data-levels>
+    <div id="site-nav"></div>
+    <noscript>
+        <div class="nav-fallback">
+            <a href="../index.html">Home</a>
+            <a href="../what-is/index.html">What Is</a>
+            <a href="index.html">User Guide</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="../advanced/index.html">Advanced</a>
+            <a href="../developer/index.html">Developer</a>
+        </div>
+    </noscript>
+
+    <div class="container">
+        <div class="page-wrapper">
+            <aside class="toc-sidebar">
+                <div id="site-toc"></div>
+            </aside>
+
+            <main class="main-content" id="main">
+
+                <div class="hero">
+                    <h1>Install</h1>
+                    <p>Three routes, all ending at the same web UI on port 8081.</p>
+                </div>
+
+                <div id="site-level"></div>
+
+                <div class="content-section">
+                    <h2 id="installation"><i class="fas fa-download" aria-hidden="true"></i> Install</h2>
+                    <p>Pick one. All three end at the same place: a web UI on port
+                        <strong>8081</strong> that walks you through setup.</p>
+
+                    <h3 id="install-ha">Home Assistant add-on</h3>
+                    <p>The easiest route if you already run Home Assistant.</p>
+                    <ol>
+                        <li>Add the <a href="https://github.com/ohAnd/ha_addons" target="_blank"
+                                rel="noopener">ohAnd/ha_addons</a> repository to your add-on store.</li>
+                        <li>Install <strong>EOS Connect</strong> and start it.</li>
+                        <li>Open <code>http://homeassistant.local:8081</code>.</li>
+                    </ol>
+                    <div class="alert alert-info">
+                        <p>The add-on only sets the web port, time zone and log level. Everything else
+                            lives in EOS Connect's own database and is configured in its web UI.</p>
+                    </div>
+
+                    <h3 id="install-docker">Docker</h3>
+                    <p>Works on anything that runs containers.</p>
+                    <div class="scroll-x">
+                        <pre><code>git clone https://github.com/ohAnd/EOS_connect.git
+cd EOS_connect
+docker compose up -d</code></pre>
+                    </div>
+                    <div class="alert alert-warning">
+                        <p><strong>Keep the <code>./data:/app/data</code> volume.</strong> Your settings,
+                            the PV yield history the forecast auto-scaler learns from, and what each
+                            managed load has learned about its appliance all live in
+                            <code>data/eos_connect.db</code>. Without that mount the database sits on the
+                            container's writable layer and is destroyed every time the container is
+                            recreated &mdash; which is exactly what an update does. Your settings then
+                            appear to have reverted on their own. Compose files written before v0.3.34
+                            do not have it.</p>
+                    </div>
+                    <p>The shipped compose file mounts a second path,
+                        <code>./src/config.yaml:/app/config.yaml</code>, which is the only persistent home
+                        the <a href="#bootstrap-config">three bootstrap keys</a> have &mdash; they are
+                        never stored in the database. On a clean clone that file does not exist yet (it is
+                        gitignored), so Docker creates an empty <em>directory</em> in its place. Harmless
+                        &mdash; EOS Connect logs which keys it ignored and starts on defaults &mdash; but
+                        to be rid of it:</p>
+                    <div class="scroll-x">
+                        <pre><code>rmdir src/config.yaml
+printf 'time_zone: Europe/Berlin\n' &gt; src/config.yaml</code></pre>
+                    </div>
+                    <p>Or drop that line and use the environment variables instead.</p>
+
+                    <h3 id="install-source">From source</h3>
+                    <p>Python 3.13.</p>
+                    <div class="scroll-x">
+                        <pre><code>git clone https://github.com/ohAnd/EOS_connect.git
+cd EOS_connect
+pip install -r requirements.txt
+python src/eos_connect.py</code></pre>
+                    </div>
+
+                    <div data-level="standard">
+                        <h3 id="bootstrap-config">Bootstrap settings</h3>
+                        <p>Almost everything is configured in the web UI and stored in the database.
+                            Only these infrastructure keys are read from <code>config.yaml</code> at
+                            startup, because they are needed before the database is open:</p>
+                        <div class="scroll-x">
+                            <pre><code># config.yaml — bootstrap settings only
+eos_connect_web_port: 8081  # web server port
+time_zone: Europe/Berlin    # system time zone
+log_level: info             # debug, info, warning, error</code></pre>
+                        </div>
+                        <p>Each has an environment-variable equivalent, which wins over the file:
+                            <code>EOS_WEB_PORT</code>, <code>EOS_TIMEZONE</code>,
+                            <code>EOS_LOG_LEVEL</code> and <code>EOS_DATA_PATH</code>.</p>
+                        <div class="alert alert-info">
+                            <p><strong>Upgrading?</strong> On first start EOS Connect migrates an existing
+                                <code>config.yaml</code> into the database by itself. Afterwards you can
+                                cut the file back to the keys above.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="content-section">
+                    <h2 id="next-steps"><i class="fas fa-arrow-right" aria-hidden="true"></i> Next
+                        steps</h2>
+                    <ul>
+                        <li><a href="first-run.html">First run</a> &mdash; what the wizard asks, and
+                            what it leaves for later.</li>
+                        <li><a href="configuration.html">Configuration</a> &mdash; every setting, one
+                            page per topic.</li>
+                        <li><a href="troubleshooting.html">Troubleshooting</a> &mdash; when something
+                            misbehaves.</li>
+                    </ul>
+                </div>
+
+            </main>
+        </div>
+    </div>
+
+    <div id="site-footer"></div>
+    <script src="../assets/js/site.js"></script>
+</body>
+
+</html>

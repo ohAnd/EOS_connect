@@ -41,7 +41,7 @@ logger = logging.getLogger("__main__")
 # messages used to carry a bare "configuration.html#…", which said nothing about
 # which of the two published sites to open.
 TEMPLATE_DOCS_URL = current_docs_url(
-    "user-guide/configuration.html#timeseries-templates"
+    "user-guide/config-data.html#timeseries-templates"
 )
 
 # Price units → EUR/Wh, the unit the optimizer and the web UI work in internally.
