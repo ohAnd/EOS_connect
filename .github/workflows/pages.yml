@@ -21,10 +21,29 @@ on:
     branches: ["main", "develop"]
     paths:
       - "docs/**"
-      # The [AUTO] version commit lands after the docs push, so a docs-only change
-      # would otherwise stamp the preview banner with the previous build number.
+      # Only fires for a version.py pushed by hand. The [AUTO] bump cannot trigger
+      # anything - see the workflow_run trigger below for why, and for what does.
       - "src/version.py"
       - ".github/workflows/pages.yml"
+
+  # The preview banner names the build it documents, which it reads out of
+  # src/version.py. That file is rewritten *after* the push that started the
+  # build, by the [AUTO] commit the image workflows push with GITHUB_TOKEN - and
+  # GitHub deliberately starts no workflow run from an event that token created.
+  # (Verified against the run history: no repository workflow has ever run on an
+  # [AUTO] commit. Which is also why docker_develop.yml, triggered by every push
+  # to develop with no path filter, does not loop.)
+  #
+  # So a run started by the docs push reads the *previous* build number, and the
+  # path filter above never rescues it. Running again once the image workflow has
+  # finished is what makes the banner agree with the app.
+  #
+  # NOTE: a workflow_run trigger only fires for the copy of this file on the
+  # default branch. It therefore stays dormant until this workflow reaches main.
+  workflow_run:
+    workflows: ["Main - build image and push", "Develop - build image and push"]
+    types: [completed]
+
   workflow_dispatch: # allows manual triggering, e.g. right after switching the Pages source
 
 permissions:
@@ -45,6 +64,11 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # A failed image build has not bumped the version, so there is nothing new to
+    # publish; every other trigger is unconditional.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     steps:
       - name: Checkout main (release docs)
         uses: actions/checkout@v6
@@ -77,6 +101,35 @@ jobs:
           set -euo pipefail
           find _site/"$PREVIEW_DIR" -name '*.html' -print0 | xargs -0 sed -i \
             's|<head>|<head>\n    <meta name="robots" content="noindex, nofollow">|'
+
+      - name: Stamp the asset links so a deploy is not served from cache
+        # The pages are static HTML and reference assets/js/site.js and
+        # assets/css/style.css by bare path, so a browser holding the previous copy
+        # keeps using it after a deploy. site.js owns the nav, the contents sidebar
+        # and the detail-level filter, and config-reference.js renders every
+        # parameter table from the schema — a stale copy of either is a visibly
+        # broken page, not a cosmetic lag.
+        #
+        # Applied here rather than committed: the query has to change per deploy,
+        # and a version written into a page would both go stale and trip
+        # test_current_version_is_not_hand_written. Each copy gets the commit of the
+        # branch it was built from, so the two sites version independently.
+        run: |
+          set -euo pipefail
+          stamp() {  # stamp <html-file-list-from-stdin> <revision>
+            xargs -0 sed -i \
+              -e "s|\(assets/js/[a-z-]*\.js\)\"|\1?v=$1\"|g" \
+              -e "s|\(assets/css/[a-z-]*\.css\)\"|\1?v=$1\"|g"
+          }
+          # The preview copy lives inside the root copy, so each pass names the
+          # other out. Both revisions are independent: the two sites are built from
+          # different branches and cache separately.
+          find _site/"$PREVIEW_DIR" -name '*.html' -print0 \
+            | stamp "$(git -C preview-src rev-parse --short HEAD)"
+          find _site -name '*.html' -not -path "_site/$PREVIEW_DIR/*" -print0 \
+            | stamp "$(git -C main-src rev-parse --short HEAD)"
+          grep -ho 'assets/js/site\.js?v=[0-9a-f]*' \
+            _site/index.html _site/"$PREVIEW_DIR"/index.html
 
       - name: Write the preview build stamp
         # The version comes from the develop checkout's src/version.py, which CI

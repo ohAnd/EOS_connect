@@ -248,13 +248,13 @@ battery_interface = factory.create_battery_interface(
                                     <td><code>level</code></td>
                                     <td><code>getting_started</code>, <code>standard</code> or
                                         <code>expert</code>. Cumulative: <code>get_by_level()</code> returns
-                                        everything at or below the requested level. Currently 38 / 61 / 28
+                                        everything at or below the requested level. Currently 49 / 90 / 34
                                         fields.</td>
                                 </tr>
                                 <tr>
                                     <td><code>help_url</code></td>
-                                    <td><code>configuration.html#anchor</code>. 121 of the 127 fields have one,
-                                        using 16 distinct anchors.</td>
+                                    <td><code>config-battery.html#battery-price</code> &mdash; a page under
+                                        <code>user-guide/</code> and a fragment. All 173 fields have one.</td>
                                 </tr>
                                 <tr>
                                     <td><code>validation</code>, <code>depends_on</code></td>
@@ -263,7 +263,7 @@ battery_interface = factory.create_battery_interface(
                                 </tr>
                                 <tr>
                                     <td><code>hot_reload</code></td>
-                                    <td>True for 56 fields. Requires matching logic in
+                                    <td>True for 87 fields. Requires matching logic in
                                         <code>src/config_web/hot_reload.py</code>, which pushes the new value
                                         into the running interface instead of asking for a restart.</td>
                                 </tr>
@@ -286,13 +286,16 @@ battery_interface = factory.create_battery_interface(
                             <code>level</code> &mdash; a field with no level is treated as expert.</li>
                         <li>If it should apply without a restart, set <code>hot_reload=True</code> and add the
                             handler in <code>src/config_web/hot_reload.py</code>.</li>
-                        <li>Point <code>help_url</code> at an anchor on
-                            <a href="../user-guide/configuration.html">the configuration page</a>.</li>
+                        <li>Point <code>help_url</code> at a heading on the
+                            <a href="../user-guide/configuration.html">configuration page</a> that explains
+                            the field &mdash; <code>config-battery.html#battery-price</code>, not the
+                            section's catch-all anchor. It is a page under <code>user-guide/</code> plus a
+                            fragment; <code>config.js</code> supplies the rest of the URL.</li>
                         <li>Run the export and commit the result:</li>
                     </ol>
                     <div class="scroll-x">
                         <pre><code>python scripts/export_config_schema.py
-# Exported 127 fields to docs/assets/data/config_schema.json</code></pre>
+# Exported 173 fields and 6 managed-load presets to docs/assets/data/config_schema.json</code></pre>
                     </div>
                     <p>Nothing regenerates that JSON automatically, so the export is a manual step &mdash; but
                         it is a guarded one.
@@ -309,11 +312,61 @@ battery_interface = factory.create_battery_interface(
                             <code>&lt;docs-base&gt;</code> is whichever copy of this site matches the running
                             build (<a href="#docs-publishing">below</a>). On this site,
                             <code>docs/assets/js/config-reference.js</code> reads the exported JSON and
-                            <em>groups the reference tables by that same anchor</em>, so the parameter tables on
-                            the configuration page are generated, never hand-written. An anchor that does not
-                            exist in <code>docs/user-guide/configuration.html</code> gives the in-app link
-                            nowhere to land.</p>
+                            <em>groups the reference tables by that same anchor</em>, so every parameter table
+                            in the documentation is generated, never hand-written. An anchor that does not
+                            exist on the page the value names gives the in-app link nowhere to land.</p>
                     </div>
+
+                    <h3 id="settings-pages">Which page a setting is explained on</h3>
+                    <p>Configuration is one page per topic under <code>docs/user-guide/</code>, listed in
+                        <code>NAV[].children</code> in <code>site.js</code> and rendered as a second nav row.
+                        Each page carries its own sections' parameters <em>and</em> the explanation of them,
+                        so configuring one thing never means reading two pages.
+                        <code>configuration.html</code> is the way in: it holds the "I want to&hellip;" index
+                        and the complete A-Z list of every setting, for looking a name up when you do not
+                        know its topic.</p>
+                    <p>A table is mounted where the prose explains it:</p>
+                    <div class="scroll-x">
+                        <pre><code>&lt;h2 id="battery-price"&gt;What your stored energy cost&lt;/h2&gt;
+&lt;p&gt;&hellip;&lt;/p&gt;
+&lt;div data-schema-section="battery" data-schema-anchor="battery-price"&gt;&lt;/div&gt;</code></pre>
+                    </div>
+                    <p>Without <code>data-schema-anchor</code> the whole section renders. The mount emits no
+                        heading of its own: the prose above it is the heading, and
+                        <code>idAttr()</code> makes the generated markup yield any anchor the page already
+                        owns &mdash; which is what keeps one id from being written twice.</p>
+                    <p>Three tests hold this together.
+                        <code>test_help_urls_reach_prose_not_the_generated_reference</code> requires every
+                        <code>help_url</code> anchor to be a hand-written id on the page it names, so a
+                        setting cannot quietly point at a bare table heading;
+                        <code>test_every_field_has_a_help_url</code> requires every field to have one at all;
+                        and <code>test_every_config_page_is_in_the_nav</code> requires the nav and the
+                        directory to agree.</p>
+
+                    <h3 id="generated-profile-tables">Generated tables for a list section</h3>
+                    <p>The Managed Loads page carries a parameter table
+                        <em>per appliance profile</em> rather than one table for the section, and those are
+                        generated too. Nothing lists which settings a sauna has: every
+                        <code>managed_loads.*</code> FieldDef already declares
+                        <code>depends_on={"type": [...]}</code>, because that is what the application's own
+                        config form filters on, so the same declaration answers the documentation's
+                        question. A page mounts one with an empty element:</p>
+                    <div class="scroll-x">
+                        <pre><code>&lt;div data-managed-load-profile="sauna"&gt;&lt;/div&gt;</code></pre>
+                    </div>
+                    <p>One thing the fields alone cannot supply is the value a profile <em>starts</em> from.
+                        A FieldDef holds a single default, and <code>managed_loads.target_temp</code> is
+                        shared by four appliance types &mdash; its default is the pool's 28&nbsp;&deg;C,
+                        which would document a sauna as aiming twenty degrees below room temperature. The
+                        real starting values live in <code>src/loads/presets.py</code>, so the export
+                        script writes them out beside the fields as <code>managed_load_presets</code>, and
+                        <code>tests/loads/test_schema_presets_agree.py</code> fails if that copy drifts.
+                        A <code>None</code> there is meaningful and is rendered as <em>no limit</em>: a
+                        sauna has no allowed window, which is not the same as the field being unset.</p>
+                    <p>Adding an appliance type is therefore three steps &mdash; the preset, the schema type
+                        list, and a <code>&lt;h3&gt;</code> with its mount on the configuration page.
+                        <code>test_every_managed_load_type_has_a_profile_section</code> is what stops the
+                        third being forgotten.</p>
                 </div>
 
                 <div class="content-section">
@@ -619,6 +672,64 @@ scripts/install_playwright_deps_userspace.sh      # the alternative, without roo
                             <code>pages.yml</code> therefore checks out <em>both</em> branches on every run,
                             whichever one triggered it. A run that published only <code>develop/</code> would
                             delete the production documentation.</p>
+                    </div>
+
+                    <h3 id="docs-publishing-versions">Which version each copy shows</h3>
+
+                    <p>Two different numbers, from two different places, and they answer two different
+                        questions:</p>
+
+                    <div class="scroll-x">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Shown where</th>
+                                    <th>Comes from</th>
+                                    <th>Shape</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>The badge beside the logo, on both copies</td>
+                                    <td><code>VERSION</code> in <code>site.js</code>, one constant the
+                                        release bump rewrites. Pinned to
+                                        <code>VERSION_PREFIX</code> in <code>docker_develop.yml</code> by
+                                        <code>test_version_badge_matches_release_prefix</code>.</td>
+                                    <td><code>&lt;major&gt;.&lt;minor&gt;.&lt;release&gt;</code></td>
+                                </tr>
+                                <tr>
+                                    <td>The preview banner, on the develop copy only</td>
+                                    <td><code>develop/build-info.json</code>, written from the develop
+                                        checkout's <code>src/version.py</code>.</td>
+                                    <td><code>&lt;release&gt;.&lt;build&gt;-develop</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p>The badge names the release <em>line</em>, which is what a reader wants to know: it
+                        says which version of the software these pages describe. The banner names the exact
+                        build, because on a preview that is the thing you are checking against. The released
+                        copy deliberately shows no build number &mdash; <code>main</code> builds
+                        <code>0.3.&lt;run number&gt;</code>, a counter that moves on every merge and tells a
+                        reader nothing about which features are documented here.</p>
+
+                    <p>The shapes are written out rather than shown as real numbers on purpose:
+                        <code>test_current_version_is_not_hand_written</code> fails on any page that
+                        contains the current version, because a copy of it here would be one more place to
+                        forget at release time.</p>
+
+                    <div class="alert alert-info">
+                        <p><strong>Why the publish runs twice.</strong> The build number reaches
+                            <code>src/version.py</code> only <em>after</em> the push that started the build,
+                            in the <code>[AUTO]</code> commit the image workflows push with
+                            <code>GITHUB_TOKEN</code> &mdash; and GitHub starts no workflow run from an event
+                            that token created. So the run that the docs push started reads the previous
+                            build number. <code>pages.yml</code> therefore also listens on
+                            <code>workflow_run</code> for those two workflows finishing, and publishes again
+                            with the version current. That trigger only fires for the copy of the file on the
+                            default branch, so it is dormant until <code>pages.yml</code> reaches
+                            <code>main</code>.</p>
                     </div>
 
                     <h3 id="docs-publishing-app-links">The application's links follow the build</h3>

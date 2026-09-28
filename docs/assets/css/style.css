@@ -72,13 +72,17 @@
     --font: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     --font-mono: 'Courier New', Courier, monospace;
 
-    /* Layout. One sticky offset, used by everything that needs to clear the
-     * header — previously this was three different magic numbers. */
+    /* Layout. --header-h is an INPUT: the design height of the first nav row,
+     * which .nav-container takes as its min-height. --chrome-h is an OUTPUT:
+     * the height the whole sticky header actually ends up with, second nav row
+     * and compact state included, measured by site.js:syncHeaderHeight. Keeping
+     * them apart matters - feeding a measured total back into the min-height
+     * that produced it makes the header grow on every frame. */
     --header-h: 4rem;
+    --chrome-h: 4rem;
     /* Height of the development-preview banner. Zero unless body.docs-preview is
      * set, which is what keeps the released site pixel-identical to before. */
     --banner-h: 0rem;
-    --scroll-offset: calc(5rem + var(--banner-h));
     --content-max: 1400px;
     --tap: 44px;
 }
@@ -110,6 +114,12 @@ html {
 }
 
 body {
+    /* Declared here, not in :root, because both terms are measured at runtime and
+     * written onto <body> - and a var() is substituted where the property is
+     * DECLARED. In :root it resolved against :root's own fallbacks, so the banner
+     * height has in fact never reached the anchor offset; it only ever looked
+     * right because the old constant 5rem was larger than the banner anyway. */
+    --scroll-offset: calc(var(--chrome-h) + var(--banner-h) + 1rem);
     margin: 0;
     font-family: var(--font);
     font-size: clamp(1rem, 0.97rem + 0.15vw, 1.0625rem);
@@ -303,10 +313,10 @@ body.docs-preview {
 }
 
 .preview-banner {
-    /* Fixed rather than sticky: the banner mounts inside #site-nav, which is only
-     * as tall as its contents, so a sticky banner would have no travel and would
-     * scroll away with the header (which, for the same reason, has never stuck).
-     * Fixed keeps it visible without touching any released-site rule. */
+    /* Fixed rather than sticky: #site-nav is itself sticky at top: var(--banner-h),
+     * so a sticky banner inside it would ride down with the header instead of
+     * holding the top edge. Fixed pins it to the viewport, and the header's own
+     * offset is what keeps the two from overlapping. */
     position: fixed;
     top: 0;
     left: 0;
@@ -354,12 +364,22 @@ body.docs-preview {
 
 /* --------------------------------------------------------------- Navigation */
 
+/* The sticky sits here rather than on .nav-header, which is what it looks like
+ * it should. A sticky box is constrained to its parent's content box, and
+ * #site-nav wraps the header at exactly its own height — no travel, so the
+ * header never stuck despite saying it did. #site-nav's parent is <body>, which
+ * is as tall as the page. Sticky rather than fixed keeps the space reserved in
+ * flow, so nothing needs padding to compensate. */
+#site-nav {
+    position: sticky;
+    /* Clears the fixed preview banner; the token is 0 on the released site. */
+    top: var(--banner-h);
+    z-index: 1000;
+}
+
 .nav-header {
     background-color: var(--surface-header);
     box-shadow: var(--shadow-card);
-    position: sticky;
-    top: 0;
-    z-index: 1000;
 }
 
 .nav-container {
@@ -418,6 +438,10 @@ body.docs-preview {
     font-size: 0.95rem;
     display: inline-flex;
     align-items: center;
+    /* The icon and the label are two flex items, and the literal space between
+     * them in the markup is a whitespace-only item, which flex drops. .nav-logo
+     * above solves the same thing the same way. */
+    gap: 0.4rem;
     min-height: var(--tap);
 }
 
@@ -446,6 +470,130 @@ body.docs-preview {
     cursor: pointer;
     min-width: var(--tap);
     min-height: var(--tap);
+}
+
+/* Second nav row, rendered by site.js only inside a section that has children.
+ * Darker than the header rather than lighter: white already clears AA on
+ * #727272 at 4.81:1, and darkening only raises that. */
+.subnav {
+    background-color: rgba(0, 0, 0, 0.22);
+    border-top: 1px solid var(--border);
+}
+
+.subnav-container {
+    max-width: var(--content-max);
+    margin: 0 auto;
+    padding: 0 1.25rem;
+}
+
+.subnav-menu {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    /* Eight labels do not fit a phone. Scrolling the row itself is the same
+     * answer .scroll-x gives elsewhere, and keeps the page body from scrolling
+     * sideways — which is what test_no_horizontal_scroll_on_phone measures. */
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+.subnav-menu a {
+    color: #fff;
+    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.5rem;
+    white-space: nowrap;
+}
+
+.subnav-menu a:hover {
+    color: #fff;
+    text-decoration: underline;
+}
+
+.subnav-menu a.active {
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 0.3em;
+    text-decoration-thickness: 2px;
+}
+
+/* ------------------------------------------- Compact header while scrolling
+ *
+ * site.js puts .nav-compact on <body> past a scroll threshold and remeasures
+ * the header, so --header-h, --scroll-offset and the sticky TOC all follow.
+ * Nothing here removes a control: both nav rows stay, they only get flatter,
+ * which is the whole point of keeping the header on screen. */
+
+.nav-container,
+.nav-logo img,
+.nav-menu a,
+.subnav-menu a {
+    transition: min-height 0.15s ease, padding 0.15s ease, height 0.15s ease,
+        font-size 0.15s ease;
+}
+
+body.nav-compact .nav-container {
+    min-height: 2.4rem;
+    padding: 0.2rem 1.25rem;
+}
+
+/* The wordmark and the version are identity, not navigation - the icon alone
+ * still says where you are, and dropping them is most of the height saved. */
+body.nav-compact .nav-logo span {
+    display: none;
+}
+
+body.nav-compact .nav-logo img {
+    height: 1.5rem;
+}
+
+/* 32px rather than the --tap 44px. That is WCAG 2.5.5 (AAA) traded for 2.5.8
+ * (AA, 24x24), and only while scrolled - at rest the targets are full size. */
+body.nav-compact .nav-menu a {
+    min-height: 2rem;
+    font-size: 0.9rem;
+}
+
+/* The global li rule puts 0.4rem above and below every item, which is most of
+ * what is left once the links themselves are shorter. */
+body.nav-compact .nav-menu li,
+body.nav-compact .subnav-menu li {
+    margin: 0;
+}
+
+body.nav-compact .subnav-menu a {
+    min-height: 1.9rem;
+    font-size: 0.8rem;
+}
+
+/* ------------------------------------------ Level switcher inside the header */
+
+/* Rendered by renderLevelSwitcher() into #site-level-compact, which renderNav()
+ * only emits on a page that offers levels at all. Hidden until the header goes
+ * compact: at rest the full switcher is a few lines below it on the page. */
+#site-level-compact {
+    display: none;
+}
+
+body.nav-compact #site-level-compact {
+    display: flex;
+    align-items: center;
+}
+
+.level-options.is-compact {
+    padding: 0.15rem;
+    gap: 0.1rem;
+}
+
+.level-options.is-compact .level-option {
+    font-size: 0.75rem;
+    padding: 0.2rem 0.5rem;
+    /* Overrides the --tap floor the page switcher keeps; see the note above. */
+    min-height: 1.6rem;
 }
 
 /* No-JS fallback: site.js injects the real nav, so without it readers still
@@ -849,6 +997,22 @@ body[data-active-level="expert"] [data-level="expert"] {
     margin-top: 2rem;
 }
 
+/* The group label above a per-profile table (Identity, Temperature, ...). It
+ * names the same grouping the application's settings form uses, so it reads as a
+ * label rather than as another heading in the page outline - and it carries no
+ * id, which keeps twenty-odd of them out of the contents sidebar. */
+.param-group {
+    margin: 1.75rem 0 0.5rem;
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.param-group:first-child {
+    margin-top: 0.5rem;
+}
+
 .param-table code {
     background: none;
     padding: 0;
@@ -860,6 +1024,23 @@ body[data-active-level="expert"] [data-level="expert"] {
 
 .param-desc {
     color: var(--text-secondary);
+}
+
+/* The "I want to ..." index on the configuration overview. Wider line spacing
+ * than an ordinary list: every item is a link and a thumb has to hit one. */
+.task-index {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.task-index li {
+    margin-bottom: 0.5rem;
+}
+
+/* "Explained on <topic page>" under a section heading in the A-Z reference. */
+.param-explained {
+    margin: -0.25rem 0 0.75rem;
+    font-size: 0.9rem;
 }
 
 .param-legend {
@@ -1066,9 +1247,11 @@ img {
      * disclosure: force it open and drop the summary. */
     .toc-sidebar {
         position: sticky;
-        top: calc(var(--header-h) + var(--banner-h) + 1rem);
+        /* The measured total, not the first row's design height: on a section
+         * page the header carries a second row this used to ignore. */
+        top: calc(var(--chrome-h) + var(--banner-h) + 1rem);
         height: fit-content;
-        max-height: calc(100vh - var(--header-h) - var(--banner-h) - 2rem);
+        max-height: calc(100vh - var(--chrome-h) - var(--banner-h) - 2rem);
         overflow-y: auto;
     }
 
@@ -1131,6 +1314,31 @@ img {
 
     .nav-container {
         position: relative;
+    }
+
+    /* The first nav row is behind the hamburger here, so the compact switcher is
+     * the only thing competing with it for width. Tighter, and it still has to
+     * leave the body without a sideways scrollbar at 360px.
+     *
+     * The three properties undone here are the ones the rule above sets for the
+     * switcher on the page, which is full width and has to fit "Getting Started"
+     * into a third of a 360px screen. This one is neither: equal thirds squeezed
+     * every label to the width of the shortest, so "Standard" wrapped to two
+     * lines and still spilled 12px past its own button. */
+    .level-options.is-compact .level-option {
+        font-size: 0.7rem;
+        padding: 0.2rem 0.35rem;
+        flex: 0 0 auto;
+        min-width: auto;
+        white-space: nowrap;
+    }
+
+    /* The hamburger takes the edge, the level buttons sit inboard of it. Done
+     * with order rather than by moving the element, because the DOM order is
+     * what puts the switcher last on a desktop - where the nav links are
+     * visible and it belongs at the far right. */
+    .mobile-menu-toggle {
+        order: 1;
     }
 
     .level-switcher-label {

@@ -76,4 +76,4 @@ def test_timeseries_error_points_at_a_resolvable_page():
     from src.interfaces.timeseries_normalizer import TEMPLATE_DOCS_URL
 
     assert TEMPLATE_DOCS_URL.startswith(("https://", "http://"))
-    assert TEMPLATE_DOCS_URL.endswith("user-guide/configuration.html#timeseries-templates")
+    assert TEMPLATE_DOCS_URL.endswith("user-guide/config-data.html#timeseries-templates")

@@ -24,14 +24,31 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 DOCS = REPO / "docs"
 
+CONFIG_PAGES = [
+    "user-guide/configuration.html",
+    "user-guide/config-data.html",
+    "user-guide/config-battery.html",
+    "user-guide/config-price.html",
+    "user-guide/config-solar.html",
+    "user-guide/config-optimizer.html",
+    "user-guide/config-managed-loads.html",
+    "user-guide/config-system.html",
+]
+
+USER_GUIDE_PAGES = [
+    "user-guide/index.html",
+    "user-guide/install.html",
+    "user-guide/first-run.html",
+    "user-guide/daily-use.html",
+    "user-guide/troubleshooting.html",
+]
+
 PAGES = [
     "index.html",
     "what-is/index.html",
-    "user-guide/index.html",
-    "user-guide/configuration.html",
     "advanced/index.html",
     "developer/index.html",
-]
+] + USER_GUIDE_PAGES + CONFIG_PAGES
 
 PHONE = {"width": 360, "height": 740}
 DESKTOP = {"width": 1440, "height": 900}
@@ -66,6 +83,16 @@ def page_fixture(browser):
     page = context.new_page()
     yield page
     context.close()
+
+
+def _page_level(page, label):
+    """The level button on the page itself, not the copy in the header.
+
+    Both switchers carry the same accessible name on purpose - they are the same
+    control - so an unscoped query matches two elements and Playwright's strict
+    mode refuses to click either.
+    """
+    return page.locator("#site-level").get_by_role("button", name=label, exact=True)
 
 
 def _open(page, docs_url, path, **query):
@@ -222,7 +249,7 @@ def test_level_filter_matches_schema(page, docs_url):
     for label, level in (("Getting Started", "getting_started"),
                          ("Standard", "standard"),
                          ("Expert", "expert")):
-        page.get_by_role("button", name=label, exact=True).click()
+        _page_level(page, label).click()
         page.wait_for_timeout(250)
         rows = page.locator("#schema-reference tbody tr").count()
         assert rows == expected[level], (
@@ -233,7 +260,7 @@ def test_level_filter_matches_schema(page, docs_url):
 def test_level_persists_across_pages(page, docs_url):
     """A reader should not have to re-pick their depth on every page."""
     _open(page, docs_url, "user-guide/configuration.html")
-    page.get_by_role("button", name="Expert", exact=True).click()
+    _page_level(page, "Expert").click()
     page.wait_for_timeout(200)
 
     _open(page, docs_url, "user-guide/index.html")
@@ -248,16 +275,22 @@ def test_app_deep_links_reach_their_anchor(page, docs_url):
     running application. 57 of 127 of them pointed at nothing before this.
     """
     schema = json.loads((DOCS / "assets/data/config_schema.json").read_text())
-    anchors = sorted({
-        f["help_url"].split("#", 1)[1]
-        for f in schema["fields"] if "#" in (f.get("help_url") or "")
-    })
+    by_page = {}
+    for field in schema["fields"]:
+        url = field.get("help_url") or ""
+        if "#" in url:
+            target, anchor = url.split("#", 1)
+            by_page.setdefault(target, set()).add(anchor)
 
-    _open(page, docs_url, "user-guide/configuration.html", level="expert")
-    page.wait_for_selector("#schema-reference h2")
-    rendered = set(page.evaluate("() => [...document.querySelectorAll('[id]')].map(e => e.id)"))
+    missing = []
+    for target, anchors in sorted(by_page.items()):
+        _open(page, docs_url, "user-guide/" + target, level="expert")
+        page.wait_for_timeout(400)
+        rendered = set(page.evaluate(
+            "() => [...document.querySelectorAll('[id]')].map(e => e.id)"
+        ))
+        missing += [f"{target}#{a}" for a in sorted(anchors) if a not in rendered]
 
-    missing = [a for a in anchors if a not in rendered]
     assert not missing, f"help_url anchors that do not exist: {missing}"
 
 
@@ -267,9 +300,9 @@ def test_deep_link_into_hidden_content_raises_the_level(page, docs_url):
     src/interfaces/timeseries_normalizer.py points error messages at
     #timeseries-templates, which lives in a Standard-level block.
     """
-    _open(page, docs_url, "user-guide/configuration.html", level="getting_started")
+    _open(page, docs_url, "user-guide/config-data.html", level="getting_started")
     page.goto(
-        docs_url + "user-guide/configuration.html?level=getting_started#timeseries-templates",
+        docs_url + "user-guide/config-data.html?level=getting_started#timeseries-templates",
         wait_until="domcontentloaded",
     )
     page.wait_for_timeout(400)
@@ -382,22 +415,28 @@ def test_banner_shows_on_every_preview_page(browser, preview_docs_url, path):
 
 
 def test_banner_starts_above_the_header_without_covering_it(page, preview_docs_url):
-    """At rest the banner is the topmost chrome and the header sits clear below it.
+    """The banner is the topmost chrome and the header sits clear below it.
 
-    The header is *not* sticky on this site despite its ``position: sticky``:
-    ``#site-nav`` wraps it at exactly its own height, so it has no travel. That is
-    pre-existing and deliberately left alone, which is why the banner holds its own
-    position (``position: fixed``) instead of relying on the header.
+    The header sticks by way of ``#site-nav``, offset by ``top: var(--banner-h)``
+    so it comes to rest under the banner rather than behind it. The banner stays
+    ``position: fixed`` because it has to hold the top edge while the header
+    travels. Checked at rest and scrolled: the offset is what keeps the order.
     """
     _open(page, preview_docs_url, "user-guide/configuration.html")
 
-    banner_box = page.locator(".preview-banner").bounding_box()
-    header_box = page.locator(".nav-header").bounding_box()
+    for where in ("at rest", "scrolled"):
+        if where == "scrolled":
+            page.evaluate("() => window.scrollTo(0, 1500)")
+            page.wait_for_function("() => window.scrollY > 1000")
+            page.wait_for_timeout(400)
 
-    assert banner_box["y"] == pytest.approx(0, abs=1)
-    assert header_box["y"] >= banner_box["y"] + banner_box["height"] - 1, (
-        "the banner covers the top of the navigation header"
-    )
+        banner_box = page.locator(".preview-banner").bounding_box()
+        header_box = page.locator(".nav-header").bounding_box()
+
+        assert banner_box["y"] == pytest.approx(0, abs=1), where
+        assert header_box["y"] >= banner_box["y"] + banner_box["height"] - 1, (
+            f"{where}: the banner covers the top of the navigation header"
+        )
 
 
 def test_banner_stays_visible_while_scrolling(page, preview_docs_url):
@@ -443,7 +482,7 @@ def test_deep_linked_anchor_is_not_hidden_behind_the_banner(page, preview_docs_u
     """
     page.goto(
         preview_docs_url
-        + "user-guide/configuration.html?level=expert#timeseries-templates",
+        + "user-guide/config-data.html?level=expert#timeseries-templates",
         wait_until="domcontentloaded",
     )
     page.wait_for_function("() => !!document.querySelector('.preview-banner')")
@@ -476,6 +515,532 @@ def test_navigation_stays_inside_the_preview(page, preview_docs_url):
 def test_level_switcher_still_works_under_the_preview_path(page, preview_docs_url):
     """The deeper path must not break the disclosure level or the contents."""
     _open(page, preview_docs_url, "user-guide/configuration.html")
-    page.locator(".level-option[data-level-value='expert']").click()
+    page.locator("#site-level .level-option[data-level-value='expert']").click()
     assert page.locator("body[data-active-level='expert']").count() == 1
     assert page.locator(".toc-link").count() > 1
+
+
+# ------------------------------------------------- managed-load profile tables
+
+MANAGED_LOAD_PROFILES = [
+    "pool_heatpump",
+    "sauna",
+    "hot_water_tank",
+    "buffer_tank",
+    "external_contingent",
+    "external_profile",
+]
+
+
+@pytest.mark.parametrize("profile", MANAGED_LOAD_PROFILES)
+def test_every_profile_renders_its_own_settings(page, docs_url, profile):
+    """Each profile mount must fill with the settings that profile really has.
+
+    The tables come from depends_on: {type: [...]} in the schema, so this also
+    proves the six mounts on the page name types the schema still knows about —
+    a renamed type would leave an empty table rather than failing anywhere else.
+    """
+    schema = json.loads((DOCS / "assets/data/config_schema.json").read_text())
+    expected = {
+        f["key"].split(".", 1)[1]
+        for f in schema["fields"]
+        if f["section"] == "managed_loads"
+        and profile in ((f.get("depends_on") or {}).get("type") or [profile])
+    }
+
+    _open(page, docs_url, "user-guide/config-managed-loads.html", level="expert")
+    mount = page.locator(f"[data-managed-load-profile='{profile}']")
+    page.wait_for_selector(f"[data-managed-load-profile='{profile}'] table")
+
+    shown = set(mount.locator("td.param-key code").all_inner_texts())
+    assert shown == expected, (
+        f"{profile} shows {sorted(shown - expected)} it should not and is missing "
+        f"{sorted(expected - shown)}"
+    )
+
+
+def _profile_row(page, profile, key):
+    """The row for one setting in a profile's table, matched on the key itself.
+
+    Matching on text would also hit the header ("Type") and any description that
+    happens to mention the setting.
+    """
+    return page.locator(f"[data-managed-load-profile='{profile}'] tbody tr").filter(
+        has=page.locator(f"td.param-key code:text-is('{key}')")
+    ).first
+
+
+def test_profile_tables_show_the_profile_starting_values(page, docs_url):
+    """A sauna must not be documented with the pool's numbers.
+
+    managed_loads.target_temp is one FieldDef shared by four appliance types and
+    its default is the pool's 28 C. The per-profile values come from
+    managed_load_presets, exported from src/loads/presets.py.
+    """
+    schema = json.loads((DOCS / "assets/data/config_schema.json").read_text())
+    presets = schema["managed_load_presets"]
+
+    _open(page, docs_url, "user-guide/config-managed-loads.html", level="expert")
+    page.wait_for_selector("[data-managed-load-profile='sauna'] table")
+
+    for profile in ("pool_heatpump", "sauna"):
+        row = _profile_row(page, profile, "target_temp")
+        # Compared as a number: 28.0 in the JSON is 28 once JavaScript has
+        # rendered it, which is the same temperature.
+        shown = float(row.locator("td").all_inner_texts()[2])
+        expected = presets[profile]["defaults"]["target_temp"]
+        assert shown == expected, (
+            f"{profile} documents target_temp as {shown}, preset says {expected}"
+        )
+
+
+@pytest.mark.parametrize("profile", MANAGED_LOAD_PROFILES)
+def test_the_type_row_names_the_profile_it_is_in(page, docs_url, profile):
+    """No preset names the type - it is the key they are looked up by.
+
+    Left to fall back on the schema, every profile would document its own type as
+    pool_heatpump, which is the one value in that table that cannot be changed
+    without making it a different table.
+    """
+    _open(page, docs_url, "user-guide/config-managed-loads.html", level="expert")
+    page.wait_for_selector(f"[data-managed-load-profile='{profile}'] table")
+
+    shown = _profile_row(page, profile, "type").locator("td").all_inner_texts()[2]
+    assert shown.strip() == profile, f"the {profile} table documents type as {shown!r}"
+
+
+def test_a_preset_of_none_reads_as_no_limit(page, docs_url):
+    """None in a preset means "no limit", not "unset".
+
+    A sauna has no allowed window at all; rendering its window_start as the
+    schema's 8 would document a restriction that is not applied.
+    """
+    _open(page, docs_url, "user-guide/config-managed-loads.html", level="expert")
+    page.wait_for_selector("[data-managed-load-profile='sauna'] table")
+
+    row = _profile_row(page, "sauna", "window_start")
+    assert "no limit" in row.locator("td").all_inner_texts()[2]
+
+
+@pytest.mark.parametrize("path", CONFIG_PAGES)
+def test_the_rendered_page_has_no_duplicate_ids(page, docs_url, path):
+    """Generated tables must not claim an anchor the prose already owns.
+
+    Both are driven by help_url, so every anchor the application links to exists
+    twice by construction unless config-reference.js yields the id. Two elements
+    with one id put the section twice in the contents and send the deep link to
+    whichever came first.
+    """
+    _open(page, docs_url, path, level="expert")
+    page.wait_for_timeout(400)
+
+    dupes = page.evaluate(
+        "() => { const seen = {}; "
+        "[...document.querySelectorAll('[id]')].forEach(e => "
+        "  seen[e.id] = (seen[e.id] || 0) + 1); "
+        "return Object.keys(seen).filter(k => seen[k] > 1); }"
+    )
+    assert not dupes, f"ids rendered more than once: {dupes}"
+
+
+def test_profile_tables_follow_the_detail_level(page, docs_url):
+    """The per-profile tables are subject to the same disclosure as everything else."""
+    _open(page, docs_url, "user-guide/config-managed-loads.html", level="expert")
+    page.wait_for_selector("[data-managed-load-profile='pool_heatpump'] table")
+    expert = page.locator("[data-managed-load-profile='pool_heatpump'] tbody tr").count()
+
+    _page_level(page, "Standard").click()
+    page.wait_for_timeout(250)
+    standard = page.locator("[data-managed-load-profile='pool_heatpump'] tbody tr").count()
+
+    assert 0 < standard < expert, (
+        f"pool heat pump shows {standard} settings at Standard and {expert} at "
+        "Expert; the level filter is not reaching the profile tables"
+    )
+
+
+@pytest.mark.parametrize("path", CONFIG_PAGES)
+def test_every_schema_section_mount_renders_a_table(page, docs_url, path):
+    """An empty mount is invisible: the prose reads on, the settings are gone."""
+    _open(page, docs_url, path, level="expert")
+    page.wait_for_timeout(400)
+
+    empty = page.evaluate(
+        "() => [...document.querySelectorAll('[data-schema-section]')]"
+        "  .filter(n => !n.querySelector('table'))"
+        "  .map(n => n.getAttribute('data-schema-section') + '#' +"
+        "            (n.getAttribute('data-schema-anchor') || ''))"
+    )
+    assert not empty, f"{path} has mounts that rendered no table: {empty}"
+
+
+def test_the_reference_points_each_section_at_its_page(page, docs_url):
+    """The A-Z list answers "what is it called"; the link is what answers "why".
+
+    Without it the reader who found a name in the full list has nowhere to go
+    with it, which is the whole reason the list is allowed to stay complete.
+    """
+    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    page.wait_for_selector("#schema-reference table")
+
+    targets = page.evaluate(
+        "() => [...document.querySelectorAll('#schema-reference .param-explained a')]"
+        "  .map(a => a.getAttribute('href'))"
+    )
+    assert len(targets) >= 13, f"only {len(targets)} sections link to a topic page"
+    assert all(t.startswith("config-") for t in targets), targets
+
+
+@pytest.mark.parametrize("level", ["getting_started", "standard", "expert"])
+def test_reference_headings_are_distinct_within_a_section(page, docs_url, level):
+    """Two groups in one section must not carry the same title.
+
+    The A-Z list groups fields by their help_url anchor and titles each group from
+    ANCHOR_TITLE, falling back to the section label. That fallback was invisible
+    while a section had one anchor; splitting managed_loads across the paragraphs
+    that explain it turned it into twelve consecutive headings all reading
+    "Managed Loads", each above a "nothing here at this level" note.
+
+    Titles repeating across *different* sections is fine and expected - an anchor
+    can serve fields from two sections, and the section heading above tells them
+    apart.
+    """
+    _open(page, docs_url, "user-guide/configuration.html", level=level)
+    page.wait_for_selector("#schema-reference table")
+    page.wait_for_timeout(300)
+
+    sections = page.evaluate(
+        "() => [...document.querySelectorAll('#schema-reference section')].map(s => ({"
+        "  name: s.querySelector('h2').textContent.trim(),"
+        "  groups: [...s.querySelectorAll('h3')].map(h => h.textContent.trim())"
+        "}))"
+    )
+    assert sections, "the reference rendered no sections at all"
+
+    repeated = {
+        s["name"]: sorted({g for g in s["groups"] if s["groups"].count(g) > 1})
+        for s in sections
+        if any(s["groups"].count(g) > 1 for g in s["groups"])
+    }
+    assert not repeated, f"sections with repeated group headings: {repeated}"
+
+
+@pytest.mark.parametrize("level", ["getting_started", "standard", "expert"])
+def test_the_reference_shows_no_empty_groups(page, docs_url, level):
+    """A heading with no table under it is noise, not navigation.
+
+    Every anchor the application links to is a written heading on a topic page
+    now, so the reference has no reason to render one it cannot fill.
+    """
+    _open(page, docs_url, "user-guide/configuration.html", level=level)
+    page.wait_for_selector("#schema-reference table")
+    page.wait_for_timeout(300)
+
+    empty = page.evaluate(
+        "() => [...document.querySelectorAll('#schema-reference h3')]"
+        "  .filter(h => h.nextElementSibling === null ||"
+        "               !h.nextElementSibling.querySelector('table'))"
+        "  .map(h => h.textContent.trim())"
+    )
+    assert not empty, f"group headings with no table: {empty}"
+
+
+@pytest.mark.parametrize("level", ["getting_started", "standard", "expert"])
+@pytest.mark.parametrize("path", CONFIG_PAGES)
+def test_no_setting_is_shown_above_the_chosen_level(page, docs_url, path, level):
+    """Nothing painted may carry a level badge higher than the one selected.
+
+    Three mechanisms filter by level and they are easy to get out of step: CSS on
+    ``data-level`` blocks, the row filter in the generated tables, and the
+    per-profile tables. This asserts the result rather than any one of them - it
+    reads the badge off every row the browser actually painted.
+    """
+    order = {"getting started": 0, "standard": 1, "expert": 2}
+    _open(page, docs_url, path, level=level)
+    page.wait_for_timeout(500)
+
+    shown = page.evaluate(
+        "() => [...document.querySelectorAll('table.param-table tbody tr')]"
+        "  .filter(tr => tr.offsetParent !== null && tr.querySelector('.badge-level'))"
+        "  .map(tr => ({key: tr.querySelector('td.param-key').textContent.trim(),"
+        "               level: tr.querySelector('.badge-level').textContent.trim()}))"
+    )
+    # Not every page has settings at every level, so an empty result is only
+    # suspicious at Expert - where a page showing nothing means a mount that
+    # failed rather than a level that excludes everything.
+    if level == "expert":
+        assert shown, f"{path} painted no parameter rows at Expert"
+
+    too_deep = sorted({
+        f"{r['key']} ({r['level']})"
+        for r in shown
+        if order.get(r["level"].lower(), 2) > order[level.replace("_", " ")]
+    })
+    assert not too_deep, f"{path} at {level} shows deeper settings: {too_deep}"
+
+
+@pytest.mark.parametrize("level", ["getting_started", "standard", "expert"])
+@pytest.mark.parametrize("path", CONFIG_PAGES)
+def test_the_contents_lists_nothing_hidden(page, docs_url, path, level):
+    """Every entry in "on this page" must lead somewhere visible.
+
+    buildTOC() filters on what is rendered, and the generated tables render after
+    it first runs - so a heading that the level filter later empties, or one the
+    reference stopped emitting, would linger in the sidebar as a dead entry.
+    """
+    _open(page, docs_url, path, level=level)
+    page.wait_for_timeout(500)
+
+    ghosts = page.evaluate(
+        "() => [...document.querySelectorAll('.toc-link')]"
+        "  .map(a => a.getAttribute('href'))"
+        "  .filter(h => { const el = document.getElementById(h.slice(1));"
+        "                 return !el || el.offsetParent === null; })"
+    )
+    assert not ghosts, f"{path} at {level} lists hidden headings: {ghosts}"
+
+
+# ------------------------------------------------------------- sticky header
+
+def _header_metrics(page):
+    return page.evaluate(
+        "() => { const h = document.querySelector('.nav-header').getBoundingClientRect();"
+        " return {y: h.y, height: h.height, bottom: h.bottom,"
+        "  chrome: parseFloat(getComputedStyle(document.body)"
+        "            .getPropertyValue('--chrome-h')) || 0}; }"
+    )
+
+
+@pytest.mark.parametrize("path", ["user-guide/config-battery.html", "advanced/index.html"])
+def test_the_header_stays_at_the_top_while_scrolling(page, docs_url, path):
+    """The header has to travel, which for years it did not.
+
+    ``.nav-header`` declared ``position: sticky`` but its parent ``#site-nav``
+    wraps it at exactly its own height, so the sticky rectangle had no travel and
+    it behaved like ``position: relative``. The sticky now sits on ``#site-nav``,
+    whose parent is ``<body>``.
+    """
+    _open(page, docs_url, path)
+    page.wait_for_timeout(300)
+    assert _header_metrics(page)["y"] == pytest.approx(0, abs=1), "not at the top at rest"
+
+    page.evaluate("() => window.scrollTo(0, 1500)")
+    page.wait_for_function("() => window.scrollY > 1000")
+    page.wait_for_timeout(400)
+    assert _header_metrics(page)["y"] == pytest.approx(0, abs=1), (
+        "the header scrolled away instead of sticking"
+    )
+
+
+def test_the_header_gets_flatter_when_scrolled(page, docs_url):
+    """Sticky chrome that kept its full height would just eat the viewport.
+
+    Both nav rows have to survive the shrink - being able to change section
+    without scrolling back up is the entire point of keeping the header.
+    """
+    _open(page, docs_url, "user-guide/config-battery.html")
+    page.wait_for_timeout(300)
+    tall = _header_metrics(page)["height"]
+
+    page.evaluate("() => window.scrollTo(0, 1500)")
+    page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+    page.wait_for_timeout(500)
+    short = _header_metrics(page)["height"]
+
+    assert short < tall * 0.8, f"header went from {tall:.0f}px to {short:.0f}px"
+    assert page.locator(".nav-menu a.active").first.is_visible(), "first level lost"
+    assert page.locator(".subnav-menu a.active").first.is_visible(), "second level lost"
+
+
+@pytest.mark.parametrize("scrolled", [False, True])
+def test_chrome_height_matches_the_rendered_header(page, docs_url, scrolled):
+    """--chrome-h feeds the anchor offset and the sticky contents sidebar.
+
+    It is written from a measurement, and the measurement is taken while the
+    shrink is still animating - so it is only right because a transitionend
+    listener takes it again. Wrong here means anchors land behind the header.
+    """
+    _open(page, docs_url, "user-guide/config-battery.html")
+    if scrolled:
+        page.evaluate("() => window.scrollTo(0, 1500)")
+        page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+    page.wait_for_timeout(600)
+
+    m = _header_metrics(page)
+    assert m["chrome"] == pytest.approx(m["height"], abs=2), (
+        f"--chrome-h is {m['chrome']}px, the header is {m['height']:.0f}px"
+    )
+
+
+def test_the_measured_height_never_reaches_the_min_height(page, docs_url):
+    """--header-h is an input and must stay one.
+
+    .nav-container takes it as its min-height, so writing the measured total back
+    into it makes the header grow by its own height every time it is measured -
+    130px, then 184px, and on up. Asserted as the invariant rather than as a
+    symptom: the runaway saturates quickly enough that comparing two heights can
+    miss it.
+    """
+    _open(page, docs_url, "user-guide/config-battery.html")
+    page.evaluate("() => window.scrollTo(0, 1500)")
+    page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+    page.wait_for_timeout(500)
+
+    written = page.evaluate(
+        "() => ({header: document.body.style.getPropertyValue('--header-h'),"
+        "        chrome: document.body.style.getPropertyValue('--chrome-h')})"
+    )
+    assert written["header"] == "", (
+        f"--header-h was written at runtime ({written['header']}); the measured "
+        "value belongs in --chrome-h"
+    )
+    assert written["chrome"], "--chrome-h was never measured"
+
+
+def test_a_contents_jump_lands_below_the_header(page, docs_url):
+    """scroll-margin-top has to clear the chrome that is now genuinely on top.
+
+    --scroll-offset is declared on <body> rather than :root on purpose: a var()
+    is substituted where the property is declared, and both terms are measured
+    onto <body> at runtime.
+    """
+    _open(page, docs_url, "user-guide/config-battery.html")
+    page.wait_for_timeout(300)
+    page.locator(".toc-link", has_text="The inverter").first.click()
+    page.wait_for_timeout(1000)
+
+    box = page.locator("#inverter").bounding_box()
+    assert box["y"] >= _header_metrics(page)["bottom"] - 1, (
+        "the heading landed behind the header"
+    )
+
+
+def test_the_header_switcher_appears_only_when_scrolled(page, docs_url):
+    """At rest the full switcher is a few lines down the page; a copy would be noise."""
+    _open(page, docs_url, "user-guide/config-battery.html")
+    page.wait_for_timeout(300)
+    assert not page.locator("#site-level-compact").is_visible()
+
+    page.evaluate("() => window.scrollTo(0, 1500)")
+    page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+    page.wait_for_timeout(400)
+    assert page.locator("#site-level-compact").is_visible()
+
+
+def test_the_header_switcher_drives_the_same_state(page, docs_url):
+    """One control in two places: applyLevel() syncs both from one query.
+
+    Both sets keep class="level-option" and data-level-value for exactly that
+    reason, so neither can drift from the level the body actually carries.
+    """
+    _open(page, docs_url, "user-guide/config-battery.html", level="standard")
+    page.evaluate("() => window.scrollTo(0, 1500)")
+    page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+    page.wait_for_timeout(400)
+
+    page.locator("#site-level-compact .level-option[data-level-value='expert']").click()
+    page.wait_for_timeout(400)
+
+    assert page.evaluate("() => document.body.dataset.activeLevel") == "expert"
+    for where in ("#site-level", "#site-level-compact"):
+        pressed = page.locator(
+            f"{where} .level-option[data-level-value='expert']"
+        ).get_attribute("aria-pressed")
+        assert pressed == "true", f"{where} did not follow"
+
+
+def test_pages_without_levels_have_no_header_switcher(page, docs_url):
+    """Those pages are pinned to Expert, so a switcher there would do nothing."""
+    _open(page, docs_url, "advanced/index.html")
+    page.wait_for_timeout(300)
+    assert page.locator("#site-level-compact").count() == 0
+
+
+def test_the_github_link_separates_its_icon_from_its_label(page, docs_url):
+    """`.nav-menu a` is a flex container, and flex drops whitespace-only items.
+
+    The literal space between the icon and "GitHub" in the markup is one of those,
+    so without an explicit gap the two render flush against each other.
+    """
+    _open(page, docs_url, "user-guide/index.html")
+    gap = page.evaluate(
+        "() => { const a = [...document.querySelectorAll('.nav-menu a')]"
+        "  .find(x => x.textContent.trim() === 'GitHub');"
+        "  return parseFloat(getComputedStyle(a).columnGap) || 0; }"
+    )
+    assert gap >= 2, f"icon and label are {gap}px apart"
+
+
+def test_the_hamburger_keeps_the_edge_on_a_phone(browser, docs_url):
+    """Thumb reach: the menu button belongs at the edge, the filters inboard.
+
+    DOM order puts the compact switcher last because that is where it belongs on
+    a desktop, to the right of the nav links. On a phone the links are behind the
+    hamburger, so the two swap visually - which is what CSS order is for.
+    """
+    context = browser.new_context(viewport=PHONE)
+    page = context.new_page()
+    try:
+        _open(page, docs_url, "user-guide/config-battery.html")
+        page.evaluate("() => window.scrollTo(0, 1500)")
+        page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+        page.wait_for_timeout(400)
+
+        order = page.evaluate(
+            "() => [...document.querySelector('.nav-container').children]"
+            "  .filter(e => getComputedStyle(e).display !== 'none')"
+            "  .map(e => [e, e.getBoundingClientRect().x])"
+            "  .sort((a, b) => a[1] - b[1])"
+            "  .map(([e]) => e.id || e.className.split(' ')[0])"
+        )
+        assert order == ["nav-logo", "site-level-compact", "mobile-menu-toggle"], order
+    finally:
+        context.close()
+
+
+def test_the_switcher_sits_right_of_the_links_on_a_desktop(browser, docs_url):
+    """The mirror of the phone rule: on a desktop nothing reorders."""
+    context = browser.new_context(viewport=DESKTOP)
+    page = context.new_page()
+    try:
+        _open(page, docs_url, "user-guide/config-battery.html")
+        page.evaluate("() => window.scrollTo(0, 1500)")
+        page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+        page.wait_for_timeout(400)
+
+        menu = page.locator(".nav-menu").bounding_box()
+        switcher = page.locator("#site-level-compact").bounding_box()
+        assert switcher["x"] >= menu["x"] + menu["width"] - 1, (
+            "the compact switcher is not to the right of the nav links"
+        )
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("viewport", [PHONE, DESKTOP], ids=["phone", "desktop"])
+def test_no_level_button_is_narrower_than_its_label(browser, docs_url, viewport):
+    """A label wider than its button is clipped, whichever switcher it is in.
+
+    The phone rule gives .level-option `flex: 1 1 0` so the switcher on the page
+    can divide 360px into equal thirds. The compact copy in the header inherited
+    that, which squeezed every label to the width of the shortest - "Standard"
+    wrapped to two lines and still spilled 12px past its own edge.
+    """
+    context = browser.new_context(viewport=viewport)
+    page = context.new_page()
+    try:
+        _open(page, docs_url, "user-guide/config-battery.html")
+        page.evaluate("() => window.scrollTo(0, 1500)")
+        page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+        page.wait_for_timeout(400)
+
+        clipped = page.evaluate(
+            "() => [...document.querySelectorAll('.level-option')]"
+            "  .filter(e => e.offsetParent !== null && e.scrollWidth > e.clientWidth + 1)"
+            "  .map(e => ({label: e.textContent.trim(),"
+            "              needs: e.scrollWidth, has: e.clientWidth,"
+            "              where: e.closest('#site-level-compact') ? 'header' : 'page'}))"
+        )
+        assert not clipped, f"labels wider than their button: {clipped}"
+    finally:
+        context.close()

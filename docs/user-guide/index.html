@@ -5,10 +5,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>User Guide - EOS Connect</title>
-    <meta name="description"
-        content="Install EOS Connect on Home Assistant, Docker or from source, run the setup wizard, and fix the problems people actually hit.">
-    <meta property="og:title" content="EOS Connect User Guide">
-    <meta property="og:description" content="Install EOS Connect, run the setup wizard, and troubleshoot it.">
+    <meta name="description" content="Install EOS Connect, let the wizard configure it, learn to read the dashboard, and know where to look when something misbehaves.">
+    <meta property="og:title" content="User Guide - EOS Connect">
+    <meta property="og:description" content="Install EOS Connect, let the wizard configure it, learn to read the dashboard, and know where to look when something misbehaves.">
     <meta property="og:type" content="article">
     <meta property="og:image" content="https://ohAnd.github.io/EOS_connect/assets/images/logo.png">
     <link rel="icon" href="../assets/images/icon.png">
@@ -16,7 +15,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
 </head>
 
-<body data-page="user-guide" data-root="../" data-levels>
+<body data-page="user-guide" data-subpage="overview" data-root="../" data-levels>
     <div id="site-nav"></div>
     <noscript>
         <div class="nav-fallback">
@@ -39,288 +38,105 @@
 
                 <div class="hero">
                     <h1>User Guide</h1>
-                    <p>Get EOS Connect installed and running, let the wizard configure it, and know
-                        where to look when something misbehaves.</p>
+                    <p>From nothing installed to a battery being planned &mdash; and what to check when it is not.</p>
                 </div>
 
                 <div id="site-level"></div>
 
                 <div class="content-section">
-                    <h2 id="installation"><i class="fas fa-download" aria-hidden="true"></i> Install</h2>
-                    <p>Pick one. All three end at the same place: a web UI on port
-                        <strong>8081</strong> that walks you through setup.</p>
-
-                    <h3 id="install-ha">Home Assistant add-on</h3>
-                    <p>The easiest route if you already run Home Assistant.</p>
-                    <ol>
-                        <li>Add the <a href="https://github.com/ohAnd/ha_addons" target="_blank"
-                                rel="noopener">ohAnd/ha_addons</a> repository to your add-on store.</li>
-                        <li>Install <strong>EOS Connect</strong> and start it.</li>
-                        <li>Open <code>http://homeassistant.local:8081</code>.</li>
-                    </ol>
-                    <div class="alert alert-info">
-                        <p>The add-on only sets the web port, time zone and log level. Everything else
-                            lives in EOS Connect's own database and is configured in its web UI.</p>
-                    </div>
-
-                    <h3 id="install-docker">Docker</h3>
-                    <p>Works on anything that runs containers.</p>
-                    <div class="scroll-x">
-                        <pre><code>git clone https://github.com/ohAnd/EOS_connect.git
-cd EOS_connect
-docker compose up -d</code></pre>
-                    </div>
-                    <div class="alert alert-warning">
-                        <p><strong>Keep the <code>./data:/app/data</code> volume.</strong> Your settings,
-                            the PV yield history the forecast auto-scaler learns from, and what each
-                            managed load has learned about its appliance all live in
-                            <code>data/eos_connect.db</code>. Without that mount the database sits on the
-                            container's writable layer and is destroyed every time the container is
-                            recreated &mdash; which is exactly what an update does. Your settings then
-                            appear to have reverted on their own. Compose files written before v0.3.34
-                            do not have it.</p>
-                    </div>
-
-                    <h3 id="install-source">From source</h3>
-                    <p>Python 3.13.</p>
-                    <div class="scroll-x">
-                        <pre><code>git clone https://github.com/ohAnd/EOS_connect.git
-cd EOS_connect
-pip install -r requirements.txt
-python src/eos_connect.py</code></pre>
-                    </div>
-
-                    <div data-level="standard">
-                        <h3 id="bootstrap-config">Bootstrap settings</h3>
-                        <p>Almost everything is configured in the web UI and stored in the database.
-                            Only these infrastructure keys are read from <code>config.yaml</code> at
-                            startup, because they are needed before the database is open:</p>
-                        <div class="scroll-x">
-                            <pre><code># config.yaml — bootstrap settings only
-eos_connect_web_port: 8081  # web server port
-time_zone: Europe/Berlin    # system time zone
-log_level: info             # debug, info, warning, error</code></pre>
-                        </div>
-                        <p>Each has an environment-variable equivalent, which wins over the file:
-                            <code>EOS_WEB_PORT</code>, <code>EOS_TIMEZONE</code>,
-                            <code>EOS_LOG_LEVEL</code> and <code>EOS_DATA_PATH</code>.</p>
-                        <div class="alert alert-info">
-                            <p><strong>Upgrading?</strong> On first start EOS Connect migrates an existing
-                                <code>config.yaml</code> into the database by itself. Afterwards you can
-                                cut the file back to the keys above.</p>
-                        </div>
+                    <h2 id="start-here"><i class="fas fa-flag" aria-hidden="true"></i> Start here</h2>
+                    <p>Four steps, in order. Each is its own page, and the row above keeps them within
+                        one click of each other.</p>
+                    <div class="card-grid">
+                        <a class="block-card" href="install.html">
+                            <div class="card-header"><i class="fas fa-download icon"
+                                    aria-hidden="true"></i>
+                                <h3>1 &middot; Install</h3>
+                            </div>
+                            <p>Home Assistant add-on, Docker or source &mdash; and the one volume mount
+                                worth getting right.</p>
+                        </a>
+                        <a class="block-card" href="first-run.html">
+                            <div class="card-header"><i class="fas fa-wand-magic-sparkles icon"
+                                    aria-hidden="true"></i>
+                                <h3>2 &middot; First run</h3>
+                            </div>
+                            <p>What the wizard asks, why in that order, and what it deliberately leaves
+                                for later.</p>
+                        </a>
+                        <a class="block-card" href="daily-use.html">
+                            <div class="card-header"><i class="fas fa-gauge-high icon"
+                                    aria-hidden="true"></i>
+                                <h3>3 &middot; Living with it</h3>
+                            </div>
+                            <p>Reading the dashboard, overriding the battery by hand, and what the
+                                system has learned.</p>
+                        </a>
+                        <a class="block-card" href="troubleshooting.html">
+                            <div class="card-header"><i class="fas fa-screwdriver-wrench icon"
+                                    aria-hidden="true"></i>
+                                <h3>4 &middot; Troubleshooting</h3>
+                            </div>
+                            <p>Sorted by the symptom you actually see, from startup crashes to sensors
+                                that read nothing.</p>
+                        </a>
                     </div>
                 </div>
 
                 <div class="content-section">
-                    <h2 id="first-run"><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i> First
-                        run</h2>
-                    <p>On first launch a <strong>setup wizard</strong> opens and asks, in order, for the
-                        things it cannot guess. It saves only the answers it actually asked for &mdash;
-                        everything else keeps its default until you change it.</p>
-
-                    <ol>
-                        <li><strong>Optimizer</strong> &mdash; built-in local solver, or an external EOS
-                            or EVopt server. The built-in one is preselected and needs nothing.</li>
-                        <li><strong>EVCC</strong> <em>(optional)</em> &mdash; for PV forecasts, inverter
-                            control or car-charging-aware behaviour. Skip if you do not run it.</li>
-                        <li><strong>Data source</strong> &mdash; Home Assistant, OpenHAB, or built-in
-                            defaults.</li>
-                        <li><strong>Inverter</strong> &mdash; for battery control. Leave it on
-                            <em>default</em> for display only.</li>
-                        <li><strong>Battery</strong> &mdash; capacity and charge limits.</li>
-                        <li><strong>Load</strong> &mdash; your consumption sensor. Skipped automatically
-                            if no data source is connected.</li>
-                        <li><strong>Price</strong> &mdash; your electricity tariff provider.</li>
-                        <li><strong>PV installations</strong> &mdash; your solar forecast. Preset to a
-                            built-in demo curve so the first run finishes without your roof geometry.</li>
-                    </ol>
-
-                    <p>Restart EOS Connect when the wizard finishes, and the dashboard starts filling in.</p>
-
-                    <div class="alert alert-warning">
-                        <p>The <strong>Default</strong> PV source is a fixed demo curve for an assumed
-                            4&nbsp;kW array &mdash; not a forecast for your roof. It exists so you can see
-                            the system working immediately. Swap it for a real provider under
-                            <em>Settings &rsaquo; PV Source</em> once you are up.</p>
-                    </div>
-
-                    <div data-level="standard">
-                        <h3 id="wizard-notes">Why the wizard asks in that order</h3>
-                        <ul>
-                            <li>EVCC and Data Source come before Inverter because either one can act as
-                                the inverter controller. Leave the EVCC URL blank and that option is
-                                greyed out later.</li>
-                            <li>Sensor fields only appear once Data Source names Home Assistant or
-                                OpenHAB. Left unset, load and battery fall back to built-in defaults and
-                                say so in the log &mdash; they are never quietly polling a name you did not
-                                choose.</li>
-                            <li>Every sensor field has a <strong>Test</strong> button that reads the
-                                entity and shows its current value, so a typo surfaces before you
-                                restart.</li>
-                            <li>PV installations only matter for location-based forecast providers
-                                (Akkudoktor, Open-Meteo, Forecast.Solar). Solcast, Victron, EVCC and
-                                Timeseries get their data elsewhere.</li>
-                            <li>A few choices need a setting the wizard does not ask for, because it is
-                                not a getting-started field. The <strong>Review &amp; Finish</strong> step
-                                lists anything still outstanding.</li>
-                        </ul>
-                    </div>
-                </div>
-
-                <div class="content-section">
-                    <h2 id="daily-use"><i class="fas fa-gauge-high" aria-hidden="true"></i> Living with it</h2>
-                    <p>The dashboard shows the current plan: forecast solar, forecast prices, what the
-                        battery is being told to do and why. Change any setting behind the gear icon.</p>
+                    <h2 id="what-you-need"><i class="fas fa-clipboard-check" aria-hidden="true"></i> What
+                        you need before you start</h2>
+                    <p>None of these is strictly required &mdash; EOS Connect starts with defaults and a
+                        demo solar curve so you can look around. They are what it takes to have it do
+                        something useful.</p>
                     <ul>
-                        <li><strong>Override the battery by hand</strong> when you know something the
-                            optimizer does not &mdash; a set duration, then it hands control back.</li>
-                        <li><strong>Settings apply live</strong> where they safely can; the ones that need
-                            a restart are marked with a <span class="badge badge-restart"><i
-                                    class="fas fa-rotate" aria-hidden="true"></i>restart</span> badge.</li>
-                        <li><strong>Back up before you experiment</strong> &mdash; there is a whole-install
-                            export and restore in Settings.</li>
+                        <li>Somewhere to run it: Home Assistant, a Docker host, or Python 3.13.</li>
+                        <li>A way to read your house: <strong>Home Assistant</strong> or
+                            <strong>openHAB</strong>, with a sensor reporting household consumption in
+                            watts.</li>
+                        <li>Your battery's <strong>capacity</strong> and its state-of-charge sensor.</li>
+                        <li>For control rather than advice: a supported <strong>inverter</strong>, or
+                            EVCC in front of one.</li>
+                        <li>An electricity <strong>tariff</strong> &mdash; a dynamic one is where this
+                            earns its keep, but a fixed rate works.</li>
                     </ul>
-
-                    <h3 id="update-notifications">Update notifications</h3>
-                    <p>Running the Docker image, EOS Connect checks the container registry for a newer
-                        release twice a day and shows a dismissible banner when it finds one. It never
-                        updates itself &mdash; pulling the new image stays your decision. Home Assistant
-                        add-on users get updates through Home Assistant instead, so the check is off.</p>
-
-                    <div data-level="standard">
-                        <h3 id="battery-pricing">What your stored energy actually cost</h3>
-                        <p>EOS Connect tracks what went into the battery and at what price, so a
-                            discharge decision compares against the real cost of that stored energy
-                            rather than a guess. It separates solar charging from grid charging, and
-                            detects your sensor's sign convention rather than assuming one.</p>
-                    </div>
-
-                    <div data-level="expert">
-                        <h3 id="autoscaling">Forecast auto-scaling</h3>
-                        <p>Solar forecasts are generic; your roof is not. Auto-scaling compares forecast
-                            against measured yield over a rolling window and applies a correction factor,
-                            so the plan stops being systematically optimistic about a shaded array. See
-                            <a href="configuration.html#pv-autoscaling">the PV auto-scaling settings</a>.</p>
-                        <p>To see what it has learned &mdash; the scale factor per timeframe, how much
-                            history it is working from, and the forecast before and after correction
-                            &mdash; pick <em>Menu &rsaquo; PV Auto-Scaling</em>. The two figures in the
-                            Statistics tile's header open the same panel, but they only carry a value
-                            after the first optimization cycle; the menu entry always works.</p>
-                    </div>
                 </div>
 
                 <div class="content-section">
-                    <h2 id="troubleshooting"><i class="fas fa-screwdriver-wrench" aria-hidden="true"></i>
-                        Troubleshooting</h2>
-
-                    <h3 id="tb-segfault">Crashes on startup under Proxmox</h3>
-                    <p><strong>Symptom:</strong> segmentation fault immediately at startup.</p>
-                    <p><strong>Cause:</strong> the VM is using the <code>kvm64</code> generic CPU type,
-                        which hides the AVX and SSE4.2 instructions that the prebuilt
-                        <code>numpy</code> and <code>pandas</code> wheels need.</p>
-                    <p><strong>Fix:</strong> stop the VM, set <em>Hardware &rsaquo; Processor &rsaquo; CPU
-                            Type</em> from <code>kvm64</code> to <code>host</code>, restart. This is safe
-                        and recommended for any Proxmox VM running containerised workloads.</p>
-
-                    <h3 id="tb-cbc">"No such file or directory" for the CBC solver</h3>
-                    <p><strong>Symptom:</strong> the built-in optimizer fails with
-                        <code>FileNotFoundError: [Errno 2] No such file or directory</code> pointing at
-                        <code>solverdir/cbc/linux/i64/cbc</code> &mdash; a file that is plainly there.</p>
-                    <p><strong>Cause:</strong> on x86_64 the CBC binary shipped inside
-                        <code>pulp</code> is dynamically linked against glibc, and the Home Assistant OS
-                        add-on images are Alpine-based (musl) with no glibc loader. Linux reports the
-                        missing <em>loader</em> as a missing <em>file</em>. aarch64 is unaffected.</p>
-                    <p><strong>Fix:</strong> update to the latest add-on version, which installs a
-                        statically linked CBC of its own. EOS Connect now verifies the solver by running
-                        it at startup and logs which binary it chose.</p>
-                    <div class="alert alert-info">
-                        <p>This one is often confused with the Proxmox problem above. A segfault is a CPU
-                            issue; a <code>FileNotFoundError</code> naming <code>cbc</code> is this one.</p>
-                    </div>
-
-                    <h3 id="tb-ssl">Self-signed certificates</h3>
-                    <p>EOS Connect validates TLS certificates when talking to Home Assistant or OpenHAB.
-                        With a private CA you can turn that off in <em>Settings &rsaquo; Data Source
-                            &rsaquo; SSL Ignore</em> (expert, needs a restart). Only do this on a network
-                        path you control &mdash; custom root CAs are not supported yet.</p>
-
-                    <div data-level="standard">
-                        <h3 id="tb-settings-reverted">Settings revert after an update</h3>
-                        <p>Almost always the missing <code>./data:/app/data</code> volume &mdash; see
-                            <a href="#install-docker">the Docker section</a>. Add the mount, then
-                            reconfigure once.</p>
-
-                        <h3 id="tb-sensors">A sensor reads nothing</h3>
-                        <p>Use the <strong>Test</strong> button next to the field. It fetches the entity
-                            and shows the current value, which distinguishes a wrong entity name from a
-                            connection or token problem. The log also names any sensor that fell back to
-                            a built-in default.</p>
-
-                        <h3 id="tb-battery-frozen">The battery stops updating after a sensor drops out</h3>
-                        <p><strong>Symptom:</strong> SOC, battery temperature and the dynamic
-                            charge power all freeze at their last values and never move again, while
-                            the rest of EOS Connect keeps running. A restart fixes it until the next
-                            time.</p>
-                        <p><strong>Cause:</strong> an entity that goes unavailable reports an empty
-                            state. Reading it crashed the background thread that refreshes the
-                            battery, and nothing restarts that thread.</p>
-                        <p><strong>Fix:</strong> update EOS Connect. An unreadable reading is now
-                            treated like any other failed fetch &mdash; the last known value is kept
-                            and the log says which sensor it was:</p>
-                        <pre><code>[BATTERY-IF] HOMEASSISTANT - Error fetching battery SOC:
-  sensor returned an empty state. Failure count: 1/5. Using last known SOC = 42%.</code></pre>
-                        <p>After five failures in a row the SOC falls back to 5&nbsp;% so the
-                            optimizer works from a safe assumption rather than a stale one. If the
-                            message repeats, the entity itself is the problem &mdash; check it in
-                            Home Assistant or OpenHAB.</p>
-
-                        <h3 id="tb-ha-history">Home Assistant history times out on startup</h3>
-                        <p>On a large recorder database &mdash; MariaDB with years of history is the
-                            usual case &mdash; building the load profile could flood Home Assistant with
-                            requests until they timed out:</p>
-                        <pre><code>[LOAD-IF] Request failed after 5 attempts for
-  http://homeassistant:8123/api/history/period/2026-09-12T00:00:00
-[LOAD-IF] DATA ERROR household load smaller than controllables
-[BATTERY-IF] HOMEASSISTANT - Error fetching battery SOC: Request timed out.</code></pre>
-                        <p>The load profile is built from four fixed days of history &mdash; the same
-                            weekday one and two weeks back, plus the following day &mdash; so it only
-                            changes at midnight. It is now built once per day and held, instead of being
-                            rebuilt on every optimizer run, and each sensor's history is fetched once for
-                            the whole day instead of once per hourly slot. In the log you should see
-                            <code>[LOAD-IF] creating load profile for weekdays &hellip;</code> once a day,
-                            not every few minutes.</p>
-                        <p>Nothing to configure. If you still see the messages above, the recorder itself
-                            is the bottleneck &mdash; check its purge settings.</p>
-
-                        <h3 id="tb-ha-purged">Older days come back empty</h3>
-                        <p>Home Assistant's recorder purges detailed state history after
-                            <code>purge_keep_days</code> (10 by default), while the load profile looks
-                            back 14 days. For days whose history is gone, EOS Connect falls back to
-                            recorder <em>statistics</em>, which are kept indefinitely.</p>
-                        <p>That fallback calls the <code>recorder.get_statistics</code> action, so the
-                            long-lived access token needs permission to call services. On a Home Assistant
-                            too old to offer it, the log says so once and the profile simply uses the days
-                            it can still read.</p>
-                    </div>
-
-                    <div data-level="expert">
-                        <h3 id="tb-logs">Reading the log</h3>
-                        <p>Set <code>log_level: debug</code> (or <code>EOS_LOG_LEVEL=debug</code>) and
-                            watch the startup sequence: it reports the selected optimizer backend, the
-                            solver binary, every interface it constructed, and every configured sensor it
-                            could not read. The web UI exposes the same log, with alerts filtered
-                            separately.</p>
-                    </div>
+                    <h2 id="i-want-to"><i class="fas fa-list-check" aria-hidden="true"></i> I want
+                        to&hellip;</h2>
+                    <ul class="task-index">
+                        <li><a href="install.html#install-ha">&hellip;install it as a Home Assistant
+                            add-on</a></li>
+                        <li><a href="install.html#install-docker">&hellip;run it in Docker without losing
+                            my settings on the next update</a></li>
+                        <li><a href="first-run.html#first-run">&hellip;know what the wizard is going to
+                            ask me</a></li>
+                        <li><a href="first-run.html#detail-levels">&hellip;understand why I cannot see a
+                            setting someone mentioned</a></li>
+                        <li><a href="daily-use.html#daily-use">&hellip;override what the battery is doing
+                            right now</a></li>
+                        <li><a href="daily-use.html#autoscaling">&hellip;see what the forecast correction
+                            has learned</a></li>
+                        <li><a href="troubleshooting.html#tb-settings-reverted">&hellip;find out why my
+                            settings reverted after an update</a></li>
+                        <li><a href="troubleshooting.html#tb-sensors">&hellip;work out why a sensor reads
+                            nothing</a></li>
+                        <li><a href="configuration.html">&hellip;look up what a particular setting
+                            does</a></li>
+                    </ul>
                 </div>
 
                 <div class="content-section">
-                    <h2 id="next-steps"><i class="fas fa-arrow-right" aria-hidden="true"></i> Next steps</h2>
+                    <h2 id="next-steps"><i class="fas fa-arrow-right" aria-hidden="true"></i> Beyond the
+                        guide</h2>
                     <ul>
-                        <li><a href="configuration.html">Configuration reference</a> &mdash; every setting,
-                            filtered to the level of detail you want.</li>
-                        <li><a href="../advanced/index.html">Advanced</a> &mdash; REST API, MQTT topics and
-                            automation.</li>
+                        <li><a href="configuration.html">Configuration</a> &mdash; every setting, one page
+                            per topic, plus the full list to look a name up in.</li>
+                        <li><a href="../advanced/index.html">Advanced</a> &mdash; REST API, MQTT topics
+                            and automation.</li>
+                        <li><a href="../what-is/index.html">What is EOS Connect</a> &mdash; what it
+                            actually does with all of this.</li>
                         <li><a href="https://github.com/ohAnd/EOS_connect/discussions" target="_blank"
                                 rel="noopener">Discussions</a> &mdash; ask a question.</li>
                     </ul>
