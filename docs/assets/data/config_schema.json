@@ -250,7 +250,7 @@
       "level": "standard",
       "description": "Total power all managed loads together may be planned for, in watts (0 = no limit). Stops a pool pump and a sauna both being scheduled into the same cheap hour and forecasting a peak the house cannot draw",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-operation",
       "validation": {
         "min": 0,
         "max": 100000
@@ -269,7 +269,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-operation",
       "validation": {
         "min": 30,
         "max": 3600
@@ -1787,7 +1787,7 @@
       "level": "standard",
       "description": "Where the outside-temperature forecast comes from. Open-Meteo needs no key and publishes the temperature directly. Akkudoktor derives it from a PV forecast query and relays its upstream provider's rate limit, which refuses everyone at once when it triggers. One curve is fetched and shared by the optimizer and by any outdoor managed load",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-ambient",
       "validation": {
         "choices": [
           "openmeteo",
@@ -2763,7 +2763,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-load-profiles",
       "validation": {
         "choices": [
           "pool_heatpump",
@@ -2802,7 +2802,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-sensor",
       "validation": {},
       "depends_on": {
         "type": [
@@ -2825,7 +2825,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-replaces-sensor",
       "validation": {},
       "depends_on": {
         "type": [
@@ -2846,7 +2846,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-sensor",
       "validation": {},
       "depends_on": null,
       "hot_reload": false,
@@ -2860,7 +2860,7 @@
       "level": "expert",
       "description": "Lower numbers are planned first and get the cheapest slots when several managed loads compete for the same shared power budget. Applies when this module places the loads itself; the built-in optimizer places them together against one objective, so there is no queue and the per-load price limit is the lever instead",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-operation",
       "validation": {
         "min": 1,
         "max": 999
@@ -2879,7 +2879,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-load-profiles",
       "validation": {},
       "depends_on": {
         "type": [
@@ -2900,7 +2900,7 @@
       "level": "getting_started",
       "description": "Target temperature in degrees Celsius",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-load-profiles",
       "validation": {
         "min": 0,
         "max": 120
@@ -2926,7 +2926,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-load-profiles",
       "validation": {},
       "depends_on": {
         "type": [
@@ -2947,7 +2947,7 @@
       "level": "standard",
       "description": "How far below target the medium must fall before heating starts, in kelvin - stops the appliance hunting around its setpoint",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-load-profiles",
       "validation": {
         "min": 0.1,
         "max": 20
@@ -2973,7 +2973,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-ambient",
       "validation": {},
       "depends_on": {
         "type": [
@@ -2996,7 +2996,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-load-profiles",
       "validation": {
         "min": 0.01,
         "max": 1000
@@ -3022,7 +3022,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-load-profiles",
       "validation": {
         "min": 0.1,
         "max": 1000
@@ -3048,7 +3048,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-calibration",
       "validation": {
         "min": 0.1,
         "max": 200
@@ -3072,7 +3072,7 @@
       "level": "getting_started",
       "description": "Electrical power the appliance draws while running, in watts. For a load whose profile is fetched or pushed it is not used to plan anything - it is the reference the incoming values are sanity-checked against, which is what catches a source publishing watts where watt-hours were expected",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-load-profiles",
       "validation": {
         "min": 1,
         "max": 100000
@@ -3091,7 +3091,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-load-profiles",
       "validation": {
         "min": 0.8,
         "max": 8
@@ -3117,7 +3117,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-calibration",
       "validation": {
         "min": -0.06,
         "max": 0.06
@@ -3143,7 +3143,7 @@
       "labels": [
         "restart_required"
       ],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-cover",
       "validation": {},
       "depends_on": {
         "type": [
@@ -3161,7 +3161,7 @@
       "level": "standard",
       "description": "Fraction of the heat loss that remains while the cover is closed. A starting point only: once the store has been seen both covered and uncovered, this is measured from its own cooling and the measured value is what the forecast uses. The calibration panel says which it is on.",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-cover",
       "validation": {
         "min": 0.05,
         "max": 1.0
@@ -3182,7 +3182,7 @@
       "level": "standard",
       "description": "How the cheapest slots are chosen. Combined uses the grid price but values PV surplus at the feed-in tariff, so your own solar wins over cheap grid energy - recommended. Cheapest slots looks at the grid price only. PV surplus takes the sunniest slots first and falls back to price when there is no surplus",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-operation",
       "validation": {
         "choices": [
           "combined",
@@ -3210,7 +3210,7 @@
       "level": "standard",
       "description": "Shortest time the appliance stays released once started - protects the compressor from being cycled every time the plan is recalculated",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-operation",
       "validation": {
         "min": 0,
         "max": 720
@@ -3235,7 +3235,7 @@
       "level": "standard",
       "description": "Cap on released hours per day (0 = no cap)",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-runtime",
       "validation": {
         "min": 0,
         "max": 24
@@ -3260,7 +3260,7 @@
       "level": "standard",
       "description": "First hour of the day the appliance may run (leave equal to end for no limit)",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-runtime",
       "validation": {
         "min": 0,
         "max": 23
@@ -3285,7 +3285,7 @@
       "level": "standard",
       "description": "Hour of the day after which the appliance may no longer run",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-runtime",
       "validation": {
         "min": 0,
         "max": 23
@@ -3310,7 +3310,7 @@
       "level": "standard",
       "description": "Hours from now by which the target must be reached (0 = anywhere in the next two days). A sauna wanted this evening sets it; a pool does not",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-operation",
       "validation": {
         "min": 0,
         "max": 48
@@ -3335,7 +3335,7 @@
       "level": "expert",
       "description": "Never pay more than this per kWh for this load's energy, in ct/kWh (0 = no limit). With the built-in optimizer the load is scheduled against this figure directly, so it runs whenever the energy actually costs less; with an external optimizer it is a simpler rule that skips any hour above it. Ignored when frost protection is active",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-price-limit",
       "validation": {
         "min": 0,
         "max": 200
@@ -3360,7 +3360,7 @@
       "level": "standard",
       "description": "Never run below this ambient temperature - an air source heat pump barely works in the cold and its heat exchanger can freeze",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-runtime",
       "validation": {
         "min": -30,
         "max": 40
@@ -3384,7 +3384,7 @@
       "level": "standard",
       "description": "Run immediately regardless of price when the medium falls to this temperature",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-operation",
       "validation": {
         "min": -20,
         "max": 40
@@ -3408,7 +3408,7 @@
       "level": "standard",
       "description": "First day of the season, as MM-DD (leave empty for all year)",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-operation",
       "validation": {
         "pattern": "^$|^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
       },
@@ -3428,7 +3428,7 @@
       "level": "standard",
       "description": "Last day of the season, as MM-DD",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-operation",
       "validation": {
         "pattern": "^$|^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
       },
@@ -3448,7 +3448,7 @@
       "level": "standard",
       "description": "How long pushed data stays valid. After this the load stops being counted, so a sender that goes quiet cannot hold a stale forecast forever",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-external",
       "validation": {
         "min": 1,
         "max": 10080
@@ -3470,7 +3470,7 @@
       "level": "getting_started",
       "description": "Where this load's profile comes from. 'push' waits for an external system to hand one over; 'timeseries' names an entity EOS Connect reads itself, the same way the price and PV sources do",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-external",
       "validation": {
         "choices": [
           "push",
@@ -3493,7 +3493,7 @@
       "level": "standard",
       "description": "Read the profile through the Home Assistant connection already configured under Data Source, instead of repeating a URL and a token here",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-fetch",
       "validation": {},
       "depends_on": {
         "type": [
@@ -3514,7 +3514,7 @@
       "level": "getting_started",
       "description": "Entity holding the load forecast, for example sensor.heat_pump_forecast. The array itself lives in one of its attributes - a Home Assistant state is capped at 255 characters and a 96-value series does not fit",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-fetch",
       "validation": {},
       "depends_on": {
         "type": [
@@ -3538,7 +3538,7 @@
       "level": "getting_started",
       "description": "Where the array sits inside the entity, in dot notation - 'attributes.data' for the usual template sensor, 'attributes.forecast' when you named it that",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-fetch",
       "validation": {},
       "depends_on": {
         "type": [
@@ -3559,7 +3559,7 @@
       "level": "standard",
       "description": "Endpoint returning the forecast, when it does not come from the central Home Assistant connection",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-fetch",
       "validation": {},
       "depends_on": {
         "type": [
@@ -3583,7 +3583,7 @@
       "level": "standard",
       "description": "Bearer token for that endpoint, if it needs one",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-fetch",
       "validation": {},
       "depends_on": {
         "type": [
@@ -3607,7 +3607,7 @@
       "level": "getting_started",
       "description": "What the fetched values are measured in. 'W' and 'kW' are average power over each entry; 'Wh' and 'kWh' are energy within it. Getting this wrong is a factor of four on quarter-hourly data, so it is checked against the rated power above",
       "labels": [],
-      "help_url": "configuration.html#managed-loads",
+      "help_url": "configuration.html#managed-loads-fetch",
       "validation": {
         "choices": [
           "W",
@@ -3681,5 +3681,161 @@
       "icon": "fa-gears",
       "label": "System"
     }
+  },
+  "managed_load_presets": {
+    "pool_heatpump": {
+      "label": "Pool heat pump",
+      "ambient": "outdoor",
+      "default_ambient_c": 15.0,
+      "defaults": {
+        "volume_m3": 30.0,
+        "surface_m2": 32.0,
+        "heat_loss_w_per_m2_k": 25.0,
+        "rated_power_w": 2500.0,
+        "cop_nominal": 5.0,
+        "cop_air_coeff": 0.03,
+        "target_temp": 28.0,
+        "deadband_k": 0.5,
+        "cover_loss_factor": 0.35,
+        "min_ambient_temp_c": 12.0,
+        "frost_protection_temp_c": 4.0,
+        "window_start": 8,
+        "window_end": 20,
+        "season_start": "04-15",
+        "season_end": "09-30",
+        "min_runtime_minutes": 30,
+        "max_runtime_hours_per_day": 12,
+        "strategy": "combined"
+      }
+    },
+    "sauna": {
+      "label": "Sauna",
+      "ambient": "indoor",
+      "default_ambient_c": 20.0,
+      "defaults": {
+        "volume_m3": 0.08,
+        "surface_m2": 12.0,
+        "heat_loss_w_per_m2_k": 5.0,
+        "rated_power_w": 6000.0,
+        "cop_nominal": 1.0,
+        "cop_air_coeff": 0.0,
+        "target_temp": 90.0,
+        "deadband_k": 3.0,
+        "cover_loss_factor": 1.0,
+        "min_ambient_temp_c": null,
+        "frost_protection_temp_c": null,
+        "window_start": null,
+        "window_end": null,
+        "season_start": null,
+        "season_end": null,
+        "min_runtime_minutes": 15,
+        "max_runtime_hours_per_day": 0,
+        "deadline_hours": 6,
+        "strategy": "cheapest_slots"
+      }
+    },
+    "hot_water_tank": {
+      "label": "Hot water tank",
+      "ambient": "indoor",
+      "default_ambient_c": 18.0,
+      "defaults": {
+        "volume_m3": 0.3,
+        "surface_m2": 3.5,
+        "heat_loss_w_per_m2_k": 1.5,
+        "rated_power_w": 2000.0,
+        "cop_nominal": 3.0,
+        "cop_air_coeff": 0.01,
+        "target_temp": 55.0,
+        "deadband_k": 3.0,
+        "cover_loss_factor": 1.0,
+        "min_ambient_temp_c": null,
+        "frost_protection_temp_c": null,
+        "window_start": null,
+        "window_end": null,
+        "season_start": null,
+        "season_end": null,
+        "min_runtime_minutes": 20,
+        "max_runtime_hours_per_day": 0,
+        "strategy": "combined"
+      }
+    },
+    "buffer_tank": {
+      "label": "Buffer tank",
+      "ambient": "indoor",
+      "default_ambient_c": 18.0,
+      "defaults": {
+        "volume_m3": 0.8,
+        "surface_m2": 5.0,
+        "heat_loss_w_per_m2_k": 1.2,
+        "rated_power_w": 3000.0,
+        "cop_nominal": 3.5,
+        "cop_air_coeff": 0.02,
+        "target_temp": 45.0,
+        "deadband_k": 2.0,
+        "cover_loss_factor": 1.0,
+        "min_ambient_temp_c": null,
+        "frost_protection_temp_c": null,
+        "window_start": null,
+        "window_end": null,
+        "season_start": null,
+        "season_end": null,
+        "min_runtime_minutes": 20,
+        "max_runtime_hours_per_day": 0,
+        "strategy": "combined"
+      }
+    },
+    "external_contingent": {
+      "label": "External energy budget",
+      "ambient": "indoor",
+      "default_ambient_c": 18.0,
+      "defaults": {
+        "rated_power_w": 2000.0,
+        "min_runtime_minutes": 0,
+        "max_runtime_hours_per_day": 0,
+        "strategy": "combined",
+        "ttl_minutes": 1440
+      }
+    },
+    "external_profile": {
+      "label": "External load profile",
+      "ambient": "indoor",
+      "default_ambient_c": 18.0,
+      "defaults": {
+        "ttl_minutes": 1440,
+        "profile_source": "push",
+        "use_ha_central_data_source": true,
+        "ha_sensor_name": "",
+        "data_path": "attributes.data",
+        "data_url": "",
+        "data_token": "",
+        "value_unit": "W",
+        "rated_power_w": 0.0
+      }
+    }
+  },
+  "managed_load_groups": {
+    "thermal": [
+      "pool_heatpump",
+      "sauna",
+      "hot_water_tank",
+      "buffer_tank"
+    ],
+    "contingent": [
+      "pool_heatpump",
+      "sauna",
+      "hot_water_tank",
+      "buffer_tank",
+      "external_contingent"
+    ],
+    "external": [
+      "external_contingent",
+      "external_profile"
+    ],
+    "cover": [
+      "pool_heatpump"
+    ],
+    "season": [
+      "pool_heatpump"
+    ]
   }
 }

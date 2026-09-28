@@ -8,6 +8,9 @@ silently refuses to offer it; add it to the schema only and picking it produces 
 that builds no model.
 """
 
+import json
+from pathlib import Path
+
 import pytest
 
 from src.config_web.schema import (
@@ -21,6 +24,10 @@ from src.config_web.schema import (
 )
 from src.loads import presets
 from src.loads.planner import STRATEGIES
+
+SCHEMA_JSON = (
+    Path(__file__).resolve().parents[2] / "docs/assets/data/config_schema.json"
+)
 
 
 def test_the_type_lists_match():
@@ -100,3 +107,43 @@ def test_relative_dependencies_are_used_only_inside_the_list_section():
                 assert field.section == "managed_loads", (
                     f"{field.key} uses a relative dependency outside a list section"
                 )
+
+
+# ------------------------------------------------ the exported documentation copy
+
+def test_the_exported_presets_match_the_runtime_ones():
+    """docs/assets/data/config_schema.json carries a copy of PRESETS.
+
+    The documentation renders a parameter table per profile and has to show the
+    value that profile really starts from - a FieldDef holds one default for a
+    field four appliance types share, and it is the pool's. That copy is written
+    by scripts/export_config_schema.py; change a preset without re-running it and
+    the documentation quietly describes the old appliance.
+    """
+    exported = json.loads(SCHEMA_JSON.read_text(encoding="utf-8"))["managed_load_presets"]
+
+    assert sorted(exported) == sorted(presets.PRESETS), (
+        "the exported profiles differ from presets.PRESETS; re-run "
+        "scripts/export_config_schema.py"
+    )
+    for name, preset in presets.PRESETS.items():
+        assert exported[name]["label"] == preset["label"]
+        assert exported[name]["ambient"] == preset["ambient"]
+        assert exported[name]["default_ambient_c"] == preset["default_ambient_c"]
+        assert exported[name]["defaults"] == preset["defaults"], (
+            f"{name} starts from different values in the docs; re-run "
+            "scripts/export_config_schema.py"
+        )
+
+
+def test_the_exported_type_groups_match_the_runtime_ones():
+    """The same file names which types each group of settings applies to."""
+    exported = json.loads(SCHEMA_JSON.read_text(encoding="utf-8"))["managed_load_groups"]
+
+    assert exported == {
+        "thermal": list(presets.THERMAL_TYPES),
+        "contingent": list(presets.CONTINGENT_TYPES),
+        "external": list(presets.EXTERNAL_TYPES),
+        "cover": list(presets.COVER_TYPES),
+        "season": list(presets.SEASON_TYPES),
+    }, "re-run scripts/export_config_schema.py"

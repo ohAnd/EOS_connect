@@ -9,6 +9,13 @@
  *
  * Fields are grouped by their help_url anchor, which guarantees that every
  * anchor the application links to (src/web/js/config.js) exists on this page.
+ *
+ * The same data drives the per-profile tables in the Managed Loads section. A
+ * managed load's fields already carry depends_on: {type: [...]}, so which settings
+ * a sauna has is a fact the schema knows - there is no second list to maintain.
+ * Their starting values come from managed_load_presets, exported alongside the
+ * fields from src/loads/presets.py, because a FieldDef holds one default for a
+ * field four appliance types share and that default is the pool's.
  */
 (function () {
     "use strict";
@@ -41,6 +48,21 @@
         "system": "System"
     };
 
+    /* Every string the per-profile tables render. Collected rather than scattered
+     * through the template literals below, so translating this file later is one
+     * map to replace. */
+    var PROFILE_TEXT = {
+        noLimit: "no limit",
+        startsAt: "Starts at",
+        aboveLevel: function (n, label) {
+            return n + " more setting" + (n === 1 ? "" : "s") + " for this profile " +
+                "at " + label + " level.";
+        },
+        unknown: function (type) {
+            return "No profile named \u201c" + type + "\u201d in the schema.";
+        }
+    };
+
     var BADGE = {
         restart_required: { cls: "badge-restart", icon: "fa-rotate", text: "restart" },
         deprecated: { cls: "badge-deprecated", icon: "fa-triangle-exclamation", text: "deprecated" },
@@ -53,6 +75,33 @@
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;");
+    }
+
+    /* Ids handed out by the render in progress. Reset by render(); null outside
+     * one, so a stray call cannot accumulate. */
+    var claimed = null;
+
+    /* An anchor may only be written once on the page. Two sources would otherwise
+     * claim the same one, and two elements with one id put the section twice in
+     * the contents and send every deep link to whichever came first:
+     *
+     *   - a prose section above already explains the setting and owns its anchor,
+     *     so the table down here yields and is reached through its "ref-" id;
+     *   - two schema sections can share a help_url (pv_forecast_source and
+     *     pv_forecast both use #pv-forecast), and only one may carry it.
+     *
+     * Returns an id attribute for the first free candidate, or none at all. */
+    function idAttr(anchor, fallback) {
+        var candidates = [anchor, fallback];
+        for (var i = 0; i < candidates.length; i++) {
+            var id = candidates[i];
+            if (!id || document.getElementById(id) || (claimed && claimed[id])) {
+                continue;
+            }
+            if (claimed) { claimed[id] = true; }
+            return " id=\"" + esc(id) + "\"";
+        }
+        return "";
     }
 
     function anchorOf(field) {
@@ -68,7 +117,18 @@
         return "<code>" + esc(field.default) + "</code>";
     }
 
-    function constraints(field) {
+    /* A preset value, where null is meaningful rather than absent: a sauna's
+     * window_start is null because a sauna has no allowed window, which is not the
+     * same as the field being left blank. */
+    function formatPreset(field, value) {
+        if (field.type === "password") { return "••••"; }
+        if (value === null) { return "<em>" + PROFILE_TEXT.noLimit + "</em>"; }
+        if (value === "") { return "<em>empty</em>"; }
+        if (typeof value === "boolean") { return value ? "true" : "false"; }
+        return "<code>" + esc(value) + "</code>";
+    }
+
+    function constraints(field, skip) {
         var v = field.validation || {};
         var parts = [];
         if (v.choices) {
@@ -86,14 +146,19 @@
             parts.push("maximum " + esc(v.max));
         }
         if (field.depends_on) {
-            var conds = Object.keys(field.depends_on).map(function (k) {
+            var keys = Object.keys(field.depends_on).filter(function (k) {
+                return (skip || []).indexOf(k) === -1;
+            });
+            var conds = keys.map(function (k) {
                 var vals = field.depends_on[k];
                 return "<code>" + esc(k) + "</code> is " +
                     (Array.isArray(vals) ? vals : [vals]).map(function (x) {
                         return "<code>" + esc(x) + "</code>";
                     }).join(" or ");
             });
-            parts.push("only when " + conds.join(" and "));
+            if (conds.length) {
+                parts.push("only when " + conds.join(" and "));
+            }
         }
         return parts.length
             ? "<div class=\"param-desc\" style=\"font-size:0.85em\">" + parts.join(" &middot; ") + "</div>"
@@ -114,23 +179,27 @@
         return out;
     }
 
-    function row(field) {
+    function row(field, opts) {
+        var o = opts || {};
         return "<tr>" +
-            "<td class=\"param-key\"><code>" + esc(field.key) + "</code>" + badges(field) + "</td>" +
+            "<td class=\"param-key\"><code>" + esc(o.key || field.key) + "</code>" +
+            badges(field) + "</td>" +
             "<td data-label=\"Type\">" + esc(field.type) + "</td>" +
-            "<td data-label=\"Default\">" + formatDefault(field) + "</td>" +
+            "<td data-label=\"" + esc(o.defaultLabel || "Default") + "\">" +
+            (o.defaultHtml || formatDefault(field)) + "</td>" +
             "<td data-label=\"Level\"><span class=\"badge badge-level\">" +
             esc(LEVEL_LABEL[field.level] || field.level) + "</span></td>" +
             "<td data-label=\"What it does\" class=\"param-desc\">" +
-            esc(field.description) + constraints(field) + "</td>" +
+            esc(field.description) + constraints(field, o.skip) + "</td>" +
             "</tr>";
     }
 
-    function table(fields) {
+    function table(fields, rowFor, defaultLabel) {
         return "<div class=\"scroll-x\"><table class=\"param-table\">" +
-            "<thead><tr><th>Parameter</th><th>Type</th><th>Default</th>" +
+            "<thead><tr><th>Parameter</th><th>Type</th><th>" +
+            esc(defaultLabel || "Default") + "</th>" +
             "<th>Level</th><th>What it does</th></tr></thead><tbody>" +
-            fields.map(row).join("") +
+            fields.map(rowFor || function (f) { return row(f); }).join("") +
             "</tbody></table></div>";
     }
 
@@ -157,6 +226,31 @@
             group.byAnchor[anchor].push(f);
         });
 
+        // One anchor group usually just restates the section name ("Battery"
+        // inside "Battery"). That anchor moves onto the section heading instead,
+        // so the reader does not see the same word twice.
+        sections.forEach(function (name) {
+            var group = bySection[name];
+            var label = (sectionMeta[name] || {}).label || name;
+            group.anchors.forEach(function (a) {
+                if (group.primary === undefined && (ANCHOR_TITLE[a] || a) === label) {
+                    group.primary = a;
+                }
+            });
+            if (group.primary === undefined) { group.primary = null; }
+        });
+
+        // Section headings claim their ids before any group heading does. Where
+        // two sections share an anchor, it belongs on the one the anchor is named
+        // after - #pv-forecast on "PV Installations", not on a subheading of
+        // "PV Source" that merely happens to carry the same help_url.
+        claimed = {};
+        var sectionId = {};
+        sections.forEach(function (name) {
+            sectionId[name] = idAttr(bySection[name].primary || ("ref-" + name),
+                                     "ref-" + name);
+        });
+
         var html = "";
         var shown = 0;
         var hidden = 0;
@@ -165,16 +259,7 @@
             var group = bySection[name];
             var meta = sectionMeta[name] || {};
             var inner = "";
-
-            // One anchor group usually just restates the section name ("Battery"
-            // inside "Battery"). That anchor moves onto the section heading
-            // instead, so the reader does not see the same word twice.
-            var primary = null;
-            group.anchors.forEach(function (a) {
-                if (primary === null && (ANCHOR_TITLE[a] || a) === (meta.label || name)) {
-                    primary = a;
-                }
-            });
+            var primary = group.primary;
 
             group.anchors.forEach(function (anchor) {
                 var all = group.byAnchor[anchor];
@@ -189,7 +274,7 @@
                 // resolves. Only the table is dropped.
                 var title = ANCHOR_TITLE[anchor] || meta.label || anchor;
                 if (anchor !== primary) {
-                    inner += "<h3 id=\"" + esc(anchor) + "\">" + esc(title) + "</h3>";
+                    inner += "<h3" + idAttr(anchor) + ">" + esc(title) + "</h3>";
                 }
                 inner += visible.length
                     ? table(visible)
@@ -202,7 +287,7 @@
             // The heading carries the primary anchor where there is one; otherwise
             // a prefixed id that cannot collide with a help_url anchor.
             html += "<section class=\"param-section\">" +
-                "<h2 id=\"" + esc(primary || ("ref-" + name)) + "\">" +
+                "<h2" + sectionId[name] + ">" +
                 "<i class=\"fas " + esc(meta.icon || "fa-cog") + "\" aria-hidden=\"true\"></i> " +
                 esc(meta.label || name) + "</h2>" + inner + "</section>";
         });
@@ -215,6 +300,8 @@
             "<span><span class=\"badge badge-deprecated\"><i class=\"fas fa-triangle-exclamation\"></i>deprecated</span> do not use for new setups</span>" +
             "</p>";
 
+        claimed = null;
+
         var summary = "<p class=\"level-note\">Showing " + shown + " of " +
             (shown + hidden) + " settings" +
             (hidden ? " — " + hidden + " more at a higher detail level." : ".") + "</p>";
@@ -222,9 +309,100 @@
         return summary + legend + html;
     }
 
+    /* ------------------------------------------------ per-profile parameters */
+
+    /* Which settings a profile has. depends_on.type is the schema's own answer -
+     * it is what the application's config form filters on - so this cannot drift
+     * from what the UI shows. A field with no type condition applies to all six. */
+    function fieldsForProfile(schema, type) {
+        return (schema.fields || []).filter(function (f) {
+            if (f.section !== "managed_loads") { return false; }
+            var dep = f.depends_on && f.depends_on.type;
+            if (!dep) { return true; }
+            return (Array.isArray(dep) ? dep : [dep]).indexOf(type) !== -1;
+        });
+    }
+
+    function presetValue(schema, type, field) {
+        var dot = field.key.indexOf(".");
+        var sub = dot === -1 ? field.key : field.key.slice(dot + 1);
+        // No preset names the type - it is the key they are looked up by. In this
+        // table it is not open anyway: the schema default is the pool's, and
+        // printing that against a sauna would be simply wrong.
+        if (sub === "type") { return type; }
+        var preset = (schema.managed_load_presets || {})[type];
+        if (!preset || !preset.defaults) { return undefined; }
+        return Object.prototype.hasOwnProperty.call(preset.defaults, sub)
+            ? preset.defaults[sub]
+            : undefined;
+    }
+
+    function renderProfile(schema, type, maxLevel) {
+        var fields = fieldsForProfile(schema, type);
+        if (!fields.length) {
+            return "<p class=\"level-note\">" + esc(PROFILE_TEXT.unknown(type)) + "</p>";
+        }
+
+        // Group by display_group, in the order the schema lists them, so the tables
+        // read in the same order as the cards in the application's settings form.
+        var order = [];
+        var byGroup = {};
+        fields.forEach(function (f) {
+            var g = f.display_group || "";
+            if (!byGroup[g]) { byGroup[g] = []; order.push(g); }
+            byGroup[g].push(f);
+        });
+
+        var html = "";
+        var hidden = 0;
+        order.forEach(function (group) {
+            var all = byGroup[group];
+            var visible = all.filter(function (f) {
+                return (LEVEL_ORDER[f.level] === undefined ? 2 : LEVEL_ORDER[f.level]) <= maxLevel;
+            });
+            hidden += all.length - visible.length;
+            if (!visible.length) { return; }
+
+            html += "<h4 class=\"param-group\">" + esc(group) + "</h4>" +
+                table(visible, function (f) {
+                    var preset = presetValue(schema, type, f);
+                    var dot = f.key.indexOf(".");
+                    return row(f, {
+                        // The stored key is managed_loads.<n>.<field>; the index is
+                        // the entry's position and says nothing useful here.
+                        key: dot === -1 ? f.key : f.key.slice(dot + 1),
+                        defaultLabel: PROFILE_TEXT.startsAt,
+                        defaultHtml: preset === undefined
+                            ? formatDefault(f)
+                            : formatPreset(f, preset),
+                        // The table is already this profile's, so repeating
+                        // "only when type is sauna" on every row says nothing.
+                        skip: ["type"]
+                    });
+                }, PROFILE_TEXT.startsAt);
+        });
+
+        if (hidden) {
+            html += "<p class=\"level-note\">" +
+                esc(PROFILE_TEXT.aboveLevel(hidden, LEVEL_LABEL.expert)) + "</p>";
+        }
+        return html;
+    }
+
+    function renderProfiles(schema, level) {
+        var maxLevel = LEVEL_ORDER[level] === undefined ? 2 : LEVEL_ORDER[level];
+        var mounts = document.querySelectorAll("[data-managed-load-profile]");
+        Array.prototype.forEach.call(mounts, function (node) {
+            node.innerHTML = renderProfile(
+                schema, node.getAttribute("data-managed-load-profile"), maxLevel
+            );
+        });
+    }
+
     function mount() {
         var container = document.getElementById("schema-reference");
-        if (!container) { return; }
+        var profiles = document.querySelectorAll("[data-managed-load-profile]");
+        if (!container && !profiles.length) { return; }
 
         fetch("../assets/data/config_schema.json")
             .then(function (res) {
@@ -235,7 +413,14 @@
                 var drawn = false;
                 var draw = function () {
                     var level = document.body.getAttribute("data-active-level") || "standard";
-                    container.innerHTML = render(schema, level);
+                    renderProfiles(schema, level);
+                    if (container) {
+                        // Cleared first: idAttr() asks the document whether an anchor
+                        // is already taken, and the previous render's own headings
+                        // would answer yes to their own ids.
+                        container.innerHTML = "";
+                        container.innerHTML = render(schema, level);
+                    }
                     if (window.EOSDocs && window.EOSDocs.buildTOC) {
                         window.EOSDocs.buildTOC();
                     }
@@ -260,11 +445,15 @@
                 }).observe(document.body, { attributes: true, attributeFilter: ["data-active-level"] });
             })
             .catch(function (err) {
-                container.innerHTML =
+                var warning =
                     "<div class=\"alert alert-warning\"><p>The parameter reference could not be " +
                     "loaded (" + esc(err.message) + "). It is generated from " +
                     "<code>assets/data/config_schema.json</code>; when reading these pages from " +
                     "disk rather than over HTTP, your browser will block that request.</p></div>";
+                if (container) { container.innerHTML = warning; }
+                Array.prototype.forEach.call(profiles, function (node) {
+                    node.innerHTML = warning;
+                });
             });
     }
 

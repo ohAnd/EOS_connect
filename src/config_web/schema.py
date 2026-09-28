@@ -447,7 +447,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "the same cheap hour and forecasting a peak the house cannot draw"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-operation",
         validation={"min": 0, "max": 100000},
         display_group="Managed Loads",
     ),
@@ -461,7 +461,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "How often managed loads are re-planned and their sensors read, in seconds"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-operation",
         validation={"min": 30, "max": 3600},
         display_group="Managed Loads",
     ),
@@ -1535,7 +1535,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "optimizer and by any outdoor managed load"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-ambient",
         validation={"choices": TEMPERATURE_SOURCES},
         display_group="Temperature",
     ),
@@ -2170,7 +2170,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "with no release signal - use it for space heating or air conditioning"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-load-profiles",
         validation={"choices": MANAGED_LOAD_TYPES},
         display_group="Identity",
     ),
@@ -2201,7 +2201,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "this at that"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-sensor",
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Identity",
     ),
@@ -2220,7 +2220,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "top of a base load which already contains the rest"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-replaces-sensor",
         depends_on={"type": MANAGED_LOAD_EXTERNAL_TYPES},
         display_group="Identity",
     ),
@@ -2237,7 +2237,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "twice"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-sensor",
         display_group="Identity",
     ),
     FieldDef(
@@ -2254,7 +2254,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "price limit is the lever instead"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-operation",
         validation={"min": 1, "max": 999},
         display_group="Identity",
     ),
@@ -2268,7 +2268,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Entity/item for the stored medium's temperature in degrees Celsius",
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-load-profiles",
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Temperature",
     ),
@@ -2280,7 +2280,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Target temperature in degrees Celsius",
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-load-profiles",
         validation={"min": 0, "max": 120},
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Temperature",
@@ -2297,7 +2297,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "Overrides the fixed value above whenever it can be read"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-load-profiles",
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Temperature",
     ),
@@ -2312,7 +2312,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "- stops the appliance hunting around its setpoint"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-load-profiles",
         validation={"min": 0.1, "max": 20},
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Temperature",
@@ -2328,7 +2328,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "forecast when this is empty; an indoor tank falls back to a fixed value"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-ambient",
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Temperature",
     ),
@@ -2343,7 +2343,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "that reproduces its heat-up time - the calibration corrects it over time"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-load-profiles",
         validation={"min": 0.01, "max": 1000},
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Physical",
@@ -2356,7 +2356,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Surface losing heat, in square metres",
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-load-profiles",
         validation={"min": 0.1, "max": 1000},
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Physical",
@@ -2372,7 +2372,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "from the observed cooling rate and refined automatically"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-calibration",
         validation={"min": 0.1, "max": 200},
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Physical",
@@ -2390,7 +2390,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "catches a source publishing watts where watt-hours were expected"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-load-profiles",
         validation={"min": 1, "max": 100000},
         display_group="Physical",
     ),
@@ -2405,7 +2405,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "heater such as a sauna. Refined automatically from measured operation"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-load-profiles",
         validation={"min": 0.8, "max": 8},
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Physical",
@@ -2421,7 +2421,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "of the nominal value. Refined automatically"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-calibration",
         validation={"min": -0.06, "max": 0.06},
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Physical",
@@ -2434,7 +2434,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Optional entity/item that is on when the cover is closed",
         labels=["restart_required"],
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-cover",
         depends_on={"type": MANAGED_LOAD_COVER_TYPES},
         display_group="Physical",
     ),
@@ -2451,7 +2451,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "is what the forecast uses. The calibration panel says which it is on."
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-cover",
         validation={"min": 0.05, "max": 1.0},
         depends_on={"type": MANAGED_LOAD_COVER_TYPES},
         display_group="Physical",
@@ -2473,7 +2473,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "there is no surplus"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-operation",
         validation={"choices": MANAGED_LOAD_STRATEGIES},
         depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
         display_group="Operation",
@@ -2489,7 +2489,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "compressor from being cycled every time the plan is recalculated"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-operation",
         validation={"min": 0, "max": 720},
         depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
         display_group="Operation",
@@ -2502,7 +2502,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Cap on released hours per day (0 = no cap)",
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-runtime",
         validation={"min": 0, "max": 24},
         depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
         display_group="Operation",
@@ -2515,7 +2515,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="First hour of the day the appliance may run (leave equal to end for no limit)",
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-runtime",
         validation={"min": 0, "max": 23},
         depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
         display_group="Operation",
@@ -2528,7 +2528,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Hour of the day after which the appliance may no longer run",
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-runtime",
         validation={"min": 0, "max": 23},
         depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
         display_group="Operation",
@@ -2544,7 +2544,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "next two days). A sauna wanted this evening sets it; a pool does not"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-operation",
         validation={"min": 0, "max": 48},
         depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
         display_group="Operation",
@@ -2563,7 +2563,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "it. Ignored when frost protection is active"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-price-limit",
         validation={"min": 0, "max": 200},
         depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
         display_group="Operation",
@@ -2579,7 +2579,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "works in the cold and its heat exchanger can freeze"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-runtime",
         validation={"min": -30, "max": 40},
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Operation",
@@ -2595,7 +2595,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "temperature"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-operation",
         validation={"min": -20, "max": 40},
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Operation",
@@ -2608,7 +2608,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="First day of the season, as MM-DD (leave empty for all year)",
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-operation",
         validation={"pattern": "^$|^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"},
         depends_on={"type": MANAGED_LOAD_COVER_TYPES},
         display_group="Operation",
@@ -2621,7 +2621,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Last day of the season, as MM-DD",
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-operation",
         validation={"pattern": "^$|^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"},
         depends_on={"type": MANAGED_LOAD_COVER_TYPES},
         display_group="Operation",
@@ -2639,7 +2639,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "so a sender that goes quiet cannot hold a stale forecast forever"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-external",
         validation={"min": 1, "max": 10080},
         depends_on={"type": MANAGED_LOAD_EXTERNAL_TYPES},
         display_group="Pushed data",
@@ -2658,7 +2658,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "the same way the price and PV sources do"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-external",
         validation={"choices": MANAGED_LOAD_PROFILE_SOURCES},
         depends_on={"type": ["external_profile"]},
         display_group="Profile source",
@@ -2674,7 +2674,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "under Data Source, instead of repeating a URL and a token here"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-fetch",
         depends_on={
             "type": ["external_profile"],
             "profile_source": ["timeseries"],
@@ -2694,7 +2694,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "96-value series does not fit"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-fetch",
         depends_on={
             "type": ["external_profile"],
             "profile_source": ["timeseries"],
@@ -2714,7 +2714,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "when you named it that"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-fetch",
         depends_on={
             "type": ["external_profile"],
             "profile_source": ["timeseries"],
@@ -2732,7 +2732,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "Home Assistant connection"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-fetch",
         depends_on={
             "type": ["external_profile"],
             "profile_source": ["timeseries"],
@@ -2748,7 +2748,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Bearer token for that endpoint, if it needs one",
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-fetch",
         depends_on={
             "type": ["external_profile"],
             "profile_source": ["timeseries"],
@@ -2769,7 +2769,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "rated power above"
         ),
         hot_reload=True,
-        help_url="configuration.html#managed-loads",
+        help_url="configuration.html#managed-loads-fetch",
         validation={"choices": MANAGED_LOAD_VALUE_UNITS},
         depends_on={
             "type": ["external_profile"],

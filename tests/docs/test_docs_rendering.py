@@ -479,3 +479,141 @@ def test_level_switcher_still_works_under_the_preview_path(page, preview_docs_ur
     page.locator(".level-option[data-level-value='expert']").click()
     assert page.locator("body[data-active-level='expert']").count() == 1
     assert page.locator(".toc-link").count() > 1
+
+
+# ------------------------------------------------- managed-load profile tables
+
+MANAGED_LOAD_PROFILES = [
+    "pool_heatpump",
+    "sauna",
+    "hot_water_tank",
+    "buffer_tank",
+    "external_contingent",
+    "external_profile",
+]
+
+
+@pytest.mark.parametrize("profile", MANAGED_LOAD_PROFILES)
+def test_every_profile_renders_its_own_settings(page, docs_url, profile):
+    """Each profile mount must fill with the settings that profile really has.
+
+    The tables come from depends_on: {type: [...]} in the schema, so this also
+    proves the six mounts on the page name types the schema still knows about —
+    a renamed type would leave an empty table rather than failing anywhere else.
+    """
+    schema = json.loads((DOCS / "assets/data/config_schema.json").read_text())
+    expected = {
+        f["key"].split(".", 1)[1]
+        for f in schema["fields"]
+        if f["section"] == "managed_loads"
+        and profile in ((f.get("depends_on") or {}).get("type") or [profile])
+    }
+
+    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    mount = page.locator(f"[data-managed-load-profile='{profile}']")
+    page.wait_for_selector(f"[data-managed-load-profile='{profile}'] table")
+
+    shown = set(mount.locator("td.param-key code").all_inner_texts())
+    assert shown == expected, (
+        f"{profile} shows {sorted(shown - expected)} it should not and is missing "
+        f"{sorted(expected - shown)}"
+    )
+
+
+def _profile_row(page, profile, key):
+    """The row for one setting in a profile's table, matched on the key itself.
+
+    Matching on text would also hit the header ("Type") and any description that
+    happens to mention the setting.
+    """
+    return page.locator(f"[data-managed-load-profile='{profile}'] tbody tr").filter(
+        has=page.locator(f"td.param-key code:text-is('{key}')")
+    ).first
+
+
+def test_profile_tables_show_the_profile_starting_values(page, docs_url):
+    """A sauna must not be documented with the pool's numbers.
+
+    managed_loads.target_temp is one FieldDef shared by four appliance types and
+    its default is the pool's 28 C. The per-profile values come from
+    managed_load_presets, exported from src/loads/presets.py.
+    """
+    schema = json.loads((DOCS / "assets/data/config_schema.json").read_text())
+    presets = schema["managed_load_presets"]
+
+    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    page.wait_for_selector("[data-managed-load-profile='sauna'] table")
+
+    for profile in ("pool_heatpump", "sauna"):
+        row = _profile_row(page, profile, "target_temp")
+        # Compared as a number: 28.0 in the JSON is 28 once JavaScript has
+        # rendered it, which is the same temperature.
+        shown = float(row.locator("td").all_inner_texts()[2])
+        expected = presets[profile]["defaults"]["target_temp"]
+        assert shown == expected, (
+            f"{profile} documents target_temp as {shown}, preset says {expected}"
+        )
+
+
+@pytest.mark.parametrize("profile", MANAGED_LOAD_PROFILES)
+def test_the_type_row_names_the_profile_it_is_in(page, docs_url, profile):
+    """No preset names the type - it is the key they are looked up by.
+
+    Left to fall back on the schema, every profile would document its own type as
+    pool_heatpump, which is the one value in that table that cannot be changed
+    without making it a different table.
+    """
+    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    page.wait_for_selector(f"[data-managed-load-profile='{profile}'] table")
+
+    shown = _profile_row(page, profile, "type").locator("td").all_inner_texts()[2]
+    assert shown.strip() == profile, f"the {profile} table documents type as {shown!r}"
+
+
+def test_a_preset_of_none_reads_as_no_limit(page, docs_url):
+    """None in a preset means "no limit", not "unset".
+
+    A sauna has no allowed window at all; rendering its window_start as the
+    schema's 8 would document a restriction that is not applied.
+    """
+    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    page.wait_for_selector("[data-managed-load-profile='sauna'] table")
+
+    row = _profile_row(page, "sauna", "window_start")
+    assert "no limit" in row.locator("td").all_inner_texts()[2]
+
+
+def test_the_rendered_page_has_no_duplicate_ids(page, docs_url):
+    """The generated reference must not claim an anchor the prose already owns.
+
+    Both are driven by help_url, so every anchor the application links to exists
+    twice by construction unless config-reference.js yields the id. Two elements
+    with one id put the section twice in the contents and send the deep link to
+    whichever came first.
+    """
+    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    page.wait_for_selector("#schema-reference table")
+
+    dupes = page.evaluate(
+        "() => { const seen = {}; "
+        "[...document.querySelectorAll('[id]')].forEach(e => "
+        "  seen[e.id] = (seen[e.id] || 0) + 1); "
+        "return Object.keys(seen).filter(k => seen[k] > 1); }"
+    )
+    assert not dupes, f"ids rendered more than once: {dupes}"
+
+
+def test_profile_tables_follow_the_detail_level(page, docs_url):
+    """The per-profile tables are subject to the same disclosure as everything else."""
+    _open(page, docs_url, "user-guide/configuration.html", level="expert")
+    page.wait_for_selector("[data-managed-load-profile='pool_heatpump'] table")
+    expert = page.locator("[data-managed-load-profile='pool_heatpump'] tbody tr").count()
+
+    page.get_by_role("button", name="Standard", exact=True).click()
+    page.wait_for_timeout(250)
+    standard = page.locator("[data-managed-load-profile='pool_heatpump'] tbody tr").count()
+
+    assert 0 < standard < expert, (
+        f"pool heat pump shows {standard} settings at Standard and {expert} at "
+        "Expert; the level filter is not reaching the profile tables"
+    )

@@ -849,6 +849,22 @@ body[data-active-level="expert"] [data-level="expert"] {
     margin-top: 2rem;
 }
 
+/* The group label above a per-profile table (Identity, Temperature, ...). It
+ * names the same grouping the application's settings form uses, so it reads as a
+ * label rather than as another heading in the page outline - and it carries no
+ * id, which keeps twenty-odd of them out of the contents sidebar. */
+.param-group {
+    margin: 1.75rem 0 0.5rem;
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.param-group:first-child {
+    margin-top: 0.5rem;
+}
+
 .param-table code {
     background: none;
     padding: 0;

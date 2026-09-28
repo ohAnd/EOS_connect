@@ -111,6 +111,56 @@ def test_schema_help_urls_resolve():
     )
 
 
+def test_managed_load_help_urls_reach_prose_not_the_reference():
+    """A managed load's settings are explained in prose, and must stay that way.
+
+    ``_generated_anchors()`` counts any help_url anchor as present, because the
+    reference at the foot of the page renders a heading for every one of them.
+    That is the right answer for a section whose anchor the reference owns, and
+    the wrong one here: these anchors were split across the Managed Loads prose
+    so a "Learn more" button lands on the paragraph that explains the setting
+    rather than on one heading shared by all thirty-nine. Misspell one in the
+    page and the reference would quietly absorb it.
+    """
+    schema = json.loads(SCHEMA_JSON.read_text(encoding="utf-8"))
+    config_page = DOCS / "user-guide/configuration.html"
+    written = _ids(config_page.read_text(encoding="utf-8"))
+
+    wanted = {}
+    for field in schema["fields"]:
+        url = field.get("help_url") or ""
+        if "#" not in url:
+            continue
+        anchor = url.split("#", 1)[1]
+        if anchor.startswith("managed-load"):
+            wanted.setdefault(anchor, []).append(field["key"])
+
+    assert wanted, "no managed-load help_url anchors found at all"
+    missing = {a: k for a, k in wanted.items() if a not in written}
+    assert not missing, (
+        "managed-load help_url anchors with no heading in the page:\n  " +
+        "\n  ".join(f"#{a} ({len(k)} field(s), e.g. {k[0]})" for a, k in sorted(missing.items()))
+    )
+
+
+def test_every_managed_load_type_has_a_profile_section():
+    """Each type the schema offers needs its own explanation and parameter table.
+
+    The tables are mounted by ``data-managed-load-profile`` and filled from the
+    schema, so a type added to presets.py without a section here would simply have
+    no documentation - and nothing else would notice.
+    """
+    schema = json.loads(SCHEMA_JSON.read_text(encoding="utf-8"))
+    types = set(schema["managed_load_presets"])
+    html = (DOCS / "user-guide/configuration.html").read_text(encoding="utf-8")
+    mounted = set(re.findall(r'data-managed-load-profile="([^"]+)"', html))
+
+    assert mounted == types, (
+        f"undocumented type(s): {sorted(types - mounted)}; "
+        f"documented but unknown: {sorted(mounted - types)}"
+    )
+
+
 def test_version_badge_matches_release_prefix():
     """site.js holds the one version string the whole site renders.
 
