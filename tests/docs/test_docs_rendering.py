@@ -85,6 +85,16 @@ def page_fixture(browser):
     context.close()
 
 
+def _page_level(page, label):
+    """The level button on the page itself, not the copy in the header.
+
+    Both switchers carry the same accessible name on purpose - they are the same
+    control - so an unscoped query matches two elements and Playwright's strict
+    mode refuses to click either.
+    """
+    return page.locator("#site-level").get_by_role("button", name=label, exact=True)
+
+
 def _open(page, docs_url, path, **query):
     suffix = ("?" + "&".join(f"{k}={v}" for k, v in query.items())) if query else ""
     page.goto(docs_url + path + suffix, wait_until="domcontentloaded")
@@ -239,7 +249,7 @@ def test_level_filter_matches_schema(page, docs_url):
     for label, level in (("Getting Started", "getting_started"),
                          ("Standard", "standard"),
                          ("Expert", "expert")):
-        page.get_by_role("button", name=label, exact=True).click()
+        _page_level(page, label).click()
         page.wait_for_timeout(250)
         rows = page.locator("#schema-reference tbody tr").count()
         assert rows == expected[level], (
@@ -250,7 +260,7 @@ def test_level_filter_matches_schema(page, docs_url):
 def test_level_persists_across_pages(page, docs_url):
     """A reader should not have to re-pick their depth on every page."""
     _open(page, docs_url, "user-guide/configuration.html")
-    page.get_by_role("button", name="Expert", exact=True).click()
+    _page_level(page, "Expert").click()
     page.wait_for_timeout(200)
 
     _open(page, docs_url, "user-guide/index.html")
@@ -405,22 +415,28 @@ def test_banner_shows_on_every_preview_page(browser, preview_docs_url, path):
 
 
 def test_banner_starts_above_the_header_without_covering_it(page, preview_docs_url):
-    """At rest the banner is the topmost chrome and the header sits clear below it.
+    """The banner is the topmost chrome and the header sits clear below it.
 
-    The header is *not* sticky on this site despite its ``position: sticky``:
-    ``#site-nav`` wraps it at exactly its own height, so it has no travel. That is
-    pre-existing and deliberately left alone, which is why the banner holds its own
-    position (``position: fixed``) instead of relying on the header.
+    The header sticks by way of ``#site-nav``, offset by ``top: var(--banner-h)``
+    so it comes to rest under the banner rather than behind it. The banner stays
+    ``position: fixed`` because it has to hold the top edge while the header
+    travels. Checked at rest and scrolled: the offset is what keeps the order.
     """
     _open(page, preview_docs_url, "user-guide/configuration.html")
 
-    banner_box = page.locator(".preview-banner").bounding_box()
-    header_box = page.locator(".nav-header").bounding_box()
+    for where in ("at rest", "scrolled"):
+        if where == "scrolled":
+            page.evaluate("() => window.scrollTo(0, 1500)")
+            page.wait_for_function("() => window.scrollY > 1000")
+            page.wait_for_timeout(400)
 
-    assert banner_box["y"] == pytest.approx(0, abs=1)
-    assert header_box["y"] >= banner_box["y"] + banner_box["height"] - 1, (
-        "the banner covers the top of the navigation header"
-    )
+        banner_box = page.locator(".preview-banner").bounding_box()
+        header_box = page.locator(".nav-header").bounding_box()
+
+        assert banner_box["y"] == pytest.approx(0, abs=1), where
+        assert header_box["y"] >= banner_box["y"] + banner_box["height"] - 1, (
+            f"{where}: the banner covers the top of the navigation header"
+        )
 
 
 def test_banner_stays_visible_while_scrolling(page, preview_docs_url):
@@ -499,7 +515,7 @@ def test_navigation_stays_inside_the_preview(page, preview_docs_url):
 def test_level_switcher_still_works_under_the_preview_path(page, preview_docs_url):
     """The deeper path must not break the disclosure level or the contents."""
     _open(page, preview_docs_url, "user-guide/configuration.html")
-    page.locator(".level-option[data-level-value='expert']").click()
+    page.locator("#site-level .level-option[data-level-value='expert']").click()
     assert page.locator("body[data-active-level='expert']").count() == 1
     assert page.locator(".toc-link").count() > 1
 
@@ -633,7 +649,7 @@ def test_profile_tables_follow_the_detail_level(page, docs_url):
     page.wait_for_selector("[data-managed-load-profile='pool_heatpump'] table")
     expert = page.locator("[data-managed-load-profile='pool_heatpump'] tbody tr").count()
 
-    page.get_by_role("button", name="Standard", exact=True).click()
+    _page_level(page, "Standard").click()
     page.wait_for_timeout(250)
     standard = page.locator("[data-managed-load-profile='pool_heatpump'] tbody tr").count()
 
@@ -782,3 +798,249 @@ def test_the_contents_lists_nothing_hidden(page, docs_url, path, level):
         "                 return !el || el.offsetParent === null; })"
     )
     assert not ghosts, f"{path} at {level} lists hidden headings: {ghosts}"
+
+
+# ------------------------------------------------------------- sticky header
+
+def _header_metrics(page):
+    return page.evaluate(
+        "() => { const h = document.querySelector('.nav-header').getBoundingClientRect();"
+        " return {y: h.y, height: h.height, bottom: h.bottom,"
+        "  chrome: parseFloat(getComputedStyle(document.body)"
+        "            .getPropertyValue('--chrome-h')) || 0}; }"
+    )
+
+
+@pytest.mark.parametrize("path", ["user-guide/config-battery.html", "advanced/index.html"])
+def test_the_header_stays_at_the_top_while_scrolling(page, docs_url, path):
+    """The header has to travel, which for years it did not.
+
+    ``.nav-header`` declared ``position: sticky`` but its parent ``#site-nav``
+    wraps it at exactly its own height, so the sticky rectangle had no travel and
+    it behaved like ``position: relative``. The sticky now sits on ``#site-nav``,
+    whose parent is ``<body>``.
+    """
+    _open(page, docs_url, path)
+    page.wait_for_timeout(300)
+    assert _header_metrics(page)["y"] == pytest.approx(0, abs=1), "not at the top at rest"
+
+    page.evaluate("() => window.scrollTo(0, 1500)")
+    page.wait_for_function("() => window.scrollY > 1000")
+    page.wait_for_timeout(400)
+    assert _header_metrics(page)["y"] == pytest.approx(0, abs=1), (
+        "the header scrolled away instead of sticking"
+    )
+
+
+def test_the_header_gets_flatter_when_scrolled(page, docs_url):
+    """Sticky chrome that kept its full height would just eat the viewport.
+
+    Both nav rows have to survive the shrink - being able to change section
+    without scrolling back up is the entire point of keeping the header.
+    """
+    _open(page, docs_url, "user-guide/config-battery.html")
+    page.wait_for_timeout(300)
+    tall = _header_metrics(page)["height"]
+
+    page.evaluate("() => window.scrollTo(0, 1500)")
+    page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+    page.wait_for_timeout(500)
+    short = _header_metrics(page)["height"]
+
+    assert short < tall * 0.8, f"header went from {tall:.0f}px to {short:.0f}px"
+    assert page.locator(".nav-menu a.active").first.is_visible(), "first level lost"
+    assert page.locator(".subnav-menu a.active").first.is_visible(), "second level lost"
+
+
+@pytest.mark.parametrize("scrolled", [False, True])
+def test_chrome_height_matches_the_rendered_header(page, docs_url, scrolled):
+    """--chrome-h feeds the anchor offset and the sticky contents sidebar.
+
+    It is written from a measurement, and the measurement is taken while the
+    shrink is still animating - so it is only right because a transitionend
+    listener takes it again. Wrong here means anchors land behind the header.
+    """
+    _open(page, docs_url, "user-guide/config-battery.html")
+    if scrolled:
+        page.evaluate("() => window.scrollTo(0, 1500)")
+        page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+    page.wait_for_timeout(600)
+
+    m = _header_metrics(page)
+    assert m["chrome"] == pytest.approx(m["height"], abs=2), (
+        f"--chrome-h is {m['chrome']}px, the header is {m['height']:.0f}px"
+    )
+
+
+def test_the_measured_height_never_reaches_the_min_height(page, docs_url):
+    """--header-h is an input and must stay one.
+
+    .nav-container takes it as its min-height, so writing the measured total back
+    into it makes the header grow by its own height every time it is measured -
+    130px, then 184px, and on up. Asserted as the invariant rather than as a
+    symptom: the runaway saturates quickly enough that comparing two heights can
+    miss it.
+    """
+    _open(page, docs_url, "user-guide/config-battery.html")
+    page.evaluate("() => window.scrollTo(0, 1500)")
+    page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+    page.wait_for_timeout(500)
+
+    written = page.evaluate(
+        "() => ({header: document.body.style.getPropertyValue('--header-h'),"
+        "        chrome: document.body.style.getPropertyValue('--chrome-h')})"
+    )
+    assert written["header"] == "", (
+        f"--header-h was written at runtime ({written['header']}); the measured "
+        "value belongs in --chrome-h"
+    )
+    assert written["chrome"], "--chrome-h was never measured"
+
+
+def test_a_contents_jump_lands_below_the_header(page, docs_url):
+    """scroll-margin-top has to clear the chrome that is now genuinely on top.
+
+    --scroll-offset is declared on <body> rather than :root on purpose: a var()
+    is substituted where the property is declared, and both terms are measured
+    onto <body> at runtime.
+    """
+    _open(page, docs_url, "user-guide/config-battery.html")
+    page.wait_for_timeout(300)
+    page.locator(".toc-link", has_text="The inverter").first.click()
+    page.wait_for_timeout(1000)
+
+    box = page.locator("#inverter").bounding_box()
+    assert box["y"] >= _header_metrics(page)["bottom"] - 1, (
+        "the heading landed behind the header"
+    )
+
+
+def test_the_header_switcher_appears_only_when_scrolled(page, docs_url):
+    """At rest the full switcher is a few lines down the page; a copy would be noise."""
+    _open(page, docs_url, "user-guide/config-battery.html")
+    page.wait_for_timeout(300)
+    assert not page.locator("#site-level-compact").is_visible()
+
+    page.evaluate("() => window.scrollTo(0, 1500)")
+    page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+    page.wait_for_timeout(400)
+    assert page.locator("#site-level-compact").is_visible()
+
+
+def test_the_header_switcher_drives_the_same_state(page, docs_url):
+    """One control in two places: applyLevel() syncs both from one query.
+
+    Both sets keep class="level-option" and data-level-value for exactly that
+    reason, so neither can drift from the level the body actually carries.
+    """
+    _open(page, docs_url, "user-guide/config-battery.html", level="standard")
+    page.evaluate("() => window.scrollTo(0, 1500)")
+    page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+    page.wait_for_timeout(400)
+
+    page.locator("#site-level-compact .level-option[data-level-value='expert']").click()
+    page.wait_for_timeout(400)
+
+    assert page.evaluate("() => document.body.dataset.activeLevel") == "expert"
+    for where in ("#site-level", "#site-level-compact"):
+        pressed = page.locator(
+            f"{where} .level-option[data-level-value='expert']"
+        ).get_attribute("aria-pressed")
+        assert pressed == "true", f"{where} did not follow"
+
+
+def test_pages_without_levels_have_no_header_switcher(page, docs_url):
+    """Those pages are pinned to Expert, so a switcher there would do nothing."""
+    _open(page, docs_url, "advanced/index.html")
+    page.wait_for_timeout(300)
+    assert page.locator("#site-level-compact").count() == 0
+
+
+def test_the_github_link_separates_its_icon_from_its_label(page, docs_url):
+    """`.nav-menu a` is a flex container, and flex drops whitespace-only items.
+
+    The literal space between the icon and "GitHub" in the markup is one of those,
+    so without an explicit gap the two render flush against each other.
+    """
+    _open(page, docs_url, "user-guide/index.html")
+    gap = page.evaluate(
+        "() => { const a = [...document.querySelectorAll('.nav-menu a')]"
+        "  .find(x => x.textContent.trim() === 'GitHub');"
+        "  return parseFloat(getComputedStyle(a).columnGap) || 0; }"
+    )
+    assert gap >= 2, f"icon and label are {gap}px apart"
+
+
+def test_the_hamburger_keeps_the_edge_on_a_phone(browser, docs_url):
+    """Thumb reach: the menu button belongs at the edge, the filters inboard.
+
+    DOM order puts the compact switcher last because that is where it belongs on
+    a desktop, to the right of the nav links. On a phone the links are behind the
+    hamburger, so the two swap visually - which is what CSS order is for.
+    """
+    context = browser.new_context(viewport=PHONE)
+    page = context.new_page()
+    try:
+        _open(page, docs_url, "user-guide/config-battery.html")
+        page.evaluate("() => window.scrollTo(0, 1500)")
+        page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+        page.wait_for_timeout(400)
+
+        order = page.evaluate(
+            "() => [...document.querySelector('.nav-container').children]"
+            "  .filter(e => getComputedStyle(e).display !== 'none')"
+            "  .map(e => [e, e.getBoundingClientRect().x])"
+            "  .sort((a, b) => a[1] - b[1])"
+            "  .map(([e]) => e.id || e.className.split(' ')[0])"
+        )
+        assert order == ["nav-logo", "site-level-compact", "mobile-menu-toggle"], order
+    finally:
+        context.close()
+
+
+def test_the_switcher_sits_right_of_the_links_on_a_desktop(browser, docs_url):
+    """The mirror of the phone rule: on a desktop nothing reorders."""
+    context = browser.new_context(viewport=DESKTOP)
+    page = context.new_page()
+    try:
+        _open(page, docs_url, "user-guide/config-battery.html")
+        page.evaluate("() => window.scrollTo(0, 1500)")
+        page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+        page.wait_for_timeout(400)
+
+        menu = page.locator(".nav-menu").bounding_box()
+        switcher = page.locator("#site-level-compact").bounding_box()
+        assert switcher["x"] >= menu["x"] + menu["width"] - 1, (
+            "the compact switcher is not to the right of the nav links"
+        )
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("viewport", [PHONE, DESKTOP], ids=["phone", "desktop"])
+def test_no_level_button_is_narrower_than_its_label(browser, docs_url, viewport):
+    """A label wider than its button is clipped, whichever switcher it is in.
+
+    The phone rule gives .level-option `flex: 1 1 0` so the switcher on the page
+    can divide 360px into equal thirds. The compact copy in the header inherited
+    that, which squeezed every label to the width of the shortest - "Standard"
+    wrapped to two lines and still spilled 12px past its own edge.
+    """
+    context = browser.new_context(viewport=viewport)
+    page = context.new_page()
+    try:
+        _open(page, docs_url, "user-guide/config-battery.html")
+        page.evaluate("() => window.scrollTo(0, 1500)")
+        page.wait_for_function("() => document.body.classList.contains('nav-compact')")
+        page.wait_for_timeout(400)
+
+        clipped = page.evaluate(
+            "() => [...document.querySelectorAll('.level-option')]"
+            "  .filter(e => e.offsetParent !== null && e.scrollWidth > e.clientWidth + 1)"
+            "  .map(e => ({label: e.textContent.trim(),"
+            "              needs: e.scrollWidth, has: e.clientWidth,"
+            "              where: e.closest('#site-level-compact') ? 'header' : 'page'}))"
+        )
+        assert not clipped, f"labels wider than their button: {clipped}"
+    finally:
+        context.close()

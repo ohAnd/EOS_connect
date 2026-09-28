@@ -64,9 +64,11 @@
      * ConfigSchema.get_by_level() in src/config_web/schema.py:121-128.
      * Cumulative: expert shows standard and getting-started content too. */
     var LEVELS = [
-        { val: "getting_started", label: "Getting Started" },
-        { val: "standard", label: "Standard" },
-        { val: "expert", label: "Expert" }
+        /* `short` is what the compact switcher in the header shows; the full label
+         * still reaches screen readers and the tooltip through aria-label/title. */
+        { val: "getting_started", label: "Getting Started", short: "Start" },
+        { val: "standard", label: "Standard", short: "Standard" },
+        { val: "expert", label: "Expert", short: "Expert" }
     ];
     var LEVEL_KEY = "config_level";
     var DEFAULT_LEVEL = "standard";
@@ -178,6 +180,37 @@
             .catch(function () { /* no stamp; the banner still says what matters */ });
     }
 
+    /* -------------------------------------------------------- header metrics */
+
+    /* Past this many pixels the header collapses to a flat bar. Roughly one
+     * header height: below it the reader has barely moved and the swap would
+     * only flicker. */
+    var SHRINK_AT = 80;
+
+    /* Last measured header height, kept here so the scroll spy can use it without
+     * reading a computed style on every frame. */
+    var headerHeight = 64;
+
+    /* Three things need the header's real height - the anchor scroll margin, the
+     * sticky contents sidebar and the scroll spy - and it changes with scroll
+     * position and with whether the page carries a second nav row. So measure it,
+     * exactly as syncBannerHeight does for the banner, rather than keeping three
+     * constants that were already disagreeing with each other.
+     *
+     * The result goes to --chrome-h, never to --header-h: the latter is what
+     * .nav-container takes as its min-height, so writing a measured total back
+     * into it would make the header grow by its own height on every frame. */
+    function syncHeaderHeight() {
+        var header = document.querySelector(".nav-header");
+        if (!header) { return; }
+        headerHeight = header.offsetHeight;
+        body.style.setProperty("--chrome-h", headerHeight + "px");
+    }
+
+    function bannerHeight() {
+        return parseFloat(body.style.getPropertyValue("--banner-h")) || 0;
+    }
+
     /* ------------------------------------------------------------ navigation */
 
     function renderNav() {
@@ -195,10 +228,18 @@
 
         /* The second row exists only inside a section that has one, and carries
          * its own classes: site.js takes the FIRST .nav-menu for the hamburger,
-         * and a second one would hand that button the wrong element. It is not
-         * sticky either - the header never actually sticks (#site-nav wraps it at
-         * its own height), so this row scrolls away with it and costs nothing
-         * from --scroll-offset. */
+         * and a second one would hand that button the wrong element. It sits
+         * inside .nav-header, so it rides along with the sticky header and its
+         * height is part of what syncHeaderHeight() measures. */
+        /* Filled by renderLevelSwitcher(), which runs later - renderNav() assigns
+         * innerHTML wholesale, so anything put in the header before this point is
+         * wiped. Emitted only where there is a level to switch: last in the flex
+         * row, which puts it at the right on a desktop and beside the hamburger on
+         * a phone, where .nav-menu is hidden. */
+        var levelMount = body.hasAttribute("data-levels")
+            ? "<div id=\"site-level-compact\"></div>"
+            : "";
+
         var subnav = "";
         if (current && current.children) {
             var subItems = current.children.map(function (child) {
@@ -232,6 +273,7 @@
             "<button class=\"mobile-menu-toggle\" type=\"button\" aria-expanded=\"false\" " +
             "aria-controls=\"nav-menu\" aria-label=\"Toggle navigation\">☰</button>" +
             "<ul class=\"nav-menu\" id=\"nav-menu\">" + items + external + "</ul>" +
+            levelMount +
             "</div>" + subnav + "</nav>";
 
         var toggle = mount.querySelector(".mobile-menu-toggle");
@@ -308,6 +350,27 @@
         });
     }
 
+    /* Both switchers emit the same class and data attribute, which is what lets
+     * applyLevel() keep them in step with one document-wide query - including when
+     * revealHashTarget() raises the level without either being clicked. */
+    function levelButtons(compact) {
+        return LEVELS.map(function (l) {
+            return "<button type=\"button\" class=\"level-option\" data-level-value=\"" +
+                l.val + "\" aria-pressed=\"false\"" +
+                (compact ? " aria-label=\"" + l.label + "\" title=\"" + l.label + "\"" : "") +
+                ">" + (compact ? l.short : l.label) + "</button>";
+        }).join("");
+    }
+
+    function onLevelClick(e) {
+        var btn = e.target.closest(".level-option");
+        if (!btn) { return; }
+        var level = btn.getAttribute("data-level-value");
+        storeLevel(level);
+        applyLevel(level);
+        buildTOC();
+    }
+
     function renderLevelSwitcher() {
         if (!body.hasAttribute("data-levels")) {
             // Pages without a switcher still need a level set, or everything
@@ -315,30 +378,29 @@
             body.setAttribute("data-active-level", "expert");
             return;
         }
+
         var mount = document.getElementById("site-level");
-        if (!mount) { return; }
+        if (mount) {
+            mount.innerHTML =
+                "<div class=\"level-switcher\">" +
+                "<span class=\"level-switcher-label\" id=\"level-label\">" +
+                "<i class=\"fas fa-layer-group\" aria-hidden=\"true\"></i> " +
+                "How much detail do you want?</span>" +
+                "<div class=\"level-options\" role=\"group\" aria-labelledby=\"level-label\">" +
+                levelButtons(false) + "</div></div>";
+            mount.addEventListener("click", onLevelClick);
+        }
 
-        var opts = LEVELS.map(function (l) {
-            return "<button type=\"button\" class=\"level-option\" data-level-value=\"" +
-                l.val + "\" aria-pressed=\"false\">" + l.label + "</button>";
-        }).join("");
-
-        mount.innerHTML =
-            "<div class=\"level-switcher\">" +
-            "<span class=\"level-switcher-label\" id=\"level-label\">" +
-            "<i class=\"fas fa-layer-group\" aria-hidden=\"true\"></i> " +
-            "How much detail do you want?</span>" +
-            "<div class=\"level-options\" role=\"group\" aria-labelledby=\"level-label\">" +
-            opts + "</div></div>";
-
-        mount.addEventListener("click", function (e) {
-            var btn = e.target.closest(".level-option");
-            if (!btn) { return; }
-            var level = btn.getAttribute("data-level-value");
-            storeLevel(level);
-            applyLevel(level);
-            buildTOC();
-        });
+        /* The header copy, visible once the header goes compact. It labels its own
+         * group rather than reusing #level-label: two elements with one id would
+         * break both the contents sidebar and every deep link. */
+        var compact = document.getElementById("site-level-compact");
+        if (compact) {
+            compact.innerHTML =
+                "<div class=\"level-options is-compact\" role=\"group\" " +
+                "aria-label=\"Detail level\">" + levelButtons(true) + "</div>";
+            compact.addEventListener("click", onLevelClick);
+        }
     }
 
     /* ------------------------------------------------ table of contents */
@@ -399,7 +461,10 @@
 
     function highlight() {
         if (!tocLinks.length) { return; }
-        var offset = 96;
+        /* A heading counts as current once it passes under the chrome. That used
+         * to be a hard-coded 96, which knew about neither the second nav row nor
+         * the compact header. */
+        var offset = headerHeight + bannerHeight() + 16;
         var current = -1;
         for (var i = 0; i < spyTargets.length; i++) {
             var t = spyTargets[i];
@@ -467,15 +532,37 @@
 
     /* ------------------------------------------------------------- startup */
 
+    /* Collapse the header once the reader has moved, and remeasure - but only on
+     * the frame the state actually changes, so the common case is one comparison. */
+    function toggleCompact() {
+        var compact = window.scrollY > SHRINK_AT;
+        if (compact === body.classList.contains("nav-compact")) { return; }
+        body.classList.toggle("nav-compact", compact);
+        syncHeaderHeight();
+    }
+
     function init() {
         renderNav();
         renderPreviewBanner();
         renderFooter();
         renderLevelSwitcher();
         applyLevel(readLevel());
+        // After the nav, the banner and the switcher: all three are part of what
+        // the header measures, and --scroll-offset depends on the result.
+        syncHeaderHeight();
         buildTOC();
         revealHashTarget();
         window.addEventListener("hashchange", revealHashTarget);
+
+        /* The compact swap is animated, so the height at the instant the class
+         * flips is still the old one. Measuring again when the transition lands
+         * is what makes --chrome-h agree with the header you can see; the same
+         * listener covers a late web font reflowing the nav. */
+        var header = document.querySelector(".nav-header");
+        if (header) {
+            header.addEventListener("transitionend", syncHeaderHeight);
+        }
+        window.addEventListener("load", syncHeaderHeight);
 
         var toggleTop = renderBackToTop();
         var ticking = false;
@@ -483,14 +570,19 @@
             if (ticking) { return; }
             ticking = true;
             window.requestAnimationFrame(function () {
+                toggleCompact();
                 highlight();
                 toggleTop();
                 ticking = false;
             });
         }, { passive: true });
+        // A reload lands mid-page with the scroll position restored, and no scroll
+        // event follows it.
+        toggleCompact();
 
         var resizeTimer;
         window.addEventListener("resize", function () {
+            syncHeaderHeight();
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(buildTOC, 200);
         });
