@@ -14,6 +14,7 @@ whole parameter reference would be missing.
 import functools
 import http.server
 import os
+import shutil
 import socket
 import threading
 
@@ -60,6 +61,33 @@ def docs_url_fixture():
     thread.start()
     try:
         yield f"http://127.0.0.1:{port}/"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.fixture(name="preview_docs_url", scope="session")
+def preview_docs_url_fixture(tmp_path_factory):
+    """Serve the docs the way ``.github/workflows/pages.yml`` publishes the preview.
+
+    The develop copy lives one segment down, under ``/develop/``, and that segment is
+    the only thing ``site.js`` has to go on when it decides to raise the banner. A
+    fixture that served ``docs/`` at the root could not exercise that at all.
+
+    ``build-info.json`` is deliberately *not* staged: the workflow writes it, so the
+    banner has to render without it here, which is also what happens for anyone
+    opening the docs from a checkout.
+    """
+    root = tmp_path_factory.mktemp("pages-site")
+    shutil.copytree(DOCS_DIR, os.path.join(str(root), "develop"))
+
+    port = _free_port()
+    handler = functools.partial(_QuietHandler, directory=str(root))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{port}/develop/"
     finally:
         server.shutdown()
         server.server_close()

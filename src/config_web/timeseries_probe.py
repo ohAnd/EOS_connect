@@ -23,7 +23,7 @@ try:  # running from src/ as a script — src/ is on sys.path
     from interfaces.timeseries_normalizer import (
         PRICE_UNIT_TO_EUR_PER_WH,
         PV_UNITS,
-        TEMPLATE_DOCS_ANCHOR,
+        TEMPLATE_DOCS_URL,
         TimeseriesFormatError,
         convert_price_values,
         convert_pv_values,
@@ -37,7 +37,7 @@ except ImportError:  # imported as src.config_web (tests)
     from ..interfaces.timeseries_normalizer import (
         PRICE_UNIT_TO_EUR_PER_WH,
         PV_UNITS,
-        TEMPLATE_DOCS_ANCHOR,
+        TEMPLATE_DOCS_URL,
         TimeseriesFormatError,
         convert_price_values,
         convert_pv_values,
@@ -287,7 +287,7 @@ def probe(
     naive_hint = (
         f"Timestamps carry no UTC offset and were read as local time "
         f"({getattr(tz, 'zone', str(tz))}). If the source renders UTC, every slot is "
-        f"shifted — see {TEMPLATE_DOCS_ANCHOR}."
+        f"shifted — see {TEMPLATE_DOCS_URL}."
     )
     if _has_naive_source_timestamps(raw_entries):
         warnings.append(naive_hint)

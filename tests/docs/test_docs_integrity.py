@@ -240,3 +240,64 @@ def test_referenced_images_exist():
             if not (page.parent / src).resolve().exists():
                 missing.append(f"{page.relative_to(REPO)} -> {src}")
     assert not missing, "missing images:\n  " + "\n  ".join(missing)
+
+
+# --------------------------------------------------------------- develop preview
+
+# The site is published twice by .github/workflows/pages.yml: the released copy at
+# the root, the develop copy under /develop/. Everything that distinguishes the two
+# is added at publish time or derived from the URL at runtime — nothing marking a
+# preview may be committed to docs/, or it would travel to main on the next merge
+# and mark the released site instead.
+
+
+@pytest.mark.parametrize("page", _published_pages(), ids=lambda p: p.name)
+def test_no_page_hand_writes_the_preview_banner(page):
+    """The banner comes from site.js, which raises it from the URL path."""
+    html = page.read_text(encoding="utf-8")
+    assert "preview-banner" not in html, (
+        f"{page.relative_to(REPO)} contains preview-banner markup; the banner is "
+        "injected by docs/assets/js/site.js and must never be written into a page"
+    )
+
+
+@pytest.mark.parametrize("page", _published_pages(), ids=lambda p: p.name)
+def test_no_page_hand_writes_a_robots_meta(page):
+    """noindex is injected into the develop copy by the publish workflow.
+
+    Committed to a page it would reach main and de-index the real documentation.
+    """
+    html = page.read_text(encoding="utf-8")
+    assert not re.search(r'<meta[^>]+name=["\']robots["\']', html, re.I), (
+        f"{page.relative_to(REPO)} carries a robots meta; noindex belongs in "
+        ".github/workflows/pages.yml, which applies it to the develop copy only"
+    )
+
+
+def test_banner_segment_matches_the_published_path():
+    """site.js keys the banner off a URL segment; the workflow creates that path.
+
+    If the two ever disagree the preview would publish with no banner at all — the
+    exact failure this whole mechanism exists to prevent.
+    """
+    site_js = (DOCS / "assets/js/site.js").read_text(encoding="utf-8")
+    segment = re.search(r'var PREVIEW_SEGMENT = "([^"]+)"', site_js).group(1)
+
+    workflow = (REPO / ".github/workflows/pages.yml").read_text(encoding="utf-8")
+    published = re.search(r"^\s*PREVIEW_DIR:\s*(\S+)\s*$", workflow, re.M).group(1)
+
+    assert segment == published, (
+        f"site.js raises the banner on '/{segment}/' but pages.yml publishes the "
+        f"preview to '/{published}/'"
+    )
+
+
+def test_banner_offset_is_a_no_op_off_the_preview_path():
+    """--banner-h must default to zero, or the released site shifts too."""
+    css = (DOCS / "assets/css/style.css").read_text(encoding="utf-8")
+    root_block = re.search(r":root\s*\{(.*?)\n\}", css, re.S).group(1)
+    default = re.search(r"--banner-h:\s*([^;]+);", root_block).group(1).strip()
+    assert default in ("0", "0rem", "0px"), (
+        f"--banner-h defaults to {default!r}; it must be zero so the released site "
+        "renders exactly as before"
+    )

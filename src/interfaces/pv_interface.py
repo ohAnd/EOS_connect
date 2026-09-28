@@ -193,7 +193,7 @@ def _describe_akkudoktor_error(tgt_value, exception):
 
 
 from .timeseries_normalizer import (
-    TEMPLATE_DOCS_ANCHOR,
+    TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
     convert_pv_values,
     extract_json_path,
@@ -1903,7 +1903,7 @@ class PvInterface:
                 expected_count,
                 midnight_today.isoformat(),
                 first_source_ts.isoformat(),
-                TEMPLATE_DOCS_ANCHOR,
+                TEMPLATE_DOCS_URL,
             )
         elif matched < expected_count:
             logger.debug(

@@ -1,0 +1,108 @@
+name: Pages - publish documentation
+# Publishes docs/ from two branches into one GitHub Pages site:
+#
+#   https://ohand.github.io/EOS_connect/           <- main    (release docs)
+#   https://ohand.github.io/EOS_connect/develop/   <- develop (preview docs)
+#
+# The preview copy is marked in three ways, none of which exist in the repository
+# and none of which therefore has to be stripped when a docs PR moves from
+# develop to main:
+#
+#   - the banner, which docs/assets/js/site.js raises from the /develop/ URL segment
+#   - a robots noindex meta, injected into the preview copy by this workflow
+#   - develop/build-info.json, written by this workflow and read by the banner
+#
+# IMPORTANT: a Pages deployment replaces the *entire* site. A run triggered by a
+# push to develop must therefore still rebuild the main copy, or it would delete
+# the production documentation. Both branches are checked out on every run.
+
+on:
+  push:
+    branches: ["main", "develop"]
+    paths:
+      - "docs/**"
+      # The [AUTO] version commit lands after the docs push, so a docs-only change
+      # would otherwise stamp the preview banner with the previous build number.
+      - "src/version.py"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch: # allows manual triggering, e.g. right after switching the Pages source
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# A deployment swaps the whole site, so runs must queue rather than race.
+# Cancelling in flight could leave the newer commit unpublished.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  PREVIEW_DIR: develop
+  PREVIEW_BRANCH: develop
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main (release docs)
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          path: main-src
+
+      - name: Checkout develop (preview docs)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.PREVIEW_BRANCH }}
+          path: preview-src
+
+      - name: Assemble the site
+        run: |
+          set -euo pipefail
+          mkdir -p _site/"$PREVIEW_DIR"
+          cp -a main-src/docs/. _site/
+          cp -a preview-src/docs/. _site/"$PREVIEW_DIR"/
+          # Both branches ship docs/.nojekyll already; this only guards the root
+          # against a future branch that forgets it and silently gets Jekyll.
+          touch _site/.nojekyll
+
+      - name: Keep the preview out of search results
+        # Injected here rather than in the pages themselves: a noindex committed to
+        # docs/ would travel to main on the next merge and de-index the real site.
+        # robots.txt cannot do this — a project page shares ohand.github.io, whose
+        # root belongs to the user page, not to this repository.
+        run: |
+          set -euo pipefail
+          find _site/"$PREVIEW_DIR" -name '*.html' -print0 | xargs -0 sed -i \
+            's|<head>|<head>\n    <meta name="robots" content="noindex, nofollow">|'
+
+      - name: Write the preview build stamp
+        # The version comes from the develop checkout's src/version.py, which CI
+        # rewrites on every develop build (docker_develop.yml), so the banner shows
+        # the same string the running develop container reports.
+        run: |
+          set -euo pipefail
+          version="$(sed -n "s/^__version__ = '\(.*\)'$/\1/p" preview-src/src/version.py)"
+          commit="$(git -C preview-src rev-parse --short HEAD)"
+          built="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          printf '{"version":"%s","commit":"%s","built":"%s"}\n' \
+            "$version" "$commit" "$built" > _site/"$PREVIEW_DIR"/build-info.json
+          cat _site/"$PREVIEW_DIR"/build-info.json
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -39,6 +39,7 @@ import pytest
 from flask import Flask, jsonify, make_response, render_template_string, send_from_directory
 
 from src.config_web.api import config_bp, init_api
+from src.docs_links import DOCS_BASE_PREVIEW, DOCS_BASE_RELEASE
 from src.config_web.backup import backup_bp, init_backup
 from src.config_web.migration import migrate_yaml_to_store
 from src.config_web.schema import ConfigSchema
@@ -85,14 +86,22 @@ def _free_port():
         return s.getsockname()[1]
 
 
-def _build_app(store, schema, module):
+def _build_app(store, schema, module, docs_base=DOCS_BASE_RELEASE):
     """A minimal stand-in for the real server: the same blueprints and the same assets."""
     app = Flask(__name__)
 
     @app.route("/")
     def index():
+        # ``docs_base`` mirrors what eos_connect.py:main_page resolves from
+        # src/version.py. The UI builds every documentation link from it
+        # (constants.js:docsUrl), so leaving it out here would silently exercise
+        # the fallback instead of the real wiring.
         with open(os.path.join(WEB_DIR, "index.html"), encoding="utf-8") as fh:
-            return make_response(render_template_string(fh.read(), asset_version="test"))
+            return make_response(
+                render_template_string(
+                    fh.read(), asset_version="test", docs_base_url=docs_base
+                )
+            )
 
     @app.route("/js/<path:filename>")
     def js(filename):
@@ -158,7 +167,7 @@ class _Server:  # pylint: disable=too-few-public-methods
         self.pv_store = pv_store
 
 
-def _serve(tmp_path, db_name, bootstrap_config, *, migrate):
+def _serve(tmp_path, db_name, bootstrap_config, *, migrate, docs_base=DOCS_BASE_RELEASE):
     """
     Start the app on a throwaway database and yield a handle to it.
 
@@ -179,7 +188,7 @@ def _serve(tmp_path, db_name, bootstrap_config, *, migrate):
     module.pv_yield_store = pv_store
 
     port = _free_port()
-    app = _build_app(store, schema, module)
+    app = _build_app(store, schema, module, docs_base=docs_base)
     # The dashboard polls several endpoints a second; its request log drowns out the
     # test output without saying anything useful.
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -303,6 +312,38 @@ def fresh_page_fixture(fresh_server):
         page = _open_page(browser, fresh_server.url)
         page.wait_for_function("typeof showSetupWizard === 'function'")
         page.wait_for_selector(".wizard-container")
+        try:
+            yield page
+        finally:
+            browser.close()
+
+
+@pytest.fixture(name="develop_server")
+def develop_server_fixture(tmp_path):
+    """The same app as ``server``, but serving a develop build's documentation base.
+
+    ``eos_connect.py:main_page`` derives this from the ``-develop`` suffix in
+    ``src/version.py``; here it is passed in directly, so the test does not depend on
+    which branch the checkout happens to sit on.
+    """
+    yield from _serve(
+        tmp_path, "develop.db", _sample_config(), migrate=True, docs_base=DOCS_BASE_PREVIEW
+    )
+
+
+@pytest.fixture(name="develop_page")
+def develop_page_fixture(develop_server):
+    """A browser page on a develop build, dashboard noise suppressed as in ``page``."""
+    from playwright.sync_api import sync_playwright  # pylint: disable=import-outside-toplevel
+
+    with sync_playwright() as p:
+        browser = _launch_browser(p)
+        page = _open_page(browser, develop_server.url)
+        page.wait_for_function("typeof showBackupMenu === 'function'")
+        page.evaluate(
+            "() => { const o = document.getElementById('overlay');"
+            " if (o) { o.style.display = 'none'; } }"
+        )
         try:
             yield page
         finally:

@@ -42,6 +42,15 @@
     var LEVEL_KEY = "config_level";
     var DEFAULT_LEVEL = "standard";
 
+    /* The develop copy of this site is published under /EOS_connect/develop/, the
+     * released copy at the root. Deriving that from the URL rather than from a build
+     * flag is what keeps this file byte-identical on both branches: a docs PR from
+     * develop to main carries no banner state anyone has to remember to strip.
+     * .github/workflows/pages.yml owns the other half — it is what puts the develop
+     * copy under that path, and what writes build-info.json beside it. */
+    var PREVIEW_SEGMENT = "develop";
+    var STABLE_DOCS_URL = "https://ohand.github.io/EOS_connect/";
+
     var body = document.body;
 
     /* data-root is one of exactly two values across the whole site. Comparing it
@@ -73,6 +82,70 @@
         }
         if (html !== undefined) { node.innerHTML = html; }
         return node;
+    }
+
+    /* -------------------------------------------------------- preview banner */
+
+    function isPreviewLocation() {
+        return window.location.pathname.split("/").indexOf(PREVIEW_SEGMENT) !== -1;
+    }
+
+    function renderPreviewBanner() {
+        if (!isPreviewLocation()) { return; }
+        var mount = document.getElementById("site-nav");
+        if (!mount) { return; }
+
+        /* Drives --banner-h, which offsets the sticky header, the sticky TOC and the
+         * anchor scroll margin. Without the class every one of those is a no-op. */
+        body.classList.add("docs-preview");
+
+        /* Inserted after renderNav(), which assigns innerHTML and would otherwise
+         * wipe it. The skip-link therefore stays ahead of the banner in DOM order,
+         * so tabbing still reaches the content first. */
+        mount.insertAdjacentHTML("afterbegin",
+            "<div class=\"preview-banner\" role=\"status\">" +
+            "<span class=\"preview-banner-text\">" +
+            "<i class=\"fas fa-flask\" aria-hidden=\"true\"></i> " +
+            "<strong>Development preview</strong> &mdash; documents the unreleased " +
+            "develop build<span class=\"preview-build\"></span></span>" +
+            "<a class=\"preview-banner-link\" href=\"" + STABLE_DOCS_URL + "\">" +
+            "Released documentation</a>" +
+            "</div>");
+
+        var banner = mount.querySelector(".preview-banner");
+        syncBannerHeight(banner);
+        window.addEventListener("resize", function () { syncBannerHeight(banner); });
+
+        fillBuildStamp(mount.querySelector(".preview-build"), banner);
+    }
+
+    /* The banner wraps to two lines on a phone, and the sticky header is offset by
+     * --banner-h. A fixed token would therefore let the header ride up over the
+     * second line, so measure what the banner actually occupies. The CSS default is
+     * only what applies for the frame before this runs. */
+    function syncBannerHeight(banner) {
+        if (!banner) { return; }
+        body.style.setProperty("--banner-h", banner.offsetHeight + "px");
+    }
+
+    /* build-info.json is written by the publish workflow, so it is absent whenever
+     * the docs are opened from a checkout or the test server. Every failure path has
+     * to leave the banner standing and say nothing. */
+    function fillBuildStamp(slot, banner) {
+        if (!slot || !window.fetch) { return; }
+        fetch(root + "build-info.json", { cache: "no-store" })
+            .then(function (res) { return res.ok ? res.json() : null; })
+            .then(function (info) {
+                if (!info || !info.version) { return; }
+                var parts = [info.version];
+                if (info.commit) { parts.push(info.commit); }
+                if (info.built) { parts.push(String(info.built).slice(0, 10)); }
+                /* textContent, not innerHTML: this is fetched data, the sink CodeQL
+                 * reports as js/html-constructed-from-input. */
+                slot.textContent = " \u00b7 " + parts.join(" \u00b7 ");
+                syncBannerHeight(banner);
+            })
+            .catch(function () { /* no stamp; the banner still says what matters */ });
     }
 
     /* ------------------------------------------------------------ navigation */
@@ -345,6 +418,7 @@
 
     function init() {
         renderNav();
+        renderPreviewBanner();
         renderFooter();
         renderLevelSwitcher();
         applyLevel(readLevel());
