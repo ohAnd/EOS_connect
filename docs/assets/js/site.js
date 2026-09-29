@@ -20,7 +20,7 @@
 
     /* Single source of truth. The [AUTO] version bump rewrites this one line
      * instead of a badge in each of six pages. */
-    var VERSION = "0.3.39";
+    var VERSION = "0.3.40";
 
     /* A nav entry may carry `children`, which renders as a second row under the
      * header while the reader is inside that entry. The pages in it declare the
