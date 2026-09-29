@@ -12,7 +12,7 @@ import re
 from typing import Any
 
 from .store import ConfigStore
-from .schema import ConfigSchema, BOOTSTRAP_KEYS
+from .schema import ConfigSchema, BOOTSTRAP_KEYS, LIST_SECTIONS
 
 logger = logging.getLogger("__main__")
 
@@ -58,8 +58,8 @@ def build_merged_config(
             # System-level keys are top-level (no nesting)
             continue
 
-        if section == "pv_forecast":
-            # pv_forecast is a list — handle specially
+        if section in LIST_SECTIONS:
+            # Built as a list further down, not as a flat group of keys.
             continue
 
         result[section] = _build_section(section, all_settings, bootstrap_config, defaults)
@@ -76,6 +76,12 @@ def build_merged_config(
 
     # pv_forecast — list of installations
     result["pv_forecast"] = _build_pv_forecast(all_settings, bootstrap_config, defaults, schema)
+
+    # managed_loads — list of appliances. Unlike pv_forecast, missing keys are *not*
+    # filled from the schema: the defaults that matter here depend on the entry's type,
+    # and ``loads.presets.apply_defaults`` is the one place that knows them. Filling
+    # them here as well would give a sauna a pool's swimming season.
+    result["managed_loads"] = _build_managed_loads(all_settings, bootstrap_config, defaults)
 
     # Resolve data_source -> load/battery connection fields
     _apply_data_source_inheritance(result, all_settings)
@@ -194,6 +200,53 @@ def _build_pv_forecast(
         "pv_forecast",
         defaults.get("pv_forecast", []),
     )
+
+
+def _build_managed_loads(
+    all_settings: dict[str, Any],
+    bootstrap_config: dict,
+    defaults: dict,
+) -> list:
+    """
+    Rebuild the managed_loads list from indexed store keys.
+
+    Entries are returned as stored, with only ``id`` normalised and unusable ones
+    dropped. Per-type defaults are deliberately *not* applied here - see the comment at
+    the call site - so an entry may legitimately be missing most of its keys.
+
+    Two storage formats are supported, mirroring ``_build_pv_forecast``:
+    indexed keys (``managed_loads.0.type``), and the whole list under one key, which is
+    what a restored backup carries.
+    """
+    entries: dict[int, dict] = {}
+    for key, value in all_settings.items():
+        match = re.match(r"^managed_loads\.(\d+)\.(.+)$", key)
+        if match:
+            index = int(match.group(1))
+            entries.setdefault(index, {})[match.group(2)] = value
+
+    if entries:
+        result = []
+        for index in sorted(entries):
+            entry = dict(entries[index])
+            entry["id"] = str(entry.get("id", "") or "").strip()
+            if not entry["id"] or not entry.get("type"):
+                # An entry with no id has no MQTT topic and no API path, and one with
+                # no type has no model. Dropping it here keeps that judgement out of
+                # the runtime, which would otherwise log the same error every cycle.
+                logger.warning(
+                    "[Merger] managed_loads entry %d has no id or no type - ignoring it",
+                    index,
+                )
+                continue
+            result.append(entry)
+        return result
+
+    stored = all_settings.get("managed_loads")
+    if isinstance(stored, list):
+        return [entry for entry in stored if isinstance(entry, dict)]
+
+    return bootstrap_config.get("managed_loads", defaults.get("managed_loads", []))
 
 
 def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -> None:

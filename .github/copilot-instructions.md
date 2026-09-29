@@ -72,9 +72,16 @@ This is now documented explicitly so it cannot be missed.
 
 #### Structure
 
-- GitHub Pages documentation is in `/docs` folder
+- GitHub Pages documentation is in `/docs` folder, published from both `main` and
+  `develop` (see "Documentation for unreleased work")
 - Structure: 4 main sections (what-is, user-guide, advanced, developer)
+- A section may have sub-pages, rendered as a second nav row from `NAV[].children`
+  in `docs/assets/js/site.js`. Configuration has seven — see *Where a Setting Is
+  Documented* under Config Schema Maintenance
 - Use HTML for documentation pages (better styling control than Markdown)
+- Follow `docs/assets/PAGE_TEMPLATE.html` for a new page; its leading comment
+  carries the authoring rules (no inline styles, no per-page scripts, Font
+  Awesome only, never hand-write the version or a table of contents)
 - **README.md**: Concise quick-start with links to full GitHub Pages docs (primary entry point)
 - **GitHub Pages** (`/docs`): Complete, detailed documentation for all features
 
@@ -102,11 +109,15 @@ This is now documented explicitly so it cannot be missed.
 
 ### Project Role Clarity
 
-- **EOS Connect is an integration and control platform**, NOT an optimizer
-- The optimization calculations are performed by external servers:
-  - Akkudoktor EOS Server (https://github.com/Akkudoktor-EOS/EOS)
-  - EVopt (https://github.com/thecem/hassio-evopt)
-- Always clarify this distinction in documentation and code comments
+- **EOS Connect is a full energy management platform**: it collects data, runs the
+  optimization, and controls the hardware from the result
+- **Optimization runs locally by default.** The built-in `local_evopt` MILP optimizer
+  (`src/interfaces/optimization_interface.py`) needs no external server
+- External backends remain **optional** alternatives, selected via `eos.source`:
+  - Akkudoktor EOS Server (https://github.com/Akkudoktor-EOS/EOS) — `eos_server`
+  - EVopt (https://github.com/thecem/hassio-evopt) — `evopt`
+- Never describe an external optimizer server as a prerequisite for installing or
+  running EOS Connect — it has not been one since `local_evopt` became the default
 
 ### Code Style
 
@@ -197,14 +208,27 @@ When making ANY code changes:
 
 **If ANY of these steps are skipped, the preparation is INCOMPLETE.**
 
-### Testing Phase Documentation
+### Documentation for unreleased work
 
-- **ENERGYFORECAST_TESTING.md**: Temporary file for develop branch testing
-  - Contains Smart Price Prediction testing guide
-  - **MUST BE DELETED** when merging to main
-  - Full documentation already exists in `/docs/user-guide/configuration.html#energyforecast`
-  - Purpose: Provide accessible docs while feature is on develop (GitHub Pages shows main only)
-  - **Reminder**: Check for and remove any similar `*_TESTING.md` files before merging features to main
+GitHub Pages publishes the site **twice** (`.github/workflows/pages.yml`):
+
+| URL | Branch |
+| --- | --- |
+| `ohand.github.io/EOS_connect/` | `main` |
+| `ohand.github.io/EOS_connect/develop/` | `develop` |
+
+- Document a feature in `/docs` on `develop` and it is readable immediately, at the
+  `/develop/` URL. Do **not** add a `*_TESTING.md` at the repo root for this — that
+  workaround existed only because Pages used to show `main` only, and it left stale
+  duplicates behind (`ENERGYFORECAST_TESTING.md`, now gone).
+- **Never** mark a page as a preview and never add a `robots` meta. The banner comes
+  from `docs/assets/js/site.js` (raised from the URL path) and the `noindex` from the
+  publish workflow, so nothing has to be stripped when the PR reaches `main`.
+- In-app documentation links resolve through `src/docs_links.py` and follow the
+  running build, so a `-develop` image links into `/develop/` on its own. Never
+  hardcode a documentation URL; use `docsUrl()` (`src/web/js/constants.js`) in the
+  frontend and `current_docs_url()` in Python.
+- See `docs/developer/index.html#docs-publishing`.
 
 ### Config Schema Maintenance
 
@@ -214,8 +238,87 @@ When making ANY code changes:
 - The Config Schema is the **SINGLE SOURCE OF TRUTH** for field metadata
 - Web UI and GitHub Pages docs both consume the exported JSON (`docs/assets/data/config_schema.json`)
 - New fields must specify a `level`: `getting_started`, `standard`, or `expert`
+- New fields **MUST** specify a `help_url` — see *Where a setting is documented* below
 - New experimental features should use the label `"experimental"`
 - Hot-reloadable fields (applied without restart) must set `hot_reload=True` and have corresponding logic in `src/config_web/hot_reload.py`
+
+#### Where a Setting Is Documented (`help_url`)
+
+`help_url` is the **only** route from a setting in the UI to its explanation.
+`src/web/js/config.js` splits it at the `#` and builds
+`<docs-base>user-guide/<page>?level=<current>#<anchor>` for the "Learn more"
+link, so the value is a page under `docs/user-guide/` plus a fragment:
+
+```python
+help_url="config-battery.html#battery-price",
+```
+
+**Rules:**
+
+- **Every field has one.** A field without `help_url` renders no "Learn more"
+  button at all — `test_every_field_has_a_help_url` fails on it.
+- **The anchor must be a hand-written heading** on that page, not merely an
+  anchor name the generated reference happens to mint.
+  `test_help_urls_reach_prose_not_the_generated_reference` fails otherwise.
+  This is the rule that matters: 129 of 173 fields once pointed at a bare
+  generated table heading, which *looks* like a working link and explains
+  nothing.
+- **Point at the heading that explains the field**, not at the section's
+  catch-all anchor. `config-optimizer.html#dyn-override`, not
+  `config-optimizer.html#eos`.
+- **The page is decided by the section** — see the table below. A field whose
+  topic sits on another page points there (e.g. `load.managed_loads_max_power_w`
+  → `config-managed-loads.html#managed-loads-operation`).
+
+**One page per topic, under `docs/user-guide/`:**
+
+| Schema section | Page |
+| --- | --- |
+| `data_source`, `load` | `config-data.html` |
+| `battery`, `inverter` | `config-battery.html` |
+| `price` | `config-price.html` |
+| `pv_forecast_source`, `pv_forecast`, `pv_autoscaling` | `config-solar.html` |
+| `eos` | `config-optimizer.html` |
+| `managed_loads` | `config-managed-loads.html` |
+| `system`, `mqtt`, `evcc` | `config-system.html` |
+
+`configuration.html` is the entry point: the "I want to…" index, and the
+complete A-Z list of every setting for looking a name up.
+
+**Parameter tables are never hand-written.** Mount them from the schema, right
+under the prose that explains them:
+
+```html
+<h2 id="battery-price">What your stored energy cost</h2>
+<p>…</p>
+<div data-schema-section="battery" data-schema-anchor="battery-price"></div>
+```
+
+Omit `data-schema-anchor` to render the whole section. The mount emits no
+heading — the prose above it owns the anchor, and `idAttr()` in
+`config-reference.js` makes generated markup yield any id the page already has,
+which is what stops one `id` being written twice.
+
+**Adding a page** means adding it to `NAV[].children` in
+`docs/assets/js/site.js` (it renders as the second nav row), giving it
+`data-page="configuration"` plus its own `data-subpage`, adding it to
+`CONFIG_PAGES` in `tests/docs/test_docs_rendering.py`, and adding its sections
+to `SECTION_PAGE` in `config-reference.js` so the A-Z list can link to it.
+`test_every_config_page_is_in_the_nav` fails if the nav and the directory
+disagree.
+
+> Pages live exactly one directory deep. `site.js` compares `data-root` against
+> the two literals `""` and `"../"`, the integrity tests discover pages with a
+> `*/*.html` glob, and `config-reference.js` fetches
+> `../assets/data/config_schema.json`. A nested directory breaks all three.
+
+**Local preview:** the reference is fetched at runtime, and a browser blocks
+that over `file://`. Serve the folder instead:
+
+```bash
+python -m http.server 8000 -d docs
+# http://localhost:8000/user-guide/configuration.html
+```
 
 #### Section Ordering & Wizard Flow
 
@@ -224,7 +327,7 @@ When making ANY code changes:
 - Configuration menu section order in the web UI (Settings)
 - Setup Wizard step order (recommended sequence for new users)
 - Both frontend JS (`config.js`, `wizard.js`) automatically use this ordering via the API response (`section_order` array)
-- **Current order (recommended setup flow):** `eos` → `evcc` → `inverter` → `data_source` → `battery` → `load` → `price` → `pv_forecast_source` → `pv_forecast` → `mqtt` → `system`
+- **Current order (recommended setup flow):** `eos` → `evcc` → `inverter` → `data_source` → `battery` → `load` → `managed_loads` → `price` → `pv_forecast_source` → `pv_forecast` → `pv_autoscaling` → `mqtt` → `system`
 
 **Rationale for this order:**
 
@@ -232,9 +335,11 @@ When making ANY code changes:
 2. **EVCC** (evcc) — Optional, but must configure before Inverter (if used as controller)
 3. **Inverter** (inverter) — Can reference EVCC as controller type
 4. **Data Source** (data_source) — Load/battery data collection
-5. **Battery** (battery) → **Load** (load) → **Price** (price) — Hardware setup
-6. **PV Source** (pv_forecast_source) → **PV Installations** (pv_forecast) — Forecast configuration
-7. **MQTT** (mqtt) → **System** (system) — Integration & system settings
+5. **Battery** (battery) → **Load** (load) — Hardware setup
+6. **Managed Loads** (managed_loads) — Appliances the load forecast cannot follow; needs the load sensors above
+7. **Price** (price) — Tariff, import and feed-in
+8. **PV Source** (pv_forecast_source) → **PV Installations** (pv_forecast) → **PV Auto-Scaling** (pv_autoscaling) — Forecast configuration
+9. **MQTT** (mqtt) → **System** (system) — Integration & system settings
 
 When reordering sections, update SECTION_META in `schema.py` — it drives all three implementations: config UI, wizard, and exported docs JSON.
 
@@ -311,18 +416,20 @@ The web-based configuration system lives in `src/config_web/` as a self-containe
 
 #### Adding a New Config Field (Checklist)
 
-1. Add `FieldDef(...)` to `_ALL_FIELDS` in `src/config_web/schema.py`
-2. Run `python scripts/export_config_schema.py` to update docs JSON
-3. **Done** — Web UI, API validation, docs table, migration, and merger all pick it up automatically
-4. If hot-reloadable: also add to `_PRICE_FIELD_MAP` or `_BATTERY_SOC_FIELDS` in `hot_reload.py`
-5. If field depends on another field: add `depends_on` param; API validation and UI greyout handle it automatically
+1. Add `FieldDef(...)` to `_ALL_FIELDS` in `src/config_web/schema.py`, with a `level` and a `help_url`
+2. Write the explanation on the page the `help_url` names, under a heading with that anchor — the generated table is automatic, the explanation is not
+3. Run `python scripts/export_config_schema.py` to update docs JSON
+4. **Done** — Web UI, API validation, docs table, migration, and merger all pick it up automatically
+5. If hot-reloadable: also add to `_PRICE_FIELD_MAP` or `_BATTERY_SOC_FIELDS` in `hot_reload.py`
+6. If field depends on another field: add `depends_on` param; API validation and UI greyout handle it automatically
 
 #### Adding a New Config Section
 
 1. Add fields with the new `section` name in `schema.py`
 2. Add entry to `SECTION_META` dict in `schema.py` (icon + label), **placing in desired order**
-3. Run `python scripts/export_config_schema.py`
-4. **Done** — Frontend falls back gracefully, section appears in correct order in UI + wizard
+3. Decide which documentation page explains it: add it to `SECTION_PAGE` in `docs/assets/js/config-reference.js`, and give it a heading plus a `data-schema-section` mount on that page
+4. Run `python scripts/export_config_schema.py`
+5. **Done** — Frontend falls back gracefully, section appears in correct order in UI + wizard
 
 #### REST API Endpoints (all under `/api/config/`)
 

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Battery & Inverter - EOS Connect</title>
+    <meta name="description" content="The battery EOS Connect plans around, the inverter it drives, and what the stored energy cost you.">
+    <meta property="og:title" content="Battery & Inverter - EOS Connect">
+    <meta property="og:description" content="The battery EOS Connect plans around, the inverter it drives, and what the stored energy cost you.">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="https://ohAnd.github.io/EOS_connect/assets/images/logo.png">
+    <link rel="icon" href="../assets/images/icon.png">
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+
+<body data-page="configuration" data-subpage="battery" data-root="../" data-levels>
+    <div id="site-nav"></div>
+    <noscript>
+        <div class="nav-fallback">
+            <a href="../index.html">Home</a>
+            <a href="../what-is/index.html">What Is</a>
+            <a href="index.html">User Guide</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="../advanced/index.html">Advanced</a>
+            <a href="../developer/index.html">Developer</a>
+        </div>
+    </noscript>
+
+    <div class="container">
+        <div class="page-wrapper">
+            <aside class="toc-sidebar">
+                <div id="site-toc"></div>
+            </aside>
+
+            <main class="main-content" id="main">
+
+                <div class="hero">
+                    <h1>Battery &amp; inverter</h1>
+                    <p>The store the optimizer plans around, the hardware it drives, and the running price of what is inside it.</p>
+                </div>
+
+                <div id="site-level"></div>
+
+                <div class="content-section">
+                    <h2 id="battery-purpose"><i class="fas fa-crosshairs" aria-hidden="true"></i> What
+                        this is for</h2>
+                    <ul>
+                        <li>I want EOS Connect to know my battery &mdash; how big it is, how fast it
+                            charges, how far it may be emptied.</li>
+                        <li>I want it to actually drive my inverter rather than only advise me.</li>
+                        <li>I want to know what the energy sitting in the battery cost me, so a discharge
+                            decision has a price behind it.</li>
+                    </ul>
+                    <p>Two settings groups: <code>battery.*</code> describes the store and what it
+                        contains, <code>inverter.*</code> is how EOS Connect talks to the hardware.</p>
+                </div>
+
+                <div class="content-section">
+                    <h2 id="battery"><i class="fas fa-battery-full" aria-hidden="true"></i> The battery
+                        itself</h2>
+                    <p>Capacity, the charge and discharge limits, and the state of charge the optimizer
+                        plans against. These are the numbers every plan is built on, so a capacity that is
+                        out by a third makes every decision out by a third.</p>
+                    <div data-schema-section="battery" data-schema-anchor="battery"></div>
+                </div>
+
+                <div class="content-section" data-level="standard">
+                    <h2 id="battery-price"><i class="fas fa-coins" aria-hidden="true"></i> What your
+                        stored energy cost</h2>
+                    <p>EOS Connect can track a running price for the energy in the battery, from what it
+                        actually paid to put it there &mdash; grid energy at that hour's tariff, solar at
+                        the export you gave up. Discharging then has a cost to weigh against the current
+                        tariff instead of being treated as free. See
+                        <a href="daily-use.html#battery-pricing">What your stored energy actually cost</a> in
+                        the User Guide for what it is worth in practice.</p>
+                    <div data-schema-section="battery" data-schema-anchor="battery-price"></div>
+                </div>
+
+                <div class="content-section">
+                    <h2 id="inverter"><i class="fas fa-microchip" aria-hidden="true"></i> The
+                        inverter</h2>
+                    <p>How EOS Connect reaches the hardware, and what it is allowed to ask of it. The
+                        control paths themselves &mdash; what a charge or discharge command does, and what
+                        the API and MQTT expose &mdash; are in
+                        <a href="../advanced/index.html#control">Controlling the battery</a>.</p>
+                    <div data-schema-section="inverter"></div>
+                </div>
+
+            </main>
+        </div>
+    </div>
+
+    <div id="site-footer"></div>
+    <script src="../assets/js/site.js"></script>
+    <script src="../assets/js/config-reference.js"></script>
+</body>
+
+</html>

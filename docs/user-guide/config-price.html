@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prices - EOS Connect</title>
+    <meta name="description" content="Where the electricity price comes from, what you are paid for export, and how the far end of the horizon is filled in.">
+    <meta property="og:title" content="Prices - EOS Connect">
+    <meta property="og:description" content="Where the electricity price comes from, what you are paid for export, and how the far end of the horizon is filled in.">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="https://ohAnd.github.io/EOS_connect/assets/images/logo.png">
+    <link rel="icon" href="../assets/images/icon.png">
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+
+<body data-page="configuration" data-subpage="price" data-root="../" data-levels>
+    <div id="site-nav"></div>
+    <noscript>
+        <div class="nav-fallback">
+            <a href="../index.html">Home</a>
+            <a href="../what-is/index.html">What Is</a>
+            <a href="index.html">User Guide</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="../advanced/index.html">Advanced</a>
+            <a href="../developer/index.html">Developer</a>
+        </div>
+    </noscript>
+
+    <div class="container">
+        <div class="page-wrapper">
+            <aside class="toc-sidebar">
+                <div id="site-toc"></div>
+            </aside>
+
+            <main class="main-content" id="main">
+
+                <div class="hero">
+                    <h1>Prices</h1>
+                    <p>What a kilowatt-hour costs you and what you are paid for one — the two numbers every optimizer decision is weighed against.</p>
+                </div>
+
+                <div id="site-level"></div>
+
+                <div class="content-section">
+                    <h2 id="price-purpose"><i class="fas fa-crosshairs" aria-hidden="true"></i> What this
+                        is for</h2>
+                    <ul>
+                        <li>I am on a dynamic tariff and want the plan built on tomorrow's actual
+                            prices.</li>
+                        <li>I have a fixed tariff and want my real rate used, surcharges included.</li>
+                        <li>I am paid for what I export and want that weighed against self-consumption.</li>
+                    </ul>
+                    <p>Everything here is <code>price.*</code>. Both the import price and the feed-in
+                        tariff are configured on this page, because the optimizer needs the pair to decide
+                        anything.</p>
+                </div>
+
+                <div class="content-section">
+                    <h2 id="price"><i class="fas fa-coins" aria-hidden="true"></i> What you pay, and what
+                        you are paid</h2>
+                    <p>The import price can come from a market source, from a fixed rate, or from a
+                        24-value array you supply; the adder and multiplier turn a raw market price into
+                        the figure on your bill. The feed-in half is configured the same way, separately,
+                        because the two rarely come from the same place.</p>
+                    <div data-schema-section="price" data-schema-anchor="price"></div>
+                </div>
+
+                <div class="content-section" data-level="standard">
+                    <h2 id="price-sources"><i class="fas fa-file-import" aria-hidden="true"></i> Prices
+                        from your own source</h2>
+                    <p>With <code>price.source</code> set to <code>timeseries</code>, EOS Connect fetches
+                        the curve from an entity or URL you name, in the shared array format. The format,
+                        ready-made Home Assistant templates and a way to test it are under
+                        <a href="config-data.html#timeseries-guide">the timeseries guide</a>.</p>
+                    <div data-schema-section="price" data-schema-anchor="price-sources"></div>
+                </div>
+
+                <div class="content-section" data-level="standard">
+                    <h2 id="energyforecast"><i class="fas fa-chart-line" aria-hidden="true"></i> Smart
+                        price prediction</h2>
+                    <p>Day-ahead prices only reach as far as tomorrow evening, while the optimizer plans
+                        48 hours. This fills the remainder with a predicted curve for your market zone, so
+                        the far end of the horizon is a forecast rather than a repeat of today.</p>
+                    <div data-schema-section="price" data-schema-anchor="energyforecast"></div>
+                </div>
+
+            </main>
+        </div>
+    </div>
+
+    <div id="site-footer"></div>
+    <script src="../assets/js/site.js"></script>
+    <script src="../assets/js/config-reference.js"></script>
+</body>
+
+</html>

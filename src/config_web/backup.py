@@ -34,7 +34,14 @@ _ROW_FIELDS_NOT_EXPORTED = ("id", "created_at", "real_counter_kwh")
 
 SETTINGS = "settings"
 PV_YIELD_HISTORY = "pv_yield_history"
-_DATASETS = (SETTINGS, PV_YIELD_HISTORY)
+# What a managed load has learned about its appliance: recorded samples and the
+# coefficients fitted from them. Every load that reads a temperature learns - pool,
+# sauna, hot-water tank, buffer tank all run the same model - and it is the slowest
+# thing on the install to rebuild: a loss coefficient needs weeks of overnight cooling
+# and varied weather before it means anything, so losing it to a reinstall costs a
+# season.
+MANAGED_LOAD_LEARNING = "managed_load_learning"
+_DATASETS = (SETTINGS, PV_YIELD_HISTORY, MANAGED_LOAD_LEARNING)
 
 # Set by ConfigWebModule.start_api() before any request is served.
 # pylint: disable=invalid-name
@@ -65,6 +72,19 @@ def _pv_store():
     never wired one up, so every caller degrades instead of raising.
     """
     return getattr(_module, "pv_yield_store", None)
+
+
+def _managed_load_store():
+    """The ManagedLoadStore, or None when this host never wired one up."""
+    return getattr(_module, "managed_load_store", None)
+
+
+def _export_learning():
+    """Recorded samples and fitted coefficients, or empty when there is no store."""
+    store = _managed_load_store()
+    if store is None:
+        return {"samples": [], "model": []}
+    return store.export_learning()
 
 
 def _setting(key, fallback):
@@ -130,6 +150,7 @@ def _export_rows():
 def backup_info():
     """Summarise what a backup taken now would contain."""
     rows = _export_rows()
+    learning = _export_learning()
     timestamps = sorted(row["timestamp"] for row in rows if row.get("timestamp"))
     return jsonify(
         {
@@ -140,6 +161,11 @@ def backup_info():
                 "count": len(rows),
                 "oldest": timestamps[0] if timestamps else None,
                 "newest": timestamps[-1] if timestamps else None,
+            },
+            MANAGED_LOAD_LEARNING: {
+                "available": _managed_load_store() is not None,
+                "count": len(learning["samples"]),
+                "models": len(learning["model"]),
             },
             "retention_days": _retention_days(),
             # The export is never masked: a redacted backup could not restore.  Said
@@ -169,6 +195,9 @@ def export_backup():
 
     if PV_YIELD_HISTORY in include:
         payload[PV_YIELD_HISTORY] = _export_rows()
+
+    if MANAGED_LOAD_LEARNING in include:
+        payload[MANAGED_LOAD_LEARNING] = _export_learning()
 
     logger.info("[Backup] Exported datasets: %s", ", ".join(include) or "none")
     return jsonify(payload)
@@ -220,6 +249,9 @@ def import_backup():
     if PV_YIELD_HISTORY in include:
         result[PV_YIELD_HISTORY] = _restore_history(data, history_mode, dry_run)
 
+    if MANAGED_LOAD_LEARNING in include:
+        result[MANAGED_LOAD_LEARNING] = _restore_learning(data, mode, dry_run)
+
     if not dry_run:
         logger.info(
             "[Backup] Restored %s (mode=%s, history_mode=%s)",
@@ -228,6 +260,35 @@ def import_backup():
             history_mode,
         )
     return jsonify(result)
+
+
+def _restore_learning(data: dict, mode: str, dry_run: bool) -> dict:
+    """
+    Restore (or preview) what the managed loads had learned.
+
+    ``merge`` keeps whatever the store has recorded since and adds the file's rows
+    beside it; ``replace`` - the default, and what the rest of a restore does - makes
+    the load's history the file's history, because fitting a calibration to two
+    overlapping records of the same appliance is worse than either alone.
+    """
+    store = _managed_load_store()
+    payload = data.get(MANAGED_LOAD_LEARNING)
+    if store is None:
+        counts = store_counts = {"samples": 0, "model": 0}
+        if isinstance(payload, dict):
+            store_counts = {
+                "samples": len(payload.get("samples") or []),
+                "model": len(payload.get("model") or []),
+            }
+        return {"available": False, "imported": 0, "present_in_file": store_counts,
+                **{k: 0 for k in counts}}
+
+    plan = (
+        store.plan_import_learning(payload)
+        if dry_run
+        else store.import_learning(payload, replace=(mode != "merge"))
+    )
+    return {**plan, "available": True}
 
 
 def _restore_history(data: dict, history_mode: str, dry_run: bool) -> dict:

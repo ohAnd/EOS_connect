@@ -28,11 +28,21 @@ import logging
 
 import pytz
 
+try:  # running from src/ as a script — src/ is on sys.path
+    from docs_links import current_docs_url
+except ImportError:  # imported as src.interfaces (tests)
+    from ..docs_links import current_docs_url
+
 logger = logging.getLogger("__main__")
 
-# Anchor in docs/user-guide/configuration.html holding the ready-made HA template
-# snippets. Referenced from error messages, so a format mismatch points at the fix.
-TEMPLATE_DOCS_ANCHOR = "configuration.html#timeseries-templates"
+# Section of the configuration guide holding the ready-made HA template snippets.
+# Referenced from error messages, so a format mismatch points at the fix. Resolved
+# through docs_links so a develop build names the develop copy of the site — the
+# messages used to carry a bare "configuration.html#…", which said nothing about
+# which of the two published sites to open.
+TEMPLATE_DOCS_URL = current_docs_url(
+    "user-guide/config-data.html#timeseries-templates"
+)
 
 # Price units → EUR/Wh, the unit the optimizer and the web UI work in internally.
 PRICE_UNIT_TO_EUR_PER_WH = {
@@ -60,6 +70,17 @@ PRICE_PLAUSIBLE_MAX_CT_KWH = 150.0
 # Headroom covers optimistic forecasts and arrays oversized against their inverter;
 # the unit mistake it has to catch is a factor of four.
 PV_PEAK_TOLERANCE = 1.5
+
+# The same headroom for a managed load measured against its rated power. A heat pump
+# on a defrost cycle or with a backup heater engaged draws above its nameplate, so the
+# band has to allow more than the nameplate itself.
+LOAD_PEAK_TOLERANCE = 1.5
+
+# Ceiling for a load peak when no rated power is configured. Nothing in a house draws
+# 50 kW continuously, so a series implying more than this is a unit mistake rather
+# than a large appliance - but without a declared rating that is all we can say, and a
+# tighter band would fire on someone's legitimately large installation.
+LOAD_PLAUSIBLE_PEAK_W = 50000.0
 
 
 class TimeseriesFormatError(ValueError):
@@ -156,7 +177,7 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
                 f"missing required field '{field}' in the first entry "
                 f"({_describe_available_keys(first)}). The expected format is "
                 f"{{start, end, value}} — shape the source with a Home Assistant "
-                f"template sensor, see {TEMPLATE_DOCS_ANCHOR}"
+                f"template sensor, see {TEMPLATE_DOCS_URL}"
             )
 
     entries = []
@@ -195,7 +216,7 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
             label,
             naive_seen,
             getattr(tz, "zone", str(tz)),
-            TEMPLATE_DOCS_ANCHOR,
+            TEMPLATE_DOCS_URL,
         )
 
     entries.sort(key=lambda item: item["start"])
@@ -293,6 +314,65 @@ def convert_pv_values(entries, unit, resolution_seconds):
     return entries
 
 
+def convert_load_values(entries, unit):
+    """
+    Convert managed-load entries to Wh per entry in place, and return them.
+
+    Same unit table as PV, but integrated over each entry's *own* span rather than one
+    resolution for the whole series. A load forecast is written by hand far more often
+    than a PV one - a template sensor someone assembled from a heating curve - so it is
+    much more likely to arrive on a half-hourly grid, or with one longer entry
+    overnight. Applying a single slot length to those would silently scale part of the
+    series.
+
+    Every entry is expected to carry ``end``; `normalize_entries` guarantees that by
+    deriving it from the following entry where the source omitted it.
+
+    Args:
+        entries: Normalized entries whose ``value`` is in *unit*.
+        unit: One of PV_UNITS.
+
+    Raises:
+        TimeseriesFormatError: On an unknown unit.
+    """
+    try:
+        spec = PV_UNITS[unit]
+    except KeyError as exc:
+        raise TimeseriesFormatError(
+            f"unknown load unit {unit!r}, expected one of {', '.join(sorted(PV_UNITS))}"
+        ) from exc
+
+    for entry in entries:
+        factor = spec["factor"]
+        if spec["is_power"]:
+            span = entry.get("end")
+            hours = (
+                (span - entry["start"]).total_seconds() / 3600.0
+                if span is not None else 1.0
+            )
+            factor *= hours
+        entry["value"] = entry["value"] * factor
+    return entries
+
+
+def median_span_seconds(entries):
+    """
+    The typical length of one entry, for a series whose grid is not 900 or 3600.
+
+    `detect_resolution_seconds` answers only for the two resolutions the optimizer
+    itself runs on. A source is free to publish on any grid it likes, so this is what
+    tells the caller how long an entry covers when that answer is None.
+    """
+    spans = [
+        (entry["end"] - entry["start"]).total_seconds()
+        for entry in entries
+        if entry.get("end") is not None
+    ]
+    if not spans:
+        return None
+    return int(_median(spans))
+
+
 def _median(values):
     """Median of a non-empty sequence, without pulling in statistics for one call."""
     ordered = sorted(values)
@@ -338,6 +418,61 @@ def pv_plausibility_message(values_wh, unit, resolution_seconds, installed_power
         f"implausible PV level: peak {peak_power_w / 1000:.1f} kW for unit '{unit}', "
         f"but only {installed_power_w / 1000:.1f} kW is installed. If the source "
         f"reports power rather than energy per slot, set the unit to 'W' or 'kW'."
+    )
+
+
+def load_plausibility_message(values_wh, unit, resolution_seconds, rated_power_w=0):
+    """
+    Check converted load energies against what the appliance can actually draw.
+
+    The mistake this has to catch is the same one PV has: a source reporting watts
+    read as watt-hours per slot, which is a factor of four on quarter-hourly data -
+    too small to look like anything but a pessimistic forecast. Comparing the peak
+    slot against a declared rated power catches it; without one, only the factor-1000
+    mistakes (kW entered as W) are visible.
+
+    Only the high direction is checked. A series that is too *low* is
+    indistinguishable from an appliance that is legitimately off, or from a small
+    downward correction - both of which are ordinary, and warning about them would
+    train the user to ignore the message.
+
+    Args:
+        values_wh: Converted energy per slot, in Wh. May contain negatives.
+        unit: The configured unit, named in the message.
+        resolution_seconds: Slot length the values belong to.
+        rated_power_w: The load's configured rated power, or 0 when not declared.
+
+    Returns:
+        str: A user-facing warning, or None when the values look plausible.
+    """
+    if not values_wh or not resolution_seconds:
+        return None
+
+    slot_hours = resolution_seconds / 3600.0
+    if slot_hours <= 0:
+        return None
+
+    # Absolute, because a correction profile is legitimately negative and a unit
+    # mistake in one is just as wrong as in a positive one.
+    peak_power_w = max(abs(value) for value in values_wh) / slot_hours
+
+    if rated_power_w and rated_power_w > 0:
+        ceiling = rated_power_w * LOAD_PEAK_TOLERANCE
+        reference = f"but it is rated for {rated_power_w / 1000:.1f} kW"
+    else:
+        ceiling = LOAD_PLAUSIBLE_PEAK_W
+        reference = (
+            f"which is above the {LOAD_PLAUSIBLE_PEAK_W / 1000:.0f} kW assumed for a "
+            f"household appliance"
+        )
+
+    if peak_power_w <= ceiling:
+        return None
+
+    return (
+        f"implausible load level: peak {peak_power_w / 1000:.1f} kW for unit "
+        f"'{unit}', {reference}. If the source reports power rather than energy per "
+        f"slot, set the unit to 'W' or 'kW'."
     )
 
 

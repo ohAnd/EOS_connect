@@ -63,6 +63,7 @@ SECTION_META = {
     "data_source":        {"icon": "fa-plug",            "label": "Data Source"},
     "battery":            {"icon": "fa-battery-full",    "label": "Battery"},
     "load":               {"icon": "fa-bolt",            "label": "Load"},
+    "managed_loads":      {"icon": "fa-sliders",         "label": "Managed Loads"},
     "price":              {"icon": "fa-coins",           "label": "Price"},
     "pv_forecast_source": {"icon": "fa-sun",             "label": "PV Source"},
     "pv_forecast":        {"icon": "fa-solar-panel",     "label": "PV Installations"},
@@ -71,8 +72,63 @@ SECTION_META = {
     "system":             {"icon": "fa-gears",           "label": "System"},
 }
 
+# Outside-temperature providers. Mirrors ``interfaces.temperature_forecast
+# .TEMPERATURE_PROVIDERS``; the schema cannot import it, so
+# ``tests/interfaces/test_pv_interface_temperature.py`` pins the two together.
+TEMPERATURE_SOURCES = ["openmeteo", "akkudoktor"]
+
+
 # Location-based PV forecast sources that require pv_forecast array configuration
 LOCATION_BASED_PV_SOURCES = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]
+
+
+# Sections stored as a *list of entries* rather than a flat group of keys. Their
+# FieldDefs are the template for ONE entry; the store holds indexed keys
+# (``managed_loads.0.type``) and the merger rebuilds the list. Everything that iterates
+# sections has to skip these, so they are named once here rather than special-cased at
+# each site - which is how ``pv_forecast`` ended up hardcoded in three places.
+LIST_SECTIONS = frozenset({"pv_forecast", "managed_loads"})
+
+
+# Managed-load appliance types. These mirror ``loads.presets.TYPES``; the schema cannot
+# import that module (it must stay importable without the runtime package layout), so
+# ``tests/loads/test_schema_presets_agree.py`` fails if the two ever drift.
+#
+# Four of them resolve to one thermal model and differ only in their starting values -
+# which is what makes "add a sauna" a table entry rather than a new implementation.
+MANAGED_LOAD_TYPES = [
+    "pool_heatpump",
+    "sauna",
+    "hot_water_tank",
+    "buffer_tank",
+    "external_contingent",
+    "external_profile",
+]
+
+# Types whose demand comes from stored heat, so the thermal fields apply.
+MANAGED_LOAD_THERMAL_TYPES = [
+    "pool_heatpump", "sauna", "hot_water_tank", "buffer_tank",
+]
+
+# Types the planner and the release gate apply to - everything except a pushed profile,
+# whose timing the sender has already decided.
+MANAGED_LOAD_CONTINGENT_TYPES = MANAGED_LOAD_THERMAL_TYPES + ["external_contingent"]
+
+# Types fed by a push over REST or MQTT rather than by sensors.
+MANAGED_LOAD_EXTERNAL_TYPES = ["external_contingent", "external_profile"]
+# Where an external load profile gets its array. "push" waits to be handed one over
+# HTTP or MQTT; "timeseries" names an entity EOS Connect fetches itself, the same way
+# the price and PV sources do.
+MANAGED_LOAD_PROFILE_SOURCES = ["push", "timeseries"]
+# Units a fetched load array may be published in. Identical to the PV table, because a
+# load series carries the same question: is this watts, or watt-hours in this slot?
+MANAGED_LOAD_VALUE_UNITS = ["W", "kW", "Wh", "kWh"]
+
+# Types for which a cover, and a swimming season, mean anything.
+MANAGED_LOAD_COVER_TYPES = ["pool_heatpump"]
+
+# Placement strategies offered to the user.
+MANAGED_LOAD_STRATEGIES = ["combined", "cheapest_slots", "pv_surplus"]
 
 
 @dataclass
@@ -199,8 +255,9 @@ class ConfigSchema:
         Returns a dict like: {"load": {"source": "default", ...}, "battery": {...}, ...}
         Top-level keys (no dot) become top-level dict entries.
         
-        Special handling: pv_forecast is a list and is built separately by the merger,
-        so we exclude it from the flat defaults dict.
+        Special handling: the sections in ``LIST_SECTIONS`` are lists built separately
+        by the merger, so they are excluded from the flat defaults dict and seeded as
+        empty lists instead.
         """
         result = {}
         for f in self._fields.values():
@@ -209,17 +266,15 @@ class ConfigSchema:
                 result[parts[0]] = f.default
             else:
                 section, subkey = parts
-                # Skip pv_forecast fields — they're built separately as a
-                # list by _build_pv_forecast()
-                if section == "pv_forecast":
+                if section in LIST_SECTIONS:
                     continue
                 if section not in result:
                     result[section] = {}
                 result[section][subkey] = f.default
 
-        # Ensure pv_forecast is initialized as an empty list (not a dict)
-        if "pv_forecast" not in result:
-            result["pv_forecast"] = []
+        for section in LIST_SECTIONS:
+            if section not in result:
+                result[section] = []
 
         return result
 
@@ -238,7 +293,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Primary data source for load and battery data",
         labels=["restart_required"],
-        help_url="configuration.html#data-source",
+        help_url="config-data.html#data-source",
         validation={"choices": ["homeassistant", "openhab", "default"]},
         display_group="Connection",
     ),
@@ -250,7 +305,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="URL of your Home Assistant or OpenHAB instance",
         labels=["restart_required"],
-        help_url="configuration.html#data-source",
+        help_url="config-data.html#data-source",
         validation={"pattern": r"^https?://.+"},
         depends_on={"data_source.type": ["homeassistant", "openhab"]},
         display_group="Connection",
@@ -263,7 +318,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Long-lived access token for Home Assistant",
         labels=["restart_required"],
-        help_url="configuration.html#data-source",
+        help_url="config-data.html#data-source",
         depends_on={"data_source.type": ["homeassistant"]},
         display_group="Connection",
     ),
@@ -275,7 +330,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Disable SSL certificate verification (use with private/self-signed CA)",
         labels=["restart_required"],
-        help_url="configuration.html#data-source",
+        help_url="config-data.html#data-source",
         depends_on={"data_source.type": ["homeassistant", "openhab"]},
         display_group="Connection",
     ),
@@ -291,6 +346,7 @@ _ALL_FIELDS: list[FieldDef] = [
         labels=["deprecated", "restart_required"],
         validation={"choices": ["homeassistant", "openhab", "default", ""]},
         display_group="Connection Override",
+        help_url="config-data.html#load",
     ),
     FieldDef(
         key="load.url",
@@ -301,6 +357,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Override URL for load interface (uses global data source URL if empty)",
         labels=["deprecated", "restart_required"],
         display_group="Connection Override",
+        help_url="config-data.html#load",
     ),
     FieldDef(
         key="load.access_token",
@@ -311,6 +368,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Override access token for load interface",
         labels=["deprecated", "restart_required"],
         display_group="Connection Override",
+        help_url="config-data.html#load",
     ),
     FieldDef(
         key="load.load_sensor",
@@ -323,7 +381,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "sensor.house_power (Home Assistant) or Load_Power (openHAB)"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#load",
+        help_url="config-data.html#load",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
     ),
@@ -338,7 +396,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "(leave empty if not used)"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#load",
+        help_url="config-data.html#load",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
     ),
@@ -350,7 +408,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Entity/item for additional load power in watts (leave empty if not used)",
         labels=["restart_required"],
-        help_url="configuration.html#load",
+        help_url="config-data.html#load",
         display_group="Additional Load",
     ),
     FieldDef(
@@ -361,7 +419,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Runtime for additional load 1 in minutes (0 = not used)",
         labels=["restart_required"],
-        help_url="configuration.html#load",
+        help_url="config-data.html#load",
         validation={"min": 0},
         depends_on={"load.additional_load_1_sensor": "!empty"},
         display_group="Additional Load",
@@ -374,10 +432,41 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Consumption for additional load 1 in Wh for one hour (0 = not used)",
         labels=["restart_required"],
-        help_url="configuration.html#load",
+        help_url="config-data.html#load",
         validation={"min": 0},
         depends_on={"load.additional_load_1_sensor": "!empty"},
         display_group="Additional Load",
+    ),
+
+    FieldDef(
+        key="load.managed_loads_max_power_w",
+        field_type="int",
+        default=0,
+        section="load",
+        level="standard",
+        description=(
+            "Total power all managed loads together may be planned for, in watts "
+            "(0 = no limit). Stops a pool pump and a sauna both being scheduled into "
+            "the same cheap hour and forecasting a peak the house cannot draw"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-operation",
+        validation={"min": 0, "max": 100000},
+        display_group="Managed Loads",
+    ),
+    FieldDef(
+        key="load.managed_loads_cycle_seconds",
+        field_type="int",
+        default=300,
+        section="load",
+        level="expert",
+        description=(
+            "How often managed loads are re-planned and their sensors read, in seconds"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-operation",
+        validation={"min": 30, "max": 3600},
+        display_group="Managed Loads",
     ),
 
     # ===== EOS =====
@@ -389,7 +478,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Optimization backend — Local (built-in), EOS Server, or EVopt (external)",
         labels=["restart_required"],
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#optimizer-choice",
         validation={"choices": ["local_evopt", "eos_server", "evopt"]},
         display_group="Backend",
     ),
@@ -401,7 +490,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="EOS or EVopt server address",
         labels=["restart_required"],
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#optimizer-choice",
         depends_on={"eos.source": ["eos_server", "evopt"]},
         display_group="External Server",
     ),
@@ -413,7 +502,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Port for EOS server (8503) or EVopt server (7050)",
         labels=["restart_required"],
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#optimizer-choice",
         validation={"min": 1, "max": 65535},
         depends_on={"eos.source": ["eos_server", "evopt"]},
         display_group="External Server",
@@ -426,7 +515,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Time frame for optimization requests in seconds",
         labels=["restart_required"],
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#time-slot-config",
         validation={"choices": [900, 3600]},
         display_group="Optimization",
     ),
@@ -438,7 +527,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Timeout for optimization requests in seconds",
         labels=[],
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#eos",
         validation={"min": 10, "max": 600},
         display_group="Optimization",
         hot_reload=True,
@@ -452,7 +541,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Fetch the outside temperature forecast (Akkudoktor) and send it to"
         + " EOS - improves model accuracy; when off a static 15 °C curve is sent",
         labels=[],
-        help_url="configuration.html#eos",
+        help_url="config-solar.html#temperature-forecast",
         depends_on={"eos.source": "eos_server"},
         display_group="Optimization",
         hot_reload=True,
@@ -465,7 +554,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Allow discharge when PV forecast exceeds load, even if optimizer says avoid",
         labels=[],
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#dyn-override",
         display_group="Advanced",
         hot_reload=True,
     ),
@@ -478,7 +567,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Enable PV-to-battery charge control from optimizer dc_charge signal"+
         " (Fronius Gen24 only)",
         labels=["experimental"],
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#eos",
         display_group="Advanced",
         hot_reload=True,
     ),
@@ -491,7 +580,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="eos",
         level="standard",
         description="Charging strategy for the built-in optimizer",
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#local-evopt",
         validation={"choices": [
             "charge_before_export",
             "discharge_before_import",
@@ -510,7 +599,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="eos",
         level="standard",
         description="Discharging strategy for the built-in optimizer",
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#local-evopt",
         validation={"choices": [
             "discharge_before_import",
             "emergency_reserve",
@@ -528,9 +617,26 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Minimum battery SOC to maintain at end-of-horizon "
         "(% of capacity, 0 = disabled)",
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#local-evopt",
         validation={"min": 0, "max": 80},
         depends_on={"eos.local_evopt_discharging_strategy": "emergency_reserve"},
+        display_group="Local Optimizer",
+        hot_reload=True,
+    ),
+    FieldDef(
+        key="eos.local_evopt_terminal_soc_value",
+        field_type="select",
+        default="cheapest_ahead",
+        section="eos",
+        level="standard",
+        description="How charge left in the battery at the end of the planning "
+        "horizon is priced",
+        help_url="config-optimizer.html#local-evopt",
+        validation={"choices": [
+            "cheapest_ahead",
+            "stored_price",
+        ]},
+        depends_on={"eos.source": "local_evopt"},
         display_group="Local Optimizer",
         hot_reload=True,
     ),
@@ -542,7 +648,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Maximum grid import power (0 = no limit, uses inverter limit). "
         "Use for grid connection limits.",
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#eos",
         validation={"min": 0, "max": 100000},
         depends_on={"eos.source": "local_evopt"},
         display_group="Local Optimizer",
@@ -556,7 +662,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Maximum grid export power (0 = no limit, uses discharge max). "
         "Use for grid feed-in limits.",
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#eos",
         validation={"min": 0, "max": 100000},
         depends_on={"eos.source": "local_evopt"},
         display_group="Local Optimizer",
@@ -569,7 +675,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="eos",
         level="expert",
         description="CBC solver thread count for built-in optimizer (0 = auto)",
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#eos",
         validation={"min": 0, "max": 32},
         depends_on={"eos.source": "local_evopt"},
         display_group="Local Optimizer",
@@ -582,11 +688,28 @@ _ALL_FIELDS: list[FieldDef] = [
         section="eos",
         level="expert",
         description="CBC solver time limit in seconds for built-in optimizer (0 = no limit)",
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#eos",
         validation={"min": 0, "max": 600},
         depends_on={"eos.source": "local_evopt"},
         display_group="Local Optimizer",
         labels=["restart_required"],
+    ),
+    FieldDef(
+        key="eos.external_evopt_terminal_soc_value",
+        field_type="select",
+        default="cheapest_ahead",
+        section="eos",
+        level="standard",
+        description="How charge left in the battery at the end of the planning "
+        "horizon is priced",
+        help_url="config-optimizer.html#local-evopt",
+        validation={"choices": [
+            "cheapest_ahead",
+            "stored_price",
+        ]},
+        depends_on={"eos.source": "evopt"},
+        display_group="External Optimizer",
+        hot_reload=True,
     ),
     FieldDef(
         key="eos.external_evopt_max_grid_import_w",
@@ -596,7 +719,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Maximum grid import power for external EVopt (0 = no limit). "
         "Use for grid connection limits.",
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#eos",
         validation={"min": 0, "max": 100000},
         depends_on={"eos.source": "evopt"},
         display_group="External Optimizer",
@@ -610,7 +733,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Maximum grid export power for external EVopt (0 = no limit). "
         "Use for grid feed-in limits.",
-        help_url="configuration.html#eos",
+        help_url="config-optimizer.html#eos",
         validation={"min": 0, "max": 100000},
         depends_on={"eos.source": "evopt"},
         display_group="External Optimizer",
@@ -626,7 +749,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Data source for electricity prices",
         hot_reload=True,
-        help_url="configuration.html#price",
+        help_url="config-price.html#price",
         validation={"choices": [
             "tibber", "smartenergy_at", "stromligning", "fixed_24h", "timeseries", "evcc", "default"
         ]},
@@ -640,7 +763,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="API token for price provider (bearer token / supplier ID)",
         labels=["restart_required"],
-        help_url="configuration.html#price",
+        help_url="config-price.html#price",
         depends_on={"price.source": ["tibber", "stromligning"]},
         display_group="Grid Price Provider",
     ),
@@ -651,7 +774,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="standard",
         description="Fixed cost addition in ct per kWh",
-        help_url="configuration.html#price",
+        help_url="config-price.html#price",
         hot_reload=True,
         display_group="Grid Price - Adjustments",
     ),
@@ -662,7 +785,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="standard",
         description="Relative cost multiplier applied to (base + fixed adder). E.g. 0.05 = 5%",
-        help_url="configuration.html#price",
+        help_url="config-price.html#price",
         hot_reload=True,
         display_group="Grid Price - Adjustments",
     ),
@@ -675,7 +798,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Exactly 24 comma-separated prices in ct/kWh (one per hour, 00:00-23:00). Automatically expanded to 48 or 192 slots based on time frame setting.",
         labels=["restart_required"],
-        help_url="configuration.html#price",
+        help_url="config-price.html#price",
         depends_on={"price.source": ["fixed_24h"]},
         display_group="Grid Price Provider",
     ),
@@ -688,7 +811,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Enable smart price prediction via energyforecast.de",
         labels=["restart_required"],
-        help_url="configuration.html#energyforecast",
+        help_url="config-price.html#energyforecast",
         display_group="Grid Price - Forecast (Advanced)",
     ),
     FieldDef(
@@ -699,7 +822,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="API token from energyforecast.de",
         labels=["restart_required"],
-        help_url="configuration.html#energyforecast",
+        help_url="config-price.html#energyforecast",
         depends_on={"price.energyforecast_enabled": [True]},
         display_group="Grid Price - Forecast (Advanced)",
     ),
@@ -711,7 +834,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Market zone for energy price forecast",
         labels=["restart_required"],
-        help_url="configuration.html#energyforecast",
+        help_url="config-price.html#energyforecast",
         validation={"choices": ["DE-LU", "AT", "FR", "NL", "BE", "PL", "DK1", "DK2"]},
         depends_on={"price.energyforecast_enabled": [True]},
         display_group="Grid Price - Forecast (Advanced)",
@@ -726,7 +849,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Use centrally configured Home Assistant instance (from Data Source) "
         "instead of manually specifying URL and token",
-        help_url="configuration.html#price-sources",
+        help_url="config-price.html#price-sources",
         depends_on={"price.source": ["timeseries"]},
         hot_reload=True,
         display_group="Grid Price Provider",
@@ -739,7 +862,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Home Assistant sensor entity containing price timeseries data "
         "(e.g., sensor.grid_prices)",
-        help_url="configuration.html#price-sources",
+        help_url="config-price.html#price-sources",
         depends_on={
             "price.source": ["timeseries"],
             "price.use_ha_central_data_source": [True],
@@ -758,7 +881,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "'attributes.data'. For custom HTTP servers: 'data', 'prices', 'values', "
             "etc. (default: 'attributes.data')"
         ),
-        help_url="configuration.html#price-sources",
+        help_url="config-price.html#price-sources",
         depends_on={"price.source": ["timeseries"]},
         hot_reload=True,
         display_group="Grid Price Provider",
@@ -776,7 +899,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "Must return a JSON array in EVCC's {start, end, value} format; "
             "'end' is optional. The unit of 'value' is set by price.value_unit."
         ),
-        help_url="configuration.html#price-sources",
+        help_url="config-price.html#price-sources",
         depends_on={
             "price.source": ["timeseries"],
             "price.use_ha_central_data_source": [False],
@@ -796,7 +919,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "(used as Authorization: Bearer [token]). "
             "Leave empty for unauthenticated endpoints."
         ),
-        help_url="configuration.html#price-sources",
+        help_url="config-price.html#price-sources",
         depends_on={
             "price.source": ["timeseries"],
             "price.use_ha_central_data_source": [False],
@@ -816,7 +939,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "(EUR/kWh). Pick EUR/Wh only for a source that already delivers the "
             "internal unit."
         ),
-        help_url="configuration.html#price-sources",
+        help_url="config-price.html#price-sources",
         validation={"choices": ["EUR/kWh", "ct/kWh", "EUR/Wh"]},
         depends_on={"price.source": ["timeseries"]},
         hot_reload=True,
@@ -831,7 +954,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="standard",
         description="Source for feed-in (export) prices",
-        help_url="configuration.html#price",
+        help_url="config-price.html#price",
         validation={"choices": ["fixed", "elpris_dk", "epex_spot", "evcc"]},
         hot_reload=True,
         display_group="Feed-In Price",
@@ -843,7 +966,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="getting_started",
         description="Fixed feed-in price for the grid in ct/kWh",
-        help_url="configuration.html#price",
+        help_url="config-price.html#price",
         depends_on={"price.feed_in_source": ["fixed"]},
         hot_reload=True,
         display_group="Feed-In Price",
@@ -855,7 +978,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="standard",
         description="Stromzone for Elpris (DK1 or DK2)",
-        help_url="configuration.html#price",
+        help_url="config-price.html#price",
         validation={"choices": ["DK1", "DK2"]},
         depends_on={"price.feed_in_source": ["elpris_dk"]},
         hot_reload=True,
@@ -868,7 +991,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="standard",
         description="Static adjustment to feed-in price in ct/kWh (e.g., +3.5 for transport costs)",
-        help_url="configuration.html#price",
+        help_url="config-price.html#price",
         validation={"min": -10.0, "max": 10.0},
         depends_on={"price.feed_in_source": ["elpris_dk", "epex_spot"]},
         hot_reload=True,
@@ -881,7 +1004,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="expert",
         description="Relative multiplier for feed-in price (1.0 = no change, 1.05 = +5%)",
-        help_url="configuration.html#price",
+        help_url="config-price.html#price",
         validation={"min": 0.5, "max": 1.5},
         depends_on={"price.feed_in_source": ["elpris_dk", "epex_spot"]},
         hot_reload=True,
@@ -894,7 +1017,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="price",
         level="standard",
         description="Clamp negative market prices to feed-in price of 0",
-        help_url="configuration.html#price",
+        help_url="config-price.html#price",
         description_map={
             "price.feed_in_source": {
                 "fixed": "Clamp to 0 when market price (Akkudoktor reference) goes negative",
@@ -918,6 +1041,7 @@ _ALL_FIELDS: list[FieldDef] = [
         labels=["deprecated", "restart_required"],
         validation={"choices": ["homeassistant", "openhab", "default", ""]},
         display_group="Connection Override",
+        help_url="config-battery.html#battery",
     ),
     FieldDef(
         key="battery.url",
@@ -928,6 +1052,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Override URL for battery interface",
         labels=["deprecated", "restart_required"],
         display_group="Connection Override",
+        help_url="config-battery.html#battery",
     ),
     FieldDef(
         key="battery.access_token",
@@ -938,6 +1063,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Override access token for battery interface",
         labels=["deprecated", "restart_required"],
         display_group="Connection Override",
+        help_url="config-battery.html#battery",
     ),
     FieldDef(
         key="battery.soc_sensor",
@@ -950,7 +1076,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "(Home Assistant) or battery_SOC (openHAB)"
         ),
         labels=["restart_required"],
-        help_url="configuration.html#battery",
+        help_url="config-battery.html#battery",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Core",
     ),
@@ -962,7 +1088,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Battery capacity in Wh",
         labels=["restart_required"],
-        help_url="configuration.html#battery",
+        help_url="config-battery.html#battery",
         validation={"min": 100, "max": 1000000},
         display_group="Core",
     ),
@@ -974,7 +1100,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Charging efficiency (0.0 to 1.0)",
         labels=["restart_required"],
-        help_url="configuration.html#battery",
+        help_url="config-battery.html#battery",
         validation={"min": 0.1, "max": 1.0},
         display_group="Core",
     ),
@@ -986,7 +1112,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Discharging efficiency (0.0 to 1.0)",
         labels=["restart_required"],
-        help_url="configuration.html#battery",
+        help_url="config-battery.html#battery",
         validation={"min": 0.1, "max": 1.0},
         display_group="Core",
     ),
@@ -998,7 +1124,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Maximum charging power in watts",
         labels=["restart_required"],
-        help_url="configuration.html#battery",
+        help_url="config-battery.html#battery",
         validation={"min": 100, "max": 100000},
         display_group="Core",
     ),
@@ -1009,7 +1135,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="battery",
         level="getting_started",
         description="Minimum battery SOC in percent",
-        help_url="configuration.html#battery",
+        help_url="config-battery.html#battery",
         validation={"min": 0, "max": 100},
         hot_reload=True,
         display_group="SOC Limits",
@@ -1021,7 +1147,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="battery",
         level="getting_started",
         description="Maximum battery SOC in percent",
-        help_url="configuration.html#battery",
+        help_url="config-battery.html#battery",
         validation={"min": 0, "max": 100},
         hot_reload=True,
         display_group="SOC Limits",
@@ -1034,7 +1160,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Enable charging curve for controlled charging power according to SOC",
         labels=["restart_required"],
-        help_url="configuration.html#battery",
+        help_url="config-battery.html#battery",
         display_group="Charging",
     ),
     FieldDef(
@@ -1045,7 +1171,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Sensor for battery temperature in °C (leave empty if not available)",
         labels=["restart_required"],
-        help_url="configuration.html#battery",
+        help_url="config-battery.html#battery",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
     ),
@@ -1057,7 +1183,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Static battery price in ct/kWh (0 = use dynamic or ignore)",
         labels=["restart_required"],
-        help_url="configuration.html#battery",
+        help_url="config-battery.html#battery",
         validation={"min": 0.0},
         display_group="Battery Price",
     ),
@@ -1069,7 +1195,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Sensor/item providing battery energy cost in €/Wh",
         labels=["restart_required"],
-        help_url="configuration.html#battery",
+        help_url="config-battery.html#battery",
         display_group="Battery Price",
     ),
     FieldDef(
@@ -1080,7 +1206,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Enable dynamic battery price calculation based on history",
         labels=["restart_required"],
-        help_url="configuration.html#battery-price",
+        help_url="config-battery.html#battery-price",
         display_group="Battery Price",
     ),
     FieldDef(
@@ -1091,7 +1217,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Interval for price update in seconds",
         labels=["restart_required"],
-        help_url="configuration.html#battery-price",
+        help_url="config-battery.html#battery-price",
         validation={"min": 60, "max": 86400},
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price",
@@ -1104,7 +1230,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Hours of history to analyze for price calculation",
         labels=["restart_required"],
-        help_url="configuration.html#battery-price",
+        help_url="config-battery.html#battery-price",
         validation={"min": 1, "max": 720},
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price",
@@ -1117,7 +1243,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Sensor for battery power in W (positive = charging)",
         labels=["restart_required"],
-        help_url="configuration.html#battery-price",
+        help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
     ),
@@ -1129,7 +1255,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Sensor for PV power in W",
         labels=["restart_required"],
-        help_url="configuration.html#battery-price",
+        help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
     ),
@@ -1141,7 +1267,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Sensor for grid power in W (positive = import)",
         labels=["restart_required"],
-        help_url="configuration.html#battery-price",
+        help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
     ),
@@ -1153,7 +1279,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Sensor for load power in W",
         labels=["restart_required"],
-        help_url="configuration.html#battery-price",
+        help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
     ),
@@ -1165,7 +1291,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Sensor for electricity price in €/kWh or ct/kWh",
         labels=["restart_required"],
-        help_url="configuration.html#battery-price",
+        help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
     ),
@@ -1176,7 +1302,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="battery",
         level="expert",
         description="Minimum battery power to consider as charging (W)",
-        help_url="configuration.html#battery-price",
+        help_url="config-battery.html#battery-price",
         validation={"min": 0.0},
         hot_reload=True,
         depends_on={"battery.price_calculation_enabled": [True]},
@@ -1189,7 +1315,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="battery",
         level="expert",
         description="Minimum grid surplus to consider as grid charging (W)",
-        help_url="configuration.html#battery-price",
+        help_url="config-battery.html#battery-price",
         validation={"min": 0.0},
         hot_reload=True,
         depends_on={"battery.price_calculation_enabled": [True]},
@@ -1202,7 +1328,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="battery",
         level="expert",
         description="Include feed-in price as opportunity cost for PV-sourced energy",
-        help_url="configuration.html#battery-price",
+        help_url="config-battery.html#battery-price",
         hot_reload=True,
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price",
@@ -1221,7 +1347,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "runs straight away. Switch to a real provider when you are ready."
         ),
         hot_reload=True,
-        help_url="configuration.html#pv-forecast",
+        help_url="config-solar.html#pv-forecast-sources",
         validation={"choices": [
             "akkudoktor", "openmeteo", "openmeteo_local",
             "forecast_solar", "evcc", "solcast", "victron", "timeseries", "default"
@@ -1236,7 +1362,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="API key for the forecast provider",
         hot_reload=True,
-        help_url="configuration.html#pv-forecast",
+        help_url="config-solar.html#pv-forecast-sources",
         # Forecast.Solar is the odd one out: it works without a key on the public tier,
         # so the key is offered but never required.  Solcast and Victron cannot fetch
         # anything without one.
@@ -1269,7 +1395,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Resource ID / Installation ID (Solcast: comma-separated list; "
         "Victron: single VRM ID)",
         hot_reload=True,
-        help_url="configuration.html#pv-forecast",
+        help_url="config-solar.html#pv-forecast-sources",
         depends_on={"pv_forecast_source.source": ["solcast", "victron"]},
         display_group="Provider",
         validation={"max_length": 1000, "required": True},
@@ -1284,7 +1410,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Apply scaling factor from EVCC forecast API to correct PV forecast values "
         "using real measured data. If disabled, no scaling applied (scale = 1.0).",
-        help_url="configuration.html#pv-forecast-evcc",
+        help_url="config-solar.html#pv-forecast-evcc",
         depends_on={"pv_forecast_source.source": ["evcc"]},
         display_group="Provider",
     ),
@@ -1298,7 +1424,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Use centrally configured Home Assistant instance (from Data Source) "
         "instead of manually specifying URL and token",
-        help_url="configuration.html#pv-forecast-sources",
+        help_url="config-solar.html#pv-forecast-sources",
         depends_on={"pv_forecast_source.source": ["timeseries"]},
         hot_reload=True,
         display_group="Provider",
@@ -1311,7 +1437,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Home Assistant sensor entity containing PV forecast timeseries data "
         "(e.g., sensor.pv_forecast)",
-        help_url="configuration.html#pv-forecast-sources",
+        help_url="config-solar.html#pv-forecast-sources",
         depends_on={
             "pv_forecast_source.source": ["timeseries"],
             "pv_forecast_source.use_ha_central_data_source": [True],
@@ -1330,7 +1456,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "'attributes.data'. For custom HTTP servers: 'data', 'forecast', 'values', "
             "etc. (default: 'attributes.data')"
         ),
-        help_url="configuration.html#pv-forecast-sources",
+        help_url="config-solar.html#pv-forecast-sources",
         depends_on={"pv_forecast_source.source": ["timeseries"]},
         hot_reload=True,
         display_group="Provider",
@@ -1349,7 +1475,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "'end' is optional. The unit of 'value' is set by "
             "pv_forecast_source.value_unit."
         ),
-        help_url="configuration.html#pv-forecast-sources",
+        help_url="config-solar.html#pv-forecast-sources",
         depends_on={
             "pv_forecast_source.source": ["timeseries"],
             "pv_forecast_source.use_ha_central_data_source": [False],
@@ -1369,7 +1495,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "(used as Authorization: Bearer [token]). "
             "Leave empty for unauthenticated endpoints."
         ),
-        help_url="configuration.html#pv-forecast-sources",
+        help_url="config-solar.html#pv-forecast-sources",
         depends_on={
             "pv_forecast_source.source": ["timeseries"],
             "pv_forecast_source.use_ha_central_data_source": [False],
@@ -1389,7 +1515,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "power (W) per slot. Pick Wh/kWh for a source that reports energy per "
             "slot instead."
         ),
-        help_url="configuration.html#pv-forecast-sources",
+        help_url="config-solar.html#pv-forecast-sources",
         validation={"choices": ["W", "kW", "Wh", "kWh"]},
         depends_on={"pv_forecast_source.source": ["timeseries"]},
         hot_reload=True,
@@ -1402,6 +1528,24 @@ _ALL_FIELDS: list[FieldDef] = [
     # This section is only shown for location-based sources
     # (not for solcast, victron, evcc, timeseries).
     FieldDef(
+        key="pv_forecast_source.temperature_source",
+        field_type="select",
+        default="openmeteo",
+        section="pv_forecast_source",
+        level="standard",
+        description=(
+            "Where the outside-temperature forecast comes from. Open-Meteo needs no key "
+            "and publishes the temperature directly. Akkudoktor derives it from a PV "
+            "forecast query and relays its upstream provider's rate limit, which refuses "
+            "everyone at once when it triggers. One curve is fetched and shared by the "
+            "optimizer and by any outdoor managed load"
+        ),
+        hot_reload=True,
+        help_url="config-solar.html#temperature-forecast",
+        validation={"choices": TEMPERATURE_SOURCES},
+        display_group="Temperature",
+    ),
+    FieldDef(
         key="pv_forecast.name",
         field_type="str",
         default="myPvInstallation1",
@@ -1409,7 +1553,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="User-defined name for this PV installation (must be unique)",
         hot_reload=True,
-        help_url="configuration.html#pv-forecast",
+        help_url="config-solar.html#pv-forecast",
         depends_on={
             "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
         },
@@ -1423,7 +1567,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Latitude of the PV installation",
         hot_reload=True,
-        help_url="configuration.html#pv-forecast",
+        help_url="config-solar.html#pv-forecast",
         validation={"min": -90, "max": 90},
         depends_on={
             "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
@@ -1438,7 +1582,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Longitude of the PV installation",
         hot_reload=True,
-        help_url="configuration.html#pv-forecast",
+        help_url="config-solar.html#pv-forecast",
         validation={"min": -180, "max": 180},
         depends_on={
             "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
@@ -1453,7 +1597,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Panel azimuth angle (-180 to 180, 0=south, 90=west, -90=east)",
         hot_reload=True,
-        help_url="configuration.html#pv-forecast",
+        help_url="config-solar.html#pv-forecast",
         validation={"min": -180, "max": 180},
         depends_on={
             "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
@@ -1468,7 +1612,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Panel tilt angle (0=flat, 90=vertical)",
         hot_reload=True,
-        help_url="configuration.html#pv-forecast",
+        help_url="config-solar.html#pv-forecast",
         validation={"min": 0, "max": 90},
         depends_on={
             "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
@@ -1483,7 +1627,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Peak power of PV system in Wp",
         hot_reload=True,
-        help_url="configuration.html#pv-forecast",
+        help_url="config-solar.html#pv-forecast",
         validation={"min": 1},
         depends_on={
             "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
@@ -1498,7 +1642,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Inverter power in W",
         hot_reload=True,
-        help_url="configuration.html#pv-forecast",
+        help_url="config-solar.html#pv-forecast",
         validation={"min": 1},
         depends_on={
             "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
@@ -1513,7 +1657,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Inverter efficiency (0.0 to 1.0)",
         hot_reload=True,
-        help_url="configuration.html#pv-forecast",
+        help_url="config-solar.html#pv-forecast",
         validation={"min": 0.1, "max": 1.0},
         depends_on={
             "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
@@ -1528,7 +1672,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Comma-separated horizon values for shading calculation",
         hot_reload=True,
-        help_url="configuration.html#pv-forecast",
+        help_url="config-solar.html#pv-forecast",
         depends_on={
             "pv_forecast_source.source": LOCATION_BASED_PV_SOURCES,
         },
@@ -1544,7 +1688,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Enable automatic scaling of PV forecasts based on historical measured yields",
         labels=["experimental"],
-        help_url="configuration.html#pv-autoscaling",
+        help_url="config-solar.html#pv-autoscaling",
         hot_reload=True,
         display_group="Auto-Scaling",
     ),
@@ -1555,7 +1699,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="pv_autoscaling",
         level="getting_started",
         description="Use centrally configured Data Source for sensor access instead of manual URL/token",
-        help_url="configuration.html#pv-autoscaling",
+        help_url="config-solar.html#pv-autoscaling",
         depends_on={"pv_autoscaling.enabled": [True]},
         hot_reload=True,
         display_group="Auto-Scaling",
@@ -1567,7 +1711,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="pv_autoscaling",
         level="getting_started",
         description="Entity/item for the cumulative PV generation counter (kWh) - REQUIRED for autoscaling to work",
-        help_url="configuration.html#pv-autoscaling",
+        help_url="config-solar.html#pv-autoscaling",
         depends_on={"pv_autoscaling.enabled": [True]},
         validation={"required": True},
         hot_reload=True,
@@ -1580,7 +1724,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="pv_autoscaling",
         level="standard",
         description="Data source type (Home Assistant or OpenHAB) for reading PV sensor",
-        help_url="configuration.html#pv-autoscaling",
+        help_url="config-solar.html#pv-autoscaling",
         validation={"choices": ["homeassistant", "openhab"]},
         depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
         hot_reload=True,
@@ -1593,6 +1737,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="pv_autoscaling",
         level="standard",
         description="Override URL for data source (used when not reusing central Data Source)",
+        help_url="config-solar.html#pv-autoscaling",
         depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
         hot_reload=True,
         display_group="Connection",
@@ -1604,6 +1749,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="pv_autoscaling",
         level="standard",
         description="Bearer token for manual data source access (only when not using central data source)",
+        help_url="config-solar.html#pv-autoscaling",
         depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
         hot_reload=True,
         display_group="Connection",
@@ -1615,6 +1761,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="pv_autoscaling",
         level="expert",
         description="Skip TLS certificate verification for the manual data source (self-signed certificates)",
+        help_url="config-solar.html#pv-autoscaling",
         depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
         hot_reload=True,
         display_group="Connection",
@@ -1626,6 +1773,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="pv_autoscaling",
         level="standard",
         description="How many days of measured PV yield to retain for scaling (1-14 days)",
+        help_url="config-solar.html#pv-autoscaling",
         validation={"min": 1, "max": 14},
         depends_on={"pv_autoscaling.enabled": [True]},
         hot_reload=True,
@@ -1638,7 +1786,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="pv_autoscaling",
         level="expert",
         description="Minimum scaling multiplier to prevent collapse (e.g., 0.2)",
-        help_url="configuration.html#pv-autoscaling",
+        help_url="config-solar.html#pv-autoscaling",
         depends_on={"pv_autoscaling.enabled": [True]},
         hot_reload=True,
         validation={"min": 0.0, "max": 10.0},
@@ -1651,7 +1799,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="pv_autoscaling",
         level="expert",
         description="Maximum scaling multiplier to prevent runaway (e.g., 2.5)",
-        help_url="configuration.html#pv-autoscaling",
+        help_url="config-solar.html#pv-autoscaling",
         depends_on={"pv_autoscaling.enabled": [True]},
         hot_reload=True,
         validation={"min": 1.0, "max": 20.0},
@@ -1664,7 +1812,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="pv_autoscaling",
         level="expert",
         description="Minimum recorded hours required before scaling is applied",
-        help_url="configuration.html#pv-autoscaling",
+        help_url="config-solar.html#pv-autoscaling",
         depends_on={"pv_autoscaling.enabled": [True]},
         validation={"min": 1, "max": 168},
         hot_reload=True,
@@ -1680,7 +1828,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Inverter type for battery control (default = display only, no control)",
         labels=["restart_required"],
-        help_url="configuration.html#inverter",
+        help_url="config-battery.html#inverter",
         validation={"choices": [
             "fronius_gen24", "fronius_gen24_legacy", "victron", "evcc",
             "homeassistant", "default"
@@ -1700,7 +1848,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="IP address of the inverter",
         labels=["restart_required"],
-        help_url="configuration.html#inverter",
+        help_url="config-battery.html#inverter",
         depends_on={"inverter.type": ["fronius_gen24", "fronius_gen24_legacy", "victron"]},
         display_group="Hardware",
     ),
@@ -1712,7 +1860,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Username for inverter login (Fronius only)",
         labels=["restart_required"],
-        help_url="configuration.html#inverter",
+        help_url="config-battery.html#inverter",
         depends_on={"inverter.type": ["fronius_gen24", "fronius_gen24_legacy"]},
         display_group="Hardware",
     ),
@@ -1724,7 +1872,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Password for inverter login (Fronius only)",
         labels=["restart_required"],
-        help_url="configuration.html#inverter",
+        help_url="config-battery.html#inverter",
         depends_on={"inverter.type": ["fronius_gen24", "fronius_gen24_legacy"]},
         display_group="Hardware",
     ),
@@ -1736,7 +1884,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Maximum inverter grid charge rate in W",
         labels=["restart_required"],
-        help_url="configuration.html#inverter",
+        help_url="config-battery.html#inverter",
         validation={"min": 0, "max": 100000},
         display_group="Power Limits",
     ),
@@ -1748,7 +1896,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Maximum inverter PV charge rate in W",
         labels=["restart_required"],
-        help_url="configuration.html#inverter",
+        help_url="config-battery.html#inverter",
         validation={"min": 0, "max": 100000},
         display_group="Power Limits",
     ),
@@ -1760,7 +1908,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Array of Home Assistant service calls for force-charge mode",
         labels=["restart_required"],
-        help_url="configuration.html#inverter",
+        help_url="config-battery.html#inverter",
         depends_on={"inverter.type": ["homeassistant"]},
         display_group="Home Assistant Service Calls",
     ),
@@ -1772,7 +1920,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Array of Home Assistant service calls for avoid-discharge mode",
         labels=["restart_required"],
-        help_url="configuration.html#inverter",
+        help_url="config-battery.html#inverter",
         depends_on={"inverter.type": ["homeassistant"]},
         display_group="Home Assistant Service Calls",
     ),
@@ -1784,7 +1932,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Array of Home Assistant service calls for discharge-allowed mode",
         labels=["restart_required"],
-        help_url="configuration.html#inverter",
+        help_url="config-battery.html#inverter",
         depends_on={"inverter.type": ["homeassistant"]},
         display_group="Home Assistant Service Calls",
     ),
@@ -1798,7 +1946,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="URL to your EVCC installation (leave default or empty if not used)",
         labels=["restart_required"],
-        help_url="configuration.html#evcc",
+        help_url="config-system.html#evcc",
         display_group="Connection",
     ),
 
@@ -1811,7 +1959,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Enable MQTT integration",
         labels=["restart_required"],
-        help_url="configuration.html#mqtt",
+        help_url="config-system.html#mqtt",
         display_group="Connection",
     ),
     FieldDef(
@@ -1822,7 +1970,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="MQTT broker hostname or IP",
         labels=["restart_required"],
-        help_url="configuration.html#mqtt",
+        help_url="config-system.html#mqtt",
         depends_on={"mqtt.enabled": [True, "enabled"]},
         display_group="Connection",
     ),
@@ -1834,7 +1982,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="MQTT broker port",
         labels=["restart_required"],
-        help_url="configuration.html#mqtt",
+        help_url="config-system.html#mqtt",
         validation={"min": 1, "max": 65535},
         depends_on={"mqtt.enabled": [True, "enabled"]},
         display_group="Connection",
@@ -1847,7 +1995,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="MQTT username",
         labels=["restart_required"],
-        help_url="configuration.html#mqtt",
+        help_url="config-system.html#mqtt",
         depends_on={"mqtt.enabled": [True, "enabled"]},
         display_group="Authentication",
     ),
@@ -1859,7 +2007,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="MQTT password",
         labels=["restart_required"],
-        help_url="configuration.html#mqtt",
+        help_url="config-system.html#mqtt",
         depends_on={"mqtt.enabled": [True, "enabled"]},
         display_group="Authentication",
     ),
@@ -1871,7 +2019,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Use TLS for MQTT connection",
         labels=["restart_required"],
-        help_url="configuration.html#mqtt",
+        help_url="config-system.html#mqtt",
         depends_on={"mqtt.enabled": [True, "enabled"]},
         display_group="Connection",
     ),
@@ -1883,7 +2031,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Enable Home Assistant MQTT auto-discovery",
         labels=["restart_required"],
-        help_url="configuration.html#mqtt",
+        help_url="config-system.html#mqtt",
         depends_on={"mqtt.enabled": [True, "enabled"]},
         display_group="Home Assistant",
     ),
@@ -1895,7 +2043,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Prefix for HA MQTT auto-discovery topics",
         labels=["restart_required"],
-        help_url="configuration.html#mqtt",
+        help_url="config-system.html#mqtt",
         depends_on={"mqtt.enabled": [True, "enabled"], "mqtt.ha_mqtt_auto_discovery": [True]},
         display_group="Home Assistant",
     ),
@@ -1908,7 +2056,7 @@ _ALL_FIELDS: list[FieldDef] = [
         section="system",
         level="standard",
         description="EOS Connect refresh time in minutes",
-        help_url="configuration.html#system",
+        help_url="config-system.html#system",
         validation={"min": 1, "max": 60},
         labels=["restart_required"],
         display_group="General",
@@ -1921,7 +2069,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description="Time zone for the application (e.g. Europe/Berlin, US/Eastern)",
         labels=["restart_required"],
-        help_url="configuration.html#system",
+        help_url="config-system.html#system",
         display_group="General",
     ),
     FieldDef(
@@ -1932,7 +2080,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Web server port for EOS Connect",
         labels=["restart_required"],
-        help_url="configuration.html#system",
+        help_url="config-system.html#system",
         validation={"min": 1024, "max": 65535},
         display_group="General",
     ),
@@ -1943,10 +2091,38 @@ _ALL_FIELDS: list[FieldDef] = [
         section="system",
         level="standard",
         description="Application log level",
-        help_url="configuration.html#system",
+        help_url="config-system.html#system",
         validation={"choices": ["debug", "info", "warning", "error"]},
         labels=["restart_required"],
         display_group="General",
+    ),
+    FieldDef(
+        key="latitude",
+        field_type="float",
+        default=0.0,
+        section="system",
+        level="standard",
+        description=(
+            "Latitude of this installation. Only needed for the outside-temperature "
+            "forecast when no PV installation supplies coordinates - a pool heat pump "
+            "uses it to predict its losses. Leave both at 0 if you do not need it"
+        ),
+        hot_reload=True,
+        help_url="config-system.html#system",
+        validation={"min": -90, "max": 90},
+        display_group="Location",
+    ),
+    FieldDef(
+        key="longitude",
+        field_type="float",
+        default=0.0,
+        section="system",
+        level="standard",
+        description="Longitude of this installation. See Latitude",
+        hot_reload=True,
+        help_url="config-system.html#system",
+        validation={"min": -180, "max": 180},
+        display_group="Location",
     ),
     FieldDef(
         key="request_timeout",
@@ -1956,8 +2132,655 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Timeout for Home Assistant / OpenHAB API calls in seconds",
         labels=["restart_required"],
-        help_url="configuration.html#system",
+        help_url="config-system.html#system",
         validation={"min": 5, "max": 120},
         display_group="General",
+    ),
+    # ===== MANAGED LOADS =====
+    # A list section, like pv_forecast: these FieldDefs are the template for ONE entry
+    # and the store holds indexed keys (``managed_loads.0.type``). The merger rebuilds
+    # the list; ``loads.presets`` supplies the per-type defaults at runtime, so the
+    # defaults here exist for the UI and mirror the pool preset.
+    #
+    # ``depends_on`` keys without a dot are resolved *within the entry* - "type" means
+    # this entry's type, not a top-level key. pv_forecast never needed that because its
+    # entries are homogeneous.
+    FieldDef(
+        key="managed_loads.id",
+        field_type="str",
+        default="",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "Short name for this load - becomes its MQTT topic and API path "
+            "(lower case letters, digits and underscores)"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads",
+        validation={"pattern": "^[a-z0-9_]{1,32}$"},
+        display_group="Identity",
+    ),
+    FieldDef(
+        key="managed_loads.type",
+        field_type="select",
+        default="pool_heatpump",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "What kind of load this is - it decides which settings apply. "
+            "Pool heat pump, sauna, hot water tank and buffer tank are heated stores "
+            "that EOS Connect schedules and releases itself. "
+            "External energy budget takes a "
+            "\"needs X Wh by then\" push and schedules it. "
+            "External load profile takes a ready-made profile and injects it as given, "
+            "with no release signal - use it for space heating or air conditioning"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-load-profiles",
+        validation={"choices": MANAGED_LOAD_TYPES},
+        display_group="Identity",
+    ),
+    FieldDef(
+        key="managed_loads.enabled",
+        field_type="bool",
+        default=True,
+        section="managed_loads",
+        level="getting_started",
+        description="Include this load in the forecast and control it",
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads",
+        display_group="Identity",
+    ),
+    FieldDef(
+        key="managed_loads.power_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "Entity/item for this load's power draw in watts (W), like every other "
+            "sensor in EOS Connect. It answers two questions a meter reading cannot: "
+            "is the appliance running right now, and how fast is it heating - which is "
+            "what the efficiency is measured from. Its history also leaves the "
+            "household base load, so the appliance is never counted twice. If you only "
+            "have a kWh meter, add a derivative helper in Home Assistant and point "
+            "this at that"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-sensor",
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Identity",
+    ),
+    FieldDef(
+        key="managed_loads.replaces_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "The meter this load's forecast stands in for, in watts (W). Set it only "
+            "when what you send is the appliance's WHOLE consumption: its measured "
+            "history then leaves the household base load, so the same appliance is not "
+            "counted twice. Leave it empty when you send only the extra bit - a "
+            "heating-versus-cooling difference, say - because that extra is added on "
+            "top of a base load which already contains the rest"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-replaces-sensor",
+        depends_on={"type": MANAGED_LOAD_EXTERNAL_TYPES},
+        display_group="Identity",
+    ),
+    FieldDef(
+        key="managed_loads.subtract_from_base_load",
+        field_type="bool",
+        default=True,
+        section="managed_loads",
+        level="expert",
+        description=(
+            "Remove this load's measured history from the household base load. Leave on "
+            "unless the sensor named above overlaps another one already being "
+            "subtracted - turning it off then makes the forecast count this appliance "
+            "twice"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-sensor",
+        display_group="Identity",
+    ),
+    FieldDef(
+        key="managed_loads.priority",
+        field_type="int",
+        default=100,
+        section="managed_loads",
+        level="expert",
+        description=(
+            "Lower numbers are planned first and get the cheapest slots when several "
+            "managed loads compete for the same shared power budget. Applies when this "
+            "module places the loads itself; the built-in optimizer places them "
+            "together against one objective, so there is no queue and the per-load "
+            "price limit is the lever instead"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-operation",
+        validation={"min": 1, "max": 999},
+        display_group="Identity",
+    ),
+
+    # --- thermal ---
+    FieldDef(
+        key="managed_loads.temp_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="getting_started",
+        description="Entity/item for the stored medium's temperature in degrees Celsius",
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-load-profiles",
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Temperature",
+    ),
+    FieldDef(
+        key="managed_loads.target_temp",
+        field_type="float",
+        default=28.0,
+        section="managed_loads",
+        level="getting_started",
+        description="Target temperature in degrees Celsius",
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-load-profiles",
+        validation={"min": 0, "max": 120},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Temperature",
+    ),
+    FieldDef(
+        key="managed_loads.target_temp_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Optional entity/item holding the target temperature, when it is set "
+            "elsewhere - a number helper, a thermostat, or the appliance itself. "
+            "Overrides the fixed value above whenever it can be read"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-load-profiles",
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Temperature",
+    ),
+    FieldDef(
+        key="managed_loads.deadband_k",
+        field_type="float",
+        default=0.5,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "How far below target the medium must fall before heating starts, in kelvin "
+            "- stops the appliance hunting around its setpoint"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-load-profiles",
+        validation={"min": 0.1, "max": 20},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Temperature",
+    ),
+    FieldDef(
+        key="managed_loads.ambient_temp_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Entity/item for the surrounding air temperature. A pool uses the outdoor "
+            "forecast when this is empty; an indoor tank falls back to a fixed value"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-ambient",
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Temperature",
+    ),
+    FieldDef(
+        key="managed_loads.volume_m3",
+        field_type="float",
+        default=30.0,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Stored volume in cubic metres. For a sauna this is a water-equivalent "
+            "that reproduces its heat-up time - the calibration corrects it over time"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-load-profiles",
+        validation={"min": 0.01, "max": 1000},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.surface_m2",
+        field_type="float",
+        default=32.0,
+        section="managed_loads",
+        level="standard",
+        description="Surface losing heat, in square metres",
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-load-profiles",
+        validation={"min": 0.1, "max": 1000},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.heat_loss_w_per_m2_k",
+        field_type="float",
+        default=25.0,
+        section="managed_loads",
+        level="expert",
+        description=(
+            "Starting guess for the heat loss coefficient in W/(m2 K). It is measured "
+            "from the observed cooling rate and refined automatically"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-calibration",
+        validation={"min": 0.1, "max": 200},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.rated_power_w",
+        field_type="float",
+        default=2500.0,
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "Electrical power the appliance draws while running, in watts. For a load "
+            "whose profile is fetched or pushed it is not used to plan anything - it is "
+            "the reference the incoming values are sanity-checked against, which is what "
+            "catches a source publishing watts where watt-hours were expected"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-load-profiles",
+        validation={"min": 1, "max": 100000},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.cop_nominal",
+        field_type="float",
+        default=5.0,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Coefficient of performance at 26 C ambient. Use 1.0 for a resistive "
+            "heater such as a sauna. Refined automatically from measured operation"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-load-profiles",
+        validation={"min": 0.8, "max": 8},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.cop_air_coeff",
+        field_type="float",
+        default=0.03,
+        section="managed_loads",
+        level="expert",
+        description=(
+            "How much the COP changes per kelvin of ambient temperature, as a fraction "
+            "of the nominal value. Refined automatically"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-calibration",
+        validation={"min": -0.06, "max": 0.06},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.cover_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description="Optional entity/item that is on when the cover is closed",
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-cover",
+        depends_on={"type": MANAGED_LOAD_COVER_TYPES},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.cover_loss_factor",
+        field_type="float",
+        default=0.35,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Fraction of the heat loss that remains while the cover is closed. A "
+            "starting point only: once the store has been seen both covered and "
+            "uncovered, this is measured from its own cooling and the measured value "
+            "is what the forecast uses. The calibration panel says which it is on."
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-cover",
+        validation={"min": 0.05, "max": 1.0},
+        depends_on={"type": MANAGED_LOAD_COVER_TYPES},
+        display_group="Physical",
+    ),
+
+    # --- when it may run ---
+    FieldDef(
+        key="managed_loads.strategy",
+        field_type="select",
+        default="combined",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "How the cheapest slots are chosen. "
+            "Combined uses the grid price but values PV surplus at the feed-in tariff, "
+            "so your own solar wins over cheap grid energy - recommended. "
+            "Cheapest slots looks at the grid price only. "
+            "PV surplus takes the sunniest slots first and falls back to price when "
+            "there is no surplus"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-operation",
+        validation={"choices": MANAGED_LOAD_STRATEGIES},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.min_runtime_minutes",
+        field_type="int",
+        default=30,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Shortest time the appliance stays released once started - protects the "
+            "compressor from being cycled every time the plan is recalculated"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-operation",
+        validation={"min": 0, "max": 720},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.max_runtime_hours_per_day",
+        field_type="int",
+        default=12,
+        section="managed_loads",
+        level="standard",
+        description="Cap on released hours per day (0 = no cap)",
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-runtime",
+        validation={"min": 0, "max": 24},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.window_start",
+        field_type="int",
+        default=8,
+        section="managed_loads",
+        level="standard",
+        description="First hour of the day the appliance may run (leave equal to end for no limit)",
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-runtime",
+        validation={"min": 0, "max": 23},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.window_end",
+        field_type="int",
+        default=20,
+        section="managed_loads",
+        level="standard",
+        description="Hour of the day after which the appliance may no longer run",
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-runtime",
+        validation={"min": 0, "max": 23},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.deadline_hours",
+        field_type="int",
+        default=0,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Hours from now by which the target must be reached (0 = anywhere in the "
+            "next two days). A sauna wanted this evening sets it; a pool does not"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-operation",
+        validation={"min": 0, "max": 48},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.max_price_ct_kwh",
+        field_type="float",
+        default=0,
+        section="managed_loads",
+        level="expert",
+        description=(
+            "Never pay more than this per kWh for this load's energy, in ct/kWh "
+            "(0 = no limit). With the built-in optimizer the load is scheduled against "
+            "this figure directly, so it runs whenever the energy actually costs less; "
+            "with an external optimizer it is a simpler rule that skips any hour above "
+            "it. Ignored when frost protection is active"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-price-limit",
+        validation={"min": 0, "max": 200},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.min_ambient_temp_c",
+        field_type="float",
+        default=12.0,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Never run below this ambient temperature - an air source heat pump barely "
+            "works in the cold and its heat exchanger can freeze"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-runtime",
+        validation={"min": -30, "max": 40},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.frost_protection_temp_c",
+        field_type="float",
+        default=4.0,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Run immediately regardless of price when the medium falls to this "
+            "temperature"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-operation",
+        validation={"min": -20, "max": 40},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.season_start",
+        field_type="str",
+        default="04-15",
+        section="managed_loads",
+        level="standard",
+        description="First day of the season, as MM-DD (leave empty for all year)",
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-operation",
+        validation={"pattern": "^$|^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"},
+        depends_on={"type": MANAGED_LOAD_COVER_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.season_end",
+        field_type="str",
+        default="09-30",
+        section="managed_loads",
+        level="standard",
+        description="Last day of the season, as MM-DD",
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-operation",
+        validation={"pattern": "^$|^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"},
+        depends_on={"type": MANAGED_LOAD_COVER_TYPES},
+        display_group="Operation",
+    ),
+
+    # --- pushed data ---
+    FieldDef(
+        key="managed_loads.ttl_minutes",
+        field_type="int",
+        default=1440,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "How long pushed data stays valid. After this the load stops being counted, "
+            "so a sender that goes quiet cannot hold a stale forecast forever"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-external",
+        validation={"min": 1, "max": 10080},
+        depends_on={"type": MANAGED_LOAD_EXTERNAL_TYPES},
+        display_group="Pushed data",
+    ),
+
+    # --- fetched profile ---
+    FieldDef(
+        key="managed_loads.profile_source",
+        field_type="select",
+        default="push",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "Where this load's profile comes from. 'push' waits for an external system "
+            "to hand one over; 'timeseries' names an entity EOS Connect reads itself, "
+            "the same way the price and PV sources do"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-external",
+        validation={"choices": MANAGED_LOAD_PROFILE_SOURCES},
+        depends_on={"type": ["external_profile"]},
+        display_group="Profile source",
+    ),
+    FieldDef(
+        key="managed_loads.use_ha_central_data_source",
+        field_type="bool",
+        default=True,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Read the profile through the Home Assistant connection already configured "
+            "under Data Source, instead of repeating a URL and a token here"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-fetch",
+        depends_on={
+            "type": ["external_profile"],
+            "profile_source": ["timeseries"],
+        },
+        display_group="Profile source",
+    ),
+    FieldDef(
+        key="managed_loads.ha_sensor_name",
+        field_type="str",
+        default="",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "Entity holding the load forecast, for example "
+            "sensor.heat_pump_forecast. The array itself lives in one of its "
+            "attributes - a Home Assistant state is capped at 255 characters and a "
+            "96-value series does not fit"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-fetch",
+        depends_on={
+            "type": ["external_profile"],
+            "profile_source": ["timeseries"],
+            "use_ha_central_data_source": [True],
+        },
+        display_group="Profile source",
+    ),
+    FieldDef(
+        key="managed_loads.data_path",
+        field_type="str",
+        default="attributes.data",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "Where the array sits inside the entity, in dot notation - "
+            "'attributes.data' for the usual template sensor, 'attributes.forecast' "
+            "when you named it that"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-fetch",
+        depends_on={
+            "type": ["external_profile"],
+            "profile_source": ["timeseries"],
+        },
+        display_group="Profile source",
+    ),
+    FieldDef(
+        key="managed_loads.data_url",
+        field_type="str",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Endpoint returning the forecast, when it does not come from the central "
+            "Home Assistant connection"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-fetch",
+        depends_on={
+            "type": ["external_profile"],
+            "profile_source": ["timeseries"],
+            "use_ha_central_data_source": [False],
+        },
+        display_group="Profile source",
+    ),
+    FieldDef(
+        key="managed_loads.data_token",
+        field_type="password",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description="Bearer token for that endpoint, if it needs one",
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-fetch",
+        depends_on={
+            "type": ["external_profile"],
+            "profile_source": ["timeseries"],
+            "use_ha_central_data_source": [False],
+        },
+        display_group="Profile source",
+    ),
+    FieldDef(
+        key="managed_loads.value_unit",
+        field_type="select",
+        default="W",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "What the fetched values are measured in. 'W' and 'kW' are average power "
+            "over each entry; 'Wh' and 'kWh' are energy within it. Getting this wrong "
+            "is a factor of four on quarter-hourly data, so it is checked against the "
+            "rated power above"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-fetch",
+        validation={"choices": MANAGED_LOAD_VALUE_UNITS},
+        depends_on={
+            "type": ["external_profile"],
+            "profile_source": ["timeseries"],
+        },
+        display_group="Profile source",
     ),
 ]

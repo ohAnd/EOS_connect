@@ -190,9 +190,7 @@ def test_temperature_failure_does_not_make_a_good_pv_cycle_look_degraded(monkeyp
     """
     pv = _pv(config=[], source={"source": "default"})
     monkeypatch.setattr(
-        pv,
-        "_PvInterface__get_pv_forecast_akkudoktor_api",
-        lambda tgt_value, pv_config_entry: [],
+        pv, "_PvInterface__fetch_temperature", lambda temp_config: []
     )
 
     _run_one_update_loop_iteration(pv)
@@ -307,8 +305,12 @@ def test_temperature_is_not_refetched_within_the_refresh_interval(monkeypatch):
     """
     The curve is hourly at the source, so refetching it on every 15-minute PV cycle was
     four requests an hour for one new data point.
+
+    Pinned to the Akkudoktor provider: ``_counting_provider`` stubs ``_retry_request``,
+    which is that path's plumbing, and the throttle's timestamp is recorded where the
+    response is parsed. The equivalent for Open-Meteo is checked separately.
     """
-    pv = _pv()
+    pv = _pv(source={"temperature_source": "akkudoktor"})
     calls = _counting_provider(pv, monkeypatch)
 
     _run_one_update_loop_iteration(pv)
@@ -320,7 +322,7 @@ def test_temperature_is_not_refetched_within_the_refresh_interval(monkeypatch):
 
 def test_a_stale_temperature_forecast_is_refetched(monkeypatch):
     """The throttle saves requests; it must not stop the curve tracking reality."""
-    pv = _pv()
+    pv = _pv(source={"temperature_source": "akkudoktor"})
     calls = _counting_provider(pv, monkeypatch)
 
     _run_one_update_loop_iteration(pv)
@@ -338,13 +340,13 @@ def test_a_failing_provider_is_retried_on_every_cycle(monkeypatch):
     pv = _pv()
     calls = {"n": 0}
 
-    def failing_fetch(tgt_value, pv_config_entry):
+    def failing_fetch(temp_config):
         calls["n"] += 1
         return []
 
     monkeypatch.setattr(pv, "get_summarized_pv_forecast", lambda scale=False: [100.0])
     monkeypatch.setattr(pv, "apply_autoscaling", lambda values: values)
-    monkeypatch.setattr(pv, "_PvInterface__get_pv_forecast_akkudoktor_api", failing_fetch)
+    monkeypatch.setattr(pv, "_PvInterface__fetch_temperature", failing_fetch)
 
     _run_one_update_loop_iteration(pv)
     _run_one_update_loop_iteration(pv)
@@ -440,3 +442,123 @@ def test_a_pv_failure_is_still_an_error():
         logger.removeHandler(handler)
 
     assert logging.ERROR in [r.levelno for r in records]
+
+
+# ---------------------------------------------------------------------------
+# Choosing a provider
+# ---------------------------------------------------------------------------
+
+
+def _openmeteo_stub(monkeypatch, values=None, error=None):
+    """Answer for Open-Meteo without touching the network. Returns a call counter."""
+    from src.interfaces import pv_interface as module
+    from src.interfaces.temperature_forecast import TemperatureForecastError
+
+    calls = {"n": 0, "kwargs": None}
+
+    def fake(**kwargs):
+        calls["n"] += 1
+        calls["kwargs"] = kwargs
+        if error:
+            raise TemperatureForecastError(error)
+        return list(values if values is not None else [float(10 + h % 24) for h in range(48)])
+
+    monkeypatch.setattr(module, "fetch_openmeteo_temperature", fake)
+    return calls
+
+
+def test_open_meteo_is_the_default_provider():
+    """Akkudoktor's forecast endpoint answers 429 for everyone when its upstream does."""
+    assert _pv().temperature_source == "openmeteo"
+
+
+def test_the_provider_is_a_setting():
+    assert _pv(source={"temperature_source": "akkudoktor"}).temperature_source == "akkudoktor"
+    assert _pv(source={"temperature_source": "OpenMeteo"}).temperature_source == "openmeteo"
+
+
+def test_open_meteo_is_asked_for_the_site_location(monkeypatch):
+    pv = _pv()
+    calls = _openmeteo_stub(monkeypatch)
+    monkeypatch.setattr(pv, "get_summarized_pv_forecast", lambda scale=False: [100.0])
+    monkeypatch.setattr(pv, "apply_autoscaling", lambda values_: values_)
+
+    _run_one_update_loop_iteration(pv)
+
+    assert calls["n"] == 1
+    assert calls["kwargs"]["latitude"] == 50.0
+    assert calls["kwargs"]["longitude"] == 8.0
+    assert calls["kwargs"]["hours"] == 48
+
+
+def test_an_open_meteo_curve_becomes_the_forecast(monkeypatch):
+    pv = _pv()
+    _openmeteo_stub(monkeypatch, values=[7.5] * 48)
+    monkeypatch.setattr(pv, "get_summarized_pv_forecast", lambda scale=False: [100.0])
+    monkeypatch.setattr(pv, "apply_autoscaling", lambda values_: values_)
+
+    _run_one_update_loop_iteration(pv)
+
+    assert pv.temp_forecast_array == [7.5] * 48
+    assert pv.has_real_temperature_forecast() is True
+
+
+def test_open_meteo_participates_in_the_refresh_throttle(monkeypatch):
+    """The throttle lives above the provider, so it has to apply to this one too."""
+    pv = _pv()
+    calls = _openmeteo_stub(monkeypatch)
+    monkeypatch.setattr(pv, "get_summarized_pv_forecast", lambda scale=False: [100.0])
+    monkeypatch.setattr(pv, "apply_autoscaling", lambda values_: values_)
+
+    _run_one_update_loop_iteration(pv)
+    _run_one_update_loop_iteration(pv)
+    assert calls["n"] == 1
+
+    pv._last_temp_fetch -= TEMP_REFRESH_INTERVAL_S + 1
+    _run_one_update_loop_iteration(pv)
+    assert calls["n"] == 2
+
+
+def test_an_open_meteo_failure_falls_back_rather_than_raising(monkeypatch):
+    pv = _pv()
+    _openmeteo_stub(monkeypatch, error="Open-Meteo is unreachable: boom")
+    monkeypatch.setattr(pv, "get_summarized_pv_forecast", lambda scale=False: [100.0])
+    monkeypatch.setattr(pv, "apply_autoscaling", lambda values_: values_)
+
+    _run_one_update_loop_iteration(pv)
+
+    assert pv.temp_forecast_array == [15.0] * 48
+    assert pv.has_real_temperature_forecast() is False
+    assert pv.consecutive_temp_failures == 1
+
+
+def test_an_open_meteo_failure_leaves_the_pv_error_slot_clean(monkeypatch):
+    """Same asymmetry as before: temperature must never damage the PV forecast."""
+    pv = _pv()
+    _openmeteo_stub(monkeypatch, error="Open-Meteo is unreachable: boom")
+    monkeypatch.setattr(pv, "get_summarized_pv_forecast", lambda scale=False: [100.0])
+    monkeypatch.setattr(pv, "apply_autoscaling", lambda values_: values_)
+
+    _run_one_update_loop_iteration(pv)
+
+    assert pv.pv_forcast_request_error["error"] is None
+
+
+def test_the_hourly_curve_is_expanded_for_quarter_hour_slots(monkeypatch):
+    """
+    The array is indexed in optimizer slots, not hours. Handing 48 hourly values to a
+    15-minute install would describe half a day as if it were two.
+    """
+    pv = PvInterface(
+        {}, [dict(FULL_ENTRY)], 900, {},
+        temperature_forecast_enabled=True, timezone="UTC",
+    )
+    _openmeteo_stub(monkeypatch, values=[float(h) for h in range(48)])
+    monkeypatch.setattr(pv, "get_summarized_pv_forecast", lambda scale=False: [100.0])
+    monkeypatch.setattr(pv, "apply_autoscaling", lambda values_: values_)
+
+    _run_one_update_loop_iteration(pv)
+
+    assert len(pv.temp_forecast_array) == 192
+    assert pv.temp_forecast_array[:4] == [0.0] * 4
+    assert pv.temp_forecast_array[4:8] == [1.0] * 4

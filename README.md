@@ -14,7 +14,7 @@
 EOS Connect is a comprehensive energy management and optimization platform. While it remains a flexible orchestration layer between your hardware and various optimization engines, it has evolved from a pure "data gateway" into a full-featured, self-contained optimization solution.
 
 EOS Connect now ships with a **built-in MILP optimizer** (`local_evopt`) — providing a complete, high-performance energy management system out of the box. For specialized needs, it maintains its open nature by allowing connections to external backends:
-- **Built-in (Recommended):** [local_evopt](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#local-evopt) — A high-performance, local optimizer based on [evcc-io/optimizer](https://github.com/evcc-io/optimizer).
+- **Built-in (Recommended):** [local_evopt](https://ohAnd.github.io/EOS_connect/user-guide/config-optimizer.html#local-evopt) — A high-performance, local optimizer based on [evcc-io/optimizer](https://github.com/evcc-io/optimizer).
 - **External:** [Akkudoktor EOS](https://github.com/Akkudoktor-EOS/EOS) or [EVopt](https://github.com/thecem/hassio-evopt).
 
 EOS Connect fetches real-time and forecast data (solar, prices), runs the integrated optimization (or delegates it), and automatically controls your devices to maximize self-consumption and minimize grid costs.
@@ -28,15 +28,16 @@ EOS Connect fetches real-time and forecast data (solar, prices), runs the integr
 - **Battery and Inverter Management:** Precise charge/discharge control, grid/PV modes, and manufacturer-validated dynamic charging curves.
 - **Integration with Smart Home Platforms:** Home Assistant (MQTT auto discovery, native inverter control via service calls), OpenHAB, EVCC, and REST APIs.
 - **Dynamic Web Dashboard:** Live monitoring, manual overrides, and visualization of the optimization process.
-- **Cost Optimization:** Automatic alignment with dynamic electricity prices (Tibber, smartenergy.at, EVCC, timeseries, etc.) with configurable resolution. The `timeseries` source reads any HTTP or Home Assistant endpoint that publishes EVCC's `{start, end, value}` format. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#price)
-- **Dynamic Feed-In Pricing:** Optimize battery discharge for maximum profit when export prices are favorable. Switch feed-in sources live without restart via hot reload. Supports fixed, Elpris DK, EPEX Spot, and EVCC. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#price)
-- **Smart Price Prediction:** Learned grid fees and taxes for accurate planning even when future prices aren't yet available. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#energyforecast)
-- **Dynamic PV Override:** Intelligent discharge prevention during high solar production or intermittent clouds. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#dyn-override)
-- **PV Auto-Scaling:** Learns from historical measured solar yield and automatically corrects PV forecasts with per-timeframe scale factors before optimization. The four daily timeframes (00–07, 08–11, 12–15, 16–23) follow when PV actually delivers, so the blocks either side of solar noon are corrected separately from the morning and evening ramps. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#pv-autoscaling)
-- **Outside Temperature Forecast:** Fetched from Akkudoktor and sent to EOS, which models the house more precisely with it. Only for `eos.source: eos_server` (EVopt does not use temperature), refreshed hourly, and held from the last success while the provider is unavailable. Set `eos.temperature_forecast_enabled: false` to stop the requests entirely — a static 15 °C curve is sent instead. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#eos)
-- **Smart Grid Limits (EVopt):** Grid import/export limits automatically default to your inverter capabilities when not explicitly configured, ensuring optimization respects your hardware. [Learn more →](https://ohAnd.github.io/EOS_connect/advanced/index.html#grid-limits)
+- **Cost Optimization:** Automatic alignment with dynamic electricity prices (Tibber, smartenergy.at, EVCC, timeseries, etc.) with configurable resolution. The `timeseries` source reads any HTTP or Home Assistant endpoint that publishes EVCC's `{start, end, value}` format. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/config-price.html#price)
+- **Dynamic Feed-In Pricing:** Optimize battery discharge for maximum profit when export prices are favorable. Switch feed-in sources live without restart via hot reload. Supports fixed, Elpris DK, EPEX Spot, and EVCC. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/config-price.html#price)
+- **Smart Price Prediction:** Learned grid fees and taxes for accurate planning even when future prices aren't yet available. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/config-price.html#energyforecast)
+- **Dynamic PV Override:** Allows battery discharge in slots where the PV forecast exceeds the load forecast, even when the optimizer planned to hold — so the battery does not sit idle through a bright but intermittently cloudy afternoon. Grid charging and any manual override still take precedence. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/config-optimizer.html#dyn-override)
+- **PV Auto-Scaling:** Learns from historical measured solar yield and automatically corrects PV forecasts with per-timeframe scale factors before optimization. The four daily timeframes (00–07, 08–11, 12–15, 16–23) follow when PV actually delivers, so the blocks either side of solar noon are corrected separately from the morning and evening ramps. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/config-solar.html#pv-autoscaling)
+- **Outside Temperature Forecast:** From Open-Meteo by default (no API key; Akkudoktor remains selectable), refreshed hourly and held from the last success while a provider is unavailable. EOS models the house more precisely with it, and an outdoor managed load such as a pool heat pump needs it whichever optimizer you run — so one curve is fetched and shared. Coordinates come from your first PV installation; for a PV source that needs none — EVCC, Victron, Solcast, timeseries — Latitude/Longitude under System is used instead, and wins over any installation left stored from an earlier setup. Set `eos.temperature_forecast_enabled: false` to stop the requests entirely — a static 15 °C curve is used instead. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/config-solar.html#temperature-forecast)
+- **Smart Grid Limits (EVopt):** Grid import/export limits automatically default to your inverter capabilities when not explicitly configured, ensuring optimization respects your hardware. [Learn more →](https://ohAnd.github.io/EOS_connect/advanced/index.html#smart-grid-limits)
 - **Backup & Restore:** One file holding your whole install — configuration plus the measured PV yield history the auto-scaler learns from, which is otherwise deleted on a rolling window. Restores preview before they apply, and an old backup's history can be shifted into the current window so scaling works from the first run. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#backup-restore)
-- **Robust Data Quality Handling:** Automatic detection and recovery from incomplete Home Assistant sensor data gaps. Forward-fill strategy ensures optimization always receives complete, valid input arrays. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#data-quality)
+- **Managed Loads:** Appliances the weekday-average load forecast cannot follow — a pool heat pump, a sauna, a hot water tank, space heating. Add one card each. Heated stores get their energy need worked out from the target temperature and the outdoor forecast, placed in the cheapest hours they are allowed to run in, and published as a **released / blocked** signal over MQTT for a relay to act on. The heat loss and efficiency are measured from ordinary operation rather than trusted from configuration. Anything you already model elsewhere — a heating curve, a cooling mode — goes in as a 48 h array instead: point the load at a Home Assistant entity holding it, or push it over HTTP or MQTT. A dashboard tile summarises them, with a detail overlay showing each load's plan, reasoning and calibration. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/config-managed-loads.html#managed-loads)
+- **Robust Data Quality Handling:** Automatic detection and recovery from incomplete Home Assistant sensor data gaps. Forward-fill strategy ensures optimization always receives complete, valid input arrays. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/config-data.html#data-quality)
 
 ---
 
@@ -46,12 +47,12 @@ EOS Connect acts as the central brain of your energy system:
 1. **Data Collection:** Periodically collects local consumption, battery states, and inverter data.
 2. **Forecasting:** Fetches PV solar forecasts and upcoming energy prices for the next 48 hours.
 3. **Internal Optimization:** The built-in optimizer processes this data locally to generate the most cost-efficient power strategy.
-4. **Active Control:** Applies targeted commands to your devices (inverters, batteries, wallboxes) based on the calculated strategy.
+4. **Active Control:** Applies the resulting strategy to your battery inverter — directly, or through EVCC acting as the gateway. EV charging itself stays with EVCC; EOS Connect plans around it rather than taking it over.
 
 All scheduling, logic, and interface management is handled by EOS Connect, providing a unified and reliable energy management experience.
 
 <div align="center">
-  <img src="docs\assets\images\eos_connect_flow.png" alt="EOS Connect process flow" width="450"/>
+  <img src="docs/assets/images/eos_connect_flow.svg" alt="EOS Connect process flow: it reads your consumption history together with live battery charge and EV charging state, fetches solar yield and electricity price forecasts, feeds both to an optimizer running inside EOS Connect, and sets your battery inverter to charge, hold or discharge — directly or through EVCC. An external Akkudoktor EOS or EVopt server can replace the built-in optimizer but is not required." width="620"/>
   <br>
   <sub><i>Figure: EOS Connect process flow</i></sub>
 </div>
@@ -60,7 +61,7 @@ Supported data sources and integrations:
 
 - **Home Assistant:** MQTT publishing (dashboard, control, auto-discovery) and direct API integration for sensor/entity data collection.
 - **OpenHAB:** MQTT publishing (dashboard, control, auto-discovery via MQTT binding) and direct API integration for item data collection.
-- **EVCC:** Monitors and controls EV charging modes and states.
+- **EVCC:** Reads charging modes and loadpoint states so the battery plan works around the car, and can act as the gateway for battery control (`/api/batterymode`). EOS Connect never commands a loadpoint itself. Supports both legacy EVCC mode names and EVCC 0.316.0+'s `smart`/`alwaysCharge` scheme. [Learn more →](https://ohAnd.github.io/EOS_connect/advanced/index.html#evcc)
 - **Inverter Interfaces:** Victron MultiPlus (3-phase ESS via Modbus/TCP), Fronius GEN24 (with automatic firmware detection), legacy fallback, generic Home Assistant inverter control (e.g., Marstek, Sungrow, Goodwe), and more via MQTT/web API/EVCC external inverter control.
 
 
@@ -91,7 +92,7 @@ Supported data sources and integrations:
     - Open `http://homeassistant.local:8081` (or your HA IP) to view the dashboard.
 
 <div align="center">
-  <img src="docs/assets/images/screenshot_0_1_20.png" alt="EOS Connect dashboard screenshot" width="600"/>
+  <img src="docs/assets/images/screenshot_0.3.38.PNG" alt="The EOS Connect dashboard: summary panels for control state, battery, EV charging and costs above a 24-hour chart of forecast load, solar, price and battery level, with the planned control state for each hour listed alongside." width="600"/>
   <br>
   <sub><i>Figure: EOS Connect dashboard</i></sub>
 </div>
@@ -120,7 +121,7 @@ The CBC solver binary that ships inside the `pulp` package is, on x86_64 only, d
 
 The add-on now installs a **statically linked CBC** of its own, which needs no glibc and runs on musl. Update to the latest add-on version and `local_evopt` works out of the box. EOS Connect also verifies the solver by actually executing it at startup and logs which binary it selected, so any remaining problem is visible in the log rather than surfacing as a cryptic error mid-optimization.
 
-For full details see the [troubleshooting docs](https://ohAnd.github.io/EOS_connect/user-guide/index.html#troubleshooting).
+For full details see the [troubleshooting docs](https://ohAnd.github.io/EOS_connect/user-guide/troubleshooting.html#troubleshooting).
 
 **Note on SSL Certificate Verification:**
 By default, EOS Connect validates SSL certificates when connecting to Home Assistant or OpenHAB. If you use a setup with **self-signed or private CA certificates**, you can disable verification in Settings → Data Source → **SSL Ignore** (expert level, requires restart). Only enable this in **trusted private networks** where you fully control the network path. Currently, EOS Connect does not support supplying custom root CA certificates — this feature is planned for future releases. For production setups, we recommend obtaining a valid certificate through Let's Encrypt (free) or your organization's certificate authority.
@@ -155,7 +156,7 @@ After the wizard completes, restart EOS Connect to apply the settings.
 **Note:**
 - EVCC and Data Source both come before Inverter, because either can act as the inverter controller. If the EVCC URL is not configured, that option is greyed out in the Inverter and PV Source fields.
 - The **Default** PV source is a fixed demo curve for an assumed 4 kW array, not a forecast for your roof. It exists so you can see EOS Connect running immediately; swap it for a real provider under Settings ▸ PV Source afterwards. The **Review & Finish** step reminds you.
-- PV Installations configuration is only required for location-based forecast sources (Akkudoktor, OpenMeteo, Forecast.Solar). Other sources (Default, Solcast, Victron, EVCC, Timeseries) configure their data elsewhere and do not need PV Installations defined. For `Timeseries`, see the [Home Assistant template snippets](https://ohAnd.github.io/EOS_connect/user-guide/configuration.html#timeseries-templates).
+- PV Installations configuration is only required for location-based forecast sources (Akkudoktor, OpenMeteo, Forecast.Solar). Other sources (Default, Solcast, Victron, EVCC, Timeseries) configure their data elsewhere and do not need PV Installations defined. For `Timeseries`, see the [Home Assistant template snippets](https://ohAnd.github.io/EOS_connect/user-guide/config-data.html#timeseries-templates).
 - Sensor fields only appear once **Data Source** names Home Assistant or openHAB. Left unset, load and battery fall back to built-in defaults and say so in the log — they are never left polling a name you did not choose. Each sensor field has a **Test** button in Settings that reads the entity and shows its current value, so a typo is caught before you restart.
 - A few choices need a setting the wizard does not ask for, because it is not a getting-started field — the Home Assistant inverter is driven by service-call sequences, and a fixed 24-hour tariff needs your own hourly prices. The **Review & Finish** step lists anything still outstanding, so you know to visit Settings afterwards.
 

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>First Run - EOS Connect</title>
+    <meta name="description" content="What the setup wizard asks, why it asks in that order, and which settings it deliberately leaves for later.">
+    <meta property="og:title" content="First Run - EOS Connect">
+    <meta property="og:description" content="What the setup wizard asks, why it asks in that order, and which settings it deliberately leaves for later.">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="https://ohAnd.github.io/EOS_connect/assets/images/logo.png">
+    <link rel="icon" href="../assets/images/icon.png">
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+
+<body data-page="user-guide" data-subpage="first-run" data-root="../" data-levels>
+    <div id="site-nav"></div>
+    <noscript>
+        <div class="nav-fallback">
+            <a href="../index.html">Home</a>
+            <a href="../what-is/index.html">What Is</a>
+            <a href="index.html">User Guide</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="../advanced/index.html">Advanced</a>
+            <a href="../developer/index.html">Developer</a>
+        </div>
+    </noscript>
+
+    <div class="container">
+        <div class="page-wrapper">
+            <aside class="toc-sidebar">
+                <div id="site-toc"></div>
+            </aside>
+
+            <main class="main-content" id="main">
+
+                <div class="hero">
+                    <h1>First run</h1>
+                    <p>The wizard asks for the things EOS Connect cannot guess &mdash; and nothing else.</p>
+                </div>
+
+                <div id="site-level"></div>
+
+                <div class="content-section">
+                    <h2 id="first-run"><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i> First
+                        run</h2>
+                    <p>On first launch a <strong>setup wizard</strong> opens and asks, in order, for the
+                        things it cannot guess. It saves only the answers it actually asked for &mdash;
+                        everything else keeps its default until you change it.</p>
+                    <p>Ten screens: a welcome, the eight below, and a <strong>Review &amp; Finish</strong>
+                        that lists what you answered and names anything a choice of yours still needs.
+                        Optional steps have a <em>Skip</em> button, and a skipped step saves nothing at
+                        all.</p>
+
+                    <ol>
+                        <li><strong>Optimizer</strong> &mdash; built-in local solver, or an external EOS
+                            or EVopt server. The built-in one is preselected and needs nothing.</li>
+                        <li><strong>EVCC</strong> <em>(optional)</em> &mdash; for PV forecasts, inverter
+                            control or car-charging-aware behaviour. Skip if you do not run it.</li>
+                        <li><strong>Data source</strong> &mdash; Home Assistant, OpenHAB, or built-in
+                            defaults.</li>
+                        <li><strong>Inverter</strong> &mdash; for battery control. Leave it on
+                            <em>default</em> for display only.</li>
+                        <li><strong>Battery</strong> &mdash; capacity and charge limits.</li>
+                        <li><strong>Load</strong> &mdash; your consumption sensor. Skipped automatically
+                            if no data source is connected.</li>
+                        <li><strong>Price</strong> &mdash; your electricity tariff provider.</li>
+                        <li><strong>PV installations</strong> &mdash; your solar forecast. Preset to a
+                            built-in demo curve so the first run finishes without your roof geometry.</li>
+                    </ol>
+
+                    <p>Restart EOS Connect when the wizard finishes, and the dashboard starts filling in.</p>
+
+                    <div class="alert alert-warning">
+                        <p>The <strong>Default</strong> PV source is a fixed demo curve for an assumed
+                            4&nbsp;kW array &mdash; not a forecast for your roof. It exists so you can see
+                            the system working immediately. Swap it for a real provider under
+                            <em>Settings &rsaquo; PV Source</em> once you are up.</p>
+                    </div>
+
+                    <div data-level="standard">
+                        <h3 id="wizard-notes">Why the wizard asks in that order</h3>
+                        <ul>
+                            <li>EVCC and Data Source come before Inverter because either one can act as
+                                the inverter controller. Leave the EVCC URL blank and that option is
+                                greyed out later.</li>
+                            <li>Sensor fields only appear once Data Source names Home Assistant or
+                                OpenHAB. Left unset, load and battery fall back to built-in defaults and
+                                say so in the log &mdash; they are never quietly polling a name you did not
+                                choose.</li>
+                            <li>Every sensor field has a <strong>Test</strong> button that reads the
+                                entity and shows its current value, so a typo surfaces before you
+                                restart.</li>
+                            <li>PV installations only matter for location-based forecast providers
+                                (Akkudoktor, Open-Meteo, Forecast.Solar). Solcast, Victron, EVCC and
+                                Timeseries get their data elsewhere.</li>
+                            <li>A few choices need a setting the wizard does not ask for, because it is
+                                not a getting-started field. The <strong>Review &amp; Finish</strong> step
+                                lists anything still outstanding.</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="content-section">
+                    <h2 id="detail-levels"><i class="fas fa-layer-group" aria-hidden="true"></i> The
+                        wizard is the Getting Started level</h2>
+                    <p>EOS Connect sorts every setting into three levels, and the selector at the top of
+                        the settings dialog &mdash; and of these pages &mdash; is what chooses between
+                        them. They are cumulative: each one includes the ones before it.</p>
+                    <div class="feature-grid">
+                        <div class="feature-item">
+                            <h4><i class="fas fa-seedling" aria-hidden="true"></i> Getting Started</h4>
+                            <p>The handful a first install cannot run without. <strong>This is exactly
+                                what the wizard asks</strong> &mdash; nothing more, and only for the
+                                eight areas below.</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-sliders" aria-hidden="true"></i> Standard</h4>
+                            <p>Everyday tuning. Efficiencies, allowed windows, price adders, the MQTT
+                                broker &mdash; things worth setting once you are running.</p>
+                        </div>
+                        <div class="feature-item">
+                            <h4><i class="fas fa-flask" aria-hidden="true"></i> Expert</h4>
+                            <p>Everything else: solver limits, learned coefficients, timeouts. Sensible
+                                defaults, and mostly better left alone.</p>
+                        </div>
+                    </div>
+                    <p>So the wizard finishing does not mean you are done tuning &mdash; it means nothing
+                        essential is missing. Four areas it never asks about keep their defaults until you
+                        go and set them: <a href="config-managed-loads.html">Managed loads</a>,
+                        <a href="config-solar.html#pv-autoscaling">PV auto-scaling</a>,
+                        <a href="config-system.html#mqtt">MQTT</a> and
+                        <a href="config-system.html#system">System</a>.</p>
+                    <div class="alert alert-info">
+                        <p>Following a <em>Learn more</em> link out of the application carries your
+                            current level across to these pages, so what you see documented matches what
+                            you see in the dialog.</p>
+                    </div>
+                </div>
+
+                <div class="content-section">
+                    <h2 id="after-the-wizard"><i class="fas fa-arrow-right" aria-hidden="true"></i> After
+                        the wizard</h2>
+                    <ul>
+                        <li><a href="daily-use.html">Living with it</a> &mdash; what the dashboard shows
+                            and what you can override.</li>
+                        <li><a href="configuration.html#i-want-to">Configuration &rsaquo; I want
+                            to&hellip;</a> &mdash; the settings the wizard left alone, by what you want
+                            to achieve.</li>
+                        <li><a href="troubleshooting.html">Troubleshooting</a> &mdash; if the dashboard
+                            stays empty.</li>
+                    </ul>
+                </div>
+
+            </main>
+        </div>
+    </div>
+
+    <div id="site-footer"></div>
+    <script src="../assets/js/site.js"></script>
+</body>
+
+</html>

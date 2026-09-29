@@ -12,6 +12,7 @@ than bootstrap keys is also auto-migrated to SQLite.
 import json
 import logging
 import os
+import re
 import shutil
 from typing import Any
 
@@ -420,6 +421,70 @@ def migrate_battery_price_unit_to_ct_kwh(store: ConfigStore) -> bool:
     store.delete("battery.price_euro_per_wh_accu")
 
     store.set(_BATTERY_PRICE_UNIT_MIGRATION_KEY, True)
+    return True
+
+
+_MANAGED_LOAD_REPLACES_MIGRATION_KEY = "_migrated_managed_load_replaces_sensor_v1"
+
+# Types whose ``power_sensor`` only ever meant "take this out of the base load".
+_EXTERNAL_LOAD_TYPES = ("external_contingent", "external_profile")
+
+
+def migrate_managed_load_power_sensor_to_replaces_sensor(store: ConfigStore) -> bool:
+    """
+    One-time migration: ``power_sensor`` becomes ``replaces_sensor`` on external loads.
+
+    On a thermal load the power sensor answers three questions - is it running, how
+    fast is the store warming, and what should leave the household base load. On an
+    externally fed one only the third applies: there is no efficiency to measure and no
+    calibration to record, so the field was carrying a name and a description that
+    described none of what it did.
+
+    Only entries whose ``type`` is external are touched, and the value is moved rather
+    than copied, so a thermal load keeps its ``power_sensor`` untouched and no entry
+    ends up subtracting the same meter twice. Runs exactly once, guarded by a marker
+    key.
+
+    Args:
+        store: An opened ConfigStore instance.
+
+    Returns:
+        True if the migration ran (first time), False if it was already done.
+    """
+    if store.get(_MANAGED_LOAD_REPLACES_MIGRATION_KEY, False):
+        return False
+
+    settings = store.get_all()
+    moved = 0
+
+    for key, value in list(settings.items()):
+        match = re.match(r"^managed_loads\.(\d+)\.power_sensor$", key)
+        if not match:
+            continue
+
+        index = match.group(1)
+        entry_type = str(settings.get(f"managed_loads.{index}.type", "") or "").strip()
+        if entry_type not in _EXTERNAL_LOAD_TYPES:
+            continue
+
+        sensor = str(value or "").strip()
+        if sensor:
+            store.set(f"managed_loads.{index}.replaces_sensor", sensor)
+            moved += 1
+            logger.info(
+                "[Migration] managed_loads.%s (%s): power_sensor '%s' is now "
+                "replaces_sensor",
+                index, entry_type, sensor,
+            )
+        store.delete(key)
+
+    if moved:
+        logger.info(
+            "[Migration] Renamed power_sensor to replaces_sensor on %d external "
+            "managed load(s)", moved,
+        )
+
+    store.set(_MANAGED_LOAD_REPLACES_MIGRATION_KEY, True)
     return True
 
 

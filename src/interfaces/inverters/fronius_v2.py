@@ -73,6 +73,11 @@ class FroniusV2(BaseInverter):
         self.nonce = 0
         self.algorithm = "SHA256"  # Will be determined by firmware version
 
+        # --- Startup mode flags (deferred initialization) ---
+        self._deferred_init_required = False
+        self._startup_mode = False
+        self._startup_timeout = 30
+
         # --- SW version loaded in initialize() ---
         self.inverter_sw_revision = {"major": 0, "minor": 0, "patch": 0, "build": 0}
         self.api_praefix = ""
@@ -679,6 +684,7 @@ class FroniusV2(BaseInverter):
     ):
         """Send one HTTP Request to the backend.
         This method does not handle application errors, only connection errors.
+        In startup mode, reduces retries and sleep time to prevent app hang.
         """
         if not headers:
             headers = {}
@@ -693,8 +699,21 @@ class FroniusV2(BaseInverter):
                 method=method, path=fullpath
             )
 
-        for i in range(3):
-            # 3 retries if connection can't be established
+        # In startup mode: reduce retries to 1 to fail fast
+        # In normal mode: 3 retries for resilience
+        max_retries = 1 if self._startup_mode else 3
+        sleep_time = 5 if self._startup_mode else 60
+
+        for i in range(max_retries):
+            # During startup, skip sleep on first attempt
+            if i > 0 and self._startup_mode:
+                logger.warning(
+                    "[Inverter] Connection attempt %d failed; retrying after %d seconds",
+                    i,
+                    sleep_time,
+                )
+                time.sleep(sleep_time)
+
             try:
                 response = requests.request(
                     method=method,
@@ -707,15 +726,18 @@ class FroniusV2(BaseInverter):
                 return response
             except requests.exceptions.ConnectionError as err:
                 logger.error(
-                    "[Inverter] Connection to Inverter failed on %s. (%d) "
-                    "Retrying in 60 seconds, Error %s",
+                    "[Inverter] Connection to Inverter failed on %s. (%d/%d) "
+                    "Error %s",
                     self.address,
-                    i,
+                    i + 1,
+                    max_retries,
                     err,
                 )
-                time.sleep(60)
+                if i < max_retries - 1:  # Only sleep if not the last attempt
+                    if not self._startup_mode:  # Normal mode sleeps 60s
+                        time.sleep(sleep_time)
 
-        logger.error("[Inverter] Request failed without response.")
+        logger.error("[Inverter] Request failed without response after %d attempts.", max_retries)
         raise RuntimeError(
             f"\turl:{url}, \n\tparams:{params} \n\theaders {headers} \n"
             f"\tnonce {self.nonce} \n"

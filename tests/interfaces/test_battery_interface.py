@@ -5,6 +5,7 @@ This module contains tests for initialization, SOC fetching, error handling,
 and control methods of the BatteryInterface.
 """
 
+from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 import pytest
 import requests
@@ -1023,3 +1024,107 @@ class TestSocConfigGuard:
 
             assert bi.src == "homeassistant", "the source must not be downgraded"
             assert bi.price_sensor == "sensor.accu_price"
+
+
+class TestAnUnreadableSensorDoesNotKillTheUpdateThread:
+    """
+    An entity that is unavailable reports an empty state, and an empty state has no
+    first token. Taking ``raw_state.split()[0]`` raised IndexError, which neither the
+    fetchers nor the update loop caught: the background thread died and the battery
+    stopped updating - SOC, temperature, usable capacity and price all frozen - until
+    EOS Connect was restarted. The failure was silent, because the thread is a daemon
+    and nothing restarts it.
+    """
+
+    @staticmethod
+    def _remote_config(default_config):
+        return {
+            **default_config,
+            "source": "homeassistant",
+            "url": "http://ha.local:8123",
+            "access_token": "tok",
+            "soc_sensor": "sensor.battery_soc",
+            "sensor_battery_temperature": "sensor.battery_temp",
+            "price_euro_per_wh_sensor": "sensor.accu_price",
+            "price_euro_per_wh_accu": 0.0002,
+        }
+
+    @contextmanager
+    def _reading(self, default_config, state):
+        """An interface whose sensors all report `state` - background thread included.
+
+        The thread is the point: it is what used to die, so it has to be running, and
+        the stub has to be in place before the interface is constructed or the first
+        cycle would go to the network.
+        """
+        with patch.object(
+            BatteryInterface,
+            "_BatteryInterface__fetch_remote_state",
+            return_value=state,
+        ):
+            bi = BatteryInterface(self._remote_config(default_config))
+            try:
+                yield bi
+            finally:
+                bi.shutdown()
+
+    def test_an_empty_soc_state_keeps_the_last_known_value(self, default_config):
+        with self._reading(default_config, "") as bi:
+            bi.current_soc = 42
+
+            assert bi._BatteryInterface__fetch_soc_data_unified() == 42
+            assert bi._update_thread.is_alive(), "the update thread must survive"
+
+    def test_an_empty_temperature_state_keeps_the_last_known_value(
+        self, default_config
+    ):
+        with self._reading(default_config, "") as bi:
+            bi.current_temp = 21.0
+
+            assert bi._BatteryInterface__battery_request_current_temp() == 21.0
+            assert bi._update_thread.is_alive()
+
+    def test_an_empty_price_state_keeps_the_last_known_value(self, default_config):
+        with self._reading(default_config, "") as bi:
+            price = bi._BatteryInterface__update_price_euro_per_wh()
+
+            assert price == pytest.approx(0.0002)
+            assert bi._update_thread.is_alive()
+
+    def test_a_state_that_is_only_whitespace_is_treated_the_same(self, default_config):
+        with self._reading(default_config, "   ") as bi:
+            bi.current_soc = 17
+
+            assert bi._BatteryInterface__fetch_soc_data_unified() == 17
+            assert bi._update_thread.is_alive()
+
+    def test_a_reading_with_a_unit_still_parses(self, default_config):
+        """The token split is what handles units; the guard must not break it."""
+        with self._reading(default_config, "63.5 %") as bi:
+            assert bi._BatteryInterface__fetch_soc_data_unified() == 63.5
+
+    def test_the_loop_comes_back_after_an_unforeseen_error(self, default_config):
+        """
+        The specific crash is fixed, but a background thread that dies on the first
+        unexpected exception is the real fault. One bad cycle must cost one cycle.
+        """
+        cycles = []
+
+        with patch.object(BatteryInterface, "start_update_service", return_value=None):
+            bi = BatteryInterface(default_config)
+            bi.update_interval = 0
+
+            def one_bad_cycle():
+                cycles.append(len(cycles))
+                if len(cycles) == 1:
+                    raise TypeError("nobody anticipated this")
+                bi._stop_event.set()
+
+            with patch.object(
+                bi,
+                "_BatteryInterface__battery_request_current_soc",
+                side_effect=one_bad_cycle,
+            ):
+                bi._update_state_loop()
+
+        assert len(cycles) == 2, "the loop must run again after an unexpected error"

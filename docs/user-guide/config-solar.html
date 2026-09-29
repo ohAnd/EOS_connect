@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solar Forecast - EOS Connect</title>
+    <meta name="description" content="Who supplies your PV forecast, how your roof is described, how the forecast is corrected from measurement, and the outside-temperature curve.">
+    <meta property="og:title" content="Solar Forecast - EOS Connect">
+    <meta property="og:description" content="Who supplies your PV forecast, how your roof is described, how the forecast is corrected from measurement, and the outside-temperature curve.">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="https://ohAnd.github.io/EOS_connect/assets/images/logo.png">
+    <link rel="icon" href="../assets/images/icon.png">
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+
+<body data-page="configuration" data-subpage="solar" data-root="../" data-levels>
+    <div id="site-nav"></div>
+    <noscript>
+        <div class="nav-fallback">
+            <a href="../index.html">Home</a>
+            <a href="../what-is/index.html">What Is</a>
+            <a href="index.html">User Guide</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="../advanced/index.html">Advanced</a>
+            <a href="../developer/index.html">Developer</a>
+        </div>
+    </noscript>
+
+    <div class="container">
+        <div class="page-wrapper">
+            <aside class="toc-sidebar">
+                <div id="site-toc"></div>
+            </aside>
+
+            <main class="main-content" id="main">
+
+                <div class="hero">
+                    <h1>Solar forecast</h1>
+                    <p>Tomorrow&rsquo;s production, where the number comes from, and how it is kept honest against what your roof actually did.</p>
+                </div>
+
+                <div id="site-level"></div>
+
+                <div class="content-section">
+                    <h2 id="solar-purpose"><i class="fas fa-crosshairs" aria-hidden="true"></i> What this
+                        is for</h2>
+                    <ul>
+                        <li>I want tomorrow's solar production in the plan, so the battery is not charged
+                            from the grid the night before a bright day.</li>
+                        <li>I want the forecast corrected against what my roof actually produced.</li>
+                        <li>I have an outdoor appliance that needs to know how cold it will get.</li>
+                    </ul>
+                    <p>Three settings groups: <code>pv_forecast_source.*</code> is who supplies the
+                        forecast, <code>pv_forecast.*</code> describes each array so a provider can compute
+                        one, and <code>pv_autoscaling.*</code> corrects it from measurement.</p>
+                </div>
+
+                <div class="content-section">
+                    <h2 id="pv-forecast-sources"><i class="fas fa-sun" aria-hidden="true"></i> Who
+                        supplies the forecast</h2>
+                    <p>Akkudoktor and Forecast.Solar compute a curve from the roof geometry you enter
+                        below; Solcast and Victron use a site configured at their end and need a key;
+                        EVCC and timeseries take a curve someone else already produced. Which of them you
+                        pick decides whether the installations section below is used at all.</p>
+                    <div data-schema-section="pv_forecast_source" data-schema-anchor="pv-forecast-sources"></div>
+                </div>
+
+                <div class="content-section">
+                    <h2 id="pv-forecast"><i class="fas fa-solar-panel" aria-hidden="true"></i> Your
+                        installations</h2>
+                    <p>One entry per roof surface: where it is, which way it faces, how steep it is and
+                        how much it can produce. A location-based provider needs these to compute
+                        anything; the coordinates of the first entry are also what the
+                        <a href="#temperature-forecast">outside-temperature forecast</a> is fetched
+                        for.</p>
+                    <div data-schema-section="pv_forecast"></div>
+                </div>
+
+                <div class="content-section" data-level="standard">
+                    <h2 id="pv-forecast-evcc"><i class="fas fa-car" aria-hidden="true"></i> PV forecast
+                        via EVCC</h2>
+                    <p>EVCC can pass on a forecast it already holds. See
+                        <a href="../advanced/index.html#evcc">EVCC</a> for what it takes at that end.</p>
+                    <div data-schema-section="pv_forecast_source" data-schema-anchor="pv-forecast-evcc"></div>
+                </div>
+
+                <div class="content-section" data-level="standard">
+                    <h2 id="pv-autoscaling"><i class="fas fa-chart-line" aria-hidden="true"></i>
+                        Auto-scaling from measurement</h2>
+                    <p>Every forecast provider is systematically out for a particular roof &mdash; shading,
+                        soiling, a module string that underperforms. Auto-scaling compares the forecast
+                        with what a yield meter actually recorded and applies the ratio. See
+                        <a href="daily-use.html#autoscaling">Forecast auto-scaling</a> in the User Guide for
+                        what to expect from it.</p>
+                    <div data-schema-section="pv_autoscaling"></div>
+                </div>
+
+                <div class="content-section" data-level="standard">
+                    <h2 id="temperature-forecast"><i class="fas fa-temperature-half"
+                            aria-hidden="true"></i> Outside temperature</h2>
+                    <p>One temperature curve is fetched and shared by the optimizer and by every outdoor
+                        <a href="config-managed-loads.html">managed load</a>, so this is a single choice
+                        for both rather than one each. How a managed load combines it with your own
+                        thermometer is described under
+                        <a href="config-managed-loads.html#managed-loads-ambient">Outdoor loads need an
+                        outdoor temperature</a>.</p>
+                    <p><code>eos.temperature_forecast_enabled</code> (on by default) is what fetches
+                        it at all. The EOS Server backend feeds it into its house model; EVopt ignores
+                        temperature, and with the forecast off a static 15&nbsp;&deg;C curve is sent
+                        instead. An outdoor managed load asks for the curve on its own account whichever
+                        optimizer you run, so turning this off takes it away from them too.</p>
+                    <div data-schema-section="pv_forecast_source" data-schema-anchor="temperature-forecast"></div>
+                    <div data-schema-section="eos" data-schema-anchor="temperature-forecast"></div>
+                </div>
+
+            </main>
+        </div>
+    </div>
+
+    <div id="site-footer"></div>
+    <script src="../assets/js/site.js"></script>
+    <script src="../assets/js/config-reference.js"></script>
+</body>
+
+</html>

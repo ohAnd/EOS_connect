@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Troubleshooting - EOS Connect</title>
+    <meta name="description" content="Symptoms you might hit and what causes them: startup crashes, sensors that read nothing, history that times out.">
+    <meta property="og:title" content="Troubleshooting - EOS Connect">
+    <meta property="og:description" content="Symptoms you might hit and what causes them: startup crashes, sensors that read nothing, history that times out.">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="https://ohAnd.github.io/EOS_connect/assets/images/logo.png">
+    <link rel="icon" href="../assets/images/icon.png">
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+
+<body data-page="user-guide" data-subpage="troubleshooting" data-root="../" data-levels>
+    <div id="site-nav"></div>
+    <noscript>
+        <div class="nav-fallback">
+            <a href="../index.html">Home</a>
+            <a href="../what-is/index.html">What Is</a>
+            <a href="index.html">User Guide</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="../advanced/index.html">Advanced</a>
+            <a href="../developer/index.html">Developer</a>
+        </div>
+    </noscript>
+
+    <div class="container">
+        <div class="page-wrapper">
+            <aside class="toc-sidebar">
+                <div id="site-toc"></div>
+            </aside>
+
+            <main class="main-content" id="main">
+
+                <div class="hero">
+                    <h1>Troubleshooting</h1>
+                    <p>Sorted by what you see, not by what the code calls it.</p>
+                </div>
+
+                <div id="site-level"></div>
+
+                <div class="content-section">
+                    <h2 id="troubleshooting"><i class="fas fa-screwdriver-wrench" aria-hidden="true"></i>
+                        Troubleshooting</h2>
+
+                    <h3 id="tb-segfault">Crashes on startup under Proxmox</h3>
+                    <p><strong>Symptom:</strong> segmentation fault immediately at startup.</p>
+                    <p><strong>Cause:</strong> the VM is using the <code>kvm64</code> generic CPU type,
+                        which hides the AVX and SSE4.2 instructions that the prebuilt
+                        <code>numpy</code> and <code>pandas</code> wheels need.</p>
+                    <p><strong>Fix:</strong> stop the VM, set <em>Hardware &rsaquo; Processor &rsaquo; CPU
+                            Type</em> from <code>kvm64</code> to <code>host</code>, restart. This is safe
+                        and recommended for any Proxmox VM running containerised workloads.</p>
+
+                    <h3 id="tb-cbc">"No such file or directory" for the CBC solver</h3>
+                    <p><strong>Symptom:</strong> the built-in optimizer fails with
+                        <code>FileNotFoundError: [Errno 2] No such file or directory</code> pointing at
+                        <code>solverdir/cbc/linux/i64/cbc</code> &mdash; a file that is plainly there.</p>
+                    <p><strong>Cause:</strong> on x86_64 the CBC binary shipped inside
+                        <code>pulp</code> is dynamically linked against glibc, and the Home Assistant OS
+                        add-on images are Alpine-based (musl) with no glibc loader. Linux reports the
+                        missing <em>loader</em> as a missing <em>file</em>. aarch64 is unaffected.</p>
+                    <p><strong>Fix:</strong> update to the latest add-on version, which installs a
+                        statically linked CBC of its own. EOS Connect now verifies the solver by running
+                        it at startup and logs which binary it chose.</p>
+                    <div class="alert alert-info">
+                        <p>This one is often confused with the Proxmox problem above. A segfault is a CPU
+                            issue; a <code>FileNotFoundError</code> naming <code>cbc</code> is this one.</p>
+                    </div>
+
+                    <h3 id="tb-ssl">Self-signed certificates</h3>
+                    <p>EOS Connect validates TLS certificates when talking to Home Assistant or OpenHAB.
+                        With a private CA you can turn that off in <em>Settings &rsaquo; Data Source
+                            &rsaquo; SSL Ignore</em> (expert, needs a restart). Only do this on a network
+                        path you control &mdash; custom root CAs are not supported yet.</p>
+
+                    <div data-level="standard">
+                        <h3 id="tb-settings-reverted">Settings revert after an update</h3>
+                        <p>Almost always the missing <code>./data:/app/data</code> volume &mdash; see
+                            <a href="install.html#install-docker">the Docker section</a>. Add the mount, then
+                            reconfigure once.</p>
+
+                        <h3 id="tb-sensors">A sensor reads nothing</h3>
+                        <p>Use the <strong>Test</strong> button next to the field. It fetches the entity
+                            and shows the current value, which distinguishes a wrong entity name from a
+                            connection or token problem. The log also names any sensor that fell back to
+                            a built-in default.</p>
+
+                        <h3 id="tb-battery-frozen">The battery stops updating after a sensor drops out</h3>
+                        <p><strong>Symptom:</strong> SOC, battery temperature and the dynamic
+                            charge power all freeze at their last values and never move again, while
+                            the rest of EOS Connect keeps running. A restart fixes it until the next
+                            time.</p>
+                        <p><strong>Cause:</strong> an entity that goes unavailable reports an empty
+                            state. Reading it crashed the background thread that refreshes the
+                            battery, and nothing restarts that thread.</p>
+                        <p><strong>Fix:</strong> update EOS Connect. An unreadable reading is now
+                            treated like any other failed fetch &mdash; the last known value is kept
+                            and the log says which sensor it was:</p>
+                        <pre><code>[BATTERY-IF] HOMEASSISTANT - Error fetching battery SOC:
+  sensor returned an empty state. Failure count: 1/5. Using last known SOC = 42%.</code></pre>
+                        <p>After five failures in a row the SOC falls back to 5&nbsp;% so the
+                            optimizer works from a safe assumption rather than a stale one. If the
+                            message repeats, the entity itself is the problem &mdash; check it in
+                            Home Assistant or OpenHAB.</p>
+
+                        <h3 id="tb-ha-history">Home Assistant history times out on startup</h3>
+                        <p>On a large recorder database &mdash; MariaDB with years of history is the
+                            usual case &mdash; building the load profile could flood Home Assistant with
+                            requests until they timed out:</p>
+                        <pre><code>[LOAD-IF] Request failed after 5 attempts for
+  http://homeassistant:8123/api/history/period/2026-09-12T00:00:00
+[LOAD-IF] DATA ERROR household load smaller than controllables
+[BATTERY-IF] HOMEASSISTANT - Error fetching battery SOC: Request timed out.</code></pre>
+                        <p>The load profile is built from four fixed days of history &mdash; the same
+                            weekday one and two weeks back, plus the following day &mdash; so it only
+                            changes at midnight. It is now built once per day and held, instead of being
+                            rebuilt on every optimizer run, and each sensor's history is fetched once for
+                            the whole day instead of once per hourly slot. In the log you should see
+                            <code>[LOAD-IF] creating load profile for weekdays &hellip;</code> once a day,
+                            not every few minutes.</p>
+                        <p>Nothing to configure. If you still see the messages above, the recorder itself
+                            is the bottleneck &mdash; check its purge settings.</p>
+
+                        <h3 id="tb-ha-purged">Older days come back empty</h3>
+                        <p>Home Assistant's recorder purges detailed state history after
+                            <code>purge_keep_days</code> (10 by default), while the load profile looks
+                            back 14 days. For days whose history is gone, EOS Connect falls back to
+                            recorder <em>statistics</em>, which are kept indefinitely.</p>
+                        <p>That fallback calls the <code>recorder.get_statistics</code> action, so the
+                            long-lived access token needs permission to call services. On a Home Assistant
+                            too old to offer it, the log says so once and the profile simply uses the days
+                            it can still read.</p>
+                    </div>
+
+                    <div data-level="expert">
+                        <h3 id="tb-logs">Reading the log</h3>
+                        <p>Set <code>log_level: debug</code> (or <code>EOS_LOG_LEVEL=debug</code>) and
+                            watch the startup sequence: it reports the selected optimizer backend, the
+                            solver binary, every interface it constructed, and every configured sensor it
+                            could not read. The web UI exposes the same log, with alerts filtered
+                            separately.</p>
+                    </div>
+                </div>
+                <div class="content-section">
+                    <h2 id="still-stuck"><i class="fas fa-comments" aria-hidden="true"></i> Still
+                        stuck</h2>
+                    <p>Turn the log level up first &mdash; the startup sequence names the optimizer
+                        backend, the solver binary, every interface it built and every configured sensor
+                        it could not read, which is usually the answer on its own.</p>
+                    <ul>
+                        <li><a href="https://github.com/ohAnd/EOS_connect/discussions" target="_blank"
+                                rel="noopener">Discussions</a> &mdash; ask a question.</li>
+                        <li><a href="https://github.com/ohAnd/EOS_connect/issues" target="_blank"
+                                rel="noopener">Issues</a> &mdash; report a bug. <em>Menu &rsaquo; Bug
+                            Report</em> in the web UI collects the version, the configuration and the
+                            recent log for you.</li>
+                    </ul>
+                </div>
+
+            </main>
+        </div>
+    </div>
+
+    <div id="site-footer"></div>
+    <script src="../assets/js/site.js"></script>
+</body>
+
+</html>

@@ -18,6 +18,11 @@ import requests
 from packaging import version as pkg_version
 from .port_interface import PortInterface
 
+try:  # running from src/ as a script — src/ is on sys.path
+    from docs_links import DEVELOP_SUFFIX, is_develop_version
+except ImportError:  # imported as src.interfaces (tests)
+    from ..docs_links import DEVELOP_SUFFIX, is_develop_version
+
 logger = logging.getLogger("__main__")
 
 
@@ -46,9 +51,11 @@ class UpdateChecker:
         self.check_interval = check_interval
         self.on_status_change = on_status_change
 
-        # Parse current version
-        self.is_develop = "-develop" in current_version
-        self.current_version_clean = current_version.replace("-develop", "")
+        # Parse current version. The develop marker is defined in docs_links, which
+        # also decides which copy of the documentation the web UI links to — the two
+        # must agree on what counts as a develop build.
+        self.is_develop = is_develop_version(current_version)
+        self.current_version_clean = current_version.replace(DEVELOP_SUFFIX, "")
 
         try:
             self.current_version_parsed = pkg_version.parse(self.current_version_clean)

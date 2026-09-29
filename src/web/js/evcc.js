@@ -18,20 +18,21 @@ class EVCCManager {
 
     /**
      * Get charging color and text based on EVCC mode and state
+     * mode_style: "smart" (EVCC >= 0.316.0 wording) or "legacy" (default)
      */
-    getChargingColorAndText(evcc_mode, evcc_state) {
+    getChargingColorAndText(evcc_mode, evcc_state, mode_style = "legacy") {
         let color = "white";
         let text = "N/A";
 
         if (evcc_mode === "off") {
             text = "Off";
         } else if (evcc_mode === "pv") {
-            text = "PV";
+            text = mode_style === "smart" ? "Smart" : "PV";
             if (evcc_state) {
                 color = COLOR_MODE_DISCHARGE_ALLOWED_EVCC_PV;
             }
         } else if (evcc_mode === "minpv") {
-            text = "Min+PV";
+            text = mode_style === "smart" ? "Smart+" : "Min+PV";
             if (evcc_state) {
                 color = COLOR_MODE_DISCHARGE_ALLOWED_EVCC_MIN_PV;
             }
@@ -125,13 +126,14 @@ class EVCCManager {
         // car charging - current states of EVCC
         let evcc_mode = data_controls["evcc"]["charging_mode"];
         let evcc_state = data_controls["evcc"]["charging_state"];
+        let mode_style = data_controls["evcc"]["mode_style"] || "legacy";
 
-        this.updateEVCCStatus(evcc_mode, evcc_state);
+        this.updateEVCCStatus(evcc_mode, evcc_state, mode_style);
 
         let numOfConnectedVehicles = data_controls["evcc"]["current_sessions"].filter(session => session["connected"]).length;
 
         if (numOfConnectedVehicles > 1) {
-            this.showMultipleLoadpoints(data_controls["evcc"]["current_sessions"]);
+            this.showMultipleLoadpoints(data_controls["evcc"]["current_sessions"], mode_style);
         } else if (numOfConnectedVehicles == 1) {
             let entryOfConnectedVehicle = data_controls["evcc"]["current_sessions"].find(session => session["connected"]);
             this.showSingleLoadpoint(entryOfConnectedVehicle);
@@ -143,7 +145,7 @@ class EVCCManager {
     /**
      * Show multiple loadpoints (multiple connected vehicles)
      */
-    showMultipleLoadpoints(sessions) {
+    showMultipleLoadpoints(sessions, mode_style = "legacy") {
         document.getElementById('ecar_charging_table_single').style.display = "none";
         document.getElementById('ecar_charging_table_multiple').style.display = "";
         document.getElementById('ecar_charging_table_off').style.display = "none";
@@ -161,7 +163,7 @@ class EVCCManager {
                 let row = document.createElement('tr');
                 // set id for the row
                 row.id = 'ecar_charging_row_' + vehicle_name;
-                row.style.color = this.getChargingColorAndText(session["mode"], session["charging"]).color; // set color based on charging state
+                row.style.color = this.getChargingColorAndText(session["mode"], session["charging"], mode_style).color; // set color based on charging state
                 row.innerHTML = `
                     <td style="text-align: left; cursor: help;" colspan="2" title="name of vehicle in EVCC">
                         <i class="fa-solid fa-car"></i> <span id="ecar_charging_name_${vehicle_name}">${displayName}</span>
@@ -224,8 +226,8 @@ class EVCCManager {
     /**
      * Update EVCC status display
      */
-    updateEVCCStatus(evcc_mode, evcc_state) {
-        const { color, text } = this.getChargingColorAndText(evcc_mode, evcc_state);
+    updateEVCCStatus(evcc_mode, evcc_state, mode_style = "legacy") {
+        const { color, text } = this.getChargingColorAndText(evcc_mode, evcc_state, mode_style);
 
         const modeElement = document.getElementById('evcc_mode');
         const stateElement = document.getElementById('evcc_state');
@@ -243,9 +245,9 @@ class EVCCManager {
 }
 
 // Legacy compatibility functions
-function getChargingColorAndText(evcc_mode, evcc_state) {
+function getChargingColorAndText(evcc_mode, evcc_state, mode_style = "legacy") {
     if (evccManager) {
-        return evccManager.getChargingColorAndText(evcc_mode, evcc_state);
+        return evccManager.getChargingColorAndText(evcc_mode, evcc_state, mode_style);
     }
     return { color: "white", text: "N/A" };
 }

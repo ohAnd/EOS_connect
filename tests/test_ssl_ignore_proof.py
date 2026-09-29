@@ -19,6 +19,24 @@ from src.interfaces.battery_interface import BatteryInterface
 from src.interfaces.inverters.inverter_ha import InverterHA
 
 
+@pytest.fixture(autouse=True)
+def _no_polling_threads():
+    """
+    Keep `BatteryInterface` from starting its background poll.
+
+    Its constructor starts a daemon thread that fetches the SOC every 30 seconds, and
+    nothing here shuts one down. A leaked thread outlives the test and keeps calling
+    `requests.get` for the rest of the session - which matters because patching
+    `some_module.requests.get` patches the attribute on the shared `requests` module,
+    so it is global to the process. That is how this file made
+    `test_request_with_retries_logs_and_retries` fail intermittently and from a great
+    distance: the leaked poller landed inside that test's patch window and its
+    `mock_get.call_count` came back as 449 instead of 3.
+    """
+    with patch.object(BatteryInterface, "start_update_service", return_value=None):
+        yield
+
+
 class TestSSLIgnoreSelfSignedCertificateProof:
     """
     Proof that ssl_ignore=True allows connections to Home Assistant with self-signed certs.

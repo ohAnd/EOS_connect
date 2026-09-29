@@ -26,6 +26,12 @@ const BACKUP_DATASETS = [
         icon: "fa-solar-panel",
         hint: "Measured hourly yield the auto-scaler learns from",
     },
+    {
+        key: "managed_load_learning",
+        label: "Managed load learning",
+        icon: "fa-sliders",
+        hint: "What each load has measured about its appliance - weeks to rebuild",
+    },
 ];
 
 class BackupManager {
@@ -36,8 +42,12 @@ class BackupManager {
         this.info = null;          // GET /api/backup/info
         // Kept apart on purpose: the two cards are separate decisions, and sharing one
         // set made ticking a box under Restore change what Download would write.
-        this.forBackup = { settings: true, pv_yield_history: true };
-        this.forRestore = { settings: true, pv_yield_history: true };
+        this.forBackup = {
+            settings: true, pv_yield_history: true, managed_load_learning: true,
+        };
+        this.forRestore = {
+            settings: true, pv_yield_history: true, managed_load_learning: true,
+        };
         this.mode = "replace";     // settings: replace | merge
         this.historyMode = "as_is"; // yield rows: as_is | seed
         this.pending = null;       // parsed file awaiting confirmation
@@ -63,6 +73,16 @@ class BackupManager {
                 throw new Error(`status ${res.status}`);
             }
             this.info = await res.json();
+            // A dataset this host cannot supply must not sit ticked: its checkbox is
+            // disabled, so nobody can untick it, and it would keep "Restore now" alive
+            // with nothing behind it.
+            for (const ds of BACKUP_DATASETS) {
+                const info = this.info[ds.key];
+                if (info && info.available === false) {
+                    this.forBackup[ds.key] = false;
+                    this.forRestore[ds.key] = false;
+                }
+            }
             this._render();
         } catch (err) {
             this._renderInto(this._error(
@@ -172,11 +192,15 @@ class BackupManager {
             ? `${this._day(history.oldest)} → ${this._day(history.newest)}`
             : "nothing recorded yet";
 
+        const learning = (this.info && this.info.managed_load_learning) || {};
         const details = {
             settings: `${settings.count || 0} settings`,
             pv_yield_history: history.available === false
                 ? "unavailable"
                 : `${history.count || 0} hours · ${this._escape(span)}`,
+            managed_load_learning: learning.available === false
+                ? "unavailable"
+                : `${learning.count || 0} samples · ${learning.models || 0} calibrated`,
         };
 
         return this._card("fa-download", "Create a backup", `
@@ -277,6 +301,11 @@ class BackupManager {
         if (history && history.available !== false) {
             details.pv_yield_history = `${history.valid || 0} of ${history.total || 0} hours`;
         }
+        const learning = p.managed_load_learning;
+        if (learning && learning.available !== false) {
+            details.managed_load_learning =
+                `${learning.samples || 0} samples · ${learning.model || 0} calibrated`;
+        }
 
         // Wide screens put "what is in the file" beside "how to restore it" instead of
         // running one long column the user has to scroll to reach the buttons.
@@ -364,6 +393,11 @@ class BackupManager {
 
         const restart = (settings && settings.restart_required) || [];
         const outside = history ? history.outside_retention : 0;
+        // The rows are in the database, but a calibrator is rebuilt from them once, at
+        // startup - so a restore that brings learning back leaves the running model on
+        // what it knew a moment ago until EOS connect restarts.
+        const relearned = (r.managed_load_learning
+            && r.managed_load_learning.samples) || 0;
 
         return `
             <div style="display:grid;
@@ -374,6 +408,11 @@ class BackupManager {
             ${restart.length ? this._warning(`
                 <strong>Restart required.</strong> ${restart.length} restored setting(s)
                 only take effect after EOS connect restarts. Everything else is already live.
+            `) : ""}
+            ${relearned && !restart.length ? this._warning(`
+                <strong>Restart required.</strong> ${relearned} restored sample(s) are
+                stored, but each load rebuilds its calibration from them at startup -
+                the running models keep what they knew until EOS connect restarts.
             `) : ""}
             ${outside ? this._warning(`
                 ${outside} restored hour(s) fall outside the ${history.retention_days}-day
@@ -401,9 +440,10 @@ class BackupManager {
     _datasetPicker(scope, details = {}) {
         const selection = scope === "backup" ? this.forBackup : this.forRestore;
         const items = BACKUP_DATASETS.map(ds => {
-            const unavailable = ds.key === "pv_yield_history"
-                && this.info && this.info.pv_yield_history
-                && this.info.pv_yield_history.available === false;
+            // Any dataset may report itself unavailable - a host can be missing the
+            // store behind it - so ask the dataset rather than naming one of them.
+            const info = (this.info && this.info[ds.key]) || null;
+            const unavailable = !!info && info.available === false;
             const detail = details[ds.key];
             // Beside the label where there is room; underneath it on a phone, where a
             // nowrap detail column squeezes the label into a two-character ribbon.

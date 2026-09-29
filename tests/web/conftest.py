@@ -33,15 +33,19 @@ import logging
 import os
 import socket
 import threading
+from zoneinfo import ZoneInfo
 
 import pytest
 from flask import Flask, jsonify, make_response, render_template_string, send_from_directory
 
 from src.config_web.api import config_bp, init_api
+from src.docs_links import DOCS_BASE_PREVIEW, DOCS_BASE_RELEASE
 from src.config_web.backup import backup_bp, init_backup
 from src.config_web.migration import migrate_yaml_to_store
 from src.config_web.schema import ConfigSchema
 from src.config_web.store import ConfigStore
+from src.loads.api import init_api as init_loads_api, loads_bp
+from src.loads.manager import ManagedLoadManager, ManagedLoadSources
 from src.persistence import PvYieldStore
 
 from tests.config_web.test_api import _FakeModule, _sample_config
@@ -82,14 +86,22 @@ def _free_port():
         return s.getsockname()[1]
 
 
-def _build_app(store, schema, module):
+def _build_app(store, schema, module, docs_base=DOCS_BASE_RELEASE):
     """A minimal stand-in for the real server: the same blueprints and the same assets."""
     app = Flask(__name__)
 
     @app.route("/")
     def index():
+        # ``docs_base`` mirrors what eos_connect.py:main_page resolves from
+        # src/version.py. The UI builds every documentation link from it
+        # (constants.js:docsUrl), so leaving it out here would silently exercise
+        # the fallback instead of the real wiring.
         with open(os.path.join(WEB_DIR, "index.html"), encoding="utf-8") as fh:
-            return make_response(render_template_string(fh.read(), asset_version="test"))
+            return make_response(
+                render_template_string(
+                    fh.read(), asset_version="test", docs_base_url=docs_base
+                )
+            )
 
     @app.route("/js/<path:filename>")
     def js(filename):
@@ -112,7 +124,38 @@ def _build_app(store, schema, module):
     init_backup(store, schema, module)
     app.register_blueprint(config_bp)
     app.register_blueprint(backup_bp)
+
+    # A real managed-load manager, so the overlay is exercised against the same JSON
+    # the app serves rather than against a stub that cannot get its shape wrong. The
+    # sensors are fixed values: this is about the UI, not about reading Home Assistant.
+    app.register_blueprint(loads_bp)
+    init_loads_api(_managed_load_manager())
     return app
+
+
+def _managed_load_manager():
+    """A pool and a sauna, warm enough to have something to plan."""
+    entries = [
+        {
+            "id": "pool", "type": "pool_heatpump", "enabled": True,
+            "temp_sensor": "sensor.pool", "power_sensor": "sensor.pool_power",
+            "target_temp": 28.0, "window_start": None, "window_end": None,
+            "season_start": None, "season_end": None, "min_ambient_temp_c": None,
+        },
+        {
+            "id": "sauna", "type": "sauna", "enabled": True,
+            "temp_sensor": "sensor.sauna", "target_temp": 90.0,
+        },
+    ]
+    readings = {"sensor.pool": 24.2, "sensor.pool_power": 0.0, "sensor.sauna": 88.5}
+    manager = ManagedLoadManager(
+        entries,
+        time_frame_base=3600,
+        time_zone=ZoneInfo("Europe/Berlin"),
+        sources=ManagedLoadSources(read_sensor=readings.get),
+    )
+    manager.run_cycle()
+    return manager
 
 
 class _Server:  # pylint: disable=too-few-public-methods
@@ -124,7 +167,7 @@ class _Server:  # pylint: disable=too-few-public-methods
         self.pv_store = pv_store
 
 
-def _serve(tmp_path, db_name, bootstrap_config, *, migrate):
+def _serve(tmp_path, db_name, bootstrap_config, *, migrate, docs_base=DOCS_BASE_RELEASE):
     """
     Start the app on a throwaway database and yield a handle to it.
 
@@ -145,7 +188,7 @@ def _serve(tmp_path, db_name, bootstrap_config, *, migrate):
     module.pv_yield_store = pv_store
 
     port = _free_port()
-    app = _build_app(store, schema, module)
+    app = _build_app(store, schema, module, docs_base=docs_base)
     # The dashboard polls several endpoints a second; its request log drowns out the
     # test output without saying anything useful.
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -207,7 +250,13 @@ def _launch_browser(driver):
 
 def _open_page(browser, url):
     """A page on *url* with the dashboard's CDN traffic blocked."""
-    page = browser.new_page()
+    # Pinned, because the dashboard reads the clock. `chart.js` turns the server's
+    # timestamp into a slot index with `Date.getHours()`, which answers in the
+    # *browser's* zone - so a chart assertion that holds on a developer's machine in
+    # Berlin fails on a CI runner in UTC, six hours off and entirely plausible looking.
+    # UTC is the choice because that is what CI already runs under: pinning it makes a
+    # local run agree with the one that decides whether the branch is green.
+    page = browser.new_page(timezone_id="UTC")
     # The page pulls FontAwesome, Chart.js and a font from CDNs. Blocking them keeps
     # the tests offline and fast; none of them affect the behaviour under test.
     page.route("**://cdnjs.cloudflare.com/**", lambda route: route.abort())
@@ -263,6 +312,38 @@ def fresh_page_fixture(fresh_server):
         page = _open_page(browser, fresh_server.url)
         page.wait_for_function("typeof showSetupWizard === 'function'")
         page.wait_for_selector(".wizard-container")
+        try:
+            yield page
+        finally:
+            browser.close()
+
+
+@pytest.fixture(name="develop_server")
+def develop_server_fixture(tmp_path):
+    """The same app as ``server``, but serving a develop build's documentation base.
+
+    ``eos_connect.py:main_page`` derives this from the ``-develop`` suffix in
+    ``src/version.py``; here it is passed in directly, so the test does not depend on
+    which branch the checkout happens to sit on.
+    """
+    yield from _serve(
+        tmp_path, "develop.db", _sample_config(), migrate=True, docs_base=DOCS_BASE_PREVIEW
+    )
+
+
+@pytest.fixture(name="develop_page")
+def develop_page_fixture(develop_server):
+    """A browser page on a develop build, dashboard noise suppressed as in ``page``."""
+    from playwright.sync_api import sync_playwright  # pylint: disable=import-outside-toplevel
+
+    with sync_playwright() as p:
+        browser = _launch_browser(p)
+        page = _open_page(browser, develop_server.url)
+        page.wait_for_function("typeof showBackupMenu === 'function'")
+        page.evaluate(
+            "() => { const o = document.getElementById('overlay');"
+            " if (o) { o.style.display = 'none'; } }"
+        )
         try:
             yield page
         finally:

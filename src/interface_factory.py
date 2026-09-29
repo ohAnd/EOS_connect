@@ -46,6 +46,7 @@ class InterfaceFactory:
         time_zone: tzinfo,
         request_timeout: int = 10,
         critical: bool = True,
+        extra_subtract_sensors=None,
     ):
         """
         Create LoadInterface with error handling.
@@ -56,6 +57,8 @@ class InterfaceFactory:
             time_zone: Timezone for timestamps
             request_timeout: Request timeout in seconds
             critical: Whether interface is critical (stops startup on failure)
+            extra_subtract_sensors: Power sensors of managed loads, removed from the
+                household base load so their predicted consumption is not counted twice
             
         Returns:
             LoadInterface instance or None if non-critical and failed
@@ -77,6 +80,49 @@ class InterfaceFactory:
                 time_frame_base,
                 time_zone,
                 request_timeout=request_timeout,
+                extra_subtract_sensors=extra_subtract_sensors,
+            ),
+        )
+
+    def create_managed_load_manager(
+        self,
+        entries,
+        time_frame_base: int,
+        time_zone: tzinfo,
+        sources=None,
+        store=None,
+        cycle_seconds: int = 300,
+        max_power_w: int = 0,
+        on_release_change=None,
+    ):
+        """
+        Create the managed load manager with error handling.
+
+        Never critical: a mistyped pool configuration must not stop the house being
+        optimized. On failure the caller substitutes a manager with no entries, which
+        is a no-op on the optimizer path.
+
+        Returns:
+            ManagedLoadManager instance, or None if creation failed
+        """
+        return self._create_interface(
+            component_name="managed_load_manager",
+            category="configuration",
+            critical=False,
+            title="Managed loads unavailable",
+            error_message="Failed to set up the configured managed loads",
+            config_link="#managed-loads",
+            creator_func=lambda: self._import_and_create(
+                "loads.manager",
+                "ManagedLoadManager",
+                entries,
+                time_frame_base,
+                time_zone,
+                sources=sources,
+                store=store,
+                cycle_seconds=cycle_seconds,
+                max_power_w=max_power_w,
+                on_release_change=on_release_change,
             ),
         )
 
@@ -219,6 +265,7 @@ class InterfaceFactory:
         temperature_forecast_enabled: bool,
         time_zone_str: str,
         critical: bool = False,
+        site_location=None,
     ):
         """
         Create PvInterface with error handling.
@@ -233,6 +280,8 @@ class InterfaceFactory:
                 forecast (see ``interfaces.pv_interface.wants_temperature_forecast``)
             time_zone_str: Timezone string
             critical: Whether interface is critical (non-critical by default)
+            site_location: ``(lat, lon)`` for this installation, used for the
+                temperature forecast when no PV entry carries coordinates
             
         Returns:
             PvInterface instance or None if non-critical and failed
@@ -263,6 +312,7 @@ class InterfaceFactory:
                 config_special,
                 temperature_forecast_enabled,
                 time_zone_str,
+                site_location=site_location,
             ),
         )
 
@@ -487,12 +537,10 @@ class InterfaceFactory:
         try:
             interface = creator_func()
 
-            # For inverter interface, also initialize it if not None
+            # For inverter interface, skip initialization here (deferred to background)
+            # This prevents app hang when inverter is unreachable at startup
             if component_name == "inverter_interface" and interface is not None:
-                try:
-                    interface.initialize()
-                except Exception as e:
-                    raise Exception(f"Inverter initialization failed: {str(e)}")
+                interface._deferred_init_required = True  # pylint: disable=protected-access
 
             self.created_interfaces[component_name] = interface
             logger.info("[Factory] Successfully created %s", component_name)
@@ -501,7 +549,7 @@ class InterfaceFactory:
             )
             return interface
 
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-except
             error_detail = str(e)
             full_message = f"{error_message}: {error_detail}{additional_message}"
 
@@ -533,6 +581,67 @@ class InterfaceFactory:
                 component_name,
             )
             return None
+
+    def initialize_inverter_deferred(self, inverter_interface, timeout_seconds: int = 30):
+        """
+        Initialize inverter interface in background with reduced timeout to prevent app hang.
+        
+        This is called after the web server starts, so if it takes time or fails, the UI is
+        still responsive and the user can fix configuration without restarting the container.
+        
+        Args:
+            inverter_interface: The inverter interface instance to initialize
+            timeout_seconds: Maximum time to wait for initialization (default 30 seconds)
+            
+        Returns:
+            True if initialization succeeded, False otherwise
+        """
+        if inverter_interface is None or not hasattr(inverter_interface, '_deferred_init_required'):
+            return True
+
+        if not inverter_interface._deferred_init_required:
+            return True
+
+        try:
+            logger.info(
+                "[Factory] Starting deferred inverter initialization (timeout=%ds)",
+                timeout_seconds,
+            )
+
+            # Set startup mode flag to reduce timeouts and retries
+            inverter_interface._startup_mode = True
+            inverter_interface._startup_timeout = timeout_seconds
+
+            # Try to initialize with reduced timeouts
+            inverter_interface.initialize()
+
+            # Clear flags on success
+            inverter_interface._deferred_init_required = False
+            inverter_interface._startup_mode = False
+
+            logger.info("[Factory] Inverter initialization completed successfully")
+            return True
+
+        except Exception as e:
+            logger.error(
+                "[Factory] Inverter initialization failed (will use NullInverter): %s",
+                str(e),
+            )
+
+            # Register error for startup panel
+            self.validator.add_error(
+                category="connectivity",
+                component="inverter_interface",
+                severity="error",
+                title="Inverter initialization failed",
+                message=f"Could not initialize inverter: {str(e)}",
+                action_required=True,
+                config_link="#inverter",
+            )
+
+            inverter_interface._deferred_init_required = False
+            inverter_interface._startup_mode = False
+            return False
 
     def _report_degraded_configuration(self, interface, component_name, config_link):
         """

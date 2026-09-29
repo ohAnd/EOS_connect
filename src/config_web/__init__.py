@@ -35,6 +35,7 @@ from .migration import (
     migrate_yaml_to_store,
     migrate_ha_options_to_store,
     migrate_battery_price_unit_to_ct_kwh,
+    migrate_managed_load_power_sensor_to_replaces_sensor,
     migrate_sensor_placeholders_to_empty,
     prune_migrated_yaml,
 )
@@ -43,9 +44,9 @@ from .api import config_bp, init_api
 from .backup import backup_bp, init_backup
 
 try:  # running from src/ as a script — src/ is on sys.path
-    from persistence import PvYieldStore
+    from persistence import ManagedLoadStore, PvYieldStore
 except ImportError:  # imported as src.config_web (tests)
-    from ..persistence import PvYieldStore
+    from ..persistence import ManagedLoadStore, PvYieldStore
 
 logger = logging.getLogger("__main__")
 
@@ -133,6 +134,10 @@ class ConfigWebModule:
         # One-time migration: battery.price_euro_per_wh_accu (€/Wh) -> battery.price_ct_kwh_accu (ct/kWh)
         migrate_battery_price_unit_to_ct_kwh(self._store)
 
+        # One-time migration: managed_loads.<n>.power_sensor -> replaces_sensor on the
+        # external types, where subtracting from the base load was all it ever did
+        migrate_managed_load_power_sensor_to_replaces_sensor(self._store)
+
         # One-time migration: blank sensor names that were only ever schema hints,
         # so the interfaces' "not configured" handling can take over.
         migrate_sensor_placeholders_to_empty(self._store)
@@ -168,6 +173,19 @@ class ConfigWebModule:
             self._pv_yield_store = store
         except Exception:
             logger.exception("[ConfigWeb] Failed to initialize PvYieldStore schema")
+
+        # Sample history and learned coefficients for managed loads. Same contract: on
+        # failure the attribute stays None and the manager runs without persistence,
+        # relearning from the configured values after each restart.
+        self._managed_load_store = None
+        try:
+            managed_store = ManagedLoadStore(self._store)
+            managed_store.ensure_schema()
+            managed_store.purge_old_samples()
+            managed_store.purge_old_decisions()
+            self._managed_load_store = managed_store
+        except Exception:
+            logger.exception("[ConfigWeb] Failed to initialize ManagedLoadStore schema")
 
     def start_api(self, flask_app):
         """
@@ -282,3 +300,8 @@ class ConfigWebModule:
     def pv_yield_store(self) -> PvYieldStore:
         """PvYieldStore wrapper for the pv_yield_history table."""
         return getattr(self, "_pv_yield_store", None)
+
+    @property
+    def managed_load_store(self) -> ManagedLoadStore:
+        """ManagedLoadStore wrapper for the managed-load sample and model tables."""
+        return getattr(self, "_managed_load_store", None)

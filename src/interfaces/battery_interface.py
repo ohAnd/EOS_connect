@@ -47,6 +47,22 @@ from .state_source import SUPPORTED_SOURCES, fetch_remote_state
 logger = logging.getLogger("__main__")
 logger.info("[BATTERY-IF] loading module ")
 
+
+def _state_as_float(raw_state):
+    """The leading number of a sensor state, whatever unit trails it.
+
+    An entity that is unavailable comes back with an empty state, and an empty string
+    has no first token. Reading it used to raise IndexError, which nothing on the path
+    caught: the background update thread died and the battery stopped updating for the
+    rest of the run. A reading with no number in it is a ValueError like any other
+    unusable one, so the existing fall-back-to-last-known-value handling applies.
+    """
+    try:
+        return float(raw_state.split()[0])
+    except IndexError as exc:
+        raise ValueError("sensor returned an empty state") from exc
+
+
 # Temperature Compensation
 # ========================
 # Battery temperature derating uses a generic curve derived from official BYD HVM
@@ -246,8 +262,7 @@ class BatteryInterface:
 
         try:
             raw_state = self.__fetch_remote_state(self.src, self.temp_sensor)
-            cleaned_value = raw_state.split()[0]
-            temp = float(cleaned_value)
+            temp = _state_as_float(raw_state)
 
             # Sanity check: battery temperature should be reasonable
             if temp < -30 or temp > 70:
@@ -299,8 +314,7 @@ class BatteryInterface:
         """Unified SOC fetch using the configured `self.src` source."""
         try:
             raw_state = self.__fetch_remote_state(self.src, self.soc_sensor)
-            cleaned_value = raw_state.split()[0]
-            raw_value = float(cleaned_value)
+            raw_value = _state_as_float(raw_state)
             if raw_value <= 1.0:
                 # Use history to decide which format is closer to the last known value.
                 # If it's the first run (current_soc == 0), we default to decimal (x100)
@@ -367,8 +381,7 @@ class BatteryInterface:
 
         # Use top-level `source` for all remote fetches (SOC and price)
         raw_state = self.__fetch_remote_state(self.src, self.price_sensor)
-        cleaned_value = raw_state.split()[0]
-        return float(cleaned_value)
+        return _state_as_float(raw_state)
 
     def __update_price_euro_per_wh(self):
         """
@@ -764,7 +777,17 @@ class BatteryInterface:
                     "[battery_interface] Battery state update failed: %s | Config: #battery | ACTION REQUIRED",
                     e
                 )
-                # Break the sleep interval into smaller chunks to allow immediate shutdown
+            except Exception:  # pylint: disable=broad-except
+                # Anything unforeseen used to kill the thread outright, and nothing
+                # restarts it: the battery silently stops updating until EOS Connect is
+                # restarted. One bad cycle is worth logging and retrying, not dying for.
+                logger.error(
+                    "[battery_interface] Unexpected error in battery state update; "
+                    "retrying next cycle | Config: #battery",
+                    exc_info=True,
+                )
+
+            # Break the sleep interval into smaller chunks to allow immediate shutdown
             sleep_interval = self.update_interval
             while sleep_interval > 0:
                 if self._stop_event.is_set():

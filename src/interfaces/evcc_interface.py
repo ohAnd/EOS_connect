@@ -25,6 +25,7 @@ import logging
 import threading
 import time
 import requests
+from packaging.version import parse as parse_version, InvalidVersion
 
 logger = logging.getLogger("__main__")
 logger.info("[EVCC] loading module ")
@@ -41,6 +42,12 @@ CHARGING_MODE_PRIORITY = {
     "minpv+plan": 6,
     "now": 7,
 }
+
+# EVCC >= this version replaced loadpoint modes "pv"/"minpv" with "smart" + "alwaysCharge"
+NEW_MODE_API_MIN_VERSION = "0.316.0"
+
+# raw loadpoint mode values understood without translation
+LEGACY_MODES = ("off", "pv", "minpv", "now")
 
 
 class EvccInterface:
@@ -116,6 +123,8 @@ class EvccInterface:
         self.current_detail_data_list = self.__get_default_detail_data()
 
         self.evcc_version = None  # Placeholder for EVCC version if needed
+        self.uses_new_mode_labels = False  # True once smart/alwaysCharge scheme is detected
+        self._unknown_modes_warned = set()  # avoid log spam for unrecognized mode values
 
         self.update_interval = update_interval
         self.on_charging_state_change = on_charging_state_change  # Store the callback
@@ -172,6 +181,7 @@ class EvccInterface:
                         self.url,
                         self.evcc_version,
                     )
+                self.__update_uses_new_mode_labels_from_version()
             return True
         except requests.exceptions.ConnectionError as e:
             logger.error(
@@ -195,6 +205,62 @@ class EvccInterface:
                 "[EVCC] Unexpected error while checking EVCC server reachability: %s", e
             )
             return False
+
+    def __update_uses_new_mode_labels_from_version(self):
+        """
+        Updates uses_new_mode_labels by comparing evcc_version to NEW_MODE_API_MIN_VERSION.
+        """
+        if not self.evcc_version:
+            return
+        try:
+            if parse_version(self.evcc_version) >= parse_version(NEW_MODE_API_MIN_VERSION):
+                self.uses_new_mode_labels = True
+        except InvalidVersion:
+            logger.warning(
+                "[EVCC] Unable to parse EVCC version '%s' for mode-scheme detection.",
+                self.evcc_version,
+            )
+
+    def __translate_loadpoint_mode(self, loadpoint):
+        """
+        Translates a raw loadpoint mode into the legacy vocabulary used internally.
+
+        EVCC >= 0.316.0 reports "smart" instead of "pv"/"minpv", using the additional
+        "alwaysCharge" flag to distinguish between them:
+            - mode "smart" + alwaysCharge on  -> legacy "minpv"
+            - mode "smart" + alwaysCharge off -> legacy "pv"
+        Older EVCC versions ("off", "pv", "minpv", "now") pass through unchanged.
+        """
+        raw_mode = loadpoint.get("mode", "off")
+        if raw_mode == "smart":
+            self.uses_new_mode_labels = True  # confirmed from live data, regardless of version
+            always_charge = loadpoint.get("alwaysCharge", False)
+            if isinstance(always_charge, str):
+                always_charge = always_charge.strip().lower() == "on"
+            return "minpv" if always_charge else "pv"
+        if raw_mode in LEGACY_MODES:
+            return raw_mode
+        if raw_mode not in self._unknown_modes_warned:
+            self._unknown_modes_warned.add(raw_mode)
+            logger.warning(
+                "[EVCC] Unrecognized loadpoint mode '%s'. Falling back to 'off'.", raw_mode
+            )
+        return "off"
+
+    def __normalize_loadpoints(self, loadpoints):
+        """
+        Returns a copy of loadpoints with each "mode" translated to the legacy vocabulary.
+        """
+        return [
+            {**loadpoint, "mode": self.__translate_loadpoint_mode(loadpoint)}
+            for loadpoint in loadpoints
+        ]
+
+    def get_mode_style(self):
+        """
+        Returns "smart" if the connected EVCC instance uses the new mode scheme, else "legacy".
+        """
+        return "smart" if self.uses_new_mode_labels else "legacy"
 
     def __get_default_detail_data(self):
         """
@@ -280,6 +346,7 @@ class EvccInterface:
                     continue
 
                 loadpoints, vehicles = result
+                loadpoints = self.__normalize_loadpoints(loadpoints)
                 self.__get_states_of_loadpoints(loadpoints, vehicles)
 
                 sum_states = self.__get_states_modes_of_connected_loadpoints(loadpoints)

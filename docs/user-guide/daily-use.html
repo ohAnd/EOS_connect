@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Living With It - EOS Connect</title>
+    <meta name="description" content="What the dashboard shows, what applies without a restart, and the panels that say what EOS Connect has learned.">
+    <meta property="og:title" content="Living With It - EOS Connect">
+    <meta property="og:description" content="What the dashboard shows, what applies without a restart, and the panels that say what EOS Connect has learned.">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="https://ohAnd.github.io/EOS_connect/assets/images/logo.png">
+    <link rel="icon" href="../assets/images/icon.png">
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+
+<body data-page="user-guide" data-subpage="daily-use" data-root="../" data-levels>
+    <div id="site-nav"></div>
+    <noscript>
+        <div class="nav-fallback">
+            <a href="../index.html">Home</a>
+            <a href="../what-is/index.html">What Is</a>
+            <a href="index.html">User Guide</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="../advanced/index.html">Advanced</a>
+            <a href="../developer/index.html">Developer</a>
+        </div>
+    </noscript>
+
+    <div class="container">
+        <div class="page-wrapper">
+            <aside class="toc-sidebar">
+                <div id="site-toc"></div>
+            </aside>
+
+            <main class="main-content" id="main">
+
+                <div class="hero">
+                    <h1>Living with it</h1>
+                    <p>The dashboard, the overrides, and the two panels that show what EOS Connect has worked out for itself.</p>
+                </div>
+
+                <div id="site-level"></div>
+
+                <div class="content-section">
+                    <h2 id="daily-use"><i class="fas fa-gauge-high" aria-hidden="true"></i> Living with it</h2>
+                    <p>The dashboard shows the current plan: forecast solar, forecast prices, what the
+                        battery is being told to do and why. Change any setting behind the gear icon.</p>
+                    <ul>
+                        <li><strong>Override the battery by hand</strong> when you know something the
+                            optimizer does not &mdash; a set duration, then it hands control back.</li>
+                        <li><strong>Settings apply live</strong> where they safely can; the ones that need
+                            a restart are marked with a <span class="badge badge-restart"><i
+                                    class="fas fa-rotate" aria-hidden="true"></i>restart</span> badge.</li>
+                        <li><strong>Back up before you experiment</strong> &mdash; there is a whole-install
+                            export and restore in Settings.</li>
+                    </ul>
+
+                    <h3 id="update-notifications">Update notifications</h3>
+                    <p>Running the Docker image, EOS Connect checks the container registry for a newer
+                        release twice a day and shows a dismissible banner when it finds one. It never
+                        updates itself &mdash; pulling the new image stays your decision. Home Assistant
+                        add-on users get updates through Home Assistant instead, so the check is off.</p>
+
+                    <div data-level="standard">
+                        <h3 id="battery-pricing">What your stored energy actually cost</h3>
+                        <p>EOS Connect tracks what went into the battery and at what price, so a
+                            discharge decision compares against the real cost of that stored energy
+                            rather than a guess. It separates solar charging from grid charging, and
+                            detects your sensor's sign convention rather than assuming one.</p>
+                    </div>
+
+                    <div data-level="expert">
+                        <h3 id="autoscaling">Forecast auto-scaling</h3>
+                        <p>Solar forecasts are generic; your roof is not. Auto-scaling compares forecast
+                            against measured yield over a rolling window and applies a correction factor,
+                            so the plan stops being systematically optimistic about a shaded array. See
+                            <a href="config-solar.html#pv-autoscaling">the PV auto-scaling settings</a>.</p>
+                        <p>To see what it has learned &mdash; the scale factor per timeframe, how much
+                            history it is working from, and the forecast before and after correction
+                            &mdash; pick <em>Menu &rsaquo; PV Auto-Scaling</em>. The two figures in the
+                            Statistics tile's header open the same panel, but they only carry a value
+                            after the first optimization cycle; the menu entry always works.</p>
+                    </div>
+                </div>
+                <div class="content-section">
+                    <h2 id="daily-next"><i class="fas fa-arrow-right" aria-hidden="true"></i> Next
+                        steps</h2>
+                    <ul>
+                        <li><a href="configuration.html">Configuration</a> &mdash; every setting, one
+                            page per topic.</li>
+                        <li><a href="../advanced/index.html">Advanced</a> &mdash; REST API, MQTT topics
+                            and automation.</li>
+                        <li><a href="troubleshooting.html">Troubleshooting</a> &mdash; when something
+                            misbehaves.</li>
+                    </ul>
+                </div>
+
+            </main>
+        </div>
+    </div>
+
+    <div id="site-footer"></div>
+    <script src="../assets/js/site.js"></script>
+</body>
+
+</html>
