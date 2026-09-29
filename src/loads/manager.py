@@ -836,7 +836,11 @@ class ManagedLoadManager:
             return None
 
         history = [None] * ctx.slot_count
-        for when, value in self._medium_history.get(item.id, ()):
+        # Snapshot before iterating: the poll thread appends to this same deque in
+        # _remember_medium, and a deque raises RuntimeError if it grows underneath a
+        # reader - which here surfaces as a 500 on /api/managed_loads, i.e. the card
+        # this series is drawn for.
+        for when, value in list(self._medium_history.get(item.id, ())):
             index = ctx.slot_of(when) if hasattr(ctx, "slot_of") else None
             if index is None:
                 offset = (when - ctx.anchor).total_seconds()

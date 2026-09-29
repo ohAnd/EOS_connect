@@ -80,11 +80,6 @@ class FroniusLegacy(BaseInverter):
         self._startup_mode = False
         self._startup_timeout = 30
 
-        # --- Startup mode flags (deferred initialization) ---
-        self._deferred_init_required = False
-        self._startup_mode = False
-        self._startup_timeout = 30
-
         # --- SW version loaded in initialize() ---
         self.inverter_sw_revision = {"major": 0, "minor": 0, "patch": 0, "build": 0}
         self.api_praefix = ""
