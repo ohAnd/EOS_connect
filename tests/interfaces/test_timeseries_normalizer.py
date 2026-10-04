@@ -470,3 +470,34 @@ class TestLoadPlausibility:
     def test_nothing_to_check(self):
         assert load_plausibility_message([], "Wh", 3600, 1500.0) is None
         assert load_plausibility_message([100.0], "Wh", 0, 1500.0) is None
+
+
+class TestMillisecondTimestamps:
+    """A HA template using `as_timestamp() * 1000` sends epoch milliseconds.
+
+    `_parse_timestamp` hands any number straight to `datetime.fromtimestamp`,
+    which raises a bare ValueError ("year must be in 1..9999") for a
+    milliseconds value — an exception the probe does not catch, so the
+    "Test connection" endpoint answers HTTP 500 instead of a message (B9 in
+    discussion #214's follow-up review).
+    """
+
+    MILLISECONDS = 1_772_000_000_000  # ~2026 in ms; year 58122 as seconds
+
+    def test_today_the_value_error_escapes(self):
+        """Pins the current defect: a bare ValueError, not a TimeseriesFormatError."""
+        payload = [{"start": self.MILLISECONDS, "value": 0.25}]
+        with pytest.raises(ValueError) as exc:
+            normalize_entries(payload, BERLIN)
+        assert not isinstance(exc.value, TimeseriesFormatError)
+
+    @pytest.mark.xfail(
+        reason="the guard lands with 'fix: reject millisecond timestamps'",
+        strict=True,
+    )
+    def test_milliseconds_become_a_format_error_naming_the_cause(self):
+        """A milliseconds epoch must be rejected with a message naming milliseconds."""
+        payload = [{"start": self.MILLISECONDS, "value": 0.25}]
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+        assert "millisecond" in str(exc.value).lower()
