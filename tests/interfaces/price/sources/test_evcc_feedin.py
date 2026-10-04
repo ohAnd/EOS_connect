@@ -406,12 +406,13 @@ class TestFeedInEvccPriceSource:
 class TestEvccTimestampOffsets:
     """EVCC renders timestamps with a numeric offset, e.g. '+02:00'.
 
-    The parser splits that offset off with rsplit('+') and re-stamps the naive
-    remainder with `.replace(tzinfo=self.time_zone)` — on a pytz zone that
-    attaches the LMT offset (+00:53 for Europe/Berlin), so in summer every
-    15-minute entry lands 67 minutes late and the hourly grouping puts it one
-    slot after its real hour (B5). The plain test pins today's shifted slot;
-    the xfail is the regression guard for the fix.
+    The source's own offset is authoritative. A hand-rolled parser once split
+    it off with rsplit('+') and re-stamped the naive remainder with
+    `.replace(tzinfo=self.time_zone)` — on a pytz zone that attaches the LMT
+    offset (+00:53 for Europe/Berlin), so in summer every 15-minute entry
+    landed 67 minutes late and the hourly grouping put it one slot after its
+    real hour (B5 in discussion #214's review). These tests guard against any
+    parser that drops or re-derives an explicit offset.
     """
 
     BERLIN = pytz.timezone("Europe/Berlin")
@@ -459,16 +460,10 @@ class TestEvccTimestampOffsets:
         feed_in_iface.update_prices(48, start_time=midnight)
         return feed_in_iface.get_current_feedin_prices()
 
-    def test_today_a_cest_offset_shifts_every_hour_one_slot_late(self, monkeypatch):
-        """Hour 5's rate (0.05 EUR/kWh) is read as 05:00+00:53 = 06:07 local."""
-        prices = self._prices_for_a_berlin_summer_day(monkeypatch)
-        assert prices[6] == pytest.approx(0.05 / 1000)
-
-    @pytest.mark.xfail(
-        reason="offset parsing lands with 'fix: read EVCC feed-in times in the real zone'",
-        strict=True,
-    )
     def test_an_entry_with_an_explicit_offset_lands_on_its_own_hour(self, monkeypatch):
-        """The source's own offset is authoritative; hour 5 must land on slot 5."""
+        """Every hour's rate must land on the slot its own timestamp names."""
         prices = self._prices_for_a_berlin_summer_day(monkeypatch)
+        assert prices[0] == pytest.approx(0.0)
         assert prices[5] == pytest.approx(0.05 / 1000)
+        assert prices[6] == pytest.approx(0.06 / 1000)
+        assert prices[47] == pytest.approx(0.47 / 1000)

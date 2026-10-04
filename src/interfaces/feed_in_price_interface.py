@@ -35,6 +35,12 @@ import threading
 import requests
 import pytz
 
+from .timeseries_normalizer import (
+    TimeseriesFormatError,
+    convert_price_values,
+    normalize_entries,
+)
+
 logger = logging.getLogger("__main__")
 logger.info("[FEEDIN-IF] loading module")
 
@@ -509,37 +515,22 @@ class FeedInPriceInterface:
                         max_price,
                     )
 
-            # Extract timeseries with timestamps
-            timeseries = []
-            for rate in rates:
-                if not isinstance(rate, dict) or "value" not in rate or "start" not in rate:
-                    logger.warning(f"[FEEDIN-IF] Skipping invalid EVCC rate entry: {rate}")
-                    continue
+            # Parse timestamps and convert EUR/kWh to EUR/Wh through the shared
+            # normalizer. EVCC renders offsets like '+02:00'; the hand-rolled
+            # parser this replaces split the offset off and re-stamped the rest
+            # with the zone object, whose pytz default is the LMT offset
+            # (+00:53 for Europe/Berlin) - every summer entry landed an hour late.
+            try:
+                entries = normalize_entries(rates, self.time_zone, label="FEEDIN-IF")
+                convert_price_values(entries, "EUR/kWh")
+            except TimeseriesFormatError as exc:
+                logger.error("[FEEDIN-IF] Invalid EVCC feed-in rates: %s", exc)
+                return []
 
-                try:
-                    price_eur_kwh = float(rate["value"])
-                    start_str = rate["start"]
-
-                    # Parse ISO 8601 timestamp
-                    if "T" in start_str:
-                        # Remove timezone for parsing, then add it back
-                        if "+" in start_str:
-                            ts_part, tz_part = start_str.rsplit("+", 1)
-                            ts = datetime.fromisoformat(ts_part).replace(tzinfo=self.time_zone)
-                        elif start_str.endswith("Z"):
-                            ts = datetime.fromisoformat(start_str.replace("Z", "+00:00")).astimezone(self.time_zone)
-                        else:
-                            ts = datetime.fromisoformat(start_str)
-                    else:
-                        continue
-
-                    # Convert EUR/kWh to EUR/Wh
-                    price_eur_wh = price_eur_kwh / 1000.0
-                    timeseries.append({"timestamp": ts, "value": price_eur_wh})
-
-                except (ValueError, KeyError, TypeError) as e:
-                    logger.warning(f"[FEEDIN-IF] Error parsing EVCC rate entry: {e}")
-                    continue
+            timeseries = [
+                {"timestamp": entry["start"], "value": entry["value"]}
+                for entry in entries
+            ]
 
             if not timeseries:
                 logger.error("[FEEDIN-IF] No valid rates with timestamps converted from EVCC response")
