@@ -333,6 +333,15 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
     if start_key is None:
         _derive_starts_from_ends(entries)
     entries.sort(key=lambda item: item["start"])
+    for earlier, later in zip(entries, entries[1:]):
+        if later["start"] == earlier["start"]:
+            # A duplicate is always a template bug. The consumers used to
+            # disagree on it (last-wins, double-count, reject) — silently
+            # keeping either value is how a wrong forecast survives.
+            raise TimeseriesFormatError(
+                f"two entries share the start timestamp "
+                f"{later['start'].isoformat()}"
+            )
     _finalize_entry_spans(entries)
     return entries
 
@@ -462,47 +471,14 @@ def convert_price_values(entries, unit):
     return entries
 
 
-def convert_pv_values(entries, unit, resolution_seconds):
+def convert_energy_values(entries, unit):
     """
-    Convert PV entries to Wh per slot in place and return them.
+    Convert PV or managed-load entries to Wh per entry in place, and return them.
 
-    Power units (W, kW) are integrated over the slot length, matching how the EVCC PV
-    adapter treats EVCC's own forecast values. Energy units pass through scaled.
-
-    Args:
-        entries: Normalized entries whose ``value`` is in *unit*.
-        unit: One of PV_UNITS.
-        resolution_seconds: Source slot length in seconds (900 or 3600).
-
-    Raises:
-        TimeseriesFormatError: On an unknown unit.
-    """
-    try:
-        spec = PV_UNITS[unit]
-    except KeyError as exc:
-        raise TimeseriesFormatError(
-            f"unknown PV unit {unit!r}, expected one of {', '.join(sorted(PV_UNITS))}"
-        ) from exc
-
-    factor = spec["factor"]
-    if spec["is_power"]:
-        factor *= resolution_seconds / 3600.0
-
-    for entry in entries:
-        entry["value"] = entry["value"] * factor
-    return entries
-
-
-def convert_load_values(entries, unit):
-    """
-    Convert managed-load entries to Wh per entry in place, and return them.
-
-    Same unit table as PV, but integrated over each entry's *own* span rather than one
-    resolution for the whole series. A load forecast is written by hand far more often
-    than a PV one - a template sensor someone assembled from a heating curve - so it is
-    much more likely to arrive on a half-hourly grid, or with one longer entry
-    overnight. Applying a single slot length to those would silently scale part of the
-    series.
+    Power units (W, kW) are integrated over each entry's *own* span rather than
+    one resolution for the whole series — a half-hourly grid, one longer entry
+    overnight, or a mixed-resolution concatenation would all be silently scaled
+    wrong by a single slot length. Energy units pass through scaled.
 
     Every entry is expected to carry ``end``; `normalize_entries` guarantees that by
     deriving it from the following entry where the source omitted it.
@@ -518,7 +494,7 @@ def convert_load_values(entries, unit):
         spec = PV_UNITS[unit]
     except KeyError as exc:
         raise TimeseriesFormatError(
-            f"unknown load unit {unit!r}, expected one of {', '.join(sorted(PV_UNITS))}"
+            f"unknown unit {unit!r}, expected one of {', '.join(sorted(PV_UNITS))}"
         ) from exc
 
     for entry in entries:

@@ -193,13 +193,26 @@ def _describe_akkudoktor_error(tgt_value, exception):
 
 
 try:  # running from src/ — src/ is on sys.path
-    from timeseries_grid import horizon_slots, local_midnight
+    from timeseries_grid import (
+        KIND_EXTENSIVE,
+        TimeseriesGridError,
+        horizon_slots,
+        local_midnight,
+        place_on_grid,
+    )
 except ImportError:  # imported as src.interfaces (tests)
-    from ..timeseries_grid import horizon_slots, local_midnight
+    from ..timeseries_grid import (
+        KIND_EXTENSIVE,
+        TimeseriesGridError,
+        horizon_slots,
+        local_midnight,
+        place_on_grid,
+    )
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
-    convert_pv_values,
+    convert_energy_values,
+    detect_resolution_seconds,
     extract_json_path,
     normalize_entries,
     pv_plausibility_message,
@@ -1721,57 +1734,48 @@ class PvInterface:
         self, timeseries, tgt_duration, resolution_seconds=None, value_unit=None
     ):
         """
-        Parse and validate a PV forecast timeseries.
+        Parse a PV forecast timeseries and lay it onto the slot grid by overlap.
 
-        Canonical format: [{start, end, value}, ...]
-        - start: ISO8601 string or Unix timestamp (seconds)
-        - end: optional, derived from the next entry when absent
-        - value: generated power/energy in *value_unit* (non-negative)
-        - Supports hourly (48 values) or 15-minute (192 values) resolution
-
-        Mirrors PriceInterface.__parse_price_timeseries, adapted for PV: values
-        represent energy-per-slot rather than a rate, so 15-min-to-hourly
-        conversion sums instead of averages, and missing trailing slots are
-        padded with 0 (no production) rather than the last known value.
+        Canonical format: [{start, end, value}, ...] — the common integration
+        spellings are accepted, a supplied end is authoritative, and derived
+        spans are capped at the series' nominal spacing (timeseries_normalizer).
+        Values are energy per entry; each entry's energy lands on every slot its
+        span actually touches, weighted by overlap (timeseries_grid, extensive
+        kind). A series starting at 00:15, a coarse entry with a declared end,
+        and a mixed-resolution concatenation all place correctly; an uncovered
+        slot is 0 Wh — no production — never a neighbour's energy.
 
         Args:
             value_unit: Unit of the incoming values (see
-                timeseries_normalizer.PV_UNITS). ``None`` means the caller already
-                supplies canonical Wh-per-slot values and needs no normalization.
+                timeseries_normalizer.PV_UNITS). ``None`` means the caller
+                already supplies canonical Wh-per-entry values.
         """
         if not timeseries or not isinstance(timeseries, list):
             logger.error("[PV-IF] PV timeseries is not a list")
             return []
 
-        if len(timeseries) == 0:
-            logger.error("[PV-IF] PV timeseries is empty")
-            return []
-
-        # self.time_zone is a zone *name* here, not a tzinfo — resolve it once for both
-        # normalization and the slot alignment further down.
+        # self.time_zone is a zone *name* here, not a tzinfo — resolve it once
+        # for normalization and the grid anchor below.
         try:
             tz = pytz.timezone(self.time_zone)
         except (pytz.UnknownTimeZoneError, AttributeError):
             tz = pytz.UTC
 
-        if value_unit is not None:
-            # External source: normalize field/timestamp shape first, then detect the
-            # source resolution, because a power unit only becomes energy once the
-            # slot length is known.
-            try:
-                timeseries = normalize_entries(timeseries, tz, label="PV-IF")
-            except TimeseriesFormatError as exc:
-                logger.error("[PV-IF] Invalid PV timeseries: %s", exc)
+        try:
+            timeseries = normalize_entries(timeseries, tz, label="PV-IF")
+        except TimeseriesFormatError as exc:
+            logger.error("[PV-IF] Invalid PV timeseries: %s", exc)
+            return []
+
+        if resolution_seconds is None:
+            resolution_seconds = detect_resolution_seconds(timeseries)
+            if resolution_seconds is None:
+                logger.error("[PV-IF] Could not detect PV timeseries resolution")
                 return []
 
-            if resolution_seconds is None:
-                resolution_seconds = self.__detect_pv_timeseries_resolution(timeseries)
-                if resolution_seconds is None:
-                    logger.error("[PV-IF] Could not detect PV timeseries resolution")
-                    return []
-
+        if value_unit is not None:
             try:
-                convert_pv_values(timeseries, value_unit, resolution_seconds)
+                convert_energy_values(timeseries, value_unit)
             except TimeseriesFormatError as exc:
                 logger.error("[PV-IF] Invalid PV timeseries: %s", exc)
                 return []
@@ -1802,207 +1806,69 @@ class PvInterface:
                     max((entry["value"] for entry in timeseries), default=0.0),
                 )
                 self._logged_value_unit = value_unit
-        else:
-            first = timeseries[0]
-            if not isinstance(first, dict) or not all(
-                k in first for k in ("start", "value")
-            ):
-                logger.error(
-                    "[PV-IF] Invalid PV timeseries format: missing start or value"
-                )
-                return []
 
-        if resolution_seconds is None:
-            resolution_seconds = self.__detect_pv_timeseries_resolution(timeseries)
-            if resolution_seconds is None:
-                logger.error("[PV-IF] Could not detect PV timeseries resolution")
-                return []
-
-        if resolution_seconds == 900 and self.time_frame_base == 3600:
-            logger.debug(
-                "[PV-IF] Converting source 15-min to system hourly resolution"
-            )
-            timeseries = self.__convert_15min_to_hourly_pv_timeseries(timeseries)
-        elif resolution_seconds == 3600 and self.time_frame_base == 900:
+        if resolution_seconds == 3600 and self.time_frame_base == 900:
             logger.error(
                 "[PV-IF] Resolution mismatch: data source provides hourly (3600s) "
                 "but system configured for 15-min (900s) slots. "
                 "Set time_frame_base to 3600 or switch to a 15-minute data source."
             )
             return []
-        elif resolution_seconds not in (900, 3600):
+        if resolution_seconds not in (900, 3600):
             logger.error(
                 "[PV-IF] Unsupported resolution: %d seconds (expected 900 or 3600)",
                 resolution_seconds,
             )
             return []
 
-        # Align by absolute timestamp to the slot grid starting at local midnight
-        # today - NOT positionally. get_ems_data() indexes pv_forcast_array by
-        # "slots since midnight" (see eos_connect.py's current_slot calculation),
-        # the same convention __get_pv_forecast_evcc_api() already follows. A
-        # source whose first entry is "now" (like ours) rather than "midnight"
-        # would otherwise land at the wrong array index. (tz resolved above.)
+        negatives = 0
+        for entry in timeseries:
+            if entry["value"] < 0:
+                negatives += 1
+                entry["value"] = 0.0
+        if negatives:
+            logger.warning("[PV-IF] %d negative PV value(s) clamped to 0", negatives)
 
-        def parse_ts(ts_val):
-            if isinstance(ts_val, datetime):
-                # Already normalized (and localized) by timeseries_normalizer.
-                return ts_val.astimezone(tz)
-            if isinstance(ts_val, (int, float)):
-                return datetime.fromtimestamp(ts_val, tz=pytz.UTC).astimezone(tz)
-            if isinstance(ts_val, str):
-                try:
-                    parsed = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
-                except ValueError:
-                    parsed = datetime.fromisoformat(ts_val)
-                if parsed.tzinfo is None:
-                    parsed = tz.localize(parsed)
-                return parsed.astimezone(tz)
-            return None
-
-        slot_seconds = 3600 if self.time_frame_base == 3600 else 900
-        lookup = {}
+        expected_count = horizon_slots(self.time_frame_base)
+        anchor = local_midnight(tz)
         try:
-            for item in timeseries:
-                ts = parse_ts(item.get("start"))
-                if ts is None:
-                    continue
-                value = float(item.get("value", 0))
-                if value < 0:
-                    logger.warning("[PV-IF] Negative PV value %.1f clamped to 0", value)
-                    value = 0.0
-
-                # Align timestamp to resolution boundary (robust to arbitrary start times)
-                # E.g., for 3600s resolution: round to nearest hour
-                #       for 900s resolution: round to nearest 15-minute
-                ts = ts.replace(second=0, microsecond=0)
-                total_seconds = int(ts.timestamp())
-                aligned_seconds = (total_seconds // slot_seconds) * slot_seconds
-                ts = datetime.fromtimestamp(aligned_seconds, tz=pytz.UTC).astimezone(tz)
-                lookup[ts] = value
-        except (ValueError, TypeError):
-            logger.error("[PV-IF] Failed to extract numeric PV values")
+            placement = place_on_grid(
+                timeseries,
+                anchor,
+                expected_count,
+                self.time_frame_base,
+                KIND_EXTENSIVE,
+            )
+        except TimeseriesGridError as exc:
+            logger.error("[PV-IF] Invalid PV timeseries: %s", exc)
             return []
 
-        now_local = datetime.now(tz)
-        midnight_today = local_midnight(tz, now_local)
-        expected_count = horizon_slots(self.time_frame_base)
-        slot_keys = [
-            midnight_today + timedelta(seconds=slot_seconds * i)
-            for i in range(expected_count)
-        ]
-        values = [round(lookup.get(key, 0.0), 1) for key in slot_keys]
-
-        matched = sum(1 for key in slot_keys if key in lookup)
-        if matched == 0 and lookup:
-            # Every entry parsed but none landed in the window. Returning 48 zeros
-            # here reads as "no sun for two days" and used to pass silently; the most
-            # common cause is a timestamp without UTC offset, so name what we saw.
-            first_source_ts = min(lookup)
+        covered = sum(1 for fraction in placement.coverage if fraction > 0)
+        if covered == 0 and placement.source_count:
+            # Every entry parsed but none landed in the window. Returning 48
+            # zeros here reads as "no sun for two days" and used to pass
+            # silently; the most common cause is a timestamp without UTC
+            # offset, so name what we saw.
             logger.warning(
                 "[PV-IF] None of %d PV timeseries entries fell into the %d-slot "
                 "window starting %s. First source timestamp is %s — if the source "
                 "renders UTC without an offset, every slot is shifted. See %s",
-                len(lookup),
+                placement.source_count,
                 expected_count,
-                midnight_today.isoformat(),
-                first_source_ts.isoformat(),
+                anchor.isoformat(),
+                timeseries[0]["start"].isoformat(),
                 TEMPLATE_DOCS_URL,
             )
-        elif matched < expected_count:
+        elif covered < expected_count:
             logger.debug(
-                "[PV-IF] PV timeseries filled %d of %d slots (rest padded with 0)",
-                matched,
+                "[PV-IF] PV timeseries filled %d of %d slots (rest 0); "
+                "%d entries outside the window",
+                covered,
                 expected_count,
+                placement.dropped,
             )
 
-        return values
-
-    def __detect_pv_timeseries_resolution(self, timeseries):
-        """
-        Detect time resolution (900s for 15-min, 3600s for hourly).
-        Identical logic to PriceInterface.__detect_price_timeseries_resolution.
-
-        Returns:
-            int: Seconds per interval (900 or 3600), or None if cannot detect
-        """
-        if len(timeseries) < 2:
-            return None
-
-        try:
-            from datetime import datetime as dt_class
-            import pytz
-
-            def parse_ts(ts_str):
-                if isinstance(ts_str, dt_class):
-                    # Already normalized by timeseries_normalizer.
-                    return ts_str
-                if isinstance(ts_str, (int, float)):
-                    return dt_class.fromtimestamp(ts_str, tz=pytz.UTC)
-                if isinstance(ts_str, str):
-                    try:
-                        return dt_class.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    except ValueError:
-                        return dt_class.fromisoformat(ts_str)
-                return None
-
-            start1 = parse_ts(timeseries[0].get("start"))
-            start2 = parse_ts(timeseries[1].get("start"))
-
-            if start1 is None or start2 is None:
-                return None
-
-            delta = int((start2 - start1).total_seconds())
-
-            if delta == 900:
-                logger.debug("[PV-IF] Detected 15-minute PV timeseries resolution")
-                return 900
-            elif delta == 3600:
-                logger.debug("[PV-IF] Detected hourly PV timeseries resolution")
-                return 3600
-            else:
-                logger.warning(
-                    "[PV-IF] Unexpected PV timeseries resolution delta: %d seconds",
-                    delta,
-                )
-                return None
-        except (KeyError, TypeError, ValueError):
-            return None
-
-    def __convert_15min_to_hourly_pv_timeseries(self, timeseries):
-        """
-        Convert 15-minute PV energy values to hourly by summing 4 consecutive
-        slots. Unlike PriceInterface's rate-based averaging, PV values are
-        energy-per-slot, so summing (not averaging) is the correct aggregation.
-
-        Returns:
-            list: Hourly timeseries with summed values
-        """
-        if len(timeseries) < 4:
-            logger.warning("[PV-IF] Not enough 15-min PV data to sum hourly")
-            return timeseries
-
-        hourly = []
-        for i in range(0, len(timeseries), 4):
-            group = timeseries[i : i + 4]
-            try:
-                total_value = sum(float(item.get("value", 0)) for item in group)
-                hourly.append(
-                    {
-                        "start": group[0].get("start"),
-                        "end": group[-1].get("end"),
-                        "value": total_value,
-                    }
-                )
-            except (ValueError, TypeError):
-                pass
-
-        logger.debug(
-            "[PV-IF] Converted %d 15-min PV values to %d hourly values",
-            len(timeseries),
-            len(hourly),
-        )
-        return hourly
+        return [round(value, 1) for value in placement.values]
 
     def __fetch_temperature(self, temp_config):
         """
@@ -3417,15 +3283,16 @@ class PvInterface:
                     )
                     forecast_time = forecast_time.astimezone(tz)
 
-                    # Find which hour this forecast belongs to
+                    # Find which hour this forecast belongs to. Compare
+                    # absolute instants, not wall-clock fields: on the 25-hour
+                    # day both 02:00 hours share year/month/day/hour and the
+                    # field match dropped one of them.
+                    hour_start = forecast_time.replace(
+                        minute=0, second=0, microsecond=0
+                    )
                     hour_index = None
                     for idx, hour_ref in enumerate(forecast_hours):
-                        if (
-                            forecast_time.year == hour_ref.year
-                            and forecast_time.month == hour_ref.month
-                            and forecast_time.day == hour_ref.day
-                            and forecast_time.hour == hour_ref.hour
-                        ):
+                        if hour_start == hour_ref:
                             hour_index = idx
                             break
 

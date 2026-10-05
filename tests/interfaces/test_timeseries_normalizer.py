@@ -15,7 +15,7 @@ from src.interfaces.timeseries_normalizer import (
     PV_UNITS,
     TimeseriesFormatError,
     convert_price_values,
-    convert_pv_values,
+    convert_energy_values,
     detect_resolution_seconds,
     extract_json_path,
     load_plausibility_message,
@@ -474,41 +474,63 @@ class TestPriceUnitConversion:
         assert entries[0]["value"] < 0
 
 
-class TestPvUnitConversion:
-    """W is canonical because that is what EVCC's solar forecast carries."""
+class TestEnergyUnitConversion:
+    """W is canonical because that is what EVCC's solar forecast carries.
+
+    Power integrates over each entry's OWN span — that is what keeps a
+    mixed-resolution concatenation, a half-hourly grid, or one deliberately
+    long entry from being silently scaled by someone else's slot length.
+    """
+
+    @staticmethod
+    def _entry(value, span_minutes):
+        start = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+        return {
+            "start": start,
+            "end": start + timedelta(minutes=span_minutes),
+            "value": value,
+        }
 
     def test_watts_integrated_over_a_quarter_hour(self):
-        entries = [{"value": 4000.0}]
+        entries = [self._entry(4000.0, 15)]
 
-        convert_pv_values(entries, "W", 900)
+        convert_energy_values(entries, "W")
 
         assert entries[0]["value"] == pytest.approx(1000.0)
 
     def test_watts_over_a_full_hour_are_watt_hours(self):
-        entries = [{"value": 4000.0}]
+        entries = [self._entry(4000.0, 60)]
 
-        convert_pv_values(entries, "W", 3600)
+        convert_energy_values(entries, "W")
 
         assert entries[0]["value"] == pytest.approx(4000.0)
 
-    def test_kilowatts_scaled_and_integrated(self):
-        entries = [{"value": 4.0}]
+    def test_each_entry_uses_its_own_span(self):
+        entries = [self._entry(4000.0, 15), self._entry(4000.0, 60)]
 
-        convert_pv_values(entries, "kW", 900)
+        convert_energy_values(entries, "W")
+
+        assert entries[0]["value"] == pytest.approx(1000.0)
+        assert entries[1]["value"] == pytest.approx(4000.0)
+
+    def test_kilowatts_scaled_and_integrated(self):
+        entries = [self._entry(4.0, 15)]
+
+        convert_energy_values(entries, "kW")
 
         assert entries[0]["value"] == pytest.approx(1000.0)
 
-    def test_energy_units_pass_through_regardless_of_slot_length(self):
-        entries = [{"value": 1000.0}]
+    def test_energy_units_pass_through_regardless_of_span(self):
+        entries = [self._entry(1000.0, 15)]
 
-        convert_pv_values(entries, "Wh", 900)
+        convert_energy_values(entries, "Wh")
 
         assert entries[0]["value"] == pytest.approx(1000.0)
 
     def test_kilowatt_hours_scaled(self):
-        entries = [{"value": 1.0}]
+        entries = [self._entry(1.0, 15)]
 
-        convert_pv_values(entries, "kWh", 900)
+        convert_energy_values(entries, "kWh")
 
         assert entries[0]["value"] == pytest.approx(1000.0)
 
@@ -517,7 +539,7 @@ class TestPvUnitConversion:
 
     def test_unknown_unit_rejected(self):
         with pytest.raises(TimeseriesFormatError):
-            convert_pv_values([{"value": 1.0}], "MW", 900)
+            convert_energy_values([self._entry(1.0, 15)], "MW")
 
 
 class TestPricePlausibility:

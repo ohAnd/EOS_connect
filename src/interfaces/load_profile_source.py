@@ -29,7 +29,7 @@ import requests
 from .timeseries_normalizer import (
     PV_UNITS,
     TimeseriesFormatError,
-    convert_load_values,
+    convert_energy_values,
     detect_resolution_seconds,
     extract_json_path,
     load_plausibility_message,
@@ -168,7 +168,7 @@ def fetch_profile(entry, data_source=None, time_zone=None, ssl_ignore=False):
                 "could not work out how long each entry covers - send at least two "
                 "entries, or give each one an 'end'"
             )
-        convert_load_values(entries, unit)
+        convert_energy_values(entries, unit)
     except TimeseriesFormatError as exc:
         # Written for the user by the normalizer, naming the keys the payload had.
         raise ProfileSourceError(str(exc)) from exc
