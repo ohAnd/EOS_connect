@@ -475,29 +475,35 @@ class TestLoadPlausibility:
 class TestMillisecondTimestamps:
     """A HA template using `as_timestamp() * 1000` sends epoch milliseconds.
 
-    `_parse_timestamp` hands any number straight to `datetime.fromtimestamp`,
-    which raises a bare ValueError ("year must be in 1..9999") for a
-    milliseconds value — an exception the probe does not catch, so the
-    "Test connection" endpoint answers HTTP 500 instead of a message (B9 in
-    discussion #214's follow-up review).
+    `datetime.fromtimestamp` answers that with a bare ValueError ("year must be
+    in 1..9999") that nothing upstream catches — the guard has to turn it into
+    a TimeseriesFormatError that names the actual mistake (B9 in discussion
+    #214's follow-up review).
     """
 
     MILLISECONDS = 1_772_000_000_000  # ~2026 in ms; year 58122 as seconds
 
-    def test_today_the_value_error_escapes(self):
-        """Pins the current defect: a bare ValueError, not a TimeseriesFormatError."""
-        payload = [{"start": self.MILLISECONDS, "value": 0.25}]
-        with pytest.raises(ValueError) as exc:
-            normalize_entries(payload, BERLIN)
-        assert not isinstance(exc.value, TimeseriesFormatError)
-
-    @pytest.mark.xfail(
-        reason="the guard lands with 'fix: reject millisecond timestamps'",
-        strict=True,
-    )
     def test_milliseconds_become_a_format_error_naming_the_cause(self):
-        """A milliseconds epoch must be rejected with a message naming milliseconds."""
+        """A milliseconds epoch is rejected with a message naming milliseconds."""
         payload = [{"start": self.MILLISECONDS, "value": 0.25}]
         with pytest.raises(TimeseriesFormatError) as exc:
             normalize_entries(payload, BERLIN)
         assert "millisecond" in str(exc.value).lower()
+
+    def test_a_timestamp_fromtimestamp_cannot_represent_is_a_format_error(self):
+        """Below the guard but before year 1: the bare ValueError must not escape."""
+        payload = [{"start": -62_200_000_000, "value": 0.25}]
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+        assert "Unix timestamp" in str(exc.value)
+
+    def test_ordinary_unix_seconds_still_parse(self):
+        """The guard must not reject real seconds timestamps."""
+        entries = normalize_entries(
+            [
+                {"start": 1_772_000_000, "value": 0.25},
+                {"start": 1_772_003_600, "value": 0.26},
+            ],
+            BERLIN,
+        )
+        assert entries[0]["start"].year == 2026

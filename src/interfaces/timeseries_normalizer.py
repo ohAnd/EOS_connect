@@ -109,7 +109,21 @@ def _parse_timestamp(raw, tz):
         )
 
     if isinstance(raw, (int, float)):
-        return datetime.fromtimestamp(raw, tz=pytz.UTC).astimezone(tz), False
+        # 1e11 s is the year 5138 - no plausible seconds timestamp reaches it,
+        # but every current epoch-milliseconds value does (a HA template using
+        # `as_timestamp() * 1000`). fromtimestamp would raise a bare ValueError
+        # ("year must be in 1..9999") that nothing upstream catches.
+        if abs(raw) >= 1e11:
+            raise TimeseriesFormatError(
+                f"'start' value {raw!r} looks like epoch milliseconds - send "
+                "Unix seconds instead (drop the '* 1000' from the template)"
+            )
+        try:
+            return datetime.fromtimestamp(raw, tz=pytz.UTC).astimezone(tz), False
+        except (ValueError, OSError, OverflowError) as exc:
+            raise TimeseriesFormatError(
+                f"'start' value {raw!r} is not a usable Unix timestamp"
+            ) from exc
 
     if isinstance(raw, str):
         text = raw.strip()
