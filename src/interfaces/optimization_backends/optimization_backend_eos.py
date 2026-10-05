@@ -201,6 +201,12 @@ class EOSBackend:
         self._adjust_arrays_for_dst(eos_request, expected_hourly)
 
         headers = {"accept": "application/json", "Content-Type": "application/json"}
+        # start_hour is the EOS server's wire contract and means the wall-clock
+        # hour — deliberately NOT the absolute slot index the rest of EOS
+        # Connect counts in. Together with _adjust_arrays_for_dst above, this
+        # pair is the only place allowed to know a local day can be 23 or 25
+        # hours: it translates the internal fixed 48-slot grid into what an
+        # EOS < 0.1.0 server expects.
         request_url = (
             self.base_url
             + "/optimize"

@@ -215,8 +215,8 @@ class TestDynamicOverrideLogic:
 
         # Current time is 12:00 (noon)
         with patch("src.interfaces.optimization_interface.datetime") as mock_datetime:
-            mock_datetime.now.return_value = datetime(
-                2024, 10, 4, 12, 0, 0, tzinfo=berlin_timezone
+            mock_datetime.now.return_value = berlin_timezone.localize(
+                datetime(2024, 10, 4, 12, 0, 0)
             )
             mock_datetime.side_effect = lambda *args, **kwargs: datetime(
                 *args, **kwargs
@@ -254,8 +254,8 @@ class TestDynamicOverrideLogic:
 
         # Current time is 8:00 (morning) - at this hour PV (5000) > Load (400)
         with patch("src.interfaces.optimization_interface.datetime") as mock_datetime:
-            mock_datetime.now.return_value = datetime(
-                2024, 10, 4, 8, 0, 0, tzinfo=berlin_timezone
+            mock_datetime.now.return_value = berlin_timezone.localize(
+                datetime(2024, 10, 4, 8, 0, 0)
             )
             mock_datetime.side_effect = lambda *args, **kwargs: datetime(
                 *args, **kwargs
@@ -353,8 +353,8 @@ class TestDynamicOverrideLogic:
 
         # Current time is 12:00 (noon) - at this hour PV (300) < Load (1000)
         with patch("src.interfaces.optimization_interface.datetime") as mock_datetime:
-            mock_datetime.now.return_value = datetime(
-                2024, 10, 4, 12, 0, 0, tzinfo=berlin_timezone
+            mock_datetime.now.return_value = berlin_timezone.localize(
+                datetime(2024, 10, 4, 12, 0, 0)
             )
             mock_datetime.side_effect = lambda *args, **kwargs: datetime(
                 *args, **kwargs
@@ -459,8 +459,8 @@ class TestDynamicOverrideLogic:
 
         # Current time at slot 8 (8:00 AM): PV (5000) > Load (400) BUT AC charging (0.3) is requested
         with patch("src.interfaces.optimization_interface.datetime") as mock_datetime:
-            mock_datetime.now.return_value = datetime(
-                2024, 10, 4, 8, 0, 0, tzinfo=berlin_timezone
+            mock_datetime.now.return_value = berlin_timezone.localize(
+                datetime(2024, 10, 4, 8, 0, 0)
             )
             mock_datetime.side_effect = lambda *args, **kwargs: datetime(
                 *args, **kwargs
@@ -568,8 +568,8 @@ class TestDynamicOverrideLogic:
         # Slot 7: AC charging (0.4) for grid priority
         # Slot 8: Avoid discharge BUT PV (5000) > Load (400), so override should apply
         with patch("src.interfaces.optimization_interface.datetime") as mock_datetime:
-            mock_datetime.now.return_value = datetime(
-                2024, 10, 4, 8, 0, 0, tzinfo=berlin_timezone
+            mock_datetime.now.return_value = berlin_timezone.localize(
+                datetime(2024, 10, 4, 8, 0, 0)
             )
             mock_datetime.side_effect = lambda *args, **kwargs: datetime(
                 *args, **kwargs

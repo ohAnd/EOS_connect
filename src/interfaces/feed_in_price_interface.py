@@ -36,9 +36,9 @@ import requests
 import pytz
 
 try:  # running from src/ — src/ is on sys.path
-    from timeseries_grid import horizon_slots
+    from timeseries_grid import horizon_slots, local_midnight
 except ImportError:  # imported as src.interfaces (tests)
-    from ..timeseries_grid import horizon_slots
+    from ..timeseries_grid import horizon_slots, local_midnight
 from .timeseries_normalizer import (
     TimeseriesFormatError,
     convert_price_values,
@@ -196,9 +196,7 @@ class FeedInPriceInterface:
         """
         try:
             # Initial update on startup
-            start_time = datetime.now(self.time_zone).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            start_time = local_midnight(self.time_zone)
             tgt_duration = horizon_slots(self.time_frame_base)
             self.update_prices(tgt_duration, start_time)
 
@@ -208,9 +206,7 @@ class FeedInPriceInterface:
                     break
 
                 # Periodic update
-                start_time = datetime.now(self.time_zone).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
+                start_time = local_midnight(self.time_zone)
                 tgt_duration = horizon_slots(self.time_frame_base)
                 self.update_prices(tgt_duration, start_time)
                 logger.debug("[FEEDIN-IF] Periodic feed-in price update completed")
@@ -238,9 +234,8 @@ class FeedInPriceInterface:
             start_time (datetime, optional): Start time (default: now at midnight)
         """
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Midnight, not the current hour: the grid is midnight-anchored.
+            start_time = local_midnight(self.time_zone)
 
         prices = self._retrieve_prices(tgt_duration, start_time)
 
