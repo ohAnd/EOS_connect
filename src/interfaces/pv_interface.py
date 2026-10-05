@@ -192,6 +192,10 @@ def _describe_akkudoktor_error(tgt_value, exception):
     return f"{message} | upstream: {body}{hint}"
 
 
+try:  # running from src/ — src/ is on sys.path
+    from timeseries_grid import horizon_slots
+except ImportError:  # imported as src.interfaces (tests)
+    from ..timeseries_grid import horizon_slots
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
@@ -1882,7 +1886,7 @@ class PvInterface:
 
         now_local = datetime.now(tz)
         midnight_today = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-        expected_count = 48 if self.time_frame_base == 3600 else 192
+        expected_count = horizon_slots(self.time_frame_base)
         slot_keys = [
             midnight_today + timedelta(seconds=slot_seconds * i)
             for i in range(expected_count)
@@ -2833,9 +2837,8 @@ class PvInterface:
             # hourly and splitting afterwards: a Personal (30 min) or Professional Plus
             # (15 min) account then contributes its real intra-hour shape instead of a
             # flat quarter of the hour.
-            slot_seconds, slot_count = (
-                (900, 192) if self.time_frame_base == 900 else (3600, 48)
-            )
+            slot_seconds = self.time_frame_base
+            slot_count = horizon_slots(slot_seconds)
             pv_forecast = self._forecast_solar_periods_to_slots(
                 watt_hours_period, slot_seconds, slot_count
             )

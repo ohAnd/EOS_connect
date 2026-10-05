@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.interfaces.price_interface import PriceInterface
+from src.timeseries_grid import horizon_slots
 
 ANCHOR = datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc)  # local midnight "today"
 
@@ -183,24 +184,12 @@ class TestHorizonUnits:
         iface.last_successful_prices = [0.0001] * 192
         iface.last_successful_prices_direct = [0.0001] * 192
         iface.consecutive_failures = 0
-        # The update loop at price_interface.py:238 passes a literal 48
-        # ("hours") while hot_reload passes 192 ("slots") to the same method.
-        iface.update_prices(48, ANCHOR)
+        # Mirrors the update loop: tgt_duration counts slots on every path.
+        iface.update_prices(horizon_slots(iface.time_frame_base), ANCHOR)
 
-    def test_the_update_loops_literal_48_truncates_the_fallback(
-        self, quarter_hour_interface, monkeypatch
-    ):
-        """Today a fallback on a 15-minute system serves 48 of the 192 cached slots."""
-        self._force_fallback(quarter_hour_interface, monkeypatch)
-        assert len(quarter_hour_interface.get_current_prices()) == 48
-
-    @pytest.mark.xfail(
-        reason="unified slot horizon lands with 'fix: express the price horizon in slots'",
-        strict=True,
-    )
     def test_a_fallback_on_a_15_minute_system_keeps_all_192_slots(
         self, quarter_hour_interface, monkeypatch
     ):
-        """Once the horizon is expressed in slots everywhere, nothing truncates it."""
+        """The horizon is expressed in slots everywhere; nothing truncates it."""
         self._force_fallback(quarter_hour_interface, monkeypatch)
         assert len(quarter_hour_interface.get_current_prices()) == 192

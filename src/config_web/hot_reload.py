@@ -66,6 +66,11 @@ import logging
 import threading
 from datetime import datetime
 
+try:  # running from src/ — src/ is on sys.path
+    from timeseries_grid import horizon_slots
+except ImportError:  # imported as src.config_web (tests)
+    from ..timeseries_grid import horizon_slots
+
 logger = logging.getLogger("__main__")
 
 
@@ -419,7 +424,7 @@ class HotReloadAdapter:
             start_time = datetime.now(self._feed_in_price.time_zone).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-            tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+            tgt_duration = horizon_slots(self._feed_in_price.time_frame_base)
             self._feed_in_price.update_prices(tgt_duration, start_time)
             logger.debug("[HotReload] Recalculated feed-in prices after %s change", key)
         except (AttributeError, TypeError, ValueError, OSError, RuntimeError) as e:
@@ -443,7 +448,7 @@ class HotReloadAdapter:
             start_time = datetime.now(self._feed_in_price.time_zone).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-            tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+            tgt_duration = horizon_slots(self._feed_in_price.time_frame_base)
             self._feed_in_price.update_prices(tgt_duration, start_time)
             logger.info(
                 "[HotReload] Synced FeedInPriceInterface.fixed_price_ct_kwh = %s (was %s)",
@@ -466,7 +471,7 @@ class HotReloadAdapter:
             start_time = datetime.now(self._feed_in_price.time_zone).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-            tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+            tgt_duration = horizon_slots(self._feed_in_price.time_frame_base)
             self._feed_in_price.update_prices(tgt_duration, start_time)
             logger.info(
                 "[HotReload] Synced FeedInPriceInterface.negative_price_switch = %s (was %s)",
@@ -854,7 +859,7 @@ class HotReloadAdapter:
                     start_time = datetime.now(self._price.time_zone).replace(
                         hour=0, minute=0, second=0, microsecond=0
                     )
-                    tgt_duration = 192 if self._price.time_frame_base == 900 else 48
+                    tgt_duration = horizon_slots(self._price.time_frame_base)
                     self._price.update_prices(tgt_duration, start_time)
                     logger.info(
                         "[HotReload] Immediately fetched prices after %s config change", key
@@ -955,7 +960,7 @@ class HotReloadAdapter:
                 start_time = datetime.now(self._feed_in_price.time_zone).replace(
                     hour=0, minute=0, second=0, microsecond=0
                 )
-                tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+                tgt_duration = horizon_slots(self._feed_in_price.time_frame_base)
                 self._feed_in_price.update_prices(tgt_duration, start_time)
                 logger.info(
                     "[HotReload] Immediately fetched feed-in prices after %s config change"
