@@ -223,10 +223,12 @@
 
                     <div class="alert alert-info">
                         <strong><i class="fas fa-info-circle" aria-hidden="true"></i> All-or-nothing parsing:</strong> if a single
-                        entry is malformed — a <code>null</code> value, an unparseable timestamp, a missing field —
-                        the whole payload is rejected and EOS Connect keeps using the last good data. Skipping just
-                        the bad entry would shift every following hourly price by one slot, which is not visible
-                        anywhere in the UI. The log names the offending entry by index.
+                        entry is malformed — a <code>null</code> value, an unparseable timestamp, a missing field, a
+                        duplicated timestamp — the whole payload is rejected and EOS Connect keeps using the last
+                        good data. Values are placed by their timestamps, so skipping just the bad entry would turn
+                        it into a hole that gets filled by policy: a <code>null</code> at 18:00 would silently become
+                        the 17:00 price, exactly where the price matters most. The log names the offending entry by
+                        index.
                     </div>
 
                     <div class="alert alert-info">
@@ -241,6 +243,17 @@
                         Bare value arrays without timestamps are rejected here — they belong to the sources
                         built for them (<code>fixed_24h</code> for prices, the managed-load push API), or get
                         timestamps added via a template sensor.
+                    </div>
+
+                    <div class="alert alert-info">
+                        <strong><i class="fas fa-info-circle" aria-hidden="true"></i> Which period must the series cover?</strong>
+                        The optimization window runs from local midnight <em>today</em> for 48 hours, and values
+                        land on it by their timestamps — a source that also publishes yesterday (EPEX Spot, Tibber
+                        via HACS) or several extra days is fine: entries outside the window are simply dropped.
+                        Price slots the series does not cover are filled (first known price backwards, last known
+                        forwards, tomorrow repeats today's pattern) and the invented tail is hatched in the chart;
+                        a series that never touches the window — stale since yesterday, or future-only — is
+                        rejected and the last good data stays in use. PV treats uncovered slots as 0&nbsp;Wh.
                     </div>
 
                     <h3>Home Assistant Integration</h3>

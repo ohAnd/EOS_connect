@@ -66,15 +66,15 @@ class TestCompleteEVCCData:
                 "value": price,
             })
 
-        result = iface._PriceInterface__convert_15min_to_hourly_price_timeseries(
-            timeseries, window_start
-        )
+        result = iface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, None, window_start
+    )
 
         # Must return exactly 48 slots
         assert len(result) == 48
 
         # Extract values for analysis
-        values = [r["value"] for r in result]
+        values = list(result)
         
         # Today's slots (0-23)
         today_pattern = values[0:24]
@@ -169,15 +169,15 @@ class TestCompleteEVCCData:
             })
 
         # Convert both
-        complete_result = iface._PriceInterface__convert_15min_to_hourly_price_timeseries(
-            complete_data, window_start
-        )
-        incomplete_result = iface._PriceInterface__convert_15min_to_hourly_price_timeseries(
-            incomplete_data, window_start
-        )
+        complete_result = iface._PriceInterface__parse_price_timeseries(
+            complete_data, 48, None, window_start
+    )
+        incomplete_result = iface._PriceInterface__parse_price_timeseries(
+            incomplete_data, 48, None, window_start
+    )
 
-        complete_values = [r["value"] for r in complete_result]
-        incomplete_values = [r["value"] for r in incomplete_result]
+        complete_values = list(complete_result)
+        incomplete_values = list(incomplete_result)
 
         # Both should have 48 values
         assert len(complete_values) == 48

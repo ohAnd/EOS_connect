@@ -42,12 +42,28 @@ import time
 import requests
 
 try:  # running from src/ — src/ is on sys.path
-    from timeseries_grid import horizon_slots, local_midnight
+    from timeseries_grid import (
+        KIND_INTENSIVE,
+        TimeseriesGridError,
+        clamp_report,
+        horizon_slots,
+        local_midnight,
+        place_on_grid,
+    )
 except ImportError:  # imported as src.interfaces (tests)
-    from ..timeseries_grid import horizon_slots, local_midnight
+    from ..timeseries_grid import (
+        KIND_INTENSIVE,
+        TimeseriesGridError,
+        clamp_report,
+        horizon_slots,
+        local_midnight,
+        place_on_grid,
+    )
 from .timeseries_normalizer import (
+    TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
     convert_price_values,
+    detect_resolution_seconds,
     extract_json_path,
     normalize_entries,
     price_plausibility_message,
@@ -55,6 +71,52 @@ from .timeseries_normalizer import (
 
 logger = logging.getLogger("__main__")
 logger.info("[PRICE-IF] loading module ")
+
+def fill_price_gaps(values, coverage, slots_per_day):
+    """
+    Fill the slots a price series did not cover, by the established policy.
+
+    - before the first covered slot: the first known price, backwards
+    - an interior hole: the last known price, forwards
+    - the second day, where uncovered: today's value for the same slot
+      (tomorrow repeats today's pattern), else the last known price
+
+    Args:
+        values: Per-slot prices from the intensive placement.
+        coverage: Per-slot coverage fractions; > 0 counts as real data.
+        slots_per_day: 24 or 96 — where the pattern repetition starts.
+
+    Returns:
+        (filled_values, leading_count, forecast_start_index) —
+        forecast_start_index is the first slot of the contiguous uncovered
+        TAIL (None when the last slot is covered), which is exactly what
+        _set_forecast_metadata reports to the UI. ([], 0, None) when nothing
+        is covered at all, so the caller can fall back instead of inventing
+        a flat price.
+    """
+    covered = [fraction > 0 for fraction in coverage]
+    first_data = next((i for i, flag in enumerate(covered) if flag), None)
+    if first_data is None:
+        return [], 0, None
+    last_data = max(i for i, flag in enumerate(covered) if flag)
+
+    first_price = values[first_data]
+    last_known = first_price
+    filled = []
+    for index, flag in enumerate(covered):
+        if flag:
+            last_known = values[index]
+            filled.append(last_known)
+        elif index < first_data:
+            filled.append(first_price)
+        elif index >= slots_per_day and covered[index - slots_per_day]:
+            filled.append(values[index - slots_per_day])
+        else:
+            filled.append(last_known)
+
+    forecast_start = last_data + 1 if last_data + 1 < len(values) else None
+    return filled, first_data, forecast_start
+
 
 AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
 TIBBER_API = "https://api.tibber.com/v1-beta/gql"
@@ -195,6 +257,10 @@ class PriceInterface:
             None  # "smart_forecast", "simple_repetition", or None (all real)
         )
         self.forecast_source = None  # e.g., "energyforecast.de" for smart forecasts
+        # Prices and forecast metadata are read by the web thread while the
+        # update thread writes them; this tuple is assigned once per update so
+        # a reader never sees new metadata next to old prices.
+        self._published = None
 
         self.__check_config()  # Validate configuration parameters
         logger.info(
@@ -380,6 +446,12 @@ class PriceInterface:
                 minute=0, second=0, microsecond=0
             )
         self.current_prices = self.__retrieve_prices(tgt_duration, start_time)
+        self._published = (
+            list(self.current_prices),
+            self.forecast_start_index,
+            self.forecast_type,
+            self.forecast_source,
+        )
         logger.debug(
             "[PRICE-IF] Prices updated for %d hours starting from %s",
             tgt_duration,
@@ -393,7 +465,8 @@ class PriceInterface:
         Returns:
             list: A list of current prices (EUR/Wh) for the configured time frame.
         """
-        # logger.debug("[PRICE-IF] Returning current prices: %s", self.current_prices)
+        if self._published is not None:
+            return self._published[0]
         return self.current_prices
 
     def get_price_currency(self):
@@ -416,11 +489,30 @@ class PriceInterface:
                   - forecast_type: "smart_forecast", "simple_repetition", or None
                   - forecast_source: Source of prediction (e.g., "energyforecast.de") or None
         """
+        if self._published is not None:
+            _, start_index, forecast_type, forecast_source = self._published
+            return {
+                "forecast_start_index": start_index,
+                "forecast_type": forecast_type,
+                "forecast_source": forecast_source,
+            }
         return {
             "forecast_start_index": self.forecast_start_index,
             "forecast_type": self.forecast_type,
             "forecast_source": self.forecast_source,
         }
+
+    def clear_forecast_metadata(self):
+        """
+        Drop forecast markers belonging to the previous source.
+
+        Used by hot reload when the price source changes without an immediate
+        fetch: the old markers would otherwise keep hatching real prices as
+        forecast until the next update cycle.
+        """
+        self._set_forecast_metadata(None, None, None)
+        if self._published is not None:
+            self._published = (self._published[0], None, None, None)
 
     def _set_forecast_metadata(self, start_index, forecast_type, source=None):
         """
@@ -1947,38 +2039,18 @@ class PriceInterface:
                         max_price,
                     )
 
-            # EVCC provides rates with start, end, and value (EUR/kWh)
-            # Convert to timeseries format: [{start, end, value}, ...] with value in EUR/Wh
-            timeseries = []
-            for rate in rates:
-                if not isinstance(rate, dict) or "start" not in rate or "value" not in rate:
-                    logger.warning(f"[PRICE-IF] Skipping invalid EVCC rate entry: {rate}")
-                    continue
-
-                try:
-                    start_str = rate["start"]
-                    end_str = rate.get("end", "")  # May be provided by EVCC
-                    price_eur_kwh = float(rate["value"])
-
-                    # Convert EUR/kWh to EUR/Wh (divide by 1000)
-                    price_eur_wh = price_eur_kwh / 1000.0
-
-                    timeseries.append({
-                        "start": start_str,
-                        "end": end_str if end_str else None,
-                        "value": price_eur_wh
-                    })
-
-                except (ValueError, KeyError, TypeError) as e:
-                    logger.warning(f"[PRICE-IF] Error parsing EVCC rate entry: {e}")
-                    continue
-
-            if not timeseries:
-                logger.error("[PRICE-IF] No valid rates converted from EVCC response")
+            # EVCC provides rates with start, end, and value (EUR/kWh). Parse
+            # them through the shared normalizer — the ends are authoritative,
+            # the timestamps keep their own offsets — and convert the unit via
+            # the common table.
+            try:
+                timeseries = normalize_entries(rates, self.time_zone, label="PRICE-IF")
+                convert_price_values(timeseries, "EUR/kWh")
+            except TimeseriesFormatError as exc:
+                logger.error("[PRICE-IF] Invalid EVCC rates: %s", exc)
                 return []
 
-            # Detect time resolution from first few entries to determine expected count
-            resolution_seconds = self.__detect_price_timeseries_resolution(timeseries)
+            resolution_seconds = detect_resolution_seconds(timeseries)
             if resolution_seconds is None:
                 logger.warning("[PRICE-IF] Could not detect timeseries resolution")
                 return []
@@ -2150,78 +2222,65 @@ class PriceInterface:
         value_unit=None,
     ):
         """
-        Parse and validate price timeseries format.
+        Parse a price timeseries and lay it onto the slot grid by timestamp.
 
-        Standardized format: [{start, end, value}, ...]
-        - start: ISO8601 string or Unix timestamp (seconds)
-        - end: optional, derived from the next entry when absent
-        - value: numeric, in *value_unit*
-        - Supports hourly (48 values) or 15-minute (192 values) resolution
+        Standardized format: [{start, end, value}, ...] — accepted field
+        spellings, authoritative ends and capped derived spans per
+        timeseries_normalizer. Prices are a rate, so placement is intensive: a
+        slot averages what covers it, a coarse entry holds its value across
+        every sub-slot (timeseries_grid). An entry's position in the payload
+        means nothing — a source that also publishes yesterday lands on
+        today's slots by its timestamps (discussion #214).
+
+        Slots the series does not cover are filled by fill_price_gaps (first
+        known price backwards, last known forwards, tomorrow repeats today's
+        pattern); a filled tail is reported via _set_forecast_metadata so the
+        UI can hatch it. A series that never touches the window returns [] so
+        the caller's fallback chain serves the last good data instead of
+        fiction.
 
         Args:
-            timeseries: List of price entries with start and value
-            tgt_duration: Target duration in hours
-            resolution_seconds: Pre-detected resolution (900 or 3600), or None to auto-detect
-            start_time: Window start time (datetime) for timestamp-aware conversion
+            timeseries: List of price entries.
+            tgt_duration: Unused; the horizon comes from time_frame_base.
+                Retained for call-site compatibility.
+            resolution_seconds: Pre-detected resolution, or None to detect.
+            start_time: Window anchor (local midnight). None falls back to
+                local_midnight(self.time_zone).
             value_unit: Unit of the incoming values (see
-                timeseries_normalizer.PRICE_UNIT_TO_EUR_PER_WH). ``None`` means the
-                caller already supplies canonical EUR/Wh values and needs no
-                normalization — that is how the EVCC path feeds this method.
+                timeseries_normalizer.PRICE_UNIT_TO_EUR_PER_WH). ``None``
+                means the caller already supplies canonical EUR/Wh values.
 
         Returns:
-            list: Normalized hourly price values in EUR/Wh, or empty on error
+            list: Prices in EUR/Wh for the full horizon, or [] on error.
         """
         if not timeseries or not isinstance(timeseries, list):
             logger.error("[PRICE-IF] Price timeseries is not a list")
             return []
 
-        if len(timeseries) == 0:
-            logger.error("[PRICE-IF] Price timeseries is empty")
+        try:
+            timeseries = normalize_entries(
+                timeseries, self.time_zone, label="PRICE-IF"
+            )
+            if value_unit is not None:
+                convert_price_values(timeseries, value_unit)
+        except TimeseriesFormatError as exc:
+            logger.error("[PRICE-IF] Invalid price timeseries: %s", exc)
             return []
 
         if value_unit is not None:
-            # External source: normalize field/timestamp shape and convert the unit
-            # before any of the resolution logic below looks at the entries.
-            try:
-                timeseries = normalize_entries(
-                    timeseries, self.time_zone, label="PRICE-IF"
-                )
-                convert_price_values(timeseries, value_unit)
-            except TimeseriesFormatError as exc:
-                logger.error("[PRICE-IF] Invalid price timeseries: %s", exc)
-                return []
-
             warning = price_plausibility_message(
                 [entry["value"] for entry in timeseries], value_unit
             )
             if warning:
                 logger.warning("[PRICE-IF] %s", warning)
-        else:
-            # Validate first entry structure for pre-normalized input
-            first = timeseries[0]
-            if not isinstance(first, dict) or not all(
-                k in first for k in ("start", "value")
-            ):
-                logger.error(
-                    "[PRICE-IF] Invalid price timeseries format: missing start or value"
-                )
-                return []
 
-        # Detect time resolution from timestamp delta (unless already provided)
         if resolution_seconds is None:
-            resolution_seconds = self.__detect_price_timeseries_resolution(timeseries)
+            resolution_seconds = detect_resolution_seconds(timeseries)
             if resolution_seconds is None:
                 logger.error("[PRICE-IF] Could not detect price timeseries resolution")
                 return []
 
-        # Validate resolution matches time frame base
-        if resolution_seconds == 900 and self.time_frame_base == 3600:
-            # Source provides 15-min, system wants hourly - OK, convert
-            logger.debug(
-                "[PRICE-IF] Converting source 15-min to system hourly resolution"
-            )
-            timeseries = self.__convert_15min_to_hourly_price_timeseries(timeseries, start_time)
-        elif resolution_seconds == 3600 and self.time_frame_base == 900:
+        if resolution_seconds == 3600 and self.time_frame_base == 900:
             # Source provides hourly, system wants 15-min - ERROR
             # User must choose: either use 3600s time frame or find 15-min source
             logger.error(
@@ -2231,273 +2290,91 @@ class PriceInterface:
                 "with 15-minute resolution."
             )
             return []
-        elif resolution_seconds not in (900, 3600):
+        if resolution_seconds not in (900, 3600):
             logger.error(
                 "[PRICE-IF] Unsupported resolution: %d seconds (expected 900 or 3600)",
                 resolution_seconds,
             )
             return []
 
-        # Extract and validate values
+        anchor = (
+            start_time if start_time is not None else local_midnight(self.time_zone)
+        )
+        slot_count = horizon_slots(self.time_frame_base)
         try:
-            values = []
-            for item in timeseries:
-                value = float(item.get("value", 0))
-                # EUR/Wh range: -0.5 to 1.0
-                if value < -0.5 or value > 1.0:
-                    logger.warning(
-                        "[PRICE-IF] Price value %.9f outside range, clamping", value
-                    )
-                    value = max(-0.5, min(1.0, value))
-                values.append(value)
-        except (ValueError, TypeError):
-            logger.error("[PRICE-IF] Failed to extract numeric prices")
+            placement = place_on_grid(
+                timeseries,
+                anchor,
+                slot_count,
+                self.time_frame_base,
+                KIND_INTENSIVE,
+            )
+        except TimeseriesGridError as exc:
+            logger.error("[PRICE-IF] Invalid price timeseries: %s", exc)
             return []
 
-        # Validate completeness
-        expected_count = horizon_slots(self.time_frame_base)
-        if len(values) < expected_count:
-            logger.debug(
-                "[PRICE-IF] Incomplete timeseries: got %d, expected %d",
-                len(values),
-                expected_count,
+        values, leading, forecast_start = fill_price_gaps(
+            placement.values, placement.coverage, slots_per_day=slot_count // 2
+        )
+        if not values:
+            logger.warning(
+                "[PRICE-IF] None of %d price entries fell into the %d-slot window "
+                "starting %s — keeping the last good prices. If the source renders "
+                "UTC without an offset, every slot is shifted. See %s",
+                placement.source_count,
+                slot_count,
+                anchor.isoformat(),
+                TEMPLATE_DOCS_URL,
             )
-            # Pad with last value
-            if values:
-                padding_needed = expected_count - len(values)
-                last_value = values[-1]
-                values.extend([last_value] * padding_needed)
+            return []
+
+        covered = sum(1 for fraction in placement.coverage if fraction > 0)
+        if forecast_start is not None:
+            self._set_forecast_metadata(
+                start_index=forecast_start,
+                forecast_type="simple_repetition",
+                source=None,
+            )
+        else:
+            self._set_forecast_metadata(
+                start_index=None, forecast_type="all_real", source=None
+            )
+
+        if leading >= slot_count // 2:
+            # A rolling source fetched mid-day leads by a few hours — normal and
+            # quiet. A series that only starts a full day after the anchor is a
+            # misconfigured window, and its whole first day is invented.
+            logger.warning(
+                "[PRICE-IF] The price series only starts %d slot(s) after the "
+                "window anchor %s — the first day is backfilled with its first "
+                "known price",
+                leading,
+                anchor.isoformat(),
+            )
+        trailing = slot_count - forecast_start if forecast_start is not None else 0
+        interior = slot_count - covered - trailing - leading
+        if interior > 0:
+            logger.warning(
+                "[PRICE-IF] %d slot(s) inside the covered window carried no price "
+                "and were filled from their neighbours — check the source for holes",
+                interior,
+            )
+        if placement.dropped:
+            logger.debug(
+                "[PRICE-IF] %d of %d price entries fall outside the %d-slot window",
+                placement.dropped,
+                placement.source_count,
+                slot_count,
+            )
+
+        values, clamped, worst = clamp_report(values, -0.5, 1.0)
+        if clamped:
+            logger.warning(
+                "[PRICE-IF] %d price value(s) outside the EUR/Wh range, "
+                "clamping (worst: %.9f)",
+                clamped,
+                worst,
+            )
 
         # Round to 9 decimals (EUR precision)
-        values = [round(v, 9) for v in values]
-
-        return values
-
-    def __detect_price_timeseries_resolution(self, timeseries):
-        """
-        Detect time resolution (900s for 15-min, 3600s for hourly).
-
-        Returns:
-            int: Seconds per interval (900 or 3600), or None if cannot detect
-        """
-        if len(timeseries) < 2:
-            return None
-
-        try:
-            # Parse first two timestamps
-            from datetime import datetime as dt_class
-            import pytz
-
-            def parse_ts(ts_str):
-                """Parse timestamp from a datetime, ISO8601 string or Unix seconds."""
-                if isinstance(ts_str, dt_class):
-                    # Already normalized by timeseries_normalizer.
-                    return ts_str
-                if isinstance(ts_str, (int, float)):
-                    return dt_class.fromtimestamp(ts_str, tz=pytz.UTC)
-                if isinstance(ts_str, str):
-                    try:
-                        return dt_class.fromisoformat(ts_str.replace('Z', '+00:00'))
-                    except ValueError:
-                        return dt_class.fromisoformat(ts_str)
-                return None
-
-            start1 = parse_ts(timeseries[0].get("start"))
-            start2 = parse_ts(timeseries[1].get("start"))
-
-            if start1 is None or start2 is None:
-                return None
-
-            delta = int((start2 - start1).total_seconds())
-
-            if delta == 900:
-                logger.debug("[PRICE-IF] Detected 15-minute price resolution")
-                return 900
-            elif delta == 3600:
-                logger.debug("[PRICE-IF] Detected hourly price resolution")
-                return 3600
-            else:
-                logger.warning(
-                    "[PRICE-IF] Unexpected resolution delta: %d seconds", delta
-                )
-                return None
-        except (KeyError, TypeError, ValueError):
-            return None
-
-    def __convert_15min_to_hourly_price_timeseries(self, timeseries, start_time=None):
-        """
-        Convert 15-minute to hourly by averaging prices within each hour slot.
-        
-        Uses timestamps to determine which hour slot each 15-min price belongs to,
-        rather than naive index-based grouping. This ensures prices are correctly
-        aligned to the 48-hour window boundaries.
-
-        Args:
-            timeseries: List of 15-min price entries with start timestamps
-            start_time: Window start time (datetime) for alignment. If None, uses
-                       first timestamp as reference.
-
-        Returns:
-            list: Averaged hourly timeseries aligned to window start
-        """
-        if not timeseries:
-            logger.warning("[PRICE-IF] No 15-min data to convert")
-            return []
-
-        try:
-            from datetime import datetime as dt_class
-            import math
-
-            # Determine window start: use provided start_time or derive from first entry
-            if start_time is None:
-                # Parse first timestamp as reference
-                first_ts = timeseries[0].get("start")
-                if isinstance(first_ts, dt_class):
-                    # Already normalized by timeseries_normalizer.
-                    window_start = first_ts
-                elif isinstance(first_ts, str):
-                    try:
-                        window_start = dt_class.fromisoformat(first_ts.replace('Z', '+00:00'))
-                    except (ValueError, AttributeError):
-                        # Fallback for Python < 3.7 or invalid format
-                        logger.debug(f"[PRICE-IF] Failed to parse timestamp: {first_ts}")
-                        return self.__convert_15min_to_hourly_price_timeseries_naive(timeseries)
-                else:
-                    # Unix timestamp
-                    from datetime import timezone
-                    window_start = dt_class.fromtimestamp(first_ts, tz=timezone.utc)
-            else:
-                # Use provided start_time (already datetime with timezone)
-                window_start = start_time
-
-            # Initialize 48 hour slots
-            hourly = [{"prices": [], "start": None, "end": None} for _ in range(48)]
-
-            # Parse timestamps and group by hour slot
-            for entry in timeseries:
-                try:
-                    # Parse entry timestamp
-                    ts_str = entry.get("start")
-                    if isinstance(ts_str, dt_class):
-                        # Already normalized by timeseries_normalizer.
-                        entry_time = ts_str
-                    elif isinstance(ts_str, str):
-                        entry_time = dt_class.fromisoformat(ts_str.replace('Z', '+00:00'))
-                    else:
-                        from datetime import timezone
-                        entry_time = dt_class.fromtimestamp(ts_str, tz=timezone.utc)
-
-                    # Calculate which hour slot this entry belongs to
-                    time_diff = entry_time - window_start
-                    hours_offset = time_diff.total_seconds() / 3600.0
-                    # Use math.floor to properly handle negative values
-                    # floor(-0.25) = -1, floor(0.25) = 0, floor(1.75) = 1
-                    hour_slot = math.floor(hours_offset)
-
-                    # Validate hour slot is within 48-hour window
-                    if 0 <= hour_slot < 48:
-                        price_value = float(entry.get("value", 0))
-                        hourly[hour_slot]["prices"].append(price_value)
-
-                        # Set start/end timestamps for this slot (from first entry in slot)
-                        if not hourly[hour_slot]["start"]:
-                            hourly[hour_slot]["start"] = ts_str
-                        hourly[hour_slot]["end"] = entry.get("end")
-                except (ValueError, TypeError, AttributeError) as e:
-                    logger.debug(f"[PRICE-IF] Skipping entry during conversion: {e}")
-                    continue
-
-            # Average prices within each hour slot and collect filled/empty info
-            slot_values = [None] * 48  # None means no data for this slot
-            slots_with_data = 0
-            slots_without_data = 0
-
-            for slot_idx, slot_data in enumerate(hourly):
-                if slot_data["prices"]:
-                    slot_values[slot_idx] = sum(slot_data["prices"]) / len(slot_data["prices"])
-                    slots_with_data += 1
-                else:
-                    slots_without_data += 1
-
-            # Find first slot with actual data
-            first_data_slot = next((i for i, v in enumerate(slot_values) if v is not None), None)
-
-            if first_data_slot is None:
-                # No data at all - return empty so fallback chain can handle it
-                logger.warning("[PRICE-IF] No 15-min prices fell within 48-hour window")
-                return []
-
-            # Gap-fill all 48 slots:
-            # - Slots before first data: backward-fill with first known price
-            # - Slots after last data: for slots 24-47 (next day), cycle daily pattern from slots 0-23
-            #   For slots within same day after data ends: forward-fill with last known
-            first_price = slot_values[first_data_slot]
-            last_known = first_price  # Start with first data as seed for pre-data slots
-
-            result = []
-            for slot_idx in range(48):
-                if slot_values[slot_idx] is not None:
-                    last_known = slot_values[slot_idx]
-                    value = last_known
-                elif slot_idx < first_data_slot:
-                    # Before any data: use first known price
-                    value = first_price
-                else:
-                    # Inner gap or post-data within same day: forward-fill with last known
-                    # If we're in the next day (slot >= 24) and have no real data there,
-                    # cycle through today's pattern (slots 0-23) for better forecasting
-                    if slot_idx >= 24:
-                        # Next day: repeat today's pattern
-                        cycle_idx = (slot_idx - 24) % 24  # Map slots 24-47 to 0-23
-                        value = slot_values[cycle_idx] if slot_values[cycle_idx] is not None else last_known
-                    else:
-                        value = last_known
-
-                result.append({"start": hourly[slot_idx]["start"], "end": hourly[slot_idx]["end"], "value": value})
-
-            logger.debug(
-                "[PRICE-IF] Converted %d 15-min prices to 48 hourly slots "
-                "(slots with data: %d, gap-filled: %d)",
-                len(timeseries),
-                slots_with_data,
-                slots_without_data,
-            )
-            return result
-
-        except Exception as e:
-            logger.error(f"[PRICE-IF] Error converting 15-min to hourly: {e}")
-            # Fallback to naive grouping if timestamp parsing fails
-            logger.debug("[PRICE-IF] Falling back to naive grouping")
-            return self.__convert_15min_to_hourly_price_timeseries_naive(timeseries)
-
-    def __convert_15min_to_hourly_price_timeseries_naive(self, timeseries):
-        """
-        Fallback: convert 15-minute to hourly by naive 4-consecutive grouping.
-        
-        This is used when timestamp parsing fails. Groups consecutive 15-min
-        prices in groups of 4 without considering timestamps.
-        
-        Args:
-            timeseries: List of 15-min price entries
-            
-        Returns:
-            list: Averaged hourly timeseries using naive grouping
-        """
-        hourly = []
-        for i in range(0, len(timeseries), 4):
-            group = timeseries[i : i + 4]
-            if not group:
-                continue
-            try:
-                avg_value = (
-                    sum(float(item.get("value", 0)) for item in group) / len(group)
-                )
-                hourly_item = {
-                    "start": group[0].get("start"),
-                    "end": group[-1].get("end"),
-                    "value": avg_value,
-                }
-                hourly.append(hourly_item)
-            except (ValueError, TypeError):
-                pass
-        return hourly
+        return [round(value, 9) for value in values]
