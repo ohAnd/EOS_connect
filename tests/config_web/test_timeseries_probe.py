@@ -123,17 +123,17 @@ class TestUnitMistakeIsSurfaced:
 
 class TestFormatMismatch:
     def test_foreign_field_names_named_against_the_path_field(self):
+        # start_time/price_per_kwh and friends are accepted spellings now, so a
+        # genuinely unknown pair stands in for "foreign".
         payload = {
-            "data": [
-                {"start_time": "2026-08-23T00:00:00+02:00", "price_per_kwh": 0.3811}
-            ]
+            "data": [{"begin": "2026-08-23T00:00:00+02:00", "cost": 0.3811}]
         }
 
         result = run_probe(payload, data_path="data")
 
         assert result["ok"] is False
         assert result["field"] == "price.data_path"
-        assert "'start_time'" in result["error"]
+        assert "'begin'" in result["error"]
 
     def test_wrong_path_lists_the_top_level_keys(self):
         result = run_probe(EVCC_RATES, data_path="prices")

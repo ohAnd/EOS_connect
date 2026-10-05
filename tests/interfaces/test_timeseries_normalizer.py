@@ -28,33 +28,128 @@ BERLIN = pytz.timezone("Europe/Berlin")
 
 
 class TestFieldValidation:
-    """The format is fixed; the error has to make it obvious how to comply."""
+    """Unknown spellings are rejected; the error has to say how to comply."""
 
-    def test_missing_start_names_the_available_keys(self):
-        payload = [{"start_time": "2026-08-23T00:00:00+02:00", "price_per_kwh": 0.3811}]
+    def test_missing_start_names_the_keys_and_the_accepted_spellings(self):
+        payload = [{"begin": "2026-08-23T00:00:00+02:00", "cost": 0.3811}]
 
         with pytest.raises(TimeseriesFormatError) as exc:
             normalize_entries(payload, BERLIN)
 
         message = str(exc.value)
         assert "'start'" in message
-        assert "'start_time'" in message
-        assert "'price_per_kwh'" in message
+        assert "'begin'" in message
+        assert "start_time" in message  # the accepted-spellings list
 
-    def test_missing_value_names_the_available_keys(self):
-        payload = [{"start": "2026-08-23T00:00:00+02:00", "price_per_kwh": 0.3811}]
+    def test_missing_value_names_the_keys_and_the_accepted_spellings(self):
+        payload = [{"start": "2026-08-23T00:00:00+02:00", "cost": 0.3811}]
 
         with pytest.raises(TimeseriesFormatError) as exc:
             normalize_entries(payload, BERLIN)
 
-        assert "'value'" in str(exc.value)
-        assert "'price_per_kwh'" in str(exc.value)
+        message = str(exc.value)
+        assert "'value'" in message
+        assert "'cost'" in message
+        assert "price_per_kwh" in message
 
     def test_error_points_at_the_template_docs(self):
         with pytest.raises(TimeseriesFormatError) as exc:
             normalize_entries([{"foo": 1}], BERLIN)
 
         assert "timeseries-templates" in str(exc.value)
+
+    def test_mixed_spellings_between_entries_are_rejected(self):
+        """One spelling per payload: a mix is a template bug, not a format."""
+        payload = [
+            {"start_time": "2026-08-23T00:00:00+02:00", "price_per_kwh": 0.38},
+            {"start": "2026-08-23T01:00:00+02:00", "price_per_kwh": 0.37},
+        ]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+
+        assert "entry 1" in str(exc.value)
+        assert "'start_time'" in str(exc.value)
+
+
+class TestFieldAliases:
+    """The spellings the #214 integrations publish are read directly."""
+
+    def test_tibber_hacs_shape_is_accepted(self):
+        payload = [
+            {"start_time": "2026-08-23T00:00:00+02:00", "price_per_kwh": 0.3811},
+            {"start_time": "2026-08-23T00:15:00+02:00", "price_per_kwh": 0.3727},
+        ]
+        entries = normalize_entries(payload, BERLIN)
+        assert entries[0]["value"] == 0.3811
+        assert entries[0]["start"].utcoffset() == timedelta(hours=2)
+
+    def test_epex_spot_hacs_shape_is_accepted(self):
+        payload = [
+            {
+                "start_time": "2026-08-22T00:00:00+02:00",
+                "end_time": "2026-08-22T00:15:00+02:00",
+                "price_per_kwh": 0.1766,
+            },
+            {
+                "start_time": "2026-08-22T00:15:00+02:00",
+                "end_time": "2026-08-22T00:30:00+02:00",
+                "price_per_kwh": 0.1714,
+            },
+        ]
+        entries = normalize_entries(payload, BERLIN)
+        assert [e["value"] for e in entries] == [0.1766, 0.1714]
+
+    def test_tibber_core_action_shape_is_accepted(self):
+        payload = [
+            {"start_time": "2026-08-23T00:00:00.000+02:00", "price": 0.3811},
+            {"start_time": "2026-08-23T01:00:00.000+02:00", "price": 0.3727},
+        ]
+        entries = normalize_entries(payload, BERLIN)
+        assert entries[1]["value"] == 0.3727
+
+    def test_solcast_shape_is_accepted(self):
+        payload = [
+            {"period_start": "2026-08-23T10:00:00+02:00", "pv_estimate": 1.25},
+            {"period_start": "2026-08-23T10:30:00+02:00", "pv_estimate": 1.5},
+        ]
+        entries = normalize_entries(payload, BERLIN)
+        assert entries[0]["value"] == 1.25
+
+    def test_the_canonical_spelling_wins_over_an_alias(self):
+        payload = [
+            {
+                "start": "2026-08-23T05:00:00+02:00",
+                "start_time": "2026-08-23T09:00:00+02:00",
+                "value": 1.0,
+            },
+            {
+                "start": "2026-08-23T06:00:00+02:00",
+                "start_time": "2026-08-23T10:00:00+02:00",
+                "value": 2.0,
+            },
+        ]
+        entries = normalize_entries(payload, BERLIN)
+        assert entries[0]["start"].hour == 5
+
+    def test_alias_use_is_logged_once(self, caplog):
+        payload = [
+            {"start_time": "2026-08-23T00:00:00+02:00", "price_per_kwh": 0.38},
+            {"start_time": "2026-08-23T01:00:00+02:00", "price_per_kwh": 0.37},
+        ]
+        with caplog.at_level("INFO"):
+            normalize_entries(payload, BERLIN, label="PRICE-IF")
+        hits = [r for r in caplog.records if "start_time" in r.getMessage()]
+        assert len(hits) == 1
+
+    def test_canonical_names_are_not_logged_as_aliases(self, caplog):
+        payload = [
+            {"start": "2026-08-23T00:00:00+02:00", "value": 0.38},
+            {"start": "2026-08-23T01:00:00+02:00", "value": 0.37},
+        ]
+        with caplog.at_level("INFO"):
+            normalize_entries(payload, BERLIN)
+        assert not [r for r in caplog.records if "read as" in r.getMessage()]
 
     def test_non_list_payload_rejected(self):
         with pytest.raises(TimeseriesFormatError):

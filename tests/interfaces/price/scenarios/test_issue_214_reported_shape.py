@@ -9,10 +9,10 @@ series starts on the previous day and runs four days — so it is simultaneously
 below reproduces that shape; prices encode their origin as 0.<day+1> + hour/1000,
 with day index 1 (base 0.2) being "today" for the anchor the tests pass.
 
-Today the payload is rejected over its field names alone. Accepting the names
-is `feat: accept common timeseries field names`; landing the values on the
-right slots is `fix: align timeseries prices by timestamp` — the second xfail
-is the acceptance case for that commit.
+The field names are accepted (the normalizer reads the sensor's own
+spellings); landing the values on the right slots is
+`fix: align timeseries prices by timestamp` — the xfail below is the
+acceptance case for that commit.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -21,7 +21,7 @@ import pytest
 import pytz
 
 from src.interfaces.price_interface import PriceInterface
-from src.interfaces.timeseries_normalizer import TimeseriesFormatError, normalize_entries
+from src.interfaces.timeseries_normalizer import normalize_entries
 
 BERLIN = pytz.timezone("Europe/Berlin")
 CEST = timezone(timedelta(hours=2))
@@ -46,23 +46,16 @@ def payload_fixture():
     return entries
 
 
-def test_the_reported_field_names_are_rejected_today(payload):
-    """Documents why the thread keeps asking for field aliases.
-
-    The error names the fields the sensor actually has, but nothing accepts them.
-    """
-    with pytest.raises(TimeseriesFormatError) as exc:
-        normalize_entries(payload, BERLIN)
-    message = str(exc.value)
-    assert "'start'" in message
-    assert "'start_time'" in message
+def test_the_reported_field_names_are_accepted(payload):
+    """The sensor's own spellings parse without a renaming template."""
+    entries = normalize_entries(payload, BERLIN)
+    assert len(entries) == 384
+    assert entries[0]["value"] == pytest.approx(0.1)
+    assert entries[0]["start"].utcoffset() == timedelta(hours=2)
 
 
 @pytest.mark.xfail(
-    reason=(
-        "needs 'feat: accept common timeseries field names' and "
-        "'fix: align timeseries prices by timestamp'"
-    ),
+    reason="timestamp placement lands with 'fix: align timeseries prices by timestamp'",
     strict=True,
 )
 def test_the_reported_payload_lands_on_todays_slots(payload, monkeypatch):

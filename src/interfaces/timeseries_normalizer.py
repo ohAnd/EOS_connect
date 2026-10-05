@@ -159,6 +159,42 @@ def _describe_available_keys(entry):
     return "available fields: " + ", ".join(repr(k) for k in entry.keys())
 
 
+#: Accepted spellings per canonical field, canonical name first. These are the
+#: names the popular integrations actually publish (discussion #214): EPEX Spot
+#: HACS and Tibber HACS use start_time/end_time/price_per_kwh, the Tibber core
+#: action start_time/price, Solcast period_start/period_end/pv_estimate,
+#: Open-Meteo time. A generic timestamp/time always means the interval START —
+#: guessing it could mean the end would shift every slot for a "hour ending"
+#: source, silently.
+FIELD_ALIASES = {
+    "start": ("start", "start_time", "period_start", "timestamp", "time"),
+    "end": ("end", "end_time", "period_end"),
+    "value": ("value", "price_per_kwh", "price", "pv_estimate"),
+}
+
+
+def resolve_field_names(first):
+    """
+    Pick the payload's field spellings from its first entry.
+
+    One spelling per field for the whole payload: mixing spellings between
+    entries is rejected later like any other malformed entry, because a mix is
+    a template bug, not a format.
+
+    Returns:
+        dict: canonical name -> the key actually present, for each field found.
+    """
+    resolved = {}
+    if not isinstance(first, dict):
+        return resolved
+    for canonical, aliases in FIELD_ALIASES.items():
+        for name in aliases:
+            if name in first:
+                resolved[canonical] = name
+                break
+    return resolved
+
+
 def normalize_entries(raw_entries, tz, label="timeseries"):
     """
     Validate and normalize a raw payload into the canonical format.
@@ -175,6 +211,10 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
     Raises:
         TimeseriesFormatError: With a user-facing message naming the offending field
             and the keys that were present instead.
+
+    Field spellings are resolved once from the first entry via FIELD_ALIASES, so
+    the integrations from discussion #214 (start_time/end_time/price_per_kwh and
+    friends) are read directly, without a renaming template.
     """
     if not isinstance(raw_entries, list):
         raise TimeseriesFormatError(
@@ -184,15 +224,24 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
     if not raw_entries:
         raise TimeseriesFormatError("timeseries is empty")
 
-    first = raw_entries[0]
+    names = resolve_field_names(raw_entries[0])
     for field in ("start", "value"):
-        if not isinstance(first, dict) or field not in first:
+        if field not in names:
             raise TimeseriesFormatError(
                 f"missing required field '{field}' in the first entry "
-                f"({_describe_available_keys(first)}). The expected format is "
+                f"({_describe_available_keys(raw_entries[0])}). Accepted names: "
+                f"{', '.join(FIELD_ALIASES[field])}. The expected format is "
                 f"{{start, end, value}} — shape the source with a Home Assistant "
                 f"template sensor, see {TEMPLATE_DOCS_URL}"
             )
+    start_key, value_key = names["start"], names["value"]
+    if start_key != "start" or value_key != "value":
+        logger.info(
+            "[%s] timeseries fields read as start=%r, value=%r",
+            label,
+            start_key,
+            value_key,
+        )
 
     entries = []
     naive_seen = 0
@@ -202,20 +251,20 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
         # slots by position, so a single missing entry shifts every later price an
         # hour early — silently, and in the direction that makes power look cheaper.
         # Rejecting the payload instead lets the caller fall back to cached data.
-        if not isinstance(raw, dict) or "start" not in raw or "value" not in raw:
+        if not isinstance(raw, dict) or start_key not in raw or value_key not in raw:
             raise TimeseriesFormatError(
-                f"entry {index} is missing 'start' or 'value' "
+                f"entry {index} is missing '{start_key}' or '{value_key}' "
                 f"({_describe_available_keys(raw)})"
             )
         try:
-            start, was_naive = _parse_timestamp(raw["start"], tz)
+            start, was_naive = _parse_timestamp(raw[start_key], tz)
         except TimeseriesFormatError as exc:
             raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
         try:
-            value = float(raw["value"])
+            value = float(raw[value_key])
         except (TypeError, ValueError) as exc:
             raise TimeseriesFormatError(
-                f"entry {index} has a non-numeric 'value': {raw['value']!r}"
+                f"entry {index} has a non-numeric '{value_key}': {raw[value_key]!r}"
             ) from exc
         if was_naive:
             naive_seen += 1
