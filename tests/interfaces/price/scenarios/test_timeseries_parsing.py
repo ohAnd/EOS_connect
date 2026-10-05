@@ -10,11 +10,47 @@ Tests strict validation of:
 """
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
+
+import pytz
 
 from src.interfaces.price_interface import PriceInterface
 from src.interfaces.pv_interface import PvInterface
+from src.interfaces.timeseries_normalizer import (
+    detect_resolution_seconds,
+    normalize_entries,
+)
+
+# The fixtures are pinned to this date; placement is timestamp-based, so the
+# parse calls pass it as the window anchor.
+WINDOW = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def hourly(hours, value=0.25, base=None):
+    """Distinct hourly entries — duplicates are rejected by the normalizer now."""
+    start = base or WINDOW
+    return [
+        {
+            "start": (start + timedelta(hours=h)).isoformat(),
+            "end": (start + timedelta(hours=h + 1)).isoformat(),
+            "value": value(h) if callable(value) else value,
+        }
+        for h in range(hours)
+    ]
+
+
+def quarter_hourly(count, value=0.25, base=None):
+    """Distinct 15-minute entries."""
+    start = base or WINDOW
+    return [
+        {
+            "start": (start + timedelta(minutes=15 * i)).isoformat(),
+            "end": (start + timedelta(minutes=15 * (i + 1))).isoformat(),
+            "value": value(i) if callable(value) else value,
+        }
+        for i in range(count)
+    ]
 
 
 class TestTimeseriesFormatValidation:
@@ -41,27 +77,23 @@ class TestTimeseriesFormatValidation:
 
     def test_valid_hourly_format(self, price_interface):
         """Valid hourly timeseries format is accepted."""
-        timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T01:00:00Z", "value": 0.25},
-            {"start": "2024-01-01T01:00:00Z", "end": "2024-01-01T02:00:00Z", "value": 0.28},
-        ] * 24  # 48 hours
+        timeseries = hourly(48)
 
-        prices = price_interface._PriceInterface__parse_price_timeseries(timeseries, 48)
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, start_time=WINDOW
+        )
         assert prices is not None
         assert len(prices) == 48
         assert all(isinstance(p, float) for p in prices)
 
     def test_valid_15min_format(self, price_interface):
         """Valid 15-minute timeseries format is converted to hourly (system is 3600s)."""
-        timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T00:15:00Z", "value": 0.25},
-            {"start": "2024-01-01T00:15:00Z", "end": "2024-01-01T00:30:00Z", "value": 0.25},
-            {"start": "2024-01-01T00:30:00Z", "end": "2024-01-01T00:45:00Z", "value": 0.25},
-            {"start": "2024-01-01T00:45:00Z", "end": "2024-01-01T01:00:00Z", "value": 0.25},
-        ] * 48  # 192 intervals (48 hours of 15-min data)
+        timeseries = quarter_hourly(192)
 
-        # System is configured for 3600s, so 15-min data will be converted to hourly (48 values)
-        prices = price_interface._PriceInterface__parse_price_timeseries(timeseries, 48)
+        # System is configured for 3600s, so 15-min data lands on hourly slots
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, start_time=WINDOW
+        )
         assert prices is not None
         assert len(prices) == 48  # Converted to hourly
 
@@ -134,23 +166,13 @@ class TestResolutionDetection:
 
     def test_detect_hourly_resolution(self, price_interface):
         """3600-second gaps detected as hourly."""
-        timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T01:00:00Z", "value": 0.25},
-            {"start": "2024-01-01T01:00:00Z", "end": "2024-01-01T02:00:00Z", "value": 0.28},
-        ]
-
-        resolution = price_interface._PriceInterface__detect_price_timeseries_resolution(timeseries)
-        assert resolution == 3600
+        entries = normalize_entries(hourly(2), pytz.UTC)
+        assert detect_resolution_seconds(entries) == 3600
 
     def test_detect_15min_resolution(self, price_interface):
         """900-second gaps detected as 15-minute."""
-        timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T00:15:00Z", "value": 0.25},
-            {"start": "2024-01-01T00:15:00Z", "end": "2024-01-01T00:30:00Z", "value": 0.28},
-        ]
-
-        resolution = price_interface._PriceInterface__detect_price_timeseries_resolution(timeseries)
-        assert resolution == 900
+        entries = normalize_entries(quarter_hourly(2), pytz.UTC)
+        assert detect_resolution_seconds(entries) == 900
 
     def test_unix_timestamp_resolution_detection(self, price_interface):
         """Unix timestamps are correctly converted and resolution detected."""
@@ -158,9 +180,8 @@ class TestResolutionDetection:
             {"start": 1704067200, "end": 1704070800, "value": 0.25},  # 2024-01-01 00:00-01:00
             {"start": 1704070800, "end": 1704074400, "value": 0.28},  # 2024-01-01 01:00-02:00
         ]
-
-        resolution = price_interface._PriceInterface__detect_price_timeseries_resolution(timeseries)
-        assert resolution == 3600
+        entries = normalize_entries(timeseries, pytz.UTC)
+        assert detect_resolution_seconds(entries) == 3600
 
     def test_unsupported_resolution(self, price_interface):
         """Unsupported resolution (not 900 or 3600 seconds) returns None."""
@@ -168,18 +189,15 @@ class TestResolutionDetection:
             {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T00:10:00Z", "value": 0.25},
             {"start": "2024-01-01T00:10:00Z", "end": "2024-01-01T00:20:00Z", "value": 0.28},
         ]
-
-        resolution = price_interface._PriceInterface__detect_price_timeseries_resolution(timeseries)
-        assert resolution is None
+        entries = normalize_entries(timeseries, pytz.UTC)
+        assert detect_resolution_seconds(entries) is None
 
     def test_insufficient_entries_for_detection(self, price_interface):
         """Single timeseries entry cannot determine resolution."""
-        timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T01:00:00Z", "value": 0.25},
-        ]
-
-        resolution = price_interface._PriceInterface__detect_price_timeseries_resolution(timeseries)
-        assert resolution is None
+        entries = normalize_entries(
+            [{"start": "2024-01-01T00:00:00Z", "value": 0.25}], pytz.UTC
+        )
+        assert detect_resolution_seconds(entries) is None
 
 
 class TestTimeFrameBaseMismatch:
@@ -201,15 +219,13 @@ class TestTimeFrameBaseMismatch:
             timezone=timezone.utc,
         )
 
-        # 4 × 15-min entries (average to 1 hourly)
-        timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T00:15:00Z", "value": 0.20},
-            {"start": "2024-01-01T00:15:00Z", "end": "2024-01-01T00:30:00Z", "value": 0.24},
-            {"start": "2024-01-01T00:30:00Z", "end": "2024-01-01T00:45:00Z", "value": 0.28},
-            {"start": "2024-01-01T00:45:00Z", "end": "2024-01-01T01:00:00Z", "value": 0.30},
-        ] * 48  # 192 × 15-min = 48 hourly slots
+        # 192 × 15-min entries; the first hour repeats the quartet to average
+        quartet = [0.20, 0.24, 0.28, 0.30]
+        timeseries = quarter_hourly(192, value=lambda i: quartet[i % 4])
 
-        prices = iface._PriceInterface__parse_price_timeseries(timeseries, 48)
+        prices = iface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, start_time=WINDOW
+        )
         assert prices is not None
         assert len(prices) == 48
         # First hour should be average of 0.20, 0.24, 0.28, 0.30 = 0.255
@@ -232,12 +248,11 @@ class TestTimeFrameBaseMismatch:
         )
 
         # Hourly source data
-        timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T01:00:00Z", "value": 0.25},
-            {"start": "2024-01-01T01:00:00Z", "end": "2024-01-01T02:00:00Z", "value": 0.28},
-        ] * 24  # 48 hourly entries
+        timeseries = hourly(48)
 
-        prices = iface._PriceInterface__parse_price_timeseries(timeseries, 192)
+        prices = iface._PriceInterface__parse_price_timeseries(
+            timeseries, 192, start_time=WINDOW
+        )
         # Should return empty (resolution mismatch error)
         assert prices == []
 
@@ -263,72 +278,41 @@ class TestAveraging:
         return iface
 
     def test_average_4_values_to_1(self, price_interface):
-        """4 × 15-min values averaged to 1 hourly value (padded to 48 slots)."""
-        timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T00:15:00Z", "value": 0.20},
-            {"start": "2024-01-01T00:15:00Z", "end": "2024-01-01T00:30:00Z", "value": 0.30},
-            {"start": "2024-01-01T00:30:00Z", "end": "2024-01-01T00:45:00Z", "value": 0.40},
-            {"start": "2024-01-01T00:45:00Z", "end": "2024-01-01T01:00:00Z", "value": 0.50},
-        ]
+        """4 × 15-min values averaged to 1 hourly value (filled to 48 slots)."""
+        quartet = [0.20, 0.30, 0.40, 0.50]
+        timeseries = quarter_hourly(4, value=lambda i: quartet[i])
 
-        # For conversion, provide start_time matching the first entry
-        start_time = datetime.fromisoformat("2024-01-01T00:00:00+00:00")
-        averaged = price_interface._PriceInterface__convert_15min_to_hourly_price_timeseries(
-            timeseries, start_time
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, start_time=WINDOW
         )
-        # Method pads to 48 slots total
-        assert len(averaged) == 48
+        assert len(prices) == 48
         # First slot: Average of 4 × 15-min values = (0.20 + 0.30 + 0.40 + 0.50) / 4 = 0.35
-        assert 0.349 < averaged[0]["value"] < 0.351
-        # Remaining slots are padded with the last value (0.35) via cyclic pattern
-        assert all(abs(v["value"] - 0.35) < 1e-6 for v in averaged)
+        assert 0.349 < prices[0] < 0.351
+        # Remaining slots carry the value on (forward fill + daily pattern)
+        assert all(abs(value - 0.35) < 1e-6 for value in prices)
 
     def test_average_multiple_hours(self, price_interface):
-        """Multiple hours of 15-min data correctly averaged to hourly (padded to 48 slots)."""
-        timeseries = []
-        for hour in range(3):
-            for minute_offset in [0, 15, 30, 45]:
-                ts = f"2024-01-01T{hour:02d}:{minute_offset:02d}:00Z"
-                te = (
-                    f"2024-01-01T{hour:02d}:{minute_offset+15:02d}:00Z"
-                    if minute_offset < 45
-                    else f"2024-01-01T{hour+1:02d}:00:00Z"
-                )
-                timeseries.append(
-                    {
-                        "start": ts,
-                        "end": te,
-                        "value": 0.20 + hour * 0.05,
-                    }
-                )
+        """Multiple hours of 15-min data correctly averaged per hour."""
+        timeseries = quarter_hourly(12, value=lambda i: 0.20 + (i // 4) * 0.05)
 
-        start_time = datetime.fromisoformat("2024-01-01T00:00:00+00:00")
-        averaged = price_interface._PriceInterface__convert_15min_to_hourly_price_timeseries(
-            timeseries, start_time
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, start_time=WINDOW
         )
-        # Method pads to 48 slots total
-        assert len(averaged) == 48
-        # First 3 slots contain actual hourly averages
-        assert abs(averaged[0]["value"] - 0.20) < 1e-6  # Hour 0: all 0.20
-        assert abs(averaged[1]["value"] - 0.25) < 1e-6  # Hour 1: all 0.25
-        assert abs(averaged[2]["value"] - 0.30) < 1e-6  # Hour 2: all 0.30
-        # Remaining slots are padded with cyclic daily pattern
+        assert len(prices) == 48
+        assert abs(prices[0] - 0.20) < 1e-6  # Hour 0: all 0.20
+        assert abs(prices[1] - 0.25) < 1e-6  # Hour 1: all 0.25
+        assert abs(prices[2] - 0.30) < 1e-6  # Hour 2: all 0.30
 
-    def test_incomplete_group_not_averaged(self, price_interface):
-        """Incomplete group at end (< 4 values) is handled gracefully."""
-        timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T00:15:00Z", "value": 0.20},
-            {"start": "2024-01-01T00:15:00Z", "end": "2024-01-01T00:30:00Z", "value": 0.30},
-            # Only 2 values, not a complete group
-        ]
+    def test_incomplete_group_averages_what_is_present(self, price_interface):
+        """A partially covered hour averages its two quarters, not a guess."""
+        quartet = [0.20, 0.30]
+        timeseries = quarter_hourly(2, value=lambda i: quartet[i])
 
-        # Should return as-is or with special handling
-        start_time = datetime.fromisoformat("2024-01-01T00:00:00+00:00")
-        result = price_interface._PriceInterface__convert_15min_to_hourly_price_timeseries(
-            timeseries, start_time
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, start_time=WINDOW
         )
-        # With < 4 total values, returns original
-        assert len(result) >= 0  # Depends on implementation
+        assert len(prices) == 48
+        assert abs(prices[0] - 0.25) < 1e-6
 
 
 class TestValueRangeValidation:
@@ -353,45 +337,34 @@ class TestValueRangeValidation:
 
     def test_values_within_range(self, price_interface):
         """Valid price values (-0.5 to 1.0) are accepted."""
-        timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T01:00:00Z", "value": -0.5},
-            {"start": "2024-01-01T01:00:00Z", "end": "2024-01-01T02:00:00Z", "value": 0.0},
-            {"start": "2024-01-01T02:00:00Z", "end": "2024-01-01T03:00:00Z", "value": 1.0},
-        ] * 16
+        band = [-0.5, 0.0, 1.0]
+        timeseries = hourly(48, value=lambda h: band[h % 3])
 
-        prices = price_interface._PriceInterface__parse_price_timeseries(timeseries, 48)
-        assert prices is not None
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, start_time=WINDOW
+        )
+        assert len(prices) == 48
         assert all(-0.5 <= p <= 1.0 for p in prices)
 
     def test_value_too_low_clamped(self, price_interface, caplog):
         """Value below -0.5 is clamped to -0.5."""
-        timeseries = [
-            {
-                "start": f"2024-01-02T{i%24:02d}:00:00Z",
-                "end": f"2024-01-02T{(i+1)%24:02d}:00:00Z" if i < 23 else "2024-01-03T00:00:00Z",
-                "value": -0.9,
-            }
-            for i in range(48)
-        ]
+        timeseries = hourly(48, value=-0.9)
 
-        prices = price_interface._PriceInterface__parse_price_timeseries(timeseries, 48)
-        assert prices is not None
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, start_time=WINDOW
+        )
+        assert len(prices) == 48
         assert all(p == -0.5 for p in prices)
         assert "clamping" in caplog.text.lower()
 
     def test_value_too_high_clamped(self, price_interface, caplog):
         """Value above 1.0 is clamped to 1.0."""
-        timeseries = [
-            {
-                "start": f"2024-01-02T{i%24:02d}:00:00Z",
-                "end": f"2024-01-02T{(i+1)%24:02d}:00:00Z" if i < 23 else "2024-01-03T00:00:00Z",
-                "value": 2.5,
-            }
-            for i in range(48)
-        ]
+        timeseries = hourly(48, value=2.5)
 
-        prices = price_interface._PriceInterface__parse_price_timeseries(timeseries, 48)
-        assert prices is not None
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, start_time=WINDOW
+        )
+        assert len(prices) == 48
         assert all(p == 1.0 for p in prices)
         assert "clamping" in caplog.text.lower()
 
@@ -416,33 +389,26 @@ class TestDataCompleteness:
         )
         return iface
 
-    def test_incomplete_hourly_data_padded(self, price_interface):
-        """Incomplete hourly data (< 48 values) is padded with last value."""
-        timeseries = [
-            {
-                "start": f"2024-01-01T{i:02d}:00:00Z",
-                "end": f"2024-01-01T{i+1:02d}:00:00Z",
-                "value": 0.25,
-            }
-            for i in range(24)  # Only 24 hours instead of 48
-        ]
+    def test_incomplete_hourly_data_filled(self, price_interface):
+        """Incomplete hourly data (< 48 values) is filled to the horizon."""
+        timeseries = hourly(24)  # Only 24 hours instead of 48
 
-        prices = price_interface._PriceInterface__parse_price_timeseries(timeseries, 48)
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, start_time=WINDOW
+        )
         assert prices is not None
-        assert len(prices) == 48  # Padded to 48
-        assert all(p == 0.25 for p in prices)  # All padded with 0.25
+        assert len(prices) == 48  # Filled to 48
+        assert all(p == 0.25 for p in prices)
+        # ...and the invented tail is reported to the UI.
+        assert price_interface.get_forecast_metadata()["forecast_start_index"] == 24
 
     def test_complete_hourly_data_no_padding(self, price_interface):
-        """Complete hourly data (48 values) requires no padding."""
-        timeseries = [
-            {
-                "start": f"2024-01-02T{i%24:02d}:00:00Z",
-                "end": f"2024-01-02T{(i+1)%24:02d}:00:00Z",
-                "value": 0.25,
-            }
-            for i in range(48)
-        ]
+        """Complete hourly data (48 values) requires no filling."""
+        timeseries = hourly(48)
 
-        prices = price_interface._PriceInterface__parse_price_timeseries(timeseries, 48)
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, start_time=WINDOW
+        )
         assert prices is not None
         assert len(prices) == 48
+        assert price_interface.get_forecast_metadata()["forecast_start_index"] is None

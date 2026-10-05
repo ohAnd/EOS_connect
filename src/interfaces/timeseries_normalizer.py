@@ -111,6 +111,15 @@ def _parse_timestamp(raw, tz, field="start"):
             f"'{field}' must be a timestamp, got boolean {raw!r}"
         )
 
+    if isinstance(raw, datetime):
+        # Already parsed (an entry coming back through normalize_entries, e.g.
+        # the EVCC price branch normalizing before the shared parser does).
+        if raw.tzinfo is None:
+            if hasattr(tz, "localize"):
+                return tz.localize(raw), True
+            return raw.replace(tzinfo=tz), True
+        return raw.astimezone(tz), False
+
     if isinstance(raw, (int, float)):
         # 1e11 s is the year 5138 - no plausible seconds timestamp reaches it,
         # but every current epoch-milliseconds value does (a HA template using
@@ -276,11 +285,13 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
     entries = []
     naive_seen = 0
     for index, raw in enumerate(raw_entries):
-        # Every entry has to parse. Dropping the bad ones would be friendlier right
-        # up until it corrupts the result: the hourly price path maps this list to
-        # slots by position, so a single missing entry shifts every later price an
-        # hour early — silently, and in the direction that makes power look cheaper.
-        # Rejecting the payload instead lets the caller fall back to cached data.
+        # Every entry has to parse. Dropping the bad ones would be friendlier
+        # right up until it corrupts the result: under timestamp placement a
+        # dropped entry becomes a hole, and a hole in a price series is filled
+        # by policy — a null at 18:00 would silently become the 17:00 price,
+        # exactly where the price matters most. Quieter than a shift, not
+        # better. Rejecting the payload keeps the fallback chain intact: the
+        # caller serves the last good data and the log names the bad entry.
         anchor_key = start_key or end_key
         if not isinstance(raw, dict) or anchor_key not in raw or value_key not in raw:
             raise TimeseriesFormatError(

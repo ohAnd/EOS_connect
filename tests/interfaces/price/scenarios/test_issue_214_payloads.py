@@ -115,8 +115,8 @@ class TestHomeAssistantIntegrationPayloads:
 
     The renaming templates the thread had to use stay documented for sources
     with genuinely foreign names, but Tibber HACS, EPEX Spot HACS and the
-    Tibber core action work without one. Placement is still positional here —
-    these tests assert acceptance and value conversion, not slot alignment.
+    Tibber core action work without one, and their values land on the slots
+    their own timestamps name.
     """
 
     def test_tibber_hacs_attributes_are_accepted(self, price_interface):
@@ -127,7 +127,10 @@ class TestHomeAssistantIntegrationPayloads:
         ]
 
         prices = price_interface._PriceInterface__parse_price_timeseries(
-            payload, 48, value_unit="EUR/kWh"
+            payload,
+            48,
+            start_time=datetime(2026, 8, 23, 0, 0, tzinfo=timezone(timedelta(hours=2))),
+            value_unit="EUR/kWh",
         )
 
         assert len(prices) == 48
@@ -149,7 +152,10 @@ class TestHomeAssistantIntegrationPayloads:
         ]
 
         prices = price_interface._PriceInterface__parse_price_timeseries(
-            payload, 48, value_unit="EUR/kWh"
+            payload,
+            48,
+            start_time=datetime(2026, 8, 22, 0, 0, tzinfo=timezone(timedelta(hours=2))),
+            value_unit="EUR/kWh",
         )
 
         assert len(prices) == 48
@@ -164,7 +170,10 @@ class TestHomeAssistantIntegrationPayloads:
         ]
 
         prices = price_interface._PriceInterface__parse_price_timeseries(
-            payload, 48, value_unit="EUR/kWh"
+            payload,
+            48,
+            start_time=datetime(2026, 8, 23, 0, 0, tzinfo=timezone(timedelta(hours=2))),
+            value_unit="EUR/kWh",
         )
 
         assert len(prices) == 48
@@ -295,11 +304,12 @@ class TestFullFetchPath:
 
 class TestNoSilentSlotShift:
     """
-    A malformed entry must never shift the remaining prices.
+    A malformed entry must never shift or silently replace the remaining prices.
 
-    The hourly path maps entries to slots positionally, so skipping a bad entry would
-    move every later price an hour early — cheaper-looking power at the wrong time,
-    with nothing in the schedule to show for it.
+    Under timestamp placement a dropped entry would become a hole, and a hole in
+    a price series is filled by policy — a null at 18:00 would quietly become
+    the 17:00 price, exactly where the price matters most. Rejecting the payload
+    keeps the fallback chain serving the last good data instead.
     """
 
     def _hourly_series(self, bad_index=None, bad_value=None):

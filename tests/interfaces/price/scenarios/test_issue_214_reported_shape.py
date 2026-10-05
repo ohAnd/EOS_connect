@@ -10,9 +10,8 @@ below reproduces that shape; prices encode their origin as 0.<day+1> + hour/1000
 with day index 1 (base 0.2) being "today" for the anchor the tests pass.
 
 The field names are accepted (the normalizer reads the sensor's own
-spellings); landing the values on the right slots is
-`fix: align timeseries prices by timestamp` — the xfail below is the
-acceptance case for that commit.
+spellings), and the values land on today's slots by their timestamps — the
+second test is the acceptance case the rework was driven by.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -54,10 +53,6 @@ def test_the_reported_field_names_are_accepted(payload):
     assert entries[0]["start"].utcoffset() == timedelta(hours=2)
 
 
-@pytest.mark.xfail(
-    reason="timestamp placement lands with 'fix: align timeseries prices by timestamp'",
-    strict=True,
-)
 def test_the_reported_payload_lands_on_todays_slots(payload, monkeypatch):
     """The acceptance case for timestamp placement, in the reporter's own shape."""
     monkeypatch.setattr(
