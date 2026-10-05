@@ -788,9 +788,11 @@ class ControlsManager {
             }
 
             const slotSeconds = Number(data.time_frame_base) || 3600;
-            const now = new Date();
-            const currentSlot = Math.floor(
-                (now.getHours() * 3600 + now.getMinutes() * 60) / slotSeconds
+            // The manager plans in absolute slots since the server's local
+            // midnight; the live index comes from the controls payload rather
+            // than the browser clock.
+            const currentSlot = ChartManager.payloadSlot(
+                data_controls, slotSeconds, new Date()
             );
 
             const total = Number(data.contribution_total_wh) || 0;
@@ -1421,11 +1423,12 @@ class ControlsManager {
         const slotsPerHour = Math.max(1, Math.round(3600 / slotSeconds));
         const slotsPerDay = 24 * slotsPerHour;
 
-        // Slot 0 is local midnight today, by the same convention the optimizer array
-        // uses, so a slot index converts straight to a wall-clock time.
-        const midnight = new Date();
-        midnight.setHours(0, 0, 0, 0);
-        const slotStart = i => new Date(midnight.getTime() + i * slotSeconds * 1000);
+        // Slot 0 is the server's local midnight today, by the same convention
+        // the optimizer array uses - taken from the controls payload's anchor,
+        // with the browser's midnight as the legacy fallback.
+        const slotStart = i => ChartManager.slotStartTime(
+            data_controls, i, slotSeconds
+        );
 
         const hhmm = d => d.toLocaleTimeString(navigator.language,
             { hour: '2-digit', minute: '2-digit' });
