@@ -26,7 +26,13 @@ class StatisticsManager {
         let expense_data = data_response["result"]["Kosten_Euro_pro_Stunde"];
         let income_data = data_response["result"]["Einnahmen_Euro_pro_Stunde"];
         let feed_in_data = data_response["result"]["Netzeinspeisung_Wh_pro_Stunde"];
-        let currentHour = new Date(data_response["timestamp"]).getHours();
+        // The result arrays start at the response's slot; "rest of today" is
+        // counted from the backend's absolute slot, not a browser clock.
+        const responseSlot = ChartManager.payloadSlot(
+            data_response,
+            time_frame_base,
+            new Date(data_response["timestamp"])
+        );
 
         if (time_frame_base === 3600) {
             // Hourly: first value is current hour, then next hours up to 23:00
@@ -34,25 +40,20 @@ class StatisticsManager {
             yield_tomorrow = data_request["ems"]["pv_prognose_wh"].slice(24, 48).reduce((acc, value) => acc + value, 0) / 1000;
 
             // expense_data[0] = current hour, expense_data[1] = next hour, etc.
-            expense_today = expense_data.slice(0, 24 - currentHour).reduce((acc, value) => acc + value, 0).toFixed(2);
-            income_today = income_data.slice(0, 24 - currentHour).reduce((acc, value) => acc + value, 0).toFixed(2);
-            feed_in_today = feed_in_data.slice(0, 24 - currentHour).reduce((acc, value) => acc + value, 0) / 1000;
+            const remainingToday = Math.max(0, 24 - responseSlot);
+            expense_today = expense_data.slice(0, remainingToday).reduce((acc, value) => acc + value, 0).toFixed(2);
+            income_today = income_data.slice(0, remainingToday).reduce((acc, value) => acc + value, 0).toFixed(2);
+            feed_in_today = feed_in_data.slice(0, remainingToday).reduce((acc, value) => acc + value, 0) / 1000;
         } else if (time_frame_base === 900) {
             // 15-min: first value is current quarter, then next quarters up to 23:45
             yield_today = data_request["ems"]["pv_prognose_wh"].slice(0, 96).reduce((acc, value) => acc + value, 0) / 1000;
             yield_tomorrow = data_request["ems"]["pv_prognose_wh"].slice(96, 192).reduce((acc, value) => acc + value, 0) / 1000;
 
-            // Calculate current quarter index (0 = :00, 1 = :15, 2 = :30, 3 = :45)
-            let now = new Date(data_response["timestamp"]);
-            let currentHour = now.getHours();
-            let currentMinute = now.getMinutes();
-            let currentQuarter = Math.floor(currentMinute / 15);
-            let currentSlot = currentHour * 4 + currentQuarter;
-
             // expense_data[0] = current quarter, expense_data[1] = next quarter, etc.
-            expense_today = expense_data.slice(0, 96 - currentSlot).reduce((acc, value) => acc + value, 0).toFixed(2);
-            income_today = income_data.slice(0, 96 - currentSlot).reduce((acc, value) => acc + value, 0).toFixed(2);
-            feed_in_today = feed_in_data.slice(0, 96 - currentSlot).reduce((acc, value) => acc + value, 0) / 1000;
+            const remainingToday = Math.max(0, 96 - responseSlot);
+            expense_today = expense_data.slice(0, remainingToday).reduce((acc, value) => acc + value, 0).toFixed(2);
+            income_today = income_data.slice(0, remainingToday).reduce((acc, value) => acc + value, 0).toFixed(2);
+            feed_in_today = feed_in_data.slice(0, remainingToday).reduce((acc, value) => acc + value, 0) / 1000;
 
         } else {
             // Fallback: use all as today
