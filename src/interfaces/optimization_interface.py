@@ -18,6 +18,12 @@ Example:
 
 import logging
 from datetime import datetime, timedelta
+
+try:  # running from src/ — src/ is on sys.path
+    from timeseries_grid import local_midnight
+except ImportError:  # imported as src.interfaces (tests)
+    from ..timeseries_grid import local_midnight
+
 from .optimization_backends.optimization_backend_eos import EOSBackend
 from .optimization_backends.optimization_backend_evopt import EVOptBackend
 from .optimization_backends.optimization_backend_local_evopt import (
@@ -148,6 +154,7 @@ class OptimizationInterface:
                 "dyn_override_active": False,
                 "error": 0,
                 "hour": -1,
+                "slot": -1,
             },
             {
                 "ac_charge_demand": 0,
@@ -156,6 +163,7 @@ class OptimizationInterface:
                 "dyn_override_active": False,
                 "error": 0,
                 "hour": -1,
+                "slot": -1,
             },
         ]
 
@@ -256,17 +264,18 @@ class OptimizationInterface:
         #     )
 
         now = datetime.now(self.time_zone)
-        # Calculate the current step index based on time_frame_base (in seconds)
-        steps_per_hour = 3600 // self.time_frame_base
-        current_step = now.hour * steps_per_hour + now.minute // (
-            self.time_frame_base // 60
-        )
-        # Calculate the datetime for the current step: today midnight
-        #  + step number * time_frame_base (in seconds)
-        today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        current_step_time = today_midnight + timedelta(
-            seconds=current_step * self.time_frame_base
-        )
+        # The current step counts absolute time since true local midnight: the
+        # arrays it indexes are midnight-anchored, and the wall clock sits one
+        # slot off against them for ~21 hours after each DST transition.
+        today_midnight = local_midnight(self.time_zone, now)
+        current_step = int(
+            (now - today_midnight).total_seconds()
+        ) // self.time_frame_base
+        # astimezone() re-normalizes the pytz offset: midnight + 16 h on the
+        # 25-hour day is 15:00 CET, not a 16:00 stamped with the stale offset.
+        current_step_time = (
+            today_midnight + timedelta(seconds=current_step * self.time_frame_base)
+        ).astimezone(self.time_zone)
 
         next_step = (
             current_step + 1
@@ -418,7 +427,6 @@ class OptimizationInterface:
                 "dyn_override_allowed_array"
             ] = dyn_override_allowed_array
 
-        current_hour = datetime.now(self.time_zone).hour
         if (
             "start_solution" in optimized_response_in
             and len(optimized_response_in["start_solution"]) > 1
@@ -435,17 +443,28 @@ class OptimizationInterface:
 
         self.last_control_data[0]["error"] = int(response_error)
         self.last_control_data[1]["error"] = int(response_error)
-        self.last_control_data[0]["hour"] = current_hour
-        self.last_control_data[1]["hour"] = current_hour + 1 if current_hour < 23 else 0
+        # The slot label is what the fast control loop matches against; "hour"
+        # stays as a wall-clock mirror for anything external still reading it.
+        next_step_time = (
+            today_midnight + timedelta(seconds=next_step * self.time_frame_base)
+        ).astimezone(self.time_zone)
+        self.last_control_data[0]["slot"] = current_step
+        self.last_control_data[1]["slot"] = next_step
+        self.last_control_data[0]["hour"] = current_step_time.hour
+        self.last_control_data[1]["hour"] = next_step_time.hour
 
         if "washingstart" in optimized_response_in:
             self.home_appliance_start_hour = optimized_response_in["washingstart"]
+            # washingstart indexes the hourly midnight-anchored arrays, so it is
+            # compared against the absolute hour slot, not the wall clock.
+            current_hour_slot = int((now - today_midnight).total_seconds()) // 3600
             self.home_appliance_released = (
-                self.home_appliance_start_hour == current_hour
+                self.home_appliance_start_hour == current_hour_slot
             )
             logger.debug(
-                "[OPTIMIZATION] Home appliance - current hour %s:00 - start hour %s - is Released: %s",
-                current_hour,
+                "[OPTIMIZATION] Home appliance - current hour slot %s - start slot %s"
+                " - is Released: %s",
+                current_hour_slot,
                 self.home_appliance_start_hour,
                 self.home_appliance_released,
             )

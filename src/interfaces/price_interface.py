@@ -42,9 +42,9 @@ import time
 import requests
 
 try:  # running from src/ — src/ is on sys.path
-    from timeseries_grid import horizon_slots
+    from timeseries_grid import horizon_slots, local_midnight
 except ImportError:  # imported as src.interfaces (tests)
-    from ..timeseries_grid import horizon_slots
+    from ..timeseries_grid import horizon_slots, local_midnight
 from .timeseries_normalizer import (
     TimeseriesFormatError,
     convert_price_values,
@@ -241,9 +241,7 @@ class PriceInterface:
         try:
             self.update_prices(
                 horizon_slots(self.time_frame_base),
-                datetime.now(self.time_zone).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                ),
+                local_midnight(self.time_zone),
             )  # Get the full optimization horizon of price data
             logger.info("[PRICE-IF] Initial price update completed")
         except RuntimeError as e:
@@ -261,9 +259,7 @@ class PriceInterface:
                 # Perform price update
                 self.update_prices(
                     horizon_slots(self.time_frame_base),
-                    datetime.now(self.time_zone).replace(
-                        hour=0, minute=0, second=0, microsecond=0
-                    ),
+                    local_midnight(self.time_zone),
                 )  # Get the full optimization horizon of price data
                 logger.debug("[PRICE-IF] Periodic price update completed")
 

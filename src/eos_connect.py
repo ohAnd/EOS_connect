@@ -26,6 +26,7 @@ from log_handler import MemoryLogHandler
 from startup_validator import StartupValidator
 from interface_factory import InterfaceFactory
 from constants import CURRENCY_SYMBOL_MAP, CURRENCY_MINOR_UNIT_MAP
+from timeseries_grid import local_midnight
 from interfaces.base_control import (
     BaseControl,
     calculate_tgt_dc_charge_power,
@@ -834,49 +835,7 @@ def create_optimize_request():
         logger.debug("[DST] No DST change detected in next 48 hours (0)")
         return 0
 
-    # def adjust_forecast_array_for_dst(data_array, dst_change_detected):
-    #     """
-    #     Adjusts the forecast array for Daylight Saving Time (DST) changes.
-
-    #     Args:
-    #         data_array (list): The original forecast array.
-    #         dst_change_detected (int): The DST change detected (positive for fall back,
-    #                                     negative for spring forward).
-    #     Returns:
-    #         list: The adjusted forecast array.
-    #     """
-    #     arr = list(data_array)  # Make a copy so the original is not modified
-    #     if dst_change_detected != 0:
-    #         hour_index = abs(dst_change_detected) - 1
-
-    #         # Validate computed index to avoid IndexError
-    #         if hour_index < 0 or hour_index >= len(arr):
-    #             logger.warning(
-    #                 "[DST] Computed hour index %s out of range for array length %s"
-    #                 + " - skipping DST adjustment",
-    #                 hour_index,
-    #                 len(arr),
-    #             )
-    #             return arr
-
-    #         if dst_change_detected > 0:
-    #             # Fall back - repeat hour
-    #             arr.insert(hour_index, arr[hour_index])  # duplicate hour
-    #             logger.debug(
-    #                 "[DST] Adjusted forecast for fall back at hour %s",
-    #                 hour_index + 1,
-    #             )
-    #         else:
-    #             # Spring forward - remove hour
-    #             removed_value = arr.pop(hour_index)
-    #             logger.debug(
-    #                 "[DST] Adjusted forecast for spring forward at hour %s (removed %s Wh)",
-    #                 hour_index + 1,
-    #                 removed_value,
-    #             )
-    #     return arr
-
-    def get_ems_data(dst_change_detected):
+    def get_ems_data():
 
         pv_prognose_wh = pv_interface.get_current_pv_forecast()
         strompreis_euro_pro_wh = price_interface.get_current_prices()
@@ -893,17 +852,19 @@ def create_optimize_request():
         eos_source_for_scale = config_manager.config.get("eos", {}).get("source", "eos_server")
         if eos_source_for_scale in ("evopt", "local_evopt"):
             now = datetime.now(time_zone)
-            seconds_since_midnight = now.hour * 3600 + now.minute * 60 + now.second
+            # Absolute seconds since true local midnight: the arrays indexed
+            # below are midnight-anchored, and the wall clock sits one slot off
+            # against them for ~21 hours after each DST transition. The modulo
+            # phase is identical either way (DST shifts whole hours), but it
+            # has to share the index's anchor.
+            seconds_since_midnight = int(
+                (now - local_midnight(time_zone, now)).total_seconds()
+            )
             scale_factor = (
                 time_frame_base - (seconds_since_midnight % time_frame_base)
             ) / time_frame_base
 
-            if time_frame_base == 3600:
-                current_slot = now.hour
-            elif time_frame_base == 900:
-                current_slot = now.hour * 4 + now.minute // 15
-            else:
-                current_slot = seconds_since_midnight // time_frame_base
+            current_slot = seconds_since_midnight // time_frame_base
 
             # Discount our own copies. Both series are backed by a cache on the
             # interface that produced them, and scaling a slot in place accumulated
@@ -920,18 +881,6 @@ def create_optimize_request():
                         current_slot + 1,
                         ts[current_slot],
                     )
-
-        # if dst_change_detected != 0:
-        #     pv_prognose_wh = adjust_forecast_array_for_dst(
-        #         pv_prognose_wh, dst_change_detected
-        #     )
-        #     strompreis_euro_pro_wh = adjust_forecast_array_for_dst(
-        #         strompreis_euro_pro_wh, dst_change_detected
-        #     )
-        #     einspeiseverguetung_euro_pro_wh = adjust_forecast_array_for_dst(
-        #         einspeiseverguetung_euro_pro_wh, dst_change_detected
-        #     )
-        #     gesamtlast = adjust_forecast_array_for_dst(gesamtlast, dst_change_detected)
 
         return {
             "pv_prognose_wh": pv_prognose_wh,
@@ -1060,7 +1009,7 @@ def create_optimize_request():
     #     )
 
     payload = {
-        "ems": get_ems_data(dst_change_detected),
+        "ems": get_ems_data(),
         "pv_akku": get_pv_akku_data(),
         "inverter": get_wechselrichter_data(),
         "eauto": get_eauto_data(),
@@ -1072,6 +1021,21 @@ def create_optimize_request():
         "[Main] optimize request payload - startsolution: %s", payload["start_solution"]
     )
     return payload
+
+
+def appliance_start_clock_hour():
+    """washingstart as an hour of the clock, for the MQTT/HA boundary.
+
+    Internally washingstart is a slot index into the midnight-anchored arrays;
+    the published value keeps its documented hour-of-day meaning, which only
+    differs from the index on a DST day.
+    """
+    slot = eos_interface.get_home_appliance_start_hour()
+    if not isinstance(slot, int) or isinstance(slot, bool) or slot < 0:
+        return slot
+    start = local_midnight(time_zone) + timedelta(hours=slot)
+    # astimezone() re-normalizes the pytz offset across a DST transition.
+    return start.astimezone(time_zone).hour
 
 
 last_control_data = {
@@ -1414,7 +1378,16 @@ class OptimizationScheduler:
         self.last_request_response["request"] = json.dumps(
             json_optimize_input, indent=4
         )
-        optimized_response["timestamp"] = datetime.now(time_zone).isoformat()
+        response_now = datetime.now(time_zone)
+        response_anchor = local_midnight(time_zone, response_now)
+        optimized_response["timestamp"] = response_now.isoformat()
+        # The absolute slot this response was produced in, plus the grid anchor
+        # it counts from - the UI aligns the midnight-anchored arrays with
+        # these instead of re-deriving a slot from a browser clock.
+        optimized_response["current_slot"] = int(
+            (response_now - response_anchor).total_seconds()
+        ) // time_frame_base
+        optimized_response["anchor"] = response_anchor.isoformat()
         self.last_request_response["response"] = json.dumps(
             optimized_response, indent=4
         )
@@ -1497,19 +1470,22 @@ class OptimizationScheduler:
         self.__start_update_service_control_loop()
 
     def __run_control_loop(self):
-        current_hour = datetime.now(time_zone).hour
+        now = datetime.now(time_zone)
+        current_slot = int(
+            (now - local_midnight(time_zone, now)).total_seconds()
+        ) // time_frame_base
         last_control_selected_entry = 0
-        if current_hour == eos_interface.get_last_control_data()[1]["hour"]:
+        if current_slot == eos_interface.get_last_control_data()[1]["slot"]:
             last_control_selected_entry = 1
-        elif -1 == eos_interface.get_last_control_data()[0]["hour"]:
+        elif -1 == eos_interface.get_last_control_data()[0]["slot"]:
             # logger.debug("[Main] check current tgt ctrl - still in startup - skip")
             return
         elif (
-            current_hour != eos_interface.get_last_control_data()[0]["hour"]
-            and current_hour != eos_interface.get_last_control_data()[1]["hour"]
+            current_slot != eos_interface.get_last_control_data()[0]["slot"]
+            and current_slot != eos_interface.get_last_control_data()[1]["slot"]
         ):
             logger.warning(
-                "[Main] check current tgt ctrl - wrong hour data for fast control - skip"
+                "[Main] check current tgt ctrl - wrong slot data for fast control - skip"
             )
             return
 
@@ -1735,7 +1711,10 @@ def change_control_state():
                 "value": eos_interface.get_home_appliance_released()
             },
             "control/eos_homeappliance_start_hour": {
-                "value": eos_interface.get_home_appliance_start_hour()
+                # Published as an hour of the clock for HA templates; internally
+                # washingstart is a slot index into the midnight-anchored
+                # arrays, which only differs from the hour on a DST day.
+                "value": appliance_start_clock_hour()
             },
             "battery/soc": {"value": battery_interface.get_current_soc()},
             "battery/remaining_energy": {
@@ -2182,6 +2161,15 @@ def get_controls():
             "source", "eos_server"
         ),
         "used_time_frame_base": time_frame_base,
+        # The authoritative "now" on the forecast grid: absolute slot index and
+        # the midnight anchor it counts from. The dashboard reads these instead
+        # of deriving a slot from getHours(), which runs in the browser's zone
+        # and misses DST days.
+        "current_slot": int(
+            (datetime.now(time_zone) - local_midnight(time_zone)).total_seconds()
+        )
+        // time_frame_base,
+        "anchor": local_midnight(time_zone).isoformat(),
         # A compact summary per managed load. The full plan and the calibration state
         # live behind /api/managed_loads; this is what the dashboard card needs.
         "managed_loads": [

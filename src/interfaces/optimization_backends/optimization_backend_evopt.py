@@ -17,8 +17,13 @@ import logging
 import time
 import json
 import os
-from math import floor
 from datetime import datetime
+
+try:  # running from src/ — src/ is on sys.path
+    from timeseries_grid import horizon_slots, local_midnight
+except ImportError:  # imported as src.interfaces (tests)
+    from ...timeseries_grid import horizon_slots, local_midnight
+
 import requests
 
 logger = logging.getLogger("__main__")
@@ -305,9 +310,14 @@ class EVOptBackend:
             price_accu_wh = 0.0
 
         now = datetime.now(self.time_zone)
+        # Absolute slot since true local midnight - the EMS arrays are
+        # midnight-anchored, and the wall clock is one slot off against them
+        # for ~21 hours after each DST transition.
+        current_slot = int(
+            (now - local_midnight(self.time_zone, now)).total_seconds()
+        ) // self.time_frame_base
         if self.time_frame_base == 900:
             # 15-min intervals
-            current_slot = now.hour * 4 + floor(now.minute / 15)
 
             def wrap(arr):
                 arr = arr or []
@@ -320,7 +330,7 @@ class EVOptBackend:
             n = 192
         else:
             # hourly intervals
-            current_hour = now.hour
+            current_hour = current_slot
             pv_series = (
                 pv_series[current_hour:] if len(pv_series) > current_hour else pv_series
             )
@@ -451,7 +461,12 @@ class EVOptBackend:
         # Each entry corresponds to the time frame in seconds
         # first entry may be shorter to align with time_frame_base
         now = datetime.now(self.time_zone)
-        seconds_since_midnight = now.hour * 3600 + now.minute * 60 + now.second
+        # Phase into the current slot. The modulo makes this DST-neutral (the
+        # offsets shift by whole hours), but it shares the grid's anchor so
+        # there is exactly one definition of "since midnight" here.
+        seconds_since_midnight = int(
+            (now - local_midnight(self.time_zone, now)).total_seconds()
+        )
         dt_first_entry = self.time_frame_base - (
             seconds_since_midnight % self.time_frame_base
         )
@@ -642,39 +657,26 @@ class EVOptBackend:
 
         Returns:
             dict with keys:
-            - n_control: Total slots for control arrays (192 for 15-min, 48 for hourly)
-            - n_result: Slots for result arrays (from now to midnight tomorrow)
-            - current_slot: Current time slot index
+            - n_control: Total slots for control arrays (192 for 15-min, 48 hourly)
+            - n_result: Slots for result arrays (from now to the end of the horizon)
+            - current_slot: Current absolute slot index since local midnight
             - pad_past: Padding array for past slots
+
+        current_slot counts absolute time since true local midnight, so it stays
+        aligned with the midnight-anchored EOS arrays through a DST transition;
+        n_result is defined from the grid (n_control - current_slot) so pad_past
+        and the result window always tile the control array exactly.
         """
         now = datetime.now(self.time_zone)
-        current_hour = now.hour
-
-        if self.time_frame_base == 900:
-            # 15-minute intervals
-            n_control = 192  # 48 hours * 4
-            current_slot = now.hour * 4 + floor(now.minute / 15)
-            pad_past = [0.0] * current_slot
-
-            # From NOW to midnight tomorrow
-            slots_today = (24 - now.hour) * 4 - floor(now.minute / 15)
-            n_result = slots_today + 96  # +96 for tomorrow
-        else:
-            # Hourly intervals
-            n_control = 48  # 48 hours
-            current_slot = current_hour
-            pad_past = [0.0] * current_hour
-
-            # From NOW to midnight tomorrow
-            hours_today = 24 - current_hour
-            n_result = hours_today + 24  # +24 for tomorrow
+        anchor = local_midnight(self.time_zone, now)
+        n_control = horizon_slots(self.time_frame_base)
+        current_slot = int((now - anchor).total_seconds()) // self.time_frame_base
 
         return {
             "n_control": n_control,
-            "n_result": n_result,
+            "n_result": n_control - current_slot,
             "current_slot": current_slot,
-            "current_hour": current_hour,
-            "pad_past": pad_past,
+            "pad_past": [0.0] * current_slot,
         }
 
     def _extract_battery_parameters(self, evopt, eos_request=None):

@@ -20,6 +20,11 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 
+try:  # running from src/ — src/ is on sys.path
+    from timeseries_grid import local_midnight
+except ImportError:  # imported as src.loads (tests)
+    from ..timeseries_grid import local_midnight
+
 from .ambient_bias import IMPLAUSIBLE_GAP_K, MAX_OFFSET_K, AmbientBias
 from .contribution import (
     SOURCE_API, SOURCE_PULL, LoadContributionRegistry, ttl_from_minutes,
@@ -635,7 +640,12 @@ class ManagedLoadManager:
 
     def _clock(self):
         now = self._now()
-        anchor = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if now.tzinfo is None:
+            anchor = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            # True local midnight: .replace() keeps now's UTC offset, which is
+            # an hour off on a DST day - see timeseries_grid.local_midnight.
+            anchor = local_midnight(now.tzinfo, now)
         slot_count = self.horizon_hours * 3600 // self.time_frame_base
         return anchor, now, slot_count
 

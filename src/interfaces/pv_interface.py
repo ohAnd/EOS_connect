@@ -193,9 +193,9 @@ def _describe_akkudoktor_error(tgt_value, exception):
 
 
 try:  # running from src/ — src/ is on sys.path
-    from timeseries_grid import horizon_slots
+    from timeseries_grid import horizon_slots, local_midnight
 except ImportError:  # imported as src.interfaces (tests)
-    from ..timeseries_grid import horizon_slots
+    from ..timeseries_grid import horizon_slots, local_midnight
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
@@ -1885,7 +1885,7 @@ class PvInterface:
             return []
 
         now_local = datetime.now(tz)
-        midnight_today = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        midnight_today = local_midnight(tz, now_local)
         expected_count = horizon_slots(self.time_frame_base)
         slot_keys = [
             midnight_today + timedelta(seconds=slot_seconds * i)
@@ -3327,7 +3327,7 @@ class PvInterface:
         # Get timezone-aware current time
         tz = pytz.timezone(self.time_zone)
         current_time = datetime.now(tz).replace(minute=0, second=0, microsecond=0)
-        midnight_today = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        midnight_today = local_midnight(tz, current_time)
 
         # Calculate query start and end times in Unix seconds
         # Start from midnight today
@@ -3843,8 +3843,15 @@ class PvInterface:
         )
         if not parsed:
             return [0.0] * slot_count
-        # Anchor on midnight of the first day, so slot 0 is always 00:00-00:xx today.
-        midnight = parsed[0][0].replace(hour=0, minute=0, second=0, microsecond=0)
+        # Anchor on true local midnight of the first day, so slot 0 is always
+        # 00:00-00:xx today (replace() would keep the entry's own UTC offset and
+        # sit an hour off across a DST transition).
+        first_start = parsed[0][0]
+        midnight = (
+            local_midnight(first_start.tzinfo, first_start)
+            if first_start.tzinfo is not None
+            else first_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        )
         slots = [0.0] * slot_count
 
         for index, (end, watt_hours) in enumerate(parsed):

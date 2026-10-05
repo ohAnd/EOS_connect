@@ -67,9 +67,9 @@ import threading
 from datetime import datetime
 
 try:  # running from src/ — src/ is on sys.path
-    from timeseries_grid import horizon_slots
+    from timeseries_grid import horizon_slots, local_midnight
 except ImportError:  # imported as src.config_web (tests)
-    from ..timeseries_grid import horizon_slots
+    from ..timeseries_grid import horizon_slots, local_midnight
 
 logger = logging.getLogger("__main__")
 
@@ -421,9 +421,7 @@ class HotReloadAdapter:
 
         # Trigger price update to recalculate arrays with new parameters
         try:
-            start_time = datetime.now(self._feed_in_price.time_zone).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            start_time = local_midnight(self._feed_in_price.time_zone)
             tgt_duration = horizon_slots(self._feed_in_price.time_frame_base)
             self._feed_in_price.update_prices(tgt_duration, start_time)
             logger.debug("[HotReload] Recalculated feed-in prices after %s change", key)
@@ -445,9 +443,7 @@ class HotReloadAdapter:
         try:
             old = getattr(self._feed_in_price, "fixed_price_ct_kwh", "?")
             self._feed_in_price.fixed_price_ct_kwh = price_ct_kwh
-            start_time = datetime.now(self._feed_in_price.time_zone).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            start_time = local_midnight(self._feed_in_price.time_zone)
             tgt_duration = horizon_slots(self._feed_in_price.time_frame_base)
             self._feed_in_price.update_prices(tgt_duration, start_time)
             logger.info(
@@ -468,9 +464,7 @@ class HotReloadAdapter:
         try:
             old = getattr(self._feed_in_price, "negative_price_switch", "?")
             self._feed_in_price.negative_price_switch = negative_price_switch
-            start_time = datetime.now(self._feed_in_price.time_zone).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            start_time = local_midnight(self._feed_in_price.time_zone)
             tgt_duration = horizon_slots(self._feed_in_price.time_frame_base)
             self._feed_in_price.update_prices(tgt_duration, start_time)
             logger.info(
@@ -514,9 +508,7 @@ class HotReloadAdapter:
             # If using fixed_24h with negative_price_switch, refresh auxiliary stock prices
             if (self._price.src == "fixed_24h" and self._price.negative_price_switch):
                 # Fetch Akkudoktor stock prices for negative price detection
-                start_time = datetime.now(self._price.time_zone).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
+                start_time = local_midnight(self._price.time_zone)
                 success = self._price.refresh_stock_prices_for_feedin_check(48, start_time)
                 if success:
                     logger.debug(
@@ -856,9 +848,7 @@ class HotReloadAdapter:
                 )
                 # Trigger immediate price fetch with new config
                 try:
-                    start_time = datetime.now(self._price.time_zone).replace(
-                        hour=0, minute=0, second=0, microsecond=0
-                    )
+                    start_time = local_midnight(self._price.time_zone)
                     tgt_duration = horizon_slots(self._price.time_frame_base)
                     self._price.update_prices(tgt_duration, start_time)
                     logger.info(
@@ -957,9 +947,7 @@ class HotReloadAdapter:
 
             # Trigger immediate feed-in price fetch with new source/zone
             try:
-                start_time = datetime.now(self._feed_in_price.time_zone).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
+                start_time = local_midnight(self._feed_in_price.time_zone)
                 tgt_duration = horizon_slots(self._feed_in_price.time_frame_base)
                 self._feed_in_price.update_prices(tgt_duration, start_time)
                 logger.info(
