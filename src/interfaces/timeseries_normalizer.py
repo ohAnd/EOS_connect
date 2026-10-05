@@ -11,13 +11,16 @@ template sensor written to feed EVCC (see discussion #214):
      "value": 0.3811}
 
     - start: ISO8601 (offset strongly recommended) or Unix seconds
-    - end:   optional; derived from the next entry's start when absent
+    - end:   optional; authoritative when present, else derived from the next
+      entry's start but capped at the series' nominal spacing (a hole stays a
+      hole). A series may also carry only end timestamps ("hour ending").
     - value: prices in EUR/kWh (EVCC `rates`), PV in W (EVCC `forecast.solar`)
 
-Home Assistant is the transport here, not the format: whatever a given integration
-names its attributes, the user shapes it into the above with a template sensor. This
-module therefore does not guess field names — it validates them and, on mismatch,
-reports which keys the payload actually had so the user can write that template.
+Home Assistant is the transport here, not the format. The spellings the common
+integrations publish (FIELD_ALIASES: start_time, period_start, end_time,
+price_per_kwh, pv_estimate, …) are read directly; for anything else the user
+shapes the payload with a template sensor, and a mismatch reports which keys
+the payload actually had so that template is easy to write.
 
 The unit conversions live here as plain tables so the price and PV interfaces share one
 definition instead of each carrying its own factor-of-1000.
@@ -93,7 +96,7 @@ class TimeseriesFormatError(ValueError):
     """
 
 
-def _parse_timestamp(raw, tz):
+def _parse_timestamp(raw, tz, field="start"):
     """
     Parse one timestamp into a timezone-aware datetime in *tz*.
 
@@ -105,7 +108,7 @@ def _parse_timestamp(raw, tz):
     if isinstance(raw, bool):
         # bool is an int subclass; treating True as epoch 1 would be nonsense.
         raise TimeseriesFormatError(
-            f"'start' must be a timestamp, got boolean {raw!r}"
+            f"'{field}' must be a timestamp, got boolean {raw!r}"
         )
 
     if isinstance(raw, (int, float)):
@@ -115,25 +118,25 @@ def _parse_timestamp(raw, tz):
         # ("year must be in 1..9999") that nothing upstream catches.
         if abs(raw) >= 1e11:
             raise TimeseriesFormatError(
-                f"'start' value {raw!r} looks like epoch milliseconds - send "
+                f"'{field}' value {raw!r} looks like epoch milliseconds - send "
                 "Unix seconds instead (drop the '* 1000' from the template)"
             )
         try:
             return datetime.fromtimestamp(raw, tz=pytz.UTC).astimezone(tz), False
         except (ValueError, OSError, OverflowError) as exc:
             raise TimeseriesFormatError(
-                f"'start' value {raw!r} is not a usable Unix timestamp"
+                f"'{field}' value {raw!r} is not a usable Unix timestamp"
             ) from exc
 
     if isinstance(raw, str):
         text = raw.strip()
         if not text:
-            raise TimeseriesFormatError("'start' is an empty string")
+            raise TimeseriesFormatError(f"'{field}' is an empty string")
         try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except ValueError as exc:
             raise TimeseriesFormatError(
-                f"'start' value {raw!r} is not a valid ISO8601 timestamp "
+                f"'{field}' value {raw!r} is not a valid ISO8601 timestamp "
                 f"or Unix timestamp"
             ) from exc
         if parsed.tzinfo is None:
@@ -146,7 +149,7 @@ def _parse_timestamp(raw, tz):
         return parsed.astimezone(tz), False
 
     raise TimeseriesFormatError(
-        f"'start' must be an ISO8601 string or Unix timestamp, got {type(raw).__name__}"
+        f"'{field}' must be an ISO8601 string or Unix timestamp, got {type(raw).__name__}"
     )
 
 
@@ -225,22 +228,49 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
         raise TimeseriesFormatError("timeseries is empty")
 
     names = resolve_field_names(raw_entries[0])
-    for field in ("start", "value"):
-        if field not in names:
-            raise TimeseriesFormatError(
-                f"missing required field '{field}' in the first entry "
-                f"({_describe_available_keys(raw_entries[0])}). Accepted names: "
-                f"{', '.join(FIELD_ALIASES[field])}. The expected format is "
-                f"{{start, end, value}} — shape the source with a Home Assistant "
-                f"template sensor, see {TEMPLATE_DOCS_URL}"
-            )
-    start_key, value_key = names["start"], names["value"]
-    if start_key != "start" or value_key != "value":
+    if "start" not in names and "end" not in names:
+        raise TimeseriesFormatError(
+            f"missing required field 'start' in the first entry "
+            f"({_describe_available_keys(raw_entries[0])}). Accepted names: "
+            f"{', '.join(FIELD_ALIASES['start'])} — or, for an hour-ending "
+            f"source, end timestamps only ({', '.join(FIELD_ALIASES['end'])}). "
+            f"The expected format is {{start, end, value}} — shape the source "
+            f"with a Home Assistant template sensor, see {TEMPLATE_DOCS_URL}"
+        )
+    if "value" not in names:
+        raise TimeseriesFormatError(
+            f"missing required field 'value' in the first entry "
+            f"({_describe_available_keys(raw_entries[0])}). Accepted names: "
+            f"{', '.join(FIELD_ALIASES['value'])}. The expected format is "
+            f"{{start, end, value}} — shape the source with a Home Assistant "
+            f"template sensor, see {TEMPLATE_DOCS_URL}"
+        )
+    start_key = names.get("start")
+    value_key = names["value"]
+    # `end` is optional per entry, so its spelling may first appear anywhere in
+    # the payload — a hand-written profile declares it only on the one entry
+    # that needs a longer span.
+    end_key = names.get("end")
+    if end_key is None:
+        for raw in raw_entries:
+            if isinstance(raw, dict):
+                end_key = next(
+                    (name for name in FIELD_ALIASES["end"] if name in raw), None
+                )
+                if end_key:
+                    break
+    aliased = {
+        canonical: key
+        for canonical, key in (
+            ("start", start_key), ("end", end_key), ("value", value_key)
+        )
+        if key is not None and canonical != key
+    }
+    if aliased:
         logger.info(
-            "[%s] timeseries fields read as start=%r, value=%r",
+            "[%s] timeseries fields read as %s",
             label,
-            start_key,
-            value_key,
+            ", ".join(f"{c}={k!r}" for c, k in sorted(aliased.items())),
         )
 
     entries = []
@@ -251,24 +281,42 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
         # slots by position, so a single missing entry shifts every later price an
         # hour early — silently, and in the direction that makes power look cheaper.
         # Rejecting the payload instead lets the caller fall back to cached data.
-        if not isinstance(raw, dict) or start_key not in raw or value_key not in raw:
+        anchor_key = start_key or end_key
+        if not isinstance(raw, dict) or anchor_key not in raw or value_key not in raw:
             raise TimeseriesFormatError(
-                f"entry {index} is missing '{start_key}' or '{value_key}' "
+                f"entry {index} is missing '{anchor_key}' or '{value_key}' "
                 f"({_describe_available_keys(raw)})"
             )
-        try:
-            start, was_naive = _parse_timestamp(raw[start_key], tz)
-        except TimeseriesFormatError as exc:
-            raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
+        start = None
+        if start_key is not None:
+            try:
+                start, was_naive = _parse_timestamp(raw[start_key], tz)
+            except TimeseriesFormatError as exc:
+                raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
+            if was_naive:
+                naive_seen += 1
+        end = None
+        if end_key is not None and raw.get(end_key) is not None:
+            try:
+                end, end_was_naive = _parse_timestamp(
+                    raw[end_key], tz, field=end_key
+                )
+            except TimeseriesFormatError as exc:
+                raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
+            if end_was_naive:
+                naive_seen += 1
+        if start is not None and end is not None and end <= start:
+            raise TimeseriesFormatError(
+                f"entry {index} ends at or before it starts "
+                f"({raw[end_key]!r} <= {raw[start_key]!r})"
+            )
         try:
             value = float(raw[value_key])
         except (TypeError, ValueError) as exc:
             raise TimeseriesFormatError(
                 f"entry {index} has a non-numeric '{value_key}': {raw[value_key]!r}"
             ) from exc
-        if was_naive:
-            naive_seen += 1
-        entries.append({"start": start, "end": None, "value": value})
+        entries.append({"start": start, "end": end, "value": value})
 
     if naive_seen:
         logger.warning(
@@ -282,29 +330,97 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
             TEMPLATE_DOCS_URL,
         )
 
+    if start_key is None:
+        _derive_starts_from_ends(entries)
     entries.sort(key=lambda item: item["start"])
-    _derive_end_timestamps(entries)
+    _finalize_entry_spans(entries)
     return entries
 
 
-def _derive_end_timestamps(entries):
+def _nominal_span_seconds(points):
     """
-    Fill each entry's ``end`` from the following entry's ``start``, in place.
+    The typical spacing of a sorted boundary sequence, in seconds.
 
-    ``end`` is part of the documented format but is never read for any calculation;
-    deriving it means a source that omits it (Tibber/EPEX HA integrations) is accepted
-    rather than rejected over a field we do not use. The last entry reuses the
-    preceding delta, falling back to one hour for a single-entry series.
+    The two grids the optimizer itself runs on are recognised from the first
+    delta (mirroring detect_resolution_seconds); any other regular grid falls
+    back to the median spacing, which shrugs off isolated holes. None when
+    there are not two distinct points.
     """
+    deltas = [
+        (later - earlier).total_seconds()
+        for earlier, later in zip(points, points[1:])
+        if later > earlier
+    ]
+    if not deltas:
+        return None
+    first = int(deltas[0])
+    if first in (900, 3600):
+        return first
+    return int(_median(deltas))
+
+
+def _finalize_entry_spans(entries):
+    """
+    Fill each missing ``end``, capped at the series' nominal spacing, in place.
+
+    A source-provided ``end`` is authoritative — it is how a deliberately long
+    entry (one overnight value in a hand-written load profile) is expressed.
+    A derived end reaches at most to the next entry's start AND at most one
+    nominal spacing past its own start: stretching it to "the next start,
+    whatever the distance" would smear the entry before a hole across the
+    hole, and a hole the grid placement cannot see can be neither reported,
+    nor filled by policy, nor marked as forecast. Derived ends carry an
+    ``end_derived`` flag so the probe can say which spans the source declared.
+
+    The last entry gets one nominal spacing (one hour for a single-entry
+    series).
+    """
+    nominal = _nominal_span_seconds([entry["start"] for entry in entries])
+    if nominal is None:
+        first_end = entries[0].get("end")
+        if first_end is not None:
+            nominal = (first_end - entries[0]["start"]).total_seconds()
+        else:
+            nominal = 3600
+    span_cap = timedelta(seconds=nominal)
+
     count = len(entries)
-    for index in range(count - 1):
-        entries[index]["end"] = entries[index + 1]["start"]
+    for index, entry in enumerate(entries):
+        if entry.get("end") is not None:
+            continue
+        candidate = entry["start"] + span_cap
+        if index + 1 < count:
+            candidate = min(candidate, entries[index + 1]["start"])
+        entry["end"] = candidate
+        entry["end_derived"] = True
 
-    if count >= 2:
-        last_delta = entries[-1]["start"] - entries[-2]["start"]
-    else:
-        last_delta = timedelta(hours=1)
-    entries[-1]["end"] = entries[-1]["start"] + last_delta
+
+def _derive_starts_from_ends(entries):
+    """
+    Derive each ``start`` for an end-only ("hour ending") series, in place.
+
+    The mirror of the end derivation: sorted by ``end``, an entry begins at
+    the previous end, but never more than one nominal spacing before its own
+    end — so a hole between ends stays a hole instead of inflating the entry
+    after it. Derived starts carry a ``start_derived`` flag.
+    """
+    entries.sort(key=lambda item: item["end"])
+    for earlier, later in zip(entries, entries[1:]):
+        if later["end"] == earlier["end"]:
+            raise TimeseriesFormatError(
+                f"two entries share the end timestamp {later['end'].isoformat()}"
+            )
+    nominal = _nominal_span_seconds([entry["end"] for entry in entries]) or 3600
+    span_cap = timedelta(seconds=nominal)
+
+    previous_end = None
+    for entry in entries:
+        candidate = entry["end"] - span_cap
+        if previous_end is not None and previous_end > candidate:
+            candidate = previous_end
+        entry["start"] = candidate
+        entry["start_derived"] = True
+        previous_end = entry["end"]
 
 
 def detect_resolution_seconds(entries):

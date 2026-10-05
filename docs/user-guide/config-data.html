@@ -229,6 +229,20 @@
                         anywhere in the UI. The log names the offending entry by index.
                     </div>
 
+                    <div class="alert alert-info">
+                        <strong><i class="fas fa-info-circle" aria-hidden="true"></i> Timestamps &amp; spans:</strong>
+                        every entry needs at least one explicit timestamp. Three shapes are accepted:
+                        <code>start</code> only (the end is derived from the next entry), <code>end</code> only
+                        (an &quot;hour ending&quot; source — the start is derived the mirrored way), or both — a
+                        supplied <code>end</code> is authoritative. A derived span never exceeds the series'
+                        typical spacing, so a missing hour stays a visible hole instead of silently stretching
+                        the entry before it; an entry that is <em>meant</em> to span longer (one overnight value
+                        in a hand-written load profile) must therefore declare its <code>end</code> explicitly.
+                        Bare value arrays without timestamps are rejected here — they belong to the sources
+                        built for them (<code>fixed_24h</code> for prices, the managed-load push API), or get
+                        timestamps added via a template sensor.
+                    </div>
+
                     <h3>Home Assistant Integration</h3>
                     <p>Home Assistant entity attributes can be accessed using the dot notation in
                         <strong>data_path</strong>.

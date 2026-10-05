@@ -213,7 +213,7 @@ class TestFieldAliases:
 
 
 class TestEndDerivation:
-    """`end` is part of the documented format but never read — absence must not reject."""
+    """`end` is optional — absence must not reject, and derivation must not invent."""
 
     def test_end_derived_from_next_start(self):
         payload = [
@@ -224,8 +224,9 @@ class TestEndDerivation:
         entries = normalize_entries(payload, BERLIN)
 
         assert entries[0]["end"] == entries[1]["start"]
+        assert entries[0]["end_derived"] is True
 
-    def test_last_end_reuses_the_preceding_delta(self):
+    def test_last_end_gets_the_nominal_spacing(self):
         payload = [
             {"start": "2026-08-23T00:00:00+02:00", "value": 0.3811},
             {"start": "2026-08-23T00:15:00+02:00", "value": 0.3727},
@@ -242,17 +243,102 @@ class TestEndDerivation:
 
         assert entries[0]["end"] - entries[0]["start"] == timedelta(hours=1)
 
-    def test_supplied_end_is_ignored_in_favour_of_the_derived_one(self):
-        # EPEX supplies end_time, EVCC supplies end; neither is read for any
-        # calculation, so the derived value is what the rest of the code sees.
+    def test_a_supplied_end_is_authoritative(self):
+        # A deliberately long entry (one overnight value in a hand-written load
+        # profile) is expressed through an explicit end — it must survive.
         payload = [
-            {"start": "2026-08-23T00:00:00+02:00", "end": "bogus", "value": 0.1766},
-            {"start": "2026-08-23T00:15:00+02:00", "end": "bogus", "value": 0.1716},
+            {"start": "2026-08-23T21:00:00+02:00", "value": 400.0},
+            {
+                "start": "2026-08-23T22:00:00+02:00",
+                "end": "2026-08-24T06:00:00+02:00",
+                "value": 300.0,
+            },
         ]
 
         entries = normalize_entries(payload, BERLIN)
 
-        assert entries[0]["end"] == entries[1]["start"]
+        assert entries[1]["end"] - entries[1]["start"] == timedelta(hours=8)
+        assert "end_derived" not in entries[1]
+
+    def test_an_unparseable_end_rejects_the_payload(self):
+        payload = [
+            {"start": "2026-08-23T00:00:00+02:00", "end": "bogus", "value": 0.1766},
+        ]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+
+        assert "entry 0" in str(exc.value)
+
+    def test_an_end_at_or_before_its_start_rejects_the_payload(self):
+        payload = [
+            {
+                "start": "2026-08-23T01:00:00+02:00",
+                "end": "2026-08-23T01:00:00+02:00",
+                "value": 0.1766,
+            },
+        ]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+
+        assert "ends at or before it starts" in str(exc.value)
+
+    def test_a_derived_end_does_not_stretch_across_a_hole(self):
+        # Hourly series with 11:00 missing: the 10:00 entry keeps its own hour
+        # instead of swallowing the hole — otherwise the hole is invisible to
+        # the grid placement and can be neither reported nor marked.
+        payload = [
+            {"start": "2026-08-23T09:00:00+02:00", "value": 1.0},
+            {"start": "2026-08-23T10:00:00+02:00", "value": 2.0},
+            {"start": "2026-08-23T12:00:00+02:00", "value": 3.0},
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert entries[1]["end"] - entries[1]["start"] == timedelta(hours=1)
+        assert entries[1]["end_derived"] is True
+        assert entries[2]["start"] - entries[1]["end"] == timedelta(hours=1)
+
+
+class TestEndOnlySeries:
+    """A source publishing only interval ends ("hour ending") is accepted."""
+
+    def test_solcast_style_period_ends_derive_their_starts(self):
+        payload = [
+            {"period_end": "2026-08-23T10:30:00+02:00", "pv_estimate": 1.25},
+            {"period_end": "2026-08-23T11:00:00+02:00", "pv_estimate": 1.5},
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert entries[0]["end"] - entries[0]["start"] == timedelta(minutes=30)
+        assert entries[0]["start"].minute == 0
+        assert entries[1]["start"] == entries[0]["end"]
+        assert entries[0]["start_derived"] is True
+
+    def test_a_hole_between_ends_stays_a_hole(self):
+        payload = [
+            {"end": "2026-08-23T10:00:00+02:00", "value": 1.0},
+            {"end": "2026-08-23T11:00:00+02:00", "value": 2.0},
+            {"end": "2026-08-23T14:00:00+02:00", "value": 3.0},
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert entries[2]["start"].hour == 13
+        assert entries[2]["start"] - entries[1]["end"] == timedelta(hours=2)
+
+    def test_duplicate_ends_are_rejected(self):
+        payload = [
+            {"end": "2026-08-23T10:00:00+02:00", "value": 1.0},
+            {"end": "2026-08-23T10:00:00+02:00", "value": 2.0},
+        ]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+
+        assert "share the end timestamp" in str(exc.value)
 
     def test_entries_are_sorted_by_start(self):
         payload = [
