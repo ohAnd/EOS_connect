@@ -26,7 +26,7 @@ try:  # running from src/ as a script — src/ is on sys.path
         TEMPLATE_DOCS_URL,
         TimeseriesFormatError,
         convert_price_values,
-        convert_pv_values,
+        convert_energy_values,
         detect_resolution_seconds,
         extract_json_path,
         normalize_entries,
@@ -40,7 +40,7 @@ except ImportError:  # imported as src.config_web (tests)
         TEMPLATE_DOCS_URL,
         TimeseriesFormatError,
         convert_price_values,
-        convert_pv_values,
+        convert_energy_values,
         detect_resolution_seconds,
         extract_json_path,
         normalize_entries,
@@ -266,7 +266,7 @@ def probe(
         if domain == "price":
             convert_price_values(entries, value_unit)
         else:
-            convert_pv_values(entries, value_unit, resolution_seconds)
+            convert_energy_values(entries, value_unit)
     except TimeseriesFormatError as exc:
         return {"ok": False, "field": unit_field, "error": str(exc)}
 
