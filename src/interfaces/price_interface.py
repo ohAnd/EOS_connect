@@ -41,6 +41,10 @@ import threading
 import time
 import requests
 
+try:  # running from src/ — src/ is on sys.path
+    from timeseries_grid import horizon_slots
+except ImportError:  # imported as src.interfaces (tests)
+    from ..timeseries_grid import horizon_slots
 from .timeseries_normalizer import (
     TimeseriesFormatError,
     convert_price_values,
@@ -236,11 +240,11 @@ class PriceInterface:
         # Initial update
         try:
             self.update_prices(
-                48,
+                horizon_slots(self.time_frame_base),
                 datetime.now(self.time_zone).replace(
                     hour=0, minute=0, second=0, microsecond=0
                 ),
-            )  # Get 48 hours of price data
+            )  # Get the full optimization horizon of price data
             logger.info("[PRICE-IF] Initial price update completed")
         except RuntimeError as e:
             logger.error(
@@ -256,11 +260,11 @@ class PriceInterface:
 
                 # Perform price update
                 self.update_prices(
-                    48,
+                    horizon_slots(self.time_frame_base),
                     datetime.now(self.time_zone).replace(
                         hour=0, minute=0, second=0, microsecond=0
                     ),
-                )  # Get 48 hours of price data
+                )  # Get the full optimization horizon of price data
                 logger.debug("[PRICE-IF] Periodic price update completed")
 
             except (requests.RequestException, KeyError, ValueError, AttributeError,
@@ -450,8 +454,8 @@ class PriceInterface:
         'stromligning', 'fixed_24h', 'timeseries', 'default'.
 
         Args:
-            tgt_duration (int): The target duration (hours or 15-min slots) for which prices
-            are to be fetched.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly)
+            for which prices are to be fetched.
             start_time (datetime, optional): The start time from which prices are to be fetched.
 
         Returns:
@@ -503,10 +507,10 @@ class PriceInterface:
 
                 # Extend if needed
                 if len(prices) < tgt_duration:
-                    remaining_hours = tgt_duration - len(prices)
-                    prices.extend(self.last_successful_prices[:remaining_hours])
+                    remaining_slots = tgt_duration - len(prices)
+                    prices.extend(self.last_successful_prices[:remaining_slots])
                     self.current_prices_direct.extend(
-                        self.last_successful_prices_direct[:remaining_hours]
+                        self.last_successful_prices_direct[:remaining_slots]
                     )
             else:
                 if len(self.last_successful_prices) == 0:
@@ -557,7 +561,7 @@ class PriceInterface:
         Fetches and processes electricity prices for today and tomorrow from Akkudoktor API.
 
         Args:
-            tgt_duration (int): The target duration in hours or 15-min slots.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
@@ -579,7 +583,7 @@ class PriceInterface:
         auxiliary stock price fetching (when src="fixed_24h" with negative_price_switch).
 
         Args:
-            tgt_duration (int): The target duration in hours or 15-min slots.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
@@ -631,10 +635,13 @@ class PriceInterface:
                 minute=0, second=0, microsecond=0
             )
         current_hour = start_time.hour
-        extended_prices = prices[current_hour : current_hour + tgt_duration]
+        # tgt_duration counts slots; this path works in hours until the final
+        # expansion below, so convert once.
+        tgt_hours = int(tgt_duration * self.time_frame_base) // 3600
+        extended_prices = prices[current_hour : current_hour + tgt_hours]
 
-        if len(extended_prices) < tgt_duration:
-            remaining_hours = tgt_duration - len(extended_prices)
+        if len(extended_prices) < tgt_hours:
+            remaining_hours = tgt_hours - len(extended_prices)
             extended_prices.extend(prices[:remaining_hours])
         logger.debug("[PRICE-IF] Prices from AKKUDOKTOR fetched successfully.")
         # for 15 min output only extend the array
@@ -651,7 +658,7 @@ class PriceInterface:
         Fetches and processes electricity prices for today and tomorrow from Tibber API.
 
         Args:
-            tgt_duration (int): The target duration in hours or 15-min slots.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
@@ -867,15 +874,9 @@ class PriceInterface:
             )
         current_hour = start_time.hour
 
-        # Convert tgt_duration to actual array slots based on time frame
-        if self.time_frame_base == 900:
-            # 15-min intervals: convert hours to 15-min slots
-            actual_slots = tgt_duration * 4
-            array_offset = current_hour * 4
-        else:
-            # Hourly intervals: use as-is
-            actual_slots = tgt_duration
-            array_offset = current_hour
+        # tgt_duration already counts slots; only the offset depends on the frame.
+        actual_slots = tgt_duration
+        array_offset = current_hour * 4 if self.time_frame_base == 900 else current_hour
 
         extended_prices = prices[array_offset : array_offset + actual_slots]
         extended_prices_direct = prices_direct[
@@ -937,7 +938,7 @@ class PriceInterface:
         Fetches and processes electricity prices from Stromligning.dk API.
 
         Args:
-            tgt_duration (int): The target duration in hours or 15-min slots.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
@@ -962,9 +963,9 @@ class PriceInterface:
         headers = {"accept": "application/json"}
 
         request_url = self._stromligning_url
-        to_param = (start_time + timedelta(hours=tgt_duration)).strftime(
-            "%Y-%m-%dT%H:%M"
-        )
+        to_param = (
+            start_time + timedelta(seconds=tgt_duration * self.time_frame_base)
+        ).strftime("%Y-%m-%dT%H:%M")
         request_url = f"{request_url}&forecast=true&to={to_param}"
 
         logger.debug("[PRICE-IF] Requesting prices from STROMLIGNING: %s", request_url)
@@ -996,7 +997,9 @@ class PriceInterface:
             return []
 
         tzinfo = start_time.tzinfo
-        horizon_end = start_time + timedelta(hours=tgt_duration)
+        horizon_end = start_time + timedelta(
+            seconds=tgt_duration * self.time_frame_base
+        )
 
         processed_entries = []
         for entry in data:
@@ -1157,7 +1160,7 @@ class PriceInterface:
         Fetches and processes electricity prices from SmartEnergy AT API.
 
         Args:
-            tgt_duration (int): The target duration in hours or 15-min slots.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
@@ -1737,7 +1740,7 @@ class PriceInterface:
         Returns a fixed 24-hour array of prices.
 
         Args:
-            tgt_duration (int): The target duration in hours or 15-min slots.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
@@ -1754,9 +1757,11 @@ class PriceInterface:
             return []
         # Convert each entry in fixed_24h_array from ct/kWh to EUR/Wh (divide by 100000)
         extended_prices = [round(price / 100000, 9) for price in self.fixed_24h_array]
-        # Extend to tgt_duration if needed
-        if len(extended_prices) < tgt_duration:
-            remaining_hours = tgt_duration - len(extended_prices)
+        # tgt_duration counts slots; this path works in hours until the final
+        # expansion below.
+        tgt_hours = int(tgt_duration * self.time_frame_base) // 3600
+        if len(extended_prices) < tgt_hours:
+            remaining_hours = tgt_hours - len(extended_prices)
             extended_prices.extend(extended_prices[:remaining_hours])
         # for 15 min output only extend the array
         if self.time_frame_base == 900:
@@ -1997,7 +2002,7 @@ class PriceInterface:
             # Pass resolution_seconds and start_time for timestamp-aware conversion
             prices = self.__parse_price_timeseries(timeseries, tgt_duration, resolution_seconds, start_time)
 
-            expected_slots = 48 if self.time_frame_base == 3600 else 192
+            expected_slots = horizon_slots(self.time_frame_base)
 
             # Validate EVCC data: only accept exactly 1 or 2 complete full days
             # Partial days, gaps, or mixed data → treat as incomplete error
@@ -2037,7 +2042,7 @@ class PriceInterface:
                     # No conversion, use actual timeseries count
                     num_real_slots = actual_timeseries_count
 
-                expected_slots = 48 if self.time_frame_base == 3600 else 192
+                expected_slots = horizon_slots(self.time_frame_base)
                 num_missing_slots = expected_slots - num_real_slots
 
                 # For energyforecast, pass the actual number of prices needed
@@ -2254,7 +2259,7 @@ class PriceInterface:
             return []
 
         # Validate completeness
-        expected_count = 48 if self.time_frame_base == 3600 else 192
+        expected_count = horizon_slots(self.time_frame_base)
         if len(values) < expected_count:
             logger.debug(
                 "[PRICE-IF] Incomplete timeseries: got %d, expected %d",
