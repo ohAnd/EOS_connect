@@ -4,8 +4,8 @@ Forecast metadata: which tail of a served array is invention, and of what kind.
 PriceInterface grew these three fields ad hoc; the feed-in interface is the
 second producer and later domains (temperature, base load) will be the third
 and fourth, so the triple lives in one mixin instead of another copy of the
-same three attributes and two accessors. Migrating PriceInterface onto it is a
-named follow-up — its variant is interwoven with the published price snapshot.
+same three attributes and two accessors. PriceInterface overrides the two
+accessors to read and clear its published price snapshot alongside.
 """
 
 import logging
