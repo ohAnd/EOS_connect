@@ -62,6 +62,7 @@ try:  # running from src/ — src/ is on sys.path
     from interfaces.http_fetch import bearer_request_kwargs, retry_request
 except ImportError:  # imported as src.interfaces (tests)
     from .http_fetch import bearer_request_kwargs, retry_request
+from .forecast_metadata import ForecastMetadataMixin
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
@@ -147,7 +148,7 @@ ENERGYFORECAST_MIN_FACTOR = 0.5  # Minimum allowed multiplicative factor
 ENERGYFORECAST_MAX_OFFSET_CT = 50.0  # Maximum allowed offset in ct/kWh
 
 
-class PriceInterface:
+class PriceInterface(ForecastMetadataMixin):
     """
     The PriceInterface class manages electricity price data retrieval and processing from
     various sources.
@@ -261,13 +262,7 @@ class PriceInterface:
         self._energyforecast_cache = []  # Cached prediction from last call
 
         # Forecast metadata tracking for UI visualization
-        self.forecast_start_index = (
-            None  # Index where forecast/repetition begins (None = all real)
-        )
-        self.forecast_type = (
-            None  # "smart_forecast", "simple_repetition", or None (all real)
-        )
-        self.forecast_source = None  # e.g., "energyforecast.de" for smart forecasts
+        self._init_forecast_metadata()
         # Prices and forecast metadata are read by the web thread while the
         # update thread writes them; this tuple is assigned once per update so
         # a reader never sees new metadata next to old prices.
@@ -495,14 +490,8 @@ class PriceInterface:
 
     def get_forecast_metadata(self):
         """
-        Return metadata about current price forecast/repetition.
-
-        Returns:
-            dict: Contains forecast_start_index, forecast_type, and forecast_source.
-                  - forecast_start_index: Index where prediction/repetition starts
-                    (None if all real)
-                  - forecast_type: "smart_forecast", "simple_repetition", or None
-                  - forecast_source: Source of prediction (e.g., "energyforecast.de") or None
+        The mixin's triple, read from the published snapshot when one exists —
+        a web-thread reader must never see new metadata next to old prices.
         """
         if self._published is not None:
             _, start_index, forecast_type, forecast_source = self._published
@@ -511,11 +500,7 @@ class PriceInterface:
                 "forecast_type": forecast_type,
                 "forecast_source": forecast_source,
             }
-        return {
-            "forecast_start_index": self.forecast_start_index,
-            "forecast_type": self.forecast_type,
-            "forecast_source": self.forecast_source,
-        }
+        return super().get_forecast_metadata()
 
     def clear_forecast_metadata(self):
         """
@@ -523,31 +508,12 @@ class PriceInterface:
 
         Used by hot reload when the price source changes without an immediate
         fetch: the old markers would otherwise keep hatching real prices as
-        forecast until the next update cycle.
+        forecast until the next update cycle. The published snapshot carries
+        its own copy of the triple, so it is cleared alongside.
         """
-        self._set_forecast_metadata(None, None, None)
+        super().clear_forecast_metadata()
         if self._published is not None:
             self._published = (self._published[0], None, None, None)
-
-    def _set_forecast_metadata(self, start_index, forecast_type, source=None):
-        """
-        Update forecast metadata for UI visualization.
-
-        Args:
-            start_index (int or None): Index where forecast/repetition begins
-            forecast_type (str or None): "smart_forecast", "simple_repetition", or None
-            source (str or None): Source name (e.g., "energyforecast.de")
-        """
-        self.forecast_start_index = start_index
-        self.forecast_type = forecast_type
-        self.forecast_source = source
-        if forecast_type:
-            logger.debug(
-                "[PRICE-IF] Forecast metadata updated: type=%s, start_index=%s, source=%s",
-                forecast_type,
-                start_index,
-                source,
-            )
 
     def __retrieve_prices(self, tgt_duration, start_time=None):
         """
