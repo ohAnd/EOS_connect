@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from src.config_web.timeseries_probe import probe
+from src.config_web.timeseries_probe import analyse, probe
 
 EVCC_RATES = {
     "rates": [
@@ -172,6 +172,34 @@ class TestFormatMismatch:
         }
 
         result = run_probe(payload)
+
+        assert result["ok"] is True
+        assert any("no UTC offset" in w for w in result["warnings"])
+
+
+class TestAnalyseOffline:
+    """The transport-free half: what the offline doctor runs on a pasted file."""
+
+    def test_a_local_payload_is_judged_without_any_request(self):
+        result = analyse(EVCC_RATES["rates"], "price", "EUR/kWh", "Europe/Berlin")
+
+        assert result["ok"] is True
+        assert result["entry_count"] == 3
+        assert result["slots"][0]["unit"] == "ct/kWh"
+        assert result["slots"][0]["value"] == pytest.approx(38.11, abs=0.01)
+
+    def test_unknown_domain_rejected(self):
+        result = analyse([], "weather", "EUR/kWh", "UTC")
+
+        assert result["ok"] is False
+
+    def test_aliased_naive_timestamps_still_get_the_offset_warning(self):
+        payload = [
+            {"start_time": "2026-08-23 00:00:00", "price_per_kwh": 0.30},
+            {"start_time": "2026-08-23 00:15:00", "price_per_kwh": 0.31},
+        ]
+
+        result = analyse(payload, "price", "EUR/kWh", "Europe/Berlin")
 
         assert result["ok"] is True
         assert any("no UTC offset" in w for w in result["warnings"])
