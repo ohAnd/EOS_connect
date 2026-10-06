@@ -214,6 +214,7 @@ from .timeseries_normalizer import (
     convert_energy_values,
     detect_resolution_seconds,
     extract_json_path,
+    median_span_seconds,
     normalize_entries,
     pv_plausibility_message,
 )
@@ -1768,7 +1769,9 @@ class PvInterface:
             return []
 
         if resolution_seconds is None:
-            resolution_seconds = detect_resolution_seconds(timeseries)
+            resolution_seconds = detect_resolution_seconds(
+                timeseries
+            ) or median_span_seconds(timeseries)
             if resolution_seconds is None:
                 logger.error("[PV-IF] Could not detect PV timeseries resolution")
                 return []
@@ -1807,19 +1810,25 @@ class PvInterface:
                 )
                 self._logged_value_unit = value_unit
 
-        if resolution_seconds == 3600 and self.time_frame_base == 900:
-            logger.error(
-                "[PV-IF] Resolution mismatch: data source provides hourly (3600s) "
-                "but system configured for 15-min (900s) slots. "
-                "Set time_frame_base to 3600 or switch to a 15-minute data source."
-            )
-            return []
-        if resolution_seconds not in (900, 3600):
-            logger.error(
-                "[PV-IF] Unsupported resolution: %d seconds (expected 900 or 3600)",
+        # Any grid places by overlap: a coarser entry's energy is split across
+        # the slots it spans, a finer one sums into each slot — an hourly source
+        # on a 15-minute system just works. Only a grid so coarse that one
+        # entry blankets many slots is worth flagging.
+        if resolution_seconds > 4 * self.time_frame_base:
+            logger.warning(
+                "[PV-IF] Source resolution is %ds — each entry spans %d slots "
+                "and its energy is split across all of them; check whether this "
+                "is really a per-slot series",
                 resolution_seconds,
+                resolution_seconds // self.time_frame_base,
             )
-            return []
+        elif resolution_seconds not in (900, 3600):
+            logger.info(
+                "[PV-IF] Unusual source resolution (%ds) — values are placed "
+                "by overlap on the %ds grid",
+                resolution_seconds,
+                self.time_frame_base,
+            )
 
         negatives = 0
         for entry in timeseries:

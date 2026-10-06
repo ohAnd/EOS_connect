@@ -70,9 +70,11 @@ class TestPvTimeseriesFormatValidation:
         assert all(isinstance(v, float) for v in values)
         assert all(v == 100.0 for v in values)
 
-    def test_missing_start_field(self):
+    def test_missing_timestamps_rejected(self):
+        # An end-only entry is a legitimate "hour ending" shape since the
+        # normalizer derives its start — no timestamp at all is the error.
         pv = make_pv_interface()
-        timeseries = [{"end": "2024-01-01T01:00:00Z", "value": 100.0}]
+        timeseries = [{"label": "noon", "value": 100.0}]
         assert pv._PvInterface__parse_pv_timeseries(timeseries, 48) == []
 
     def test_missing_value_field(self):
@@ -122,13 +124,20 @@ class TestPvResolutionDetection:
         )
         assert detect_resolution_seconds(entries) == 900
 
-    def test_hourly_source_to_15min_system_rejected(self):
+    def test_hourly_source_to_15min_system_splits_the_energy(self):
         pv = make_pv_interface(time_frame_base=TIME_FRAME_BASE_15MIN)
+        base = midnight_today_utc()
         timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T01:00:00Z", "value": 100.0},
-            {"start": "2024-01-01T01:00:00Z", "end": "2024-01-01T02:00:00Z", "value": 200.0},
-        ] * 24
-        assert pv._PvInterface__parse_pv_timeseries(timeseries, 192) == []
+            {
+                "start": (base + timedelta(hours=h)).isoformat(),
+                "end": (base + timedelta(hours=h + 1)).isoformat(),
+                "value": 100.0 * (h + 1),
+            }
+            for h in range(2)
+        ]
+        values = pv._PvInterface__parse_pv_timeseries(timeseries, 192)
+        assert values[0:4] == [25.0] * 4
+        assert values[4:8] == [50.0] * 4
 
 
 class TestOverlapPlacement:

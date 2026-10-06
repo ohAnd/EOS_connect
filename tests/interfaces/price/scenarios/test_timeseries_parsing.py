@@ -231,8 +231,8 @@ class TestTimeFrameBaseMismatch:
         # First hour should be average of 0.20, 0.24, 0.28, 0.30 = 0.255
         assert 0.254 < prices[0] < 0.256
 
-    def test_hourly_source_to_15min_system_rejected(self, monkeypatch):
-        """Hourly source (3600s) to 15-min system (900s) → ERROR, rejected."""
+    def test_hourly_source_to_15min_system_holds_each_price(self, monkeypatch):
+        """Hourly source (3600s) on a 15-min system: each price covers its 4 slots."""
         monkeypatch.setattr(
             "src.interfaces.price_interface.PriceInterface._PriceInterface__start_update_service",
             lambda self: None,
@@ -247,14 +247,78 @@ class TestTimeFrameBaseMismatch:
             timezone=timezone.utc,
         )
 
-        # Hourly source data
-        timeseries = hourly(48)
+        # Hourly source data with a distinct value per hour
+        timeseries = hourly(48, value=lambda h: 0.1 + h / 1000)
 
         prices = iface._PriceInterface__parse_price_timeseries(
             timeseries, 192, start_time=WINDOW
         )
-        # Should return empty (resolution mismatch error)
-        assert prices == []
+        assert len(prices) == 192
+        assert prices[0:4] == [pytest.approx(0.1)] * 4
+        assert prices[4] == pytest.approx(0.101)
+
+    def test_half_hourly_source_is_placed_like_any_other_grid(self, monkeypatch):
+        """A 30-min grid (Solcast-style) needs no special case: overlap placement."""
+        monkeypatch.setattr(
+            "src.interfaces.price_interface.PriceInterface._PriceInterface__start_update_service",
+            lambda self: None,
+        )
+        iface = PriceInterface(
+            {
+                "source": "timeseries",
+                "data_url": "http://test.local/prices",
+                "data_path": "data",
+            },
+            time_frame_base=3600,
+            timezone=timezone.utc,
+        )
+        timeseries = [
+            {
+                "start": (WINDOW + timedelta(minutes=30 * i)).isoformat(),
+                "value": 0.1 + i / 100,
+            }
+            for i in range(4)
+        ]
+        prices = iface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, start_time=WINDOW
+        )
+        # Hour 0 averages its two half-hours, hour 1 the next two.
+        assert prices[0] == pytest.approx(0.105)
+        assert prices[1] == pytest.approx(0.125)
+
+    def test_a_daily_average_sensor_is_accepted_but_flagged(
+        self, monkeypatch, caplog
+    ):
+        """One entry blanketing a day smells like a misconfigured sensor (R5)."""
+        monkeypatch.setattr(
+            "src.interfaces.price_interface.PriceInterface._PriceInterface__start_update_service",
+            lambda self: None,
+        )
+        iface = PriceInterface(
+            {
+                "source": "timeseries",
+                "data_url": "http://test.local/prices",
+                "data_path": "data",
+            },
+            time_frame_base=3600,
+            timezone=timezone.utc,
+        )
+        timeseries = [
+            {
+                "start": (WINDOW + timedelta(days=d)).isoformat(),
+                "end": (WINDOW + timedelta(days=d + 1)).isoformat(),
+                "value": 0.2 + d / 10,
+            }
+            for d in range(2)
+        ]
+        with caplog.at_level("WARNING"):
+            prices = iface._PriceInterface__parse_price_timeseries(
+                timeseries, 48, start_time=WINDOW
+            )
+        assert len(prices) == 48
+        assert prices[0] == pytest.approx(0.2)
+        assert prices[24] == pytest.approx(0.3)
+        assert "spans" in caplog.text
 
 
 class TestAveraging:

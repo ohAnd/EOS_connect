@@ -142,7 +142,7 @@ class TestFormatMismatch:
         assert result["field"] == "price.data_path"
         assert "'rates'" in result["error"]
 
-    def test_unsupported_resolution_is_named(self):
+    def test_unusual_resolution_is_accepted_and_named(self):
         payload = {
             "rates": [
                 {"start": "2026-08-23T00:00:00+02:00", "value": 0.30},
@@ -152,8 +152,8 @@ class TestFormatMismatch:
 
         result = run_probe(payload)
 
-        assert result["ok"] is False
-        assert "300s" in result["error"]
+        assert result["ok"] is True
+        assert any("Unusual slot resolution (300s" in w for w in result["warnings"])
 
     def test_single_entry_cannot_determine_resolution(self):
         payload = {"rates": [{"start": "2026-08-23T00:00:00+02:00", "value": 0.30}]}
@@ -261,9 +261,9 @@ class TestTransportFailures:
 
 
 class TestResolutionCompatibility:
-    """A green test must not be followed by a runtime "resolution mismatch"."""
+    """The test must say what the runtime will do — accept, and by which rule."""
 
-    def test_hourly_source_on_15min_system_is_rejected(self):
+    def test_hourly_source_on_15min_system_warns_with_the_applied_rule(self):
         payload = {
             "rates": [
                 {"start": "2026-08-23T00:00:00+02:00", "value": 0.30},
@@ -273,8 +273,8 @@ class TestResolutionCompatibility:
 
         result = run_probe(payload, time_frame_base=900)
 
-        assert result["ok"] is False
-        assert "15-minute slots" in result["error"]
+        assert result["ok"] is True
+        assert any("hourly on a 15-minute system" in w for w in result["warnings"])
 
     def test_quarter_hourly_source_on_15min_system_is_fine(self):
         result = run_probe(EVCC_RATES, time_frame_base=900)

@@ -65,6 +65,7 @@ from .timeseries_normalizer import (
     convert_price_values,
     detect_resolution_seconds,
     extract_json_path,
+    median_span_seconds,
     normalize_entries,
     price_plausibility_message,
 )
@@ -2275,27 +2276,33 @@ class PriceInterface:
                 logger.warning("[PRICE-IF] %s", warning)
 
         if resolution_seconds is None:
-            resolution_seconds = detect_resolution_seconds(timeseries)
+            resolution_seconds = detect_resolution_seconds(
+                timeseries
+            ) or median_span_seconds(timeseries)
             if resolution_seconds is None:
                 logger.error("[PRICE-IF] Could not detect price timeseries resolution")
                 return []
 
-        if resolution_seconds == 3600 and self.time_frame_base == 900:
-            # Source provides hourly, system wants 15-min - ERROR
-            # User must choose: either use 3600s time frame or find 15-min source
-            logger.error(
-                "[PRICE-IF] Resolution mismatch: data source provides hourly (3600s) "
-                "but system configured for 15-min (900s) slots. "
-                "Set time_frame_base to 3600 or switch to a data source "
-                "with 15-minute resolution."
-            )
-            return []
-        if resolution_seconds not in (900, 3600):
-            logger.error(
-                "[PRICE-IF] Unsupported resolution: %d seconds (expected 900 or 3600)",
+        # Any grid places by overlap: a coarser price holds its value across
+        # every slot it spans, a finer one averages into each slot. An hourly
+        # source on a 15-minute system therefore just works. Only a grid so
+        # coarse that one entry blankets many slots is worth flagging — that is
+        # almost always a daily-average sensor configured by mistake.
+        if resolution_seconds > 4 * self.time_frame_base:
+            logger.warning(
+                "[PRICE-IF] Source resolution is %ds — each entry spans %d slots "
+                "and holds its price across all of them; check whether this is "
+                "really a per-slot price series",
                 resolution_seconds,
+                resolution_seconds // self.time_frame_base,
             )
-            return []
+        elif resolution_seconds not in (900, 3600):
+            logger.info(
+                "[PRICE-IF] Unusual source resolution (%ds) — values are placed "
+                "by overlap on the %ds grid",
+                resolution_seconds,
+                self.time_frame_base,
+            )
 
         anchor = (
             start_time if start_time is not None else local_midnight(self.time_zone)
