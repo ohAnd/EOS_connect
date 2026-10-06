@@ -908,7 +908,8 @@ if soc &lt; 20 and not override_active:
                         <code>unavailable</code> each get their own message.</p>
 
                     <p><code>POST /api/config/test-timeseries</code> does the same job for a whole series. It
-                        takes <code>domain</code>, either <code>"price"</code> or <code>"pv"</code>, plus the
+                        takes <code>domain</code> &mdash; <code>"price"</code>, <code>"pv"</code> or
+                        <code>"feed_in"</code> &mdash; plus the
                         same style of unsaved overrides. Success returns <code>entry_count</code>,
                         <code>resolution_seconds</code>, <code>value_unit</code>,
                         <code>first_slot</code>/<code>last_slot</code>/<code>covered_slots</code> (where the
@@ -924,6 +925,23 @@ if soc &lt; 20 and not override_active:
                             status tells you the probe ran, not that it succeeded. Branch on the
                             <code>ok</code> field.</p>
                     </div>
+
+                    <h3 id="timeseries-doctor">The offline timeseries doctor</h3>
+                    <p>The same analysis is available as a command-line tool, for a payload pasted into a
+                        support thread or a sensor on a machine the web UI cannot reach. It prints where
+                        every entry lands on the optimization grid &mdash; slot by slot, with the local
+                        wall-clock time, the covered fraction and the value &mdash; and ends with the exact
+                        verdict the &ldquo;Test connection&rdquo; button would render. <code>--today</code>
+                        anchors the grid on any date, so a DST changeover can be played through without
+                        waiting for one; the exit code is 0 only when the verdict is ok.</p>
+
+                    <pre><code>python scripts/timeseries_doctor.py \
+  --domain price --tz Europe/Berlin --time-frame 3600 \
+  --file payload.json --path attributes.data
+
+python scripts/timeseries_doctor.py \
+  --domain pv --url http://homeassistant:8123/api/states/sensor.pv \
+  --token "$HA_TOKEN" --today 2026-10-25</code></pre>
 
                     <h3 id="sign-conventions">Automatic sign-convention detection</h3>
                     <p>This is the part that really is automatic, and it has nothing to do with finding
