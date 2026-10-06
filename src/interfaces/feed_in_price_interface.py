@@ -39,6 +39,10 @@ try:  # running from src/ — src/ is on sys.path
     from timeseries_grid import horizon_slots, local_midnight
 except ImportError:  # imported as src.interfaces (tests)
     from ..timeseries_grid import horizon_slots, local_midnight
+try:  # running from src/ — src/ is on sys.path
+    from interfaces.http_fetch import bearer_request_kwargs
+except ImportError:  # imported as src.interfaces (tests)
+    from .http_fetch import bearer_request_kwargs
 from .timeseries_normalizer import (
     TimeseriesFormatError,
     convert_price_values,
@@ -472,10 +476,9 @@ class FeedInPriceInterface:
 
             # Fetch feed-in tariff (export prices)
             feed_in_url = f"{evcc_url}/api/tariff/feedin"
-            headers = {"Content-Type": "application/json"}
 
             try:
-                response = requests.get(feed_in_url, headers=headers, timeout=10)
+                response = requests.get(feed_in_url, **bearer_request_kwargs())
                 response.raise_for_status()
             except requests.exceptions.RequestException as req_err:
                 logger.error(f"[FEEDIN-IF] Failed to fetch EVCC feed-in tariff: {req_err}")
