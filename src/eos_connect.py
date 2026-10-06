@@ -322,6 +322,12 @@ feed_in_config = {
     "negative_price_switch": price_config.get(
         "feed_in_negative_price_switch", False
     ),  # Clamp negative prices to 0 if enabled
+    # Timeseries source connection; the merger has already resolved central-HA
+    # mode into feed_in_data_url/feed_in_data_token.
+    "data_url": price_config.get("feed_in_data_url", ""),
+    "data_path": price_config.get("feed_in_data_path", "attributes.data"),
+    "data_token": price_config.get("feed_in_data_token", ""),
+    "value_unit": price_config.get("feed_in_value_unit", "EUR/kWh"),
 }
 
 feed_in_price_interface = interface_factory.create_feed_in_price_interface(
@@ -2288,6 +2294,10 @@ def get_price_info():
         "forecast_start_index": forecast_metadata.get("forecast_start_index"),
         "forecast_type": forecast_metadata.get("forecast_type"),
         "forecast_source": forecast_metadata.get("forecast_source"),
+        # Per-domain variant; feed-in grew its own metadata with its
+        # timeseries source. The top-level triple stays for the chart code
+        # that reads it today.
+        "feed_in": feed_in_price_interface.get_forecast_metadata(),
         "timestamp": datetime.now(time_zone).isoformat(),
         "api_version": "0.0.1",
     }

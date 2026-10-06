@@ -219,6 +219,22 @@ class TestAnalyseOffline:
         assert any("no UTC offset" in w for w in result["warnings"])
 
 
+class TestFeedInDomain:
+    """Feed-in is the third probe domain: price semantics, feed_in_ fields."""
+
+    def test_feed_in_payload_probes_like_a_price(self):
+        result = run_probe(EVCC_RATES, domain="feed_in")
+
+        assert result["ok"] is True
+        assert result["slots"][0]["unit"] == "ct/kWh"
+
+    def test_errors_point_at_the_feed_in_fields(self):
+        result = run_probe(EVCC_RATES, domain="feed_in", value_unit="USD/kWh")
+
+        assert result["ok"] is False
+        assert result["field"] == "price.feed_in_value_unit"
+
+
 class TestWindowCoverage:
     """Probe green must mean the interface serves a non-fallback array (P4)."""
 

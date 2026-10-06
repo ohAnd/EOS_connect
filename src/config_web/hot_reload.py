@@ -98,10 +98,16 @@ _FEEDIN_PRICE_FIELD_MAP = {
     "price.feed_in_negative_price_switch": ("negative_price_switch", bool),
 }
 
-# Feed-in data source fields that require reload (source/zone changes)
+# Feed-in data source fields that require reload (source/zone/connection changes)
 _FEEDIN_DATA_FIELDS = {
     "price.feed_in_source",
     "price.feed_in_zone",
+    "price.feed_in_use_ha_central_data_source",
+    "price.feed_in_ha_sensor_name",
+    "price.feed_in_data_path",
+    "price.feed_in_data_url",
+    "price.feed_in_data_token",
+    "price.feed_in_value_unit",
 }
 
 _BATTERY_SOC_FIELDS = {
@@ -897,6 +903,20 @@ class HotReloadAdapter:
             old_zone = self._feed_in_price.zone
             self._feed_in_price.source = new_source
             self._feed_in_price.zone = new_zone
+            # Timeseries connection details (central-HA mode already resolved
+            # by the merger into feed_in_data_url/feed_in_data_token).
+            self._feed_in_price.data_url = str(
+                feedin_config.get("feed_in_data_url", "") or ""
+            ).strip()
+            self._feed_in_price.data_path = str(
+                feedin_config.get("feed_in_data_path", "") or "attributes.data"
+            ).strip()
+            self._feed_in_price.data_token = str(
+                feedin_config.get("feed_in_data_token", "") or ""
+            ).strip()
+            self._feed_in_price.value_unit = str(
+                feedin_config.get("feed_in_value_unit", "") or "EUR/kWh"
+            ).strip()
             self._applied_keys.append(key)
 
             logger.info(

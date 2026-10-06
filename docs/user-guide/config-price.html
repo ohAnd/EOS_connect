@@ -77,6 +77,18 @@
                         ready-made Home Assistant templates and a way to test it are under
                         <a href="config-data.html#timeseries-guide">the timeseries guide</a>.</p>
                     <div data-schema-section="price" data-schema-anchor="price-sources"></div>
+
+                    <h3 id="feed-in-timeseries">Feed-in prices from your own source</h3>
+                    <p>The export half can come from a timeseries too: set
+                        <code>price.feed_in_source</code> to <code>timeseries</code> and point the
+                        <code>price.feed_in_*</code> connection fields at an entity or URL publishing your
+                        feed-in tariff — the same array format, field spellings, window rules and
+                        &ldquo;Test connection&rdquo; button as the import side, documented in
+                        <a href="config-data.html#timeseries-guide">the timeseries guide</a>. The static
+                        adder and multiplier apply on top in the feed-in convention
+                        (<code>(price + adder) × multiplier</code>), the negative-price switch clamps
+                        below zero, and slots the series does not cover are filled by the usual policy
+                        and reported as forecast.</p>
                 </div>
 
                 <div class="content-section" data-level="standard">

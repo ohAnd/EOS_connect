@@ -148,6 +148,10 @@ class FieldDef:
     description_map: Optional[dict] = None  # dynamic descriptions with parent refs
     hot_reload: bool = False
     display_group: str = ""  # sub-grouping for UI layout
+    # Set on a value_unit field to anchor a "Test connection" panel: names the
+    # probe domain and lets the frontend derive the field prefix, instead of
+    # sniffing key suffixes and hardcoding section->domain maps.
+    timeseries_domain: str = ""
 
 
 class ConfigSchema:
@@ -282,6 +286,146 @@ class ConfigSchema:
 # ---------------------------------------------------------------------------
 # Field definitions — the SINGLE SOURCE OF TRUTH
 # ---------------------------------------------------------------------------
+
+def _timeseries_source_fields(
+    key_prefix,
+    source_key,
+    domain,
+    default_sensor,
+    help_url,
+    display_group,
+    unit_choices,
+    default_unit,
+    unit_description,
+):
+    """
+    The six connection fields every timeseries-capable domain needs.
+
+    price, pv_forecast_source and the managed loads each carry a hand-written
+    copy of this group; the feed-in source is the first to be generated.
+    Migrating the older copies onto this factory is a follow-up — the fields
+    are identical in shape, they only differ in prefix, defaults and prose.
+
+    Args:
+        key_prefix: Full key prefix including the trailing separator, e.g.
+            ``"price.feed_in_"`` — fields become ``<prefix>data_url`` etc.
+        source_key: The source-select key gating visibility.
+        domain: Probe domain name, stamped on the value_unit field so the UI
+            anchors a "Test connection" panel to this group.
+        default_sensor: Suggested HA entity for central mode.
+        help_url: Docs anchor for the whole group (hand-written prose).
+        display_group: UI sub-grouping.
+        unit_choices: Accepted value_unit spellings.
+        default_unit: The unit the common sources deliver.
+        unit_description: Prose for the unit field.
+    """
+    gate = {source_key: ["timeseries"]}
+    return [
+        FieldDef(
+            key=f"{key_prefix}use_ha_central_data_source",
+            field_type="bool",
+            default=False,
+            section="price",
+            level="standard",
+            description=(
+                "Use the centrally configured Home Assistant instance (from Data "
+                "Source) instead of manually specifying URL and token"
+            ),
+            help_url=help_url,
+            depends_on=dict(gate),
+            hot_reload=True,
+            display_group=display_group,
+        ),
+        FieldDef(
+            key=f"{key_prefix}ha_sensor_name",
+            field_type="str",
+            default=default_sensor,
+            section="price",
+            level="getting_started",
+            description=(
+                f"Home Assistant sensor entity containing the timeseries data "
+                f"(e.g., {default_sensor})"
+            ),
+            help_url=help_url,
+            depends_on={
+                **gate,
+                f"{key_prefix}use_ha_central_data_source": [True],
+            },
+            hot_reload=True,
+            display_group=display_group,
+        ),
+        FieldDef(
+            key=f"{key_prefix}data_path",
+            field_type="str",
+            default="attributes.data",
+            section="price",
+            level="standard",
+            description=(
+                "JSON path to the timeseries array in the response. For HA "
+                "sensors: 'attributes.data'. For custom HTTP servers: 'data', "
+                "'prices', 'values', etc."
+            ),
+            help_url=help_url,
+            depends_on=dict(gate),
+            hot_reload=True,
+            display_group=display_group,
+        ),
+        FieldDef(
+            key=f"{key_prefix}data_url",
+            field_type="str",
+            default=f"http://homeassistant.local:8123/api/states/{default_sensor}",
+            section="price",
+            level="getting_started",
+            description=(
+                "Data source URL. For Home Assistant: "
+                "http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. "
+                "For HTTP servers: an endpoint returning a JSON array in EVCC's "
+                "{start, end, value} format; 'end' is optional."
+            ),
+            help_url=help_url,
+            depends_on={
+                **gate,
+                f"{key_prefix}use_ha_central_data_source": [False],
+            },
+            validation={"pattern": r"^https?://.+"},
+            hot_reload=True,
+            display_group=display_group,
+        ),
+        FieldDef(
+            key=f"{key_prefix}data_token",
+            field_type="password",
+            default="",
+            section="price",
+            level="standard",
+            description=(
+                "Optional bearer token for API authentication "
+                "(used as Authorization: Bearer [token]). "
+                "Leave empty for unauthenticated endpoints."
+            ),
+            help_url=help_url,
+            depends_on={
+                **gate,
+                f"{key_prefix}use_ha_central_data_source": [False],
+            },
+            hot_reload=True,
+            display_group=display_group,
+        ),
+        FieldDef(
+            key=f"{key_prefix}value_unit",
+            field_type="select",
+            default=default_unit,
+            section="price",
+            level="getting_started",
+            description=unit_description,
+            help_url=help_url,
+            validation={"choices": list(unit_choices)},
+            depends_on=dict(gate),
+            hot_reload=True,
+            display_group=display_group,
+            timeseries_domain=domain,
+        ),
+    ]
+
 
 _ALL_FIELDS: list[FieldDef] = [
     # ===== DATA SOURCE (unified HA/OpenHAB connection) =====
@@ -933,6 +1077,7 @@ _ALL_FIELDS: list[FieldDef] = [
         default="EUR/kWh",
         section="price",
         level="getting_started",
+        timeseries_domain="price",
         description=(
             "Unit of the 'value' field in the timeseries. Default matches EVCC's "
             "/api/tariff/grid and the common Home Assistant price integrations "
@@ -955,7 +1100,9 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Source for feed-in (export) prices",
         help_url="config-price.html#price",
-        validation={"choices": ["fixed", "elpris_dk", "epex_spot", "evcc"]},
+        validation={
+            "choices": ["fixed", "elpris_dk", "epex_spot", "evcc", "timeseries"]
+        },
         hot_reload=True,
         display_group="Feed-In Price",
     ),
@@ -1023,11 +1170,32 @@ _ALL_FIELDS: list[FieldDef] = [
                 "fixed": "Clamp to 0 when market price (Akkudoktor reference) goes negative",
                 "elpris_dk": "Clamp to 0 when market price (Elpris DK) goes negative",
                 "epex_spot": "Clamp to 0 when market price (EPEX Spot) goes negative",
+                "evcc": "Clamp to 0 when the EVCC feed-in rate goes negative",
+                "timeseries": "Clamp to 0 when the sourced feed-in price goes negative",
             }
         },
-        depends_on={"price.feed_in_source": ["fixed", "elpris_dk", "epex_spot"]},
+        depends_on={
+            "price.feed_in_source": [
+                "fixed", "elpris_dk", "epex_spot", "evcc", "timeseries"
+            ]
+        },
         hot_reload=True,
         display_group="Feed-In Price",
+    ),
+    *_timeseries_source_fields(
+        key_prefix="price.feed_in_",
+        source_key="price.feed_in_source",
+        domain="feed_in",
+        default_sensor="sensor.feed_in_prices",
+        help_url="config-price.html#feed-in-timeseries",
+        display_group="Feed-In Price Provider",
+        unit_choices=["EUR/kWh", "ct/kWh", "EUR/Wh"],
+        default_unit="EUR/kWh",
+        unit_description=(
+            "Unit of the 'value' field in the feed-in timeseries. Default "
+            "matches EVCC and the common Home Assistant price integrations "
+            "(EUR/kWh)."
+        ),
     ),
 
     # ===== BATTERY =====
@@ -1505,6 +1673,7 @@ _ALL_FIELDS: list[FieldDef] = [
     ),
     FieldDef(
         key="pv_forecast_source.value_unit",
+        timeseries_domain="pv",
         field_type="select",
         default="W",
         section="pv_forecast_source",

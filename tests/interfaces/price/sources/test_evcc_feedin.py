@@ -161,8 +161,9 @@ class TestFeedInEvccPriceSource:
         # 0.1 EUR/kWh should convert to 0.0001 EUR/Wh
         assert abs(prices[0] - 0.0001) < 0.00001
 
-    def test_evcc_prices_used_as_is_no_adder(self, monkeypatch):
-        """Test that EVCC feed-in prices are NOT modified by static adder."""
+    def test_evcc_prices_get_the_configured_adder(self, monkeypatch):
+        """The adder applies on EVCC too — it was offered for every source but
+        silently ignored here (P5 in the #214 review)."""
         rates_data = [
             {
                 "start": datetime(2025, 10, 20, 0, tzinfo=timezone.utc).isoformat(),
@@ -188,7 +189,7 @@ class TestFeedInEvccPriceSource:
         mock_evcc = Mock()
         mock_evcc.url = "http://evcc.local:7070"
         
-        # Configure with a 5 ct/kWh adder (should NOT be applied to EVCC feed-in)
+        # Configure with a 5 ct/kWh adder — applied like on every other source
         feed_in_iface = FeedInPriceInterface(
             {
                 "source": "evcc",
@@ -202,12 +203,11 @@ class TestFeedInEvccPriceSource:
         feed_in_iface.update_prices(48)
         prices = feed_in_iface.get_current_feedin_prices()
         
-        # Price should be 0.0001 EUR/Wh (NOT 0.0001 + adder)
-        # EVCC feed-in prices are used raw
-        assert abs(prices[0] - 0.0001) < 0.00001
+        # 0.1 EUR/kWh + 5 ct/kWh adder = 0.00015 EUR/Wh
+        assert abs(prices[0] - 0.00015) < 0.0000001
 
-    def test_evcc_prices_used_as_is_no_multiplier(self, monkeypatch):
-        """Test that EVCC feed-in prices are NOT modified by multiplier."""
+    def test_evcc_prices_get_the_configured_multiplier(self, monkeypatch):
+        """The multiplier applies on EVCC too (plain factor, feed-in convention)."""
         rates_data = [
             {
                 "start": datetime(2025, 10, 20, 0, tzinfo=timezone.utc).isoformat(),
@@ -247,8 +247,8 @@ class TestFeedInEvccPriceSource:
         feed_in_iface.update_prices(48)
         prices = feed_in_iface.get_current_feedin_prices()
         
-        # Price should be 0.0001 EUR/Wh (NOT multiplied by 1.1)
-        assert abs(prices[0] - 0.0001) < 0.00001
+        # 0.0001 EUR/Wh * 1.1 = 0.00011 EUR/Wh
+        assert abs(prices[0] - 0.00011) < 0.0000001
 
     def test_evcc_connection_error_fallback(self, monkeypatch):
         """Test fallback when EVCC connection fails."""

@@ -166,6 +166,21 @@ DOMAINS = {
         url_field="pv_forecast_source.data_url",
         path_field="pv_forecast_source.data_path",
     ),
+    # Feed-in prices are prices: same units, conversion and plausibility — only
+    # the config keys differ (they live in the price section, feed_in_-prefixed).
+    "feed_in": ProbeDomain(
+        units=PRICE_UNIT_TO_EUR_PER_WH,
+        convert=convert_price_values,
+        plausibility=lambda values, unit, resolution, power: (
+            price_plausibility_message(values, unit)
+        ),
+        display_factor=100_000.0,
+        display_round=2,
+        display_unit="ct/kWh",
+        unit_field="price.feed_in_value_unit",
+        url_field="price.feed_in_data_url",
+        path_field="price.feed_in_data_path",
+    ),
 }
 
 
