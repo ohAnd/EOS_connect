@@ -25,11 +25,11 @@ Usage:
         "multiplier": 1.0,
     }
     feed_in_interface = FeedInPriceInterface(config, time_frame_base=3600, timezone="Europe/Berlin")
-    feed_in_interface.update_prices(tgt_duration=48, start_time=datetime.now())
+    feed_in_interface.update_prices(tgt_duration=48)  # anchors at local midnight
     current_feedin = feed_in_interface.get_current_feedin_prices()
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 import logging
 import threading
 import requests
@@ -40,12 +40,22 @@ try:  # running from src/ — src/ is on sys.path
 except ImportError:  # imported as src.interfaces (tests)
     from ..timeseries_grid import horizon_slots, local_midnight
 try:  # running from src/ — src/ is on sys.path
+    from timeseries_grid import KIND_INTENSIVE, TimeseriesGridError, place_on_grid
+except ImportError:  # imported as src.interfaces (tests)
+    from ..timeseries_grid import KIND_INTENSIVE, TimeseriesGridError, place_on_grid
+try:  # running from src/ — src/ is on sys.path
     from interfaces.http_fetch import bearer_request_kwargs
 except ImportError:  # imported as src.interfaces (tests)
     from .http_fetch import bearer_request_kwargs
+from .forecast_metadata import ForecastMetadataMixin
+from .price_interface import fill_price_gaps
 from .timeseries_normalizer import (
+    TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
     convert_price_values,
+    detect_resolution_seconds,
+    extract_json_path,
+    median_span_seconds,
     normalize_entries,
 )
 
@@ -56,7 +66,7 @@ ELPRIS_API_BASE = "https://www.elprisenligenu.dk/api/v1/prices"
 AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
 
 
-class FeedInPriceInterface:
+class FeedInPriceInterface(ForecastMetadataMixin):
     """
     The FeedInPriceInterface class manages electricity feed-in (export) price data retrieval
     and processing from various sources.
@@ -64,7 +74,8 @@ class FeedInPriceInterface:
     All prices are consistently represented in ct/kWh (cent per kilowatt-hour) for user clarity.
 
     Attributes:
-        source (str): Source of the feed-in price data ('elpris_dk', 'epex_spot', 'fixed')
+        source (str): Source of the feed-in price data
+            ('elpris_dk', 'epex_spot', 'evcc', 'timeseries', 'fixed')
         zone (str): Price zone for Elpris (DK1 or DK2)
         static_adder_ct_kwh (float): Static adjustment in ct/kWh (e.g., 3.5 for transport costs)
         multiplier (float): Relative multiplier (1.0 = no change, 1.05 = +5%)
@@ -125,6 +136,15 @@ class FeedInPriceInterface:
         # Negative price switching: if True, clamps negative market prices to 0
         self.negative_price_switch = config.get("negative_price_switch", False)
 
+        # Timeseries source connection (central-HA mode is resolved by the
+        # merger into data_url/data_token before this dict is built).
+        self.data_url = str(config.get("data_url", "") or "").strip()
+        self.data_path = str(config.get("data_path", "") or "attributes.data").strip()
+        self.data_token = str(config.get("data_token", "") or "").strip()
+        self.value_unit = str(config.get("value_unit", "") or "EUR/kWh").strip()
+
+        self._init_forecast_metadata()
+
         self.time_frame_base = time_frame_base
         # Handle both string and pytz.timezone objects
         if isinstance(timezone, str):
@@ -162,7 +182,7 @@ class FeedInPriceInterface:
 
     def _validate_config(self):
         """Validate configuration parameters."""
-        valid_sources = ["fixed", "elpris_dk", "epex_spot", "evcc"]
+        valid_sources = ["fixed", "elpris_dk", "epex_spot", "evcc", "timeseries"]
         if self.source not in valid_sources:
             logger.error(
                 "[FEEDIN-IF] Invalid source: %s. Defaulting to 'fixed'.", self.source
@@ -300,7 +320,15 @@ class FeedInPriceInterface:
         elif self.source == "epex_spot":
             return self._fetch_epex_spot_prices(tgt_duration, start_time)
         elif self.source == "evcc":
-            return self._fetch_evcc_prices(tgt_duration, start_time)
+            # The adder/multiplier/negative-switch trio used to be a silent
+            # no-op on this path (every field offered, none applied).
+            return self._apply_adjustments(
+                self._fetch_evcc_prices(tgt_duration, start_time)
+            )
+        elif self.source == "timeseries":
+            return self._apply_adjustments(
+                self._fetch_timeseries_prices(tgt_duration, start_time)
+            )
         elif self.source == "fixed":
             return self._fetch_fixed_price(tgt_duration, start_time)
         else:
@@ -443,6 +471,117 @@ class FeedInPriceInterface:
         except (KeyError, ValueError) as e:
             logger.error("[FEEDIN-IF] Akkudoktor API response parsing failed: %s", e)
             return []
+
+    def _apply_adjustments(self, prices):
+        """
+        Apply the feed-in corrections to freshly fetched dynamic prices.
+
+        Feed-in's established convention: (price + static_adder) * multiplier —
+        the multiplier is a plain factor here (1.0 = unchanged), unlike the
+        grid-price side's (1 + relative) form; existing configs rely on it.
+        negative_price_switch then clamps below zero to 0.
+        """
+        if not prices:
+            return prices
+        adder = self.static_adder_ct_kwh / 100000
+        adjusted = [
+            round((price + adder) * self.multiplier, 9) for price in prices
+        ]
+        if self.negative_price_switch:
+            adjusted = [max(0.0, price) for price in adjusted]
+        return adjusted
+
+    def _fetch_timeseries_prices(self, tgt_duration, start_time):
+        """
+        Fetch feed-in prices from a user-provided timeseries endpoint.
+
+        The same chain the grid-price timeseries source runs: shared normalizer
+        (field aliases, authoritative ends), unit conversion, intensive overlap
+        placement against the window anchor, and the established gap policy —
+        with the filled tail reported through the forecast metadata.
+
+        Returns:
+            list: Prices in EUR/Wh for the full horizon, or [] on error (the
+            caller's fallback chain then serves the last good data).
+        """
+        if not self.data_url:
+            logger.error(
+                "[FEEDIN-IF] feed_in_data_url not configured for the timeseries "
+                "source"
+            )
+            return []
+
+        try:
+            response = requests.get(
+                self.data_url, **bearer_request_kwargs(self.data_token)
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except requests.exceptions.RequestException as exc:
+            logger.error("[FEEDIN-IF] Timeseries source request failed: %s", exc)
+            return []
+        except ValueError:
+            logger.error("[FEEDIN-IF] Timeseries source response is not valid JSON")
+            return []
+
+        raw_entries = extract_json_path(payload, self.data_path, label="FEEDIN-IF")
+        if not isinstance(raw_entries, list):
+            logger.error(
+                "[FEEDIN-IF] No timeseries array at path '%s'", self.data_path
+            )
+            return []
+
+        try:
+            entries = normalize_entries(raw_entries, self.time_zone, label="FEEDIN-IF")
+            convert_price_values(entries, self.value_unit)
+        except TimeseriesFormatError as exc:
+            logger.error("[FEEDIN-IF] Invalid feed-in timeseries: %s", exc)
+            return []
+
+        resolution_seconds = detect_resolution_seconds(
+            entries
+        ) or median_span_seconds(entries)
+        if resolution_seconds is None:
+            logger.error("[FEEDIN-IF] Could not detect feed-in series resolution")
+            return []
+
+        slot_count = tgt_duration
+        try:
+            placement = place_on_grid(
+                entries, start_time, slot_count, self.time_frame_base, KIND_INTENSIVE
+            )
+        except TimeseriesGridError as exc:
+            logger.error("[FEEDIN-IF] Invalid feed-in timeseries: %s", exc)
+            return []
+
+        values, _leading, forecast_start = fill_price_gaps(
+            placement.values, placement.coverage, slots_per_day=slot_count // 2
+        )
+        if not values:
+            logger.warning(
+                "[FEEDIN-IF] None of %d feed-in entries fell into the %d-slot "
+                "window starting %s — keeping the last good prices. If the "
+                "source renders UTC without an offset, every slot is shifted. "
+                "See %s",
+                placement.source_count,
+                slot_count,
+                start_time.isoformat(),
+                TEMPLATE_DOCS_URL,
+            )
+            return []
+
+        if forecast_start is not None:
+            self._set_forecast_metadata(
+                start_index=forecast_start,
+                forecast_type="simple_repetition",
+                source=None,
+            )
+        else:
+            self._set_forecast_metadata(
+                start_index=None, forecast_type="all_real", source=None
+            )
+
+        return [round(value, 9) for value in values]
 
     def _fetch_evcc_prices(self, tgt_duration, start_time):
         """

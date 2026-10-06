@@ -217,6 +217,55 @@ class TestTestTimeseriesEndpoint:
         assert resp.status_code == 400
 
 
+class TestFeedInDomainEndpoint:
+    """The endpoint accepts domain=feed_in and resolves the feed_in_ fields."""
+
+    def test_feed_in_domain_probes_the_configured_url(self, client):
+        client.store.set("price.feed_in_source", "timeseries")
+        client.store.set(
+            "price.feed_in_data_url", "http://ha.local/api/states/sensor.feed_in"
+        )
+        client.store.set("price.feed_in_data_path", "rates")
+        client.store.set("price.feed_in_value_unit", "EUR/kWh")
+
+        resp, mock_get = post_test_timeseries(client, {"domain": "feed_in"})
+
+        assert resp.status_code == 200
+        assert resp.get_json()["ok"] is True
+        assert mock_get.call_args[0][0] == "http://ha.local/api/states/sensor.feed_in"
+
+    def test_feed_in_central_mode_builds_the_url_like_the_merger(self, client):
+        client.store.set("price.feed_in_source", "timeseries")
+        client.store.set("price.feed_in_use_ha_central_data_source", True)
+        client.store.set("price.feed_in_ha_sensor_name", "sensor.my_feed_in")
+        client.store.set("price.feed_in_data_path", "rates")
+        client.store.set("data_source.url", "http://ha.local:8123")
+        client.store.set("data_source.access_token", "tok")
+
+        resp, mock_get = post_test_timeseries(client, {"domain": "feed_in"})
+
+        assert resp.status_code == 200
+        assert (
+            mock_get.call_args[0][0]
+            == "http://ha.local:8123/api/states/sensor.my_feed_in"
+        )
+
+    def test_merger_and_resolver_agree_on_the_central_url(self, client):
+        """The api resolver documents that it mirrors the merger — pin it."""
+        client.store.set("price.feed_in_source", "timeseries")
+        client.store.set("price.feed_in_use_ha_central_data_source", True)
+        client.store.set("price.feed_in_ha_sensor_name", "sensor.my_feed_in")
+        client.store.set("data_source.url", "http://ha.local:8123")
+        client.store.set("data_source.access_token", "tok")
+
+        merged = build_merged_config({}, client.store, ConfigSchema())
+        assert (
+            merged["price"]["feed_in_data_url"]
+            == "http://ha.local:8123/api/states/sensor.my_feed_in"
+        )
+        assert merged["price"]["feed_in_data_token"] == "tok"
+
+
 class TestPreflightScope:
     """A save must not depend on an endpoint it has no reason to contact."""
 

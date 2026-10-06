@@ -173,6 +173,41 @@ class TestHotReloadPrice:
         call_args = price_interface.update_prices.call_args
         assert call_args[0][0] == 48  # tgt_duration for 3600 second time frame
 
+    def test_feed_in_data_field_change_reloads_the_connection(
+        self, feed_in_price_interface
+    ):
+        """Editing the timeseries connection must reach the running interface."""
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.source = "timeseries"
+        feed_in_price_interface.zone = "DK1"
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "feed_in_source": "timeseries",
+                "feed_in_zone": "DK1",
+                "feed_in_data_url": "http://ha.local/api/states/sensor.feed_in",
+                "feed_in_data_path": "rates",
+                "feed_in_value_unit": "ct/kWh",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+
+        adapter.on_config_changed(
+            "price.feed_in_data_url", "old", "http://ha.local/api/states/sensor.feed_in"
+        )
+
+        assert feed_in_price_interface.data_url == (
+            "http://ha.local/api/states/sensor.feed_in"
+        )
+        assert feed_in_price_interface.value_unit == "ct/kWh"
+        feed_in_price_interface.update_prices.assert_called_once()
+
     def test_price_source_change_skips_immediate_fetch(self, price_interface):
         """Changing price.source FROM timeseries TO another source should NOT fetch.
         
