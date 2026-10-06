@@ -215,10 +215,12 @@
 
                     <div class="alert alert-info">
                         <strong><i class="fas fa-info-circle" aria-hidden="true"></i> Time Resolution:</strong> EOS Connect
-                        auto-detects whether the timeseries is 15-minute (900s) or hourly (3600s) from the
-                        timestamp differences. 15-minute data is converted to hourly automatically — prices are
-                        averaged, PV energy is summed. An hourly source cannot serve a system configured for
-                        15-minute slots; the connection test reports that rather than letting it fail at runtime.
+                        reads the source's resolution from the timestamps and places values by overlap: a finer
+                        source averages (prices) or sums (PV energy) into each slot, a coarser one holds its
+                        price — or splits its energy — across the slots it spans. An hourly source on a
+                        15-minute system therefore just works, as does a half-hourly or other unusual grid; the
+                        connection test names the applied rule. Only a source so coarse that one entry blankets
+                        many slots (a daily average) is flagged as probably misconfigured.
                     </div>
 
                     <div class="alert alert-info">

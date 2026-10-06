@@ -491,15 +491,15 @@ class TestEffectiveTimeFrame:
 
         assert resp.get_json()["ok"] is True
 
-    def test_hourly_source_rejected_when_900_really_applies(self, client):
+    def test_hourly_source_warns_when_900_really_applies(self, client):
         client.store.set("eos.time_frame", 900)
         client.store.set("eos.source", "local_evopt")
 
         resp, _ = post_test_timeseries(client, payload=self.HOURLY_PAYLOAD)
 
         data = resp.get_json()
-        assert data["ok"] is False
-        assert "15-minute slots" in data["error"]
+        assert data["ok"] is True
+        assert any("hourly on a 15-minute system" in w for w in data["warnings"])
 
 
 class TestConnectionFieldResolution:
