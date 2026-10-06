@@ -1090,7 +1090,7 @@ def _probe_timeseries_domain(domain: str, data: dict, get_value) -> dict:
             time_zone,
             resource_label=resolved["resource_label"],
             time_frame_base=time_frame_base,
-            installed_power_w=_installed_pv_power_w(config) if domain == "pv" else 0,
+            installed_power_w=_installed_pv_power_w(config),
         )
     except Exception:  # pylint: disable=broad-exception-caught
         # The endpoint promises HTTP 200 with a finding in both directions, and
