@@ -6,12 +6,18 @@ source was rejected, and — for a source it accepts — show the converted numb
 unit mistake is visible before saving rather than hours later in the schedule.
 """
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
 import requests
 
 from src.config_web.timeseries_probe import analyse, probe
+
+# The fixtures are pinned to 2026-08-23; the window anchor is passed along so
+# the tests stay meaningful on any real date (production passes none and gets
+# local midnight today).
+ANCHOR = datetime(2026, 8, 23, 0, 0, tzinfo=timezone(timedelta(hours=2)))
 
 EVCC_RATES = {
     "rates": [
@@ -42,6 +48,7 @@ def run_probe(payload=None, status_code=200, raise_json=False, **kwargs):
         "data_token": "",
         "value_unit": "EUR/kWh",
         "time_zone": "Europe/Berlin",
+        "anchor": ANCHOR,
     }
     params.update(kwargs)
     with patch(
@@ -109,10 +116,10 @@ class TestUnitMistakeIsSurfaced:
 
         assert result["slots"][0]["value"] == pytest.approx(38110.0, abs=1.0)
 
-    def test_correct_unit_produces_no_warning(self):
+    def test_correct_unit_produces_no_unit_warning(self):
         result = run_probe(EVCC_RATES)
 
-        assert result["warnings"] == []
+        assert not any("implausible" in w for w in result["warnings"])
 
     def test_unknown_unit_is_rejected_against_the_unit_field(self):
         result = run_probe(EVCC_RATES, value_unit="USD/kWh")
@@ -155,13 +162,16 @@ class TestFormatMismatch:
         assert result["ok"] is True
         assert any("Unusual slot resolution (300s" in w for w in result["warnings"])
 
-    def test_single_entry_cannot_determine_resolution(self):
+    def test_a_single_entry_is_accepted_with_its_coverage_named(self):
+        # The interface accepts one entry (its span comes from the derived end),
+        # so a red probe here would contradict what actually happens at runtime.
         payload = {"rates": [{"start": "2026-08-23T00:00:00+02:00", "value": 0.30}]}
 
         result = run_probe(payload)
 
-        assert result["ok"] is False
-        assert "at least two" in result["error"]
+        assert result["ok"] is True
+        assert result["covered_slots"] == 1
+        assert any("covers slots" in w for w in result["warnings"])
 
     def test_naive_timestamps_are_warned_about(self):
         payload = {
@@ -181,7 +191,9 @@ class TestAnalyseOffline:
     """The transport-free half: what the offline doctor runs on a pasted file."""
 
     def test_a_local_payload_is_judged_without_any_request(self):
-        result = analyse(EVCC_RATES["rates"], "price", "EUR/kWh", "Europe/Berlin")
+        result = analyse(
+            EVCC_RATES["rates"], "price", "EUR/kWh", "Europe/Berlin", anchor=ANCHOR
+        )
 
         assert result["ok"] is True
         assert result["entry_count"] == 3
@@ -199,10 +211,90 @@ class TestAnalyseOffline:
             {"start_time": "2026-08-23 00:15:00", "price_per_kwh": 0.31},
         ]
 
-        result = analyse(payload, "price", "EUR/kWh", "Europe/Berlin")
+        result = analyse(
+            payload, "price", "EUR/kWh", "Europe/Berlin", anchor=ANCHOR
+        )
 
         assert result["ok"] is True
         assert any("no UTC offset" in w for w in result["warnings"])
+
+
+class TestWindowCoverage:
+    """Probe green must mean the interface serves a non-fallback array (P4)."""
+
+    def test_coverage_fields_report_where_the_series_lands(self):
+        result = run_probe(EVCC_RATES)
+
+        assert result["ok"] is True
+        assert result["first_slot"] == 0
+        assert result["last_slot"] == 0
+        assert result["covered_slots"] == 1
+        assert any("covers slots 0-0" in w for w in result["warnings"])
+
+    def test_a_series_entirely_in_the_past_is_red(self):
+        payload = {
+            "rates": [
+                {"start": "2026-08-19T00:00:00+02:00", "value": 0.30},
+                {"start": "2026-08-19T01:00:00+02:00", "value": 0.31},
+            ]
+        }
+
+        result = run_probe(payload)
+
+        assert result["ok"] is False
+        assert "optimization window" in result["error"]
+
+    def test_a_series_starting_tomorrow_is_amber_not_red(self):
+        payload = {
+            "rates": [
+                {"start": "2026-08-24T00:00:00+02:00", "value": 0.30},
+                {"start": "2026-08-24T01:00:00+02:00", "value": 0.31},
+            ]
+        }
+
+        result = run_probe(payload)
+
+        assert result["ok"] is True
+        assert result["first_slot"] == 24
+        assert any("covers slots" in w for w in result["warnings"])
+
+    def test_a_full_two_day_series_carries_no_coverage_warning(self):
+        payload = {
+            "rates": [
+                {
+                    "start": (ANCHOR + timedelta(hours=h)).isoformat(),
+                    "value": 0.30,
+                }
+                for h in range(48)
+            ]
+        }
+
+        result = run_probe(payload)
+
+        assert result["ok"] is True
+        assert result["covered_slots"] == 48
+        assert not any("covers slots" in w for w in result["warnings"])
+
+
+class TestUnavailableSensor:
+    """V6: the most likely real-world failure gets its own words."""
+
+    def test_an_unavailable_ha_sensor_is_named(self):
+        payload = {"state": "unavailable", "attributes": {}}
+
+        result = run_probe(payload, resource_label="sensor.grid_prices")
+
+        assert result["ok"] is False
+        assert "'unavailable'" in result["error"]
+        assert "sensor.grid_prices" in result["error"]
+
+    def test_an_unknown_ha_sensor_is_named(self):
+        payload = {"state": "unknown", "attributes": {"data": []}}
+
+        result = run_probe(payload, resource_label="sensor.grid_prices")
+
+        assert result["ok"] is False
+        assert "'unknown'" in result["error"]
 
 
 class TestTransportFailures:
@@ -343,11 +435,11 @@ class TestPvPlausibility:
             **kwargs,
         )
 
-    def test_matching_installation_produces_no_warning(self):
+    def test_matching_installation_produces_no_plausibility_warning(self):
         result = self._pv_probe(installed_power_w=4000)
 
         assert result["ok"] is True
-        assert result["warnings"] == []
+        assert not any("exceed" in w or "implausible" in w for w in result["warnings"])
 
     def test_energy_unit_on_a_power_source_is_flagged(self):
         result = run_probe(
@@ -370,4 +462,4 @@ class TestPvPlausibility:
             installed_power_w=0,
         )
 
-        assert result["warnings"] == []
+        assert not any("exceed" in w or "implausible" in w for w in result["warnings"])

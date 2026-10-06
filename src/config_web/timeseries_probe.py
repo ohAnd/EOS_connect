@@ -21,6 +21,23 @@ import pytz
 import requests
 
 try:  # running from src/ as a script — src/ is on sys.path
+    from timeseries_grid import (
+        KIND_INTENSIVE,
+        TimeseriesGridError,
+        horizon_slots,
+        local_midnight,
+        place_on_grid,
+    )
+except ImportError:  # imported as src.config_web (tests)
+    from ..timeseries_grid import (
+        KIND_INTENSIVE,
+        TimeseriesGridError,
+        horizon_slots,
+        local_midnight,
+        place_on_grid,
+    )
+
+try:  # running from src/ as a script — src/ is on sys.path
     from interfaces.timeseries_normalizer import (
         PRICE_UNIT_TO_EUR_PER_WH,
         PV_UNITS,
@@ -53,9 +70,14 @@ except ImportError:  # imported as src.config_web (tests)
         resolve_field_names,
     )
 
+try:  # running from src/ as a script — src/ is on sys.path
+    from interfaces.http_fetch import DEFAULT_TIMEOUT_SECONDS, bearer_request_kwargs
+except ImportError:  # imported as src.config_web (tests)
+    from ..interfaces.http_fetch import DEFAULT_TIMEOUT_SECONDS, bearer_request_kwargs
+
 logger = logging.getLogger("__main__")
 
-REQUEST_TIMEOUT_SECONDS = 10
+REQUEST_TIMEOUT_SECONDS = DEFAULT_TIMEOUT_SECONDS
 
 # How many normalized slots to hand back for display.
 SAMPLE_SLOT_COUNT = 3
@@ -64,9 +86,6 @@ SAMPLE_SLOT_COUNT = 3
 # words the "Test connection" button does.
 MSG_UNKNOWN_DOMAIN = "unknown probe domain '{domain}'"
 MSG_UNKNOWN_UNIT = "Unknown unit '{unit}'. Expected one of: {expected}."
-MSG_SINGLE_ENTRY = (
-    "Only one entry found — at least two are needed to determine the slot resolution."
-)
 WARN_UNUSUAL_RESOLUTION = (
     "Unusual slot resolution ({resolution}s between entries) — values are placed "
     "on the grid by their timestamps: a finer entry averages (prices) or sums "
@@ -79,6 +98,20 @@ WARN_HOURLY_ON_QUARTER = (
 WARN_COARSE_SPAN = (
     "Each entry spans {slots} slots and covers all of them — check whether this "
     "is really a per-slot series and not a daily average."
+)
+MSG_WINDOW_MISS = (
+    "None of the {count} entries fall into the {slots}-slot optimization window "
+    "starting {anchor}. The running interface would keep its last good data — "
+    "the series is stale, or entirely beyond the horizon."
+)
+MSG_SENSOR_UNAVAILABLE = (
+    "'{label}' is currently '{state}' in Home Assistant — the sensor exists but "
+    "carries no data right now. Check the integration providing it."
+)
+WARN_PARTIAL_WINDOW = (
+    "The series covers slots {first}-{last} of {slots} ({covered} covered). "
+    "Uncovered price slots are filled by policy and hatched as forecast in the "
+    "chart; PV treats them as 0 Wh."
 )
 WARN_NAIVE_TIMESTAMPS = (
     "Timestamps carry no UTC offset and were read as local time ({zone}). If the "
@@ -143,6 +176,7 @@ def analyse(
     time_zone,
     time_frame_base=3600,
     installed_power_w=0,
+    anchor=None,
 ):
     """
     Judge an already-fetched timeseries payload.
@@ -162,11 +196,16 @@ def analyse(
             happen, not just that something will.
         installed_power_w: Total configured array power, used only to
             sanity-check PV magnitudes. Zero disables that check.
+        anchor: Slot 0 of the optimization window — local midnight today when
+            None. The doctor's --today passes a different day through here.
 
     Returns:
         dict: ``{"ok": bool, ...}``. On success: entry_count,
-        resolution_seconds, value_unit, slots (start/end/value/unit) and
-        warnings. On failure: a curated ``error`` string safe to show the user,
+        resolution_seconds, value_unit, first_slot/last_slot/covered_slots
+        (where the series lands on the window), slots (start/end/value/unit)
+        and warnings. A series that never touches the window is a failure —
+        the running interface would fall back, and a green test would hide
+        that. On failure: a curated ``error`` string safe to show the user,
         plus ``field`` naming the config key most likely at fault.
 
     Never raises: every failure path is reported as a result.
@@ -197,16 +236,15 @@ def analyse(
     warnings = []
     resolution_seconds = detect_resolution_seconds(entries)
     if resolution_seconds is None:
-        if len(entries) < 2:
-            return {
-                "ok": False,
-                "field": spec.path_field,
-                "error": MSG_SINGLE_ENTRY,
-            }
+        # The entry spans themselves (a single entry included — the normalizer
+        # always derives an end). The interface accepts exactly this, so the
+        # probe must not be stricter; the coverage warning below carries the
+        # quality signal.
         resolution_seconds = median_span_seconds(entries)
-        warnings.append(
-            WARN_UNUSUAL_RESOLUTION.format(resolution=resolution_seconds)
-        )
+        if len(entries) >= 2:
+            warnings.append(
+                WARN_UNUSUAL_RESOLUTION.format(resolution=resolution_seconds)
+            )
 
     if resolution_seconds == 3600 and time_frame_base == 900:
         warnings.append(WARN_HOURLY_ON_QUARTER)
@@ -219,6 +257,43 @@ def analyse(
         spec.convert(entries, value_unit)
     except TimeseriesFormatError as exc:
         return {"ok": False, "field": spec.unit_field, "error": str(exc)}
+
+    # Where does the series actually land on the optimization window? The same
+    # placement the interfaces run — probe green must mean the interface
+    # serves a non-fallback array (and probe red that it will not).
+    slot_count = horizon_slots(time_frame_base)
+    if anchor is None:
+        anchor = local_midnight(tz)
+    try:
+        placement = place_on_grid(
+            entries, anchor, slot_count, time_frame_base, KIND_INTENSIVE
+        )
+    except TimeseriesGridError as exc:
+        return {"ok": False, "field": spec.path_field, "error": str(exc)}
+
+    covered_indices = [
+        index for index, fraction in enumerate(placement.coverage) if fraction > 0
+    ]
+    if not covered_indices:
+        return {
+            "ok": False,
+            "field": spec.url_field,
+            "error": MSG_WINDOW_MISS.format(
+                count=len(entries), slots=slot_count, anchor=anchor.isoformat()
+            ),
+        }
+    first_slot = covered_indices[0]
+    last_slot = covered_indices[-1]
+    covered_slots = len(covered_indices)
+    if covered_slots < slot_count:
+        warnings.append(
+            WARN_PARTIAL_WINDOW.format(
+                first=first_slot,
+                last=last_slot,
+                slots=slot_count,
+                covered=covered_slots,
+            )
+        )
 
     plausibility = spec.plausibility(
         [entry["value"] for entry in entries],
@@ -254,6 +329,9 @@ def analyse(
         "entry_count": len(entries),
         "resolution_seconds": resolution_seconds,
         "value_unit": value_unit,
+        "first_slot": first_slot,
+        "last_slot": last_slot,
+        "covered_slots": covered_slots,
         "slots": slots,
         "warnings": warnings,
     }
@@ -269,6 +347,7 @@ def probe(
     resource_label=None,
     time_frame_base=3600,
     installed_power_w=0,
+    anchor=None,
 ):
     """
     Fetch a timeseries endpoint and `analyse` what it returns.
@@ -312,16 +391,10 @@ def probe(
             ),
         }
 
-    headers = {"Content-Type": "application/json"}
-    if data_token:
-        headers["Authorization"] = f"Bearer {data_token}"
-
     label = resource_label or data_url
 
     try:
-        response = requests.get(
-            data_url, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS
-        )
+        response = requests.get(data_url, **bearer_request_kwargs(data_token))
     except requests.exceptions.Timeout:
         logger.warning("[Probe] Timeseries probe timed out for %s", data_url)
         return {
@@ -360,6 +433,18 @@ def probe(
             "error": "Response is not valid JSON.",
         }
 
+    if isinstance(payload, dict):
+        # The most likely thing a user hits in the wild: the HA entity exists
+        # but its integration is down, so the state says so and the attributes
+        # are stale or gone. Name that instead of a path error.
+        state = str(payload.get("state", "")).lower()
+        if state in ("unavailable", "unknown"):
+            return {
+                "ok": False,
+                "field": spec.url_field,
+                "error": MSG_SENSOR_UNAVAILABLE.format(label=label, state=state),
+            }
+
     raw_entries = extract_json_path(payload, data_path, label="Probe")
     if raw_entries is None:
         available = (
@@ -383,6 +468,7 @@ def probe(
         time_zone,
         time_frame_base=time_frame_base,
         installed_power_w=installed_power_w,
+        anchor=anchor,
     )
 
 

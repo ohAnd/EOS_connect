@@ -7,6 +7,7 @@ a network probe (which would make every save depend on a reachable endpoint).
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -20,10 +21,19 @@ from src.config_web.store import ConfigStore
 
 from .test_api import _FakeModule, _sample_config
 
+# The endpoint judges window coverage against local midnight *today*, so the
+# payloads are built relative to now rather than pinned to a date.
+MIDNIGHT = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+
+
+def _at(minutes):
+    return (MIDNIGHT + timedelta(minutes=minutes)).isoformat()
+
+
 EVCC_RATES = {
     "rates": [
-        {"start": "2026-08-23T00:00:00+02:00", "value": 0.3811},
-        {"start": "2026-08-23T00:15:00+02:00", "value": 0.3727},
+        {"start": _at(0), "value": 0.3811},
+        {"start": _at(15), "value": 0.3727},
     ]
 }
 
@@ -124,13 +134,13 @@ class TestTestTimeseriesEndpoint:
         payload = {
             "rates": [
                 {
-                    "start_time": "2026-08-23T00:00:00+02:00",
-                    "end_time": "2026-08-23T00:15:00+02:00",
+                    "start_time": _at(0),
+                    "end_time": _at(15),
                     "price_per_kwh": 0.3811,
                 },
                 {
-                    "start_time": "2026-08-23T00:15:00+02:00",
-                    "end_time": "2026-08-23T00:30:00+02:00",
+                    "start_time": _at(15),
+                    "end_time": _at(30),
                     "price_per_kwh": 0.3727,
                 },
             ]
@@ -178,8 +188,8 @@ class TestTestTimeseriesEndpoint:
 
     def test_pv_domain_supported(self, client):
         payload = {"attributes": {"data": [
-            {"start": "2026-08-23T00:00:00+02:00", "value": 4000.0},
-            {"start": "2026-08-23T00:15:00+02:00", "value": 4000.0},
+            {"start": _at(0), "value": 4000.0},
+            {"start": _at(15), "value": 4000.0},
         ]}}
         resp, _ = post_test_timeseries(
             client,
@@ -478,8 +488,8 @@ class TestEffectiveTimeFrame:
 
     HOURLY_PAYLOAD = {
         "rates": [
-            {"start": "2026-08-23T00:00:00+02:00", "value": 0.30},
-            {"start": "2026-08-23T01:00:00+02:00", "value": 0.31},
+            {"start": _at(0), "value": 0.30},
+            {"start": _at(60), "value": 0.31},
         ]
     }
 

@@ -38,7 +38,6 @@ from collections import defaultdict
 import json
 import logging
 import threading
-import time
 import requests
 
 try:  # running from src/ — src/ is on sys.path
@@ -59,6 +58,10 @@ except ImportError:  # imported as src.interfaces (tests)
         local_midnight,
         place_on_grid,
     )
+try:  # running from src/ — src/ is on sys.path
+    from interfaces.http_fetch import bearer_request_kwargs, retry_request
+except ImportError:  # imported as src.interfaces (tests)
+    from .http_fetch import bearer_request_kwargs, retry_request
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
@@ -1837,34 +1840,10 @@ class PriceInterface:
         return slope, intercept
 
     def _retry_request(self, request_func, error_handler, max_retries=3, delay=1):
-        """
-        Centralized retry logic for API requests with exponential backoff.
-
-        Args:
-            request_func (callable): Function that performs the request and returns the result.
-            error_handler (callable): Function to call on final failure.
-            max_retries (int): Number of retries before error handler is called.
-            delay (int): Initial delay in seconds between retries.
-
-        Returns:
-            The result of request_func, or error_handler on failure.
-        """
-        for attempt in range(max_retries):
-            try:
-                return request_func()
-            except requests.exceptions.Timeout as e:
-                if attempt == max_retries - 1:
-                    return error_handler("timeout", e)
-            except requests.exceptions.RequestException as e:
-                if attempt == max_retries - 1:
-                    return error_handler("request_failed", e)
-            except (ValueError, TypeError) as e:
-                if attempt == max_retries - 1:
-                    return error_handler("invalid_json", e)
-            except (KeyError, AttributeError) as e:
-                if attempt == max_retries - 1:
-                    return error_handler("parsing_error", e)
-            time.sleep(delay)
+        """Delegate to the shared retry loop (interfaces.http_fetch)."""
+        return retry_request(
+            request_func, error_handler, max_retries=max_retries, delay=delay
+        )
 
     def __retrieve_prices_from_fixed24h_array(
         self, tgt_duration, start_time=None  # pylint: disable=unused-argument
@@ -1932,10 +1911,6 @@ class PriceInterface:
             )
             return []
 
-        # Prepare request headers with optional bearer token
-        headers = {"Content-Type": "application/json"}
-        if self.data_token:
-            headers["Authorization"] = f"Bearer {self.data_token}"
 
         logger.debug(
             "[PRICE-IF] Fetching prices from timeseries source: %s (path: %s, unit: %s)",
@@ -1946,7 +1921,9 @@ class PriceInterface:
 
         def request_and_parse():
             """Fetch data and extract timeseries using data_path."""
-            response = requests.get(self.data_url, headers=headers, timeout=10)
+            response = requests.get(
+                self.data_url, **bearer_request_kwargs(self.data_token)
+            )
             response.raise_for_status()
             response_data = response.json()
 
@@ -2040,10 +2017,9 @@ class PriceInterface:
 
             # Fetch grid tariff (consumption prices)
             grid_url = f"{evcc_url}/api/tariff/grid"
-            headers = {"Content-Type": "application/json"}
 
             try:
-                response = requests.get(grid_url, headers=headers, timeout=10)
+                response = requests.get(grid_url, **bearer_request_kwargs())
                 response.raise_for_status()
             except requests.exceptions.RequestException as req_err:
                 logger.error(f"[PRICE-IF] Failed to fetch EVCC grid tariff: {req_err}")

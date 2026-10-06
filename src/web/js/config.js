@@ -2442,7 +2442,12 @@ class ConfigurationManager {
             });
             const data = await res.json();
             resultEl.innerHTML = this._renderTimeseriesResult(data);
-            resultEl.className = `config-timeseries-result visible ${data.ok ? "ok" : "error"}`;
+            // Three states: green (clean), amber (works, but the probe has
+            // something to say — coverage, resolution rule, unit doubt), red.
+            const state = data.ok
+                ? ((data.warnings || []).length ? "warn" : "ok")
+                : "error";
+            resultEl.className = `config-timeseries-result visible ${state}`;
         } catch (err) {
             console.error("[ConfigurationManager] Timeseries test failed:", err);
             resultEl.className = "config-timeseries-result visible error";
@@ -2460,8 +2465,15 @@ class ConfigurationManager {
      * @returns {string} Result HTML
      */
     _renderTimeseriesResult(data) {
+        const warnings = (data.warnings || []).map(
+            w => `<div class="config-timeseries-warning">
+                    <i class="fas fa-triangle-exclamation"></i> ${this._escapeHtml(w)}
+                  </div>`
+        ).join("");
+
         if (!data.ok) {
-            return `<i class="fas fa-times-circle"></i> ${this._escapeHtml(data.error || "Test failed.")}`;
+            return `<i class="fas fa-times-circle"></i> ${this._escapeHtml(data.error || "Test failed.")}
+                ${warnings}`;
         }
 
         const resolution = data.resolution_seconds === 900 ? "15 min" : "hourly";
@@ -2472,15 +2484,14 @@ class ConfigurationManager {
                         <td>${this._escapeHtml(slot.unit)}</td></tr>`;
         }).join("");
 
-        const warnings = (data.warnings || []).map(
-            w => `<div class="config-timeseries-warning">
-                    <i class="fas fa-triangle-exclamation"></i> ${this._escapeHtml(w)}
-                  </div>`
-        ).join("");
+        // Where the series lands on the 48 h optimization window.
+        const coverage = Number.isInteger(data.covered_slots)
+            ? `, covers slots ${data.first_slot}–${data.last_slot}`
+            : "";
 
         return `<div><i class="fas fa-circle-check"></i>
                     ${data.entry_count} entries, ${resolution} resolution,
-                    read as ${this._escapeHtml(data.value_unit)}</div>
+                    read as ${this._escapeHtml(data.value_unit)}${coverage}</div>
                 <table class="config-timeseries-slots">${slots}</table>
                 ${warnings}`;
     }

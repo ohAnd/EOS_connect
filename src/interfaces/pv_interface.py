@@ -208,6 +208,10 @@ except ImportError:  # imported as src.interfaces (tests)
         local_midnight,
         place_on_grid,
     )
+try:  # running from src/ — src/ is on sys.path
+    from interfaces.http_fetch import bearer_request_kwargs, retry_request
+except ImportError:  # imported as src.interfaces (tests)
+    from .http_fetch import bearer_request_kwargs, retry_request
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
@@ -1624,9 +1628,6 @@ class PvInterface:
                 "timeseries",
             ) or self.__get_default_pv_forcast(fallback_power)
 
-        headers = {"Content-Type": "application/json"}
-        if data_token:
-            headers["Authorization"] = f"Bearer {data_token}"
 
         logger.debug(
             "[PV-IF] Fetching PV forecast from timeseries source: %s (path: %s, unit: %s)",
@@ -1636,7 +1637,7 @@ class PvInterface:
         )
 
         def request_and_parse():
-            response = requests.get(data_url, headers=headers, timeout=10)
+            response = requests.get(data_url, **bearer_request_kwargs(data_token))
             response.raise_for_status()
             response_data = response.json()
             timeseries = extract_json_path(response_data, data_path, label="PV-IF")
@@ -3494,34 +3495,10 @@ class PvInterface:
         return aoi
 
     def _retry_request(self, request_func, error_handler, max_retries=3, delay=1):
-        """
-        Centralized retry logic for API requests.
-
-        Args:
-            request_func (callable): Function that performs the request and returns the result.
-            error_handler (callable): Function to call on final failure.
-            max_retries (int): Number of retries before error handler is called.
-            delay (int): Delay in seconds between retries.
-
-        Returns:
-            The result of request_func, or error_handler on failure.
-        """
-        for attempt in range(max_retries):
-            try:
-                return request_func()
-            except requests.exceptions.Timeout as e:
-                if attempt == max_retries - 1:
-                    return error_handler("timeout", e)
-            except requests.exceptions.RequestException as e:
-                if attempt == max_retries - 1:
-                    return error_handler("request_failed", e)
-            except (ValueError, TypeError) as e:
-                if attempt == max_retries - 1:
-                    return error_handler("invalid_json", e)
-            except (KeyError, AttributeError) as e:
-                if attempt == max_retries - 1:
-                    return error_handler("parsing_error", e)
-            time.sleep(delay)
+        """Delegate to the shared retry loop (interfaces.http_fetch)."""
+        return retry_request(
+            request_func, error_handler, max_retries=max_retries, delay=delay
+        )
 
     def _handle_interface_error(
         self, error_type, message, pv_config_entry, source="unknown", target="power"

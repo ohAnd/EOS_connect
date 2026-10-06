@@ -910,10 +910,14 @@ if soc &lt; 20 and not override_active:
                     <p><code>POST /api/config/test-timeseries</code> does the same job for a whole series. It
                         takes <code>domain</code>, either <code>"price"</code> or <code>"pv"</code>, plus the
                         same style of unsaved overrides. Success returns <code>entry_count</code>,
-                        <code>resolution_seconds</code>, <code>value_unit</code>, <code>warnings</code>, and a
-                        short <code>slots</code> sample so you can eyeball the numbers and the units. Failure
-                        returns <code>ok: false</code> with an <code>error</code> and a <code>field</code>
-                        naming the setting most likely at fault.</p>
+                        <code>resolution_seconds</code>, <code>value_unit</code>,
+                        <code>first_slot</code>/<code>last_slot</code>/<code>covered_slots</code> (where the
+                        series lands on the 48&nbsp;h optimization window), <code>warnings</code>, and a
+                        short <code>slots</code> sample so you can eyeball the numbers and the units. A
+                        series that never touches the window fails the test — the running interface would
+                        fall back to its last good data. Failure returns <code>ok: false</code> with an
+                        <code>error</code> and a <code>field</code> naming the setting most likely at
+                        fault.</p>
 
                     <div class="alert alert-warning">
                         <p><strong>Both routes answer HTTP 200 even when the test fails.</strong> The HTTP
