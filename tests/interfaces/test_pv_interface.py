@@ -1686,6 +1686,133 @@ def test_evcc_forecast_unscaled_when_correction_disabled(monkeypatch):
 
     assert result == [40.0] * 48
 
+
+def _pin_module_clock(monkeypatch, fake_now):
+    """Pin datetime.now inside pv_interface to *fake_now* (tz-converted)."""
+
+    class _PinnedDatetime(real_datetime.datetime):
+        """Datetime subclass with now() pinned."""
+
+        @classmethod
+        def now(cls, tz=None):
+            """Return the pinned datetime, optionally converted to *tz*."""
+            return fake_now.astimezone(tz) if tz is not None else fake_now
+
+    monkeypatch.setattr("src.interfaces.pv_interface.datetime", _PinnedDatetime)
+
+
+def test_evcc_fall_back_day_lands_by_absolute_slot(monkeypatch):
+    """
+    2026-10-25 Europe/Berlin has 25 wall-clock hours. The EVCC placer used to
+    anchor at ``now.replace(hour=0, ...)``, which after the changeover keeps
+    now's +01:00 offset — the whole forecast shifted one slot. Entries must
+    land by absolute time: the two 02:00 wall-clock hours are slots 2 and 3.
+    """
+    berlin = pytz.timezone("Europe/Berlin")
+    midnight = berlin.localize(real_datetime.datetime(2026, 10, 25))
+    base = midnight.astimezone(real_datetime.timezone.utc)
+
+    def power(quarter):
+        hour = quarter // 4
+        if hour == 2:  # 02:00 CEST
+            return 80.0
+        if hour == 3:  # 02:00 CET, the repeated wall-clock hour
+            return 120.0
+        return 40.0
+
+    timeseries = [
+        [int((base + real_datetime.timedelta(minutes=15 * i)).timestamp()), power(i)]
+        for i in range(192)
+    ]
+
+    monkeypatch.setattr(
+        PvInterface,
+        "_retry_request",
+        staticmethod(lambda request_func, error_handler, **kwargs: (timeseries, 1.0)),
+    )
+    config_entry = {"name": "evcc_test", "lat": 50, "lon": 8, "power": 100}
+    pv = PvInterface(
+        {"source": "evcc", "use_real_data_correction": False},
+        [config_entry],
+        3600,
+        {"url": "http://dummy-evcc"},
+        timezone="Europe/Berlin",
+    )
+    _pin_module_clock(
+        monkeypatch, berlin.localize(real_datetime.datetime(2026, 10, 25, 15, 30))
+    )
+
+    result = pv._PvInterface__get_pv_forecast_evcc_api(config_entry, hours=48)
+
+    assert len(result) == 48
+    assert result[2] == 80.0
+    assert result[3] == 120.0
+    assert result[0] == 40.0
+    assert result[47] == 40.0
+
+
+def test_solcast_fall_back_day_lands_by_absolute_slot(monkeypatch):
+    """
+    The Solcast placer carried the same ``now.replace(hour=0, ...)`` anchor;
+    its 30-minute periods must land by absolute time on the 25-hour day too.
+    """
+    berlin = pytz.timezone("Europe/Berlin")
+    midnight = berlin.localize(real_datetime.datetime(2026, 10, 25))
+    base = midnight.astimezone(real_datetime.timezone.utc)
+
+    def estimate(half_hour):
+        hour = half_hour // 2
+        if hour == 2:  # 02:00 CEST
+            return 0.8
+        if hour == 3:  # 02:00 CET, the repeated wall-clock hour
+            return 1.2
+        return 0.4
+
+    forecasts = [
+        {
+            "pv_estimate": estimate(i),
+            "period_end": (
+                base + real_datetime.timedelta(minutes=30 * (i + 1))
+            ).isoformat(),
+            "period": "PT30M",
+        }
+        for i in range(96)
+    ]
+
+    config_entry = {
+        "name": "solcast_test",
+        "lat": 50,
+        "lon": 8,
+        "inverterEfficiency": 1.0,
+    }
+    config_source = {
+        "source": "solcast",
+        "api_key": "dummy_key",
+        "resource_id": "dummy_resource",
+    }
+    pv = PvInterface(
+        config_source, [config_entry], 3600, {}, timezone="Europe/Berlin"
+    )
+    pv._retry_request = lambda request_func, error_handler, **kwargs: {
+        "forecasts": forecasts
+    }
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: None)
+    _pin_module_clock(
+        monkeypatch, berlin.localize(real_datetime.datetime(2026, 10, 25, 15, 30))
+    )
+
+    forecast = pv._PvInterface__get_pv_forecast_solcast_api(
+        config_entry, tgt_duration=48
+    )
+
+    assert len(forecast) == 48
+    # 0.8 kW over two half-hours: 0.8 * 0.5 h * 1000 * 2 = 800 Wh, and so on.
+    assert forecast[2] == 800.0
+    assert forecast[3] == 1200.0
+    assert forecast[0] == 400.0
+    assert forecast[47] == 400.0
+
+
 # ---------------------------------------------------------------------------
 # Open-Meteo DST normalisation tests
 # ---------------------------------------------------------------------------
