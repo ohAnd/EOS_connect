@@ -38,6 +38,7 @@ from .migration import (
     migrate_battery_price_unit_to_ct_kwh,
     migrate_managed_load_power_sensor_to_replaces_sensor,
     migrate_sensor_placeholders_to_empty,
+    migrate_managed_loads_season_cleanup,
     prune_migrated_yaml,
 )
 from .merger import build_merged_config
@@ -146,6 +147,9 @@ class ConfigWebModule:
         # One-time migration: blank sensor names that were only ever schema hints,
         # so the interfaces' "not configured" handling can take over.
         migrate_sensor_placeholders_to_empty(self._store)
+
+        # One-time migration: clean up stale season values for managed loads that don't support seasons
+        migrate_managed_loads_season_cleanup(self._store)
 
         # Drop the migrated values from a legacy config.yaml so an empty store cannot
         # resurrect them — but only once the database is known to survive (#287).
