@@ -2536,51 +2536,32 @@ class PvInterface:
 
         # Data processing
         try:
-            # Build an array of hourly values from now (hour=0) up
-            # to tomorrow midnight (48 hours)
+            # Slot 0 is TRUE local midnight today; every slot after it is one
+            # ABSOLUTE hour further on.
+            #
+            # estimate.timezone is a fixed-offset tzinfo the library builds from
+            # the API's utc_offset_seconds, so .replace(hour=0) on it is not
+            # local midnight on a transition day - it keeps whatever offset was
+            # in force at fetch time. That put this array an hour out against
+            # every other forecast (price, load, EVCC, Solcast, Victron,
+            # timeseries), all of which anchor on local_midnight, and against
+            # the absolute current_slot the optimizer and the UI now index with.
+            # Before the slot indices moved, the wall-clock index cancelled this
+            # anchor error; it does not any more.
+            #
+            # Stepping absolute hours also removes the need to trim or pad: 48
+            # steps are 48 slots on a 23-, 24- or 25-hour day alike. The samples
+            # are taken by absolute instant, which is what the library compares.
+            anchor = local_midnight(pytz.timezone(self.time_zone))
             pv_forecast = []
-            # Calculate the number of hours remaining until tomorrow midnight
-            # Use the current time in the forecast's timezone
-            # Always use the start of the current hour in the forecast's timezone
-            now = datetime.now(estimate.timezone).replace(
-                minute=0, second=0, microsecond=0
-            )
-            # Find tomorrow's midnight in the forecast's timezone
-            tomorrow_midnight = (now + timedelta(days=2)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            hours_until_tomorrow_midnight = int(
-                (tomorrow_midnight - now).total_seconds() // 3600
-            )
-            hours_from_today_midnight = int(
-                (
-                    now - now.replace(hour=0, minute=0, second=0, microsecond=0)
-                ).total_seconds()
-                // 3600
-            )
-
-            for hour in range(
-                -1 * hours_from_today_midnight, hours_until_tomorrow_midnight
-            ):
+            for slot in range(48):
+                slot_start = anchor + timedelta(hours=slot)
                 current_hour_energy = 0
                 for minute in range(59):
                     current_hour_energy += estimate.power_production_at_time(
-                        now + timedelta(hours=hour, minutes=minute)
+                        slot_start + timedelta(minutes=minute)
                     )
-                current_hour_energy = round(current_hour_energy / 60, 1)
-                # time_point = now + timedelta(hours=hour, minutes=0)
-                # logger.debug("TEST - : %s - %s", current_hour_energy, time_point)
-                pv_forecast.append(current_hour_energy)
-
-            # Normalise to exactly 48 hourly slots so DST days never produce
-            # a short or long array.  The openmeteo lib computes
-            # hours_until_tomorrow_midnight in wall-clock time, which yields
-            # 47 on spring-forward and 49 on fall-back days.
-            target_hourly = 48
-            if len(pv_forecast) > target_hourly:
-                pv_forecast = pv_forecast[:target_hourly]
-            elif len(pv_forecast) < target_hourly:
-                pv_forecast.extend([0.0] * (target_hourly - len(pv_forecast)))
+                pv_forecast.append(round(current_hour_energy / 60, 1))
 
             # Clear any previous errors on success
             self.pv_forcast_request_error["error"] = None
