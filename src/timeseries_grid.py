@@ -28,7 +28,18 @@ and decides nothing.
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+
+try:  # pytz is the zone flavour the interfaces build; zoneinfo needs no help
+    from pytz.exceptions import AmbiguousTimeError, NonExistentTimeError
+except ImportError:  # pragma: no cover - pytz is a hard dependency in practice
+
+    class AmbiguousTimeError(Exception):
+        """Placeholder so the pytz branch degrades instead of raising NameError."""
+
+    class NonExistentTimeError(Exception):
+        """Placeholder so the pytz branch degrades instead of raising NameError."""
+
 
 KIND_EXTENSIVE = "extensive"
 KIND_INTENSIVE = "intensive"
@@ -69,14 +80,39 @@ def local_midnight(tz, now=None):
     *now's* UTC offset, so on a DST day the "midnight" it produces is an hour
     off, and ``(now - anchor)`` collapses back to the wall clock. Localizing
     the date fresh attaches midnight's own offset.
+
+    Where the local day *starts* with a transition the date is not enough
+    either. A handful of zones shift at or across midnight — America/Havana and
+    Atlantic/Azores fall back at 01:00 and 00:00 local, so 00:00 happens twice —
+    and pytz's default (``is_dst=False``) picks the second, standard-time one.
+    That is an hour after the day actually began, which makes every slot an hour
+    late and, during that first hour, ``now - anchor`` NEGATIVE: slot ``-1``
+    indexes the last slot of the horizon instead of the first. Slot 0 must be
+    the EARLIEST instant of the local day, so the DST reading wins. Where
+    midnight does not exist at all (a forward shift at 00:00), the day starts
+    at the instant the clocks jump to.
     """
     if now is None:
         now = datetime.now(tz)
     day = now.astimezone(tz)
     naive = datetime(day.year, day.month, day.day)
     if hasattr(tz, "localize"):
-        return tz.localize(naive)
-    return naive.replace(tzinfo=tz)
+        try:
+            return tz.localize(naive, is_dst=None)
+        except AmbiguousTimeError:
+            return tz.localize(naive, is_dst=True)
+        except NonExistentTimeError:
+            # Walk forward to the first local time that does exist.
+            for minutes in range(1, 24 * 60):
+                try:
+                    return tz.localize(
+                        naive + timedelta(minutes=minutes), is_dst=None
+                    )
+                except (AmbiguousTimeError, NonExistentTimeError):
+                    continue
+            return tz.localize(naive, is_dst=True)
+    # zoneinfo and friends: fold=0 already selects the first occurrence.
+    return naive.replace(tzinfo=tz, fold=0)
 
 
 def place_on_grid(entries, anchor, slot_count, slot_seconds, kind):
