@@ -207,16 +207,21 @@ class ThermalStorageModel(BaseDemandModel):
         """
         Per-slot mask of when the appliance may run at all, and why not when it may not.
 
-        Hours are derived from the slot index because slot 0 is local midnight by
-        construction. On the two DST days of the year that drifts by an hour late in the
-        second day of the horizon, which is not worth a calendar walk per slot.
+        Each slot's wall clock comes from the instant it starts, not from its index.
+        Dividing the index gives the right answer on 364 days a year and is an hour
+        out on the other two: a 25-hour day has 25 hourly slots, so from the
+        transition onwards index // slots_per_hour names the hour before the real
+        one — and a run window of 22:00–06:00 would open and close an hour late. One
+        astimezone() per slot (192 at most) settles it exactly.
         """
-        slots_per_day = max(1, 86400 // ctx.time_frame_base)
-        slots_per_hour = max(1, ctx.slots_per_hour())
         mask, reasons = [], []
         for index in range(ctx.slot_count):
-            hour = (index % slots_per_day) // slots_per_hour
-            day = (ctx.anchor + timedelta(days=index // slots_per_day)).date()
+            # astimezone() re-normalizes the pytz offset across a transition.
+            slot_start = (
+                ctx.anchor + timedelta(seconds=index * ctx.time_frame_base)
+            ).astimezone(ctx.anchor.tzinfo)
+            hour = slot_start.hour
+            day = slot_start.date()
 
             reason = None
             if not _in_window(hour, self.window_start, self.window_end):
@@ -341,8 +346,6 @@ class ThermalStorageModel(BaseDemandModel):
         if self.cover_loss_factor >= 1.0:
             return [1.0] * ctx.slot_count
 
-        slots_per_day = max(1, 86400 // ctx.time_frame_base)
-        slots_per_hour = max(1, ctx.slots_per_hour())
         observed_until = ctx.current_slot + round(
             OBSERVED_HOURS * 3600 / ctx.time_frame_base
         )
@@ -352,7 +355,12 @@ class ThermalStorageModel(BaseDemandModel):
             if index <= observed_until:
                 series.append(measured)
                 continue
-            hour = (index % slots_per_day) // slots_per_hour
+            # The hour this slot actually starts at - see _slot_mask: index
+            # arithmetic is an hour out after a DST transition, which would
+            # read the cover habit for the wrong hour of the evening.
+            hour = (
+                ctx.anchor + timedelta(seconds=index * ctx.time_frame_base)
+            ).astimezone(ctx.anchor.tzinfo).hour
             probability = self.cover_habit.probability(hour)
             if probability is None:
                 series.append(measured)
