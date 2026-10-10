@@ -683,3 +683,79 @@ class TestSharedDataSourceEditsAreNotBlocked:
             )
 
         assert resp.status_code == 422
+
+
+class TestFeedInPreflight:
+    """
+    The feed-in domain's pre-flight, which had no coverage at all — which is
+    why its error reported against the grid-price field.
+    """
+
+    @staticmethod
+    def _as_timeseries_feedin(client):
+        client.store.set("price.feed_in_source", "timeseries")
+        client.store.set("price.feed_in_data_url", "http://ha.local/feed_in")
+        client.store.set("price.feed_in_data_path", "rates")
+        client.store.set("price.feed_in_value_unit", "EUR/kWh")
+
+    def test_a_broken_feed_in_source_names_the_feed_in_field(self, client):
+        """Not price.data_url — that is the GRID price, a different setting."""
+        self._as_timeseries_feedin(client)
+
+        with patch(
+            "src.config_web.timeseries_probe.requests.get",
+            return_value=FakeResponse({"rates": [{"begin": "x", "cost": 1}]}),
+        ):
+            resp = client.put(
+                "/api/config/",
+                data=json.dumps({"price.feed_in_data_path": "rates"}),
+                content_type="application/json",
+            )
+
+        assert resp.status_code == 422
+        key = resp.get_json()["errors"][0]["key"]
+        assert key.startswith("price.feed_in_"), key
+        assert key != "price.data_url"
+
+
+class TestStaleSeriesDoesNotBlockTheSave:
+    """
+    A series that misses the optimization window is red in the tester but must
+    not refuse a save.
+
+    The window is judged against local midnight TODAY, so an untouched config
+    that saved yesterday would start returning 422 this morning — and the user
+    could not edit their way out of it, because every PUT carrying the field
+    would be rejected by the same check.
+    """
+
+    STALE = {
+        "rates": [
+            {"start": (MIDNIGHT - timedelta(days=30)).isoformat(), "value": 0.30},
+            {"start": (MIDNIGHT - timedelta(days=30, minutes=-15)).isoformat(),
+             "value": 0.31},
+        ]
+    }
+
+    def test_the_save_goes_through(self, client):
+        with patch(
+            "src.config_web.timeseries_probe.requests.get",
+            return_value=FakeResponse(self.STALE),
+        ):
+            resp = client.put(
+                "/api/config/",
+                data=json.dumps({"price.data_path": "rates"}),
+                content_type="application/json",
+            )
+
+        assert resp.status_code == 200
+
+    def test_the_tester_still_calls_it_red(self, client):
+        """The probe verdict itself is unchanged — only the save is unblocked."""
+        resp, _ = post_test_timeseries(
+            client, {"domain": "price"}, payload=self.STALE
+        )
+
+        body = resp.get_json()
+        assert body["ok"] is False
+        assert "optimization window" in body["error"]
