@@ -290,17 +290,27 @@ price_interface = interface_factory.create_price_interface(
 ) or PriceInterface(config_manager.config["price"], time_frame_base, time_zone, evcc_interface)
 
 # Feed-in price interface (for dynamic export pricing)
+# Defensive check: ensure price config is a dict before accessing it
+price_config = config_manager.config.get("price", {})
+if not isinstance(price_config, dict):
+    logger.warning(
+        "[Main] Price config section is not a dict (got %s), using empty defaults. "
+        "This indicates a critical configuration loading issue.",
+        type(price_config).__name__,
+    )
+    price_config = {}
+
 feed_in_config = {
-    "source": config_manager.config.get("price", {}).get("feed_in_source", "fixed"),
-    "zone": config_manager.config.get("price", {}).get("feed_in_zone", "DK1"),
-    "static_adder_ct_kwh": config_manager.config.get("price", {}).get(
+    "source": price_config.get("feed_in_source", "fixed"),
+    "zone": price_config.get("feed_in_zone", "DK1"),
+    "static_adder_ct_kwh": price_config.get(
         "feed_in_static_adder", 0.0
     ),  # ct/kWh (standard unit)
-    "multiplier": config_manager.config.get("price", {}).get("feed_in_multiplier", 1.0),
-    "fixed_price_ct_kwh": config_manager.config.get("price", {}).get(
+    "multiplier": price_config.get("feed_in_multiplier", 1.0),
+    "fixed_price_ct_kwh": price_config.get(
         "feed_in_price", 0.0
     ),  # ct/kWh
-    "negative_price_switch": config_manager.config.get("price", {}).get(
+    "negative_price_switch": price_config.get(
         "feed_in_negative_price_switch", False
     ),  # Clamp negative prices to 0 if enabled
 }

@@ -912,10 +912,22 @@ class HotReloadAdapter:
 
         try:
             feedin_config = config.get("price", {})
+
+            # Defensive check: ensure feedin_config is a dict before calling .get() on it
+            if not isinstance(feedin_config, dict):
+                logger.error(
+                    "[HotReload] Feed-in config section is not a dict (got %s). "
+                    "Skipping feed-in reload for %s. This indicates a configuration "
+                    "loading issue.",
+                    type(feedin_config).__name__,
+                    key,
+                )
+                return
+
             # Use forced source if provided (callback fired before rebuild_config)
             new_source = force_source if force_source else feedin_config.get("feed_in_source", "fixed").strip()
             new_zone = feedin_config.get("feed_in_zone", "DK1").strip()
-            
+
             if force_source:
                 logger.debug(
                     "[HotReload] Using forced feed-in source '%s' (callback fired"
