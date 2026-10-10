@@ -19,7 +19,12 @@ from typing import Any
 from ruamel.yaml.error import YAMLError
 
 from .store import ConfigStore
-from .schema import ConfigSchema, BOOTSTRAP_KEYS, LEGACY_SENSOR_PLACEHOLDERS
+from .schema import (
+    ConfigSchema,
+    BOOTSTRAP_KEYS,
+    LEGACY_SENSOR_PLACEHOLDERS,
+    MANAGED_LOAD_COVER_TYPES,
+)
 
 logger = logging.getLogger("__main__")
 
@@ -258,6 +263,71 @@ def migrate_sensor_placeholders_to_empty(store: ConfigStore) -> bool:
             )
 
     store.set(_SENSOR_PLACEHOLDER_MIGRATION_KEY, True)
+    return True
+
+
+_MANAGED_LOADS_SEASON_MIGRATION_KEY = "_migrated_managed_loads_season_cleanup_v1"
+
+
+def migrate_managed_loads_season_cleanup(store: ConfigStore) -> bool:
+    """
+    One-time migration: clean up stale season values for managed loads that don't support seasons.
+
+    Issue #322: Managed loads with types that don't support seasons (sauna, hot_water_tank,
+    buffer_tank, external_contingent, external_profile) can retain stale season values
+    (season_start, season_end) in the database. The UI hides these fields via CSS for
+    non-pool types but doesn't clear their values, causing the optimizer to incorrectly
+    reject scheduling as "out of season".
+
+    This migration clears season values for any managed load entry whose type is not in
+    MANAGED_LOAD_COVER_TYPES (currently only "pool_heatpump").
+
+    Args:
+        store: An opened ConfigStore instance.
+
+    Returns:
+        True if the migration ran (first time), False if it was already done.
+    """
+    if store.get(_MANAGED_LOADS_SEASON_MIGRATION_KEY, False):
+        return False
+
+    cleaned = 0
+    
+    # Iterate through all stored keys looking for managed_loads entries
+    all_keys = list(store.get_all().keys())
+    for key in all_keys:
+        # Match managed_loads.N.season_start or managed_loads.N.season_end
+        match = re.match(r"^managed_loads\.(\d+)\.(season_start|season_end)$", key)
+        if not match:
+            continue
+        
+        idx = int(match.group(1))
+        season_field = match.group(2)
+        
+        # Get the type for this load entry
+        type_key = f"managed_loads.{idx}.type"
+        load_type = store.get(type_key)
+        
+        # If type is not in cover types (pool_heatpump), clear the season field
+        if load_type not in MANAGED_LOAD_COVER_TYPES:
+            store.delete(key)
+            cleaned += 1
+            logger.info(
+                "[Migration] Cleared %s for managed_loads[%d] (type: %s) — "
+                "this load type does not support seasons",
+                season_field,
+                idx,
+                load_type,
+            )
+
+    store.set(_MANAGED_LOADS_SEASON_MIGRATION_KEY, True)
+    
+    if cleaned > 0:
+        logger.info(
+            "[Migration] Cleaned up %d stale managed_loads season value(s)",
+            cleaned,
+        )
+    
     return True
 
 
