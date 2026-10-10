@@ -173,7 +173,6 @@ class TestHorizonUnits:
             lambda tgt_duration, start_time=None: [],
         )
         iface.last_successful_prices = [0.0001] * 192
-        iface.last_successful_prices_direct = [0.0001] * 192
         iface.consecutive_failures = 0
         # Mirrors the update loop: tgt_duration counts slots on every path.
         iface.update_prices(horizon_slots(iface.time_frame_base), ANCHOR)

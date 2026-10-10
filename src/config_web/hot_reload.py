@@ -146,12 +146,6 @@ _PRICE_RUN_TRIGGERS = {
     "price.feed_in_static_adder",
 }
 
-# Feed-in related fields that require recalculating feed-in prices
-_FEEDIN_TRIGGERS = {
-    "price.feed_in_price",
-    "price.feed_in_negative_price_switch",
-}
-
 _PV_KEY_PREFIXES = (
     "pv_forecast_source.",
     "pv_forecast.",
@@ -389,10 +383,6 @@ class HotReloadAdapter:
         if key == "price.feed_in_negative_price_switch":
             self._sync_feed_in_negative_price_switch(coerced)
 
-        # Recalculate feed-in prices when feed_in_price or negative_price_switch change
-        if key in _FEEDIN_TRIGGERS:
-            self._recalculate_feedin()
-
         # Feed-in price change invalidates the current optimization result
         if key in _PRICE_RUN_TRIGGERS:
             self._fire_run_trigger(key)
@@ -498,39 +488,6 @@ class HotReloadAdapter:
             new_val,
             old_val,
         )
-
-    def _recalculate_feedin(self):
-        """Recalculate feed-in prices on the price interface."""
-        if self._price is None:
-            return
-        try:
-            # If using fixed_24h with negative_price_switch, refresh auxiliary stock prices
-            if (self._price.src == "fixed_24h" and self._price.negative_price_switch):
-                # Fetch Akkudoktor stock prices for negative price detection
-                start_time = local_midnight(self._price.time_zone)
-                success = self._price.refresh_stock_prices_for_feedin_check(48, start_time)
-                if success:
-                    logger.debug(
-                        "[HotReload] Refreshed Akkudoktor stock prices for fixed_24h negative"+
-                        " price detection"
-                    )
-                else:
-                    logger.warning(
-                        "[HotReload] Could not refresh Akkudoktor stock prices for fixed_24h"+
-                        " source"
-                    )
-
-            # Now recalculate feedin prices with potentially updated stock prices
-            feedin = self._price.recalculate_feedin_prices()
-            if feedin is not None:
-                logger.info(
-                    "[HotReload] Recalculated feed-in prices (%d entries)",
-                    len(feedin),
-                )
-        except (AttributeError, TypeError) as exc:
-            logger.debug(
-                "[HotReload] Could not recalculate feed-in prices: %s", exc
-            )
 
     def _apply_optimizer(self, key, new_value):
         """Apply an optimizer config change."""
