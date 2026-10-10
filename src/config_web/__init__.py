@@ -34,6 +34,7 @@ from .store import ConfigStore
 from .migration import (
     migrate_yaml_to_store,
     migrate_ha_options_to_store,
+    migrate_clear_deprecated_overrides,
     migrate_battery_price_unit_to_ct_kwh,
     migrate_managed_load_power_sensor_to_replaces_sensor,
     migrate_sensor_placeholders_to_empty,
@@ -130,6 +131,10 @@ class ConfigWebModule:
             self._store,
             self._schema,
         )
+
+        # One-time migration: clear deprecated per-section data source overrides
+        # if global data_source is properly configured (solves issue #320)
+        migrate_clear_deprecated_overrides(self._store)
 
         # One-time migration: battery.price_euro_per_wh_accu (€/Wh) -> battery.price_ct_kwh_accu (ct/kWh)
         migrate_battery_price_unit_to_ct_kwh(self._store)

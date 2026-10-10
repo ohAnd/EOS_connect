@@ -641,3 +641,94 @@ def _create_data_source(config_dict: dict, store: ConfigStore) -> None:
     batch = _create_data_source_batch(config_dict)
     for key, value in batch.items():
         store.set(key, value)
+
+
+def migrate_clear_deprecated_overrides(store: ConfigStore) -> None:
+    """
+    One-time migration: Clear deprecated per-section data source overrides.
+
+    The old configuration model allowed separate data source configs for load and battery
+    (``load.source``, ``load.url``, ``load.access_token``, ``battery.source``, etc.).
+    These are deprecated in favor of a unified ``data_source`` section.
+
+    During migration from config.yaml, deprecated override fields are preserved as-is.
+    However, if the global ``data_source`` has been properly configured (not "default"),
+    we should clear these deprecated overrides so the merger's inheritance logic works
+    correctly. Otherwise, stale credentials in per-section overrides block the fallback
+    to the global ``data_source``, causing 401 auth errors (see issue #320).
+
+    **Logic:**
+    1. If ``data_source.type`` is a real remote source (homeassistant/openhab),
+       clear all deprecated per-section overrides to "default" / "".
+    2. If ``data_source.type`` is "default" but per-section overrides exist,
+       keep the overrides (user explicitly configured them as Expert settings).
+    3. Guard with marker key to prevent re-running this migration.
+
+    Args:
+        store: An opened ConfigStore instance.
+    """
+    # Guard: skip if already migrated
+    if store.has_key("_migrated_clear_deprecated_overrides"):
+        logger.debug("[Migration] Skipping clear_deprecated_overrides (already migrated)")
+        return
+
+    logger.info("[Migration] Clearing deprecated per-section data source overrides")
+
+    # Get global data_source configuration
+    ds_type = store.get("data_source.type", "default")
+    ds_url = store.get("data_source.url", "")
+    ds_token = store.get("data_source.access_token", "")
+
+    # Get current per-section overrides
+    load_source = store.get("load.source", "default")
+    load_url = store.get("load.url", "")
+    load_token = store.get("load.access_token", "")
+    battery_source = store.get("battery.source", "default")
+    battery_url = store.get("battery.url", "")
+    battery_token = store.get("battery.access_token", "")
+
+    # Decision: should we clear deprecated overrides?
+    clear_overrides = ds_type in ("homeassistant", "openhab")
+
+    batch = {}
+    if clear_overrides:
+        # Global data_source is properly configured — clear all deprecated overrides
+        # to ensure the merger's inheritance logic falls back to global data_source
+        if load_source != "default" or load_url or load_token:
+            logger.info(
+                "[Migration] Clearing deprecated load overrides (had source=%s)",
+                load_source,
+            )
+            batch["load.source"] = "default"
+            batch["load.url"] = ""
+            batch["load.access_token"] = ""
+
+        if battery_source != "default" or battery_url or battery_token:
+            logger.info(
+                "[Migration] Clearing deprecated battery overrides (had source=%s)",
+                battery_source,
+            )
+            batch["battery.source"] = "default"
+            batch["battery.url"] = ""
+            batch["battery.access_token"] = ""
+    else:
+        # Global data_source is "default" — keep any per-section overrides
+        # (user configured them as Expert-level settings)
+        if load_source != "default" or battery_source != "default":
+            logger.debug(
+                "[Migration] Keeping per-section overrides (global data_source is default)"
+            )
+        else:
+            logger.debug("[Migration] No deprecated overrides to clear")
+
+    # Write changes and mark migration as complete
+    batch["_migrated_clear_deprecated_overrides"] = True
+    if batch:  # Only write if there are changes
+        try:
+            store.set_batch(batch)
+            logger.info(
+                "[Migration] Cleared deprecated overrides: %d updates",
+                len(batch) - 1,  # Don't count the marker key
+            )
+        except Exception:
+            logger.exception("[Migration] Failed to clear deprecated overrides")
