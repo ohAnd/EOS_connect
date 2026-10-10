@@ -152,6 +152,14 @@ startup_validator = StartupValidator()
 # Initialize interface factory for centralized creation and error handling
 interface_factory = InterfaceFactory(startup_validator)
 
+#: How long the fast control loop keeps applying the last optimization result
+#: after its slot has ended. The loop runs once a second; the optimizer runs on
+#: `refresh_time`, configurable up to 60 minutes, so at quarter-hourly
+#: resolution the two stored slots (30 minutes) can expire before the next run.
+#: Holding the last decision is the right behaviour there - dropping control
+#: because a run is late leaves the inverter on whatever it was last told.
+CONTROL_DATA_GRACE_SECONDS = 3600
+
 # Set global time frame base AFTER DB merge (so DB values are respected)
 # with validation and fallback
 time_frame_base = config_manager.config.get("eos", {}).get("time_frame", 3600)
@@ -1476,23 +1484,43 @@ class OptimizationScheduler:
 
     def __run_control_loop(self):
         now = datetime.now(time_zone)
-        current_slot = int(
-            (now - local_midnight(time_zone, now)).total_seconds()
-        ) // time_frame_base
-        last_control_selected_entry = 0
-        if current_slot == eos_interface.get_last_control_data()[1]["slot"]:
-            last_control_selected_entry = 1
-        elif -1 == eos_interface.get_last_control_data()[0]["slot"]:
-            # logger.debug("[Main] check current tgt ctrl - still in startup - skip")
+        control_data = eos_interface.get_last_control_data()
+
+        # Match on the instants the entries describe, not on their slot numbers.
+        # A slot number only means anything against the midnight it was counted
+        # from, so the pair stored at 23:40 (slots 23 and 24) matched nothing
+        # once the loop started counting from the next midnight - one warning
+        # per second until the following optimization run, with correct data
+        # sitting in entry 1 the whole time.
+        if control_data[0].get("valid_from") is None:
+            # Still starting up: no optimization response yet.
             return
-        elif (
-            current_slot != eos_interface.get_last_control_data()[0]["slot"]
-            and current_slot != eos_interface.get_last_control_data()[1]["slot"]
-        ):
-            logger.warning(
-                "[Main] check current tgt ctrl - wrong slot data for fast control - skip"
-            )
-            return
+
+        last_control_selected_entry = None
+        for index, entry in enumerate(control_data):
+            if entry["valid_from"] <= now < entry["valid_until"]:
+                last_control_selected_entry = index
+                break
+
+        if last_control_selected_entry is None:
+            # Outside both slots. The optimizer may simply be between runs -
+            # refresh_time is configurable up to an hour, while two slots are
+            # only 30 minutes at quarter-hourly resolution - so hold the last
+            # entry for as long as a run could plausibly take, and only then
+            # stop acting on data that has gone stale.
+            latest = max(control_data, key=lambda entry: entry["valid_until"])
+            grace = timedelta(seconds=max(CONTROL_DATA_GRACE_SECONDS,
+                                          2 * time_frame_base))
+            if latest["valid_until"] <= now < latest["valid_until"] + grace:
+                last_control_selected_entry = control_data.index(latest)
+            else:
+                logger.warning(
+                    "[Main] check current tgt ctrl - no control data covers %s "
+                    "(last slot ended %s) - skip",
+                    now.isoformat(timespec="seconds"),
+                    latest["valid_until"].isoformat(timespec="seconds"),
+                )
+                return
 
         ac_charge_demand = eos_interface.get_last_control_data()[
             last_control_selected_entry
