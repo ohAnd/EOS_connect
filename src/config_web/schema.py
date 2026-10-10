@@ -1057,7 +1057,24 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Static adjustment to feed-in price in ct/kWh (e.g., +3.5 for transport costs)",
         help_url="config-price.html#price",
         validation={"min": -10.0, "max": 10.0},
-        depends_on={"price.feed_in_source": ["elpris_dk", "epex_spot"]},
+        description_map={
+            "price.feed_in_source": {
+                "fixed": "Static adjustment to the fixed feed-in price in ct/kWh",
+                "elpris_dk": "Static adjustment to the Elpris DK price in ct/kWh (e.g., +3.5 for transport costs)",
+                "epex_spot": "Static adjustment to the EPEX Spot price in ct/kWh (e.g., +3.5 for transport costs)",
+                "evcc": "Static adjustment to the EVCC feed-in rate in ct/kWh",
+                "timeseries": "Static adjustment to the sourced feed-in price in ct/kWh",
+            }
+        },
+        # Every feed-in source applies (price + adder) * multiplier, so the
+        # fields have to be visible for every one of them. Listing only two
+        # meant the value was applied to evcc and timeseries but could neither
+        # be seen nor edited there.
+        depends_on={
+            "price.feed_in_source": [
+                "fixed", "elpris_dk", "epex_spot", "evcc", "timeseries"
+            ]
+        },
         hot_reload=True,
         display_group="Feed-In Price",
     ),
@@ -1070,7 +1087,20 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Relative multiplier for feed-in price (1.0 = no change, 1.05 = +5%)",
         help_url="config-price.html#price",
         validation={"min": 0.5, "max": 1.5},
-        depends_on={"price.feed_in_source": ["elpris_dk", "epex_spot"]},
+        description_map={
+            "price.feed_in_source": {
+                "fixed": "Multiplier on the fixed feed-in price (1.0 = no change)",
+                "elpris_dk": "Multiplier on the Elpris DK price (1.0 = no change, 1.05 = +5%)",
+                "epex_spot": "Multiplier on the EPEX Spot price (1.0 = no change, 1.05 = +5%)",
+                "evcc": "Multiplier on the EVCC feed-in rate (1.0 = no change)",
+                "timeseries": "Multiplier on the sourced feed-in price (1.0 = no change)",
+            }
+        },
+        depends_on={
+            "price.feed_in_source": [
+                "fixed", "elpris_dk", "epex_spot", "evcc", "timeseries"
+            ]
+        },
         hot_reload=True,
         display_group="Feed-In Price",
     ),

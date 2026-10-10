@@ -233,7 +233,7 @@ class TestFeedInEvccPriceSource:
         mock_evcc = Mock()
         mock_evcc.url = "http://evcc.local:7070"
         
-        # Configure with a multiplier (should NOT be applied to EVCC feed-in)
+        # Configure with a multiplier — applied like on every other source
         feed_in_iface = FeedInPriceInterface(
             {
                 "source": "evcc",
