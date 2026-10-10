@@ -48,6 +48,20 @@ TEMPLATE_DOCS_URL = current_docs_url(
     "user-guide/config-data.html#timeseries-templates"
 )
 
+# Where to send someone whose payload carries no timestamps at all. The
+# timeseries path needs an explicit time per entry; "the array begins today at
+# 00:00" is precisely the defect discussion #214 reported, and a frozen source
+# would be indistinguishable from a fresh one. Each of these takes a bare array
+# by design, so the rejection has to name them rather than only offer a
+# template - a user who pasted a 24-value price array wants fixed_24h, and
+# telling them to write a template sensor is the wrong advice.
+BARE_ARRAY_ALTERNATIVES = (
+    "a bare array of values carries no time information. Use the source built "
+    "for that shape instead: 'fixed_24h' for 24 hourly prices, the managed-load "
+    "'push' API for a profile with an explicit anchor, or the elpris/epex "
+    "adapters for those providers"
+)
+
 # Price units → EUR/Wh, the unit the optimizer and the web UI work in internally.
 PRICE_UNIT_TO_EUR_PER_WH = {
     "EUR/kWh": 1e-3,
@@ -291,6 +305,13 @@ def normalize_entries(raw_entries, tz, label="timeseries", lenient=False):
             f"expected a JSON array of timeseries entries, got "
             f"{type(raw_entries).__name__}"
         )
+    if raw_entries and all(not isinstance(entry, dict) for entry in raw_entries):
+        raise TimeseriesFormatError(
+            f"the payload is a list of {type(raw_entries[0]).__name__} values, "
+            f"not timeseries entries — {BARE_ARRAY_ALTERNATIVES}. To use this "
+            f"source, give every entry its own timestamp: the expected format "
+            f"is {{start, end, value}}, see {TEMPLATE_DOCS_URL}"
+        )
     if not raw_entries:
         raise TimeseriesFormatError("timeseries is empty")
 
@@ -312,7 +333,8 @@ def normalize_entries(raw_entries, tz, label="timeseries", lenient=False):
             f"{', '.join(FIELD_ALIASES['start'])} — or, for an hour-ending "
             f"source, end timestamps only ({', '.join(FIELD_ALIASES['end'])}). "
             f"The expected format is {{start, end, value}} — shape the source "
-            f"with a Home Assistant template sensor, see {TEMPLATE_DOCS_URL}"
+            f"with a Home Assistant template sensor, see {TEMPLATE_DOCS_URL}. "
+            f"Note that {BARE_ARRAY_ALTERNATIVES}."
         )
     if "value" not in names:
         raise TimeseriesFormatError(
