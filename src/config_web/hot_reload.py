@@ -910,6 +910,14 @@ class HotReloadAdapter:
             # Update feed-in interface with new configuration
             old_source = self._feed_in_price.source
             old_zone = self._feed_in_price.zone
+            if old_source != new_source:
+                # The forecast markers describe the array the PREVIOUS source
+                # produced. Left in place they keep hatching the new source's
+                # prices as invented - the same reset the grid-price side does.
+                try:
+                    self._feed_in_price.clear_forecast_metadata()
+                except AttributeError:
+                    pass
             self._feed_in_price.source = new_source
             self._feed_in_price.zone = new_zone
             # Timeseries connection details (central-HA mode already resolved
