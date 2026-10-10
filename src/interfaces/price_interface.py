@@ -443,9 +443,13 @@ class PriceInterface:
             Logs a debug message indicating that prices have been updated.
         """
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
         self.current_prices = self.__retrieve_prices(tgt_duration, start_time)
         self._published = (
             list(self.current_prices),
@@ -680,9 +684,13 @@ class PriceInterface:
         """
         logger.debug("[PRICE-IF] Fetching prices from akkudoktor ...")
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
         current_hour = start_time.hour
         request_url = (
             AKKUDOKTOR_API_PRICES
@@ -720,9 +728,13 @@ class PriceInterface:
             prices.append(price_final)
 
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
         current_hour = start_time.hour
         # tgt_duration counts slots; this path works in hours until the final
         # expansion below, so convert once.
@@ -875,9 +887,13 @@ class PriceInterface:
         tomorrow_prices_json = json.loads(tomorrow_prices)
 
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
 
         prices = []
         prices_direct = []
@@ -958,9 +974,13 @@ class PriceInterface:
                 )
 
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
         current_hour = start_time.hour
 
         # tgt_duration already counts slots; only the offset depends on the frame.
@@ -1042,9 +1062,13 @@ class PriceInterface:
             return []
 
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
 
         if start_time.tzinfo is None and hasattr(self.time_zone, "localize"):
             start_time = self.time_zone.localize(start_time)
@@ -1263,9 +1287,13 @@ class PriceInterface:
             )
             return []
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
         request_url = SMARTENERGY_API
         logger.debug(
             "[PRICE-IF] Requesting prices from SMARTENERGY_AT: %s", request_url
