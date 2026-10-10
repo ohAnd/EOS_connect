@@ -2053,13 +2053,25 @@ class PriceInterface(ForecastMetadataMixin):
             # the timestamps keep their own offsets — and convert the unit via
             # the common table.
             try:
-                timeseries = normalize_entries(rates, self.time_zone, label="PRICE-IF")
+                # Lenient: EVCC publishes rates straight from whatever tariff
+                # plugin the user configured, and one malformed rate must not
+                # cost the other 191. A skipped rate leaves a gap the placement
+                # reports, which is strictly better than losing the fetch.
+                timeseries = normalize_entries(
+                    rates, self.time_zone, label="PRICE-IF", lenient=True
+                )
                 convert_price_values(timeseries, "EUR/kWh")
             except TimeseriesFormatError as exc:
                 logger.error("[PRICE-IF] Invalid EVCC rates: %s", exc)
                 return []
 
-            resolution_seconds = detect_resolution_seconds(timeseries)
+            # Same fallback the generic parser uses. Detecting from the first
+            # delta alone is too strict here: skipping an unusable rate leaves
+            # an irregular gap, and refusing the whole fetch because of it would
+            # undo the point of reading the payload leniently.
+            resolution_seconds = detect_resolution_seconds(
+                timeseries
+            ) or median_span_seconds(timeseries)
             if resolution_seconds is None:
                 logger.warning("[PRICE-IF] Could not detect timeseries resolution")
                 return []
