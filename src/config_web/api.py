@@ -19,6 +19,7 @@ from .schema import (
     LEGACY_SENSOR_PLACEHOLDERS,
     LIST_SECTIONS,
     LOCATION_BASED_PV_SOURCES,
+    MANAGED_LOAD_COVER_TYPES,
     REMOTE_DATA_SOURCE_TYPES,
 )
 from .entity_probe import probe_entity
@@ -718,6 +719,48 @@ def _pending_pv_installation_count(data: dict, current_config: dict) -> int:
     return len(listed or [])
 
 
+def _get_managed_loads_entries(data: dict, current_config: dict) -> list[dict]:
+    """
+    Extract managed_loads entries from incoming data and current config.
+    
+    Returns a list of dicts, one per managed load entry, merging incoming changes
+    with stored values so the dependency check sees the full picture.
+    """
+    entries = []
+    
+    # Collect indices from both data and current config
+    indices = set()
+    for key in data:
+        parts = key.split(".")
+        if len(parts) >= 3 and parts[0] == "managed_loads" and parts[1].isdigit():
+            indices.add(int(parts[1]))
+    
+    current_loads = current_config.get("managed_loads", [])
+    if isinstance(current_loads, list):
+        for idx in range(len(current_loads)):
+            indices.add(idx)
+    
+    # Build merged entries
+    for idx in sorted(indices):
+        entry = {}
+        
+        # Start with current config value if it exists
+        if isinstance(current_loads, list) and idx < len(current_loads):
+            entry.update(current_loads[idx])
+        
+        # Override with incoming data
+        for key in data:
+            parts = key.split(".")
+            if len(parts) == 3 and parts[0] == "managed_loads" and parts[1] == str(idx):
+                entry[parts[2]] = data[key]
+        
+        if entry:
+            entries.append(entry)
+    
+    return entries
+
+
+
 def _check_dependencies(data: dict) -> list[dict]:
     """
     Cross-field dependencies that *this request* would leave unsatisfied.
@@ -831,6 +874,26 @@ def _check_dependencies(data: dict) -> list[dict]:
                     ),
                     "requires": key,
                     "blocking": False,
+                })
+
+    # Managed loads season validation: season fields only apply to pool_heatpump type
+    if touches("managed_loads"):
+        managed_loads = _get_managed_loads_entries(data, current_config)
+        for idx, entry in enumerate(managed_loads):
+            load_type = entry.get("type")
+            season_start = entry.get("season_start", "")
+            season_end = entry.get("season_end", "")
+            
+            # Only validate if this load has non-empty season values
+            if (season_start or season_end) and load_type not in MANAGED_LOAD_COVER_TYPES:
+                dependencies.append({
+                    "field": f"managed_loads.{idx}.season_start",
+                    "reason": (
+                        f"Load '{entry.get('name', f'#{idx}')}' (type: {load_type}) does not support seasons. "
+                        "Seasons only apply to pool heatpump loads."
+                    ),
+                    "requires": f"managed_loads.{idx}.type",
+                    "blocking": True,
                 })
 
     return dependencies
