@@ -793,12 +793,17 @@ def _check_dependencies(data: dict) -> list[dict]:
         return val
 
     def touches(*keys):
-        """Whether the request sets any of *keys* — including indexed pv_forecast."""
+        """Whether the request sets any of *keys* — including indexed pv_forecast and managed_loads."""
         for key in keys:
             if key in data:
                 return True
+            # Special handling for list-based sections that use indexed keys
             if key == "pv_forecast" and any(
                 k.startswith("pv_forecast.") for k in data
+            ):
+                return True
+            if key == "managed_loads" and any(
+                k.startswith("managed_loads.") for k in data
             ):
                 return True
         return False
