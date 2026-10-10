@@ -281,9 +281,14 @@ class FeedInPriceInterface(ForecastMetadataMixin):
                     "Using default prices.",
                     self.max_failures,
                 )
+                # default_prices is a 48-entry hourly array; stretch it to
+                # whatever the configured resolution asks for rather than
+                # testing for the literal 192.
                 prices = self.default_prices
-                if tgt_duration == 192:  # 15-min slots
-                    prices = [p for p in prices for _ in range(4)]
+                if self.time_frame_base != 3600:
+                    per_hour = 3600 // self.time_frame_base
+                    prices = [p for p in prices for _ in range(per_hour)]
+                prices = prices[:tgt_duration]
         else:
             self.consecutive_failures = 0
             self.last_successful_prices = prices.copy()
@@ -672,46 +677,57 @@ class FeedInPriceInterface(ForecastMetadataMixin):
                 logger.error("[FEEDIN-IF] Invalid EVCC feed-in rates: %s", exc)
                 return []
 
-            timeseries = [
-                {"timestamp": entry["start"], "value": entry["value"]}
-                for entry in entries
-            ]
-
-            if not timeseries:
-                logger.error("[FEEDIN-IF] No valid rates with timestamps converted from EVCC response")
+            # Place by timestamp, exactly as the grid-price and timeseries
+            # feed-in paths do. This was the last consumer still laying entries
+            # out by POSITION: the timestamps were parsed above and then thrown
+            # away, so a series that also published yesterday, or started
+            # mid-day, landed on the wrong slots - the #214 defect, on the
+            # export side. Overlap placement also makes the resolution
+            # conversions below unnecessary: a coarse rate simply holds its
+            # value across the slots it spans.
+            slot_count = tgt_duration
+            try:
+                placement = place_on_grid(
+                    entries,
+                    start_time,
+                    slot_count,
+                    self.time_frame_base,
+                    KIND_INTENSIVE,
+                )
+            except TimeseriesGridError as exc:
+                logger.error("[FEEDIN-IF] Invalid EVCC feed-in rates: %s", exc)
                 return []
 
-            # Detect resolution
-            resolution_seconds = self._detect_resolution_from_timeseries(timeseries)
+            prices, _leading, forecast_start = fill_price_gaps(
+                placement.values, placement.coverage, slots_per_day=slot_count // 2
+            )
+            if not prices:
+                logger.warning(
+                    "[FEEDIN-IF] None of %d EVCC feed-in rates fell into the "
+                    "%d-slot window starting %s — keeping the last good prices",
+                    placement.source_count,
+                    slot_count,
+                    start_time.isoformat(),
+                )
+                return []
 
-            # Convert to target resolution if needed
-            if resolution_seconds == 900 and self.time_frame_base == 3600:
-                # 15-min to hourly conversion using timestamp-aware method
-                prices = self.__convert_15min_to_hourly_feedin_timeseries(timeseries, start_time)
-            elif resolution_seconds == 3600 and self.time_frame_base == 900:
-                # Hourly to 15-min expansion
-                prices = [p for p in [r["value"] for r in timeseries] for _ in range(4)]
+            if forecast_start is not None:
+                self._set_forecast_metadata(
+                    start_index=forecast_start,
+                    forecast_type="simple_repetition",
+                    source=None,
+                )
             else:
-                # Already correct resolution, just extract values
-                prices = [r["value"] for r in timeseries]
-
-            # Trim or extend to exact tgt_duration
-            if len(prices) > tgt_duration:
-                prices = prices[:tgt_duration]
-            elif len(prices) < tgt_duration:
-                # Pad with last value or cycle if available
-                if prices:
-                    prices.extend([prices[-1]] * (tgt_duration - len(prices)))
-                else:
-                    prices = [0.0] * tgt_duration
+                self._set_forecast_metadata(
+                    start_index=None, forecast_type="all_real", source=None
+                )
 
             logger.debug(
-                "[FEEDIN-IF] Fetched %d EVCC feed-in prices (resolution: %ds), "
-                "returned %d slots for tgt_duration=%d",
-                len(timeseries),
-                resolution_seconds,
-                len(prices),
-                tgt_duration,
+                "[FEEDIN-IF] Placed %d EVCC feed-in rates onto %d slots "
+                "(%d covered)",
+                placement.source_count,
+                slot_count,
+                sum(1 for fraction in placement.coverage if fraction > 0),
             )
 
             return prices
@@ -862,80 +878,3 @@ class FeedInPriceInterface(ForecastMetadataMixin):
             prices.extend(prices[:remaining_slots])
 
         return prices
-
-    def _detect_resolution_from_timeseries(self, timeseries):
-        """
-        Detect resolution (15-min or hourly) from timeseries data using timestamps.
-
-        Args:
-            timeseries (list): List of dicts with "timestamp" and "value" keys
-
-        Returns:
-            int: Resolution in seconds (900 for 15-min, 3600 for hourly, etc.)
-        """
-        if len(timeseries) < 2:
-            return 3600  # Default to hourly
-
-        # Calculate time differences between consecutive entries
-        ts1 = timeseries[0]["timestamp"]
-        ts2 = timeseries[1]["timestamp"]
-        delta = int((ts2 - ts1).total_seconds())
-
-        # Common resolutions
-        if delta == 900:
-            return 900  # 15-minute
-        elif delta == 1800:
-            return 1800  # 30-minute
-        elif delta == 3600:
-            return 3600  # Hourly
-        else:
-            logger.warning(
-                "[FEEDIN-IF] Unusual resolution detected: %d seconds. Using as-is.",
-                delta
-            )
-            return delta
-
-    def __convert_15min_to_hourly_feedin_timeseries(self, timeseries, start_time):
-        """
-        Convert 15-minute feedin prices to hourly using timestamp-aware averaging.
-
-        Maps each 15-minute price to the correct hourly slot based on its timestamp.
-        Takes the average of 4 consecutive 15-min prices for each hourly slot.
-
-        Args:
-            timeseries (list): List of dicts with "timestamp" and "value" keys (15-min intervals)
-            start_time (datetime): Start time (midnight) for the requested 48-hour window
-
-        Returns:
-            list: 48 hourly prices in EUR/Wh
-        """
-        hourly_prices = []
-
-        # Generate 48 hourly slots starting from start_time
-        for hour_index in range(48):
-            slot_start = start_time + timedelta(hours=hour_index)
-            slot_end = slot_start + timedelta(hours=1)
-
-            # Find all 15-min prices that fall within this hour
-            prices_in_slot = []
-            for entry in timeseries:
-                ts = entry["timestamp"]
-                if slot_start <= ts < slot_end:
-                    prices_in_slot.append(entry["value"])
-
-            # Average the prices in this slot (typically 4 for 15-min resolution)
-            if prices_in_slot:
-                hourly_price = sum(prices_in_slot) / len(prices_in_slot)
-            else:
-                # No data for this hour, use last known price
-                hourly_price = timeseries[-1]["value"] if timeseries else 0.0
-
-            hourly_prices.append(hourly_price)
-
-        logger.debug(
-            "[FEEDIN-IF] Converted %d 15-min feedin prices to %d hourly slots",
-            len(timeseries),
-            len(hourly_prices)
-        )
-
-        return hourly_prices
