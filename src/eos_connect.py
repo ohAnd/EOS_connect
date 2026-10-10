@@ -1031,19 +1031,42 @@ def create_optimize_request():
     return payload
 
 
+def appliance_start_datetime():
+    """The absolute instant washingstart names, or None when there is none.
+
+    washingstart is a slot index into the 48-hour midnight-anchored arrays, so
+    it reaches 47 - anything from 24 up is TOMORROW.
+    """
+    slot = eos_interface.get_home_appliance_start_hour()
+    if not isinstance(slot, int) or isinstance(slot, bool) or slot < 0:
+        return None
+    # astimezone() re-normalizes the pytz offset across a DST transition.
+    return (local_midnight(time_zone) + timedelta(hours=slot)).astimezone(time_zone)
+
+
 def appliance_start_clock_hour():
     """washingstart as an hour of the clock, for the MQTT/HA boundary.
 
     Internally washingstart is a slot index into the midnight-anchored arrays;
-    the published value keeps its documented hour-of-day meaning, which only
-    differs from the index on a DST day.
+    the published value keeps its documented hour-of-day meaning so existing
+    Home Assistant templates go on working.
+
+    It is 0-23, so it cannot say WHICH day: a wash scheduled for 06:00 tomorrow
+    publishes the same 6 as one scheduled for 06:00 today. The companion topic
+    control/eos_homeappliance_start_time carries the full timestamp for anyone
+    who needs to tell them apart.
     """
     slot = eos_interface.get_home_appliance_start_hour()
     if not isinstance(slot, int) or isinstance(slot, bool) or slot < 0:
         return slot
-    start = local_midnight(time_zone) + timedelta(hours=slot)
-    # astimezone() re-normalizes the pytz offset across a DST transition.
-    return start.astimezone(time_zone).hour
+    start = appliance_start_datetime()
+    return start.hour if start is not None else slot
+
+
+def appliance_start_timestamp():
+    """washingstart as an ISO8601 instant, for the new companion topic."""
+    start = appliance_start_datetime()
+    return start.isoformat() if start is not None else None
 
 
 last_control_data = {
@@ -1740,9 +1763,15 @@ def change_control_state():
             },
             "control/eos_homeappliance_start_hour": {
                 # Published as an hour of the clock for HA templates; internally
-                # washingstart is a slot index into the midnight-anchored
-                # arrays, which only differs from the hour on a DST day.
+                # washingstart is a slot index into the midnight-anchored arrays.
                 "value": appliance_start_clock_hour()
+            },
+            "control/eos_homeappliance_start_time": {
+                # The same decision as a full timestamp. start_hour is 0-23 and
+                # so cannot distinguish 06:00 today from 06:00 tomorrow, which
+                # the 48-hour horizon makes a real case; it stays as it is for
+                # existing templates and this carries the unambiguous answer.
+                "value": appliance_start_timestamp()
             },
             "battery/soc": {"value": battery_interface.get_current_soc()},
             "battery/remaining_energy": {

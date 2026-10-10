@@ -512,7 +512,12 @@ curl -X POST "http://localhost:8081/api/backup/import?dry_run=1" \
                                 <tr>
                                     <td><code>control/eos_homeappliance_start_hour</code></td>
                                     <td>hour</td>
-                                    <td>Hour the appliance should start</td>
+                                    <td>Hour of the clock (0&ndash;23) the appliance should start. Cannot distinguish today from tomorrow &mdash; use <code>control/eos_homeappliance_start_time</code> when that matters.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>control/eos_homeappliance_start_time</code></td>
+                                    <td>&mdash;</td>
+                                    <td>The same start as a full ISO8601 timestamp, so a slot scheduled for tomorrow is unambiguous</td>
                                 </tr>
                                 <tr>
                                     <td><code>control/override_active</code></td>
