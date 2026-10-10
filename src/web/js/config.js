@@ -1340,6 +1340,39 @@ class ConfigurationManager {
     _onFieldChange(key, value) {
         this.values[key] = value;
 
+        // Special handling for managed_loads type changes: clear season fields if the new type doesn't support seasons
+        const managedLoadTypeMatch = key.match(/^managed_loads\.(\d+)\.type$/);
+        if (managedLoadTypeMatch) {
+            const idx = managedLoadTypeMatch[1];
+            const seasonStartKey = `managed_loads.${idx}.season_start`;
+            const seasonEndKey = `managed_loads.${idx}.season_end`;
+            
+            // Only pool_heatpump supports seasons
+            if (value !== "pool_heatpump") {
+                // If this type doesn't support seasons, clear any season values
+                if (this.values[seasonStartKey] || this.values[seasonEndKey]) {
+                    this.values[seasonStartKey] = "";
+                    this.values[seasonEndKey] = "";
+                    
+                    // Update the form inputs
+                    const startInput = document.querySelector(`input[data-key="${seasonStartKey}"]`);
+                    const endInput = document.querySelector(`input[data-key="${seasonEndKey}"]`);
+                    if (startInput) startInput.value = "";
+                    if (endInput) endInput.value = "";
+                    
+                    // Mark both as changed
+                    if (startInput) {
+                        startInput.classList.add("changed");
+                        startInput.value = "";
+                    }
+                    if (endInput) {
+                        endInput.classList.add("changed");
+                        endInput.value = "";
+                    }
+                }
+            }
+        }
+
         // Re-evaluate dependent field visibility
         this._updateDependencies(key);
 
