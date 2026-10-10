@@ -155,6 +155,10 @@ class OptimizationInterface:
                 "error": 0,
                 "hour": -1,
                 "slot": -1,
+                # None until the first optimization response; the control loop
+                # reads that as "still starting up" and stays quiet.
+                "valid_from": None,
+                "valid_until": None,
             },
             {
                 "ac_charge_demand": 0,
@@ -164,6 +168,10 @@ class OptimizationInterface:
                 "error": 0,
                 "hour": -1,
                 "slot": -1,
+                # None until the first optimization response; the control loop
+                # reads that as "still starting up" and stays quiet.
+                "valid_from": None,
+                "valid_until": None,
             },
         ]
 
@@ -283,6 +291,9 @@ class OptimizationInterface:
             < len(optimized_response_in.get("discharge_allowed", [])) - 1
             else 0
         )
+        # next_step indexes the 48-hour array, so on a normal day it never
+        # wraps - current_step only reaches 23 (or 95). The wrap exists for the
+        # very last slot of the horizon, where there is no successor.
 
         ac_charge_demand_relative = None
         dc_charge_demand_relative = None
@@ -452,6 +463,24 @@ class OptimizationInterface:
         self.last_control_data[1]["slot"] = next_step
         self.last_control_data[0]["hour"] = current_step_time.hour
         self.last_control_data[1]["hour"] = next_step_time.hour
+        # The instants these two entries actually describe. The fast control
+        # loop matches on these, not on the slot label.
+        #
+        # A slot number is only meaningful against the midnight it was counted
+        # from. An optimization at 23:40 labels its two entries 23 and 24; at
+        # 00:00 the loop recounts against the NEW midnight and gets 0, which
+        # matches neither - so it took the skip branch and logged a warning
+        # once a second until the next optimization run. Entry 1 held exactly
+        # the right data all along: slot 24 of yesterday's array IS 00:00
+        # today, and as an absolute instant it says so.
+        self.last_control_data[0]["valid_from"] = current_step_time
+        self.last_control_data[1]["valid_from"] = next_step_time
+        self.last_control_data[0]["valid_until"] = current_step_time + timedelta(
+            seconds=self.time_frame_base
+        )
+        self.last_control_data[1]["valid_until"] = next_step_time + timedelta(
+            seconds=self.time_frame_base
+        )
 
         if "washingstart" in optimized_response_in:
             self.home_appliance_start_hour = optimized_response_in["washingstart"]

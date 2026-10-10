@@ -204,3 +204,80 @@ class TestControlDataSlotSelection:
         """The wall-clock hour (15) must not release a slot-16 start."""
         self.examine(interface, berlin(FALL_BACK, 15, 30), self.response(15))
         assert interface.home_appliance_released is False
+
+
+class TestControlDataValidityWindow:
+    """
+    The fast control loop matches on the instants an entry describes, not on
+    its slot number.
+
+    A slot number only means something against the midnight it was counted
+    from. An optimization at 23:40 labels its entries 23 and 24; at 00:00 the
+    loop recounts against the next midnight, gets 0, and matched neither - so
+    it skipped and warned once a second until the next run, while entry 1 held
+    exactly the right data (slot 24 of yesterday IS 00:00 today).
+    """
+
+    @pytest.fixture(name="interface")
+    def interface_fixture(self):
+        iface = OptimizationInterface.__new__(OptimizationInterface)
+        iface.time_zone = BERLIN
+        iface.time_frame_base = 3600
+        iface.last_control_data = [{}, {}]
+        iface.dyn_override_discharge_allowed = False
+        iface.last_eos_request = None
+        iface.home_appliance_start_hour = None
+        iface.home_appliance_released = False
+        iface.last_start_solution = None
+        return iface
+
+    RESPONSE = {
+        "ac_charge": [round(s / 100, 2) for s in range(48)],
+        "dc_charge": [0.0] * 48,
+        "discharge_allowed": [0] * 48,
+        "start_solution": [0, 1],
+    }
+
+    @staticmethod
+    def _select(entries, now):
+        """The matcher's exact-window pass, as eos_connect runs it."""
+        for index, entry in enumerate(entries):
+            if entry["valid_from"] <= now < entry["valid_until"]:
+                return index
+        return None
+
+    def test_the_entries_carry_the_instants_they_describe(self, interface):
+        moment = berlin(FALL_BACK, 15, 30)
+        with clock_at("src.interfaces.optimization_interface.datetime", moment):
+            interface.examine_response_to_control_data(dict(self.RESPONSE))
+
+        first, second = interface.last_control_data
+        assert first["valid_from"] <= moment < first["valid_until"]
+        assert second["valid_from"] == first["valid_until"]
+        assert first["valid_until"] - first["valid_from"] == timedelta(hours=1)
+
+    def test_the_pair_still_matches_after_midnight(self, interface):
+        """Optimized at 23:40, asked at 00:05 the next day."""
+        with clock_at(
+            "src.interfaces.optimization_interface.datetime",
+            berlin((2026, 8, 23), 23, 40),
+        ):
+            interface.examine_response_to_control_data(dict(self.RESPONSE))
+
+        # The slot labels are 23 and 24 and would match nothing after midnight.
+        assert [entry["slot"] for entry in interface.last_control_data] == [23, 24]
+
+        after_midnight = berlin((2026, 8, 24), 0, 5)
+        assert self._select(interface.last_control_data, after_midnight) == 1
+
+    def test_the_second_entry_covers_the_hour_after_the_first(self, interface):
+        with clock_at(
+            "src.interfaces.optimization_interface.datetime",
+            berlin((2026, 8, 23), 10, 5),
+        ):
+            interface.examine_response_to_control_data(dict(self.RESPONSE))
+
+        entries = interface.last_control_data
+        assert self._select(entries, berlin((2026, 8, 23), 10, 59)) == 0
+        assert self._select(entries, berlin((2026, 8, 23), 11, 0)) == 1
+        assert self._select(entries, berlin((2026, 8, 23), 12, 0)) is None
