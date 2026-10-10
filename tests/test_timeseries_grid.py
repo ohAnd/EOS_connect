@@ -171,6 +171,48 @@ class TestLocalMidnight:
         assert midnight.day == 24
         assert midnight.hour == 0
 
+    @pytest.mark.parametrize(
+        "zone, day",
+        [
+            # The only zones whose local day STARTS with a transition: both fall
+            # back at or just after midnight, so 00:00 happens twice.
+            ("America/Havana", (2026, 11, 1)),
+            ("Atlantic/Azores", (2026, 10, 25)),
+        ],
+    )
+    def test_an_ambiguous_midnight_takes_the_earlier_instant(self, zone, day):
+        """Slot 0 is where the local day begins, not an hour into it.
+
+        pytz defaults to is_dst=False, which picks the second 00:00. That put
+        the anchor an hour after the day started, so during that first hour
+        `now - anchor` was negative and current_slot came out as -1 — which, as
+        a list index, silently selects the LAST slot of the horizon.
+        """
+        import pytz as _pytz
+
+        tz = _pytz.timezone(zone)
+        midnight = local_midnight(tz, tz.localize(datetime(*day, 12, 0)))
+
+        assert midnight.hour == 0
+        # The DST (summer) offset is the larger one, and the earlier instant.
+        assert midnight.utcoffset() == max(
+            tz.localize(datetime(*day), is_dst=True).utcoffset(),
+            tz.localize(datetime(*day), is_dst=False).utcoffset(),
+        )
+
+    @pytest.mark.parametrize(
+        "zone, day", [("America/Havana", (2026, 11, 1))]
+    )
+    def test_no_slot_before_the_anchor_on_an_ambiguous_day(self, zone, day):
+        """Every instant of the local day must land on a non-negative slot."""
+        import pytz as _pytz
+
+        tz = _pytz.timezone(zone)
+        anchor = local_midnight(tz, tz.localize(datetime(*day, 12, 0)))
+        for minutes in range(0, 24 * 60, 15):
+            moment = anchor + timedelta(minutes=minutes)
+            assert int((moment - anchor).total_seconds()) // 3600 >= 0
+
 
 class TestHorizonSlots:
     def test_the_two_system_resolutions(self):
