@@ -506,3 +506,17 @@ class TestEvccPlacesBySlotNotEntryCount:
         assert prices[47] == pytest.approx(0.00043)  # last published entry
         # The source reaches the final slot, so nothing is invented at the tail.
         assert iface.get_forecast_metadata()["forecast_start_index"] is None
+
+    def test_one_full_day_is_not_reported_as_all_real(self, monkeypatch):
+        """24 hourly rates are 'valid complete data', but day two is invented.
+
+        The complete-data branch overwrote the placement's markers with
+        all_real, so the UI drew repeated prices as measured ones.
+        """
+        iface = self._interface(monkeypatch, self._rates(24, 1), 3600)
+        iface.update_prices(48, start_time=self.ANCHOR)
+
+        metadata = iface.get_forecast_metadata()
+        assert len(iface.get_current_prices()) == 48
+        assert metadata["forecast_start_index"] == 24
+        assert metadata["forecast_type"] == "simple_repetition"
