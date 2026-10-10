@@ -662,7 +662,11 @@ class FeedInPriceInterface(ForecastMetadataMixin):
             # with the zone object, whose pytz default is the LMT offset
             # (+00:53 for Europe/Berlin) - every summer entry landed an hour late.
             try:
-                entries = normalize_entries(rates, self.time_zone, label="FEEDIN-IF")
+                # Lenient for the same reason as the grid-price EVCC path: one
+                # malformed rate must not cost the whole fetch.
+                entries = normalize_entries(
+                    rates, self.time_zone, label="FEEDIN-IF", lenient=True
+                )
                 convert_price_values(entries, "EUR/kWh")
             except TimeseriesFormatError as exc:
                 logger.error("[FEEDIN-IF] Invalid EVCC feed-in rates: %s", exc)

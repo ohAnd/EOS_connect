@@ -235,11 +235,21 @@ class TestEvccPriceSource:
             evcc_interface=mock_evcc,
         )
         
-        price_iface.update_prices(8, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc))
+        price_iface.update_prices(48, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc))
         prices = price_iface.get_current_prices()
-        
-        # Should skip invalid entries and use only valid ones
-        assert len(prices) >= 3  # At least 3 valid rates
+
+        # The three usable rates all fall inside hour 0 and are averaged by the
+        # intensive placement: 0.125 covers 00:00-00:15, 0.135 00:30-00:45 and
+        # 0.140 00:45-01:00, i.e. three quarters of the hour carrying
+        # (0.125 + 0.135 + 0.140) / 3 EUR/kWh.
+        #
+        # Asserting the VALUES matters: the old `len(prices) >= 3` also passed
+        # when the fetch failed outright and the 10 ct/kWh placeholder was
+        # served, which is exactly what a strict parser did here.
+        assert len(prices) == 48
+        # abs=1e-9: the served values are rounded to nine decimals.
+        assert prices[0] == pytest.approx((0.125 + 0.135 + 0.140) / 3 / 1000, abs=1e-9)
+        assert prices[0] != pytest.approx(0.0001), "fell back to default prices"
 
     def test_evcc_empty_tariffs(self, monkeypatch):
         """Test handling empty rates array from EVCC."""

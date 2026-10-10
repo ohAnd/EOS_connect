@@ -260,7 +260,7 @@ def resolve_field_names(first):
     return resolved
 
 
-def normalize_entries(raw_entries, tz, label="timeseries"):
+def normalize_entries(raw_entries, tz, label="timeseries", lenient=False):
     """
     Validate and normalize a raw payload into the canonical format.
 
@@ -268,6 +268,11 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
         raw_entries: Decoded JSON list from the configured data_path.
         tz: Target timezone (pytz timezone or tzinfo) for all timestamps.
         label: Prefix used in log messages, e.g. "PRICE-IF" or "PV-IF".
+        lenient: Skip unusable entries instead of rejecting the payload, with
+            one aggregated warning naming the first few. For sources that mix
+            housekeeping rows in with real ones; the gap a skipped entry leaves
+            is visible to the caller through ``coverage``. Raises only when
+            nothing at all could be read.
 
     Returns:
         list: ``[{"start": datetime (aware), "end": datetime (aware), "value": float}]``
@@ -290,6 +295,16 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
         raise TimeseriesFormatError("timeseries is empty")
 
     names = resolve_field_names(raw_entries[0])
+    if lenient and not ("value" in names and ("start" in names or "end" in names)):
+        # The spellings come from the first entry, so in strict mode a junk
+        # first entry rejects the payload before any other is looked at. When
+        # the caller has opted into skipping, take the spellings from the first
+        # entry that actually carries them instead.
+        for candidate in raw_entries[1:]:
+            resolved = resolve_field_names(candidate)
+            if "value" in resolved and ("start" in resolved or "end" in resolved):
+                names = resolved
+                break
     if "start" not in names and "end" not in names:
         raise TimeseriesFormatError(
             f"missing required field 'start' in the first entry "
@@ -337,18 +352,15 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
 
     entries = []
     naive_seen = 0
+    skipped = []
     # One localizer for the whole payload: resolving the repeated DST hour needs
     # to know whether this wall clock has already been seen in this series.
     localizer = _NaiveLocalizer(tz)
-    for index, raw in enumerate(raw_entries):
-        # Every entry has to parse. Dropping the bad ones would be friendlier
-        # right up until it corrupts the result: under timestamp placement a
-        # dropped entry becomes a hole, and a hole in a price series is filled
-        # by policy — a null at 18:00 would silently become the 17:00 price,
-        # exactly where the price matters most. Quieter than a shift, not
-        # better. Rejecting the payload keeps the fallback chain intact: the
-        # caller serves the last good data and the log names the bad entry.
-        anchor_key = start_key or end_key
+    anchor_key = start_key or end_key
+
+    def _parse_entry(index, raw):
+        """One entry, or TimeseriesFormatError naming what is wrong with it."""
+        naive_here = 0
         if not isinstance(raw, dict) or anchor_key not in raw or value_key not in raw:
             raise TimeseriesFormatError(
                 f"entry {index} is missing '{anchor_key}' or '{value_key}' "
@@ -363,7 +375,7 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
             except TimeseriesFormatError as exc:
                 raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
             if was_naive:
-                naive_seen += 1
+                naive_here += 1
         end = None
         if end_key is not None and raw.get(end_key) is not None:
             try:
@@ -373,8 +385,12 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
             except TimeseriesFormatError as exc:
                 raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
             if end_was_naive:
-                naive_seen += 1
-        if start is not None and end is not None and end <= start:
+                naive_here += 1
+        if (
+            start is not None
+            and end is not None
+            and end.timestamp() <= start.timestamp()
+        ):
             raise TimeseriesFormatError(
                 f"entry {index} ends at or before it starts "
                 f"({raw[end_key]!r} <= {raw[start_key]!r})"
@@ -385,7 +401,43 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
             raise TimeseriesFormatError(
                 f"entry {index} has a non-numeric '{value_key}': {raw[value_key]!r}"
             ) from exc
-        entries.append({"start": start, "end": end, "value": value})
+        return {"start": start, "end": end, "value": value}, naive_here
+
+    for index, raw in enumerate(raw_entries):
+        # Strict by default. Dropping bad entries is friendlier right up until
+        # it corrupts the result: a dropped entry becomes a hole, and a hole in
+        # a price series is filled by policy — a null at 18:00 would silently
+        # become the 17:00 price, exactly where the price matters most.
+        # Rejecting the payload keeps the fallback chain intact instead.
+        #
+        # `lenient` is for sources that publish their own housekeeping rows
+        # alongside real ones (EVCC), where one malformed rate must not cost the
+        # other 191. The hole it leaves is visible in `coverage`, so the caller
+        # can report it rather than mistake it for data.
+        try:
+            entry, naive_here = _parse_entry(index, raw)
+        except TimeseriesFormatError as exc:
+            if not lenient:
+                raise
+            if len(skipped) < 5:
+                skipped.append(str(exc))
+            continue
+        naive_seen += naive_here
+        entries.append(entry)
+
+    if skipped:
+        logger.warning(
+            "[%s] %d of %d timeseries entries were unusable and were skipped "
+            "(the slots they would have covered are reported as gaps). First: %s",
+            label,
+            len(raw_entries) - len(entries),
+            len(raw_entries),
+            "; ".join(skipped),
+        )
+    if not entries:
+        raise TimeseriesFormatError(
+            f"none of the {len(raw_entries)} timeseries entries could be read"
+        )
 
     if naive_seen:
         logger.warning(
