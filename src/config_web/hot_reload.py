@@ -789,7 +789,16 @@ class HotReloadAdapter:
                 )
 
             # Update all price config fields including source
+            source_changed = key == "price.source" and self._price.src != new_source
             self._price.src = new_source
+            if source_changed:
+                # The fallback cache belongs to the source being left: it carries
+                # that source's adjustments, and the EVCC path splices it into
+                # its own result. Drop it before anything can serve it.
+                try:
+                    self._price.drop_fallback_cache()
+                except AttributeError:
+                    pass
             self._price.config_source = price_config
             self._price.data_url = price_config.get("data_url", "").strip()
             self._price.data_path = price_config.get("data_path", "attributes.data").strip()
