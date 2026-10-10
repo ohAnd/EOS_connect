@@ -207,6 +207,16 @@ class EOSBackend:
         # pair is the only place allowed to know a local day can be 23 or 25
         # hours: it translates the internal fixed 48-slot grid into what an
         # EOS < 0.1.0 server expects.
+        #
+        # KNOWN GAP, deliberately not "fixed" here: the arrays sent alongside
+        # are anchored on true local midnight, so on a DST day their index and
+        # this wall-clock hour disagree by one — at 15:00 on the 25-hour day
+        # the current slot is 16 while start_hour says 15. Making them agree
+        # means changing what an EXTERNAL server is told, and the server's own
+        # reading of start_hour cannot be verified from this side; getting it
+        # wrong would shift the whole plan on every day of the year rather than
+        # two. Left as the server's documented contract. Revisit only with a
+        # real EOS instance to test against.
         request_url = (
             self.base_url
             + "/optimize"
