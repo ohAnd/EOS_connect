@@ -174,6 +174,30 @@ class TestFeedInPriceInterfaceValidation:
         interface = FeedInPriceInterface(config, 3600, "UTC")
         assert interface.zone == "DK1"
 
+    def test_config_as_list_fallback(self):
+        """Test defensive fallback when config is a list instead of dict.
+        
+        Regression test for issue #321: If config is somehow a list,
+        calling .get() on it would raise AttributeError. The fix should
+        gracefully handle this and use empty defaults.
+        """
+        config = ["not", "a", "dict"]  # Intentionally wrong type
+        interface = FeedInPriceInterface(config, 3600, "UTC")
+
+        # Should fall back to defaults without crashing
+        assert interface.source == "fixed"
+        assert interface.zone == "DK1"
+        assert interface.fixed_price_ct_kwh == 0.0
+        assert interface.multiplier == 1.0
+
+    def test_config_as_none_fallback(self):
+        """Test defensive fallback when config is None."""
+        interface = FeedInPriceInterface(None, 3600, "UTC")
+
+        # Should fall back to defaults without crashing
+        assert interface.source == "fixed"
+        assert interface.zone == "DK1"
+
 
 class TestFeedInPriceInterfaceHotReload:
     """Test hot-reload capabilities."""

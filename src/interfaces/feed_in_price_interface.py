@@ -78,6 +78,15 @@ class FeedInPriceInterface:
             timezone (str): Timezone identifier (e.g., 'UTC', 'Europe/Berlin')
             evcc_interface: Optional EVCC interface instance for feed-in price retrieval
         """
+        # Defensive check: ensure config is a dict before calling .get() on it
+        if not isinstance(config, dict):
+            logger.error(
+                "[FEEDIN-IF] Configuration is not a dict (got %s). Using empty config. "
+                "This indicates a critical configuration loading issue that should be reported.",
+                type(config).__name__,
+            )
+            config = {}
+
         self.source = config.get("source", "fixed")
         self.zone = config.get("zone", "DK1")
         self.evcc_interface = evcc_interface
@@ -510,7 +519,7 @@ class FeedInPriceInterface:
                 try:
                     price_eur_kwh = float(rate["value"])
                     start_str = rate["start"]
-                    
+
                     # Parse ISO 8601 timestamp
                     if "T" in start_str:
                         # Remove timezone for parsing, then add it back
@@ -523,7 +532,7 @@ class FeedInPriceInterface:
                             ts = datetime.fromisoformat(start_str)
                     else:
                         continue
-                    
+
                     # Convert EUR/kWh to EUR/Wh
                     price_eur_wh = price_eur_kwh / 1000.0
                     timeseries.append({"timestamp": ts, "value": price_eur_wh})
@@ -538,7 +547,7 @@ class FeedInPriceInterface:
 
             # Detect resolution
             resolution_seconds = self._detect_resolution_from_timeseries(timeseries)
-            
+
             # Convert to target resolution if needed
             if resolution_seconds == 900 and self.time_frame_base == 3600:
                 # 15-min to hourly conversion using timestamp-aware method
@@ -765,32 +774,32 @@ class FeedInPriceInterface:
             list: 48 hourly prices in EUR/Wh
         """
         hourly_prices = []
-        
+
         # Generate 48 hourly slots starting from start_time
         for hour_index in range(48):
             slot_start = start_time + timedelta(hours=hour_index)
             slot_end = slot_start + timedelta(hours=1)
-            
+
             # Find all 15-min prices that fall within this hour
             prices_in_slot = []
             for entry in timeseries:
                 ts = entry["timestamp"]
                 if slot_start <= ts < slot_end:
                     prices_in_slot.append(entry["value"])
-            
+
             # Average the prices in this slot (typically 4 for 15-min resolution)
             if prices_in_slot:
                 hourly_price = sum(prices_in_slot) / len(prices_in_slot)
             else:
                 # No data for this hour, use last known price
                 hourly_price = timeseries[-1]["value"] if timeseries else 0.0
-            
+
             hourly_prices.append(hourly_price)
-        
+
         logger.debug(
             "[FEEDIN-IF] Converted %d 15-min feedin prices to %d hourly slots",
             len(timeseries),
             len(hourly_prices)
         )
-        
+
         return hourly_prices

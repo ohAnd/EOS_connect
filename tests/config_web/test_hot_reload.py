@@ -769,6 +769,35 @@ class TestHotReloadFeedInSource:
         adapter.on_config_changed("price.feed_in_source", "fixed", "elpris_dk")
         assert adapter.last_applied == []
 
+    def test_feed_in_config_section_is_list_no_crash(self):
+        """Feed-in reload should handle case where config['price'] is a list (issue #321).
+        
+        Regression test: If config['price'] is accidentally a list instead of a dict,
+        the hot reload should log an error and return gracefully instead of crashing
+        with AttributeError: 'list' object has no attribute 'get'.
+        """
+        feed_in_price_interface = MagicMock()
+        feed_in_price_interface.source = "fixed"
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+
+        # Config provider returns a config where price is a list (wrong type)
+        config_provider = MagicMock(return_value={
+            "price": ["not", "a", "dict"],  # Intentionally wrong type
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+
+        # This should log an error but not crash
+        adapter.on_config_changed("price.feed_in_source", "fixed", "elpris_dk")
+
+        # Feed-in interface should not be modified
+        assert adapter.last_applied == []
+        feed_in_price_interface.update_prices.assert_not_called()
+
     def test_feed_in_source_change_with_forced_source(self, feed_in_price_interface):
         """Forced source should override config_provider value."""
         feed_in_price_interface.source = "fixed"
