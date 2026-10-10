@@ -125,6 +125,18 @@ SMARTENERGY_API = "https://apis.smartenergy.at/market/v1/price"
 STROMLIGNING_API_BASE = "https://stromligning.dk/api/prices?lean=true"
 ENERGYFORECAST_API = "https://www.energyforecast.de/api/v1/predictions/next_48_hours"
 
+# Sources that publish a raw exchange price, i.e. energy alone with no grid fee,
+# levy or VAT folded in. Only these get fixed_price_adder_ct / relative_price_multiplier:
+# the adder exists to turn an exchange price into what the meter actually costs.
+#
+# The others already serve a final tariff and must be left alone — Tibber reports
+# price["total"] (energy + tax + fees), Stromligning is queried with ?lean=true
+# (incl. tariffs and VAT), EVCC's /api/tariff/grid has the user's own tariff
+# configuration applied, fixed_24h is a figure the user typed by hand, and
+# default_prices is the 10 ct/kWh placeholder. Adding a grid fee on top of any of
+# those would charge it twice.
+EXCHANGE_PRICE_SOURCES = frozenset({"default", "smartenergy_at", "timeseries"})
+
 # Energyforecast smart price prediction constants
 ENERGYFORECAST_MIN_OVERLAP_HOURS = 6  # Minimum overlapping hours needed for learning
 ENERGYFORECAST_MAX_FACTOR = 5.0  # Maximum allowed multiplicative factor
@@ -146,7 +158,6 @@ class PriceInterface:
                     (legacy, use FeedInPriceInterface).
         time_zone (str): Timezone for date and time operations.
         current_prices (list): Current prices including taxes (EUR/Wh).
-        current_prices_direct (list): Current prices without tax (EUR/Wh).
         default_prices (list): Default price list if external data is unavailable (EUR/Wh).
 
     Methods:
@@ -156,8 +167,6 @@ class PriceInterface:
             Returns the current prices (EUR/Wh).
         get_current_feedin_prices():
             Returns the current feed-in prices (EUR/Wh).
-        __create_feedin_prices():
-            Generates feed-in prices based on current_prices_direct and configuration.
         __retrieve_prices(tgt_duration, start_time=None):
             Dispatches price retrieval to the configured source.
         __retrieve_prices_from_akkudoktor(tgt_duration, start_time=None):
@@ -229,13 +238,11 @@ class PriceInterface:
         self.time_frame_base = time_frame_base
         self.time_zone = timezone
         self.current_prices = []
-        self.current_prices_direct = []  # without tax
         self.default_prices = [0.0001] * 48  # if external data are not available
         self.price_currency = self.__determine_price_currency()
 
         # Add retry mechanism attributes
         self.last_successful_prices = []
-        self.last_successful_prices_direct = []
         self.consecutive_failures = 0
         self.max_failures = 24  # Max consecutive failures before using default prices
 
@@ -575,11 +582,19 @@ class PriceInterface:
             prices = self.__retrieve_prices_from_akkudoktor(tgt_duration, start_time)
         else:
             prices = self.default_prices
-            self.current_prices_direct = self.default_prices.copy()
             logger.error(
                 "[PRICE-IF] Price source currently not supported."
                 + " Using default prices (0,10 ct/kWh)."
             )
+            # Nothing below may adjust this: the placeholder is not an exchange
+            # price, and an unsupported source must not silently grow a grid fee.
+            return prices[:tgt_duration]
+
+        if prices and self.src in EXCHANGE_PRICE_SOURCES:
+            # Exchange prices only — see EXCHANGE_PRICE_SOURCES. The cache below
+            # stores the adjusted values, so a fallback serves them as-is and
+            # nothing is ever adjusted twice.
+            prices = self.__apply_price_adjustments(prices)
 
         if not prices:
             self.consecutive_failures += 1
@@ -594,17 +609,11 @@ class PriceInterface:
                     self.max_failures,
                 )
                 prices = self.last_successful_prices[:tgt_duration]
-                self.current_prices_direct = self.last_successful_prices_direct[
-                    :tgt_duration
-                ]
 
                 # Extend if needed
                 if len(prices) < tgt_duration:
                     remaining_slots = tgt_duration - len(prices)
                     prices.extend(self.last_successful_prices[:remaining_slots])
-                    self.current_prices_direct.extend(
-                        self.last_successful_prices_direct[:remaining_slots]
-                    )
             else:
                 if len(self.last_successful_prices) == 0:
                     logger.error(
@@ -619,12 +628,10 @@ class PriceInterface:
                         self.consecutive_failures,
                     )
                 prices = self.default_prices[:tgt_duration]
-                self.current_prices_direct = self.default_prices[:tgt_duration].copy()
         else:
             # Success - reset failure counter and store successful prices
             self.consecutive_failures = 0
             self.last_successful_prices = prices.copy()
-            self.last_successful_prices_direct = self.current_prices_direct.copy()
             logger.debug("[PRICE-IF] Prices retrieved successfully. Stored as backup.")
 
         return prices
@@ -649,6 +656,38 @@ class PriceInterface:
             return "EUR"
         return "EUR"
 
+    def __apply_price_adjustments(self, prices):
+        """
+        Apply the user's price corrections to freshly fetched prices.
+
+        (price + fixed_price_adder_ct) * (1 + relative_price_multiplier), then
+        the EUR/Wh sanity clamp — in that order, so a grid fee is multiplied
+        like the energy price is (VAT applies to fees too) and the served value
+        stays bounded.
+
+        Called only for EXCHANGE_PRICE_SOURCES. It used to live in the Akkudoktor
+        fetch alone, which left the fields a silent no-op on the other exchange
+        sources (EPEX-style timeseries, smartenergy_at) whose raw prices need the
+        fee the most — but a source that already reports a final tariff must not
+        be touched at all, or the fee is charged twice.
+        """
+        adder = self.fixed_price_adder_ct / 100000
+        multiplier = 1 + self.relative_price_multiplier
+        if adder == 0 and multiplier == 1:
+            return prices
+
+        adjusted = [round((price + adder) * multiplier, 9) for price in prices]
+        adjusted, clamped, worst = clamp_report(adjusted, -0.5, 1.0)
+        if clamped:
+            logger.warning(
+                "[PRICE-IF] %d adjusted price value(s) outside the EUR/Wh range, "
+                "clamping (worst: %.9f) — check fixed_price_adder_ct and "
+                "relative_price_multiplier",
+                clamped,
+                worst,
+            )
+        return adjusted
+
     def __retrieve_prices_from_akkudoktor(self, tgt_duration, start_time=None):
         """
         Fetches and processes electricity prices for today and tomorrow from Akkudoktor API.
@@ -672,8 +711,8 @@ class PriceInterface:
         """
         Core Akkudoktor API fetch logic (without source validation).
         
-        This is used both for primary price retrieval (when src="default") and for
-        auxiliary stock price fetching (when src="fixed_24h" with negative_price_switch).
+        Only reachable for src="default" — __retrieve_prices_from_akkudoktor
+        guards the source before delegating here.
 
         Args:
             tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
@@ -718,14 +757,9 @@ class PriceInterface:
 
         prices = []
         for price in data["values"]:
-            price_with_fixed = (
-                round(price["marketpriceEurocentPerKWh"] / 100000, 9)
-                + self.fixed_price_adder_ct / 100000
-            )
-            price_final = round(
-                price_with_fixed * (1 + self.relative_price_multiplier), 9
-            )
-            prices.append(price_final)
+            # Plain market price; the adder/multiplier are applied centrally in
+            # __retrieve_prices for every dynamic source alike.
+            prices.append(round(price["marketpriceEurocentPerKWh"] / 100000, 9))
 
         if start_time is None:
             # Local midnight, not the top of the current hour: slot 0 of every
@@ -751,7 +785,6 @@ class PriceInterface:
             for price in extended_prices:
                 extended_prices_15min.extend([price] * 4)
             extended_prices = extended_prices_15min
-        self.current_prices_direct = extended_prices.copy()
         return extended_prices
 
     def __retrieve_prices_from_tibber(self, tgt_duration, start_time=None):
@@ -896,14 +929,12 @@ class PriceInterface:
             start_time = local_midnight(self.time_zone)
 
         prices = []
-        prices_direct = []
         prices_with_timestamps = []  # Keep timestamp info for smart price prediction
         today_cutoff_idx = 0  # Track where today's real data ends
 
         # Load today's prices and find where real data ends (end of calendar day)
         for price in today_prices_json:
             prices.append(round(price["total"] / 1000, 9))
-            prices_direct.append(round(price["energy"] / 1000, 9))
             prices_with_timestamps.append(
                 {
                     "price": round(price["total"] / 1000, 9),
@@ -921,7 +952,6 @@ class PriceInterface:
         if tomorrow_prices_json:
             for price in tomorrow_prices_json:
                 prices.append(round(price["total"] / 1000, 9))
-                prices_direct.append(round(price["energy"] / 1000, 9))
                 prices_with_timestamps.append(
                     {
                         "price": round(price["total"] / 1000, 9),
@@ -956,7 +986,6 @@ class PriceInterface:
                 )
                 forecast_start_idx = today_cutoff_idx
                 prices.extend(forecast_prices)
-                prices_direct.extend(forecast_prices)
                 self._set_forecast_metadata(
                     start_index=forecast_start_idx,
                     forecast_type="smart_forecast",
@@ -966,7 +995,6 @@ class PriceInterface:
                 # Use simple price repetition when prediction unavailable
                 forecast_start_idx = today_cutoff_idx
                 prices.extend(prices[:extend_amount])
-                prices_direct.extend(prices_direct[:extend_amount])
                 self._set_forecast_metadata(
                     start_index=forecast_start_idx,
                     forecast_type="simple_repetition",
@@ -988,9 +1016,6 @@ class PriceInterface:
         array_offset = current_hour * 4 if self.time_frame_base == 900 else current_hour
 
         extended_prices = prices[array_offset : array_offset + actual_slots]
-        extended_prices_direct = prices_direct[
-            array_offset : array_offset + actual_slots
-        ]
 
         # Note: forecast_start_index remains canonical (relative to full 48-hour array)
         # UI will handle time offset when filtering for display
@@ -1023,22 +1048,16 @@ class PriceInterface:
                     remaining_hours,
                 )
                 extended_prices.extend(forecast_prices[:remaining_slots])
-                extended_prices_direct.extend(forecast_prices[:remaining_slots])
             else:
                 # Fall back to repeating the last known price value
                 pad_value = extended_prices[-1] if extended_prices else 0.0
-                pad_value_direct = (
-                    extended_prices_direct[-1] if extended_prices_direct else 0.0
-                )
                 logger.debug(
                     "[PRICE-IF] Smart price prediction unavailable, padding %d slots "
                     "with last known price (likely DST adjustment)",
                     remaining_slots,
                 )
                 extended_prices.extend([pad_value] * remaining_slots)
-                extended_prices_direct.extend([pad_value_direct] * remaining_slots)
 
-        self.current_prices_direct = extended_prices_direct.copy()
         logger.debug("[PRICE-IF] Prices from TIBBER fetched successfully.")
         return extended_prices
 
@@ -1218,7 +1237,6 @@ class PriceInterface:
                     "missing intervals reused the prior value."
                 )
 
-            self.current_prices_direct = prices.copy()
             logger.debug("[PRICE-IF] Prices from STROMLIGNING fetched successfully.")
             return prices
 
@@ -1264,7 +1282,6 @@ class PriceInterface:
                     "missing intervals reused the prior value."
                 )
 
-            self.current_prices_direct = prices.copy()
             logger.debug("[PRICE-IF] Prices from STROMLIGNING fetched successfully.")
             return prices
 
@@ -1421,7 +1438,6 @@ class PriceInterface:
             return []
 
         logger.debug("[PRICE-IF] Prices from SMARTENERGY_AT fetched successfully.")
-        self.current_prices_direct = extended_prices.copy()
         return extended_prices
 
     def _should_call_energyforecast(self):
@@ -1886,7 +1902,6 @@ class PriceInterface:
             for price in extended_prices:
                 extended_prices_15min.extend([price] * 4)
             extended_prices = extended_prices_15min
-        self.current_prices_direct = extended_prices.copy()
         return extended_prices
 
     def __retrieve_prices_from_url(self, tgt_duration, start_time=None):
@@ -1971,7 +1986,6 @@ class PriceInterface:
             # Clear any previous errors on success
             self.consecutive_failures = 0
             self.last_successful_prices = prices.copy()
-            self.last_successful_prices_direct = prices.copy()
 
             # State the unit once per unit change. The canonical unit moved from
             # EUR/Wh to EUR/kWh, so a config carried over from an earlier version
@@ -2225,7 +2239,6 @@ class PriceInterface:
             if prices:
                 self.consecutive_failures = 0
                 self.last_successful_prices = prices.copy()
-                self.last_successful_prices_direct = prices.copy()
                 logger.info(
                     "[PRICE-IF] EVCC prices finalized: %d values, "
                     "first 4 rates (EUR/Wh): %.9f, %.9f, %.9f, %.9f",

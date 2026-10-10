@@ -62,7 +62,9 @@
                         you are paid</h2>
                     <p>The import price can come from a market source, from a fixed rate, or from a
                         24-value array you supply; the adder and multiplier turn a raw market price into
-                        the figure on your bill. The feed-in half is configured the same way, separately,
+                        the figure on your bill — applied to every price source alike, as
+                        <code>(price + adder) × (1 + multiplier)</code>, so a grid fee is multiplied the
+                        way the energy price is. The feed-in half is configured the same way, separately,
                         because the two rarely come from the same place.</p>
                     <div data-schema-section="price" data-schema-anchor="price"></div>
                 </div>
