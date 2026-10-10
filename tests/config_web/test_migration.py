@@ -14,6 +14,7 @@ from src.config_web.migration import (
     migrate_battery_price_unit_to_ct_kwh,
     migrate_managed_load_power_sensor_to_replaces_sensor,
     migrate_sensor_placeholders_to_empty,
+    migrate_managed_loads_season_cleanup,
     prune_migrated_yaml,
     PRUNE_BACKUP_SUFFIX,
     _flatten_config,
@@ -1361,3 +1362,170 @@ class TestMigrateClearDeprecatedOverrides:
         assert store.get("load.source") == "default"
         assert store.get("load.url") == ""
         assert store.get("load.access_token") == ""
+
+
+class TestManagedLoadsSeasonCleanup:
+    """Tests for cleaning up stale season values on non-pool load types.
+    
+    Issue #322: Managed loads with types that don't support seasons
+    (sauna, hot_water_tank, buffer_tank, etc.) should not have season values.
+    """
+
+    def test_migration_clears_sauna_seasons(self, store):
+        """Sauna load with seasons should have them cleared."""
+        # Set up a sauna load with seasons (stale data from before #322)
+        store.set("managed_loads.0.id", "sauna_1")
+        store.set("managed_loads.0.name", "Sauna")
+        store.set("managed_loads.0.type", "sauna")
+        store.set("managed_loads.0.season_start", "04-15")
+        store.set("managed_loads.0.season_end", "09-30")
+
+        # Run migration
+        result = migrate_managed_loads_season_cleanup(store)
+
+        assert result is True
+        # Season values should be cleared
+        assert store.get("managed_loads.0.season_start") is None
+        assert store.get("managed_loads.0.season_end") is None
+        # Load itself should still exist
+        assert store.get("managed_loads.0.type") == "sauna"
+
+    def test_migration_clears_hot_water_tank_seasons(self, store):
+        """Hot water tank load with seasons should have them cleared."""
+        store.set("managed_loads.0.id", "hwt_1")
+        store.set("managed_loads.0.name", "Hot Water Tank")
+        store.set("managed_loads.0.type", "hot_water_tank")
+        store.set("managed_loads.0.season_start", "01-01")
+        store.set("managed_loads.0.season_end", "12-31")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        assert store.get("managed_loads.0.season_start") is None
+        assert store.get("managed_loads.0.season_end") is None
+
+    def test_migration_clears_buffer_tank_seasons(self, store):
+        """Buffer tank load with seasons should have them cleared."""
+        store.set("managed_loads.0.id", "buffer_1")
+        store.set("managed_loads.0.name", "Buffer Tank")
+        store.set("managed_loads.0.type", "buffer_tank")
+        store.set("managed_loads.0.season_start", "06-21")
+        store.set("managed_loads.0.season_end", "09-21")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        assert store.get("managed_loads.0.season_start") is None
+        assert store.get("managed_loads.0.season_end") is None
+
+    def test_migration_preserves_pool_heatpump_seasons(self, store):
+        """Pool heatpump seasons should be preserved."""
+        store.set("managed_loads.0.id", "pool_1")
+        store.set("managed_loads.0.name", "Pool")
+        store.set("managed_loads.0.type", "pool_heatpump")
+        store.set("managed_loads.0.season_start", "04-15")
+        store.set("managed_loads.0.season_end", "09-30")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        # Pool heatpump seasons should be preserved
+        assert store.get("managed_loads.0.season_start") == "04-15"
+        assert store.get("managed_loads.0.season_end") == "09-30"
+
+    def test_migration_handles_mixed_loads(self, store):
+        """Migration handles multiple loads correctly."""
+        # Load 0: sauna with seasons (should be cleared)
+        store.set("managed_loads.0.id", "sauna_1")
+        store.set("managed_loads.0.type", "sauna")
+        store.set("managed_loads.0.season_start", "04-15")
+        store.set("managed_loads.0.season_end", "09-30")
+
+        # Load 1: pool_heatpump with seasons (should be preserved)
+        store.set("managed_loads.1.id", "pool_1")
+        store.set("managed_loads.1.type", "pool_heatpump")
+        store.set("managed_loads.1.season_start", "05-01")
+        store.set("managed_loads.1.season_end", "08-31")
+
+        # Load 2: hot_water_tank with seasons (should be cleared)
+        store.set("managed_loads.2.id", "hwt_1")
+        store.set("managed_loads.2.type", "hot_water_tank")
+        store.set("managed_loads.2.season_start", "01-01")
+        store.set("managed_loads.2.season_end", "12-31")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        # Check results
+        assert store.get("managed_loads.0.season_start") is None
+        assert store.get("managed_loads.0.season_end") is None
+        assert store.get("managed_loads.1.season_start") == "05-01"
+        assert store.get("managed_loads.1.season_end") == "08-31"
+        assert store.get("managed_loads.2.season_start") is None
+        assert store.get("managed_loads.2.season_end") is None
+
+    def test_migration_idempotent_on_second_run(self, store):
+        """Migration should be a no-op on second run."""
+        store.set("managed_loads.0.id", "sauna_1")
+        store.set("managed_loads.0.type", "sauna")
+        store.set("managed_loads.0.season_start", "04-15")
+
+        # First run
+        result1 = migrate_managed_loads_season_cleanup(store)
+        assert result1 is True
+        assert store.get("managed_loads.0.season_start") is None
+
+        # Second run (should do nothing)
+        result2 = migrate_managed_loads_season_cleanup(store)
+        assert result2 is False  # Already migrated
+        assert store.get("managed_loads.0.season_start") is None
+
+    def test_migration_skipped_on_empty_store(self, store):
+        """Migration should be skipped on empty store."""
+        result = migrate_managed_loads_season_cleanup(store)
+        
+        # Should complete without error
+        assert result is True
+        assert store.get("_migrated_managed_loads_season_cleanup_v1") is True
+
+    def test_migration_handles_external_contingent_seasons(self, store):
+        """External contingent type seasons should be cleared."""
+        store.set("managed_loads.0.id", "ext_cont_1")
+        store.set("managed_loads.0.type", "external_contingent")
+        store.set("managed_loads.0.season_start", "04-15")
+        store.set("managed_loads.0.season_end", "09-30")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        assert store.get("managed_loads.0.season_start") is None
+        assert store.get("managed_loads.0.season_end") is None
+
+    def test_migration_handles_external_profile_seasons(self, store):
+        """External profile type seasons should be cleared."""
+        store.set("managed_loads.0.id", "ext_prof_1")
+        store.set("managed_loads.0.type", "external_profile")
+        store.set("managed_loads.0.season_start", "04-15")
+        store.set("managed_loads.0.season_end", "09-30")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        assert store.get("managed_loads.0.season_start") is None
+        assert store.get("managed_loads.0.season_end") is None
+
+    def test_migration_only_clears_season_start_if_present(self, store):
+        """Migration handles case where only season_start is present."""
+        store.set("managed_loads.0.id", "sauna_1")
+        store.set("managed_loads.0.type", "sauna")
+        store.set("managed_loads.0.season_start", "04-15")
+        # season_end not set
+
+        migrate_managed_loads_season_cleanup(store)
+
+        assert store.get("managed_loads.0.season_start") is None
+
+    def test_migration_only_clears_season_end_if_present(self, store):
+        """Migration handles case where only season_end is present."""
+        store.set("managed_loads.0.id", "sauna_1")
+        store.set("managed_loads.0.type", "sauna")
+        # season_start not set
+        store.set("managed_loads.0.season_end", "09-30")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        assert store.get("managed_loads.0.season_end") is None
