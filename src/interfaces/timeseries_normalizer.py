@@ -457,24 +457,72 @@ def _finalize_entry_spans(entries):
     The last entry gets one nominal spacing (one hour for a single-entry
     series).
     """
-    nominal = _nominal_span_seconds([entry["start"] for entry in entries])
+    starts = [entry["start"] for entry in entries]
+    nominal = _nominal_span_seconds(starts)
     if nominal is None:
         first_end = entries[0].get("end")
         if first_end is not None:
             nominal = (first_end - entries[0]["start"]).total_seconds()
         else:
             nominal = 3600
-    span_cap = timedelta(seconds=nominal)
+    caps = _derived_span_caps(starts, nominal)
 
     count = len(entries)
     for index, entry in enumerate(entries):
         if entry.get("end") is not None:
             continue
-        candidate = entry["start"] + span_cap
+        candidate = entry["start"] + timedelta(seconds=caps[index])
         if index + 1 < count:
             candidate = min(candidate, entries[index + 1]["start"])
         entry["end"] = candidate
         entry["end_derived"] = True
+
+
+def _derived_span_caps(starts, fallback_seconds, window=5):
+    """
+    The longest span each entry may be given, in seconds, one per entry.
+
+    A single spacing for the whole payload is wrong the moment a series changes
+    resolution mid-way — EPEX-style sources publish the current day at fifteen
+    minutes and the next at an hour — because capping the coarse half at the
+    fine spacing drops three quarters of every entry in it. So the cap is local.
+
+    An entry keeps the whole gap to its successor when that gap REPEATS: a run
+    of equal gaps is the resolution in force there, not a hole. An isolated
+    large gap is a hole, and the entry before it is capped at the local median
+    spacing so the hole survives into ``coverage`` and can be reported, filled
+    by policy, or marked as forecast.
+
+    Two equal large gaps in a row therefore read as a coarser resolution rather
+    than as two holes. That is the honest reading of start-only data: nothing
+    distinguishes them, which is why a deliberately long entry should declare
+    its own ``end``.
+    """
+    count = len(starts)
+    if count < 2:
+        return [fallback_seconds] * count
+
+    epochs = [moment.timestamp() for moment in starts]
+    gaps = [later - earlier for earlier, later in zip(epochs, epochs[1:])]
+
+    caps = []
+    for index in range(count):
+        if index >= len(gaps):
+            # The last entry has no successor to measure against, so it takes
+            # the spacing in force at the END of the series - not the global
+            # one, which on a payload that changes resolution is the spacing of
+            # the other half.
+            caps.append(min(gaps[-window:]) or fallback_seconds)
+            continue
+        lower = max(0, index - window)
+        # The tightest spacing nearby, not the median: with only a couple of
+        # gaps a median sits between the real resolution and the hole and caps
+        # at neither. The repeat test above is what protects a genuinely
+        # coarser run, so this only ever applies to an isolated outlier.
+        local = min(gaps[lower : index + window + 1]) or fallback_seconds
+        repeats = index + 1 < len(gaps) and gaps[index + 1] == gaps[index]
+        caps.append(gaps[index] if repeats else min(gaps[index], local))
+    return caps
 
 
 def _derive_starts_from_ends(entries):

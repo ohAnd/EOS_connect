@@ -785,3 +785,62 @@ class TestNaiveTimestampsAcrossDst:
         instants = [entry["start"].timestamp() for entry in entries]
         assert len(entries) == 3
         assert instants == sorted(instants)
+
+
+class TestMixedResolutionSpans:
+    """
+    A start-only payload that changes resolution mid-series.
+
+    EPEX-style sources publish the current day at fifteen minutes and the next
+    at an hour. One nominal spacing for the whole payload capped the coarse half
+    at the fine spacing, so every hour of day two arrived carrying a quarter of
+    its energy.
+    """
+
+    ANCHOR = BERLIN.localize(datetime(2026, 8, 23))
+
+    def _span(self, entry):
+        return round(entry["end"].timestamp() - entry["start"].timestamp())
+
+    def test_the_coarse_half_keeps_its_full_hour(self):
+        payload = [
+            {"start": (self.ANCHOR + timedelta(minutes=15 * i)).isoformat(),
+             "value": 1.0}
+            for i in range(96)
+        ] + [
+            {"start": (self.ANCHOR + timedelta(days=1, hours=i)).isoformat(),
+             "value": 1.0}
+            for i in range(24)
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert {self._span(e) for e in entries[:96]} == {900}
+        assert {self._span(e) for e in entries[96:]} == {3600}
+
+    def test_a_lone_fine_entry_does_not_shrink_the_rest(self):
+        """A 15-minute lead entry must not cap every following hour."""
+        payload = [
+            {"start": self.ANCHOR.isoformat(), "value": 1.0},
+            {"start": (self.ANCHOR + timedelta(minutes=15)).isoformat(), "value": 1.0},
+        ] + [
+            {"start": (self.ANCHOR + timedelta(hours=i)).isoformat(), "value": 1.0}
+            for i in range(1, 12)
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert self._span(entries[0]) == 900
+        assert {self._span(e) for e in entries[2:]} == {3600}
+
+    def test_an_isolated_long_gap_is_still_a_hole(self):
+        """The cap must keep doing its job: one outlier gap is a hole."""
+        payload = [
+            {"start": (self.ANCHOR + timedelta(hours=h)).isoformat(), "value": 1.0}
+            for h in (9, 10, 13, 14)
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert self._span(entries[1]) == 3600  # 10:00 does not swallow 11:00-13:00
+        assert entries[2]["start"] - entries[1]["end"] == timedelta(hours=2)
