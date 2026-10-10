@@ -515,6 +515,21 @@ class PriceInterface(ForecastMetadataMixin):
         if self._published is not None:
             self._published = (self._published[0], None, None, None)
 
+    def drop_fallback_cache(self):
+        """
+        Forget the last successful prices, for a source change.
+
+        ``last_successful_prices`` holds values already shaped by the *previous*
+        source — including its adder and multiplier, which only the exchange
+        sources get (EXCHANGE_PRICE_SOURCES). Carrying that cache into a new
+        source would serve the old source's adjusted prices whenever the new one
+        is short or fails, and the EVCC path splices the cache directly into its
+        own result. The failure counter goes with it: failures counted against
+        the old endpoint say nothing about the new one.
+        """
+        self.last_successful_prices = []
+        self.consecutive_failures = 0
+
     def __retrieve_prices(self, tgt_duration, start_time=None):
         """
         Retrieve prices based on the target duration and optional start time.
