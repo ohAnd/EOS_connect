@@ -763,3 +763,94 @@ def test_import_does_not_erase_a_stored_value_with_a_null(pv_store):
     stored = pv_store.get_all_history()[0]
     assert stored["real_delta_kwh"] == 2.5
     assert stored["forecast_kwh"] == 3.0
+
+
+class TestDstForecastRepair:
+    """
+    The one-time repair of forecast values recorded against a wall-clock hour.
+
+    Before the slot fix the hourly forecast was indexed by local_hour, which is
+    off by one for every hour after a DST change. Those forecast/yield pairs
+    feed the scaling factors, so they have to be invalidated rather than used.
+    """
+
+    @staticmethod
+    def _row(pv_store, timestamp, local_date, local_hour, offset, forecast):
+        pv_store.insert_hourly_record(
+            timestamp=timestamp,
+            date=local_date,
+            hour=local_hour,
+            real_counter_kwh=10.0,
+            real_delta_kwh=1.0,
+            forecast_kwh=forecast,
+            local_date=local_date,
+            local_hour=local_hour,
+            local_offset_minutes=offset,
+        )
+
+    @staticmethod
+    def _as_pre_fix_database(pv_store):
+        """Rewind user_version so the repair sees an upgrade, not a fresh install.
+
+        The fixture already ran ensure_schema once, which stamps the version. A
+        real pre-fix database has never been stamped at all.
+        """
+        pv_store._store.execute("PRAGMA user_version = 0")  # pylint: disable=protected-access
+
+    @staticmethod
+    def _forecasts(pv_store):
+        return {
+            row[0]: row[1]
+            for row in pv_store._store.query(  # pylint: disable=protected-access
+                "SELECT timestamp, forecast_kwh FROM pv_yield_history"
+            )
+        }
+
+    def test_only_transition_day_forecasts_are_dropped(self, pv_store):
+        # A normal day: one offset all day.
+        self._row(pv_store, "2026-08-23T10:00:00Z", "2026-08-23", 12, 120, 3.0)
+        self._row(pv_store, "2026-08-23T11:00:00Z", "2026-08-23", 13, 120, 4.0)
+        # The autumn transition: two offsets on the same local date.
+        self._row(pv_store, "2026-10-25T00:00:00Z", "2026-10-25", 2, 120, 0.5)
+        self._row(pv_store, "2026-10-25T01:00:00Z", "2026-10-25", 2, 60, 0.6)
+        self._row(pv_store, "2026-10-25T12:00:00Z", "2026-10-25", 13, 60, 5.0)
+
+        self._as_pre_fix_database(pv_store)
+        pv_store.ensure_schema()  # the upgrade: the repair fires here
+        forecasts = self._forecasts(pv_store)
+
+        # The ordinary day keeps its forecasts...
+        assert forecasts["2026-08-23T10:00:00Z"] == 3.0
+        assert forecasts["2026-08-23T11:00:00Z"] == 4.0
+        # ...and the transition day loses only its forecasts.
+        assert forecasts["2026-10-25T00:00:00Z"] is None
+        assert forecasts["2026-10-25T12:00:00Z"] is None
+
+    def test_the_measurement_survives_the_repair(self, pv_store):
+        self._row(pv_store, "2026-10-25T00:00:00Z", "2026-10-25", 2, 120, 0.5)
+        self._row(pv_store, "2026-10-25T01:00:00Z", "2026-10-25", 2, 60, 0.6)
+
+        self._as_pre_fix_database(pv_store)
+        pv_store.ensure_schema()
+
+        rows = pv_store._store.query(  # pylint: disable=protected-access
+            "SELECT real_delta_kwh FROM pv_yield_history"
+        )
+        assert [row[0] for row in rows] == [1.0, 1.0]
+
+    def test_the_repair_runs_only_once(self, pv_store):
+        """A correct row written on a FUTURE DST day must not be nulled again."""
+        self._row(pv_store, "2026-10-25T00:00:00Z", "2026-10-25", 2, 120, 0.5)
+        self._row(pv_store, "2026-10-25T01:00:00Z", "2026-10-25", 2, 60, 0.6)
+        self._as_pre_fix_database(pv_store)
+        pv_store.ensure_schema()
+        assert self._forecasts(pv_store)["2026-10-25T00:00:00Z"] is None
+
+        # Next year's transition, now recorded correctly.
+        self._row(pv_store, "2027-10-31T00:00:00Z", "2027-10-31", 2, 120, 0.7)
+        self._row(pv_store, "2027-10-31T01:00:00Z", "2027-10-31", 2, 60, 0.8)
+        pv_store.ensure_schema()
+
+        forecasts = self._forecasts(pv_store)
+        assert forecasts["2027-10-31T00:00:00Z"] == 0.7
+        assert forecasts["2027-10-31T01:00:00Z"] == 0.8
