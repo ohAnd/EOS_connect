@@ -34,7 +34,7 @@ Usage:
 """
 
 from datetime import datetime, timedelta
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 import json
 import logging
 import threading
@@ -76,6 +76,15 @@ from .timeseries_normalizer import (
 
 logger = logging.getLogger("__main__")
 logger.info("[PRICE-IF] loading module ")
+
+#: What one placement of a price series produced. ``real_slots`` is the slot
+#: index where invented data begins — the first slot after the last one the
+#: source actually covered, or the full horizon when the source covered it all.
+#: It is a SLOT index, which is the whole point: the number of entries a source
+#: sent equals a slot index only when the series starts exactly at the anchor
+#: AND its resolution matches time_frame_base.
+PriceWindow = namedtuple("PriceWindow", "values first_covered real_slots")
+
 
 def fill_price_gaps(values, coverage, slots_per_day):
     """
@@ -2068,7 +2077,10 @@ class PriceInterface(ForecastMetadataMixin):
 
             # Parse the converted timeseries using standard parser
             # Pass resolution_seconds and start_time for timestamp-aware conversion
-            prices = self.__parse_price_timeseries(timeseries, tgt_duration, resolution_seconds, start_time)
+            window = self.__place_price_timeseries(
+                timeseries, tgt_duration, resolution_seconds, start_time
+            )
+            prices = window.values
 
             expected_slots = horizon_slots(self.time_frame_base)
 
@@ -2100,17 +2112,16 @@ class PriceInterface(ForecastMetadataMixin):
                 )
 
             if prices and is_incomplete:
-                # Data was incomplete, try fallback chain
-                # Calculate how many real slots we got, accounting for resolution conversion
-                # Resolution conversion (15-min → hourly) happens inside __parse_price_timeseries()
-                if resolution_seconds == 900 and self.time_frame_base == 3600:
-                    # 15-min data was converted to hourly (divided by 4)
-                    num_real_slots = actual_timeseries_count // 4
-                else:
-                    # No conversion, use actual timeseries count
-                    num_real_slots = actual_timeseries_count
-
-                expected_slots = horizon_slots(self.time_frame_base)
+                # Data was incomplete, try fallback chain.
+                #
+                # The boundary comes from the PLACEMENT, never from len(rates):
+                # an entry count equals a slot index only when the series starts
+                # exactly at the anchor and its resolution matches
+                # time_frame_base. It does not when EVCC publishes from the
+                # current period onwards (the leading slots are backfill, not
+                # real data) nor when an hourly source runs on a 15-minute
+                # system, where 30 entries cover 120 slots.
+                num_real_slots = window.real_slots
                 num_missing_slots = expected_slots - num_real_slots
 
                 # For energyforecast, pass the actual number of prices needed
@@ -2125,8 +2136,25 @@ class PriceInterface(ForecastMetadataMixin):
                     num_forecast_prices_needed,
                 )
 
-                # Extract the real (unpadded) values
+                # The real head of the placed array. Everything from
+                # num_real_slots on is fill_price_gaps' invention, which the
+                # fallbacks below try to replace with something better.
                 real_prices = prices[:num_real_slots] if num_real_slots > 0 else []
+
+                def _complete(head, tail):
+                    """Head + tail, trimmed or padded to exactly the horizon.
+
+                    Every branch must hand back a full-horizon array: the
+                    optimizer pads a short one with its last value, which is how
+                    a 60-value array silently became 192 flat slots.
+                    """
+                    combined = list(head) + list(tail)
+                    if len(combined) > expected_slots:
+                        return combined[:expected_slots]
+                    if len(combined) < expected_slots:
+                        filler = prices[len(combined):expected_slots]
+                        combined.extend(filler)
+                    return combined
 
                 if real_prices and num_missing_slots > 0:
                     # Fallback 1: Try energyforecast.de smart price prediction
@@ -2141,14 +2169,7 @@ class PriceInterface(ForecastMetadataMixin):
                             "prediction to fill %d missing price slots",
                             num_forecast_prices_needed,
                         )
-                        # For 15-min mode, energyforecast returns hourly prices that need expansion
-                        if self.time_frame_base == 900:
-                            # forecast_prices is in 15-min resolution (96 slots for 24h)
-                            # Already in correct format
-                            prices = real_prices + forecast_prices
-                        else:
-                            # hourly mode, use forecast directly
-                            prices = real_prices + forecast_prices
+                        prices = _complete(real_prices, forecast_prices)
 
                         self._set_forecast_metadata(
                             start_index=num_real_slots,
@@ -2166,20 +2187,23 @@ class PriceInterface(ForecastMetadataMixin):
                             num_missing_slots,
                         )
                         yesterday_fill = self.last_successful_prices[num_real_slots:]
-                        prices = real_prices + yesterday_fill
+                        prices = _complete(real_prices, yesterday_fill)
                         self._set_forecast_metadata(
                             start_index=num_real_slots,
                             forecast_type="fallback_history",
                             source="yesterday_prices",
                         )
-                    # Fallback 3: Repeat today's prices for tomorrow (same as Tibber)
+                    # Fallback 3: keep the placement's own gap policy.
                     else:
                         logger.info(
                             "[PRICE-IF] EVCC incomplete, no fallback available. "
                             "Repeating today's prices for tomorrow."
                         )
-                        # Repeat today's real prices to fill tomorrow
-                        prices = real_prices + real_prices
+                        # fill_price_gaps already repeated today's pattern into
+                        # tomorrow's uncovered slots, so `prices` IS the
+                        # repetition and is already horizon-length. Rebuilding
+                        # it as real_prices + real_prices produced a
+                        # 2*num_real_slots array instead.
                         self._set_forecast_metadata(
                             start_index=num_real_slots,
                             forecast_type="simple_repetition",
@@ -2212,7 +2236,11 @@ class PriceInterface(ForecastMetadataMixin):
             logger.error(f"[PRICE-IF] Unexpected error fetching EVCC prices: {e}")
             return []
 
-    def __parse_price_timeseries(
+    def __parse_price_timeseries(self, *args, **kwargs):
+        """The served array alone; see __place_price_timeseries for the window."""
+        return self.__place_price_timeseries(*args, **kwargs).values
+
+    def __place_price_timeseries(
         self,
         timeseries,
         tgt_duration,
@@ -2250,11 +2278,13 @@ class PriceInterface(ForecastMetadataMixin):
                 means the caller already supplies canonical EUR/Wh values.
 
         Returns:
-            list: Prices in EUR/Wh for the full horizon, or [] on error.
+            PriceWindow: the full-horizon EUR/Wh array plus where real data
+            started and where invention begins. ``PriceWindow([], 0, 0)`` on
+            error, so the caller's fallback chain takes over.
         """
         if not timeseries or not isinstance(timeseries, list):
             logger.error("[PRICE-IF] Price timeseries is not a list")
-            return []
+            return PriceWindow([], 0, 0)
 
         try:
             timeseries = normalize_entries(
@@ -2264,7 +2294,7 @@ class PriceInterface(ForecastMetadataMixin):
                 convert_price_values(timeseries, value_unit)
         except TimeseriesFormatError as exc:
             logger.error("[PRICE-IF] Invalid price timeseries: %s", exc)
-            return []
+            return PriceWindow([], 0, 0)
 
         if value_unit is not None:
             warning = price_plausibility_message(
@@ -2279,7 +2309,7 @@ class PriceInterface(ForecastMetadataMixin):
             ) or median_span_seconds(timeseries)
             if resolution_seconds is None:
                 logger.error("[PRICE-IF] Could not detect price timeseries resolution")
-                return []
+                return PriceWindow([], 0, 0)
 
         # Any grid places by overlap: a coarser price holds its value across
         # every slot it spans, a finer one averages into each slot. An hourly
@@ -2316,7 +2346,7 @@ class PriceInterface(ForecastMetadataMixin):
             )
         except TimeseriesGridError as exc:
             logger.error("[PRICE-IF] Invalid price timeseries: %s", exc)
-            return []
+            return PriceWindow([], 0, 0)
 
         values, leading, forecast_start = fill_price_gaps(
             placement.values, placement.coverage, slots_per_day=slot_count // 2
@@ -2331,7 +2361,7 @@ class PriceInterface(ForecastMetadataMixin):
                 anchor.isoformat(),
                 TEMPLATE_DOCS_URL,
             )
-            return []
+            return PriceWindow([], 0, 0)
 
         covered = sum(1 for fraction in placement.coverage if fraction > 0)
         if forecast_start is not None:
@@ -2382,4 +2412,10 @@ class PriceInterface(ForecastMetadataMixin):
             )
 
         # Round to 9 decimals (EUR precision)
-        return [round(value, 9) for value in values]
+        return PriceWindow(
+            values=[round(value, 9) for value in values],
+            first_covered=leading,
+            # Where invention starts. forecast_start is None when the source
+            # covered the final slot, i.e. the whole horizon is real.
+            real_slots=forecast_start if forecast_start is not None else slot_count,
+        )

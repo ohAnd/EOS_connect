@@ -415,3 +415,94 @@ class TestEvccPriceSource:
         # Tomorrow (hours 24-47) should repeat today's pattern (hours 0-23)
         for i in range(24):
             assert prices[24 + i] == pytest.approx(prices[i], rel=1e-9)
+
+
+class TestEvccPlacesBySlotNotEntryCount:
+    """
+    The incomplete-data fallback must index the grid by SLOT, not by len(rates).
+
+    An entry count equals a slot index only when the series starts exactly at the
+    anchor and its resolution matches time_frame_base. Both assumptions break in
+    configurations the branch itself newly allows, and the result was real
+    published prices being thrown away and replaced with backfill.
+    """
+
+    ANCHOR = datetime(2026, 8, 23, 0, tzinfo=timezone.utc)
+
+    def _interface(self, monkeypatch, rates_data, time_frame_base):
+        def fake_get(url, headers=None, timeout=None):
+            class R:
+                def raise_for_status(self):
+                    return None
+
+                def json(self):
+                    return {"rates": rates_data}
+
+            assert "/api/tariff/grid" in url
+            return R()
+
+        monkeypatch.setattr("src.interfaces.price_interface.requests.get", fake_get)
+        monkeypatch.setattr(
+            PriceInterface, "_PriceInterface__start_update_service", lambda self: None
+        )
+        mock_evcc = Mock()
+        mock_evcc.url = "http://evcc.local:7070"
+        return PriceInterface(
+            {"source": "evcc"},
+            time_frame_base=time_frame_base,
+            timezone=timezone.utc,
+            evcc_interface=mock_evcc,
+        )
+
+    def _rates(self, count, step_hours, start_offset_hours=0):
+        """Rising prices, 0.10 EUR/kWh upwards, one entry per *step_hours*."""
+        out = []
+        for index in range(count):
+            start = self.ANCHOR + timedelta(
+                hours=start_offset_hours + index * step_hours
+            )
+            out.append(
+                {
+                    "start": start.isoformat(),
+                    "end": (start + timedelta(hours=step_hours)).isoformat(),
+                    "value": round(0.10 + index * 0.01, 4),
+                }
+            )
+        return out
+
+    def test_an_hourly_source_on_a_15_minute_grid_keeps_every_price(
+        self, monkeypatch
+    ):
+        """30 hourly rates cover 120 quarter-slots, not 30.
+
+        Counting entries made num_real_slots 30, so the array came back 60 long
+        for a 192-slot horizon and 22.5 hours of published prices were dropped.
+        """
+        iface = self._interface(monkeypatch, self._rates(30, 1), 900)
+        iface.update_prices(192, start_time=self.ANCHOR)
+        prices = iface.get_current_prices()
+
+        assert len(prices) == 192
+        # Hour 7's published price (0.17 EUR/kWh) holds across its four slots.
+        assert prices[28:32] == pytest.approx([0.00017] * 4)
+        # Invention starts after the 30 covered hours = slot 120.
+        assert iface.get_forecast_metadata()["forecast_start_index"] == 120
+
+    def test_a_series_starting_midday_keeps_tomorrows_prices(self, monkeypatch):
+        """34 rates from 14:00 today reach 23:00 tomorrow — none may be discarded.
+
+        The leading slots are fill_price_gaps backfill. Slicing the grid at the
+        entry count took that backfill as the real data and threw the genuinely
+        published tail away.
+        """
+        iface = self._interface(
+            monkeypatch, self._rates(34, 1, start_offset_hours=14), 3600
+        )
+        iface.update_prices(48, start_time=self.ANCHOR)
+        prices = iface.get_current_prices()
+
+        assert len(prices) == 48
+        assert prices[14] == pytest.approx(0.0001)  # first real entry
+        assert prices[47] == pytest.approx(0.00043)  # last published entry
+        # The source reaches the final slot, so nothing is invented at the tail.
+        assert iface.get_forecast_metadata()["forecast_start_index"] is None
