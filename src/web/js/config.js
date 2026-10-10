@@ -213,8 +213,8 @@ class ConfigurationManager {
     _buildHeader() {
         const levelOptions = [
             { val: "getting_started", label: "Getting Started" },
-            { val: "standard",        label: "Standard" },
-            { val: "expert",          label: "Expert" },
+            { val: "standard", label: "Standard" },
+            { val: "expert", label: "Expert" },
         ];
         const opts = levelOptions.map(o =>
             `<option value="${o.val}" ${o.val === this.level ? "selected" : ""}>${o.label}</option>`
@@ -519,8 +519,8 @@ class ConfigurationManager {
         const [helpPage, helpAnchor] = f.help_url ? f.help_url.split("#") : [];
         const docsHref = f.help_url
             ? docsUrl(`user-guide/${helpPage}`)
-              + `?level=${encodeURIComponent(this.level)}`
-              + (helpAnchor ? `#${helpAnchor}` : "")
+            + `?level=${encodeURIComponent(this.level)}`
+            + (helpAnchor ? `#${helpAnchor}` : "")
             : "";
         const docsLink = f.help_url
             ? ` <a href="${docsHref}" target="_blank" rel="noopener">
@@ -545,8 +545,7 @@ class ConfigurationManager {
                 </div>
                 ${helpText}
                 <div class="config-field-error" id="cfg-err-${this._cssKey(f.key)}"></div>
-            </div>${this._renderEntityTester(f, entryValues)}${
-                this._renderTemperatureCoordinateNotice(f)}`;
+            </div>${this._renderEntityTester(f, entryValues)}${this._renderTemperatureCoordinateNotice(f)}`;
     }
 
     /**
@@ -1346,20 +1345,20 @@ class ConfigurationManager {
             const idx = managedLoadTypeMatch[1];
             const seasonStartKey = `managed_loads.${idx}.season_start`;
             const seasonEndKey = `managed_loads.${idx}.season_end`;
-            
+
             // Only pool_heatpump supports seasons
             if (value !== "pool_heatpump") {
                 // If this type doesn't support seasons, clear any season values
                 if (this.values[seasonStartKey] || this.values[seasonEndKey]) {
                     this.values[seasonStartKey] = "";
                     this.values[seasonEndKey] = "";
-                    
+
                     // Update the form inputs
                     const startInput = document.querySelector(`input[data-key="${seasonStartKey}"]`);
                     const endInput = document.querySelector(`input[data-key="${seasonEndKey}"]`);
                     if (startInput) startInput.value = "";
                     if (endInput) endInput.value = "";
-                    
+
                     // Mark both as changed
                     if (startInput) {
                         startInput.classList.add("changed");
@@ -1697,7 +1696,7 @@ class ConfigurationManager {
                         error: `Value too long (${value.length} chars, max 2000)`,
                     });
                 } else if ((fd.type === "str" || fd.type === "sensor")
-                            && /<[a-zA-Z/!]/.test(value)) {
+                    && /<[a-zA-Z/!]/.test(value)) {
                     clientErrors.push({
                         key,
                         error: "HTML tags are not allowed in this field",
@@ -2259,10 +2258,10 @@ class ConfigurationManager {
         this._ensureToastContainer();
 
         const styles = {
-            info:    { border: "#1aa1f3", icon: "fa-circle-info",            color: "#1aa1f3" },
-            success: { border: "#28a745", icon: "fa-check-circle",           color: "#28a745" },
-            warning: { border: "#ffc107", icon: "fa-exclamation-circle",     color: "#ffc107" },
-            error:   { border: "#dc3545", icon: "fa-exclamation-triangle",   color: "#dc3545" },
+            info: { border: "#1aa1f3", icon: "fa-circle-info", color: "#1aa1f3" },
+            success: { border: "#28a745", icon: "fa-check-circle", color: "#28a745" },
+            warning: { border: "#ffc107", icon: "fa-exclamation-circle", color: "#ffc107" },
+            error: { border: "#dc3545", icon: "fa-exclamation-triangle", color: "#dc3545" },
         };
         const s = styles[type] || styles.info;
 
@@ -2545,7 +2544,7 @@ class ConfigurationManager {
             return "";
         }
         return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;")
-                  .replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            .replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 }
 
@@ -2583,5 +2582,5 @@ document.addEventListener("DOMContentLoaded", () => {
                 configurationManager._startRestartPoll();
             }
         })
-        .catch(() => {}); // non-critical
+        .catch(() => { }); // non-critical
 });
