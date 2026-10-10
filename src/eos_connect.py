@@ -1365,11 +1365,6 @@ class OptimizationScheduler:
               necessary configuration values for "eos.timeout" and "refresh_time".
         """
         logger.info("[Main] start new run")
-        # update prices
-        # price_interface.update_prices(
-        #     EOS_TGT_DURATION,
-        #     datetime.now(time_zone).replace(hour=0, minute=0, second=0, microsecond=0),
-        # )
         # create optimize request
         json_optimize_input = create_optimize_request()
         self.__set_state_request()

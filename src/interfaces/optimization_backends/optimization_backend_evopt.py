@@ -1079,7 +1079,13 @@ class EVOptBackend:
         # Handle washingstart (if present)
         washingstart = resp.get("washingstart")
         if washingstart is not None:
-            eos_resp["washingstart"] = time_params["pad_past"] + washingstart
+            # washingstart is a single slot INDEX into the result window, so it
+            # shifts by the number of past slots - it is not an array to
+            # concatenate. `pad_past + washingstart` is list + int, a TypeError
+            # that would take the whole response down the moment the solver
+            # returned a wash schedule. The line above is correct because
+            # start_solution really is a list.
+            eos_resp["washingstart"] = time_params["current_slot"] + washingstart
 
         # Attach eauto_obj if present
         if "eauto_obj" in resp:
