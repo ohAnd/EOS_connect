@@ -1172,9 +1172,28 @@ def _check_timeseries_preflight(data: dict) -> list[dict]:
             )
             continue
 
+        if result.get("stale"):
+            # The source answered and parsed, but its series does not reach the
+            # optimization window. That is a data problem, not a configuration
+            # one — the window is judged against local midnight TODAY, so an
+            # untouched config that saved yesterday would start failing this
+            # morning and the user could not edit their way out of it. The
+            # tester still shows it red and the interface still falls back.
+            logger.info(
+                "[ConfigAPI] Timeseries pre-flight: the %s series misses the "
+                "current window: %s",
+                domain,
+                result.get("error"),
+            )
+            continue
+
         errors.append(
             {
-                "key": result.get("field", f"{section}.data_url"),
+                # Fall back to the DOMAIN's own URL field, not the section's:
+                # for feed-in that is price.feed_in_data_url, and reporting
+                # against price.data_url pointed the user at the grid-price
+                # field instead.
+                "key": result.get("field", f"{section}.{prefix}data_url"),
                 "error": result.get("error", "Timeseries check failed."),
             }
         )

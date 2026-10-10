@@ -293,6 +293,16 @@ def analyse(
         return {
             "ok": False,
             "field": spec.url_field,
+            # Red in the tester and a non-zero exit for the doctor - the running
+            # interface really would fall back, and "probe green means the
+            # interface serves data" has to keep holding.
+            #
+            # But not a reason to refuse a SAVE. The window is always judged
+            # against local midnight TODAY, so a config that was savable
+            # yesterday would start returning 422 this morning with nothing
+            # about it changed, and the user could not even correct the URL that
+            # caused it. Same escape hatch as `transport`.
+            "stale": True,
             "error": MSG_WINDOW_MISS.format(
                 count=len(entries), slots=slot_count, anchor=anchor.isoformat()
             ),
