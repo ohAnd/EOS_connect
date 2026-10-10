@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 import logging
 
 import pytz
+from pytz.exceptions import AmbiguousTimeError, NonExistentTimeError
 
 try:  # running from src/ as a script — src/ is on sys.path
     from docs_links import current_docs_url
@@ -96,7 +97,58 @@ class TimeseriesFormatError(ValueError):
     """
 
 
-def _parse_timestamp(raw, tz, field="start"):
+class _NaiveLocalizer:
+    """
+    Attach a zone to naive timestamps, resolving a DST transition by position.
+
+    A source that renders local wall clock without an offset emits the repeated
+    hour of the autumn transition TWICE - "02:00" is both the last CEST hour and
+    the first CET one. pytz's default (``is_dst=False``) maps both onto the
+    standard-time instant, which makes them duplicates, and the duplicate check
+    then rejects the whole 25-entry payload: one day a year, a correctly
+    configured source lost all its data.
+
+    Position decides instead, which is the only information available: the first
+    time a given wall clock appears it is the DST reading, the second time the
+    standard one. Tracked per FIELD, because a start and the previous entry's
+    end legitimately name the same instant and must not consume each other's turn.
+
+    Timestamps that carry an offset never come here - they are unambiguous.
+    """
+
+    def __init__(self, tz):
+        self._tz = tz
+        self._seen = {}
+
+    def _is_repeat(self, field, naive):
+        seen = self._seen.setdefault(field, set())
+        repeat = naive in seen
+        seen.add(naive)
+        return repeat
+
+    def __call__(self, naive, field):
+        if not hasattr(self._tz, "localize"):
+            # zoneinfo: fold=1 selects the second occurrence of a repeated time.
+            first = naive.replace(tzinfo=self._tz, fold=0)
+            if first.utcoffset() == naive.replace(tzinfo=self._tz, fold=1).utcoffset():
+                return first  # unambiguous
+            return naive.replace(tzinfo=self._tz, fold=1 if self._is_repeat(field, naive) else 0)
+        try:
+            return self._tz.localize(naive, is_dst=None)
+        except AmbiguousTimeError:
+            return self._tz.localize(
+                naive, is_dst=not self._is_repeat(field, naive)
+            )
+        except NonExistentTimeError:
+            # The clock jumped over this wall time, so no instant matches it.
+            # Reading it with the pre-jump (standard) offset and normalizing
+            # moves it FORWARD to where the clock landed - naive 02:00 becomes
+            # 03:00, the instant the jump produced. is_dst=True would map it
+            # backwards onto 01:00 and collide with the entry before it.
+            return self._tz.normalize(self._tz.localize(naive, is_dst=False))
+
+
+def _parse_timestamp(raw, tz, field="start", localizer=None):
     """
     Parse one timestamp into a timezone-aware datetime in *tz*.
 
@@ -115,9 +167,7 @@ def _parse_timestamp(raw, tz, field="start"):
         # Already parsed (an entry coming back through normalize_entries, e.g.
         # the EVCC price branch normalizing before the shared parser does).
         if raw.tzinfo is None:
-            if hasattr(tz, "localize"):
-                return tz.localize(raw), True
-            return raw.replace(tzinfo=tz), True
+            return _localize_naive(raw, tz, field, localizer), True
         return raw.astimezone(tz), False
 
     if isinstance(raw, (int, float)):
@@ -149,17 +199,20 @@ def _parse_timestamp(raw, tz, field="start"):
                 f"or Unix timestamp"
             ) from exc
         if parsed.tzinfo is None:
-            # localize() is pytz-specific; fall back for plain tzinfo objects.
-            if hasattr(tz, "localize"):
-                parsed = tz.localize(parsed)
-            else:
-                parsed = parsed.replace(tzinfo=tz)
-            return parsed, True
+            return _localize_naive(parsed, tz, field, localizer), True
         return parsed.astimezone(tz), False
 
     raise TimeseriesFormatError(
         f"'{field}' must be an ISO8601 string or Unix timestamp, got {type(raw).__name__}"
     )
+
+
+def _localize_naive(naive, tz, field, localizer):
+    """Attach *tz* to a naive timestamp, via *localizer* when one is in play."""
+    if localizer is not None:
+        return localizer(naive, field)
+    # A one-off parse outside a payload: no neighbours to judge a repeat by.
+    return _NaiveLocalizer(tz)(naive, field)
 
 
 def _describe_available_keys(entry):
@@ -284,6 +337,9 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
 
     entries = []
     naive_seen = 0
+    # One localizer for the whole payload: resolving the repeated DST hour needs
+    # to know whether this wall clock has already been seen in this series.
+    localizer = _NaiveLocalizer(tz)
     for index, raw in enumerate(raw_entries):
         # Every entry has to parse. Dropping the bad ones would be friendlier
         # right up until it corrupts the result: under timestamp placement a
@@ -301,7 +357,9 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
         start = None
         if start_key is not None:
             try:
-                start, was_naive = _parse_timestamp(raw[start_key], tz)
+                start, was_naive = _parse_timestamp(
+                    raw[start_key], tz, field="start", localizer=localizer
+                )
             except TimeseriesFormatError as exc:
                 raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
             if was_naive:
@@ -310,7 +368,7 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
         if end_key is not None and raw.get(end_key) is not None:
             try:
                 end, end_was_naive = _parse_timestamp(
-                    raw[end_key], tz, field=end_key
+                    raw[end_key], tz, field=end_key, localizer=localizer
                 )
             except TimeseriesFormatError as exc:
                 raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
@@ -343,9 +401,13 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
 
     if start_key is None:
         _derive_starts_from_ends(entries)
-    entries.sort(key=lambda item: item["start"])
+    # Order and compare by absolute instant. Two aware datetimes sharing a
+    # zoneinfo tzinfo sort and compare in WALL-CLOCK mode (PEP 495), so the two
+    # 02:00 of an autumn transition would read as equal and a correct payload
+    # would be rejected as duplicated.
+    entries.sort(key=lambda item: item["start"].timestamp())
     for earlier, later in zip(entries, entries[1:]):
-        if later["start"] == earlier["start"]:
+        if later["start"].timestamp() == earlier["start"].timestamp():
             # A duplicate is always a template bug. The consumers used to
             # disagree on it (last-wins, double-count, reject) — silently
             # keeping either value is how a wrong forecast survives.
@@ -424,9 +486,9 @@ def _derive_starts_from_ends(entries):
     end — so a hole between ends stays a hole instead of inflating the entry
     after it. Derived starts carry a ``start_derived`` flag.
     """
-    entries.sort(key=lambda item: item["end"])
+    entries.sort(key=lambda item: item["end"].timestamp())
     for earlier, later in zip(entries, entries[1:]):
-        if later["end"] == earlier["end"]:
+        if later["end"].timestamp() == earlier["end"].timestamp():
             raise TimeseriesFormatError(
                 f"two entries share the end timestamp {later['end'].isoformat()}"
             )

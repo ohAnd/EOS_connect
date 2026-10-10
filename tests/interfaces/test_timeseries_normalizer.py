@@ -5,7 +5,8 @@ validation with an actionable error, derived `end`, timezone handling, and the u
 tables. The payload shapes used here are the ones reported in discussion #214.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 import pytz
@@ -710,3 +711,77 @@ class TestMillisecondTimestamps:
             BERLIN,
         )
         assert entries[0]["start"].year == 2026
+
+
+class TestNaiveTimestampsAcrossDst:
+    """
+    A source rendering local wall clock without an offset, on a transition day.
+
+    This is the common Home Assistant template shape, and once a year it emits
+    "02:00" twice. Resolving both to the standard-time instant made them
+    duplicates and the whole 25-entry payload was rejected - the one day of the
+    year when a correctly configured source lost all of its data.
+    """
+
+    @staticmethod
+    def _wall_clock_day(date):
+        """Every hour the local clock actually shows on that calendar day."""
+        entries = []
+        moment = BERLIN.localize(datetime(date.year, date.month, date.day))
+        while moment.astimezone(BERLIN).date() == date:
+            entries.append(
+                {"start": moment.strftime("%Y-%m-%dT%H:%M:%S"), "value": 0.25}
+            )
+            moment = BERLIN.normalize(moment + timedelta(hours=1))
+        return entries
+
+    @pytest.mark.parametrize("zone", [BERLIN, ZoneInfo("Europe/Berlin")])
+    def test_the_repeated_hour_yields_two_distinct_instants(self, zone):
+        payload = self._wall_clock_day(date(2026, 10, 25))
+        assert len(payload) == 25, "the long day has 25 wall-clock hours"
+
+        entries = normalize_entries(payload, zone)
+
+        instants = [entry["start"].timestamp() for entry in entries]
+        assert len(entries) == 25
+        assert len(set(instants)) == 25, "02:00 must resolve to two instants"
+        assert instants == sorted(instants)
+        assert (instants[-1] - instants[0]) / 3600 == 24
+
+    @pytest.mark.parametrize("zone", [BERLIN, ZoneInfo("Europe/Berlin")])
+    def test_the_short_day_is_accepted_too(self, zone):
+        payload = self._wall_clock_day(date(2026, 3, 29))
+        assert len(payload) == 23
+
+        entries = normalize_entries(payload, zone)
+
+        instants = [entry["start"].timestamp() for entry in entries]
+        assert len(entries) == 23
+        assert len(set(instants)) == 23
+        assert (instants[-1] - instants[0]) / 3600 == 22
+
+    def test_a_genuine_duplicate_is_still_rejected(self):
+        """The check must keep catching real template bugs."""
+        payload = [
+            {"start": "2026-08-23T10:00:00+02:00", "value": 1.0},
+            {"start": "2026-08-23T10:00:00+02:00", "value": 2.0},
+        ]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+
+        assert "share the start timestamp" in str(exc.value)
+
+    def test_a_nonexistent_wall_time_does_not_kill_the_payload(self):
+        """02:30 does not exist on the spring day; it must not raise."""
+        payload = [
+            {"start": "2026-03-29T01:30:00", "value": 1.0},
+            {"start": "2026-03-29T02:30:00", "value": 2.0},  # skipped by the clock
+            {"start": "2026-03-29T04:30:00", "value": 3.0},
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        instants = [entry["start"].timestamp() for entry in entries]
+        assert len(entries) == 3
+        assert instants == sorted(instants)

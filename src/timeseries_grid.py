@@ -145,6 +145,7 @@ def place_on_grid(entries, anchor, slot_count, slot_seconds, kind):
     values = [0.0] * slot_count
     covered_seconds = [0.0] * slot_count
     horizon_seconds = slot_count * slot_seconds
+    anchor_epoch = anchor.timestamp()
     dropped = 0
 
     for index, entry in enumerate(entries):
@@ -156,8 +157,14 @@ def place_on_grid(entries, anchor, slot_count, slot_seconds, kind):
             raise TimeseriesGridError(f"entry {index} has no 'end'")
         value = _as_number(entry.get("value"), f"entries[{index}].value")
 
-        begin = (start - anchor).total_seconds()
-        finish = (end - anchor).total_seconds()
+        # Via the epoch, never by subtracting the datetimes directly. Two aware
+        # datetimes that share a zoneinfo tzinfo subtract in WALL-CLOCK mode
+        # (PEP 495), so the repeated hour of an autumn transition would cancel
+        # itself out and two different instants would land on the same slot.
+        # pytz is unaffected - it attaches a fixed offset - but the grid must
+        # not depend on which flavour the caller happens to use.
+        begin = start.timestamp() - anchor_epoch
+        finish = end.timestamp() - anchor_epoch
         span = finish - begin
         if span <= 0:
             raise TimeseriesGridError(
