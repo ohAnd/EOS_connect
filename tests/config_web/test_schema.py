@@ -211,3 +211,48 @@ class TestPvForecastApiKey:
         assert "required" in solcast.lower()
         assert "optional" in forecast_solar.lower()
         assert forecast_solar != solcast
+
+
+class TestFeedInAdjustmentVisibility:
+    """
+    Every feed-in source applies (price + adder) * multiplier, so the UI has to
+    offer both fields for every source. They were gated to two, which made the
+    value invisible and uneditable on the three sources it also applied to.
+    """
+
+    SOURCES = ["fixed", "elpris_dk", "epex_spot", "evcc", "timeseries"]
+
+    @pytest.mark.parametrize(
+        "key", ["price.feed_in_static_adder", "price.feed_in_multiplier"]
+    )
+    def test_the_field_is_offered_for_every_feed_in_source(self, key):
+        schema = ConfigSchema()
+        field = schema.get(key)
+
+        assert field is not None
+        assert sorted(field.depends_on["price.feed_in_source"]) == sorted(self.SOURCES)
+
+    @pytest.mark.parametrize(
+        "key", ["price.feed_in_static_adder", "price.feed_in_multiplier"]
+    )
+    def test_each_source_gets_its_own_description(self, key):
+        """description_map and depends_on are kept in lock-step, house style."""
+        schema = ConfigSchema()
+        field = schema.get(key)
+
+        described = field.description_map["price.feed_in_source"]
+        assert sorted(described) == sorted(self.SOURCES)
+        for source in self.SOURCES:
+            resolved = schema.get_resolved_description(
+                key, {"price.feed_in_source": source}
+            )
+            assert resolved == described[source]
+
+    def test_the_gate_matches_the_declared_source_list(self):
+        """If a sixth feed-in source is added, these fields must follow it."""
+        schema = ConfigSchema()
+        choices = schema.get("price.feed_in_source").validation["choices"]
+
+        for key in ("price.feed_in_static_adder", "price.feed_in_multiplier"):
+            gate = schema.get(key).depends_on["price.feed_in_source"]
+            assert sorted(gate) == sorted(choices)
