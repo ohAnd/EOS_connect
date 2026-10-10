@@ -2211,9 +2211,10 @@ class PvInterface:
         try:
             forecast_values = []
             tz = pytz.timezone(self.time_zone)
-            current_time = tz.localize(
-                datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            )
+            # datetime.now() is naive SYSTEM local time, so on a host whose
+            # clock runs in another zone than the configured one this picked the
+            # wrong DATE near midnight. local_midnight reads the day in tz.
+            current_time = local_midnight(tz)
             end_time = current_time + timedelta(hours=tgt_duration)
 
             for forecast_entry in day_values:
@@ -3818,21 +3819,37 @@ class PvInterface:
             list: Exactly ``slot_count`` Wh values, starting at midnight of the first
             day in the payload.
         """
+        tz = pytz.timezone(self.time_zone)
+
+        def _localize(naive):
+            """Forecast.Solar stamps local wall clock with no offset."""
+            try:
+                return tz.localize(naive, is_dst=None)
+            except pytz.AmbiguousTimeError:
+                # The repeated hour of the autumn transition. For a PV series it
+                # is the middle of the night, where every value is 0, so either
+                # reading places the same energy.
+                return tz.localize(naive, is_dst=False)
+            except pytz.NonExistentTimeError:
+                # The skipped hour of the spring transition - likewise night.
+                return tz.localize(naive + timedelta(hours=1), is_dst=True)
+
         parsed = sorted(
-            (datetime.strptime(ts, "%Y-%m-%d %H:%M:%S"), float(wh))
+            (_localize(datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")), float(wh))
             for ts, wh in watt_hours_period.items()
         )
         if not parsed:
             return [0.0] * slot_count
         # Anchor on true local midnight of the first day, so slot 0 is always
-        # 00:00-00:xx today (replace() would keep the entry's own UTC offset and
-        # sit an hour off across a DST transition).
-        first_start = parsed[0][0]
-        midnight = (
-            local_midnight(first_start.tzinfo, first_start)
-            if first_start.tzinfo is not None
-            else first_start.replace(hour=0, minute=0, second=0, microsecond=0)
-        )
+        # 00:00-00:xx of that day.
+        #
+        # The timestamps arrive naive, so every offset below used to be measured
+        # in WALL-CLOCK seconds. That is an hour short of absolute time for the
+        # rest of a 25-hour day, which put the whole array one slot off against
+        # the absolute current_slot the optimizer indexes with. Localizing first
+        # makes every subtraction below absolute, and a normal day is unaffected
+        # because wall clock and absolute time agree on it.
+        midnight = local_midnight(tz, parsed[0][0])
         slots = [0.0] * slot_count
 
         for index, (end, watt_hours) in enumerate(parsed):
