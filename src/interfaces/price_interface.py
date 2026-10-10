@@ -2210,12 +2210,23 @@ class PriceInterface(ForecastMetadataMixin):
                             source=None,
                         )
             elif prices and not is_incomplete:
-                # Data is complete (real data only)
-                self._set_forecast_metadata(
-                    start_index=None,
-                    forecast_type="all_real",
-                    source=None,
-                )
+                # "Complete" here means EVCC sent whole days, not that the days
+                # it sent cover the horizon: exactly 24 hourly rates is accepted
+                # as valid, and fill_price_gaps then invents the second day from
+                # the first. Reporting that as all_real served invented prices
+                # to the UI as measured ones, so keep what the placement found.
+                if window.real_slots < expected_slots:
+                    self._set_forecast_metadata(
+                        start_index=window.real_slots,
+                        forecast_type="simple_repetition",
+                        source=None,
+                    )
+                else:
+                    self._set_forecast_metadata(
+                        start_index=None,
+                        forecast_type="all_real",
+                        source=None,
+                    )
 
             if prices:
                 self.consecutive_failures = 0
