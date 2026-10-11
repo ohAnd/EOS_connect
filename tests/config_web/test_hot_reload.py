@@ -18,7 +18,6 @@ def price_interface():
     mock.fixed_price_adder_ct = 0.0
     mock.relative_price_multiplier = 0.0
     mock.feed_in_tariff_price = 0.0
-    mock.recalculate_feedin_prices = MagicMock(return_value=[0.05, 0.05, 0.05])
     return mock
 
 
@@ -107,10 +106,9 @@ class TestHotReloadPrice:
         assert price_interface.relative_price_multiplier == 0.05
 
     def test_feed_in_price(self, adapter, price_interface):
-        """Changing feed_in_price should update attr and recalculate feed-in."""
+        """Changing feed_in_price should update the interface attribute."""
         adapter.on_config_changed("price.feed_in_price", 0.0, 0.08)
         assert price_interface.feed_in_tariff_price == 0.08
-        price_interface.recalculate_feedin_prices.assert_called_once()
 
     def test_feed_in_price_fires_run_trigger(self, price_interface, battery_interface):
         """Changing feed_in_price should also trigger an immediate optimization run."""
@@ -464,7 +462,6 @@ class TestHotReloadFeedInPrice:
         price_mock = MagicMock()
         price_mock.src = "fixed"
         price_mock.time_zone = ZoneInfo("Europe/Berlin")
-        price_mock.recalculate_feedin_prices = MagicMock(return_value=[])
         adapter = HotReloadAdapter(
             price_interface=price_mock,
             feed_in_price_interface=feed_in_price_interface,
