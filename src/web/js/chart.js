@@ -44,6 +44,56 @@ class ChartManager {
     }
 
     /**
+     * The absolute slot a backend payload was produced in.
+     *
+     * The backend publishes it as "current_slot" next to "anchor" (the local
+     * midnight its forecast grid counts from): the controls payload carries
+     * the live slot, the optimize response the slot of its run. Deriving a
+     * slot from getHours() instead runs in the BROWSER's zone and sits one
+     * slot off against the midnight-anchored arrays for ~21 hours after each
+     * DST transition - getHours() is for labels only, never for indexing a
+     * series. The fallback keeps a stale payload without the field rendering
+     * the way it used to.
+     *
+     * @param {Object} payload - data_controls or the optimize response
+     * @param {number} timeFrameBase - 900 or 3600
+     * @param {Date} [fallbackTime] - time for the legacy wall-clock derivation
+     * @returns {number} slot index at the running resolution
+     */
+    static payloadSlot(payload, timeFrameBase, fallbackTime) {
+        const slot = payload ? payload["current_slot"] : undefined;
+        if (Number.isInteger(slot)) {
+            return slot;
+        }
+        const time = fallbackTime || new Date();
+        return timeFrameBase === 900
+            ? time.getHours() * 4 + Math.floor(time.getMinutes() / 15)
+            : time.getHours();
+    }
+
+    /**
+     * When a slot starts, as a Date for user-local display.
+     *
+     * Uses the payload's "anchor" so the name survives a DST day (slot 16 on
+     * the 25-hour day starts at 15:00); without it, falls back to the
+     * browser's midnight, which matches the old naming on ordinary days.
+     *
+     * @param {Object} payload - any payload carrying "anchor"
+     * @param {number} slot - slot index at the running resolution
+     * @param {number} timeFrameBase - 900 or 3600
+     * @returns {Date} start of the slot
+     */
+    static slotStartTime(payload, slot, timeFrameBase) {
+        const anchorMs = payload ? Date.parse(payload["anchor"]) : NaN;
+        if (!Number.isNaN(anchorMs)) {
+            return new Date(anchorMs + slot * timeFrameBase * 1000);
+        }
+        const midnight = new Date();
+        midnight.setHours(0, 0, 0, 0);
+        return new Date(midnight.getTime() + slot * timeFrameBase * 1000);
+    }
+
+    /**
      * The scheduled managed loads, summed and aligned to the chart's x-axis.
      *
      * One band rather than one per load: the total is what the Load bar was missing,
@@ -80,13 +130,15 @@ class ChartManager {
             return;
         }
 
-        // Use server timestamp consistently for data processing
+        // Server timestamp: kept for the user-local axis labels below.
         const serverTime = new Date(data_response["timestamp"]);
-        const currentMinutes = serverTime.getMinutes();
-        const currentSlot = serverTime.getHours() * 4 + Math.floor(currentMinutes / 15);
-        const currentHour = serverTime.getHours();
 
         const time_frame_base = data_controls["used_time_frame_base"];
+        // The slot this response was produced in - the rotation anchor for
+        // every midnight-anchored array drawn here.
+        const responseSlot = ChartManager.payloadSlot(
+            data_response, time_frame_base, serverTime
+        );
 
         // Check if EVopt-based optimizer is active (both remote "evopt" and local "local_evopt")
         const evopt_in_charge = ["evopt", "local_evopt"].includes(data_controls["used_optimization_source"]);
@@ -124,7 +176,7 @@ class ChartManager {
         // EOS server includes AC charging energy in Last_Wh_pro_Stunde; using gesamtlast
         // gives consistent display across both EOS and EVopt backends.
         const axisLength = data_response["result"]["Last_Wh_pro_Stunde"].length;
-        const axisSlot = time_frame_base === 900 ? currentSlot : currentHour;
+        const axisSlot = responseSlot;
         const gesamtlastSliced = ChartManager.alignToAxis(
             data_request["ems"]["gesamtlast"], axisSlot, axisLength, time_frame_base
         );
@@ -150,14 +202,14 @@ class ChartManager {
         if (time_frame_base === 900) {
             // 15-minute intervals, 192 slots
             pvData = data_request["ems"]["pv_prognose_wh"]
-                .slice(currentSlot)
-                .concat(data_request["ems"]["pv_prognose_wh"].slice(0, currentSlot))
+                .slice(responseSlot)
+                .concat(data_request["ems"]["pv_prognose_wh"].slice(0, responseSlot))
                 .slice(0, 192)
                 .map(value => (value / 1000).toFixed(3));
         } else {
             // Hourly intervals, 48 slots
             pvData = data_request["ems"]["pv_prognose_wh"]
-                .slice(currentHour)
+                .slice(responseSlot)
                 .concat(data_request["ems"]["pv_prognose_wh"].slice(24, 48))
                 .map(value => (value / 1000).toFixed(3));
         }
@@ -168,9 +220,9 @@ class ChartManager {
         if (data_response["dc_charge"] && pvChargeCtrlEnabled) {
             let dcChargeSlots;
             if (time_frame_base === 900) {
-                dcChargeSlots = data_response["dc_charge"].slice(currentSlot).concat(data_response["dc_charge"].slice(96, 192));
+                dcChargeSlots = data_response["dc_charge"].slice(responseSlot).concat(data_response["dc_charge"].slice(96, 192));
             } else {
-                dcChargeSlots = data_response["dc_charge"].slice(currentHour).concat(data_response["dc_charge"].slice(24, 48));
+                dcChargeSlots = data_response["dc_charge"].slice(responseSlot).concat(data_response["dc_charge"].slice(24, 48));
             }
             this.chartInstance.data.datasets[2].backgroundColor = pvData.map((_, i) =>
                 dcChargeSlots[i] ? '#df6c00' : '#FFA500'
@@ -193,11 +245,7 @@ class ChartManager {
         const acChargeData = [];
 
         data_response["result"]["Netzbezug_Wh_pro_Stunde"].forEach((value, index) => {
-            var originalAcChargeValue = data_response["ac_charge"].slice(currentHour).concat(data_response["ac_charge"].slice(24, 48))[index] * max_charge_power_w;
-            if (time_frame_base === 900) {
-                const current_quarterly_slot = serverTime.getHours() * 4 + Math.floor(serverTime.getMinutes() / 15);
-                originalAcChargeValue = data_response["ac_charge"].slice(current_quarterly_slot).concat(data_response["ac_charge"].slice(24, 48))[index] * max_charge_power_w;
-            }
+            var originalAcChargeValue = data_response["ac_charge"].slice(responseSlot).concat(data_response["ac_charge"].slice(24, 48))[index] * max_charge_power_w;
 
             // EVopt: subtract planned AC charge from grid.
             // EOS: Last_Wh_pro_Stunde already contains optimizer-added load, which can differ
@@ -240,9 +288,9 @@ class ChartManager {
         this.chartInstance.data.datasets[7].data = data_response["result"]["Einnahmen_Euro_pro_Stunde"];
         
         if (time_frame_base === 900) {
-            this.chartInstance.data.datasets[8].data = data_response["discharge_allowed"].slice(currentSlot).concat(data_response["discharge_allowed"].slice(96, 192));
+            this.chartInstance.data.datasets[8].data = data_response["discharge_allowed"].slice(responseSlot).concat(data_response["discharge_allowed"].slice(96, 192));
         } else {
-            this.chartInstance.data.datasets[8].data = data_response["discharge_allowed"].slice(currentHour).concat(data_response["discharge_allowed"].slice(24, 48));
+            this.chartInstance.data.datasets[8].data = data_response["discharge_allowed"].slice(responseSlot).concat(data_response["discharge_allowed"].slice(24, 48));
         }
 
         // dataset[12] is populated alongside PV bar recolouring above — nothing more needed here
@@ -273,11 +321,11 @@ class ChartManager {
 
         if (time_frame_base === 900) {
             if (dynOverrideData.length > 0) {
-                this.chartInstance.data.datasets[9].data = dynOverrideData.slice(currentSlot).concat(dynOverrideData.slice(96, 192));
+                this.chartInstance.data.datasets[9].data = dynOverrideData.slice(responseSlot).concat(dynOverrideData.slice(96, 192));
             }
         } else {
             if (dynOverrideData.length > 0) {
-                this.chartInstance.data.datasets[9].data = dynOverrideData.slice(currentHour).concat(dynOverrideData.slice(24, 48));
+                this.chartInstance.data.datasets[9].data = dynOverrideData.slice(responseSlot).concat(dynOverrideData.slice(24, 48));
             }
         }
 
@@ -287,21 +335,9 @@ class ChartManager {
         
         // Apply segment styling if forecast data is available
         if (priceInfo && priceInfo.forecast_start_index !== null && priceInfo.forecast_type !== "all_real") {
-            // Calculate current slot offset based on time frame
-            // forecast_start_index is absolute from midnight, so we need to subtract current position
-            const timeFrameBase = data_controls && data_controls["used_time_frame_base"] ? data_controls["used_time_frame_base"] : 3600;
-            
-            // Convert absolute forecast_start_index (from midnight) to relative index in priceData
-            // priceData starts from midnight, so subtract the current slot offset
-            let arrayOffset = 0;
-            if (timeFrameBase === 900) {
-                // 15-min intervals: use currentSlot which includes both hours AND minutes
-                // currentSlot already calculated at top: currentHour * 4 + Math.floor(currentMinutes / 15)
-                arrayOffset = currentSlot;
-            } else {
-                // Hourly: use hour directly
-                arrayOffset = currentHour;
-            }
+            // forecast_start_index is absolute from midnight; priceData starts
+            // at the response's slot, so subtract that offset.
+            const arrayOffset = responseSlot;
             
             const forecastIdx = Math.max(0, priceInfo.forecast_start_index - arrayOffset);
             

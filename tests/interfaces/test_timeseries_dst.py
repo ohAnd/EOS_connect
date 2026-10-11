@@ -2,14 +2,13 @@
 """
 Characterization of slot indexing and midnight anchoring on DST days.
 
-The forecast grid is absolute (slot i = midnight + i*time_frame_base), but both
-halves of the arithmetic use the wall clock: the slot index is `now.hour`-based,
-and every "midnight" is `now.replace(hour=0, ...)` on a pytz datetime — which
-keeps *now's* UTC offset, so on a DST day the anchor itself is an hour off. The
-two errors currently cancel, which is why the plain tests here pass; the xfail
-tests state the absolute indexing that `fix: anchor forecast slots at true local
-midnight` makes true, for the ~21 hours after each transition where wall clock
-and absolute slot disagree.
+The forecast grid is absolute (slot i = midnight + i*time_frame_base). Both
+halves of the arithmetic used to run on the wall clock — a `now.hour`-based
+index against a `now.replace(hour=0, ...)` anchor whose pytz offset is an hour
+off on a DST day — two errors that cancelled on ordinary days and broke
+together on transition days. Everything now counts absolute time against
+`timeseries_grid.local_midnight`; these tests pin that for the ~21 hours after
+each transition where wall clock and absolute slot disagree.
 
 Reference days: 2026-03-29 (23 hours) and 2026-10-25 (25 hours), Europe/Berlin —
 the same days tests/interfaces/test_pv_autoscaler_dst.py uses.
@@ -32,11 +31,6 @@ NORMAL_DAY = (2026, 8, 23)
 SPRING_FORWARD = (2026, 3, 29)  # 02:00 -> 03:00, the day has 23 hours
 FALL_BACK = (2026, 10, 25)  # 03:00 -> 02:00, the day has 25 hours
 
-ANCHOR_XFAIL = (
-    "absolute indexing lands with 'fix: anchor forecast slots at true local midnight'"
-)
-
-
 def berlin(day, hour, minute=0):
     """A timezone-aware Berlin timestamp on one of the reference days."""
     return BERLIN.localize(datetime(*day, hour, minute))
@@ -55,10 +49,10 @@ def clock_at(module_path, moment):
 
 class TestMidnightAnchor:
     """
-    Documents why a `local_midnight` helper is needed at all: the anchor pattern
-    used by eos_connect.get_ems_data, loads/manager._clock, pv_interface and
-    both price interfaces — `now.replace(hour=0, ...)` — is not local midnight
-    on a DST day, and `(now - anchor)` against it reproduces the wall clock.
+    Documents why `timeseries_grid.local_midnight` exists: the anchor pattern
+    the code used to rely on — `now.replace(hour=0, ...)` — is not local
+    midnight on a DST day, and `(now - anchor)` against it reproduces the wall
+    clock. These pin the pytz semantics the code must never return to.
     """
 
     def test_replace_keeps_nows_offset_instead_of_midnights(self):
@@ -123,7 +117,6 @@ class TestEvoptTimeParameters:
         assert len(params["pad_past"]) == params["current_slot"]
         assert params["current_slot"] + params["n_result"] == params["n_control"]
 
-    @pytest.mark.xfail(reason=ANCHOR_XFAIL, strict=True)
     @pytest.mark.parametrize(
         "day,time_frame_base,expected_slot",
         [
@@ -142,7 +135,6 @@ class TestEvoptTimeParameters:
             params = backend._calculate_time_parameters()
         assert params["current_slot"] == expected_slot
 
-    @pytest.mark.xfail(reason=ANCHOR_XFAIL, strict=True)
     def test_late_on_the_long_day_the_index_passes_the_wall_clock_maximum(
         self, backend
     ):
@@ -157,8 +149,8 @@ class TestEvoptTimeParameters:
 class TestControlDataSlotSelection:
     """
     examine_response_to_control_data picks the control values for "now" out of
-    midnight-anchored arrays with a wall-clock index and labels them with the
-    wall-clock hour (optimization_interface.py:261, :421, :438-445).
+    midnight-anchored arrays by the absolute slot and labels the entries with
+    it; "hour" remains as a wall-clock mirror of the slot's start.
     """
 
     @pytest.fixture(name="interface")
@@ -190,25 +182,102 @@ class TestControlDataSlotSelection:
             "washingstart": washingstart,
         }
 
-    def test_today_the_wall_clock_hour_picks_the_slot_and_labels_it(self, interface):
-        """Pins the wall-clock selection, label, and the release that never fires.
-
-        washingstart is a slot index (16 = 15:30 on the 25-hour day), but it is
-        compared against the wall-clock hour.
-        """
-        self.examine(interface, berlin(FALL_BACK, 15, 30), self.response(16))
-        assert interface.last_control_data[0]["ac_charge_demand"] == 0.15
-        assert interface.last_control_data[0]["hour"] == 15
-        assert interface.home_appliance_released is False
-
-    @pytest.mark.xfail(reason=ANCHOR_XFAIL, strict=True)
     def test_the_control_slot_is_absolute_on_dst_days(self, interface):
         """The control value for 15:30 on the long day lives in slot 16, not 15."""
         self.examine(interface, berlin(FALL_BACK, 15, 30), self.response(16))
         assert interface.last_control_data[0]["ac_charge_demand"] == 0.16
+        assert interface.last_control_data[0]["slot"] == 16
+        assert interface.last_control_data[1]["slot"] == 17
 
-    @pytest.mark.xfail(reason=ANCHOR_XFAIL, strict=True)
+    def test_the_hour_label_mirrors_the_slots_wall_clock(self, interface):
+        """"hour" stays as a wall-clock mirror for anything external reading it."""
+        self.examine(interface, berlin(FALL_BACK, 15, 30), self.response(16))
+        # Slot 16 on the 25-hour day starts at 15:00 local (CET).
+        assert interface.last_control_data[0]["hour"] == 15
+
     def test_the_appliance_release_matches_the_absolute_slot(self, interface):
-        """A washingstart equal to the current absolute slot must release the appliance."""
+        """A washingstart equal to the current absolute slot releases the appliance."""
         self.examine(interface, berlin(FALL_BACK, 15, 30), self.response(16))
         assert interface.home_appliance_released is True
+
+    def test_a_washingstart_for_another_slot_does_not_release(self, interface):
+        """The wall-clock hour (15) must not release a slot-16 start."""
+        self.examine(interface, berlin(FALL_BACK, 15, 30), self.response(15))
+        assert interface.home_appliance_released is False
+
+
+class TestControlDataValidityWindow:
+    """
+    The fast control loop matches on the instants an entry describes, not on
+    its slot number.
+
+    A slot number only means something against the midnight it was counted
+    from. An optimization at 23:40 labels its entries 23 and 24; at 00:00 the
+    loop recounts against the next midnight, gets 0, and matched neither - so
+    it skipped and warned once a second until the next run, while entry 1 held
+    exactly the right data (slot 24 of yesterday IS 00:00 today).
+    """
+
+    @pytest.fixture(name="interface")
+    def interface_fixture(self):
+        iface = OptimizationInterface.__new__(OptimizationInterface)
+        iface.time_zone = BERLIN
+        iface.time_frame_base = 3600
+        iface.last_control_data = [{}, {}]
+        iface.dyn_override_discharge_allowed = False
+        iface.last_eos_request = None
+        iface.home_appliance_start_hour = None
+        iface.home_appliance_released = False
+        iface.last_start_solution = None
+        return iface
+
+    RESPONSE = {
+        "ac_charge": [round(s / 100, 2) for s in range(48)],
+        "dc_charge": [0.0] * 48,
+        "discharge_allowed": [0] * 48,
+        "start_solution": [0, 1],
+    }
+
+    @staticmethod
+    def _select(entries, now):
+        """The matcher's exact-window pass, as eos_connect runs it."""
+        for index, entry in enumerate(entries):
+            if entry["valid_from"] <= now < entry["valid_until"]:
+                return index
+        return None
+
+    def test_the_entries_carry_the_instants_they_describe(self, interface):
+        moment = berlin(FALL_BACK, 15, 30)
+        with clock_at("src.interfaces.optimization_interface.datetime", moment):
+            interface.examine_response_to_control_data(dict(self.RESPONSE))
+
+        first, second = interface.last_control_data
+        assert first["valid_from"] <= moment < first["valid_until"]
+        assert second["valid_from"] == first["valid_until"]
+        assert first["valid_until"] - first["valid_from"] == timedelta(hours=1)
+
+    def test_the_pair_still_matches_after_midnight(self, interface):
+        """Optimized at 23:40, asked at 00:05 the next day."""
+        with clock_at(
+            "src.interfaces.optimization_interface.datetime",
+            berlin((2026, 8, 23), 23, 40),
+        ):
+            interface.examine_response_to_control_data(dict(self.RESPONSE))
+
+        # The slot labels are 23 and 24 and would match nothing after midnight.
+        assert [entry["slot"] for entry in interface.last_control_data] == [23, 24]
+
+        after_midnight = berlin((2026, 8, 24), 0, 5)
+        assert self._select(interface.last_control_data, after_midnight) == 1
+
+    def test_the_second_entry_covers_the_hour_after_the_first(self, interface):
+        with clock_at(
+            "src.interfaces.optimization_interface.datetime",
+            berlin((2026, 8, 23), 10, 5),
+        ):
+            interface.examine_response_to_control_data(dict(self.RESPONSE))
+
+        entries = interface.last_control_data
+        assert self._select(entries, berlin((2026, 8, 23), 10, 59)) == 0
+        assert self._select(entries, berlin((2026, 8, 23), 11, 0)) == 1
+        assert self._select(entries, berlin((2026, 8, 23), 12, 0)) is None

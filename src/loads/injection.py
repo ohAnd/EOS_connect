@@ -28,7 +28,12 @@ network and a malformed array must produce a 400, never a corrupted ``gesamtlast
 import logging
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+
+try:  # running from src/ as a script — src/ is on sys.path
+    from timeseries_grid import KIND_EXTENSIVE, TimeseriesGridError, place_on_grid
+except ImportError:  # imported as src.loads (tests)
+    from ..timeseries_grid import KIND_EXTENSIVE, TimeseriesGridError, place_on_grid
 
 from .contribution import MAX_SLOT_WH, ttl_from_minutes
 
@@ -351,45 +356,38 @@ def profile_from_entries(entries, resolution_seconds, anchor, slot_count,
     if not entries:
         raise InjectionError("the source returned no values")
 
-    placed = [0.0] * slot_count
-    horizon_seconds = slot_count * time_frame_base
-    dropped = 0
-
+    declared_span = timedelta(seconds=resolution_seconds)
+    spanned = []
     for index, entry in enumerate(entries):
         start = entry.get("start")
         if start is None:
             raise InjectionError(f"entry {index} has no 'start'")
-        value = _as_number(entry.get("value"), f"entries[{index}].value")
-
-        begin = (start - anchor).total_seconds()
-        end_stamp = entry.get("end")
-        finish = (
-            (end_stamp - anchor).total_seconds() if end_stamp is not None
-            else begin + resolution_seconds
+        end = entry.get("end")
+        spanned.append(
+            {
+                "start": start,
+                "end": end if end is not None else start + declared_span,
+                "value": entry.get("value"),
+            }
         )
-        span = finish - begin
-        if span <= 0:
-            raise InjectionError(
-                f"entry {index} ends at or before it starts - check the source's "
-                "timestamps"
-            )
 
-        if finish <= 0 or begin >= horizon_seconds:
-            dropped += 1
-            continue
+    try:
+        placement = place_on_grid(
+            spanned, anchor, slot_count, time_frame_base, KIND_EXTENSIVE
+        )
+    except TimeseriesGridError as exc:
+        raise InjectionError(str(exc)) from exc
 
-        _spread(placed, value, begin, finish, span, time_frame_base, slot_count)
-
-    if dropped:
+    if placement.dropped:
         # The same accounting a push gets. A source publishing yesterday as well as
         # today is normal and its past entries are meant to fall away - but so is a
         # source stuck a day behind, and only the count tells those apart.
         logger.info(
             "[LOADS] %d of %d pulled entries fall outside the %d-slot horizon and were "
-            "ignored", dropped, len(entries), slot_count,
+            "ignored", placement.dropped, len(entries), slot_count,
         )
 
-    for value in placed:
+    for value in placement.values:
         if abs(value) > MAX_SLOT_WH:
             raise InjectionError(
                 f"a slot value of {value:.0f} Wh is outside the plausible range "
@@ -397,30 +395,11 @@ def profile_from_entries(entries, resolution_seconds, anchor, slot_count,
             )
 
     return PushedProfile(
-        slots_wh=placed,
+        slots_wh=placement.values,
         valid_until=valid_until,
         source_resolution_s=int(resolution_seconds),
         source_length=len(entries),
     )
-
-
-def _spread(placed, value, begin, finish, span, time_frame_base, slot_count):
-    """
-    Add one entry's energy to every slot its span touches, weighted by overlap.
-
-    Splitting by overlap rather than by slot index is what keeps a source whose
-    timestamps do not line up with the slot boundaries from silently losing energy at
-    each edge.
-    """
-    first = max(0, int(begin // time_frame_base))
-    last = min(slot_count - 1, int((finish - 1e-9) // time_frame_base))
-
-    for slot in range(first, last + 1):
-        slot_begin = slot * time_frame_base
-        slot_end = slot_begin + time_frame_base
-        overlap = min(finish, slot_end) - max(begin, slot_begin)
-        if overlap > 0:
-            placed[slot] += value * (overlap / span)
 
 
 def describe(profile, time_frame_base):

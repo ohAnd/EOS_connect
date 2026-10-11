@@ -15,6 +15,11 @@ import logging
 import threading
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
+
+try:  # running from src/ — src/ is on sys.path
+    from timeseries_grid import local_midnight
+except ImportError:  # imported as src.interfaces (tests)
+    from ..timeseries_grid import local_midnight
 import math
 from typing import Any, Dict, List, Optional
 
@@ -463,8 +468,21 @@ class PvAutoscaler:
         # 15-minute day), so slot width comes from the interface resolution above.
         forecast_kwh = None
         try:
-            # Get forecast for PREVIOUS hour (delta represents generation during it)
-            idx_start = (prev_hour_local % 24) * slots_per_hour
+            # Get forecast for PREVIOUS hour (delta represents generation
+            # during it). Index by absolute hours since local midnight, not the
+            # wall-clock hour: on the 25-hour day the second 02:00 is slot 3,
+            # and every hour after the transition sits one slot past its
+            # wall-clock name - these rows are persisted and feed the scaling.
+            if period_start_local.tzinfo is None:
+                idx_start = (prev_hour_local % 24) * slots_per_hour
+            else:
+                midnight = local_midnight(
+                    period_start_local.tzinfo, period_start_local
+                )
+                hours_since_midnight = (
+                    int((period_start_local - midnight).total_seconds()) // 3600
+                )
+                idx_start = hours_since_midnight * slots_per_hour
             hour_slots = current_forecast[idx_start : idx_start + slots_per_hour]
             if hour_slots:
                 # Sum source Wh values, then normalize the stored value to kWh.

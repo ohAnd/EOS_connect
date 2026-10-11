@@ -235,9 +235,9 @@ def test_stromligning_quarter_hour_aggregation(monkeypatch):
 
     assert price_interface._stromligning_url == expected_url
 
-    # Request 4 hours (should yield 16 intervals for 15-min resolution)
+    # Request 4 hours = 16 slots (tgt_duration counts slots on every path)
     price_interface.update_prices(
-        4, start_time=datetime(2025, 10, 20, 22, tzinfo=timezone.utc)
+        16, start_time=datetime(2025, 10, 20, 22, tzinfo=timezone.utc)
     )
 
     # Convert ct/kWh to €/kWh (divide by 1000)
@@ -384,9 +384,9 @@ def test_akkudoktor_quarter_hour(monkeypatch):
         {"source": "default"}, time_frame_base=900, timezone=timezone.utc
     )
     price_interface.update_prices(
-        4, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc)
+        16, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc)
     )
-    # Each hour is split into 4 equal 15min intervals
+    # Each hour is split into 4 equal 15min intervals; 16 slots = 4 hours
     expected = [round((100000 + i // 4 * 1000) / 100000, 9) for i in range(16)]
     assert price_interface.get_current_prices() == pytest.approx(expected, rel=1e-9)
 
@@ -501,7 +501,7 @@ def test_tibber_quarter_hour(monkeypatch):
         timezone=timezone.utc,
     )
     price_interface.update_prices(
-        4, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc)
+        16, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc)
     )
     expected = [round((0.2 + i * 0.01) / 1000, 9) for i in range(16)]
     actual = price_interface.get_current_prices()

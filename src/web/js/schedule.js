@@ -94,7 +94,6 @@ class ScheduleManager {
     showSchedule(data_request, data_response, data_controls, priceInfo = null) {
         //console.log("------- showSchedule -------");
         var serverTime = new Date(data_response["timestamp"]);
-        var currentHour = serverTime.getHours();
         var discharge_allowed = data_response["discharge_allowed"];
         var ac_charge = data_response["ac_charge"];
         var dc_charge = data_response["dc_charge"] || [];
@@ -107,6 +106,13 @@ class ScheduleManager {
 
         const time_frame_base = data_controls["used_time_frame_base"];
         const evopt_in_charge = data_controls["used_optimization_source"] === "evopt";
+        // The hourly slot the response was produced in - the table's row 0.
+        // After the quarter-hourly arrays are folded to hours below, every
+        // index into them is hour-based, so fold the slot the same way.
+        var currentHour = Math.floor(
+            ChartManager.payloadSlot(data_response, time_frame_base, serverTime)
+            * time_frame_base / 3600
+        );
 
         ac_charge = ac_charge.map((value, index) => value * max_charge_power_w);
         var priceData = data_response["result"]["Electricity_price"];
@@ -158,17 +164,14 @@ class ScheduleManager {
         let adjustedForecastStartIndex = priceInfo ? priceInfo.forecast_start_index : null;
         
         if (adjustedForecastStartIndex !== null) {
-            const now = new Date();
-            const currentHour = now.getHours();
-            
             if (time_frame_base === 900) {
                 // Convert from quarterly (15-min) index to hourly index
                 // 4 quarterly slots = 1 hour, so divide by 4
                 adjustedForecastStartIndex = Math.floor(adjustedForecastStartIndex / 4);
             }
-            
-            // Adjust for current hour offset
-            // forecast_start_index is absolute (from midnight), schedule table shows relative hours (from now)
+
+            // forecast_start_index is absolute (from midnight); the table rows
+            // are relative to the response's hourly slot computed above.
             adjustedForecastStartIndex = Math.max(0, adjustedForecastStartIndex - currentHour);
         }
 

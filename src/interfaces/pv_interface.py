@@ -192,6 +192,10 @@ def _describe_akkudoktor_error(tgt_value, exception):
     return f"{message} | upstream: {body}{hint}"
 
 
+try:  # running from src/ — src/ is on sys.path
+    from timeseries_grid import horizon_slots, local_midnight
+except ImportError:  # imported as src.interfaces (tests)
+    from ..timeseries_grid import horizon_slots, local_midnight
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
@@ -1881,8 +1885,8 @@ class PvInterface:
             return []
 
         now_local = datetime.now(tz)
-        midnight_today = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-        expected_count = 48 if self.time_frame_base == 3600 else 192
+        midnight_today = local_midnight(tz, now_local)
+        expected_count = horizon_slots(self.time_frame_base)
         slot_keys = [
             midnight_today + timedelta(seconds=slot_seconds * i)
             for i in range(expected_count)
@@ -2207,9 +2211,10 @@ class PvInterface:
         try:
             forecast_values = []
             tz = pytz.timezone(self.time_zone)
-            current_time = tz.localize(
-                datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            )
+            # datetime.now() is naive SYSTEM local time, so on a host whose
+            # clock runs in another zone than the configured one this picked the
+            # wrong DATE near midnight. local_midnight reads the day in tz.
+            current_time = local_midnight(tz)
             end_time = current_time + timedelta(hours=tgt_duration)
 
             for forecast_entry in day_values:
@@ -2532,51 +2537,32 @@ class PvInterface:
 
         # Data processing
         try:
-            # Build an array of hourly values from now (hour=0) up
-            # to tomorrow midnight (48 hours)
+            # Slot 0 is TRUE local midnight today; every slot after it is one
+            # ABSOLUTE hour further on.
+            #
+            # estimate.timezone is a fixed-offset tzinfo the library builds from
+            # the API's utc_offset_seconds, so .replace(hour=0) on it is not
+            # local midnight on a transition day - it keeps whatever offset was
+            # in force at fetch time. That put this array an hour out against
+            # every other forecast (price, load, EVCC, Solcast, Victron,
+            # timeseries), all of which anchor on local_midnight, and against
+            # the absolute current_slot the optimizer and the UI now index with.
+            # Before the slot indices moved, the wall-clock index cancelled this
+            # anchor error; it does not any more.
+            #
+            # Stepping absolute hours also removes the need to trim or pad: 48
+            # steps are 48 slots on a 23-, 24- or 25-hour day alike. The samples
+            # are taken by absolute instant, which is what the library compares.
+            anchor = local_midnight(pytz.timezone(self.time_zone))
             pv_forecast = []
-            # Calculate the number of hours remaining until tomorrow midnight
-            # Use the current time in the forecast's timezone
-            # Always use the start of the current hour in the forecast's timezone
-            now = datetime.now(estimate.timezone).replace(
-                minute=0, second=0, microsecond=0
-            )
-            # Find tomorrow's midnight in the forecast's timezone
-            tomorrow_midnight = (now + timedelta(days=2)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            hours_until_tomorrow_midnight = int(
-                (tomorrow_midnight - now).total_seconds() // 3600
-            )
-            hours_from_today_midnight = int(
-                (
-                    now - now.replace(hour=0, minute=0, second=0, microsecond=0)
-                ).total_seconds()
-                // 3600
-            )
-
-            for hour in range(
-                -1 * hours_from_today_midnight, hours_until_tomorrow_midnight
-            ):
+            for slot in range(48):
+                slot_start = anchor + timedelta(hours=slot)
                 current_hour_energy = 0
                 for minute in range(59):
                     current_hour_energy += estimate.power_production_at_time(
-                        now + timedelta(hours=hour, minutes=minute)
+                        slot_start + timedelta(minutes=minute)
                     )
-                current_hour_energy = round(current_hour_energy / 60, 1)
-                # time_point = now + timedelta(hours=hour, minutes=0)
-                # logger.debug("TEST - : %s - %s", current_hour_energy, time_point)
-                pv_forecast.append(current_hour_energy)
-
-            # Normalise to exactly 48 hourly slots so DST days never produce
-            # a short or long array.  The openmeteo lib computes
-            # hours_until_tomorrow_midnight in wall-clock time, which yields
-            # 47 on spring-forward and 49 on fall-back days.
-            target_hourly = 48
-            if len(pv_forecast) > target_hourly:
-                pv_forecast = pv_forecast[:target_hourly]
-            elif len(pv_forecast) < target_hourly:
-                pv_forecast.extend([0.0] * (target_hourly - len(pv_forecast)))
+                pv_forecast.append(round(current_hour_energy / 60, 1))
 
             # Clear any previous errors on success
             self.pv_forcast_request_error["error"] = None
@@ -2833,9 +2819,8 @@ class PvInterface:
             # hourly and splitting afterwards: a Personal (30 min) or Professional Plus
             # (15 min) account then contributes its real intra-hour shape instead of a
             # flat quarter of the hour.
-            slot_seconds, slot_count = (
-                (900, 192) if self.time_frame_base == 900 else (3600, 48)
-            )
+            slot_seconds = self.time_frame_base
+            slot_count = horizon_slots(slot_seconds)
             pv_forecast = self._forecast_solar_periods_to_slots(
                 watt_hours_period, slot_seconds, slot_count
             )
@@ -3324,7 +3309,7 @@ class PvInterface:
         # Get timezone-aware current time
         tz = pytz.timezone(self.time_zone)
         current_time = datetime.now(tz).replace(minute=0, second=0, microsecond=0)
-        midnight_today = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        midnight_today = local_midnight(tz, current_time)
 
         # Calculate query start and end times in Unix seconds
         # Start from midnight today
@@ -3834,14 +3819,37 @@ class PvInterface:
             list: Exactly ``slot_count`` Wh values, starting at midnight of the first
             day in the payload.
         """
+        tz = pytz.timezone(self.time_zone)
+
+        def _localize(naive):
+            """Forecast.Solar stamps local wall clock with no offset."""
+            try:
+                return tz.localize(naive, is_dst=None)
+            except pytz.AmbiguousTimeError:
+                # The repeated hour of the autumn transition. For a PV series it
+                # is the middle of the night, where every value is 0, so either
+                # reading places the same energy.
+                return tz.localize(naive, is_dst=False)
+            except pytz.NonExistentTimeError:
+                # The skipped hour of the spring transition - likewise night.
+                return tz.localize(naive + timedelta(hours=1), is_dst=True)
+
         parsed = sorted(
-            (datetime.strptime(ts, "%Y-%m-%d %H:%M:%S"), float(wh))
+            (_localize(datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")), float(wh))
             for ts, wh in watt_hours_period.items()
         )
         if not parsed:
             return [0.0] * slot_count
-        # Anchor on midnight of the first day, so slot 0 is always 00:00-00:xx today.
-        midnight = parsed[0][0].replace(hour=0, minute=0, second=0, microsecond=0)
+        # Anchor on true local midnight of the first day, so slot 0 is always
+        # 00:00-00:xx of that day.
+        #
+        # The timestamps arrive naive, so every offset below used to be measured
+        # in WALL-CLOCK seconds. That is an hour short of absolute time for the
+        # rest of a 25-hour day, which put the whole array one slot off against
+        # the absolute current_slot the optimizer indexes with. Localizing first
+        # makes every subtraction below absolute, and a normal day is unaffected
+        # because wall clock and absolute time agree on it.
+        midnight = local_midnight(tz, parsed[0][0])
         slots = [0.0] * slot_count
 
         for index, (end, watt_hours) in enumerate(parsed):
