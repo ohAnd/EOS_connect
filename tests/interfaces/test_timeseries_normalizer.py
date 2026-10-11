@@ -844,3 +844,100 @@ class TestMixedResolutionSpans:
 
         assert self._span(entries[1]) == 3600  # 10:00 does not swallow 11:00-13:00
         assert entries[2]["start"] - entries[1]["end"] == timedelta(hours=2)
+
+
+class TestLenientMode:
+    """
+    Opt-in tolerance for sources that mix unusable rows in with real ones.
+
+    Strict stays the default: a dropped entry becomes a hole, and a hole in a
+    price series is filled by policy. But since the placement reports holes
+    through `coverage`, a caller that knows its source can trade one bad entry
+    for the other 191 rather than losing the whole fetch.
+    """
+
+    GOOD = [
+        {"start": "2026-08-23T09:00:00+02:00", "value": 1.0},
+        {"start": "2026-08-23T10:00:00+02:00", "value": 2.0},
+        {"start": "2026-08-23T11:00:00+02:00", "value": 3.0},
+    ]
+
+    def test_strict_is_the_default(self):
+        payload = self.GOOD[:1] + [{"start": "nonsense", "value": 1.0}] + self.GOOD[1:]
+
+        with pytest.raises(TimeseriesFormatError):
+            normalize_entries(payload, BERLIN)
+
+    def test_lenient_skips_and_keeps_the_rest(self, caplog):
+        payload = self.GOOD[:1] + [{"start": "nonsense", "value": 1.0}] + self.GOOD[1:]
+
+        with caplog.at_level("WARNING"):
+            entries = normalize_entries(payload, BERLIN, lenient=True)
+
+        assert [entry["value"] for entry in entries] == [1.0, 2.0, 3.0]
+        assert "skipped" in caplog.text
+
+    def test_lenient_skips_a_missing_value(self):
+        payload = [{"start": "2026-08-23T08:00:00+02:00"}] + self.GOOD
+
+        entries = normalize_entries(payload, BERLIN, lenient=True)
+
+        assert [entry["value"] for entry in entries] == [1.0, 2.0, 3.0]
+
+    def test_lenient_still_raises_when_nothing_survives(self):
+        """An empty result must reach the caller, not come back as no entries."""
+        payload = [{"start": "nonsense", "value": 1.0}, {"nothing": "useful"}]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN, lenient=True)
+
+        assert "none of the 2" in str(exc.value)
+
+    def test_a_skipped_entry_leaves_a_visible_hole(self):
+        """The gap must survive into the spans, not be swallowed by its neighbour."""
+        payload = [
+            {"start": f"2026-08-23T{hour:02d}:00:00+02:00", "value": float(hour)}
+            for hour in range(8, 16)
+        ]
+        payload[3]["value"] = "not a number"  # 11:00 is unusable
+
+        entries = normalize_entries(payload, BERLIN, lenient=True)
+
+        assert len(entries) == 7
+        # 10:00 keeps its own hour rather than stretching across the hole.
+        tenth = next(e for e in entries if e["start"].hour == 10)
+        assert tenth["end"] - tenth["start"] == timedelta(hours=1)
+        assert tenth["end"].hour == 11
+
+
+class TestBareArrayRejection:
+    """
+    A payload with no timestamps must name the sources built for that shape.
+
+    "The array begins today at 00:00" is the #214 defect as a feature, so the
+    timeseries path refuses it - but the refusal has to be actionable. Someone
+    who pasted 24 hourly prices wants fixed_24h; telling them to write a
+    template sensor sends them the wrong way.
+    """
+
+    def test_a_list_of_numbers_names_the_alternatives(self):
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries([0.25, 0.30, 0.28], BERLIN)
+
+        message = str(exc.value)
+        assert "fixed_24h" in message
+        assert "push" in message
+        assert "elpris/epex" in message
+
+    def test_entries_without_a_timestamp_name_them_too(self):
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries([{"value": 0.25}, {"value": 0.30}], BERLIN)
+
+        assert "fixed_24h" in str(exc.value)
+
+    def test_an_empty_payload_still_says_empty(self):
+        """The bare-array check must not shadow the clearer message."""
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries([], BERLIN)
+
+        assert "empty" in str(exc.value)

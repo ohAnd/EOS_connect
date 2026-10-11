@@ -155,7 +155,9 @@ class TestFeedInEvccPriceSource:
             evcc_interface=mock_evcc,
         )
         
-        feed_in_iface.update_prices(48)
+        # The rates are dated 2025-10-20, so the window must be too:
+        # placement is by timestamp now, not by position in the list.
+        feed_in_iface.update_prices(48, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc))
         prices = feed_in_iface.get_current_feedin_prices()
         
         # 0.1 EUR/kWh should convert to 0.0001 EUR/Wh
@@ -200,7 +202,9 @@ class TestFeedInEvccPriceSource:
             evcc_interface=mock_evcc,
         )
         
-        feed_in_iface.update_prices(48)
+        # The rates are dated 2025-10-20, so the window must be too:
+        # placement is by timestamp now, not by position in the list.
+        feed_in_iface.update_prices(48, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc))
         prices = feed_in_iface.get_current_feedin_prices()
         
         # 0.1 EUR/kWh + 5 ct/kWh adder = 0.00015 EUR/Wh
@@ -244,7 +248,9 @@ class TestFeedInEvccPriceSource:
             evcc_interface=mock_evcc,
         )
         
-        feed_in_iface.update_prices(48)
+        # The rates are dated 2025-10-20, so the window must be too:
+        # placement is by timestamp now, not by position in the list.
+        feed_in_iface.update_prices(48, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc))
         prices = feed_in_iface.get_current_feedin_prices()
         
         # 0.0001 EUR/Wh * 1.1 = 0.00011 EUR/Wh
@@ -467,3 +473,89 @@ class TestEvccTimestampOffsets:
         assert prices[5] == pytest.approx(0.05 / 1000)
         assert prices[6] == pytest.approx(0.06 / 1000)
         assert prices[47] == pytest.approx(0.47 / 1000)
+
+
+class TestEvccFeedInPlacesByTimestamp:
+    """
+    The export side of discussion #214.
+
+    EVCC feed-in was the one consumer the "five consumers, one placement"
+    refactor did not reach: the timestamps were parsed and then discarded, and
+    the values laid out by their position in the payload. A tariff that also
+    publishes yesterday therefore served yesterday's prices as today's.
+    """
+
+    BERLIN = pytz.timezone("Europe/Berlin")
+    TODAY = BERLIN.localize(datetime(2026, 8, 23))
+
+    def _interface(self, monkeypatch, rates, time_frame_base=3600):
+        def fake_get(url, headers=None, timeout=None):
+            class R:
+                def raise_for_status(self):
+                    return None
+
+                def json(self):
+                    return {"rates": rates}
+
+            return R()
+
+        monkeypatch.setattr(
+            "src.interfaces.feed_in_price_interface.requests.get", fake_get
+        )
+        monkeypatch.setattr(
+            FeedInPriceInterface, "_start_update_service", lambda self: None
+        )
+        mock_evcc = Mock()
+        mock_evcc.url = "http://evcc.local:7070"
+        return FeedInPriceInterface(
+            {"source": "evcc"},
+            time_frame_base=time_frame_base,
+            timezone=self.BERLIN,
+            evcc_interface=mock_evcc,
+        )
+
+    def _rates(self, count, start, step_hours=1):
+        return [
+            {
+                "start": (start + timedelta(hours=i * step_hours)).isoformat(),
+                "end": (start + timedelta(hours=(i + 1) * step_hours)).isoformat(),
+                "value": round(0.05 + i * 0.001, 4),
+            }
+            for i in range(count)
+        ]
+
+    def test_a_series_starting_yesterday_lands_on_today(self, monkeypatch):
+        rates = self._rates(72, self.TODAY - timedelta(days=1))
+        iface = self._interface(monkeypatch, rates)
+
+        iface.update_prices(48, start_time=self.TODAY)
+        prices = iface.get_current_feedin_prices()
+
+        assert len(prices) == 48
+        # Today 00:00 is entry 24 of the payload, not entry 0.
+        assert prices[0] == pytest.approx(0.074 / 1000, abs=1e-9)
+        assert prices[12] == pytest.approx(0.086 / 1000, abs=1e-9)
+
+    def test_an_hourly_tariff_holds_across_quarter_slots(self, monkeypatch):
+        """Overlap placement replaces the old x4 positional expansion."""
+        rates = self._rates(48, self.TODAY)
+        iface = self._interface(monkeypatch, rates, time_frame_base=900)
+
+        iface.update_prices(192, start_time=self.TODAY)
+        prices = iface.get_current_feedin_prices()
+
+        assert len(prices) == 192
+        assert prices[0:4] == pytest.approx([0.05 / 1000] * 4, abs=1e-9)
+        assert prices[4:8] == pytest.approx([0.051 / 1000] * 4, abs=1e-9)
+
+    def test_a_quarter_hour_tariff_averages_into_hourly_slots(self, monkeypatch):
+        """And replaces the old 15min-to-hourly conversion helper."""
+        rates = self._rates(192, self.TODAY, step_hours=0.25)
+        iface = self._interface(monkeypatch, rates)
+
+        iface.update_prices(48, start_time=self.TODAY)
+        prices = iface.get_current_feedin_prices()
+
+        assert len(prices) == 48
+        # Hour 0 averages the first four quarters: 0.050, 0.051, 0.052, 0.053.
+        assert prices[0] == pytest.approx(0.0515 / 1000, abs=1e-9)
