@@ -206,6 +206,10 @@ class TestHotReloadPrice:
         # Verify NO immediate fetch was triggered (deferred to next cycle)
         price_interface.update_prices.assert_not_called()
 
+        # The deferred fetch keeps the previous source's prices; its forecast
+        # markers must be dropped so they do not hatch those prices as forecast.
+        price_interface.clear_forecast_metadata.assert_called_once()
+
     def test_price_source_change_to_timeseries_triggers_immediate_fetch(self, price_interface):
         """Changing price.source TO timeseries FROM any other source SHOULD fetch.
         

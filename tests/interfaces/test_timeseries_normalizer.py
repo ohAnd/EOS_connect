@@ -5,7 +5,8 @@ validation with an actionable error, derived `end`, timezone handling, and the u
 tables. The payload shapes used here are the ones reported in discussion #214.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 import pytz
@@ -15,7 +16,7 @@ from src.interfaces.timeseries_normalizer import (
     PV_UNITS,
     TimeseriesFormatError,
     convert_price_values,
-    convert_pv_values,
+    convert_energy_values,
     detect_resolution_seconds,
     extract_json_path,
     load_plausibility_message,
@@ -474,41 +475,63 @@ class TestPriceUnitConversion:
         assert entries[0]["value"] < 0
 
 
-class TestPvUnitConversion:
-    """W is canonical because that is what EVCC's solar forecast carries."""
+class TestEnergyUnitConversion:
+    """W is canonical because that is what EVCC's solar forecast carries.
+
+    Power integrates over each entry's OWN span — that is what keeps a
+    mixed-resolution concatenation, a half-hourly grid, or one deliberately
+    long entry from being silently scaled by someone else's slot length.
+    """
+
+    @staticmethod
+    def _entry(value, span_minutes):
+        start = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+        return {
+            "start": start,
+            "end": start + timedelta(minutes=span_minutes),
+            "value": value,
+        }
 
     def test_watts_integrated_over_a_quarter_hour(self):
-        entries = [{"value": 4000.0}]
+        entries = [self._entry(4000.0, 15)]
 
-        convert_pv_values(entries, "W", 900)
+        convert_energy_values(entries, "W")
 
         assert entries[0]["value"] == pytest.approx(1000.0)
 
     def test_watts_over_a_full_hour_are_watt_hours(self):
-        entries = [{"value": 4000.0}]
+        entries = [self._entry(4000.0, 60)]
 
-        convert_pv_values(entries, "W", 3600)
+        convert_energy_values(entries, "W")
 
         assert entries[0]["value"] == pytest.approx(4000.0)
 
-    def test_kilowatts_scaled_and_integrated(self):
-        entries = [{"value": 4.0}]
+    def test_each_entry_uses_its_own_span(self):
+        entries = [self._entry(4000.0, 15), self._entry(4000.0, 60)]
 
-        convert_pv_values(entries, "kW", 900)
+        convert_energy_values(entries, "W")
+
+        assert entries[0]["value"] == pytest.approx(1000.0)
+        assert entries[1]["value"] == pytest.approx(4000.0)
+
+    def test_kilowatts_scaled_and_integrated(self):
+        entries = [self._entry(4.0, 15)]
+
+        convert_energy_values(entries, "kW")
 
         assert entries[0]["value"] == pytest.approx(1000.0)
 
-    def test_energy_units_pass_through_regardless_of_slot_length(self):
-        entries = [{"value": 1000.0}]
+    def test_energy_units_pass_through_regardless_of_span(self):
+        entries = [self._entry(1000.0, 15)]
 
-        convert_pv_values(entries, "Wh", 900)
+        convert_energy_values(entries, "Wh")
 
         assert entries[0]["value"] == pytest.approx(1000.0)
 
     def test_kilowatt_hours_scaled(self):
-        entries = [{"value": 1.0}]
+        entries = [self._entry(1.0, 15)]
 
-        convert_pv_values(entries, "kWh", 900)
+        convert_energy_values(entries, "kWh")
 
         assert entries[0]["value"] == pytest.approx(1000.0)
 
@@ -517,7 +540,7 @@ class TestPvUnitConversion:
 
     def test_unknown_unit_rejected(self):
         with pytest.raises(TimeseriesFormatError):
-            convert_pv_values([{"value": 1.0}], "MW", 900)
+            convert_energy_values([self._entry(1.0, 15)], "MW")
 
 
 class TestPricePlausibility:
@@ -688,3 +711,136 @@ class TestMillisecondTimestamps:
             BERLIN,
         )
         assert entries[0]["start"].year == 2026
+
+
+class TestNaiveTimestampsAcrossDst:
+    """
+    A source rendering local wall clock without an offset, on a transition day.
+
+    This is the common Home Assistant template shape, and once a year it emits
+    "02:00" twice. Resolving both to the standard-time instant made them
+    duplicates and the whole 25-entry payload was rejected - the one day of the
+    year when a correctly configured source lost all of its data.
+    """
+
+    @staticmethod
+    def _wall_clock_day(date):
+        """Every hour the local clock actually shows on that calendar day."""
+        entries = []
+        moment = BERLIN.localize(datetime(date.year, date.month, date.day))
+        while moment.astimezone(BERLIN).date() == date:
+            entries.append(
+                {"start": moment.strftime("%Y-%m-%dT%H:%M:%S"), "value": 0.25}
+            )
+            moment = BERLIN.normalize(moment + timedelta(hours=1))
+        return entries
+
+    @pytest.mark.parametrize("zone", [BERLIN, ZoneInfo("Europe/Berlin")])
+    def test_the_repeated_hour_yields_two_distinct_instants(self, zone):
+        payload = self._wall_clock_day(date(2026, 10, 25))
+        assert len(payload) == 25, "the long day has 25 wall-clock hours"
+
+        entries = normalize_entries(payload, zone)
+
+        instants = [entry["start"].timestamp() for entry in entries]
+        assert len(entries) == 25
+        assert len(set(instants)) == 25, "02:00 must resolve to two instants"
+        assert instants == sorted(instants)
+        assert (instants[-1] - instants[0]) / 3600 == 24
+
+    @pytest.mark.parametrize("zone", [BERLIN, ZoneInfo("Europe/Berlin")])
+    def test_the_short_day_is_accepted_too(self, zone):
+        payload = self._wall_clock_day(date(2026, 3, 29))
+        assert len(payload) == 23
+
+        entries = normalize_entries(payload, zone)
+
+        instants = [entry["start"].timestamp() for entry in entries]
+        assert len(entries) == 23
+        assert len(set(instants)) == 23
+        assert (instants[-1] - instants[0]) / 3600 == 22
+
+    def test_a_genuine_duplicate_is_still_rejected(self):
+        """The check must keep catching real template bugs."""
+        payload = [
+            {"start": "2026-08-23T10:00:00+02:00", "value": 1.0},
+            {"start": "2026-08-23T10:00:00+02:00", "value": 2.0},
+        ]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+
+        assert "share the start timestamp" in str(exc.value)
+
+    def test_a_nonexistent_wall_time_does_not_kill_the_payload(self):
+        """02:30 does not exist on the spring day; it must not raise."""
+        payload = [
+            {"start": "2026-03-29T01:30:00", "value": 1.0},
+            {"start": "2026-03-29T02:30:00", "value": 2.0},  # skipped by the clock
+            {"start": "2026-03-29T04:30:00", "value": 3.0},
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        instants = [entry["start"].timestamp() for entry in entries]
+        assert len(entries) == 3
+        assert instants == sorted(instants)
+
+
+class TestMixedResolutionSpans:
+    """
+    A start-only payload that changes resolution mid-series.
+
+    EPEX-style sources publish the current day at fifteen minutes and the next
+    at an hour. One nominal spacing for the whole payload capped the coarse half
+    at the fine spacing, so every hour of day two arrived carrying a quarter of
+    its energy.
+    """
+
+    ANCHOR = BERLIN.localize(datetime(2026, 8, 23))
+
+    def _span(self, entry):
+        return round(entry["end"].timestamp() - entry["start"].timestamp())
+
+    def test_the_coarse_half_keeps_its_full_hour(self):
+        payload = [
+            {"start": (self.ANCHOR + timedelta(minutes=15 * i)).isoformat(),
+             "value": 1.0}
+            for i in range(96)
+        ] + [
+            {"start": (self.ANCHOR + timedelta(days=1, hours=i)).isoformat(),
+             "value": 1.0}
+            for i in range(24)
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert {self._span(e) for e in entries[:96]} == {900}
+        assert {self._span(e) for e in entries[96:]} == {3600}
+
+    def test_a_lone_fine_entry_does_not_shrink_the_rest(self):
+        """A 15-minute lead entry must not cap every following hour."""
+        payload = [
+            {"start": self.ANCHOR.isoformat(), "value": 1.0},
+            {"start": (self.ANCHOR + timedelta(minutes=15)).isoformat(), "value": 1.0},
+        ] + [
+            {"start": (self.ANCHOR + timedelta(hours=i)).isoformat(), "value": 1.0}
+            for i in range(1, 12)
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert self._span(entries[0]) == 900
+        assert {self._span(e) for e in entries[2:]} == {3600}
+
+    def test_an_isolated_long_gap_is_still_a_hole(self):
+        """The cap must keep doing its job: one outlier gap is a hole."""
+        payload = [
+            {"start": (self.ANCHOR + timedelta(hours=h)).isoformat(), "value": 1.0}
+            for h in (9, 10, 13, 14)
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert self._span(entries[1]) == 3600  # 10:00 does not swallow 11:00-13:00
+        assert entries[2]["start"] - entries[1]["end"] == timedelta(hours=2)

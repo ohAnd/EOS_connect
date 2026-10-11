@@ -61,15 +61,15 @@ class TestEVCCIncompleteDataCyclicPadding:
         # Window starts at Berlin midnight (which is UTC 22:00 previous day)
         window_start = datetime(2026, 7, 7, 22, 0, 0, tzinfo=timezone.utc)
         
-        result = iface._PriceInterface__convert_15min_to_hourly_price_timeseries(
-            timeseries, window_start
-        )
+        result = iface._PriceInterface__parse_price_timeseries(
+            timeseries, 48, None, window_start
+    )
 
         # Must return exactly 48 slots
         assert len(result) == 48
         
         # Extract just the values for pattern matching
-        values = [r["value"] for r in result]
+        values = list(result)
         
         # Today's slots (0-23) should have the data pattern
         today_pattern = values[0:24]

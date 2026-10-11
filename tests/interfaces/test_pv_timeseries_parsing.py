@@ -20,6 +20,10 @@ import pytz
 import pytest
 
 from src.interfaces.pv_interface import PvInterface
+from src.interfaces.timeseries_normalizer import (
+    detect_resolution_seconds,
+    normalize_entries,
+)
 
 TIME_FRAME_BASE_HOURLY = 3600
 TIME_FRAME_BASE_15MIN = 900
@@ -66,9 +70,11 @@ class TestPvTimeseriesFormatValidation:
         assert all(isinstance(v, float) for v in values)
         assert all(v == 100.0 for v in values)
 
-    def test_missing_start_field(self):
+    def test_missing_timestamps_rejected(self):
+        # An end-only entry is a legitimate "hour ending" shape since the
+        # normalizer derives its start — no timestamp at all is the error.
         pv = make_pv_interface()
-        timeseries = [{"end": "2024-01-01T01:00:00Z", "value": 100.0}]
+        timeseries = [{"label": "noon", "value": 100.0}]
         assert pv._PvInterface__parse_pv_timeseries(timeseries, 48) == []
 
     def test_missing_value_field(self):
@@ -96,46 +102,118 @@ class TestPvTimeseriesFormatValidation:
 
 
 class TestPvResolutionDetection:
+    """Detection is the shared normalizer helper; PV has no private copy left."""
+
     def test_detect_hourly_resolution(self):
-        pv = make_pv_interface()
-        timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T01:00:00Z", "value": 100.0},
-            {"start": "2024-01-01T01:00:00Z", "end": "2024-01-01T02:00:00Z", "value": 200.0},
-        ]
-        assert pv._PvInterface__detect_pv_timeseries_resolution(timeseries) == 3600
+        entries = normalize_entries(
+            [
+                {"start": "2024-01-01T00:00:00Z", "value": 100.0},
+                {"start": "2024-01-01T01:00:00Z", "value": 200.0},
+            ],
+            pytz.UTC,
+        )
+        assert detect_resolution_seconds(entries) == 3600
 
     def test_detect_15min_resolution(self):
-        pv = make_pv_interface()
-        timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T00:15:00Z", "value": 100.0},
-            {"start": "2024-01-01T00:15:00Z", "end": "2024-01-01T00:30:00Z", "value": 100.0},
-        ]
-        assert pv._PvInterface__detect_pv_timeseries_resolution(timeseries) == 900
+        entries = normalize_entries(
+            [
+                {"start": "2024-01-01T00:00:00Z", "value": 100.0},
+                {"start": "2024-01-01T00:15:00Z", "value": 100.0},
+            ],
+            pytz.UTC,
+        )
+        assert detect_resolution_seconds(entries) == 900
 
-    def test_hourly_source_to_15min_system_rejected(self):
+    def test_hourly_source_to_15min_system_splits_the_energy(self):
         pv = make_pv_interface(time_frame_base=TIME_FRAME_BASE_15MIN)
+        base = midnight_today_utc()
         timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T01:00:00Z", "value": 100.0},
-            {"start": "2024-01-01T01:00:00Z", "end": "2024-01-01T02:00:00Z", "value": 200.0},
-        ] * 24
-        assert pv._PvInterface__parse_pv_timeseries(timeseries, 192) == []
+            {
+                "start": (base + timedelta(hours=h)).isoformat(),
+                "end": (base + timedelta(hours=h + 1)).isoformat(),
+                "value": 100.0 * (h + 1),
+            }
+            for h in range(2)
+        ]
+        values = pv._PvInterface__parse_pv_timeseries(timeseries, 192)
+        assert values[0:4] == [25.0] * 4
+        assert values[4:8] == [50.0] * 4
+
+
+class TestOverlapPlacement:
+    """Energy lands on the slots an entry's span touches — never by list position."""
+
+    def test_a_series_starting_at_a_quarter_past_splits_across_hours(self):
+        """R7 from the #214 review: the old positional grouping ignored the offset."""
+        pv = make_pv_interface()
+        base = midnight_today_utc() + timedelta(minutes=15)
+        timeseries = [
+            {"start": (base + timedelta(minutes=15 * q)).isoformat(), "value": 400.0}
+            for q in range(8)
+        ]
+        values = pv._PvInterface__parse_pv_timeseries(timeseries, 48)
+        # 00:15–01:00 holds three quarters, 01:00–02:00 four, 02:00–02:15 one.
+        assert values[0] == pytest.approx(1200.0)
+        assert values[1] == pytest.approx(1600.0)
+        assert values[2] == pytest.approx(400.0)
+
+    def test_mixed_resolution_entries_integrate_over_their_own_span(self):
+        """B6: a 15-min head and an hourly tail with declared ends both count fully."""
+        pv = make_pv_interface()
+        base = midnight_today_utc()
+        timeseries = [
+            {
+                "start": (base + timedelta(minutes=15 * q)).isoformat(),
+                "end": (base + timedelta(minutes=15 * (q + 1))).isoformat(),
+                "value": 4000.0,
+            }
+            for q in range(4)
+        ] + [
+            {
+                "start": (base + timedelta(hours=1)).isoformat(),
+                "end": (base + timedelta(hours=2)).isoformat(),
+                "value": 4000.0,
+            }
+        ]
+        values = pv._PvInterface__parse_pv_timeseries(
+            timeseries, 48, value_unit="W"
+        )
+        # 4 quarters of 4000 W = 4000 Wh; one declared hour of 4000 W = 4000 Wh.
+        assert values[0] == pytest.approx(4000.0)
+        assert values[1] == pytest.approx(4000.0)
+
+    def test_an_interior_gap_stays_at_zero(self):
+        """A missing hour is 0 Wh — not a share of the neighbour's energy."""
+        pv = make_pv_interface()
+        base = midnight_today_utc()
+        timeseries = [
+            {"start": (base + timedelta(hours=h)).isoformat(), "value": 1000.0}
+            for h in (10, 11, 13)
+        ]
+        values = pv._PvInterface__parse_pv_timeseries(timeseries, 48)
+        assert values[11] == pytest.approx(1000.0)
+        assert values[12] == 0.0
+        assert values[13] == pytest.approx(1000.0)
 
 
 class TestPvAveraging:
     """15-min PV values are summed into hourly totals, not averaged (energy, not a rate)."""
 
     def test_sum_4_values_to_1(self):
+        """Overlap placement sums the four quarters of an hour: energy, not a rate."""
         pv = make_pv_interface()
+        base = midnight_today_utc()
         timeseries = [
-            {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T00:15:00Z", "value": 100.0},
-            {"start": "2024-01-01T00:15:00Z", "end": "2024-01-01T00:30:00Z", "value": 150.0},
-            {"start": "2024-01-01T00:30:00Z", "end": "2024-01-01T00:45:00Z", "value": 200.0},
-            {"start": "2024-01-01T00:45:00Z", "end": "2024-01-01T01:00:00Z", "value": 250.0},
+            {
+                "start": (base + timedelta(minutes=15 * q)).isoformat(),
+                "end": (base + timedelta(minutes=15 * (q + 1))).isoformat(),
+                "value": value,
+            }
+            for q, value in enumerate([100.0, 150.0, 200.0, 250.0])
         ]
-        hourly = pv._PvInterface__convert_15min_to_hourly_pv_timeseries(timeseries)
-        assert len(hourly) == 1
+        values = pv._PvInterface__parse_pv_timeseries(timeseries, 48)
         # Sum: 100 + 150 + 200 + 250 = 700 (not the 175 average)
-        assert hourly[0]["value"] == 700.0
+        assert values[0] == 700.0
 
     def test_15min_source_to_hourly_system_end_to_end(self):
         pv = make_pv_interface()

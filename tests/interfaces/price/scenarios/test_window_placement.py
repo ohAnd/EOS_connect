@@ -1,14 +1,13 @@
 # pylint: disable=protected-access
 """
-Characterization of how the price timeseries path places values on the slot grid.
+Window placement of the price timeseries path.
 
-The hourly/matching-resolution path maps payload entries to slots BY POSITION,
-not by timestamp (discussion #214): entry 0 lands on slot 0 no matter when it
-starts, a missing hour shifts everything after it, and the optimization window
-is never checked. The plain tests here pin that behaviour so the extraction and
-anchor refactors in between can prove they changed nothing; the xfail tests
-state the timestamp-placed behaviour that `fix: align timeseries prices by
-timestamp` makes true — removing their markers is that commit's acceptance.
+Prices land on the slot grid by their timestamps (intensive overlap placement):
+an entry's position in the payload means nothing, a missing hour does not shift
+anything, and a series that never touches the optimization window is rejected
+so the fallback chain serves the last good data. Slots the series does not
+cover are filled by fill_price_gaps and a filled tail is reported through the
+forecast metadata, so the UI can hatch it.
 
 Values are EUR/Wh and encode their origin as 0.<day><hour>: yesterday's hour h
 is 0.100 + h/1000, today's is 0.200 + h/1000, tomorrow's 0.300 + h/1000 — so a
@@ -38,12 +37,12 @@ def hourly_entries(day_offset, hours, base):
     ]
 
 
-def seven_days(price_entries_builder=hourly_entries):
+def seven_days():
     """A week of hourly entries, one base value per day (0.200 … 0.800)."""
     return [
         entry
         for day in range(7)
-        for entry in price_entries_builder(day, range(24), 0.200 + day / 10)
+        for entry in hourly_entries(day, range(24), 0.200 + day / 10)
     ]
 
 
@@ -67,69 +66,24 @@ def price_interface_fixture(monkeypatch):
 
 
 def parse(price_interface, entries):
-    """Run the private parser with the anchor every production caller passes."""
+    """Run the parser with the anchor every production caller passes."""
     return price_interface._PriceInterface__parse_price_timeseries(
         entries, 48, start_time=ANCHOR
     )
 
 
-class TestTodaysPositionalPlacement:
-    """Pins the current positional mapping. Rewritten by the timestamp-placement fix."""
-
-    def test_a_series_starting_yesterday_fills_slot_zero_with_yesterday(
-        self, price_interface
-    ):
-        """The #214 report: a source that also publishes the previous day is a day late."""
-        entries = hourly_entries(-1, range(24), 0.100) + hourly_entries(
-            0, range(24), 0.200
-        )
-        prices = parse(price_interface, entries)
-        assert prices[0] == pytest.approx(0.100)
-
-    def test_a_missing_hour_shifts_every_later_price(self, price_interface):
-        """Slot 5 (= 05:00) carries the 06:00 price; everything after is an hour early."""
-        entries = hourly_entries(0, [h for h in range(24) if h != 5], 0.200)
-        prices = parse(price_interface, entries)
-        assert prices[5] == pytest.approx(0.206)
-        assert prices[6] == pytest.approx(0.207)
-
-    def test_a_series_entirely_tomorrow_is_served_as_today(self, price_interface):
-        """The window is never checked: tomorrow's prices pass as today's."""
-        prices = parse(price_interface, hourly_entries(1, range(48), 0.300))
-        assert prices[0] == pytest.approx(0.300)
-
-    def test_a_series_entirely_in_the_past_is_served_as_today(self, price_interface):
-        """A source frozen three days ago still answers as if it were current."""
-        prices = parse(price_interface, hourly_entries(-3, range(48), 0.100))
-        assert prices[0] == pytest.approx(0.100)
-
-    def test_a_short_series_is_padded_with_its_last_value(self, price_interface):
-        """The tail is flat-filled and nothing marks it as invented."""
-        prices = parse(price_interface, hourly_entries(0, range(24), 0.200))
-        assert len(prices) == 48
-        assert prices[24:] == [pytest.approx(0.223)] * 24
-
-    def test_an_overlong_series_is_returned_uncut(self, price_interface):
-        """168 hourly entries come back as 168 prices: pad-only, never trimmed (W7)."""
-        prices = parse(price_interface, seven_days())
-        assert len(prices) == 168
-
-
-XFAIL_REASON = "timestamp placement lands with 'fix: align timeseries prices by timestamp'"
-
-
-@pytest.mark.xfail(reason=XFAIL_REASON, strict=True)
-class TestTimestampPlacementContract:
-    """What the same inputs must produce once values are placed by timestamp."""
+class TestTimestampPlacement:
+    """The payload's order means nothing; its timestamps mean everything."""
 
     def test_a_series_starting_yesterday_lands_on_todays_slots(self, price_interface):
-        """Yesterday's 24 entries are dropped; slot 0 carries today's 00:00 price."""
+        """The #214 report: yesterday's entries are dropped, not served as today."""
         entries = hourly_entries(-1, range(24), 0.100) + hourly_entries(
             0, range(24), 0.200
         )
         prices = parse(price_interface, entries)
         assert prices[0] == pytest.approx(0.200)
         assert prices[23] == pytest.approx(0.223)
+        assert len(prices) == 48
 
     def test_a_missing_hour_does_not_shift_later_prices(self, price_interface):
         """Entries after a gap stay on the slots their timestamps name."""
@@ -138,23 +92,60 @@ class TestTimestampPlacementContract:
         assert prices[4] == pytest.approx(0.204)
         assert prices[6] == pytest.approx(0.206)
 
-    def test_a_series_entirely_tomorrow_is_rejected(self, price_interface):
-        """No entry touches today: [] lets the caller's fallback chain serve last good data."""
-        assert parse(price_interface, hourly_entries(1, range(48), 0.300)) == []
+    def test_an_interior_hole_is_filled_forward_and_warned_about(
+        self, price_interface, caplog
+    ):
+        """The hole carries the last known price, and the log says so."""
+        entries = hourly_entries(0, [h for h in range(24) if h != 5], 0.200)
+        with caplog.at_level("WARNING"):
+            prices = parse(price_interface, entries)
+        assert prices[5] == pytest.approx(0.204)
+        assert "filled from their neighbours" in caplog.text
 
     def test_a_series_entirely_in_the_past_is_rejected(self, price_interface):
-        """A stale series must not be served as current."""
+        """A stale series must not be served as current — the fallback takes over."""
         assert parse(price_interface, hourly_entries(-3, range(48), 0.100)) == []
+
+    def test_a_series_entirely_tomorrow_backfills_today(self, price_interface):
+        """Tomorrow's series covers slots 24-47; today is backfilled, not shifted."""
+        prices = parse(price_interface, hourly_entries(1, range(24), 0.300))
+        assert len(prices) == 48
+        assert prices[0] == pytest.approx(0.300)  # first known price, backwards
+        assert prices[24] == pytest.approx(0.300)
+        assert prices[47] == pytest.approx(0.323)
 
     def test_an_overlong_series_is_trimmed_to_the_horizon(self, price_interface):
         """Entries beyond the 48-slot window are dropped, not handed to the optimizer."""
         prices = parse(price_interface, seven_days())
         assert len(prices) == 48
         assert prices[0] == pytest.approx(0.200)
+        assert prices[47] == pytest.approx(0.323)
+
+
+class TestForecastMetadata:
+    """A filled tail is marked so the UI can hatch it (the missing N3 signal)."""
+
+    def test_a_short_series_marks_where_the_repetition_starts(self, price_interface):
+        prices = parse(price_interface, hourly_entries(0, range(24), 0.200))
+        assert len(prices) == 48
+        # Tomorrow repeats today's pattern...
+        assert prices[24] == pytest.approx(0.200)
+        assert prices[47] == pytest.approx(0.223)
+        # ...and says so.
+        metadata = price_interface.get_forecast_metadata()
+        assert metadata["forecast_start_index"] == 24
+        assert metadata["forecast_type"] == "simple_repetition"
+
+    def test_a_full_series_reports_all_real(self, price_interface):
+        parse(price_interface, hourly_entries(0, range(24), 0.200)
+              + hourly_entries(1, range(24), 0.300))
+        metadata = price_interface.get_forecast_metadata()
+        assert metadata["forecast_start_index"] is None
+        assert metadata["forecast_type"] == "all_real"
 
 
 class TestHorizonUnits:
-    """`tgt_duration` means hours in the update loop and slots in the parser."""
+    """`tgt_duration` counts slots on every path."""
 
     @pytest.fixture(name="quarter_hour_interface")
     def quarter_hour_interface_fixture(self, monkeypatch):

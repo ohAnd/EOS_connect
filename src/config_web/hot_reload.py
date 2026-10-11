@@ -64,7 +64,6 @@ handles these sources more efficiently.
 
 import logging
 import threading
-from datetime import datetime
 
 try:  # running from src/ — src/ is on sys.path
     from timeseries_grid import horizon_slots, local_midnight
@@ -862,6 +861,12 @@ class HotReloadAdapter:
                 # Source change detected but NOT to timeseries/evcc — config updated but
                 # fetch deferred
                 if key == "price.source":
+                    # The deferred fetch leaves the previous source's prices in
+                    # place; its forecast markers must not keep hatching them.
+                    try:
+                        self._price.clear_forecast_metadata()
+                    except AttributeError:
+                        pass
                     logger.debug(
                         "[HotReload] Price source changed to '%s' — config updated, "
                         "fetch deferred to next update cycle", new_source

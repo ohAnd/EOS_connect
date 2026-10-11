@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 import logging
 
 import pytz
+from pytz.exceptions import AmbiguousTimeError, NonExistentTimeError
 
 try:  # running from src/ as a script — src/ is on sys.path
     from docs_links import current_docs_url
@@ -96,7 +97,58 @@ class TimeseriesFormatError(ValueError):
     """
 
 
-def _parse_timestamp(raw, tz, field="start"):
+class _NaiveLocalizer:
+    """
+    Attach a zone to naive timestamps, resolving a DST transition by position.
+
+    A source that renders local wall clock without an offset emits the repeated
+    hour of the autumn transition TWICE - "02:00" is both the last CEST hour and
+    the first CET one. pytz's default (``is_dst=False``) maps both onto the
+    standard-time instant, which makes them duplicates, and the duplicate check
+    then rejects the whole 25-entry payload: one day a year, a correctly
+    configured source lost all its data.
+
+    Position decides instead, which is the only information available: the first
+    time a given wall clock appears it is the DST reading, the second time the
+    standard one. Tracked per FIELD, because a start and the previous entry's
+    end legitimately name the same instant and must not consume each other's turn.
+
+    Timestamps that carry an offset never come here - they are unambiguous.
+    """
+
+    def __init__(self, tz):
+        self._tz = tz
+        self._seen = {}
+
+    def _is_repeat(self, field, naive):
+        seen = self._seen.setdefault(field, set())
+        repeat = naive in seen
+        seen.add(naive)
+        return repeat
+
+    def __call__(self, naive, field):
+        if not hasattr(self._tz, "localize"):
+            # zoneinfo: fold=1 selects the second occurrence of a repeated time.
+            first = naive.replace(tzinfo=self._tz, fold=0)
+            if first.utcoffset() == naive.replace(tzinfo=self._tz, fold=1).utcoffset():
+                return first  # unambiguous
+            return naive.replace(tzinfo=self._tz, fold=1 if self._is_repeat(field, naive) else 0)
+        try:
+            return self._tz.localize(naive, is_dst=None)
+        except AmbiguousTimeError:
+            return self._tz.localize(
+                naive, is_dst=not self._is_repeat(field, naive)
+            )
+        except NonExistentTimeError:
+            # The clock jumped over this wall time, so no instant matches it.
+            # Reading it with the pre-jump (standard) offset and normalizing
+            # moves it FORWARD to where the clock landed - naive 02:00 becomes
+            # 03:00, the instant the jump produced. is_dst=True would map it
+            # backwards onto 01:00 and collide with the entry before it.
+            return self._tz.normalize(self._tz.localize(naive, is_dst=False))
+
+
+def _parse_timestamp(raw, tz, field="start", localizer=None):
     """
     Parse one timestamp into a timezone-aware datetime in *tz*.
 
@@ -110,6 +162,13 @@ def _parse_timestamp(raw, tz, field="start"):
         raise TimeseriesFormatError(
             f"'{field}' must be a timestamp, got boolean {raw!r}"
         )
+
+    if isinstance(raw, datetime):
+        # Already parsed (an entry coming back through normalize_entries, e.g.
+        # the EVCC price branch normalizing before the shared parser does).
+        if raw.tzinfo is None:
+            return _localize_naive(raw, tz, field, localizer), True
+        return raw.astimezone(tz), False
 
     if isinstance(raw, (int, float)):
         # 1e11 s is the year 5138 - no plausible seconds timestamp reaches it,
@@ -140,17 +199,20 @@ def _parse_timestamp(raw, tz, field="start"):
                 f"or Unix timestamp"
             ) from exc
         if parsed.tzinfo is None:
-            # localize() is pytz-specific; fall back for plain tzinfo objects.
-            if hasattr(tz, "localize"):
-                parsed = tz.localize(parsed)
-            else:
-                parsed = parsed.replace(tzinfo=tz)
-            return parsed, True
+            return _localize_naive(parsed, tz, field, localizer), True
         return parsed.astimezone(tz), False
 
     raise TimeseriesFormatError(
         f"'{field}' must be an ISO8601 string or Unix timestamp, got {type(raw).__name__}"
     )
+
+
+def _localize_naive(naive, tz, field, localizer):
+    """Attach *tz* to a naive timestamp, via *localizer* when one is in play."""
+    if localizer is not None:
+        return localizer(naive, field)
+    # A one-off parse outside a payload: no neighbours to judge a repeat by.
+    return _NaiveLocalizer(tz)(naive, field)
 
 
 def _describe_available_keys(entry):
@@ -275,12 +337,17 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
 
     entries = []
     naive_seen = 0
+    # One localizer for the whole payload: resolving the repeated DST hour needs
+    # to know whether this wall clock has already been seen in this series.
+    localizer = _NaiveLocalizer(tz)
     for index, raw in enumerate(raw_entries):
-        # Every entry has to parse. Dropping the bad ones would be friendlier right
-        # up until it corrupts the result: the hourly price path maps this list to
-        # slots by position, so a single missing entry shifts every later price an
-        # hour early — silently, and in the direction that makes power look cheaper.
-        # Rejecting the payload instead lets the caller fall back to cached data.
+        # Every entry has to parse. Dropping the bad ones would be friendlier
+        # right up until it corrupts the result: under timestamp placement a
+        # dropped entry becomes a hole, and a hole in a price series is filled
+        # by policy — a null at 18:00 would silently become the 17:00 price,
+        # exactly where the price matters most. Quieter than a shift, not
+        # better. Rejecting the payload keeps the fallback chain intact: the
+        # caller serves the last good data and the log names the bad entry.
         anchor_key = start_key or end_key
         if not isinstance(raw, dict) or anchor_key not in raw or value_key not in raw:
             raise TimeseriesFormatError(
@@ -290,7 +357,9 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
         start = None
         if start_key is not None:
             try:
-                start, was_naive = _parse_timestamp(raw[start_key], tz)
+                start, was_naive = _parse_timestamp(
+                    raw[start_key], tz, field="start", localizer=localizer
+                )
             except TimeseriesFormatError as exc:
                 raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
             if was_naive:
@@ -299,7 +368,7 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
         if end_key is not None and raw.get(end_key) is not None:
             try:
                 end, end_was_naive = _parse_timestamp(
-                    raw[end_key], tz, field=end_key
+                    raw[end_key], tz, field=end_key, localizer=localizer
                 )
             except TimeseriesFormatError as exc:
                 raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
@@ -332,7 +401,20 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
 
     if start_key is None:
         _derive_starts_from_ends(entries)
-    entries.sort(key=lambda item: item["start"])
+    # Order and compare by absolute instant. Two aware datetimes sharing a
+    # zoneinfo tzinfo sort and compare in WALL-CLOCK mode (PEP 495), so the two
+    # 02:00 of an autumn transition would read as equal and a correct payload
+    # would be rejected as duplicated.
+    entries.sort(key=lambda item: item["start"].timestamp())
+    for earlier, later in zip(entries, entries[1:]):
+        if later["start"].timestamp() == earlier["start"].timestamp():
+            # A duplicate is always a template bug. The consumers used to
+            # disagree on it (last-wins, double-count, reject) — silently
+            # keeping either value is how a wrong forecast survives.
+            raise TimeseriesFormatError(
+                f"two entries share the start timestamp "
+                f"{later['start'].isoformat()}"
+            )
     _finalize_entry_spans(entries)
     return entries
 
@@ -375,24 +457,72 @@ def _finalize_entry_spans(entries):
     The last entry gets one nominal spacing (one hour for a single-entry
     series).
     """
-    nominal = _nominal_span_seconds([entry["start"] for entry in entries])
+    starts = [entry["start"] for entry in entries]
+    nominal = _nominal_span_seconds(starts)
     if nominal is None:
         first_end = entries[0].get("end")
         if first_end is not None:
             nominal = (first_end - entries[0]["start"]).total_seconds()
         else:
             nominal = 3600
-    span_cap = timedelta(seconds=nominal)
+    caps = _derived_span_caps(starts, nominal)
 
     count = len(entries)
     for index, entry in enumerate(entries):
         if entry.get("end") is not None:
             continue
-        candidate = entry["start"] + span_cap
+        candidate = entry["start"] + timedelta(seconds=caps[index])
         if index + 1 < count:
             candidate = min(candidate, entries[index + 1]["start"])
         entry["end"] = candidate
         entry["end_derived"] = True
+
+
+def _derived_span_caps(starts, fallback_seconds, window=5):
+    """
+    The longest span each entry may be given, in seconds, one per entry.
+
+    A single spacing for the whole payload is wrong the moment a series changes
+    resolution mid-way — EPEX-style sources publish the current day at fifteen
+    minutes and the next at an hour — because capping the coarse half at the
+    fine spacing drops three quarters of every entry in it. So the cap is local.
+
+    An entry keeps the whole gap to its successor when that gap REPEATS: a run
+    of equal gaps is the resolution in force there, not a hole. An isolated
+    large gap is a hole, and the entry before it is capped at the local median
+    spacing so the hole survives into ``coverage`` and can be reported, filled
+    by policy, or marked as forecast.
+
+    Two equal large gaps in a row therefore read as a coarser resolution rather
+    than as two holes. That is the honest reading of start-only data: nothing
+    distinguishes them, which is why a deliberately long entry should declare
+    its own ``end``.
+    """
+    count = len(starts)
+    if count < 2:
+        return [fallback_seconds] * count
+
+    epochs = [moment.timestamp() for moment in starts]
+    gaps = [later - earlier for earlier, later in zip(epochs, epochs[1:])]
+
+    caps = []
+    for index in range(count):
+        if index >= len(gaps):
+            # The last entry has no successor to measure against, so it takes
+            # the spacing in force at the END of the series - not the global
+            # one, which on a payload that changes resolution is the spacing of
+            # the other half.
+            caps.append(min(gaps[-window:]) or fallback_seconds)
+            continue
+        lower = max(0, index - window)
+        # The tightest spacing nearby, not the median: with only a couple of
+        # gaps a median sits between the real resolution and the hole and caps
+        # at neither. The repeat test above is what protects a genuinely
+        # coarser run, so this only ever applies to an isolated outlier.
+        local = min(gaps[lower : index + window + 1]) or fallback_seconds
+        repeats = index + 1 < len(gaps) and gaps[index + 1] == gaps[index]
+        caps.append(gaps[index] if repeats else min(gaps[index], local))
+    return caps
 
 
 def _derive_starts_from_ends(entries):
@@ -404,9 +534,9 @@ def _derive_starts_from_ends(entries):
     end — so a hole between ends stays a hole instead of inflating the entry
     after it. Derived starts carry a ``start_derived`` flag.
     """
-    entries.sort(key=lambda item: item["end"])
+    entries.sort(key=lambda item: item["end"].timestamp())
     for earlier, later in zip(entries, entries[1:]):
-        if later["end"] == earlier["end"]:
+        if later["end"].timestamp() == earlier["end"].timestamp():
             raise TimeseriesFormatError(
                 f"two entries share the end timestamp {later['end'].isoformat()}"
             )
@@ -462,47 +592,14 @@ def convert_price_values(entries, unit):
     return entries
 
 
-def convert_pv_values(entries, unit, resolution_seconds):
+def convert_energy_values(entries, unit):
     """
-    Convert PV entries to Wh per slot in place and return them.
+    Convert PV or managed-load entries to Wh per entry in place, and return them.
 
-    Power units (W, kW) are integrated over the slot length, matching how the EVCC PV
-    adapter treats EVCC's own forecast values. Energy units pass through scaled.
-
-    Args:
-        entries: Normalized entries whose ``value`` is in *unit*.
-        unit: One of PV_UNITS.
-        resolution_seconds: Source slot length in seconds (900 or 3600).
-
-    Raises:
-        TimeseriesFormatError: On an unknown unit.
-    """
-    try:
-        spec = PV_UNITS[unit]
-    except KeyError as exc:
-        raise TimeseriesFormatError(
-            f"unknown PV unit {unit!r}, expected one of {', '.join(sorted(PV_UNITS))}"
-        ) from exc
-
-    factor = spec["factor"]
-    if spec["is_power"]:
-        factor *= resolution_seconds / 3600.0
-
-    for entry in entries:
-        entry["value"] = entry["value"] * factor
-    return entries
-
-
-def convert_load_values(entries, unit):
-    """
-    Convert managed-load entries to Wh per entry in place, and return them.
-
-    Same unit table as PV, but integrated over each entry's *own* span rather than one
-    resolution for the whole series. A load forecast is written by hand far more often
-    than a PV one - a template sensor someone assembled from a heating curve - so it is
-    much more likely to arrive on a half-hourly grid, or with one longer entry
-    overnight. Applying a single slot length to those would silently scale part of the
-    series.
+    Power units (W, kW) are integrated over each entry's *own* span rather than
+    one resolution for the whole series — a half-hourly grid, one longer entry
+    overnight, or a mixed-resolution concatenation would all be silently scaled
+    wrong by a single slot length. Energy units pass through scaled.
 
     Every entry is expected to carry ``end``; `normalize_entries` guarantees that by
     deriving it from the following entry where the source omitted it.
@@ -518,7 +615,7 @@ def convert_load_values(entries, unit):
         spec = PV_UNITS[unit]
     except KeyError as exc:
         raise TimeseriesFormatError(
-            f"unknown load unit {unit!r}, expected one of {', '.join(sorted(PV_UNITS))}"
+            f"unknown unit {unit!r}, expected one of {', '.join(sorted(PV_UNITS))}"
         ) from exc
 
     for entry in entries:

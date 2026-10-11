@@ -215,18 +215,22 @@
 
                     <div class="alert alert-info">
                         <strong><i class="fas fa-info-circle" aria-hidden="true"></i> Time Resolution:</strong> EOS Connect
-                        auto-detects whether the timeseries is 15-minute (900s) or hourly (3600s) from the
-                        timestamp differences. 15-minute data is converted to hourly automatically — prices are
-                        averaged, PV energy is summed. An hourly source cannot serve a system configured for
-                        15-minute slots; the connection test reports that rather than letting it fail at runtime.
+                        reads the source's resolution from the timestamps and places values by overlap: a finer
+                        source averages (prices) or sums (PV energy) into each slot, a coarser one holds its
+                        price — or splits its energy — across the slots it spans. An hourly source on a
+                        15-minute system therefore just works, as does a half-hourly or other unusual grid; the
+                        connection test names the applied rule. Only a source so coarse that one entry blankets
+                        many slots (a daily average) is flagged as probably misconfigured.
                     </div>
 
                     <div class="alert alert-info">
                         <strong><i class="fas fa-info-circle" aria-hidden="true"></i> All-or-nothing parsing:</strong> if a single
-                        entry is malformed — a <code>null</code> value, an unparseable timestamp, a missing field —
-                        the whole payload is rejected and EOS Connect keeps using the last good data. Skipping just
-                        the bad entry would shift every following hourly price by one slot, which is not visible
-                        anywhere in the UI. The log names the offending entry by index.
+                        entry is malformed — a <code>null</code> value, an unparseable timestamp, a missing field, a
+                        duplicated timestamp — the whole payload is rejected and EOS Connect keeps using the last
+                        good data. Values are placed by their timestamps, so skipping just the bad entry would turn
+                        it into a hole that gets filled by policy: a <code>null</code> at 18:00 would silently become
+                        the 17:00 price, exactly where the price matters most. The log names the offending entry by
+                        index.
                     </div>
 
                     <div class="alert alert-info">
@@ -241,6 +245,17 @@
                         Bare value arrays without timestamps are rejected here — they belong to the sources
                         built for them (<code>fixed_24h</code> for prices, the managed-load push API), or get
                         timestamps added via a template sensor.
+                    </div>
+
+                    <div class="alert alert-info">
+                        <strong><i class="fas fa-info-circle" aria-hidden="true"></i> Which period must the series cover?</strong>
+                        The optimization window runs from local midnight <em>today</em> for 48 hours, and values
+                        land on it by their timestamps — a source that also publishes yesterday (EPEX Spot, Tibber
+                        via HACS) or several extra days is fine: entries outside the window are simply dropped.
+                        Price slots the series does not cover are filled (first known price backwards, last known
+                        forwards, tomorrow repeats today's pattern) and the invented tail is hatched in the chart;
+                        a series that never touches the window — stale since yesterday, or future-only — is
+                        rejected and the last good data stays in use. PV treats uncovered slots as 0&nbsp;Wh.
                     </div>
 
                     <h3>Home Assistant Integration</h3>

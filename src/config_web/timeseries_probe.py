@@ -26,7 +26,8 @@ try:  # running from src/ as a script — src/ is on sys.path
         TEMPLATE_DOCS_URL,
         TimeseriesFormatError,
         convert_price_values,
-        convert_pv_values,
+        convert_energy_values,
+        median_span_seconds,
         detect_resolution_seconds,
         extract_json_path,
         normalize_entries,
@@ -40,7 +41,8 @@ except ImportError:  # imported as src.config_web (tests)
         TEMPLATE_DOCS_URL,
         TimeseriesFormatError,
         convert_price_values,
-        convert_pv_values,
+        convert_energy_values,
+        median_span_seconds,
         detect_resolution_seconds,
         extract_json_path,
         normalize_entries,
@@ -112,9 +114,10 @@ def probe(
         time_zone: Zone name or tzinfo used to resolve timestamps.
         resource_label: What to call the thing being fetched in messages — the HA
             sensor entity when the URL was derived from one, else the URL itself.
-        time_frame_base: The system's slot length (900 or 3600). Reported as a failure
-            when the source cannot satisfy it, because the interfaces reject that
-            combination outright and would otherwise fall back silently.
+        time_frame_base: The system's slot length (900 or 3600). A coarser
+            source is accepted — values land on the grid by overlap — and the
+            applied rule is reported as a warning so the test says what will
+            happen, not just that something will.
         installed_power_w: Total configured array power, used only to sanity-check PV
             magnitudes. Zero disables that check.
 
@@ -239,34 +242,31 @@ def probe(
                     "slot resolution."
                 ),
             }
-        delta = int((entries[1]["start"] - entries[0]["start"]).total_seconds())
-        return {
-            "ok": False,
-            "field": path_field,
-            "error": (
-                f"Unsupported slot resolution: {delta}s between the first two entries. "
-                "Only 900s (15 min) and 3600s (hourly) are supported."
-            ),
-        }
+        resolution_seconds = median_span_seconds(entries)
+        warnings.append(
+            f"Unusual slot resolution ({resolution_seconds}s between entries) — "
+            "values are placed on the grid by their timestamps: a finer entry "
+            "averages (prices) or sums (PV energy) into each slot, a coarser "
+            "one covers every slot it spans."
+        )
 
     if resolution_seconds == 3600 and time_frame_base == 900:
-        # PriceInterface / PvInterface refuse this combination and fall back, so a
-        # green test here would be a lie.
-        return {
-            "ok": False,
-            "field": path_field,
-            "error": (
-                "Source provides hourly data, but the system is configured for "
-                "15-minute slots (eos.time_frame = 900). Use a 15-minute source or "
-                "set the time frame to 3600."
-            ),
-        }
+        warnings.append(
+            "Source is hourly on a 15-minute system: each price holds for its "
+            "four 15-minute slots (PV energy is split across them)."
+        )
+    elif resolution_seconds and resolution_seconds > 4 * time_frame_base:
+        warnings.append(
+            f"Each entry spans {resolution_seconds // time_frame_base} slots "
+            "and covers all of them — check whether this is really a per-slot "
+            "series and not a daily average."
+        )
 
     try:
         if domain == "price":
             convert_price_values(entries, value_unit)
         else:
-            convert_pv_values(entries, value_unit, resolution_seconds)
+            convert_energy_values(entries, value_unit)
     except TimeseriesFormatError as exc:
         return {"ok": False, "field": unit_field, "error": str(exc)}
 

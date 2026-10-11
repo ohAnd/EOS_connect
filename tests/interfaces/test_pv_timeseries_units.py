@@ -126,7 +126,7 @@ class TestPowerToEnergyConversion:
             )
 
         assert values == []
-        assert "unknown PV unit" in caplog.text
+        assert "unknown unit" in caplog.text
 
 
 class TestReferenceSensorAcceptance:
