@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock
 
 import pytest
+import pytz
 
 from src.interfaces.feed_in_price_interface import FeedInPriceInterface
 
@@ -395,8 +396,74 @@ class TestFeedInEvccPriceSource:
         )
         
         feed_in_iface.update_prices(48)
-        
+
         # Verify that feed_in endpoint was called, not grid endpoint
         assert call_count["feed_in"] > 0
         # Grid endpoint should not be called for feed-in source
         assert call_count["grid"] == 0
+
+
+class TestEvccTimestampOffsets:
+    """EVCC renders timestamps with a numeric offset, e.g. '+02:00'.
+
+    The source's own offset is authoritative. A hand-rolled parser once split
+    it off with rsplit('+') and re-stamped the naive remainder with
+    `.replace(tzinfo=self.time_zone)` — on a pytz zone that attaches the LMT
+    offset (+00:53 for Europe/Berlin), so in summer every 15-minute entry
+    landed 67 minutes late and the hourly grouping put it one slot after its
+    real hour (B5 in discussion #214's review). These tests guard against any
+    parser that drops or re-derives an explicit offset.
+    """
+
+    BERLIN = pytz.timezone("Europe/Berlin")
+
+    def _prices_for_a_berlin_summer_day(self, monkeypatch):
+        """48 h of 15-min EVCC rates with '+02:00' offsets; EUR/kWh encodes the hour."""
+        midnight = self.BERLIN.localize(datetime(2026, 7, 8, 0, 0))
+        rates_data = []
+        for hour in range(48):
+            for quarter in range(4):
+                begin = midnight + timedelta(hours=hour, minutes=15 * quarter)
+                rates_data.append(
+                    {
+                        "start": begin.isoformat(),  # carries '+02:00'
+                        "end": (begin + timedelta(minutes=15)).isoformat(),
+                        "value": hour / 100,  # EUR/kWh encodes the hour
+                    }
+                )
+
+        def fake_get(url, headers=None, timeout=None):
+            class R:
+                def raise_for_status(self):
+                    return None
+
+                def json(self):
+                    return {"rates": rates_data}
+
+            return R()
+
+        monkeypatch.setattr(
+            "src.interfaces.feed_in_price_interface.requests.get", fake_get
+        )
+        monkeypatch.setattr(
+            FeedInPriceInterface, "_start_update_service", lambda self: None
+        )
+
+        mock_evcc = Mock()
+        mock_evcc.url = "http://evcc.local:7070"
+        feed_in_iface = FeedInPriceInterface(
+            {"source": "evcc"},
+            time_frame_base=3600,
+            timezone=self.BERLIN,
+            evcc_interface=mock_evcc,
+        )
+        feed_in_iface.update_prices(48, start_time=midnight)
+        return feed_in_iface.get_current_feedin_prices()
+
+    def test_an_entry_with_an_explicit_offset_lands_on_its_own_hour(self, monkeypatch):
+        """Every hour's rate must land on the slot its own timestamp names."""
+        prices = self._prices_for_a_berlin_summer_day(monkeypatch)
+        assert prices[0] == pytest.approx(0.0)
+        assert prices[5] == pytest.approx(0.05 / 1000)
+        assert prices[6] == pytest.approx(0.06 / 1000)
+        assert prices[47] == pytest.approx(0.47 / 1000)

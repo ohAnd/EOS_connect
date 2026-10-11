@@ -132,6 +132,42 @@ def test_watts_on_a_quarter_hourly_grid_give_a_quarter_of_the_energy():
     assert result["resolution_seconds"] == 900
 
 
+def test_an_hour_missing_from_the_source_stays_a_hole():
+    """The entry before a gap keeps its own hour instead of swallowing the gap.
+
+    1000 W published for 09:00 and 10:00 with 11:00 missing is 1000 Wh twice —
+    not 1000 + 2000 because the 10:00 entry happens to sit before the hole. A
+    deliberately longer span is declared with an explicit `end` instead.
+    """
+    entries = [
+        {"start": datetime(2026, 1, 15, 9, 0, tzinfo=BERLIN).isoformat(), "value": 1000.0},
+        {"start": datetime(2026, 1, 15, 10, 0, tzinfo=BERLIN).isoformat(), "value": 1000.0},
+        {"start": datetime(2026, 1, 15, 12, 0, tzinfo=BERLIN).isoformat(), "value": 1000.0},
+    ]
+    payload = {"state": "unknown", "attributes": {"forecast": entries}}
+
+    result, _ = _fetch(payload)
+
+    assert [entry["value"] for entry in result["entries"]] == [1000.0] * 3
+
+
+def test_a_declared_end_keeps_a_long_entry_long():
+    """One overnight value in a hand-written profile: 300 W for 8 h is 2400 Wh."""
+    entries = [
+        {"start": datetime(2026, 1, 15, 21, 0, tzinfo=BERLIN).isoformat(), "value": 400.0},
+        {
+            "start": datetime(2026, 1, 15, 22, 0, tzinfo=BERLIN).isoformat(),
+            "end": datetime(2026, 1, 16, 6, 0, tzinfo=BERLIN).isoformat(),
+            "value": 300.0,
+        },
+    ]
+    payload = {"state": "unknown", "attributes": {"forecast": entries}}
+
+    result, _ = _fetch(payload)
+
+    assert [entry["value"] for entry in result["entries"]] == [400.0, 2400.0]
+
+
 def test_energy_units_pass_through_unscaled():
     result, _ = _fetch(_payload([250.0] * 4, step_minutes=15),
                        _entry(value_unit="Wh"))

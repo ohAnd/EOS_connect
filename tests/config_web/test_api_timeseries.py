@@ -119,6 +119,63 @@ class TestTestTimeseriesEndpoint:
         assert resp.status_code == 200
         assert resp.get_json()["ok"] is False
 
+    def test_integration_field_names_probe_green_without_a_template(self, client):
+        """EPEX Spot HACS spellings (start_time/end_time/price_per_kwh) just work."""
+        payload = {
+            "rates": [
+                {
+                    "start_time": "2026-08-23T00:00:00+02:00",
+                    "end_time": "2026-08-23T00:15:00+02:00",
+                    "price_per_kwh": 0.3811,
+                },
+                {
+                    "start_time": "2026-08-23T00:15:00+02:00",
+                    "end_time": "2026-08-23T00:30:00+02:00",
+                    "price_per_kwh": 0.3727,
+                },
+            ]
+        }
+        resp, _ = post_test_timeseries(client, payload=payload)
+
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["entry_count"] == 2
+
+    def test_millisecond_timestamps_are_a_finding_not_a_500(self, client):
+        """A `as_timestamp() * 1000` template must get a message, not a crash (B9)."""
+        payload = {
+            "rates": [
+                {"start": 1_772_000_000_000, "value": 0.3811},
+                {"start": 1_772_000_900_000, "value": 0.3727},
+            ]
+        }
+        resp, _ = post_test_timeseries(client, payload=payload)
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is False
+        assert "millisecond" in data["error"].lower()
+
+    def test_an_unexpected_probe_crash_stays_curated(self, client):
+        """Served errors carry no exception text (test_error_message_exposure's rule).
+
+        A requests exception names hosts and proxies; whatever escapes the probe
+        belongs in the log, while the endpoint keeps its HTTP-200 promise.
+        """
+        leak = "HTTPSConnectionPool(host='internal-secret.lan', port=8123)"
+        with patch("src.config_web.api.probe", side_effect=RuntimeError(leak)):
+            resp = client.post(
+                "/api/config/test-timeseries",
+                data=json.dumps({}),
+                content_type="application/json",
+            )
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is False
+        assert "internal-secret.lan" not in json.dumps(data)
+        assert "log" in data["error"]
+
     def test_pv_domain_supported(self, client):
         payload = {"attributes": {"data": [
             {"start": "2026-08-23T00:00:00+02:00", "value": 4000.0},
@@ -181,7 +238,7 @@ class TestPreflightScope:
     def test_broken_source_blocks_the_save_against_the_right_field(self, client):
         with patch(
             "src.config_web.timeseries_probe.requests.get",
-            return_value=FakeResponse({"rates": [{"start_time": "x", "price_per_kwh": 1}]}),
+            return_value=FakeResponse({"rates": [{"begin": "x", "cost": 1}]}),
         ):
             resp = client.put(
                 "/api/config/",
@@ -192,7 +249,7 @@ class TestPreflightScope:
         assert resp.status_code == 422
         errors = resp.get_json()["errors"]
         assert errors[0]["key"] == "price.data_path"
-        assert "'start_time'" in errors[0]["error"]
+        assert "'begin'" in errors[0]["error"]
 
     def test_a_unit_warning_does_not_block_the_save(self, client):
         with patch(

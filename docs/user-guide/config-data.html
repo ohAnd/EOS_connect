@@ -229,6 +229,20 @@
                         anywhere in the UI. The log names the offending entry by index.
                     </div>
 
+                    <div class="alert alert-info">
+                        <strong><i class="fas fa-info-circle" aria-hidden="true"></i> Timestamps &amp; spans:</strong>
+                        every entry needs at least one explicit timestamp. Three shapes are accepted:
+                        <code>start</code> only (the end is derived from the next entry), <code>end</code> only
+                        (an &quot;hour ending&quot; source — the start is derived the mirrored way), or both — a
+                        supplied <code>end</code> is authoritative. A derived span never exceeds the series'
+                        typical spacing, so a missing hour stays a visible hole instead of silently stretching
+                        the entry before it; an entry that is <em>meant</em> to span longer (one overnight value
+                        in a hand-written load profile) must therefore declare its <code>end</code> explicitly.
+                        Bare value arrays without timestamps are rejected here — they belong to the sources
+                        built for them (<code>fixed_24h</code> for prices, the managed-load push API), or get
+                        timestamps added via a template sensor.
+                    </div>
+
                     <h3>Home Assistant Integration</h3>
                     <p>Home Assistant entity attributes can be accessed using the dot notation in
                         <strong>data_path</strong>.
@@ -329,18 +343,29 @@
   ]
 }</pre>
 
-                    <h3 id="timeseries-templates">Home Assistant Template Snippets</h3>
-                    <p>Home Assistant integrations name their attributes differently — Tibber and EPEX use
-                        <code>start_time</code> and <code>price_per_kwh</code>, Solcast uses
-                        <code>period_start</code> and <code>pv_estimate</code>. EOS Connect does not guess these
-                        names. Instead you publish one template sensor in the expected format; adapting to a
-                        different provider then means editing the template, not reconfiguring EOS Connect.</p>
-                    <p>Because <code>end</code> is derived automatically, the templates only need
-                        <code>start</code> and <code>value</code>.</p>
+                    <h3 id="timeseries-templates">Accepted Field Names &amp; Template Snippets</h3>
+                    <p>The common integration spellings are read directly — no renaming template needed:</p>
+                    <ul>
+                        <li><code>start</code>: also <code>start_time</code>, <code>period_start</code>,
+                            <code>timestamp</code>, <code>time</code>. A generic
+                            <code>timestamp</code>/<code>time</code> always means the interval <em>start</em>.</li>
+                        <li><code>end</code>: also <code>end_time</code>, <code>period_end</code>
+                            (derived automatically when absent).</li>
+                        <li><code>value</code>: also <code>price_per_kwh</code>, <code>price</code>,
+                            <code>pv_estimate</code>.</li>
+                    </ul>
+                    <p>One spelling per payload, picked from its first entry — entries mixing spellings are
+                        rejected like any other malformed entry. Tibber Price Information, EPEX Spot (HACS) and
+                        Solcast sensors therefore work as-is. A template sensor is still the way in for a source
+                        whose names are not on the list, or whose <em>shape</em> needs rework (like the
+                        address-keyed Tibber action response below); adapting to such a provider then means
+                        editing the template, not reconfiguring EOS Connect.</p>
 
                     <h4>Prices: Tibber Price Information / EPEX Spot (HACS)</h4>
                     <p>Both provide a <code>data</code> attribute with <code>start_time</code> and
-                        <code>price_per_kwh</code> (EUR/kWh):</p>
+                        <code>price_per_kwh</code> (EUR/kWh) — read directly, so pointing
+                        <code>price.data_path</code> at that attribute is enough. The template below remains the
+                        pattern for reshaping other sources:</p>
                     <pre>template:
   - trigger:
   - platform: time_pattern
@@ -445,12 +470,14 @@ Content-Type: application/json
 }</pre>
 
                     <p><strong>Response (Format mismatch):</strong> the message names the fields the payload
-                        actually contained, so you can see what to map in your template:</p>
+                        actually contained and the spellings it accepts, so you can see what to map in your
+                        template:</p>
                     <pre>{
   "ok": false,
   "field": "price.data_path",
   "error": "missing required field 'start' in the first entry (available fields:
-        'start_time', 'price_per_kwh'). The expected format is {start, end, value}
+        'begin', 'cost'). Accepted names: start, start_time, period_start,
+        timestamp, time. The expected format is {start, end, value}
         - shape the source with a Home Assistant template sensor, see
         configuration.html#timeseries-templates"
 }</pre>

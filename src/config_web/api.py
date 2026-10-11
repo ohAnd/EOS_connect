@@ -1080,17 +1080,29 @@ def _probe_timeseries_domain(domain: str, data: dict, get_value) -> dict:
     config = _module.get_config() or {}
     time_zone = config.get("time_zone", "UTC")
     time_frame_base = _effective_time_frame_base(get_value)
-    result = probe(
-        domain,
-        resolved["data_url"],
-        resolved["data_path"],
-        resolved["data_token"],
-        resolved["value_unit"],
-        time_zone,
-        resource_label=resolved["resource_label"],
-        time_frame_base=time_frame_base,
-        installed_power_w=_installed_pv_power_w(config) if domain == "pv" else 0,
-    )
+    try:
+        result = probe(
+            domain,
+            resolved["data_url"],
+            resolved["data_path"],
+            resolved["data_token"],
+            resolved["value_unit"],
+            time_zone,
+            resource_label=resolved["resource_label"],
+            time_frame_base=time_frame_base,
+            installed_power_w=_installed_pv_power_w(config) if domain == "pv" else 0,
+        )
+    except Exception:  # pylint: disable=broad-exception-caught
+        # The endpoint promises HTTP 200 with a finding in both directions, and
+        # served errors must not carry exception text - that goes to the log.
+        logger.exception("[CONFIG-API] timeseries probe failed unexpectedly")
+        return {
+            "ok": False,
+            "error": (
+                "The test failed unexpectedly - the EOS Connect log has the "
+                "details."
+            ),
+        }
     # In central-HA mode the actionable field is the sensor name, not the derived URL.
     if not result.get("ok") and result.get("field", "").endswith(".data_url"):
         result["field"] = resolved["sensor_field"]
