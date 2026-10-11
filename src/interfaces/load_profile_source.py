@@ -26,6 +26,10 @@ import logging
 
 import requests
 
+try:  # running from src/ — src/ is on sys.path
+    from interfaces.http_fetch import bearer_request_kwargs
+except ImportError:  # imported as src.interfaces (tests)
+    from .http_fetch import bearer_request_kwargs
 from .timeseries_normalizer import (
     PV_UNITS,
     TimeseriesFormatError,
@@ -114,13 +118,12 @@ def fetch_profile(entry, data_source=None, time_zone=None, ssl_ignore=False):
             f"unknown unit '{unit}' - use one of: {', '.join(PV_UNITS)}"
         )
 
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
     try:
         response = requests.get(
-            url, headers=headers, timeout=REQUEST_TIMEOUT_S, verify=not ssl_ignore
+            url,
+            **bearer_request_kwargs(
+                token, timeout=REQUEST_TIMEOUT_S, ssl_ignore=ssl_ignore
+            ),
         )
         response.raise_for_status()
         payload = response.json()

@@ -304,14 +304,22 @@ def _apply_inverter_data_source_injection(result: dict, all_settings: dict[str, 
     inverter["ssl_ignore"] = ds_ssl_ignore
 
 
+_CENTRAL_HA_SECTIONS = (
+    ("price", "", "sensor.grid_prices"),
+    ("pv_forecast_source", "", "sensor.pv_forecast"),
+    ("price", "feed_in_", "sensor.feed_in_prices"),
+)
+
+
 def _apply_central_ha_data_source(result: dict, all_settings: dict[str, Any]) -> None:
     """
-    Apply central Home Assistant data source to price, pv_forecast_source, and pv_autoscaling.
+    Apply the central Home Assistant data source to every section that opted in.
 
-    When price.use_ha_central_data_source, pv_forecast_source.use_ha_central_data_source,
-    or pv_autoscaling.use_ha_central_data_source is true, construct the connection details
-    from the centrally configured data_source (url and access_token), avoiding repetition
-    for end users.
+    When a section's use_ha_central_data_source toggle is true, its connection
+    details are constructed from the centrally configured data_source (url and
+    access_token), avoiding repetition for end users. The timeseries-capable
+    domains come from _CENTRAL_HA_SECTIONS; pv_autoscaling keeps its own block
+    because its key names and source handling differ.
 
     Args:
         result: The merged config dict to modify in-place.
@@ -322,23 +330,18 @@ def _apply_central_ha_data_source(result: dict, all_settings: dict[str, Any]) ->
     ds_token = all_settings.get("data_source.access_token", "")
     ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
 
-    # Apply to price section
-    if "price" in result:
-        price = result["price"]
-        if price.get("use_ha_central_data_source"):
-            sensor_name = price.get("ha_sensor_name", "sensor.grid_prices")
+    # One spec per timeseries-capable domain instead of a copy-pasted block per
+    # section: (section, key prefix within it, default sensor). Must stay in
+    # step with api._TIMESERIES_DOMAIN_SECTIONS — a test pins the two together.
+    for section, prefix, default_sensor in _CENTRAL_HA_SECTIONS:
+        target = result.get(section)
+        if not isinstance(target, dict):
+            continue
+        if target.get(f"{prefix}use_ha_central_data_source"):
+            sensor_name = target.get(f"{prefix}ha_sensor_name", default_sensor)
             # Construct HA API URL from sensor entity
-            price["data_url"] = f"{ds_url}/api/states/{sensor_name}"
-            price["data_token"] = ds_token
-
-    # Apply to pv_forecast_source section
-    if "pv_forecast_source" in result:
-        pv_source = result["pv_forecast_source"]
-        if pv_source.get("use_ha_central_data_source"):
-            sensor_name = pv_source.get("ha_sensor_name", "sensor.pv_forecast")
-            # Construct HA API URL from sensor entity
-            pv_source["data_url"] = f"{ds_url}/api/states/{sensor_name}"
-            pv_source["data_token"] = ds_token
+            target[f"{prefix}data_url"] = f"{ds_url}/api/states/{sensor_name}"
+            target[f"{prefix}data_token"] = ds_token
 
     # Apply to pv_autoscaling section
     if "pv_autoscaling" in result:

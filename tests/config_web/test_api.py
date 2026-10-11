@@ -318,12 +318,25 @@ class TestConfigAPI:
             class MockResponse:
                 status_code = 200
                 def json(self):
+                    from datetime import datetime, timedelta, timezone
+
+                    midnight = datetime.now(timezone.utc).replace(
+                        hour=12, minute=0, second=0, microsecond=0
+                    )
                     return {
                         'state': 'available',
                         'attributes': {
                             'data': [
-                                {'start': '2024-01-01T00:00:00', 'end': '2024-01-01T01:00:00', 'value': 0.25},
-                                {'start': '2024-01-01T01:00:00', 'end': '2024-01-01T02:00:00', 'value': 0.30},
+                                {
+                                    'start': midnight.isoformat(),
+                                    'end': (midnight + timedelta(hours=1)).isoformat(),
+                                    'value': 0.25,
+                                },
+                                {
+                                    'start': (midnight + timedelta(hours=1)).isoformat(),
+                                    'end': (midnight + timedelta(hours=2)).isoformat(),
+                                    'value': 0.30,
+                                },
                             ]
                         }
                     }

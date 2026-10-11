@@ -216,3 +216,63 @@ class TestFinalTariffSourcesAreUntouched:
         prices = iface.get_current_prices()
         assert len(prices) == 48
         assert prices[0] == pytest.approx(0.0001)
+
+
+class TestTheCacheNeverCompounds:
+    """
+    last_successful_prices stores ADJUSTED values, so no path may re-adjust it.
+
+    The EVCC history fallback splices the cache straight into the array it
+    returns, and that array used to flow back through the central adjustment —
+    so every 15-minute cycle multiplied the spliced tail again, reaching the
+    EUR/Wh clamp in about a day. EVCC is no longer an exchange source, which
+    removes the loop; these tests keep it removed.
+    """
+
+    @staticmethod
+    def _evcc(monkeypatch, **overrides):
+        monkeypatch.setattr(
+            "src.interfaces.price_interface.PriceInterface._PriceInterface__start_update_service",
+            lambda self: None,
+        )
+        config = {
+            "source": "evcc",
+            "fixed_price_adder_ct": 2.0,
+            "relative_price_multiplier": 0.10,
+        }
+        config.update(overrides)
+        return PriceInterface(config, time_frame_base=3600, timezone=timezone.utc)
+
+    def test_repeated_incomplete_cycles_do_not_drift(self, monkeypatch):
+        """Full grid once, then short grids forever: the tail must stay put."""
+        iface = self._evcc(monkeypatch)
+        state = {"count": 48}
+        monkeypatch.setattr(
+            iface,
+            "_PriceInterface__retrieve_prices_from_evcc",
+            lambda tgt_duration, start_time=None: [0.0002] * state["count"],
+        )
+
+        served = []
+        for _ in range(8):
+            iface.update_prices(48, ANCHOR)
+            served.append(iface.get_current_prices()[-1])
+            state["count"] = 30  # incomplete from here on -> history fallback
+
+        assert served == pytest.approx([0.0002] * 8)
+
+    def test_a_source_change_drops_the_previous_cache(self, monkeypatch):
+        """Switching source must not inherit the old source's adjusted prices."""
+        iface = self._evcc(monkeypatch, source="timeseries", data_url="http://x", data_path="d")
+        monkeypatch.setattr(
+            iface,
+            "_PriceInterface__retrieve_prices_from_url",
+            lambda tgt_duration, start_time=None: [0.0002] * 48,
+        )
+        iface.update_prices(48, ANCHOR)
+        # timeseries is an exchange source, so the cache is adjusted.
+        assert iface.last_successful_prices[0] == pytest.approx(0.000242)
+
+        iface.drop_fallback_cache()
+        assert iface.last_successful_prices == []
+        assert iface.consecutive_failures == 0

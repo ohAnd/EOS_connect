@@ -173,6 +173,41 @@ class TestHotReloadPrice:
         call_args = price_interface.update_prices.call_args
         assert call_args[0][0] == 48  # tgt_duration for 3600 second time frame
 
+    def test_feed_in_data_field_change_reloads_the_connection(
+        self, feed_in_price_interface
+    ):
+        """Editing the timeseries connection must reach the running interface."""
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.source = "timeseries"
+        feed_in_price_interface.zone = "DK1"
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "feed_in_source": "timeseries",
+                "feed_in_zone": "DK1",
+                "feed_in_data_url": "http://ha.local/api/states/sensor.feed_in",
+                "feed_in_data_path": "rates",
+                "feed_in_value_unit": "ct/kWh",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+
+        adapter.on_config_changed(
+            "price.feed_in_data_url", "old", "http://ha.local/api/states/sensor.feed_in"
+        )
+
+        assert feed_in_price_interface.data_url == (
+            "http://ha.local/api/states/sensor.feed_in"
+        )
+        assert feed_in_price_interface.value_unit == "ct/kWh"
+        feed_in_price_interface.update_prices.assert_called_once()
+
     def test_price_source_change_skips_immediate_fetch(self, price_interface):
         """Changing price.source FROM timeseries TO another source should NOT fetch.
         
@@ -207,6 +242,50 @@ class TestHotReloadPrice:
         # The deferred fetch keeps the previous source's prices; its forecast
         # markers must be dropped so they do not hatch those prices as forecast.
         price_interface.clear_forecast_metadata.assert_called_once()
+
+        # The fallback cache belongs to timeseries — including its adder and
+        # multiplier, which tibber must never inherit.
+        price_interface.drop_fallback_cache.assert_called_once()
+
+    def test_price_source_change_to_evcc_also_drops_the_cache(self, price_interface):
+        """The immediate-fetch branch must drop the cache too, not just the deferred one.
+
+        EVCC's own incomplete-data fallback splices last_successful_prices into the
+        array it returns, so a cache left over from an exchange source would put
+        that source's adjusted prices into the EVCC result.
+        """
+        price_interface.src = "timeseries"
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=MagicMock(return_value={"price": {"source": "evcc"}}),
+        )
+
+        adapter.on_config_changed("price.source", "timeseries", "evcc")
+
+        price_interface.update_prices.assert_called_once()
+        price_interface.drop_fallback_cache.assert_called_once()
+
+    def test_a_non_source_price_change_keeps_the_cache(self, price_interface):
+        """Editing a data field is not a source change — the cache stays valid."""
+        price_interface.src = "timeseries"
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=MagicMock(
+                return_value={"price": {"source": "timeseries", "data_url": "http://x"}}
+            ),
+        )
+
+        adapter.on_config_changed("price.data_url", "http://old", "http://x")
+
+        price_interface.drop_fallback_cache.assert_not_called()
 
     def test_price_source_change_to_timeseries_triggers_immediate_fetch(self, price_interface):
         """Changing price.source TO timeseries FROM any other source SHOULD fetch.

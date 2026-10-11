@@ -7,6 +7,7 @@ a network probe (which would make every save depend on a reachable endpoint).
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -20,10 +21,19 @@ from src.config_web.store import ConfigStore
 
 from .test_api import _FakeModule, _sample_config
 
+# The endpoint judges window coverage against local midnight *today*, so the
+# payloads are built relative to now rather than pinned to a date.
+MIDNIGHT = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+
+
+def _at(minutes):
+    return (MIDNIGHT + timedelta(minutes=minutes)).isoformat()
+
+
 EVCC_RATES = {
     "rates": [
-        {"start": "2026-08-23T00:00:00+02:00", "value": 0.3811},
-        {"start": "2026-08-23T00:15:00+02:00", "value": 0.3727},
+        {"start": _at(0), "value": 0.3811},
+        {"start": _at(15), "value": 0.3727},
     ]
 }
 
@@ -124,13 +134,13 @@ class TestTestTimeseriesEndpoint:
         payload = {
             "rates": [
                 {
-                    "start_time": "2026-08-23T00:00:00+02:00",
-                    "end_time": "2026-08-23T00:15:00+02:00",
+                    "start_time": _at(0),
+                    "end_time": _at(15),
                     "price_per_kwh": 0.3811,
                 },
                 {
-                    "start_time": "2026-08-23T00:15:00+02:00",
-                    "end_time": "2026-08-23T00:30:00+02:00",
+                    "start_time": _at(15),
+                    "end_time": _at(30),
                     "price_per_kwh": 0.3727,
                 },
             ]
@@ -178,8 +188,8 @@ class TestTestTimeseriesEndpoint:
 
     def test_pv_domain_supported(self, client):
         payload = {"attributes": {"data": [
-            {"start": "2026-08-23T00:00:00+02:00", "value": 4000.0},
-            {"start": "2026-08-23T00:15:00+02:00", "value": 4000.0},
+            {"start": _at(0), "value": 4000.0},
+            {"start": _at(15), "value": 4000.0},
         ]}}
         resp, _ = post_test_timeseries(
             client,
@@ -205,6 +215,55 @@ class TestTestTimeseriesEndpoint:
         )
 
         assert resp.status_code == 400
+
+
+class TestFeedInDomainEndpoint:
+    """The endpoint accepts domain=feed_in and resolves the feed_in_ fields."""
+
+    def test_feed_in_domain_probes_the_configured_url(self, client):
+        client.store.set("price.feed_in_source", "timeseries")
+        client.store.set(
+            "price.feed_in_data_url", "http://ha.local/api/states/sensor.feed_in"
+        )
+        client.store.set("price.feed_in_data_path", "rates")
+        client.store.set("price.feed_in_value_unit", "EUR/kWh")
+
+        resp, mock_get = post_test_timeseries(client, {"domain": "feed_in"})
+
+        assert resp.status_code == 200
+        assert resp.get_json()["ok"] is True
+        assert mock_get.call_args[0][0] == "http://ha.local/api/states/sensor.feed_in"
+
+    def test_feed_in_central_mode_builds_the_url_like_the_merger(self, client):
+        client.store.set("price.feed_in_source", "timeseries")
+        client.store.set("price.feed_in_use_ha_central_data_source", True)
+        client.store.set("price.feed_in_ha_sensor_name", "sensor.my_feed_in")
+        client.store.set("price.feed_in_data_path", "rates")
+        client.store.set("data_source.url", "http://ha.local:8123")
+        client.store.set("data_source.access_token", "tok")
+
+        resp, mock_get = post_test_timeseries(client, {"domain": "feed_in"})
+
+        assert resp.status_code == 200
+        assert (
+            mock_get.call_args[0][0]
+            == "http://ha.local:8123/api/states/sensor.my_feed_in"
+        )
+
+    def test_merger_and_resolver_agree_on_the_central_url(self, client):
+        """The api resolver documents that it mirrors the merger — pin it."""
+        client.store.set("price.feed_in_source", "timeseries")
+        client.store.set("price.feed_in_use_ha_central_data_source", True)
+        client.store.set("price.feed_in_ha_sensor_name", "sensor.my_feed_in")
+        client.store.set("data_source.url", "http://ha.local:8123")
+        client.store.set("data_source.access_token", "tok")
+
+        merged = build_merged_config({}, client.store, ConfigSchema())
+        assert (
+            merged["price"]["feed_in_data_url"]
+            == "http://ha.local:8123/api/states/sensor.my_feed_in"
+        )
+        assert merged["price"]["feed_in_data_token"] == "tok"
 
 
 class TestPreflightScope:
@@ -478,8 +537,8 @@ class TestEffectiveTimeFrame:
 
     HOURLY_PAYLOAD = {
         "rates": [
-            {"start": "2026-08-23T00:00:00+02:00", "value": 0.30},
-            {"start": "2026-08-23T01:00:00+02:00", "value": 0.31},
+            {"start": _at(0), "value": 0.30},
+            {"start": _at(60), "value": 0.31},
         ]
     }
 
@@ -624,3 +683,79 @@ class TestSharedDataSourceEditsAreNotBlocked:
             )
 
         assert resp.status_code == 422
+
+
+class TestFeedInPreflight:
+    """
+    The feed-in domain's pre-flight, which had no coverage at all — which is
+    why its error reported against the grid-price field.
+    """
+
+    @staticmethod
+    def _as_timeseries_feedin(client):
+        client.store.set("price.feed_in_source", "timeseries")
+        client.store.set("price.feed_in_data_url", "http://ha.local/feed_in")
+        client.store.set("price.feed_in_data_path", "rates")
+        client.store.set("price.feed_in_value_unit", "EUR/kWh")
+
+    def test_a_broken_feed_in_source_names_the_feed_in_field(self, client):
+        """Not price.data_url — that is the GRID price, a different setting."""
+        self._as_timeseries_feedin(client)
+
+        with patch(
+            "src.config_web.timeseries_probe.requests.get",
+            return_value=FakeResponse({"rates": [{"begin": "x", "cost": 1}]}),
+        ):
+            resp = client.put(
+                "/api/config/",
+                data=json.dumps({"price.feed_in_data_path": "rates"}),
+                content_type="application/json",
+            )
+
+        assert resp.status_code == 422
+        key = resp.get_json()["errors"][0]["key"]
+        assert key.startswith("price.feed_in_"), key
+        assert key != "price.data_url"
+
+
+class TestStaleSeriesDoesNotBlockTheSave:
+    """
+    A series that misses the optimization window is red in the tester but must
+    not refuse a save.
+
+    The window is judged against local midnight TODAY, so an untouched config
+    that saved yesterday would start returning 422 this morning — and the user
+    could not edit their way out of it, because every PUT carrying the field
+    would be rejected by the same check.
+    """
+
+    STALE = {
+        "rates": [
+            {"start": (MIDNIGHT - timedelta(days=30)).isoformat(), "value": 0.30},
+            {"start": (MIDNIGHT - timedelta(days=30, minutes=-15)).isoformat(),
+             "value": 0.31},
+        ]
+    }
+
+    def test_the_save_goes_through(self, client):
+        with patch(
+            "src.config_web.timeseries_probe.requests.get",
+            return_value=FakeResponse(self.STALE),
+        ):
+            resp = client.put(
+                "/api/config/",
+                data=json.dumps({"price.data_path": "rates"}),
+                content_type="application/json",
+            )
+
+        assert resp.status_code == 200
+
+    def test_the_tester_still_calls_it_red(self, client):
+        """The probe verdict itself is unchanged — only the save is unblocked."""
+        resp, _ = post_test_timeseries(
+            client, {"domain": "price"}, payload=self.STALE
+        )
+
+        body = resp.get_json()
+        assert body["ok"] is False
+        assert "optimization window" in body["error"]

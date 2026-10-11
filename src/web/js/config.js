@@ -1561,8 +1561,9 @@ class ConfigurationManager {
         }
         for (const el of document.querySelectorAll("[data-timeseries-tester]")) {
             const domain = el.getAttribute("data-timeseries-tester");
-            const section = domain === "price" ? "price" : "pv_forecast_source";
-            const unitField = this.schema.find(f => f.key === `${section}.value_unit`);
+            const unitField = this.schema.find(
+                f => f.timeseries_domain === domain
+            );
             if (!unitField) {
                 continue;
             }
@@ -2374,12 +2375,14 @@ class ConfigurationManager {
      * @returns {string} Panel HTML, or "" when the group has no timeseries fields
      */
     _renderTimeseriesTester(groupFields) {
-        const unitField = groupFields.find(f => f.key.endsWith(".value_unit"));
+        // The schema marks the anchor field: its timeseries_domain names the
+        // probe domain, its key carries the field prefix. No suffix sniffing,
+        // no hardcoded section-to-domain map — a new domain is one schema tag.
+        const unitField = groupFields.find(f => f.timeseries_domain);
         if (!unitField) {
             return "";
         }
-        const section = unitField.key.split(".")[0];
-        const domain = section === "price" ? "price" : "pv";
+        const domain = unitField.timeseries_domain;
         const hidden = this._isDependencyHidden(unitField) ? " hidden" : "";
 
         return `
@@ -2405,19 +2408,24 @@ class ConfigurationManager {
      * @param {string} domain - "price" or "pv"
      */
     async testTimeseries(domain) {
-        const section = domain === "price" ? "price" : "pv_forecast_source";
+        const unitField = (this.schema || []).find(
+            f => f.timeseries_domain === domain
+        );
         const resultEl = document.getElementById(`cfg-ts-result-${domain}`);
         const btnEl = document.getElementById(`cfg-ts-test-${domain}`);
-        if (!resultEl) {
+        if (!resultEl || !unitField) {
             return;
         }
 
+        // "price.feed_in_value_unit" -> "price.feed_in_"; unsaved form values
+        // for the whole connection group ride along with the probe request.
+        const keyPrefix = unitField.key.slice(0, -"value_unit".length);
         const body = { domain };
         for (const suffix of [
             "source", "data_url", "data_path", "data_token",
             "value_unit", "use_ha_central_data_source", "ha_sensor_name",
         ]) {
-            const key = `${section}.${suffix}`;
+            const key = `${keyPrefix}${suffix}`;
             if (this.values[key] !== undefined) {
                 body[key] = this.values[key];
             }
@@ -2442,7 +2450,12 @@ class ConfigurationManager {
             });
             const data = await res.json();
             resultEl.innerHTML = this._renderTimeseriesResult(data);
-            resultEl.className = `config-timeseries-result visible ${data.ok ? "ok" : "error"}`;
+            // Three states: green (clean), amber (works, but the probe has
+            // something to say — coverage, resolution rule, unit doubt), red.
+            const state = data.ok
+                ? ((data.warnings || []).length ? "warn" : "ok")
+                : "error";
+            resultEl.className = `config-timeseries-result visible ${state}`;
         } catch (err) {
             console.error("[ConfigurationManager] Timeseries test failed:", err);
             resultEl.className = "config-timeseries-result visible error";
@@ -2460,8 +2473,15 @@ class ConfigurationManager {
      * @returns {string} Result HTML
      */
     _renderTimeseriesResult(data) {
+        const warnings = (data.warnings || []).map(
+            w => `<div class="config-timeseries-warning">
+                    <i class="fas fa-triangle-exclamation"></i> ${this._escapeHtml(w)}
+                  </div>`
+        ).join("");
+
         if (!data.ok) {
-            return `<i class="fas fa-times-circle"></i> ${this._escapeHtml(data.error || "Test failed.")}`;
+            return `<i class="fas fa-times-circle"></i> ${this._escapeHtml(data.error || "Test failed.")}
+                ${warnings}`;
         }
 
         const resolution = data.resolution_seconds === 900 ? "15 min" : "hourly";
@@ -2472,15 +2492,14 @@ class ConfigurationManager {
                         <td>${this._escapeHtml(slot.unit)}</td></tr>`;
         }).join("");
 
-        const warnings = (data.warnings || []).map(
-            w => `<div class="config-timeseries-warning">
-                    <i class="fas fa-triangle-exclamation"></i> ${this._escapeHtml(w)}
-                  </div>`
-        ).join("");
+        // Where the series lands on the 48 h optimization window.
+        const coverage = Number.isInteger(data.covered_slots)
+            ? `, covers slots ${data.first_slot}–${data.last_slot}`
+            : "";
 
         return `<div><i class="fas fa-circle-check"></i>
                     ${data.entry_count} entries, ${resolution} resolution,
-                    read as ${this._escapeHtml(data.value_unit)}</div>
+                    read as ${this._escapeHtml(data.value_unit)}${coverage}</div>
                 <table class="config-timeseries-slots">${slots}</table>
                 ${warnings}`;
     }

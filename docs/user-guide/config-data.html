@@ -457,6 +457,10 @@ sensor:
                     <p>The same check runs automatically when you save a timeseries setting; a hard failure blocks
                         the save and is reported on the field that caused it, while a plausibility warning does not
                         block.</p>
+                    <p>For a payload you only have as a file — someone else's sensor dump in a support thread,
+                        say — the identical analysis runs offline as
+                        <a href="../advanced/index.html#timeseries-doctor">the timeseries doctor</a>, a
+                        command-line tool that also prints slot by slot where every entry lands on the grid.</p>
 
                     <p><strong>HTTP Request:</strong></p>
                     <pre>POST /api/config/test-timeseries
@@ -469,7 +473,8 @@ Content-Type: application/json
   "price.value_unit": "EUR/kWh"
 }</pre>
                     <p>All keys are optional — anything omitted falls back to the stored configuration.
-                        <code>domain</code> is <code>price</code> (default) or <code>pv</code>.</p>
+                        <code>domain</code> is <code>price</code> (default), <code>pv</code> or
+                        <code>feed_in</code>.</p>
 
                     <p><strong>Response (Success):</strong></p>
                     <pre>{

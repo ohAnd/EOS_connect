@@ -38,7 +38,6 @@ from collections import defaultdict
 import json
 import logging
 import threading
-import time
 import requests
 
 try:  # running from src/ — src/ is on sys.path
@@ -59,6 +58,11 @@ except ImportError:  # imported as src.interfaces (tests)
         local_midnight,
         place_on_grid,
     )
+try:  # running from src/ — src/ is on sys.path
+    from interfaces.http_fetch import bearer_request_kwargs, retry_request
+except ImportError:  # imported as src.interfaces (tests)
+    from .http_fetch import bearer_request_kwargs, retry_request
+from .forecast_metadata import ForecastMetadataMixin
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
@@ -144,7 +148,7 @@ ENERGYFORECAST_MIN_FACTOR = 0.5  # Minimum allowed multiplicative factor
 ENERGYFORECAST_MAX_OFFSET_CT = 50.0  # Maximum allowed offset in ct/kWh
 
 
-class PriceInterface:
+class PriceInterface(ForecastMetadataMixin):
     """
     The PriceInterface class manages electricity price data retrieval and processing from
     various sources.
@@ -258,13 +262,7 @@ class PriceInterface:
         self._energyforecast_cache = []  # Cached prediction from last call
 
         # Forecast metadata tracking for UI visualization
-        self.forecast_start_index = (
-            None  # Index where forecast/repetition begins (None = all real)
-        )
-        self.forecast_type = (
-            None  # "smart_forecast", "simple_repetition", or None (all real)
-        )
-        self.forecast_source = None  # e.g., "energyforecast.de" for smart forecasts
+        self._init_forecast_metadata()
         # Prices and forecast metadata are read by the web thread while the
         # update thread writes them; this tuple is assigned once per update so
         # a reader never sees new metadata next to old prices.
@@ -492,14 +490,8 @@ class PriceInterface:
 
     def get_forecast_metadata(self):
         """
-        Return metadata about current price forecast/repetition.
-
-        Returns:
-            dict: Contains forecast_start_index, forecast_type, and forecast_source.
-                  - forecast_start_index: Index where prediction/repetition starts
-                    (None if all real)
-                  - forecast_type: "smart_forecast", "simple_repetition", or None
-                  - forecast_source: Source of prediction (e.g., "energyforecast.de") or None
+        The mixin's triple, read from the published snapshot when one exists —
+        a web-thread reader must never see new metadata next to old prices.
         """
         if self._published is not None:
             _, start_index, forecast_type, forecast_source = self._published
@@ -508,11 +500,7 @@ class PriceInterface:
                 "forecast_type": forecast_type,
                 "forecast_source": forecast_source,
             }
-        return {
-            "forecast_start_index": self.forecast_start_index,
-            "forecast_type": self.forecast_type,
-            "forecast_source": self.forecast_source,
-        }
+        return super().get_forecast_metadata()
 
     def clear_forecast_metadata(self):
         """
@@ -520,31 +508,27 @@ class PriceInterface:
 
         Used by hot reload when the price source changes without an immediate
         fetch: the old markers would otherwise keep hatching real prices as
-        forecast until the next update cycle.
+        forecast until the next update cycle. The published snapshot carries
+        its own copy of the triple, so it is cleared alongside.
         """
-        self._set_forecast_metadata(None, None, None)
+        super().clear_forecast_metadata()
         if self._published is not None:
             self._published = (self._published[0], None, None, None)
 
-    def _set_forecast_metadata(self, start_index, forecast_type, source=None):
+    def drop_fallback_cache(self):
         """
-        Update forecast metadata for UI visualization.
+        Forget the last successful prices, for a source change.
 
-        Args:
-            start_index (int or None): Index where forecast/repetition begins
-            forecast_type (str or None): "smart_forecast", "simple_repetition", or None
-            source (str or None): Source name (e.g., "energyforecast.de")
+        ``last_successful_prices`` holds values already shaped by the *previous*
+        source — including its adder and multiplier, which only the exchange
+        sources get (EXCHANGE_PRICE_SOURCES). Carrying that cache into a new
+        source would serve the old source's adjusted prices whenever the new one
+        is short or fails, and the EVCC path splices the cache directly into its
+        own result. The failure counter goes with it: failures counted against
+        the old endpoint say nothing about the new one.
         """
-        self.forecast_start_index = start_index
-        self.forecast_type = forecast_type
-        self.forecast_source = source
-        if forecast_type:
-            logger.debug(
-                "[PRICE-IF] Forecast metadata updated: type=%s, start_index=%s, source=%s",
-                forecast_type,
-                start_index,
-                source,
-            )
+        self.last_successful_prices = []
+        self.consecutive_failures = 0
 
     def __retrieve_prices(self, tgt_duration, start_time=None):
         """
@@ -1837,34 +1821,10 @@ class PriceInterface:
         return slope, intercept
 
     def _retry_request(self, request_func, error_handler, max_retries=3, delay=1):
-        """
-        Centralized retry logic for API requests with exponential backoff.
-
-        Args:
-            request_func (callable): Function that performs the request and returns the result.
-            error_handler (callable): Function to call on final failure.
-            max_retries (int): Number of retries before error handler is called.
-            delay (int): Initial delay in seconds between retries.
-
-        Returns:
-            The result of request_func, or error_handler on failure.
-        """
-        for attempt in range(max_retries):
-            try:
-                return request_func()
-            except requests.exceptions.Timeout as e:
-                if attempt == max_retries - 1:
-                    return error_handler("timeout", e)
-            except requests.exceptions.RequestException as e:
-                if attempt == max_retries - 1:
-                    return error_handler("request_failed", e)
-            except (ValueError, TypeError) as e:
-                if attempt == max_retries - 1:
-                    return error_handler("invalid_json", e)
-            except (KeyError, AttributeError) as e:
-                if attempt == max_retries - 1:
-                    return error_handler("parsing_error", e)
-            time.sleep(delay)
+        """Delegate to the shared retry loop (interfaces.http_fetch)."""
+        return retry_request(
+            request_func, error_handler, max_retries=max_retries, delay=delay
+        )
 
     def __retrieve_prices_from_fixed24h_array(
         self, tgt_duration, start_time=None  # pylint: disable=unused-argument
@@ -1932,10 +1892,6 @@ class PriceInterface:
             )
             return []
 
-        # Prepare request headers with optional bearer token
-        headers = {"Content-Type": "application/json"}
-        if self.data_token:
-            headers["Authorization"] = f"Bearer {self.data_token}"
 
         logger.debug(
             "[PRICE-IF] Fetching prices from timeseries source: %s (path: %s, unit: %s)",
@@ -1946,7 +1902,9 @@ class PriceInterface:
 
         def request_and_parse():
             """Fetch data and extract timeseries using data_path."""
-            response = requests.get(self.data_url, headers=headers, timeout=10)
+            response = requests.get(
+                self.data_url, **bearer_request_kwargs(self.data_token)
+            )
             response.raise_for_status()
             response_data = response.json()
 
@@ -2040,10 +1998,9 @@ class PriceInterface:
 
             # Fetch grid tariff (consumption prices)
             grid_url = f"{evcc_url}/api/tariff/grid"
-            headers = {"Content-Type": "application/json"}
 
             try:
-                response = requests.get(grid_url, headers=headers, timeout=10)
+                response = requests.get(grid_url, **bearer_request_kwargs())
                 response.raise_for_status()
             except requests.exceptions.RequestException as req_err:
                 logger.error(f"[PRICE-IF] Failed to fetch EVCC grid tariff: {req_err}")

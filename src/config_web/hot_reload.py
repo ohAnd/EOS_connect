@@ -98,10 +98,16 @@ _FEEDIN_PRICE_FIELD_MAP = {
     "price.feed_in_negative_price_switch": ("negative_price_switch", bool),
 }
 
-# Feed-in data source fields that require reload (source/zone changes)
+# Feed-in data source fields that require reload (source/zone/connection changes)
 _FEEDIN_DATA_FIELDS = {
     "price.feed_in_source",
     "price.feed_in_zone",
+    "price.feed_in_use_ha_central_data_source",
+    "price.feed_in_ha_sensor_name",
+    "price.feed_in_data_path",
+    "price.feed_in_data_url",
+    "price.feed_in_data_token",
+    "price.feed_in_value_unit",
 }
 
 _BATTERY_SOC_FIELDS = {
@@ -783,7 +789,16 @@ class HotReloadAdapter:
                 )
 
             # Update all price config fields including source
+            source_changed = key == "price.source" and self._price.src != new_source
             self._price.src = new_source
+            if source_changed:
+                # The fallback cache belongs to the source being left: it carries
+                # that source's adjustments, and the EVCC path splices it into
+                # its own result. Drop it before anything can serve it.
+                try:
+                    self._price.drop_fallback_cache()
+                except AttributeError:
+                    pass
             self._price.config_source = price_config
             self._price.data_url = price_config.get("data_url", "").strip()
             self._price.data_path = price_config.get("data_path", "attributes.data").strip()
@@ -895,8 +910,30 @@ class HotReloadAdapter:
             # Update feed-in interface with new configuration
             old_source = self._feed_in_price.source
             old_zone = self._feed_in_price.zone
+            if old_source != new_source:
+                # The forecast markers describe the array the PREVIOUS source
+                # produced. Left in place they keep hatching the new source's
+                # prices as invented - the same reset the grid-price side does.
+                try:
+                    self._feed_in_price.clear_forecast_metadata()
+                except AttributeError:
+                    pass
             self._feed_in_price.source = new_source
             self._feed_in_price.zone = new_zone
+            # Timeseries connection details (central-HA mode already resolved
+            # by the merger into feed_in_data_url/feed_in_data_token).
+            self._feed_in_price.data_url = str(
+                feedin_config.get("feed_in_data_url", "") or ""
+            ).strip()
+            self._feed_in_price.data_path = str(
+                feedin_config.get("feed_in_data_path", "") or "attributes.data"
+            ).strip()
+            self._feed_in_price.data_token = str(
+                feedin_config.get("feed_in_data_token", "") or ""
+            ).strip()
+            self._feed_in_price.value_unit = str(
+                feedin_config.get("feed_in_value_unit", "") or "EUR/kWh"
+            ).strip()
             self._applied_keys.append(key)
 
             logger.info(
