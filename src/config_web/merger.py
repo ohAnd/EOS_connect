@@ -36,6 +36,12 @@ def build_merged_config(
     2. Bootstrap config.yaml (for bootstrap-only keys)
     3. Schema defaults (fallback)
 
+    Resolutions the EVCC data source makes (the single URL, virtual entities,
+    battery parameters read from EVCC) are written back into the store before
+    the dict is returned — the settings UI reads the store, and a resolution
+    that only existed in the merged dict would leave those pages showing the
+    stale Home Assistant names the user is trying to get away from.
+
     Args:
         bootstrap_config: The ``config_manager.config`` dict (for bootstrap keys).
         store: An opened ConfigStore with migrated/edited values.
@@ -45,6 +51,7 @@ def build_merged_config(
         A nested dict identical in shape to the original config dict.
     """
     all_settings = store.get_all()
+    _original_settings = dict(all_settings)
     defaults = schema.defaults_dict()
     result = {}
 
@@ -90,13 +97,25 @@ def build_merged_config(
     )
 
     # Resolve data_source -> load/battery connection fields
-    _apply_data_source_inheritance(result, all_settings)
+    evcc_writeback = _apply_data_source_inheritance(result, all_settings)
 
     # Inject data_source credentials to inverter when type is homeassistant
     _apply_inverter_data_source_injection(result, all_settings)
 
     # Apply central HA data source for price and PV sources
     _apply_central_ha_data_source(result, all_settings)
+
+    # Persist only what the EVCC resolutions changed, back into the store. The
+    # settings UI reads the store (GET /api/config/export), so a resolved value
+    # that only existed in the merged dict - the mirrored EVCC URL, the virtual
+    # entities, the battery parameters EVCC reported - would never have reached
+    # those pages. Named by the resolution itself rather than diffed: a diff of
+    # the whole merged dict would write schema *defaults* into the store, and
+    # every replace-mode import would end up owning them.
+    if evcc_writeback:
+        store.set_batch(
+            {k: v for k, v in evcc_writeback.items() if _original_settings.get(k) != v}
+        )
 
     return result
 
@@ -255,7 +274,9 @@ def _build_managed_loads(
     return bootstrap_config.get("managed_loads", defaults.get("managed_loads", []))
 
 
-def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -> None:
+def _apply_data_source_inheritance(
+    result: dict, all_settings: dict[str, Any]
+) -> dict[str, Any]:
     """
     Resolve ``data_source.*`` into ``load`` and ``battery`` connection fields.
 
@@ -267,7 +288,13 @@ def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -
     EVCC URL lives in the ``evcc`` section, and either copy of it —
     ``data_source.url`` or ``evcc.url`` — should configure both. The placeholder is
     skipped so a half-configured setup does not look connected.
+
+    Returns:
+        Flat store keys the resolution changed, for the caller to persist. Empty
+        when EVCC is not involved - the plain HA/openHAB inheritance is computed
+        fresh on every merge and never needs storing.
     """
+    writeback: dict[str, Any] = {}
     ds_type = all_settings.get("data_source.type", "default")
     ds_url = all_settings.get("data_source.url", "")
     ds_token = all_settings.get("data_source.access_token", "")
@@ -275,11 +302,36 @@ def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -
 
     evcc_url = all_settings.get("evcc.url", "")
     if ds_type == "evcc":
-        # Either spelling of the EVCC address wins over a Home Assistant default or
-        # the placeholder; evcc.url is the primary, data_source.url the fallback.
-        ds_url = evcc_url or ds_url
-        if _is_evcc_placeholder(ds_url):
-            ds_url = ""
+        # One input, two keys: the setup writes the EVCC address under
+        # data_source.url (the page the user is on), and the evcc section keeps
+        # serving the roles that read it from there (inverter controller, price
+        # and PV source). While EVCC is the data source, the display and both
+        # keys follow the *evcc* address: it is the one the running roles were
+        # configured against, and a Home Assistant URL left in data_source.url
+        # from the previous connection is stale here, not an input — it must not
+        # win just because it parses as a URL. A data_source.url the user typed
+        # after the switch only wins while evcc.url is still unset/placeholder.
+        ds_url_typed = str(all_settings.get("data_source.url", "") or "").strip()
+        # What "the user typed an EVCC address here" looks like: any URL that is
+        # not one of the schema's shipped defaults. The Home Assistant default
+        # (`http://homeassistant:8123`) and the openHAB spelling are leftovers of
+        # the previous connection, not an EVCC address to hand across.
+        if ds_url_typed not in ("", "http://homeassistant:8123", "http://openhab:8080"):
+            if not _is_evcc_url_usable(evcc_url):
+                all_settings["evcc.url"] = ds_url_typed
+                writeback["evcc.url"] = ds_url_typed
+                evcc_url = ds_url_typed
+            elif ds_url_typed != evcc_url:
+                # Both sides hold a real URL that disagree: evcc.url is the one
+                # the running roles were configured against, and the field the
+                # user sees mirrors it.
+                all_settings["data_source.url"] = evcc_url
+                writeback["data_source.url"] = evcc_url
+        elif _is_evcc_url_usable(evcc_url):
+            if all_settings.get("data_source.url") != evcc_url:
+                writeback["data_source.url"] = evcc_url
+            all_settings["data_source.url"] = evcc_url
+        ds_url = evcc_url if _is_evcc_url_usable(evcc_url) else ""
         ds_token = ""
 
     for section in _DATA_SOURCE_SECTIONS:
@@ -299,8 +351,9 @@ def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -
         # If section has its own source set, keep it (Expert override)
 
     if ds_type == "evcc":
-        _apply_evcc_virtual_entities(result, all_settings)
-        _apply_evcc_battery_entities(result, all_settings)
+        writeback.update(_apply_evcc_virtual_entities(result, all_settings) or {})
+        writeback.update(_apply_evcc_battery_entities(result, all_settings) or {})
+    return writeback
 
 
 def _is_evcc_placeholder(url) -> bool:
@@ -311,7 +364,14 @@ def _is_evcc_placeholder(url) -> bool:
     return not stripped or stripped == "http://yourEVCCserver:7070"
 
 
-def _apply_evcc_virtual_entities(result: dict, all_settings: dict[str, Any]) -> None:
+def _is_evcc_url_usable(url) -> bool:
+    """A real EVCC address: set, and not the schema placeholder."""
+    return not _is_evcc_placeholder(url)
+
+
+def _apply_evcc_virtual_entities(
+    result: dict, all_settings: dict[str, Any]
+) -> dict[str, Any]:
     """
     Pre-fill the load section's virtual entities when EVCC becomes the data source.
 
@@ -322,7 +382,7 @@ def _apply_evcc_virtual_entities(result: dict, all_settings: dict[str, Any]) -> 
     """
     load = result.get("load")
     if not isinstance(load, dict):
-        return
+        return {}
 
     loadpoint_title = str(
         all_settings.get("data_source.evcc_loadpoint_title", "") or ""
@@ -389,6 +449,14 @@ def _apply_evcc_virtual_entities(result: dict, all_settings: dict[str, Any]) -> 
             f"group:consumer:{consumer_title}" if consumer_title else ""
         )
 
+    # Only the user-visible sensor names are store-worthy; the merger computes
+    # source/url on every pass and the store's copy would pin those.
+    return {
+        f"load.{key}": load[key]
+        for key in ("load_sensor", "car_charge_load_sensor", "additional_load_1_sensor")
+        if key in load
+    }
+
 
 def _is_evcc_virtual_entity(entity) -> bool:
     """Whether *entity* already IS a virtual entity (group:/tariff: grammar)."""
@@ -409,14 +477,45 @@ def _apply_evcc_battery_entities(result: dict, all_settings: dict[str, Any]) -> 
     this source cannot answer is how a switched setup ends up with a static 5%
     SOC and a price calculation that silently stops updating — the same failure
     the load section's prefill exists for.
+
+    Battery physics come from EVCC too, when it reports them: capacity from the
+    battery meter, and the SoC bounds EVCC's own management uses (bufferSoc /
+    prioritySoc). Only values EVCC actually answers are written; an expert-set
+    manual value already matching stays untouched, and an unreachable EVCC
+    simply leaves the configured numbers in place.
     """
     battery = result.get("battery")
     if not isinstance(battery, dict) or battery.get("source") != "evcc":
-        return
+        return {}
 
     soc = str(battery.get("soc_sensor", "") or "").strip()
     if soc and not _is_evcc_virtual_entity(soc) and not soc.startswith("battery."):
         battery["soc_sensor"] = "battery.soc"
+
+    # The connection the battery's own sensors answer through. The EVCC URL the
+    # section inherited only reaches /api/state and /api/history/*; a sensor
+    # name carried over from an Home Assistant setup (the battery temperature is
+    # the recurring case) needs the supplementary connection to stay readable.
+    # A non-remote supplementary choice means "no second connection": the keys
+    # are blanked rather than carried over from the previous save.
+    supp_type = str(all_settings.get("data_source.supplementary_type", "") or "")
+    supplementary_usable = supp_type in ("homeassistant", "openhab")
+    battery["supplementary_type"] = supp_type if supplementary_usable else ""
+    battery["supplementary_url"] = (
+        str(all_settings.get("data_source.supplementary_url", "") or "")
+        if supplementary_usable
+        else ""
+    )
+    battery["supplementary_access_token"] = (
+        str(all_settings.get("data_source.supplementary_access_token", "") or "")
+        if supplementary_usable
+        else ""
+    )
+    battery["supplementary_ssl_ignore"] = (
+        bool(all_settings.get("data_source.supplementary_ssl_ignore", False))
+        if supplementary_usable
+        else False
+    )
 
     price_sensors = {
         "battery_power_sensor": "group:battery",
@@ -429,6 +528,45 @@ def _apply_evcc_battery_entities(result: dict, all_settings: dict[str, Any]) -> 
         current = str(battery.get(key, "") or "").strip()
         if current and not _is_evcc_virtual_entity(current):
             battery[key] = virtual
+
+    # Capacity is a physical fact EVCC's meter knows better than a hand-typed
+    # number. The SOC bounds are deliberately NOT auto-filled: EVCC's
+    # bufferSoc/prioritySoc are its *charging behaviour* limits (when surplus
+    # leaves the battery, what stays in reserve), not the battery's physical
+    # operating range - mapping them read a site with priority 70 as "min SOC
+    # 70%" and locked the optimizer out of three quarters of the battery.
+    # Efficiency and charge-power limits are not exposed by EVCC either and
+    # stay configurable exactly as they were.
+    parameters = None
+    try:
+        # Imported late: interfaces is heavier than this module's import graph
+        # wants at module load, and EVCC mode is the only case that needs it.
+        from interfaces.evcc_parameters import fetch_evcc_parameters
+
+        parameters = fetch_evcc_parameters(battery.get("url", ""))
+    except (ImportError, OSError, ValueError):
+        logger.warning(
+            "[Merger] EVCC battery parameters could not be read; "
+            "keeping the configured values",
+            exc_info=True,
+        )
+    if parameters and "capacity_wh" in parameters:
+        battery["capacity_wh"] = parameters["capacity_wh"]
+
+    writeback: dict[str, Any] = {}
+    for key in (
+        "soc_sensor",
+        "battery_power_sensor",
+        "pv_power_sensor",
+        "grid_power_sensor",
+        "load_power_sensor",
+        "price_sensor",
+        "capacity_wh",
+    ):
+        if key in battery:
+            writeback[f"battery.{key}"] = battery[key]
+    # Supplementary connection: computed per merge, the store's copy stays bare.
+    return writeback
 
 
 def _apply_inverter_data_source_injection(
