@@ -108,8 +108,22 @@ class BatteryPriceHandler:
             if self.price_calculation_enabled
             else None
         )
-        self.battery_power_convention: Optional[str] = None  # Will be auto-detected
-        self.grid_power_convention: Optional[str] = None  # Will be auto-detected
+        # EVCC's history endpoint answers with an energy and a returnEnergy
+        # column per slot - charge and discharge are already separated, so the
+        # sign conventions are known before any data is seen. Every other source
+        # leaves them None for the energy-balance fit
+        # (_detect_sensor_conventions) to decide from real samples.
+        if self.source == "evcc":
+            self.battery_power_convention = "positive_charging"
+            self.grid_power_convention = "positive_import"
+            logger.info(
+                "[BATTERY-PRICE] EVCC source: conventions fixed (battery "
+                "positive_charging, grid positive_import) - detection skipped"
+            )
+        else:  # auto-detect later from data
+            self.battery_power_convention = None
+            self.grid_power_convention = None
+
         self.last_analysis_results = {
             "stored_energy_price": self.price_euro_per_wh_accu,
             "duration_of_analysis": 0,

@@ -197,7 +197,7 @@ class BatteryInterface:
             return
 
         missing, where = None, "Data Source"
-        if self.url == "":
+        if self.url == "" or "://yourEVCCserver" in str(self.url):
             missing = "the data source URL is not configured"
         elif self.access_token == "" and self.src == "homeassistant":
             missing = "the Home Assistant access token is not configured"
@@ -315,7 +315,13 @@ class BatteryInterface:
         try:
             raw_state = self.__fetch_remote_state(self.src, self.soc_sensor)
             raw_value = _state_as_float(raw_state)
-            if raw_value <= 1.0:
+            if self.src == "evcc":
+                # EVCC /api/state reports battery.soc in percent (0-100), weighted
+                # across battery meters - no decimal/percent guessing is needed, and
+                # guessing here would read 0.6 as "60% of 1 percent" on a 60% battery
+                # only after the auto-detect below had already settled on a format.
+                soc = raw_value
+            elif raw_value <= 1.0:
                 # Use history to decide which format is closer to the last known value.
                 # If it's the first run (current_soc == 0), we default to decimal (x100)
                 # UNLESS the value is exactly 1.0, which we treat as 1% to avoid
@@ -326,11 +332,6 @@ class BatteryInterface:
 
                     if diff_as_percent < diff_as_decimal:
                         soc = raw_value
-                        # logger.debug(
-                        #     "[BATTERY-IF] Auto-detected percentage format "
-                        #     "(0-1) based on history: %s%%",
-                        #     soc,
-                        # )
                     else:
                         soc = raw_value * 100
                         logger.debug(
@@ -358,9 +359,6 @@ class BatteryInterface:
             else:
                 # Values > 1.0 are clearly percentage format (0-100).
                 soc = raw_value
-                # logger.debug(
-                #     "[BATTERY-IF] Detected percentage format (0-100): %s%%", soc
-                # )
 
             self.soc_fail_count = 0
             return round(soc, 1)
@@ -408,7 +406,7 @@ class BatteryInterface:
             return self.price_euro_per_wh
 
         source_name = self.src.upper()
-        if self.src not in ("homeassistant", "openhab"):
+        if self.src not in ("homeassistant", "openhab", "evcc"):
             logger.warning(
                 "[BATTERY-IF] Unknown price source '%s'. Keeping last value %s.",
                 self.src,
@@ -648,7 +646,9 @@ class BatteryInterface:
                 )
 
                 if self.base_control:
-                    self.base_control.set_current_bat_charge_max(self.max_charge_power_dyn)
+                    self.base_control.set_current_bat_charge_max(
+                        self.max_charge_power_dyn
+                    )
 
                 if self.on_bat_max_changed:
                     self.on_bat_max_changed()
@@ -775,7 +775,7 @@ class BatteryInterface:
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:
                 logger.error(
                     "[battery_interface] Battery state update failed: %s | Config: #battery | ACTION REQUIRED",
-                    e
+                    e,
                 )
             except Exception:  # pylint: disable=broad-except
                 # Anything unforeseen used to kill the thread outright, and nothing

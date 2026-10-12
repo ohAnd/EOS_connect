@@ -15,6 +15,7 @@
         "choices": [
           "homeassistant",
           "openhab",
+          "evcc",
           "default"
         ]
       },
@@ -28,7 +29,7 @@
       "default": "http://homeassistant:8123",
       "section": "data_source",
       "level": "getting_started",
-      "description": "URL of your Home Assistant or OpenHAB instance",
+      "description": "URL of your Home Assistant, OpenHAB or EVCC instance",
       "labels": [
         "restart_required"
       ],
@@ -39,7 +40,8 @@
       "depends_on": {
         "data_source.type": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
         ]
       },
       "hot_reload": false,
@@ -80,7 +82,48 @@
       "depends_on": {
         "data_source.type": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Connection"
+    },
+    {
+      "key": "data_source.evcc_loadpoint_title",
+      "type": "str",
+      "default": "",
+      "section": "data_source",
+      "level": "expert",
+      "description": "Title of one EVCC loadpoint whose history stands for the wallbox (empty = all loadpoints summed)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "config-data.html#data-source-evcc",
+      "validation": {},
+      "depends_on": {
+        "data_source.type": [
+          "evcc"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Connection"
+    },
+    {
+      "key": "data_source.evcc_consumer_title",
+      "type": "str",
+      "default": "",
+      "section": "data_source",
+      "level": "expert",
+      "description": "Title of one EVCC consumer or extra meter for the additional load (empty = not used)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "config-data.html#data-source-evcc",
+      "validation": {},
+      "depends_on": {
+        "data_source.type": [
+          "evcc"
         ]
       },
       "hot_reload": false,
@@ -102,6 +145,7 @@
         "choices": [
           "homeassistant",
           "openhab",
+          "evcc",
           "default",
           ""
         ]
@@ -150,7 +194,7 @@
       "default": "",
       "section": "load",
       "level": "getting_started",
-      "description": "Entity/item reporting household load power in watts — e.g. sensor.house_power (Home Assistant) or Load_Power (openHAB)",
+      "description": "Entity/item reporting household load power in watts — e.g. sensor.house_power (Home Assistant), Load_Power (openHAB) or group:home (EVCC history)",
       "labels": [
         "restart_required"
       ],
@@ -159,7 +203,8 @@
       "depends_on": {
         "data_source.type": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
         ]
       },
       "hot_reload": false,
@@ -171,7 +216,7 @@
       "default": "",
       "section": "load",
       "level": "standard",
-      "description": "Entity/item for wallbox power data in watts — e.g. sensor.wallbox_power (leave empty if not used)",
+      "description": "Entity/item for wallbox power data in watts — e.g. sensor.wallbox_power (Home Assistant) or group:loadpoint (EVCC, all loadpoints; group:loadpoint:Garage for one; leave empty if not used)",
       "labels": [
         "restart_required"
       ],
@@ -180,7 +225,8 @@
       "depends_on": {
         "data_source.type": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
         ]
       },
       "hot_reload": false,
@@ -192,13 +238,19 @@
       "default": "",
       "section": "load",
       "level": "standard",
-      "description": "Entity/item for additional load power in watts (leave empty if not used)",
+      "description": "Entity/item for additional load power in watts (Home Assistant, openHAB; or group:consumer / group:consumer:<Title> from EVCC history; leave empty if not used)",
       "labels": [
         "restart_required"
       ],
       "help_url": "config-data.html#load",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab",
+          "evcc"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Additional Load"
     },
@@ -1250,6 +1302,7 @@
         "choices": [
           "homeassistant",
           "openhab",
+          "evcc",
           "default",
           ""
         ]
@@ -1298,7 +1351,7 @@
       "default": "",
       "section": "battery",
       "level": "getting_started",
-      "description": "Entity/item for battery state of charge — e.g. sensor.battery_soc (Home Assistant) or battery_SOC (openHAB)",
+      "description": "Entity/item for battery state of charge — e.g. sensor.battery_soc (Home Assistant), battery_SOC (openHAB) or battery.soc (EVCC live state)",
       "labels": [
         "restart_required"
       ],
@@ -1307,7 +1360,8 @@
       "depends_on": {
         "data_source.type": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
         ]
       },
       "hot_reload": false,
@@ -1454,7 +1508,8 @@
       "depends_on": {
         "data_source.type": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
         ]
       },
       "hot_reload": false,
@@ -1562,7 +1617,7 @@
       "default": "",
       "section": "battery",
       "level": "standard",
-      "description": "Sensor for battery power in W (positive = charging)",
+      "description": "Sensor for battery power in W (positive = charging); with EVCC: group:battery (charge/discharge split read directly)",
       "labels": [
         "restart_required"
       ],
@@ -1582,7 +1637,7 @@
       "default": "",
       "section": "battery",
       "level": "standard",
-      "description": "Sensor for PV power in W",
+      "description": "Sensor for PV power in W (EVCC: group:pv)",
       "labels": [
         "restart_required"
       ],
@@ -1602,7 +1657,7 @@
       "default": "",
       "section": "battery",
       "level": "standard",
-      "description": "Sensor for grid power in W (positive = import)",
+      "description": "Sensor for grid power in W, positive = import (EVCC: group:grid)",
       "labels": [
         "restart_required"
       ],
@@ -1622,7 +1677,7 @@
       "default": "",
       "section": "battery",
       "level": "standard",
-      "description": "Sensor for load power in W",
+      "description": "Sensor for load power in W (EVCC: group:home)",
       "labels": [
         "restart_required"
       ],
@@ -1642,7 +1697,7 @@
       "default": "",
       "section": "battery",
       "level": "standard",
-      "description": "Sensor for electricity price in €/kWh or ct/kWh",
+      "description": "Sensor for electricity price in €/kWh or ct/kWh (EVCC: the literal name tariff:grid reads the persisted tariff slots)",
       "labels": [
         "restart_required"
       ],

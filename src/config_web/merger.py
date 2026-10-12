@@ -62,7 +62,9 @@ def build_merged_config(
             # Built as a list further down, not as a flat group of keys.
             continue
 
-        result[section] = _build_section(section, all_settings, bootstrap_config, defaults)
+        result[section] = _build_section(
+            section, all_settings, bootstrap_config, defaults
+        )
 
     # Top-level (system) keys
     for field_def in schema.get_section("system"):
@@ -75,13 +77,17 @@ def build_merged_config(
             result[key] = bootstrap_config.get(key, field_def.default)
 
     # pv_forecast — list of installations
-    result["pv_forecast"] = _build_pv_forecast(all_settings, bootstrap_config, defaults, schema)
+    result["pv_forecast"] = _build_pv_forecast(
+        all_settings, bootstrap_config, defaults, schema
+    )
 
     # managed_loads — list of appliances. Unlike pv_forecast, missing keys are *not*
     # filled from the schema: the defaults that matter here depend on the entry's type,
     # and ``loads.presets.apply_defaults`` is the one place that knows them. Filling
     # them here as well would give a sauna a pool's swimming season.
-    result["managed_loads"] = _build_managed_loads(all_settings, bootstrap_config, defaults)
+    result["managed_loads"] = _build_managed_loads(
+        all_settings, bootstrap_config, defaults
+    )
 
     # Resolve data_source -> load/battery connection fields
     _apply_data_source_inheritance(result, all_settings)
@@ -110,7 +116,7 @@ def _build_section(
     prefix = f"{section}."
     for key, value in all_settings.items():
         if key.startswith(prefix):
-            subkey = key[len(prefix):]
+            subkey = key[len(prefix) :]
             section_dict[subkey] = value
 
     # Fill in missing keys from bootstrap config, then defaults
@@ -256,11 +262,25 @@ def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -
     Per-section overrides (Expert level) take precedence. If a section already has
     its own ``source``/``url``/``access_token`` with non-default values, those win.
     Otherwise the global ``data_source`` values are injected.
+
+    A central EVCC source adds one more injection the other types do not need: the
+    EVCC URL lives in the ``evcc`` section, and either copy of it —
+    ``data_source.url`` or ``evcc.url`` — should configure both. The placeholder is
+    skipped so a half-configured setup does not look connected.
     """
     ds_type = all_settings.get("data_source.type", "default")
     ds_url = all_settings.get("data_source.url", "")
     ds_token = all_settings.get("data_source.access_token", "")
     ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
+
+    evcc_url = all_settings.get("evcc.url", "")
+    if ds_type == "evcc":
+        # Either spelling of the EVCC address wins over a Home Assistant default or
+        # the placeholder; evcc.url is the primary, data_source.url the fallback.
+        ds_url = evcc_url or ds_url
+        if _is_evcc_placeholder(ds_url):
+            ds_url = ""
+        ds_token = ""
 
     for section in _DATA_SOURCE_SECTIONS:
         if section not in result:
@@ -278,8 +298,63 @@ def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -
         sec["ssl_ignore"] = ds_ssl_ignore
         # If section has its own source set, keep it (Expert override)
 
+    if ds_type == "evcc":
+        _apply_evcc_virtual_entities(result, all_settings)
 
-def _apply_inverter_data_source_injection(result: dict, all_settings: dict[str, Any]) -> None:
+
+def _is_evcc_placeholder(url) -> bool:
+    """Whether *url* is empty, blank, or still the schema's EVCC placeholder."""
+    if not url or not isinstance(url, str):
+        return True
+    stripped = url.strip()
+    return not stripped or stripped == "http://yourEVCCserver:7070"
+
+
+def _apply_evcc_virtual_entities(result: dict, all_settings: dict[str, Any]) -> None:
+    """
+    Pre-fill the load section's virtual entities when EVCC becomes the data source.
+
+    The household load then reads group ``home`` and the wallbox group
+    ``loadpoint`` — optionally narrowed to one loadpoint by title. These are the
+    defaults a site needs most; every field stays editable, and an entity the user
+    typed themselves is never overwritten.
+    """
+    load = result.get("load")
+    if not isinstance(load, dict):
+        return
+
+    loadpoint_title = str(
+        all_settings.get("data_source.evcc_loadpoint_title", "") or ""
+    ).strip()
+    consumer_title = str(
+        all_settings.get("data_source.evcc_consumer_title", "") or ""
+    ).strip()
+
+    # The inheritance loop above has already written "evcc" into source - either
+    # from the central setting or because the section overrode it the same way.
+    # Keying on that value covers both arrivals; a load still on another source
+    # (an expert kept Home Assistant for it) stays untouched.
+    evcc_now = load.get("source") == "evcc"
+
+    if evcc_now and not str(load.get("load_sensor", "") or "").strip():
+        load["load_sensor"] = "group:home"
+    if evcc_now and not str(load.get("car_charge_load_sensor", "") or "").strip():
+        load["car_charge_load_sensor"] = (
+            f"group:loadpoint:{loadpoint_title}"
+            if loadpoint_title
+            else "group:loadpoint"
+        )
+    if (
+        evcc_now
+        and consumer_title
+        and not str(load.get("additional_load_1_sensor", "") or "").strip()
+    ):
+        load["additional_load_1_sensor"] = f"group:consumer:{consumer_title}"
+
+
+def _apply_inverter_data_source_injection(
+    result: dict, all_settings: dict[str, Any]
+) -> None:
     """
     Inject data_source URL and token to inverter when type is homeassistant.
 
