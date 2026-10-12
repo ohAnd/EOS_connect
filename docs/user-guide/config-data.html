@@ -90,32 +90,27 @@
                         EVCC as the data source</h2>
                     <p>When <a href="config-system.html#evcc">EVCC</a> is already metering your house
                         &mdash; grid, PV, battery, household consumption and every wallbox &mdash; EOS
-                        Connect can read that history instead of asking a home-automation system for the
-                        same numbers a second time. Select <strong>evcc</strong> as the data source and
-                        the sensor fields name <em>virtual entities</em>: EVCC history groups written
-                        like <code>group:home</code>, rather than Home Assistant entity ids.</p>
-                    <p>The fields are filled in for you: household load becomes <code>group:home</code>,
-                        the wallbox becomes <code>group:loadpoint</code> (or one named loadpoint, if you
-                        set a loadpoint title). Both stay editable &mdash; anything you type is used as
-                        it is.</p>
-                    <ul>
-                        <li><code>group:home</code> &mdash; household consumption, without the wallboxes
-                            (those are subtracted like any other controllable).</li>
-                        <li><code>group:loadpoint</code> &mdash; all wallboxes summed;
-                            <code>group:loadpoint:Carport</code> narrows it to one &mdash; this is what
-                            the wallbox sensor field wants.</li>
-                        <li><code>group:consumer</code> / <code>group:consumer:&lt;Title&gt;</code> &mdash;
-                            a single appliance EVCC meters (aux or consumer); the additional-load field
-                            takes this.</li>
-                        <li><code>group:battery</code>, <code>group:pv</code>,
-                            <code>group:grid</code> &mdash; the power histories the battery price
-                            calculation needs, named in
-                            <a href="config-battery.html#battery-price">Battery price</a>.</li>
-                    </ul>
-                    <p>Two things EVCC's history cannot stand in for: the battery temperature sensor
-                        (that still reads from Home Assistant, if your battery reports one) and the PV
-                        auto-scaling counter, whose cumulative reading has no EVCC equivalent. Both stay
-                        on their Home Assistant fields.</p>
+                        Connect reads that history instead of asking a home-automation system for the
+                        same numbers a second time. Select <strong>evcc</strong> as the data source, enter
+                        your EVCC address in the URL field &mdash; that is the one place the address is
+                        configured (the separate EVCC page stays for its other roles, and its URL field
+                        stands down) &mdash; and every sensor field fills itself in.</p>
+                    <p>EOS Connect resolves what EVCC supplies itself, and shows it on the Battery and
+                        Load pages as read-only values with a <em>from EVCC</em> badge instead of empty
+                        inputs: the household load reads the metered
+                        <code>group:home</code> history, the wallbox <code>group:loadpoint</code>, battery
+                        state of charge the live <code>battery.soc</code>, and the battery price
+                        calculation its power histories and persisted tariff slots. The battery
+                        parameters EVCC knows &mdash; capacity from the meter, minimum and maximum SoC
+                        from EVCC's own battery management &mdash; are likewise filled in and shown as
+                        read-only; switching the disclosure level to <strong>Expert</strong> turns every
+                        one of them back into a normal editable field if you ever need to deviate.</p>
+                    <p><strong>What stays manual on EVCC</strong>: charge and discharge efficiency and
+                        the maximum charge power &mdash; EVCC exposes its battery meter and SoC
+                        management, but no efficiency or power-limit values &mdash; and the optional
+                        battery temperature sensor. The two title fields under Data Source optionally
+                        narrow the wallbox to one loadpoint and name the appliance the additional load
+                        reads.</p>
                     <p><strong>Where the numbers come from:</strong> EVCC records energy in 15-minute
                         slots per meter &mdash; consumed energy and fed-back energy in separate columns
                         &mdash; and EOS Connect integrates those slots into the power values its load
