@@ -67,6 +67,25 @@
                         way the energy price is. The feed-in half is configured the same way, separately,
                         because the two rarely come from the same place.</p>
                     <div data-schema-section="price" data-schema-anchor="price"></div>
+
+                    <h3 id="feed-in-elpris">Danish feed-in prices (Elpris)</h3>
+                    <p>Set <code>price.feed_in_source</code> to <code>elpris_dk</code> and pick your
+                        bidding zone in <code>price.feed_in_zone</code> — <code>DK1</code> west of the
+                        Great Belt, <code>DK2</code> east of it, including Copenhagen. EOS Connect then
+                        reads the hourly day-ahead prices published by
+                        <a href="https://www.elprisenligenu.dk/elpris-api" target="_blank"
+                            rel="noopener">elprisenligenu.dk</a>; no account or API key is needed.</p>
+                    <p>Prices arrive one day per request, in euro and in kroner, with the exchange rate
+                        the provider used that day. Tomorrow&rsquo;s file appears once the day-ahead
+                        auction clears, around 13:00 Danish time — before then the optimizer sees today
+                        repeated for the second half of its horizon, and the real curve replaces it at
+                        the next update. Updates run every 15 minutes; if the service is unreachable the
+                        last good prices are kept rather than dropped.</p>
+                    <p>The static adder and multiplier apply on top in the feed-in convention
+                        (<code>(price + adder) × multiplier</code>) — use the adder for a fixed
+                        per-kWh deduction your buyer makes, and the multiplier for a percentage one. The
+                        negative-price switch clamps an hour to zero when the market price goes below it,
+                        which matches most Danish contracts.</p>
                 </div>
 
                 <div class="content-section" data-level="standard">
