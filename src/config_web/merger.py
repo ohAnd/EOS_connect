@@ -300,6 +300,7 @@ def _apply_data_source_inheritance(result: dict, all_settings: dict[str, Any]) -
 
     if ds_type == "evcc":
         _apply_evcc_virtual_entities(result, all_settings)
+        _apply_evcc_battery_entities(result, all_settings)
 
 
 def _is_evcc_placeholder(url) -> bool:
@@ -336,9 +337,39 @@ def _apply_evcc_virtual_entities(result: dict, all_settings: dict[str, Any]) -> 
     # (an expert kept Home Assistant for it) stays untouched.
     evcc_now = load.get("source") == "evcc"
 
+    # A sensor name left from a Home Assistant setup is stale on an EVCC source:
+    # grammar-valid entities are kept, anything else is pre-filled, so a plain
+    # switch of the data source produces a working setup rather than a load
+    # profile that fails its grammar check into the built-in curve. The user is
+    # told in the web UI what was filled (the fields are visible there either way).
+    ha_sensors = {
+        "load_sensor",
+        "car_charge_load_sensor",
+        "additional_load_1_sensor",
+    }
+    stale = {
+        key: load.get(key, "") or ""
+        for key in ha_sensors
+        if evcc_now
+        and str(load.get(key, "") or "").strip()
+        and not _is_evcc_virtual_entity(load.get(key))
+    }
+
     if evcc_now and not str(load.get("load_sensor", "") or "").strip():
         load["load_sensor"] = "group:home"
+    if evcc_now and "load_sensor" in stale and "sensor." in stale["load_sensor"]:
+        load["load_sensor"] = "group:home"
     if evcc_now and not str(load.get("car_charge_load_sensor", "") or "").strip():
+        load["car_charge_load_sensor"] = (
+            f"group:loadpoint:{loadpoint_title}"
+            if loadpoint_title
+            else "group:loadpoint"
+        )
+    if (
+        evcc_now
+        and "car_charge_load_sensor" in stale
+        and "sensor." in stale["car_charge_load_sensor"]
+    ):
         load["car_charge_load_sensor"] = (
             f"group:loadpoint:{loadpoint_title}"
             if loadpoint_title
@@ -350,6 +381,54 @@ def _apply_evcc_virtual_entities(result: dict, all_settings: dict[str, Any]) -> 
         and not str(load.get("additional_load_1_sensor", "") or "").strip()
     ):
         load["additional_load_1_sensor"] = f"group:consumer:{consumer_title}"
+    if evcc_now and "additional_load_1_sensor" in stale:
+        # Stale Home Assistant name: replaced with the consumer title when one is
+        # configured, dropped otherwise - the additional load then simply stays
+        # unset, instead of pointing at a name this source cannot answer.
+        load["additional_load_1_sensor"] = (
+            f"group:consumer:{consumer_title}" if consumer_title else ""
+        )
+
+
+def _is_evcc_virtual_entity(entity) -> bool:
+    """Whether *entity* already IS a virtual entity (group:/tariff: grammar)."""
+    if not entity or not isinstance(entity, str):
+        return False
+    parts = entity.strip().split(":")
+    if parts[0] == "tariff" and len(parts) == 2:
+        return True
+    return parts[0] == "group" and len(parts) in (2, 3)
+
+
+def _apply_evcc_battery_entities(result: dict, all_settings: dict[str, Any]) -> None:
+    """
+    Switch the battery section's stale Home Assistant names to EVCC equivalents.
+
+    The SOC sensor moves onto the live state (``battery.soc``); the five price
+    calculation sensors move onto the history groups they measure. A sensor name
+    this source cannot answer is how a switched setup ends up with a static 5%
+    SOC and a price calculation that silently stops updating — the same failure
+    the load section's prefill exists for.
+    """
+    battery = result.get("battery")
+    if not isinstance(battery, dict) or battery.get("source") != "evcc":
+        return
+
+    soc = str(battery.get("soc_sensor", "") or "").strip()
+    if soc and not _is_evcc_virtual_entity(soc) and not soc.startswith("battery."):
+        battery["soc_sensor"] = "battery.soc"
+
+    price_sensors = {
+        "battery_power_sensor": "group:battery",
+        "pv_power_sensor": "group:pv",
+        "grid_power_sensor": "group:grid",
+        "load_power_sensor": "group:home",
+        "price_sensor": "tariff:grid",
+    }
+    for key, virtual in price_sensors.items():
+        current = str(battery.get(key, "") or "").strip()
+        if current and not _is_evcc_virtual_entity(current):
+            battery[key] = virtual
 
 
 def _apply_inverter_data_source_injection(

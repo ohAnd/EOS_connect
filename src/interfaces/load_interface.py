@@ -35,6 +35,10 @@ EVCC_HISTORY_GROUPS = (
 # Groups carrying more than one metered series, where "grouped=false" keeps the
 # per-entity series separate and a title filter picks one.
 EVCC_GROUPS_WITH_SOURCES = ("loadpoint", "consumer", "meter", "pv")
+# Persisted tariff slots, "tariff:<name>". EVCC stores what its tariff source
+# produced at the time - the price history the battery price calculation works
+# from. Names are the usages EVCC persists (grid, feedin) per core/metrics/tariffs.go.
+EVCC_TARIFF_NAMES = ("grid", "feedin")
 
 
 class LoadInterface:
@@ -738,22 +742,32 @@ class LoadInterface:
     def __is_valid_evcc_entity(self, entity):
         """Whether *entity* names an EVCC history series this source can answer.
 
-        Virtual entity grammar: ``group:<name>`` for a whole history group, or
-        ``group:<name>:<title>`` for one series inside it. Empty and None are
-        handled by the caller the same way a missing Home Assistant sensor is.
+        Virtual entity grammar: ``group:<name>`` for a whole history group,
+        ``group:<name>:<title>`` for one series inside it, or ``tariff:<name>``
+        for the persisted tariff slots (the price history the battery price
+        calculation works from). Empty and None are handled by the caller the
+        same way a missing Home Assistant sensor is.
         """
         if not entity or not isinstance(entity, str):
             return False
         parts = entity.strip().split(":")
+        if parts[0] == "tariff" and len(parts) == 2:
+            return parts[1] in EVCC_TARIFF_NAMES
         if len(parts) not in (2, 3) or parts[0] != "group":
             return False
         return parts[1] in EVCC_HISTORY_GROUPS
 
     def __evcc_entity_parts(self, entity):
-        """Split ``group:<name>[:<title>]`` into (group, title-or-None), or None."""
+        """Split ``group:<name>[:<title>]`` or ``tariff:<name>`` into parts.
+
+        Returns (group, title-or-None) with ``tariff:grid`` becoming
+        ``("tariff:grid", None)``, or None when the grammar is not matched.
+        """
         if not self.__is_valid_evcc_entity(entity):
             return None
         parts = str(entity).strip().split(":")
+        if parts[0] == "tariff":
+            return f"tariff:{parts[1]}", None
         return parts[1], (parts[2] if len(parts) == 3 else None)
 
     @staticmethod
@@ -778,7 +792,15 @@ class LoadInterface:
         stamped twice, opening and closing — the same two-edge shape a Home
         Assistant history period opens with, which is what lets the slot
         integration downstream treat this source like any other.
+
+        A tariff entity (``tariff:grid``) is answered from the separate persisted
+        tariff slots instead: values in currency/kWh, delivered as the point
+        samples the price handler normalizes.
         """
+        if entity[0] == "tariff:grid":
+            return self.__fetch_evcc_tariff_series("grid", start_utc, end_utc)
+        if entity[0] == "tariff:feedin":
+            return self.__fetch_evcc_tariff_series("feedin", start_utc, end_utc)
         url = f"{self.url}/api/history/energy"
         response = self.__request_with_retries(
             "get",
@@ -831,12 +853,21 @@ class LoadInterface:
 
                 energy_kwh = self.__as_float(slot.get("energy")) or 0.0
                 retour_kwh = self.__as_float(slot.get("returnEnergy")) or 0.0
-                net_wh = (energy_kwh - retour_kwh) * 1000.0
                 hours = (clipped_end - clipped_start).total_seconds() / 3600.0
-                # kWh per slot integrated to average W over the *clipped* span.
-                # Negative noise is clamped like the energy-counter path does: a
-                # metering blip must not read as production for the group.
-                power_w = max(0.0, net_wh / hours) if hours > 0 else 0.0
+                # Signed power. EVCC's rule is the same for every group
+                # (verified against a live 0.317 site): ``energy`` accumulates
+                # the positive direction - charging for the battery meter,
+                # importing for grid, producing for PV - and ``returnEnergy``
+                # the return direction. The signed net is exactly the
+                # conventions the battery price calculation pins for EVCC
+                # (battery positive_charging, grid positive_import). Positive
+                # only stays positive: clamping negatives here would erase the
+                # discharge signal, and a discharging slot would read as a
+                # no-op instead of "discharge, not charge". Consumers of the
+                # load profile path take abs() of the integrated average.
+                power_w = (
+                    (energy_kwh - retour_kwh) * 1000.0 / hours if hours > 0 else 0.0
+                )
                 for stamp in (clipped_start, clipped_end):
                     samples.append(
                         (
@@ -852,6 +883,54 @@ class LoadInterface:
         # keyed by stamp keeps the first answer, which is the earliest series' slot.
         deduped = {stamp: sample for stamp, sample in samples}
         return [(stamp, deduped[stamp]) for stamp in sorted(deduped)]
+
+    def __fetch_evcc_tariff_series(self, usage, start_utc, end_utc):
+        """EVCC's persisted tariff slots as (utc, price €/Wh) point samples.
+
+        ``GET /api/history/tariffs`` answers 15-minute slots with ``grid`` and
+        ``feedin`` columns in currency/kWh - the price history the battery price
+        calculation attributes grid-charged energy with. Point samples (one per
+        slot start) rather than the two-edge power shape: the price handler reads
+        nearest-sample values, and a slot boundary stamp is exactly that.
+        """
+        response = self.__request_with_retries(
+            "get",
+            f"{self.url}/api/history/tariffs",
+            params={
+                "from": start_utc.astimezone(timezone.utc).isoformat(),
+                "to": end_utc.astimezone(timezone.utc).isoformat(),
+                "aggregate": "15m",
+            },
+            item_label=f"tariff:{usage} (EVCC history)",
+        )
+        if response is None:
+            return []
+
+        try:
+            slots = response.json()
+        except (ValueError, TypeError):
+            logger.error("[LOAD-IF] EVCC - Invalid JSON from /api/history/tariffs")
+            return []
+        if not isinstance(slots, list):
+            return []
+
+        # The price handler's converter divides anything above 1.0 by 100 (its
+        # ct/kWh heuristic); EVCC answers currency/kWh, values like 0.27 - inside
+        # the range the converter expects. EUR/kWh is also exactly what the
+        # price_data key wants, so no conversion happens here at all.
+        column = "grid" if usage == "grid" else "feedin"
+        samples = []
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            value = self.__as_float(slot.get(column))
+            stamp = self.__to_utc(slot.get("start"))
+            if value is None or stamp is None:
+                continue
+            if stamp < start_utc or stamp >= end_utc:
+                continue
+            samples.append((stamp, {"state": value, "last_updated": stamp.isoformat()}))
+        return samples
 
     def __entity_attributes(self, entity_id):
         """Attributes of an entity, fetched once per process."""
