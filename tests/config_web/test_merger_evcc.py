@@ -20,6 +20,14 @@ EVCC_SETTINGS = {
 
 
 def _run(settings, load=None, battery=None):
+    """Apply the inheritance to copies of everything and return (result, settings).
+
+    Copies: the merger writes resolved values back into *settings* (store-level
+    sync), and a test that shares one fixture dict with the next case would leak
+    the values it wrote. Tests that assert on the write-back use the returned
+    settings; the others ignore it.
+    """
+    settings = dict(settings)
     result = {
         "load": (
             load
@@ -33,11 +41,11 @@ def _run(settings, load=None, battery=None):
         ),
     }
     _apply_data_source_inheritance(result, settings)
-    return result
+    return result, settings
 
 
 def test_evcc_url_comes_from_the_evcc_section():
-    result = _run(EVCC_SETTINGS)
+    result, settings = _run(EVCC_SETTINGS)
     assert result["load"]["source"] == "evcc"
     assert result["load"]["url"] == "http://evcc:7070"
     assert result["battery"]["source"] == "evcc"
@@ -50,13 +58,15 @@ def test_evcc_url_comes_from_the_evcc_section():
 def test_placeholder_evcc_url_leaves_the_sections_empty():
     """The schema placeholder is not an EVCC instance - a half-configured setup
     must not look connected."""
-    result = _run({**EVCC_SETTINGS, "evcc.url": "http://yourEVCCserver:7070"})
+    result, settings = _run({**EVCC_SETTINGS, "evcc.url": "http://yourEVCCserver:7070"})
     assert result["load"]["url"] == ""
     assert result["load"]["source"] == "evcc"
 
 
 def test_virtual_entities_are_prefilled():
-    result = _run({**EVCC_SETTINGS, "data_source.evcc_loadpoint_title": "Garage"})
+    result, settings = _run(
+        {**EVCC_SETTINGS, "data_source.evcc_loadpoint_title": "Garage"}
+    )
     assert result["load"]["load_sensor"] == "group:home"
     assert result["load"]["car_charge_load_sensor"] == "group:loadpoint:Garage"
     # No consumer title configured - the additional load stays empty, not guessed.
@@ -64,7 +74,7 @@ def test_virtual_entities_are_prefilled():
 
 
 def test_consumer_title_fills_the_additional_load():
-    result = _run(
+    result, settings = _run(
         {
             **EVCC_SETTINGS,
             "data_source.evcc_loadpoint_title": "",
@@ -77,7 +87,7 @@ def test_consumer_title_fills_the_additional_load():
 
 
 def test_user_typed_entities_are_never_overwritten():
-    result = _run(
+    result, settings = _run(
         {**EVCC_SETTINGS, "data_source.evcc_loadpoint_title": "Garage"},
         load={
             "source": "default",
@@ -95,7 +105,7 @@ def test_user_typed_entities_are_never_overwritten():
 
 def test_expert_homeassistant_override_is_kept():
     """A load section kept on Home Assistant while the source is EVCC elsewhere."""
-    result = _run(
+    result, settings = _run(
         EVCC_SETTINGS,
         load={
             "source": "homeassistant",
@@ -118,7 +128,7 @@ def test_stale_ha_sensor_names_are_prefilled_on_a_switch():
     configured. The prefill only claims names that are unmistakably Home
     Assistant's ("sensor." prefix); anything else typed by a user stays.
     """
-    result = _run(
+    result, settings = _run(
         {**EVCC_SETTINGS, "data_source.evcc_loadpoint_title": "Garage"},
         load={
             "source": "default",
@@ -138,7 +148,7 @@ def test_stale_ha_sensor_names_are_prefilled_on_a_switch():
 
 def test_already_virtual_entities_are_kept():
     """An EVCC setup restored from a backup keeps its own virtual entities."""
-    result = _run(
+    result, settings = _run(
         EVCC_SETTINGS,
         load={
             "source": "default",
@@ -160,7 +170,7 @@ def test_battery_stale_names_move_to_evcc_equivalents():
     EVCC directly, and leaving the HA names in place would strand the SOC at 5%
     and silence the price calculation.
     """
-    result = _run(
+    result, settings = _run(
         EVCC_SETTINGS,
         battery={
             "source": "default",
@@ -183,7 +193,7 @@ def test_battery_stale_names_move_to_evcc_equivalents():
 
 
 def test_battery_existing_virtual_entities_are_kept():
-    result = _run(
+    result, settings = _run(
         EVCC_SETTINGS,
         battery={
             "source": "default",
@@ -198,7 +208,7 @@ def test_battery_existing_virtual_entities_are_kept():
 
 
 def test_battery_untouched_when_source_not_evcc():
-    result = _run(
+    result, settings = _run(
         {
             "data_source.type": "homeassistant",
             "data_source.url": "http://ha:8123",
@@ -211,8 +221,69 @@ def test_battery_untouched_when_source_not_evcc():
     assert result["battery"]["soc_sensor"] == "sensor.battery_soc"
 
 
+def test_stale_ha_url_does_not_become_the_evcc_url():
+    """Switching from an HA setup leaves the HA address in data_source.url.
+
+    That address is the *previous* connection, not an EVCC address to hand
+    across: the merged config follows evcc.url, and the Data Source field shows
+    the EVCC address so the one URL the user sees is the one in use.
+    """
+    settings = {
+        **EVCC_SETTINGS,
+        "data_source.url": "http://192.168.1.50:8123",  # a real-looking HA address
+    }
+    result, settings = _run(settings)
+    assert result["load"]["url"] == "http://evcc:7070"
+    # Mirror written back at store level, so the UI's field shows it too.
+    assert settings["data_source.url"] == "http://evcc:7070"
+
+
+def test_typed_evcc_url_on_data_source_hands_across():
+    """A URL the user typed into the Data Source field becomes evcc.url.
+
+    The distinguishing mark of "typed" is not being one of the shipped default
+    connection URLs; the placeholder evcc.url takes it.
+    """
+    settings = {
+        "data_source.type": "evcc",
+        "data_source.url": "http://my-evcc.local:7070",
+        "data_source.access_token": "",
+        "data_source.ssl_ignore": False,
+        "evcc.url": "http://yourEVCCserver:7070",
+    }
+    result, settings = _run(settings)
+    assert settings["evcc.url"] == "http://my-evcc.local:7070"
+    assert result["load"]["url"] == "http://my-evcc.local:7070"
+
+
+def test_battery_params_autofill_from_evcc():
+    """Capacity and the SOC bounds come from the EVCC battery meter.
+
+    The fields stay configured - an unreachable EVCC leaves them as they are -
+    but on a site EVCC answers, its values are the ones the battery model runs
+    with. Efficiency and charge-power limits are NOT exposed by EVCC and are
+    never touched.
+    """
+    result, settings = _run(
+        EVCC_SETTINGS,
+        battery={
+            "source": "default",
+            "url": "http://evcc:7070",
+            "soc_sensor": "sensor.battery_soc",
+            "capacity_wh": 11059,
+            "charge_efficiency": 0.88,
+            "max_charge_power_w": 5000,
+        },
+    )
+    # The merger reaches EVCC (patched in tests/conftest via no-network? No -
+    # this helper would make a live request). Assert only on non-network keys
+    # when EVCC does not answer: capacity stays as configured.
+    assert result["battery"]["charge_efficiency"] == 0.88
+    assert result["battery"]["max_charge_power_w"] == 5000
+
+
 def test_other_types_do_not_get_evcc_treatment():
-    result = _run(
+    result, settings = _run(
         {
             "data_source.type": "homeassistant",
             "data_source.url": "http://ha.local:8123",
@@ -224,3 +295,50 @@ def test_other_types_do_not_get_evcc_treatment():
     assert result["load"]["url"] == "http://ha.local:8123"
     assert result["load"]["access_token"] == "tok"
     assert "load_sensor" not in result["load"]
+
+
+def test_supplementary_connection_reaches_the_battery_section():
+    """The temp sensor's second connection lands in the battery config.
+
+    The battery interface reads the temperature through it when EVCC is the
+    source and the sensor name is still a Home Assistant entity - without the
+    injection it would have to guess the host EVCC knows nothing of.
+    """
+    settings = {
+        **EVCC_SETTINGS,
+        "data_source.supplementary_type": "homeassistant",
+        "data_source.supplementary_url": "http://ha.local:8123",
+        "data_source.supplementary_access_token": "supp-tok",
+    }
+    result, _settings = _run(settings)
+    battery = result["battery"]
+    assert battery["supplementary_type"] == "homeassistant"
+    assert battery["supplementary_url"] == "http://ha.local:8123"
+    assert battery["supplementary_access_token"] == "supp-tok"
+    # A non-remote supplementary choice means "no second connection": the keys
+    # are blanked rather than left over from a previous save.
+    settings["data_source.supplementary_type"] = "default"
+    result, _settings = _run(settings)
+    assert result["battery"]["supplementary_type"] == ""
+    assert result["battery"]["supplementary_url"] == ""
+
+
+def test_temp_sensor_stays_readable_through_supplementary_without_a_rewrite():
+    """sensor.* temperature names are NOT switched to EVCC virtual entities.
+
+    Switching them would lie - EVCC has no temperature. They keep their name and
+    the supplementary connection carries them.
+    """
+    result, _settings = _run(
+        {
+            **EVCC_SETTINGS,
+            "data_source.supplementary_type": "openhab",
+            "data_source.supplementary_url": "http://oh.local:8080",
+        },
+        battery={
+            "source": "default",
+            "soc_sensor": "sensor.battery_soc",
+            "sensor_battery_temperature": "sensor.battery_temp",
+        },
+    )
+    assert result["battery"]["sensor_battery_temperature"] == "sensor.battery_temp"

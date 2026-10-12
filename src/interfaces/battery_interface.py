@@ -261,7 +261,13 @@ class BatteryInterface:
             return None  # Default mode doesn't support temperature
 
         try:
-            raw_state = self.__fetch_remote_state(self.src, self.temp_sensor)
+            if self.src == "evcc" and self.__temperature_sensor_is_entity():
+                raw_state, src_name = self.__fetch_temp_via_supplementary()
+            else:
+                raw_state, src_name = (
+                    self.__fetch_remote_state(self.src, self.temp_sensor),
+                    self.src,
+                )
             temp = _state_as_float(raw_state)
 
             # Sanity check: battery temperature should be reasonable
@@ -274,7 +280,9 @@ class BatteryInterface:
 
             self.temp_fail_count = 0
             self.current_temp = temp
-            logger.debug("[BATTERY-IF] Successfully fetched Temp = %s°C", temp)
+            logger.debug(
+                "[BATTERY-IF] Successfully fetched Temp = %s°C via %s", temp, src_name
+            )
             return temp
 
         except (requests.exceptions.RequestException, ValueError, KeyError) as e:
@@ -292,6 +300,47 @@ class BatteryInterface:
                 e,
             )
             return self.current_temp  # Use last known value
+
+    def __temperature_sensor_is_entity(self):
+        """Whether the temp sensor names an entity the supplementary source serves.
+
+        An EVCC data source answers state reads as dotted paths; a temperature
+        sensor named like a Home Assistant entity will never resolve there, and
+        EVCC has no temperature of its own unless a meter reports one. Anything
+        "sensor."-shaped goes to the supplementary connection.
+        """
+        return str(self.temp_sensor).strip().startswith("sensor.")
+
+    def __fetch_temp_via_supplementary(self):
+        """Read the temperature through the supplementary connection, if any.
+
+        Raises the same RequestException/ValueError the direct path would, so the
+        failure handling below treats both identically.
+        """
+        supp_type = str(self.battery_data.get("supplementary_type", "") or "").strip()
+        supp_url = str(self.battery_data.get("supplementary_url", "") or "").strip()
+        if not supp_type or not supp_url or supp_type == "default":
+            raise ValueError(
+                f"Battery temperature sensor '{self.temp_sensor}' is not an EVCC "
+                "value — configure the supplementary Home Assistant connection "
+                "under Settings > Data Source to read it."
+            )
+        supp_token = str(
+            self.battery_data.get("supplementary_access_token", "") or ""
+        ).strip()
+        return (
+            fetch_remote_state(
+                supp_type,
+                self.temp_sensor,
+                url=supp_url,
+                access_token=supp_token,
+                request_timeout=self.request_timeout,
+                ssl_ignore=bool(
+                    self.battery_data.get("supplementary_ssl_ignore", False)
+                ),
+            ),
+            f"supplementary {supp_type}",
+        )
 
     # source-specific price fetchers removed — use __fetch_price_data_unified
 
