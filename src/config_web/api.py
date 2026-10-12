@@ -1304,6 +1304,11 @@ def _entity_probe_connection(key: str, get_value):
     carry its own host and token. Probing ``data_source.*`` for that one would test a
     connection it never uses, and report a working entity as missing — or the reverse.
 
+    When EVCC is the data source, a field whose value is an ordinary entity id
+    (``sensor.*`` — the battery temperature is the recurring case) reads through
+    the supplementary connection instead: EVCC has no /api/states endpoint, so
+    probing it with an HA entity id would report a working sensor as missing.
+
     Returns ``(source, url, access_token, ssl_ignore)``.
     """
     section = key.split(".")[0]
@@ -1317,6 +1322,27 @@ def _entity_probe_connection(key: str, get_value):
             get_value("pv_autoscaling.access_token"),
             bool(get_value("pv_autoscaling.ssl_ignore")),
         )
+
+    ds_type = get_value("data_source.type")
+    if ds_type == "evcc":
+        sensor_name = str(get_value(key) or "").strip()
+        is_virtual = sensor_name.startswith(("group:", "tariff:"))
+        is_evcc_path = (
+            bool(sensor_name)
+            and ":" not in sensor_name
+            and "." in sensor_name
+            and not sensor_name.startswith("sensor.")
+        )
+        if not (is_virtual or is_evcc_path):
+            supp_type = get_value("data_source.supplementary_type")
+            supp_url = get_value("data_source.supplementary_url")
+            if supp_type in ("homeassistant", "openhab") and supp_url:
+                return (
+                    supp_type,
+                    supp_url,
+                    get_value("data_source.supplementary_access_token"),
+                    bool(get_value("data_source.supplementary_ssl_ignore")),
+                )
 
     return (
         get_value("data_source.type"),
@@ -1459,7 +1485,8 @@ def _dependency_met(field_def, data: dict, current_config: dict, key: str = "") 
 
     Mirrors ``_isDependencyMet`` in the frontend: a ``depends_on`` entry is satisfied
     when the governing key holds one of the listed values, or — for ``"!empty"`` — any
-    value at all. *key* is the concrete key being validated, which is what lets a
+    value at all, or — for a ``"!"``-prefixed value — anything but that value.
+    *key* is the concrete key being validated, which is what lets a
     relative dependency find the entry it belongs to.
     """
     if not field_def.depends_on:
@@ -1470,6 +1497,12 @@ def _dependency_met(field_def, data: dict, current_config: dict, key: str = "") 
 
         if allowed == "!empty":
             if not current:
+                return False
+        elif isinstance(allowed, str) and allowed.startswith("!") and len(allowed) > 1:
+            # Negative match: "the field applies while the governing key does not
+            # hold this value" — how evcc.url steps aside once data_source.type
+            # already points at EVCC and the Data Source page carries the input.
+            if str(current) == allowed[1:]:
                 return False
         elif isinstance(allowed, list):
             if not any(str(a) == str(current) for a in allowed):
