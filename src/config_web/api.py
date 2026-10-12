@@ -104,7 +104,7 @@ def get_schema():
     # Use json.dumps with sort_keys=False to preserve SECTION_META insertion order
     response = Response(
         json.dumps(data, sort_keys=False, ensure_ascii=False),
-        mimetype="application/json"
+        mimetype="application/json",
     )
     return response
 
@@ -146,11 +146,13 @@ def get_section(section):
         entries = config.get(section, [])
         if not isinstance(entries, list):
             entries = []
-        return jsonify([
-            _mask_passwords_flat(entry, section=section)
-            for entry in entries
-            if isinstance(entry, dict)
-        ])
+        return jsonify(
+            [
+                _mask_passwords_flat(entry, section=section)
+                for entry in entries
+                if isinstance(entry, dict)
+            ]
+        )
 
     section_data = config.get(section, {})
     return jsonify(_mask_passwords_flat(section_data, section=section))
@@ -292,11 +294,16 @@ def update_config():
     blocking_deps = [d for d in unmet_deps if d.get("blocking", True)]
     advisories = [d for d in unmet_deps if not d.get("blocking", True)]
     if blocking_deps:
-        return jsonify({
-            "success": False,
-            "unmet_dependencies": blocking_deps,
-            "message": "Cannot save: required dependencies not configured"
-        }), 200
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "unmet_dependencies": blocking_deps,
+                    "message": "Cannot save: required dependencies not configured",
+                }
+            ),
+            200,
+        )
 
     before = _store.get_all()
     updates, changed_keys, restart_required, hot_reloaded = _classify_updates(data)
@@ -324,7 +331,8 @@ def update_config():
     _notify_changes(before, updates)
     if pruned:
         logger.info(
-            "[CONFIG] removed %d stored key(s) for entries the caller dropped", len(pruned)
+            "[CONFIG] removed %d stored key(s) for entries the caller dropped",
+            len(pruned),
         )
 
     # Persist restart-required fields for banner across reloads
@@ -465,9 +473,7 @@ def plan_settings(data: dict, mode: str = "merge") -> dict:
     """
     before = _store.get_all()
     valid_data, invalid, skipped = _classify_settings(data)
-    removed = (
-        _stale_keys(before, valid_data) if mode == "replace" else []
-    )
+    removed = _stale_keys(before, valid_data) if mode == "replace" else []
     changed = [k for k, v in valid_data.items() if k not in before or before[k] != v]
 
     restart_required = []
@@ -521,7 +527,9 @@ def apply_settings(data: dict, mode: str = "merge") -> dict:
     count = _store.set_batch(valid_data) if valid_data else 0
     _module.rebuild_config()
 
-    restart_required, hot_reloaded, changed = _replay_changes(before, valid_data, removed)
+    restart_required, hot_reloaded, changed = _replay_changes(
+        before, valid_data, removed
+    )
 
     # Persist restart-required fields so the banner survives a page reload, matching
     # what update_config() does after a normal save.
@@ -704,6 +712,7 @@ def _pending_pv_installation_count(data: dict, current_config: dict) -> int:
     touches installation 0 must not read as "there is one installation" when the store
     already holds two.
     """
+
     def _indices(keys):
         found = set()
         for key in keys:
@@ -718,50 +727,53 @@ def _pending_pv_installation_count(data: dict, current_config: dict) -> int:
 
     # A whole list can also arrive under the bare key, and the merged config always
     # exposes one.
-    listed = data["pv_forecast"] if "pv_forecast" in data else current_config.get("pv_forecast")
+    listed = (
+        data["pv_forecast"]
+        if "pv_forecast" in data
+        else current_config.get("pv_forecast")
+    )
     return len(listed or [])
 
 
 def _get_managed_loads_entries(data: dict, current_config: dict) -> list[dict]:
     """
     Extract managed_loads entries from incoming data and current config.
-    
+
     Returns a list of dicts, one per managed load entry, merging incoming changes
     with stored values so the dependency check sees the full picture.
     """
     entries = []
-    
+
     # Collect indices from both data and current config
     indices = set()
     for key in data:
         parts = key.split(".")
         if len(parts) >= 3 and parts[0] == "managed_loads" and parts[1].isdigit():
             indices.add(int(parts[1]))
-    
+
     current_loads = current_config.get("managed_loads", [])
     if isinstance(current_loads, list):
         for idx in range(len(current_loads)):
             indices.add(idx)
-    
+
     # Build merged entries
     for idx in sorted(indices):
         entry = {}
-        
+
         # Start with current config value if it exists
         if isinstance(current_loads, list) and idx < len(current_loads):
             entry.update(current_loads[idx])
-        
+
         # Override with incoming data
         for key in data:
             parts = key.split(".")
             if len(parts) == 3 and parts[0] == "managed_loads" and parts[1] == str(idx):
                 entry[parts[2]] = data[key]
-        
+
         if entry:
             entries.append(entry)
-    
-    return entries
 
+    return entries
 
 
 def _check_dependencies(data: dict) -> list[dict]:
@@ -801,9 +813,7 @@ def _check_dependencies(data: dict) -> list[dict]:
             if key in data:
                 return True
             # Special handling for list-based sections that use indexed keys
-            if key == "pv_forecast" and any(
-                k.startswith("pv_forecast.") for k in data
-            ):
+            if key == "pv_forecast" and any(k.startswith("pv_forecast.") for k in data):
                 return True
             if key == "managed_loads" and any(
                 k.startswith("managed_loads.") for k in data
@@ -818,15 +828,18 @@ def _check_dependencies(data: dict) -> list[dict]:
         ("pv_forecast_source.source", "PV source"),
         ("inverter.type", "inverter controller"),
         ("price.source", "price source"),
+        ("data_source.type", "data source"),
     ):
         if get_value(field) == "evcc" and touches(field, "evcc.url"):
             if _evcc_url_unconfigured(get_value("evcc.url")):
-                dependencies.append({
-                    "field": field,
-                    "reason": f"EVCC selected as {label} but EVCC URL is not configured",
-                    "requires": "evcc.url",
-                    "blocking": True,
-                })
+                dependencies.append(
+                    {
+                        "field": field,
+                        "reason": f"EVCC selected as {label} but EVCC URL is not configured",
+                        "requires": "evcc.url",
+                        "blocking": True,
+                    }
+                )
 
     pv_source = get_value("pv_forecast_source.source")
 
@@ -835,28 +848,34 @@ def _check_dependencies(data: dict) -> list[dict]:
         "pv_forecast_source.source", "pv_forecast_source.resource_id"
     ):
         resource_id = get_value("pv_forecast_source.resource_id")
-        if not resource_id or (isinstance(resource_id, str) and not resource_id.strip()):
-            dependencies.append({
-                "field": "pv_forecast_source.resource_id",
-                "reason": (
-                    f"{pv_source.capitalize()} selected as PV source but "
-                    "Resource ID/Installation ID is not configured"
-                ),
-                "requires": "pv_forecast_source.resource_id",
-                "blocking": True,
-            })
+        if not resource_id or (
+            isinstance(resource_id, str) and not resource_id.strip()
+        ):
+            dependencies.append(
+                {
+                    "field": "pv_forecast_source.resource_id",
+                    "reason": (
+                        f"{pv_source.capitalize()} selected as PV source but "
+                        "Resource ID/Installation ID is not configured"
+                    ),
+                    "requires": "pv_forecast_source.resource_id",
+                    "blocking": True,
+                }
+            )
 
     # Location-based sources forecast from coordinates, so they need an installation.
     if pv_source in LOCATION_BASED_PV_SOURCES and touches(
         "pv_forecast_source.source", "pv_forecast"
     ):
         if _pending_pv_installation_count(data, current_config) == 0:
-            dependencies.append({
-                "field": "pv_forecast",
-                "reason": "Location-based PV source selected but no PV installations configured",
-                "requires": "pv_forecast.0.lat",  # Indicate at least one entry needed
-                "blocking": True,
-            })
+            dependencies.append(
+                {
+                    "field": "pv_forecast",
+                    "reason": "Location-based PV source selected but no PV installations configured",
+                    "requires": "pv_forecast.0.lat",  # Indicate at least one entry needed
+                    "blocking": True,
+                }
+            )
 
     # A remote data source with nothing to read from it. Deliberately advisory: an
     # empty sensor is a *supported* state — the interfaces fall back to the built-in
@@ -873,16 +892,18 @@ def _check_dependencies(data: dict) -> list[dict]:
             if key in data:
                 continue
             if _sensor_unconfigured(get_value(key)):
-                dependencies.append({
-                    "field": key,
-                    "reason": (
-                        f"{get_value('data_source.type')} selected as data source, but "
-                        f"the {label.lower()} sensor is not set — that data stays on "
-                        f"the built-in fallback until you set it under Settings > {label}"
-                    ),
-                    "requires": key,
-                    "blocking": False,
-                })
+                dependencies.append(
+                    {
+                        "field": key,
+                        "reason": (
+                            f"{get_value('data_source.type')} selected as data source, but "
+                            f"the {label.lower()} sensor is not set — that data stays on "
+                            f"the built-in fallback until you set it under Settings > {label}"
+                        ),
+                        "requires": key,
+                        "blocking": False,
+                    }
+                )
 
     # Managed loads season validation: season fields only apply to pool_heatpump type
     if touches("managed_loads"):
@@ -891,18 +912,22 @@ def _check_dependencies(data: dict) -> list[dict]:
             load_type = entry.get("type")
             season_start = entry.get("season_start", "")
             season_end = entry.get("season_end", "")
-            
+
             # Only validate if this load has non-empty season values
-            if (season_start or season_end) and load_type not in MANAGED_LOAD_COVER_TYPES:
-                dependencies.append({
-                    "field": f"managed_loads.{idx}.season_start",
-                    "reason": (
-                        f"Load '{entry.get('name', f'#{idx}')}' (type: {load_type}) does not support seasons. "
-                        "Seasons only apply to pool heatpump loads."
-                    ),
-                    "requires": f"managed_loads.{idx}.type",
-                    "blocking": True,
-                })
+            if (
+                season_start or season_end
+            ) and load_type not in MANAGED_LOAD_COVER_TYPES:
+                dependencies.append(
+                    {
+                        "field": f"managed_loads.{idx}.season_start",
+                        "reason": (
+                            f"Load '{entry.get('name', f'#{idx}')}' (type: {load_type}) does not support seasons. "
+                            "Seasons only apply to pool heatpump loads."
+                        ),
+                        "requires": f"managed_loads.{idx}.type",
+                        "blocking": True,
+                    }
+                )
 
     return dependencies
 
@@ -990,6 +1015,7 @@ def _raw_value_getter(data: dict):
     that 401s at runtime. Falling back to the schema default instead keeps this
     resolution honest for exactly those two keys.
     """
+
     def get_raw(key):
         if key in data:
             return data[key]
@@ -1108,8 +1134,7 @@ def _probe_timeseries_domain(domain: str, data: dict, get_value) -> dict:
         return {
             "ok": False,
             "error": (
-                "The test failed unexpectedly - the EOS Connect log has the "
-                "details."
+                "The test failed unexpectedly - the EOS Connect log has the " "details."
             ),
         }
     # In central-HA mode the actionable field is the sensor name, not the derived URL.
@@ -1131,7 +1156,12 @@ def _check_timeseries_preflight(data: dict) -> list[dict]:
     errors = []
     get_value = _effective_value_getter(data)
 
-    for domain, (section, prefix, _sensor, _unit) in _TIMESERIES_DOMAIN_SECTIONS.items():
+    for domain, (
+        section,
+        prefix,
+        _sensor,
+        _unit,
+    ) in _TIMESERIES_DOMAIN_SECTIONS.items():
         if get_value(f"{section}.{prefix}source") != "timeseries":
             continue
 
@@ -1219,12 +1249,15 @@ def test_timeseries():
 
     domain = data.pop("domain", "price")
     if domain not in _TIMESERIES_DOMAIN_SECTIONS:
-        return jsonify(
-            {
-                "error": "domain must be one of: "
-                + ", ".join(sorted(_TIMESERIES_DOMAIN_SECTIONS))
-            }
-        ), 400
+        return (
+            jsonify(
+                {
+                    "error": "domain must be one of: "
+                    + ", ".join(sorted(_TIMESERIES_DOMAIN_SECTIONS))
+                }
+            ),
+            400,
+        )
 
     get_value = _effective_value_getter(data)
     return jsonify(_probe_timeseries_domain(domain, data, get_value)), 200
@@ -1328,14 +1361,17 @@ def _validate_price_arrays(data: dict) -> list[dict]:
         )
 
         # If not provided or empty, that's an error
-        if not fixed_24h_array or (isinstance(fixed_24h_array, str) and
-                                   not fixed_24h_array.strip()):
-            errors.append({
-                "key": "price.fixed_24h_array",
-                "error": (
-                    "fixed_24h_array is required when price source is 'fixed_24h'"
-                )
-            })
+        if not fixed_24h_array or (
+            isinstance(fixed_24h_array, str) and not fixed_24h_array.strip()
+        ):
+            errors.append(
+                {
+                    "key": "price.fixed_24h_array",
+                    "error": (
+                        "fixed_24h_array is required when price source is 'fixed_24h'"
+                    ),
+                }
+            )
             return errors  # Return early to avoid redundant errors
 
         # Validate format only if we have data
@@ -1348,19 +1384,23 @@ def _validate_price_arrays(data: dict) -> list[dict]:
                     float(v)
                 # Check count
                 if len(values) != 24:
-                    errors.append({
-                        "key": "price.fixed_24h_array",
-                        "error": (
-                            f"Must contain exactly 24 comma-separated values, "
-                            f"got {len(values)}"
-                        )
-                    })
+                    errors.append(
+                        {
+                            "key": "price.fixed_24h_array",
+                            "error": (
+                                f"Must contain exactly 24 comma-separated values, "
+                                f"got {len(values)}"
+                            ),
+                        }
+                    )
             except ValueError as exc:
                 logger.debug("[ConfigWeb] fixed_24h_array is not parseable: %s", exc)
-                errors.append({
-                    "key": "price.fixed_24h_array",
-                    "error": "Array must contain numeric values only"
-                })
+                errors.append(
+                    {
+                        "key": "price.fixed_24h_array",
+                        "error": "Array must contain numeric values only",
+                    }
+                )
 
     return errors
 
@@ -1502,7 +1542,9 @@ def _validate_single(field_def, value) -> str:
     try:
         value = _coerce_value(field_def, value)
     except (TypeError, ValueError) as exc:
-        logger.debug("[ConfigWeb] Value for '%s' will not coerce: %s", field_def.key, exc)
+        logger.debug(
+            "[ConfigWeb] Value for '%s' will not coerce: %s", field_def.key, exc
+        )
         return _type_error_message(field_def)
 
     # Choices
