@@ -257,8 +257,47 @@ def test_return_energy_is_subtracted():
             "group:grid", slot_start, slot_start + timedelta(minutes=15)
         )
     values = [entry["state"] for entry in samples]
-    # 0.4 kWh net over 15 min = 1600 W
+    # 0.4 kWh net over 15 min = 1600 W, import positive
     assert values and all(value == pytest.approx(1600.0) for value in values)
+
+
+def test_battery_discharge_is_signed_not_clamped():
+    """A discharging slot must stay negative - it is the discharge signal itself.
+
+    The price calculation distinguishes PV charging from discharging by the
+    sign; clamping negative slots to zero turned every discharge into a no-op
+    and left the calculation with "no energy charged in identified events" - the
+    live-site failure these EVCC branches were verified against.
+    """
+    slot_start = DAY_START
+    interface = _interface()
+    with patch("src.interfaces.load_interface.requests.get") as getter, patch(
+        "src.interfaces.load_interface.time.sleep"
+    ):
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = [
+            {
+                "group": "battery",
+                "title": None,
+                "data": [
+                    {
+                        # discharge: nothing charged, 0.18 kWh returned
+                        "start": slot_start.isoformat(),
+                        "end": (slot_start + timedelta(minutes=15)).isoformat(),
+                        "energy": 0.0,
+                        "returnEnergy": 0.18,
+                    }
+                ],
+            }
+        ]
+        getter.return_value = response
+        samples = interface.fetch_historical_energy_data(
+            "group:battery", slot_start, slot_start + timedelta(minutes=15)
+        )
+    values = [entry["state"] for entry in samples]
+    # -0.18 kWh over 15 min = -720 W, discharge negative (charging positive)
+    assert values and all(value == pytest.approx(-720.0) for value in values)
 
 
 def test_get_load_profile_hands_to_the_day_builder():
@@ -266,3 +305,60 @@ def test_get_load_profile_hands_to_the_day_builder():
     interface = _interface()
     with patch.object(LoadInterface, "refresh_load_profile", return_value=[1.0] * 48):
         assert interface.get_load_profile(48) == [1.0] * 48
+
+
+def test_tariff_grid_answers_price_history():
+    """``tariff:grid`` reads the persisted tariff slots, in EUR/kWh point samples.
+
+    The price handler's converter divides values above 1.0 by 100 (its ct/kWh
+    heuristic); EVCC's currency/kWh sits below that line, so the values must
+    pass through unchanged.
+    """
+    slot_start = DAY_START
+    interface = _interface()
+    with patch("src.interfaces.load_interface.requests.get") as getter, patch(
+        "src.interfaces.load_interface.time.sleep"
+    ):
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = [
+            {"start": slot_start.isoformat(), "grid": 0.27, "feedin": 0.08},
+            {"start": (slot_start + timedelta(minutes=15)).isoformat(), "grid": 0.31},
+        ]
+        getter.return_value = response
+        samples = interface.fetch_historical_energy_data(
+            "tariff:grid", slot_start, slot_start + timedelta(minutes=30)
+        )
+    values = [entry["state"] for entry in samples]
+    assert values == [0.27, 0.31], "EUR/kWh values pass through unconverted"
+    # feedin is not leaked into a grid request
+    assert all(0.08 != value for value in values)
+
+
+def test_tariff_feedin_answers_separately():
+    interface = _interface()
+    with patch("src.interfaces.load_interface.requests.get") as getter, patch(
+        "src.interfaces.load_interface.time.sleep"
+    ):
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = [
+            {"start": DAY_START.isoformat(), "grid": 0.27, "feedin": 0.08}
+        ]
+        getter.return_value = response
+        samples = interface.fetch_historical_energy_data(
+            "tariff:feedin", DAY_START, DAY_START + timedelta(minutes=15)
+        )
+    assert [entry["state"] for entry in samples] == [0.08]
+
+
+def test_tariff_unknown_name_is_rejected():
+    interface = _interface()
+    with patch("src.interfaces.load_interface.requests.get") as getter:
+        assert (
+            interface.fetch_historical_energy_data(
+                "tariff:co2", DAY_START, DAY_START + timedelta(minutes=15)
+            )
+            == []
+        )
+    getter.assert_not_called()
