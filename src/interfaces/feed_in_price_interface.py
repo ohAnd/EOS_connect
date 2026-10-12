@@ -4,7 +4,7 @@ This module provides the `FeedInPriceInterface` class for retrieving and process
 feed-in (export) price data from various sources.
 
 Supported sources:
-    - Elpris (Dänemark): Spot-Preise für stromexport (in DKK/kWh, converted to ct/kWh)
+    - Elpris (Dänemark): Spot-Preise für stromexport (DKK/kWh and EUR/kWh per hour)
     - EPEX-Spot (EU/AT): Netto-Börsenpreise via Akkudoktor (in ct/kWh)
     - EVCC: Real-time feed-in tariffs from EVCC charger (in EUR/kWh)
     - Fixed: Statischer Einspeisepreis (in ct/kWh)
@@ -50,6 +50,7 @@ except ImportError:  # imported as src.interfaces (tests)
 from .forecast_metadata import ForecastMetadataMixin
 from .price_interface import fill_price_gaps
 from .timeseries_normalizer import (
+    PRICE_UNIT_TO_EUR_PER_WH,
     TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
     convert_price_values,
@@ -64,6 +65,24 @@ logger.info("[FEEDIN-IF] loading module")
 
 ELPRIS_API_BASE = "https://www.elprisenligenu.dk/api/v1/prices"
 AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
+
+# Only used when a record carries DKK but no EXR of its own. Every record the
+# API actually serves carries both EUR_per_kWh and EXR, so this is a last
+# resort, not the conversion path - a rate frozen into the source silently
+# drifts away from the one the prices were published with.
+ELPRIS_FALLBACK_DKK_PER_EUR = 7.46
+
+
+def _as_number(value):
+    """
+    The value as a float, or None when it is not a usable number.
+
+    bool is an int in Python and would convert to a 1.0 ct/kWh price, so it is
+    rejected explicitly.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 class FeedInPriceInterface(ForecastMetadataMixin):
@@ -162,6 +181,10 @@ class FeedInPriceInterface(ForecastMetadataMixin):
         self.consecutive_failures = 0
         self.max_failures = 24  # Max consecutive failures before using default
 
+        # Warn once per process about a missing Elpris exchange rate rather
+        # than on every record of every 15-minute cycle.
+        self._elpris_exr_warned = False
+
         # Background thread attributes
         self._update_thread = None
         self._stop_event = threading.Event()
@@ -213,41 +236,72 @@ class FeedInPriceInterface(ForecastMetadataMixin):
             self._update_thread.join(timeout=5)
             logger.debug("[FEEDIN-IF] Background update service stopped")
 
+    # Anything a source can throw at the loop. Kept as one tuple so the
+    # initial update and the periodic one cannot drift apart.
+    _UPDATE_ERRORS = (
+        requests.RequestException,
+        KeyError,
+        ValueError,
+        AttributeError,
+        TypeError,
+        OSError,
+        RuntimeError,
+    )
+
     def _update_prices_loop(self):
         """
         Background loop that periodically updates feed-in prices.
         Runs every 15 minutes (900 seconds).
+
+        Each update is guarded on its own. The guard used to wrap the whole
+        loop, so the first unexpected API response ended feed-in price updates
+        for the lifetime of the process — which is what issue #321 reported:
+        one ERROR, one "restarting…", then silence. A bad cycle now costs that
+        cycle and nothing more.
         """
         try:
             # Initial update on startup
-            start_time = local_midnight(self.time_zone)
-            tgt_duration = horizon_slots(self.time_frame_base)
-            self.update_prices(tgt_duration, start_time)
-
-            while not self._stop_event.is_set():
-                # Wait for update interval or stop signal
-                if self._stop_event.wait(timeout=self.update_interval):
-                    break
-
-                # Periodic update
-                start_time = local_midnight(self.time_zone)
-                tgt_duration = horizon_slots(self.time_frame_base)
-                self.update_prices(tgt_duration, start_time)
-                logger.debug("[FEEDIN-IF] Periodic feed-in price update completed")
-
-        except (requests.RequestException, KeyError, ValueError, AttributeError,
-                TypeError, OSError, RuntimeError) as e:
+            self.update_prices(
+                horizon_slots(self.time_frame_base),
+                local_midnight(self.time_zone),
+            )
+            logger.debug("[FEEDIN-IF] Initial feed-in price update completed")
+        except self._UPDATE_ERRORS as e:
             logger.error(
                 "[FEEDIN-IF] Price fetch failed: %s | Config: #price | ACTION REQUIRED",
                 e,
             )
 
-        # Restart if not intentionally stopped
+        while not self._stop_event.is_set():
+            try:
+                # Wait for update interval or stop signal
+                if self._stop_event.wait(timeout=self.update_interval):
+                    break
+
+                # Periodic update
+                self.update_prices(
+                    horizon_slots(self.time_frame_base),
+                    local_midnight(self.time_zone),
+                )
+                logger.debug("[FEEDIN-IF] Periodic feed-in price update completed")
+
+            except self._UPDATE_ERRORS as e:
+                logger.error(
+                    "[FEEDIN-IF] Price fetch failed: %s | Config: #price | ACTION REQUIRED",
+                    e,
+                )
+                # Keep looping — the next cycle retries.
+
         if not self._stop_event.is_set():
-            logger.warning(
-                "[FEEDIN-IF] Background thread stopped unexpectedly, restarting..."
+            # Unreachable through the guards above. The old code called
+            # _start_update_service() here, which could never work: it runs on
+            # the very thread it is trying to replace, so the is_alive() guard
+            # declines and "restarting…" restarted nothing. Say what actually
+            # happened instead of promising a recovery that never came.
+            logger.error(
+                "[FEEDIN-IF] Background price update thread ended unexpectedly; "
+                "feed-in prices will not refresh until EOS Connect is restarted"
             )
-            self._start_update_service()
 
     def update_prices(self, tgt_duration, start_time=None):
         """
@@ -321,9 +375,13 @@ class FeedInPriceInterface(ForecastMetadataMixin):
             list: Prices in EUR/Wh or empty list on error
         """
         if self.source == "elpris_dk":
-            return self._fetch_elpris_prices(tgt_duration, start_time)
+            return self._apply_adjustments(
+                self._fetch_elpris_prices(tgt_duration, start_time)
+            )
         elif self.source == "epex_spot":
-            return self._fetch_epex_spot_prices(tgt_duration, start_time)
+            return self._apply_adjustments(
+                self._fetch_epex_spot_prices(tgt_duration, start_time)
+            )
         elif self.source == "evcc":
             # The adder/multiplier/negative-switch trio used to be a silent
             # no-op on this path (every field offered, none applied).
@@ -344,82 +402,193 @@ class FeedInPriceInterface(ForecastMetadataMixin):
 
     def _fetch_elpris_prices(self, tgt_duration, start_time):
         """
-        Fetch feed-in prices from Elpris API (Dänemark).
+        Fetch feed-in prices from the Elpris API (Dänemark).
 
-        API: https://www.elprisenligenu.dk/elpris-api
-        Returns prices in DKK/kWh, converts to ct/kWh (0.134 DKK/EUR)
+        API: https://www.elprisenligenu.dk/elpris-api — one JSON file per day
+        and zone, holding 24 hourly records. Tomorrow's file appears around
+        13:00 CET; until then only today exists and the day is repeated, as
+        before. Both days are fetched because the optimizer's horizon is 48h
+        and a repeated today is a guess, not a price.
+
+        Returns raw EUR/Wh: the static adder, the multiplier and the negative
+        clamp are applied centrally in _retrieve_prices via _apply_adjustments,
+        the same way the evcc and timeseries sources do it.
 
         Args:
             tgt_duration (int): 48 (hourly) or 192 (15-min slots)
-            start_time (datetime): Start time
+            start_time (datetime): Local midnight of day one
 
         Returns:
             list: Prices in EUR/Wh or empty list on error
         """
-        try:
-            # API format: YYYY/MM-DD_ZONE.json
-            date_str = start_time.strftime("%Y/%m-%d")
-            url = f"{ELPRIS_API_BASE}/{date_str}_{self.zone}.json"
+        prices_eur_wh = self._fetch_elpris_day(start_time)
+        if not prices_eur_wh:
+            logger.warning(
+                "[FEEDIN-IF] Elpris returned no usable prices for %s on %s",
+                self.zone,
+                start_time.strftime("%Y-%m-%d"),
+            )
+            return []
 
+        tomorrow = start_time + timedelta(days=1)
+        prices_tomorrow = self._fetch_elpris_day(tomorrow, required=False)
+        if prices_tomorrow:
+            prices_eur_wh = prices_eur_wh + prices_tomorrow
+        else:
+            logger.debug(
+                "[FEEDIN-IF] Elpris: %s not published yet, repeating today's "
+                "%d values for the second day",
+                tomorrow.strftime("%Y-%m-%d"),
+                len(prices_eur_wh),
+            )
+
+        logger.debug(
+            "[FEEDIN-IF] Fetched %d Elpris prices from %s",
+            len(prices_eur_wh),
+            self.zone,
+        )
+
+        # Expand to the configured resolution, cycle if only one day arrived,
+        # and cut to the horizon.
+        return self._extend_prices_to_duration(prices_eur_wh, tgt_duration)
+
+    def _fetch_elpris_day(self, day, required=True):
+        """
+        Fetch one calendar day of Elpris prices as raw EUR/Wh.
+
+        The v1 endpoint answers with a bare JSON array of hourly records::
+
+            [{"DKK_per_kWh": 0.8523, "EUR_per_kWh": 0.114, "EXR": 7.476273,
+              "time_start": "2026-10-11T00:00:00+02:00",
+              "time_end": "2026-10-11T01:00:00+02:00"}, ...]
+
+        This parser used to ask for a ``prices`` key holding ``price`` fields —
+        a shape the API has never served. ``.get()`` on the array raised
+        AttributeError on every startup and killed the price thread (#321).
+
+        Args:
+            day (datetime): Calendar day to fetch.
+            required (bool): False for tomorrow, whose file simply does not
+                exist before the day-ahead auction clears. A 404 is then an
+                expected state, not an error worth logging as one.
+
+        Returns:
+            list: Prices in EUR/Wh, empty on any failure.
+        """
+        url = f"{ELPRIS_API_BASE}/{day.strftime('%Y/%m-%d')}_{self.zone}.json"
+
+        try:
             logger.debug("[FEEDIN-IF] Fetching Elpris prices from: %s", url)
             response = requests.get(url, timeout=10)
             response.raise_for_status()
-
-            data = response.json()
-            prices_dkk = data.get("prices", [])
-
-            if not prices_dkk:
-                logger.warning("[FEEDIN-IF] Elpris API returned empty price list")
-                return []
-
-            # Elpris returns 24 hourly prices in DKK/kWh
-            # DKK/EUR rate ≈ 7.46, so 1 DKK/kWh = 100/7.46 ≈ 13.41 ct/kWh
-            dkk_per_eur = 7.46
-            prices_eur_wh = []
-
-            for price_entry in prices_dkk:
-                price_dkk_kwh = price_entry.get("price", 0.0)
-
-                # DKK/kWh → ct/kWh
-                price_ct_kwh = price_dkk_kwh * 100 / dkk_per_eur
-
-                # Add static adder and apply multiplier
-                price_with_adder = price_ct_kwh + self.static_adder_ct_kwh
-                price_adjusted = price_with_adder * self.multiplier
-
-                # ct/kWh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
-                price_eur_wh = round(price_adjusted / 100000, 9)
-
-                # Clamp to 0 if negative_price_switch enabled and price negative
-                if self.negative_price_switch and price_eur_wh < 0:
-                    price_eur_wh = 0.0
-
-                prices_eur_wh.append(price_eur_wh)
-
-            logger.debug(
-                "[FEEDIN-IF] Fetched %d Elpris prices from %s",
-                len(prices_eur_wh),
-                self.zone,
-            )
-
-            # Extend to 48 or 96 hours if only 24h available
-            prices_eur_wh = self._extend_prices_to_duration(prices_eur_wh, tgt_duration)
-
-            return prices_eur_wh
-
+            entries = self._elpris_entries(response.json())
         except requests.RequestException as e:
-            logger.error("[FEEDIN-IF] Elpris API request failed: %s", e)
+            logger.log(
+                logging.ERROR if required else logging.DEBUG,
+                "[FEEDIN-IF] Elpris API request failed (%s): %s",
+                url,
+                e,
+            )
             return []
-        except (KeyError, ValueError) as e:
+        except (KeyError, ValueError, AttributeError, TypeError) as e:
             logger.error("[FEEDIN-IF] Elpris API response parsing failed: %s", e)
             return []
+
+        prices_eur_wh = []
+        skipped = []
+        for entry in entries:
+            price_eur_kwh = self._elpris_price_eur_kwh(entry)
+            if price_eur_kwh is None:
+                skipped.append(entry)
+                continue
+            prices_eur_wh.append(
+                round(price_eur_kwh * PRICE_UNIT_TO_EUR_PER_WH["EUR/kWh"], 9)
+            )
+
+        if skipped:
+            # Naming the keys that did arrive makes a provider-side rename
+            # readable from the log instead of showing up as silent zeros.
+            first = skipped[0]
+            logger.warning(
+                "[FEEDIN-IF] Elpris: skipped %d of %d entries carrying neither "
+                "EUR_per_kWh nor DKK_per_kWh (keys present: %s)",
+                len(skipped),
+                len(entries),
+                ", ".join(sorted(first)) if isinstance(first, dict)
+                else type(first).__name__,
+            )
+
+        return prices_eur_wh
+
+    @staticmethod
+    def _elpris_entries(data):
+        """
+        Unwrap an Elpris payload into the list of hourly records.
+
+        The array is the real shape. A wrapper object is accepted anyway so a
+        future provider change degrades to "no prices this cycle" instead of
+        taking the background thread down with it.
+        """
+        if isinstance(data, list):
+            return data
+
+        if isinstance(data, dict):
+            for key in ("prices", "records", "data"):
+                nested = data.get(key)
+                if isinstance(nested, list):
+                    return nested
+            logger.warning(
+                "[FEEDIN-IF] Elpris response is an object without a price "
+                "array (keys: %s)",
+                ", ".join(sorted(data)) or "none",
+            )
+            return []
+
+        logger.warning(
+            "[FEEDIN-IF] Elpris response is %s, expected a list of hourly prices",
+            type(data).__name__,
+        )
+        return []
+
+    def _elpris_price_eur_kwh(self, entry):
+        """
+        EUR/kWh for one Elpris record, or None when it carries no price.
+
+        ``EUR_per_kWh`` is taken as published. ``DKK_per_kWh`` is converted with
+        the record's own ``EXR`` — the provider's DKK/EUR rate for that very
+        day — rather than with a rate pinned in this file.
+        """
+        if not isinstance(entry, dict):
+            return None
+
+        eur_per_kwh = _as_number(entry.get("EUR_per_kWh"))
+        if eur_per_kwh is not None:
+            return eur_per_kwh
+
+        dkk_per_kwh = _as_number(entry.get("DKK_per_kWh"))
+        if dkk_per_kwh is None:
+            return None
+
+        exr = _as_number(entry.get("EXR"))
+        if not exr:
+            exr = ELPRIS_FALLBACK_DKK_PER_EUR
+            if not self._elpris_exr_warned:
+                logger.warning(
+                    "[FEEDIN-IF] Elpris records carry no usable EXR rate; "
+                    "converting DKK with the static fallback %.2f DKK/EUR",
+                    ELPRIS_FALLBACK_DKK_PER_EUR,
+                )
+                self._elpris_exr_warned = True
+
+        return dkk_per_kwh / exr
 
     def _fetch_epex_spot_prices(self, tgt_duration, start_time):
         """
         Fetch feed-in prices from EPEX-Spot via Akkudoktor API.
 
-        Uses Akkudoktor's netto prices (without taxes/fees) as base.
-        Applies static_adder and multiplier.
+        Uses Akkudoktor's netto prices (without taxes/fees) as base and
+        returns raw EUR/Wh; the adder, multiplier and negative clamp are
+        applied centrally in _retrieve_prices via _apply_adjustments.
 
         Args:
             tgt_duration (int): 48 (hourly) or 192 (15-min slots)
@@ -444,21 +613,16 @@ class FeedInPriceInterface(ForecastMetadataMixin):
                 logger.warning("[FEEDIN-IF] Akkudoktor API returned empty price list")
                 return []
 
-            prices_eur_wh = []
-            for price_entry in prices_list:
-                # API returns prices in ct/kWh (eurocentPerKWh)
-                price_ct_kwh = price_entry.get("marketpriceEurocentPerKWh", 0.0)
-
-                # Add static adder (already in ct/kWh) and apply multiplier
-                price_with_adder = price_ct_kwh + self.static_adder_ct_kwh
-                price_adjusted = price_with_adder * self.multiplier
-
-                # Convert ct/kWh → EUR/Wh (1 ct/kWh = 0.00001 EUR/Wh)
-                price_eur_wh = round(price_adjusted / 100000, 9)
-                # Clamp to 0 if negative_price_switch enabled and price negative
-                if self.negative_price_switch and price_eur_wh < 0:
-                    price_eur_wh = 0.0
-                prices_eur_wh.append(price_eur_wh)
+            # The API publishes ct/kWh (eurocentPerKWh); convert to the
+            # internal EUR/Wh and leave the corrections to _apply_adjustments.
+            prices_eur_wh = [
+                round(
+                    (_as_number(price_entry.get("marketpriceEurocentPerKWh")) or 0.0)
+                    * PRICE_UNIT_TO_EUR_PER_WH["ct/kWh"],
+                    9,
+                )
+                for price_entry in prices_list
+            ]
 
             logger.debug(
                 "[FEEDIN-IF] Fetched %d EPEX prices from Akkudoktor",
@@ -473,7 +637,7 @@ class FeedInPriceInterface(ForecastMetadataMixin):
         except requests.RequestException as e:
             logger.error("[FEEDIN-IF] Akkudoktor API request failed: %s", e)
             return []
-        except (KeyError, ValueError) as e:
+        except (KeyError, ValueError, AttributeError, TypeError) as e:
             logger.error("[FEEDIN-IF] Akkudoktor API response parsing failed: %s", e)
             return []
 
@@ -846,7 +1010,7 @@ class FeedInPriceInterface(ForecastMetadataMixin):
         except requests.RequestException as e:
             logger.error("[FEEDIN-IF] Failed to fetch Akkudoktor market prices: %s", e)
             return []
-        except (KeyError, ValueError) as e:
+        except (KeyError, ValueError, AttributeError, TypeError) as e:
             logger.error("[FEEDIN-IF] Failed to parse Akkudoktor response: %s", e)
             return []
 
@@ -872,9 +1036,13 @@ class FeedInPriceInterface(ForecastMetadataMixin):
             prices = [p for p in prices for _ in range(4)]
             tgt_duration = tgt_duration * 4 if tgt_duration < 100 else tgt_duration
 
-        # If still short, cycle through available prices
-        if len(prices) < tgt_duration:
-            remaining_slots = tgt_duration - len(prices)
-            prices.extend(prices[:remaining_slots])
+        # If still short, cycle through available prices. Repeating until the
+        # horizon is full, rather than extending once: a source shorter than
+        # half the horizon used to come back short, and a short array reads
+        # downstream as a truncated forecast rather than a repeated one.
+        while 0 < len(prices) < tgt_duration:
+            prices.extend(prices[: tgt_duration - len(prices)])
 
-        return prices
+        # And never longer than the horizon: on a DST changeover day the
+        # providers publish 23 or 25 hourly values, so two days are 47 or 49.
+        return prices[:tgt_duration]
