@@ -1,18 +1,58 @@
 """
-Shared reader for entity state from Home Assistant or openHAB.
+Shared reader for entity state from Home Assistant, openHAB or EVCC.
 
 Several interfaces poll a single sensor value over HTTP with the same shape: an
-openHAB item endpoint, or a Home Assistant states endpoint with a bearer token. Keeping
-one implementation means a fix to authentication, timeouts or TLS handling reaches all
-of them rather than only the interface it was noticed in.
+openHAB item endpoint, a Home Assistant states endpoint with a bearer token, or a
+dotted path into EVCC's /api/state document. Keeping one implementation means a fix to
+authentication, timeouts or TLS handling reaches all of them rather than only the
+interface it was noticed in.
 """
+
 import requests
 
-SUPPORTED_SOURCES = ("homeassistant", "openhab")
+SUPPORTED_SOURCES = ("homeassistant", "openhab", "evcc")
 
 
-def fetch_remote_state(source, sensor, url, access_token="", request_timeout=10,
-                       ssl_ignore=False):
+def _evcc_state_document(base, request_timeout, ssl_ignore):
+    """One EVCC /api/state document, with the legacy envelope unwrapped.
+
+    Older EVCC versions wrapped every response in ``{"result": {...}}``; current
+    ones answer with the state document directly. The same unwrapping is done by
+    ``EvccInterface.__check_config`` and ``__fetch_evcc_state_via_api`` — keep the
+    three in step when the envelope rules change.
+    """
+    response = requests.get(
+        f"{base}/api/state", timeout=request_timeout, verify=not ssl_ignore
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+        payload = payload["result"]
+    if not isinstance(payload, dict):
+        payload = {}
+    return payload
+
+
+def _evcc_path(payload, path):
+    """The value at a dotted path like ``battery.soc``, or None when absent.
+
+    Only plain dict traversal: a list index would be nice for ``pv.0.power`` but
+    no configured field needs it, and silently indexing the wrong thing beats
+    loudly failing the one this exists for.
+    """
+    current = payload
+    for part in str(path or "").split("."):
+        if not part:
+            return None
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def fetch_remote_state(
+    source, sensor, url, access_token="", request_timeout=10, ssl_ignore=False
+):
     """
     Fetch the raw state string for one entity/item.
 
@@ -45,6 +85,10 @@ def fetch_remote_state(source, sensor, url, access_token="", request_timeout=10,
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
+    elif source == "evcc":
+        payload = _evcc_state_document(base, request_timeout, ssl_ignore)
+        value = _evcc_path(payload, sensor)
+        return "" if value is None else str(value).strip()
     else:
         raise ValueError(f"Unknown source: {source}")
 
@@ -55,8 +99,9 @@ def fetch_remote_state(source, sensor, url, access_token="", request_timeout=10,
     return _details_from(response.json())
 
 
-def fetch_remote_state_details(source, sensor, url, access_token="", request_timeout=10,
-                               ssl_ignore=False):
+def fetch_remote_state_details(
+    source, sensor, url, access_token="", request_timeout=10, ssl_ignore=False
+):
     """
     Fetch one entity/item's state together with what it is measured in.
 
@@ -67,7 +112,7 @@ def fetch_remote_state_details(source, sensor, url, access_token="", request_tim
 
     Returns:
         ``{"state": str, "unit": str, "device_class": str}``. The last two are empty
-        strings when the source does not report them, which openHAB never does.
+        strings when the source does not report them, which openHAB and EVCC never do.
 
     Raises:
         Same as `fetch_remote_state`.
@@ -84,6 +129,14 @@ def fetch_remote_state_details(source, sensor, url, access_token="", request_tim
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
+        }
+    elif source == "evcc":
+        payload = _evcc_state_document(base, request_timeout, ssl_ignore)
+        value = _evcc_path(payload, sensor)
+        return {
+            "state": "" if value is None else str(value).strip(),
+            "unit": "",
+            "device_class": "",
         }
     else:
         raise ValueError(f"Unknown source: {source}")
