@@ -62,8 +62,8 @@ DATA_SOURCE_REQUIRED_SENSORS = {
 SECTION_META = {
     "eos": {"icon": "fa-server", "label": "Optimizer"},
     "evcc": {"icon": "fa-car", "label": "EVCC"},
-    "inverter": {"icon": "fa-microchip", "label": "Inverter"},
     "data_source": {"icon": "fa-plug", "label": "Data Source"},
+    "inverter": {"icon": "fa-microchip", "label": "Inverter"},
     "battery": {"icon": "fa-battery-full", "label": "Battery"},
     "load": {"icon": "fa-bolt", "label": "Load"},
     "managed_loads": {"icon": "fa-sliders", "label": "Managed Loads"},
@@ -469,6 +469,16 @@ _ALL_FIELDS: list[FieldDef] = [
         validation={"pattern": r"^https?://.+"},
         depends_on={"data_source.type": ["homeassistant", "openhab", "evcc"]},
         display_group="Connection",
+        description_map={
+            "data_source.type": {
+                "evcc": (
+                    "URL of your EVCC instance — the only place the address is "
+                    "configured when EVCC reads the consumption"
+                ),
+                "homeassistant": "URL of your Home Assistant instance",
+                "openhab": "URL of your OpenHAB instance",
+            }
+        },
     ),
     FieldDef(
         key="data_source.access_token",
@@ -524,6 +534,68 @@ _ALL_FIELDS: list[FieldDef] = [
         depends_on={"data_source.type": ["evcc"]},
         display_group="Connection",
     ),
+    FieldDef(
+        key="data_source.supplementary_type",
+        field_type="select",
+        default="default",
+        section="data_source",
+        level="standard",
+        description=(
+            "Second connection for the readings EVCC cannot supply — battery "
+            "temperature, the PV auto-scaling counter"
+        ),
+        labels=["restart_required"],
+        help_url="config-data.html#data-source-evcc",
+        validation={"choices": ["homeassistant", "openhab", "default"]},
+        depends_on={"data_source.type": ["evcc"]},
+        display_group="Supplementary Home Assistant",
+    ),
+    FieldDef(
+        key="data_source.supplementary_url",
+        field_type="str",
+        default="http://homeassistant:8123",
+        section="data_source",
+        level="standard",
+        description="URL of that instance (Home Assistant or openHAB)",
+        labels=["restart_required"],
+        help_url="config-data.html#data-source-evcc",
+        validation={"pattern": r"^https?://.+"},
+        depends_on={
+            "data_source.type": ["evcc"],
+            "data_source.supplementary_type": ["homeassistant", "openhab"],
+        },
+        display_group="Supplementary Home Assistant",
+    ),
+    FieldDef(
+        key="data_source.supplementary_access_token",
+        field_type="password",
+        default="",
+        section="data_source",
+        level="standard",
+        description="Access token of that instance (Home Assistant only)",
+        labels=["restart_required"],
+        help_url="config-data.html#data-source-evcc",
+        depends_on={
+            "data_source.type": ["evcc"],
+            "data_source.supplementary_type": ["homeassistant"],
+        },
+        display_group="Supplementary Home Assistant",
+    ),
+    FieldDef(
+        key="data_source.supplementary_ssl_ignore",
+        field_type="bool",
+        default=False,
+        section="data_source",
+        level="expert",
+        description="Disable SSL verification for the supplementary connection",
+        labels=["restart_required"],
+        help_url="config-data.html#data-source-evcc",
+        depends_on={
+            "data_source.type": ["evcc"],
+            "data_source.supplementary_type": ["homeassistant", "openhab"],
+        },
+        display_group="Supplementary Home Assistant",
+    ),
     # ===== LOAD =====
     FieldDef(
         key="load.source",
@@ -568,9 +640,9 @@ _ALL_FIELDS: list[FieldDef] = [
         description=(
             "Entity/item reporting household load power in watts — e.g. "
             "sensor.house_power (Home Assistant), Load_Power (openHAB) or "
-            "group:home (EVCC history)"
+            "group:home (EVCC fills this in: the household meter it measures)"
         ),
-        labels=["restart_required"],
+        labels=["restart_required", "evcc_managed"],
         help_url="config-data.html#load",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
@@ -583,10 +655,10 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description=(
             "Entity/item for wallbox power data in watts — e.g. sensor.wallbox_power "
-            "(Home Assistant) or group:loadpoint (EVCC, all loadpoints; "
-            "group:loadpoint:Garage for one; leave empty if not used)"
+            "(Home Assistant) or group:loadpoint (EVCC fills this in: every "
+            "charging point it meters)"
         ),
-        labels=["restart_required"],
+        labels=["restart_required", "evcc_managed"],
         help_url="config-data.html#load",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
@@ -599,10 +671,10 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description=(
             "Entity/item for additional load power in watts (Home Assistant, "
-            "openHAB; or group:consumer / group:consumer:<Title> from EVCC "
-            "history; leave empty if not used)"
+            "openHAB; EVCC names one of its metered appliances via the Data "
+            "Source consumer title; leave empty if not used)"
         ),
-        labels=["restart_required"],
+        labels=["restart_required", "evcc_managed"],
         help_url="config-data.html#load",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Additional Load",
@@ -1257,9 +1329,9 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description=(
             "Entity/item for battery state of charge — e.g. sensor.battery_soc "
-            "(Home Assistant), battery_SOC (openHAB) or battery.soc (EVCC live state)"
+            "(Home Assistant); EVCC fills this in from its live battery state"
         ),
-        labels=["restart_required"],
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Core",
@@ -1270,8 +1342,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default=11059,
         section="battery",
         level="getting_started",
-        description="Battery capacity in Wh",
-        labels=["restart_required"],
+        description=(
+            "Battery capacity in Wh. EVCC fills this in from its battery meter "
+            "when EVCC reads the data"
+        ),
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery",
         validation={"min": 100, "max": 1000000},
         display_group="Core",
@@ -1318,7 +1393,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default=5,
         section="battery",
         level="getting_started",
-        description="Minimum battery SOC in percent",
+        description=(
+            "Minimum battery SOC in percent — your battery's physical operating "
+            "range. EVCC's battery management limits are behaviour thresholds, "
+            "not this, so this stays configured here even on an EVCC data source"
+        ),
         help_url="config-battery.html#battery",
         validation={"min": 0, "max": 100},
         hot_reload=True,
@@ -1330,7 +1409,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default=100,
         section="battery",
         level="getting_started",
-        description="Maximum battery SOC in percent",
+        description=(
+            "Maximum battery SOC in percent — your battery's physical operating "
+            "range. EVCC's battery management limits are behaviour thresholds, "
+            "not this, so this stays configured here even on an EVCC data source"
+        ),
         help_url="config-battery.html#battery",
         validation={"min": 0, "max": 100},
         hot_reload=True,
@@ -1353,7 +1436,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for battery temperature in °C (leave empty if not available)",
+        description=(
+            "Sensor for battery temperature in °C (leave empty if not available). "
+            "On an EVCC data source this reads through the supplementary Home "
+            "Assistant connection — EVCC has no temperature of its own"
+        ),
         labels=["restart_required"],
         help_url="config-battery.html#battery",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
@@ -1426,10 +1513,10 @@ _ALL_FIELDS: list[FieldDef] = [
         section="battery",
         level="standard",
         description=(
-            "Sensor for battery power in W (positive = charging); with EVCC: "
-            "group:battery (charge/discharge split read directly)"
+            "Sensor for battery power in W, positive = charging. EVCC supplies "
+            "its battery history directly, charged and discharged separately"
         ),
-        labels=["restart_required"],
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
@@ -1440,8 +1527,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for PV power in W (EVCC: group:pv)",
-        labels=["restart_required"],
+        description="Sensor for PV power in W. EVCC supplies its PV meter history",
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
@@ -1452,8 +1539,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for grid power in W, positive = import (EVCC: group:grid)",
-        labels=["restart_required"],
+        description="Sensor for grid power in W, positive = import. EVCC supplies its grid meter history",
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
@@ -1464,8 +1551,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for load power in W (EVCC: group:home)",
-        labels=["restart_required"],
+        description="Sensor for load power in W. EVCC supplies its household history",
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
@@ -1476,11 +1563,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description=(
-            "Sensor for electricity price in €/kWh or ct/kWh (EVCC: the literal "
-            "name tariff:grid reads the persisted tariff slots)"
-        ),
-        labels=["restart_required"],
+        description="Sensor for electricity price. EVCC supplies its persisted tariff slots",
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
@@ -2007,7 +2091,10 @@ _ALL_FIELDS: list[FieldDef] = [
         default=5000,
         section="inverter",
         level="standard",
-        description="Maximum inverter grid charge rate in W",
+        description=(
+            "Maximum inverter grid charge rate in W — not exposed by EVCC even "
+            "when EVCC controls the battery, so this stays manual"
+        ),
         labels=["restart_required"],
         help_url="config-battery.html#inverter",
         validation={"min": 0, "max": 100000},
@@ -2019,7 +2106,10 @@ _ALL_FIELDS: list[FieldDef] = [
         default=5000,
         section="inverter",
         level="standard",
-        description="Maximum inverter PV charge rate in W",
+        description=(
+            "Maximum inverter PV charge rate in W — not exposed by EVCC even "
+            "when EVCC controls the battery, so this stays manual"
+        ),
         labels=["restart_required"],
         help_url="config-battery.html#inverter",
         validation={"min": 0, "max": 100000},
@@ -2068,9 +2158,16 @@ _ALL_FIELDS: list[FieldDef] = [
         default="http://yourEVCCserver:7070",
         section="evcc",
         level="getting_started",
-        description="URL to your EVCC installation (leave default or empty if not used)",
+        description=(
+            "URL to your EVCC installation (leave default or empty if not used; "
+            "configured under Data Source when EVCC reads the consumption)"
+        ),
         labels=["restart_required"],
         help_url="config-system.html#evcc",
+        # One input, not two: with EVCC as the data source the address is typed
+        # on the Data Source page and this field stands down, mirrored by the
+        # merger's bidirectional sync.
+        depends_on={"data_source.type": "!evcc"},
         display_group="Connection",
     ),
     # ===== MQTT =====
