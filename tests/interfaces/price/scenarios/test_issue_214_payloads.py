@@ -111,66 +111,73 @@ class TestEvccRatesPayload:
 
 class TestHomeAssistantIntegrationPayloads:
     """
-    Foreign field names are rejected — but the message has to say what to do.
+    The field spellings the #214 integrations publish are read directly.
 
-    The adaptation path is a HA template sensor (as agreed in the thread), so the
-    error names the fields that were present instead of guessing at them.
+    The renaming templates the thread had to use stay documented for sources
+    with genuinely foreign names, but Tibber HACS, EPEX Spot HACS and the
+    Tibber core action work without one, and their values land on the slots
+    their own timestamps name.
     """
 
-    def test_tibber_hacs_attributes_rejected_with_actionable_message(
-        self, price_interface, caplog
-    ):
+    def test_tibber_hacs_attributes_are_accepted(self, price_interface):
         # Verbatim from #214: start_time + price_per_kwh, no end.
         payload = [
             {"start_time": "2026-08-23T00:00:00+02:00", "price_per_kwh": 0.3811},
             {"start_time": "2026-08-23T00:15:00+02:00", "price_per_kwh": 0.3727},
         ]
 
-        with caplog.at_level("ERROR"):
-            prices = price_interface._PriceInterface__parse_price_timeseries(
-                payload, 48, value_unit="EUR/kWh"
-            )
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            payload,
+            48,
+            start_time=datetime(2026, 8, 23, 0, 0, tzinfo=timezone(timedelta(hours=2))),
+            value_unit="EUR/kWh",
+        )
 
-        assert prices == []
-        assert "'start_time'" in caplog.text
-        assert "'price_per_kwh'" in caplog.text
-        assert "timeseries-templates" in caplog.text
+        assert len(prices) == 48
+        assert prices[0] == pytest.approx((0.3811 + 0.3727) / 2 / 1000)
 
-    def test_epex_spot_attributes_rejected_with_actionable_message(
-        self, price_interface, caplog
-    ):
-        # Verbatim from #214: start_time + end_time + price_per_kwh.
+    def test_epex_spot_attributes_are_accepted(self, price_interface):
+        # Verbatim shape from #214: start_time + end_time + price_per_kwh.
         payload = [
             {
                 "start_time": "2026-08-22T00:00:00+02:00",
                 "end_time": "2026-08-22T00:15:00+02:00",
                 "price_per_kwh": 0.1766,
             },
+            {
+                "start_time": "2026-08-22T00:15:00+02:00",
+                "end_time": "2026-08-22T00:30:00+02:00",
+                "price_per_kwh": 0.1714,
+            },
         ]
 
-        with caplog.at_level("ERROR"):
-            prices = price_interface._PriceInterface__parse_price_timeseries(
-                payload, 48, value_unit="EUR/kWh"
-            )
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            payload,
+            48,
+            start_time=datetime(2026, 8, 22, 0, 0, tzinfo=timezone(timedelta(hours=2))),
+            value_unit="EUR/kWh",
+        )
 
-        assert prices == []
-        assert "'end_time'" in caplog.text
+        assert len(prices) == 48
+        assert prices[0] == pytest.approx((0.1766 + 0.1714) / 2 / 1000)
 
-    def test_tibber_action_attributes_rejected_with_actionable_message(
-        self, price_interface, caplog
-    ):
-        # Verbatim from #214: the built-in Tibber integration's action response.
+    def test_tibber_action_attributes_are_accepted(self, price_interface):
+        # Verbatim shape from #214: the built-in Tibber integration's action
+        # response, with millisecond-fraction timestamps.
         payload = [
             {"start_time": "2026-08-23T00:00:00.000+02:00", "price": 0.3811},
+            {"start_time": "2026-08-23T01:00:00.000+02:00", "price": 0.3727},
         ]
 
-        with caplog.at_level("ERROR"):
-            prices = price_interface._PriceInterface__parse_price_timeseries(
-                payload, 48, value_unit="EUR/kWh"
-            )
+        prices = price_interface._PriceInterface__parse_price_timeseries(
+            payload,
+            48,
+            start_time=datetime(2026, 8, 23, 0, 0, tzinfo=timezone(timedelta(hours=2))),
+            value_unit="EUR/kWh",
+        )
 
-        assert prices == []
-        assert "'price'" in caplog.text
+        assert len(prices) == 48
+        assert prices[0] == pytest.approx(0.3811 / 1000)
 
     def test_a_template_shaped_payload_is_accepted(self, price_interface):
         """What the documented HA template snippet produces: start + value only."""
@@ -297,11 +304,12 @@ class TestFullFetchPath:
 
 class TestNoSilentSlotShift:
     """
-    A malformed entry must never shift the remaining prices.
+    A malformed entry must never shift or silently replace the remaining prices.
 
-    The hourly path maps entries to slots positionally, so skipping a bad entry would
-    move every later price an hour early — cheaper-looking power at the wrong time,
-    with nothing in the schedule to show for it.
+    Under timestamp placement a dropped entry would become a hole, and a hole in
+    a price series is filled by policy — a null at 18:00 would quietly become
+    the 17:00 price, exactly where the price matters most. Rejecting the payload
+    keeps the fallback chain serving the last good data instead.
     """
 
     def _hourly_series(self, bad_index=None, bad_value=None):

@@ -186,6 +186,18 @@ class MqttInterface:
                 "device_class": None,
                 "icon": "mdi:clock-start",
             },
+            "control/eos_homeappliance_start_time": {
+                "value": None,
+                "name": "EOS Home Appliance Start Time",
+                "qos": 0,
+                "retain": True,
+                "unit": None,
+                "type": "sensor",
+                # The companion to start_hour, which is 0-23 and therefore
+                # cannot say whether the slot is today or tomorrow.
+                "device_class": "timestamp",
+                "icon": "mdi:clock-start",
+            },
             "control/override_remain_time": {
                 "value": None,
                 "set_value": None,

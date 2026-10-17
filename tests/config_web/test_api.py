@@ -318,12 +318,25 @@ class TestConfigAPI:
             class MockResponse:
                 status_code = 200
                 def json(self):
+                    from datetime import datetime, timedelta, timezone
+
+                    midnight = datetime.now(timezone.utc).replace(
+                        hour=12, minute=0, second=0, microsecond=0
+                    )
                     return {
                         'state': 'available',
                         'attributes': {
                             'data': [
-                                {'start': '2024-01-01T00:00:00', 'end': '2024-01-01T01:00:00', 'value': 0.25},
-                                {'start': '2024-01-01T01:00:00', 'end': '2024-01-01T02:00:00', 'value': 0.30},
+                                {
+                                    'start': midnight.isoformat(),
+                                    'end': (midnight + timedelta(hours=1)).isoformat(),
+                                    'value': 0.25,
+                                },
+                                {
+                                    'start': (midnight + timedelta(hours=1)).isoformat(),
+                                    'end': (midnight + timedelta(hours=2)).isoformat(),
+                                    'value': 0.30,
+                                },
                             ]
                         }
                     }
@@ -1223,3 +1236,198 @@ class TestConnectingADataSourceWithoutSensors:
         )
 
         assert self._advisories(resp) == set()
+
+
+class TestManagedLoadsSeasonsValidation:
+    """Cross-field validation for managed loads seasons.
+    
+    Issue #322: Season fields should only be used with pool_heatpump type.
+    """
+
+    @staticmethod
+    def _add_managed_load(store, idx=0, name="test_load", load_type="pool_heatpump",
+                          season_start="04-15", season_end="09-30"):
+        """Helper to add a managed load entry to the store."""
+        batch = {
+            f"managed_loads.{idx}.id": f"load_{idx}",
+            f"managed_loads.{idx}.name": name,
+            f"managed_loads.{idx}.type": load_type,
+        }
+        if season_start is not None:
+            batch[f"managed_loads.{idx}.season_start"] = season_start
+        if season_end is not None:
+            batch[f"managed_loads.{idx}.season_end"] = season_end
+        store.set_batch(batch)
+
+    def test_pool_heatpump_with_seasons_is_allowed(self, client):
+        """Pool heatpump can have season values — this is the normal case."""
+        self._add_managed_load(client.store, idx=0, load_type="pool_heatpump",
+                               season_start="04-15", season_end="09-30")
+        
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({"managed_loads.0.season_start": "05-01"}),
+            content_type="application/json",
+        )
+        
+        assert resp.get_json()["success"] is True
+        assert client.store.get("managed_loads.0.season_start") == "05-01"
+
+    def test_sauna_with_empty_seasons_is_allowed(self, client):
+        """Sauna without seasons is fine."""
+        self._add_managed_load(client.store, idx=0, load_type="sauna",
+                               season_start=None, season_end=None)
+        
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({"managed_loads.0.type": "sauna"}),
+            content_type="application/json",
+        )
+        
+        assert resp.get_json()["success"] is True
+
+    def test_sauna_with_season_start_is_rejected(self, client):
+        """Sauna with season_start should be rejected (blocking dependency)."""
+        self._add_managed_load(client.store, idx=0, load_type="sauna",
+                               season_start="04-15", season_end="")
+        
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({"managed_loads.0.type": "sauna"}),
+            content_type="application/json",
+        )
+        
+        body = resp.get_json()
+        assert body["success"] is False
+        assert len(body.get("unmet_dependencies", [])) > 0
+        # Check that the error mentions the sauna type
+        assert any("sauna" in str(d) for d in body.get("unmet_dependencies", []))
+
+    def test_sauna_with_season_end_is_rejected(self, client):
+        """Sauna with season_end should be rejected."""
+        self._add_managed_load(client.store, idx=0, load_type="sauna",
+                               season_start="", season_end="09-30")
+        
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({"managed_loads.0.type": "sauna"}),
+            content_type="application/json",
+        )
+        
+        body = resp.get_json()
+        assert body["success"] is False
+        assert len(body.get("unmet_dependencies", [])) > 0
+
+    def test_hot_water_tank_with_seasons_is_rejected(self, client):
+        """Hot water tank with seasons should be rejected."""
+        self._add_managed_load(client.store, idx=0, load_type="hot_water_tank",
+                               season_start="04-15", season_end="09-30")
+        
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({"managed_loads.0.type": "hot_water_tank"}),
+            content_type="application/json",
+        )
+        
+        body = resp.get_json()
+        assert body["success"] is False
+
+    def test_buffer_tank_with_seasons_is_rejected(self, client):
+        """Buffer tank with seasons should be rejected."""
+        self._add_managed_load(client.store, idx=0, load_type="buffer_tank",
+                               season_start="04-15", season_end="09-30")
+        
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({"managed_loads.0.type": "buffer_tank"}),
+            content_type="application/json",
+        )
+        
+        body = resp.get_json()
+        assert body["success"] is False
+
+    def test_multiple_loads_validated_independently(self, client):
+        """Each load entry is validated independently."""
+        # Load 0: sauna with seasons (invalid)
+        self._add_managed_load(client.store, idx=0, load_type="sauna",
+                               season_start="04-15", season_end="09-30")
+        # Load 1: pool_heatpump with seasons (valid)
+        self._add_managed_load(client.store, idx=1, load_type="pool_heatpump",
+                               season_start="05-01", season_end="08-31")
+        
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({"managed_loads.0.type": "sauna"}),
+            content_type="application/json",
+        )
+        
+        # Should be rejected because load 0 has seasons with sauna type
+        body = resp.get_json()
+        assert body["success"] is False
+
+    def test_external_contingent_with_seasons_is_rejected(self, client):
+        """External contingent type doesn't support seasons."""
+        self._add_managed_load(client.store, idx=0, load_type="external_contingent",
+                               season_start="04-15", season_end="09-30")
+        
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({"managed_loads.0.type": "external_contingent"}),
+            content_type="application/json",
+        )
+        
+        body = resp.get_json()
+        assert body["success"] is False
+
+    def test_external_profile_with_seasons_is_rejected(self, client):
+        """External profile type doesn't support seasons."""
+        self._add_managed_load(client.store, idx=0, load_type="external_profile",
+                               season_start="04-15", season_end="09-30")
+        
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({"managed_loads.0.type": "external_profile"}),
+            content_type="application/json",
+        )
+        
+        body = resp.get_json()
+        assert body["success"] is False
+
+    def test_changing_from_pool_to_sauna_with_existing_seasons_is_rejected(self, client):
+        """Changing type from pool_heatpump to sauna while seasons exist should be rejected."""
+        self._add_managed_load(client.store, idx=0, load_type="pool_heatpump",
+                               season_start="04-15", season_end="09-30")
+        
+        # Try to change to sauna (seasons still in request/database)
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({"managed_loads.0.type": "sauna"}),
+            content_type="application/json",
+        )
+        
+        # Should be rejected
+        body = resp.get_json()
+        assert body["success"] is False
+
+    def test_changing_from_pool_to_sauna_and_clearing_seasons_is_allowed(self, client):
+        """Changing type from pool to sauna AND clearing seasons should succeed."""
+        self._add_managed_load(client.store, idx=0, load_type="pool_heatpump",
+                               season_start="04-15", season_end="09-30")
+        
+        # Change type AND clear seasons
+        resp = client.put(
+            "/api/config/",
+            data=json.dumps({
+                "managed_loads.0.type": "sauna",
+                "managed_loads.0.season_start": "",
+                "managed_loads.0.season_end": "",
+            }),
+            content_type="application/json",
+        )
+        
+        # Should succeed
+        body = resp.get_json()
+        assert body["success"] is True
+        assert client.store.get("managed_loads.0.type") == "sauna"
+        assert client.store.get("managed_loads.0.season_start") is None or \
+               client.store.get("managed_loads.0.season_start") == ""

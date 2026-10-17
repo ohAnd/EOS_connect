@@ -118,3 +118,58 @@ def test_hourly_resolution_rotates_by_the_hour(backend):
         window = backend.to_solver_slots(mask, fill=False)
         assert window.index(True) == 2
         assert backend.from_solver_slots(window, fill=False).index(True) == 9
+
+
+class TestWashingstartOffset:
+    """
+    washingstart is a slot INDEX, not an array.
+
+    `pad_past + washingstart` is list + int. It never fired because no test
+    exercised a solver response carrying a wash schedule, but the first user
+    whose solver returned one would have lost the whole optimization to a
+    TypeError.
+    """
+
+    @staticmethod
+    def _backend():
+        backend = EVOptBackend.__new__(EVOptBackend)
+        backend.time_frame_base = 3600
+        backend.time_zone = ZoneInfo("Europe/Berlin")
+        return backend
+
+    def _build(self, current_slot, washingstart):
+        backend = self._backend()
+        time_params = {
+            "n_control": 48,
+            "n_result": 48 - current_slot,
+            "current_slot": current_slot,
+            "pad_past": [0.0] * current_slot,
+        }
+        control_arrays = {
+            "ac_charge": [0.0] * time_params["n_result"],
+            "dc_charge": [0.0] * time_params["n_result"],
+            "discharge_allowed": [0] * time_params["n_result"],
+        }
+        return backend._build_eos_response(  # pylint: disable=protected-access
+            control_arrays,
+            {},
+            time_params,
+            {"washingstart": washingstart},
+            {},
+        )
+
+    def test_it_does_not_raise(self):
+        assert self._build(current_slot=15, washingstart=3) is not None
+
+    def test_it_shifts_by_the_past_slots(self):
+        """A wash 3 slots into the result window is slot 18 of the day at 15:00."""
+        assert self._build(current_slot=15, washingstart=3)["washingstart"] == 18
+
+    def test_at_midnight_the_index_is_unchanged(self):
+        assert self._build(current_slot=0, washingstart=7)["washingstart"] == 7
+
+    def test_the_control_arrays_still_tile_the_horizon(self):
+        """The neighbouring concatenations must keep working."""
+        response = self._build(current_slot=15, washingstart=3)
+        assert len(response["ac_charge"]) == 48
+        assert len(response["discharge_allowed"]) == 48

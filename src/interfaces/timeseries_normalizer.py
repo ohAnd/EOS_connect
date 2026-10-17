@@ -11,13 +11,16 @@ template sensor written to feed EVCC (see discussion #214):
      "value": 0.3811}
 
     - start: ISO8601 (offset strongly recommended) or Unix seconds
-    - end:   optional; derived from the next entry's start when absent
+    - end:   optional; authoritative when present, else derived from the next
+      entry's start but capped at the series' nominal spacing (a hole stays a
+      hole). A series may also carry only end timestamps ("hour ending").
     - value: prices in EUR/kWh (EVCC `rates`), PV in W (EVCC `forecast.solar`)
 
-Home Assistant is the transport here, not the format: whatever a given integration
-names its attributes, the user shapes it into the above with a template sensor. This
-module therefore does not guess field names — it validates them and, on mismatch,
-reports which keys the payload actually had so the user can write that template.
+Home Assistant is the transport here, not the format. The spellings the common
+integrations publish (FIELD_ALIASES: start_time, period_start, end_time,
+price_per_kwh, pv_estimate, …) are read directly; for anything else the user
+shapes the payload with a template sensor, and a mismatch reports which keys
+the payload actually had so that template is easy to write.
 
 The unit conversions live here as plain tables so the price and PV interfaces share one
 definition instead of each carrying its own factor-of-1000.
@@ -27,6 +30,7 @@ from datetime import datetime, timedelta
 import logging
 
 import pytz
+from pytz.exceptions import AmbiguousTimeError, NonExistentTimeError
 
 try:  # running from src/ as a script — src/ is on sys.path
     from docs_links import current_docs_url
@@ -42,6 +46,20 @@ logger = logging.getLogger("__main__")
 # which of the two published sites to open.
 TEMPLATE_DOCS_URL = current_docs_url(
     "user-guide/config-data.html#timeseries-templates"
+)
+
+# Where to send someone whose payload carries no timestamps at all. The
+# timeseries path needs an explicit time per entry; "the array begins today at
+# 00:00" is precisely the defect discussion #214 reported, and a frozen source
+# would be indistinguishable from a fresh one. Each of these takes a bare array
+# by design, so the rejection has to name them rather than only offer a
+# template - a user who pasted a 24-value price array wants fixed_24h, and
+# telling them to write a template sensor is the wrong advice.
+BARE_ARRAY_ALTERNATIVES = (
+    "a bare array of values carries no time information. Use the source built "
+    "for that shape instead: 'fixed_24h' for 24 hourly prices, the managed-load "
+    "'push' API for a profile with an explicit anchor, or the elpris/epex "
+    "adapters for those providers"
 )
 
 # Price units → EUR/Wh, the unit the optimizer and the web UI work in internally.
@@ -93,7 +111,58 @@ class TimeseriesFormatError(ValueError):
     """
 
 
-def _parse_timestamp(raw, tz):
+class _NaiveLocalizer:
+    """
+    Attach a zone to naive timestamps, resolving a DST transition by position.
+
+    A source that renders local wall clock without an offset emits the repeated
+    hour of the autumn transition TWICE - "02:00" is both the last CEST hour and
+    the first CET one. pytz's default (``is_dst=False``) maps both onto the
+    standard-time instant, which makes them duplicates, and the duplicate check
+    then rejects the whole 25-entry payload: one day a year, a correctly
+    configured source lost all its data.
+
+    Position decides instead, which is the only information available: the first
+    time a given wall clock appears it is the DST reading, the second time the
+    standard one. Tracked per FIELD, because a start and the previous entry's
+    end legitimately name the same instant and must not consume each other's turn.
+
+    Timestamps that carry an offset never come here - they are unambiguous.
+    """
+
+    def __init__(self, tz):
+        self._tz = tz
+        self._seen = {}
+
+    def _is_repeat(self, field, naive):
+        seen = self._seen.setdefault(field, set())
+        repeat = naive in seen
+        seen.add(naive)
+        return repeat
+
+    def __call__(self, naive, field):
+        if not hasattr(self._tz, "localize"):
+            # zoneinfo: fold=1 selects the second occurrence of a repeated time.
+            first = naive.replace(tzinfo=self._tz, fold=0)
+            if first.utcoffset() == naive.replace(tzinfo=self._tz, fold=1).utcoffset():
+                return first  # unambiguous
+            return naive.replace(tzinfo=self._tz, fold=1 if self._is_repeat(field, naive) else 0)
+        try:
+            return self._tz.localize(naive, is_dst=None)
+        except AmbiguousTimeError:
+            return self._tz.localize(
+                naive, is_dst=not self._is_repeat(field, naive)
+            )
+        except NonExistentTimeError:
+            # The clock jumped over this wall time, so no instant matches it.
+            # Reading it with the pre-jump (standard) offset and normalizing
+            # moves it FORWARD to where the clock landed - naive 02:00 becomes
+            # 03:00, the instant the jump produced. is_dst=True would map it
+            # backwards onto 01:00 and collide with the entry before it.
+            return self._tz.normalize(self._tz.localize(naive, is_dst=False))
+
+
+def _parse_timestamp(raw, tz, field="start", localizer=None):
     """
     Parse one timestamp into a timezone-aware datetime in *tz*.
 
@@ -105,35 +174,59 @@ def _parse_timestamp(raw, tz):
     if isinstance(raw, bool):
         # bool is an int subclass; treating True as epoch 1 would be nonsense.
         raise TimeseriesFormatError(
-            f"'start' must be a timestamp, got boolean {raw!r}"
+            f"'{field}' must be a timestamp, got boolean {raw!r}"
         )
 
+    if isinstance(raw, datetime):
+        # Already parsed (an entry coming back through normalize_entries, e.g.
+        # the EVCC price branch normalizing before the shared parser does).
+        if raw.tzinfo is None:
+            return _localize_naive(raw, tz, field, localizer), True
+        return raw.astimezone(tz), False
+
     if isinstance(raw, (int, float)):
-        return datetime.fromtimestamp(raw, tz=pytz.UTC).astimezone(tz), False
+        # 1e11 s is the year 5138 - no plausible seconds timestamp reaches it,
+        # but every current epoch-milliseconds value does (a HA template using
+        # `as_timestamp() * 1000`). fromtimestamp would raise a bare ValueError
+        # ("year must be in 1..9999") that nothing upstream catches.
+        if abs(raw) >= 1e11:
+            raise TimeseriesFormatError(
+                f"'{field}' value {raw!r} looks like epoch milliseconds - send "
+                "Unix seconds instead (drop the '* 1000' from the template)"
+            )
+        try:
+            return datetime.fromtimestamp(raw, tz=pytz.UTC).astimezone(tz), False
+        except (ValueError, OSError, OverflowError) as exc:
+            raise TimeseriesFormatError(
+                f"'{field}' value {raw!r} is not a usable Unix timestamp"
+            ) from exc
 
     if isinstance(raw, str):
         text = raw.strip()
         if not text:
-            raise TimeseriesFormatError("'start' is an empty string")
+            raise TimeseriesFormatError(f"'{field}' is an empty string")
         try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except ValueError as exc:
             raise TimeseriesFormatError(
-                f"'start' value {raw!r} is not a valid ISO8601 timestamp "
+                f"'{field}' value {raw!r} is not a valid ISO8601 timestamp "
                 f"or Unix timestamp"
             ) from exc
         if parsed.tzinfo is None:
-            # localize() is pytz-specific; fall back for plain tzinfo objects.
-            if hasattr(tz, "localize"):
-                parsed = tz.localize(parsed)
-            else:
-                parsed = parsed.replace(tzinfo=tz)
-            return parsed, True
+            return _localize_naive(parsed, tz, field, localizer), True
         return parsed.astimezone(tz), False
 
     raise TimeseriesFormatError(
-        f"'start' must be an ISO8601 string or Unix timestamp, got {type(raw).__name__}"
+        f"'{field}' must be an ISO8601 string or Unix timestamp, got {type(raw).__name__}"
     )
+
+
+def _localize_naive(naive, tz, field, localizer):
+    """Attach *tz* to a naive timestamp, via *localizer* when one is in play."""
+    if localizer is not None:
+        return localizer(naive, field)
+    # A one-off parse outside a payload: no neighbours to judge a repeat by.
+    return _NaiveLocalizer(tz)(naive, field)
 
 
 def _describe_available_keys(entry):
@@ -145,7 +238,43 @@ def _describe_available_keys(entry):
     return "available fields: " + ", ".join(repr(k) for k in entry.keys())
 
 
-def normalize_entries(raw_entries, tz, label="timeseries"):
+#: Accepted spellings per canonical field, canonical name first. These are the
+#: names the popular integrations actually publish (discussion #214): EPEX Spot
+#: HACS and Tibber HACS use start_time/end_time/price_per_kwh, the Tibber core
+#: action start_time/price, Solcast period_start/period_end/pv_estimate,
+#: Open-Meteo time. A generic timestamp/time always means the interval START —
+#: guessing it could mean the end would shift every slot for a "hour ending"
+#: source, silently.
+FIELD_ALIASES = {
+    "start": ("start", "start_time", "period_start", "timestamp", "time"),
+    "end": ("end", "end_time", "period_end"),
+    "value": ("value", "price_per_kwh", "price", "pv_estimate"),
+}
+
+
+def resolve_field_names(first):
+    """
+    Pick the payload's field spellings from its first entry.
+
+    One spelling per field for the whole payload: mixing spellings between
+    entries is rejected later like any other malformed entry, because a mix is
+    a template bug, not a format.
+
+    Returns:
+        dict: canonical name -> the key actually present, for each field found.
+    """
+    resolved = {}
+    if not isinstance(first, dict):
+        return resolved
+    for canonical, aliases in FIELD_ALIASES.items():
+        for name in aliases:
+            if name in first:
+                resolved[canonical] = name
+                break
+    return resolved
+
+
+def normalize_entries(raw_entries, tz, label="timeseries", lenient=False):
     """
     Validate and normalize a raw payload into the canonical format.
 
@@ -153,6 +282,11 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
         raw_entries: Decoded JSON list from the configured data_path.
         tz: Target timezone (pytz timezone or tzinfo) for all timestamps.
         label: Prefix used in log messages, e.g. "PRICE-IF" or "PV-IF".
+        lenient: Skip unusable entries instead of rejecting the payload, with
+            one aggregated warning naming the first few. For sources that mix
+            housekeeping rows in with real ones; the gap a skipped entry leaves
+            is visible to the caller through ``coverage``. Raises only when
+            nothing at all could be read.
 
     Returns:
         list: ``[{"start": datetime (aware), "end": datetime (aware), "value": float}]``
@@ -161,51 +295,171 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
     Raises:
         TimeseriesFormatError: With a user-facing message naming the offending field
             and the keys that were present instead.
+
+    Field spellings are resolved once from the first entry via FIELD_ALIASES, so
+    the integrations from discussion #214 (start_time/end_time/price_per_kwh and
+    friends) are read directly, without a renaming template.
     """
     if not isinstance(raw_entries, list):
         raise TimeseriesFormatError(
             f"expected a JSON array of timeseries entries, got "
             f"{type(raw_entries).__name__}"
         )
+    if raw_entries and all(not isinstance(entry, dict) for entry in raw_entries):
+        raise TimeseriesFormatError(
+            f"the payload is a list of {type(raw_entries[0]).__name__} values, "
+            f"not timeseries entries — {BARE_ARRAY_ALTERNATIVES}. To use this "
+            f"source, give every entry its own timestamp: the expected format "
+            f"is {{start, end, value}}, see {TEMPLATE_DOCS_URL}"
+        )
     if not raw_entries:
         raise TimeseriesFormatError("timeseries is empty")
 
-    first = raw_entries[0]
-    for field in ("start", "value"):
-        if not isinstance(first, dict) or field not in first:
-            raise TimeseriesFormatError(
-                f"missing required field '{field}' in the first entry "
-                f"({_describe_available_keys(first)}). The expected format is "
-                f"{{start, end, value}} — shape the source with a Home Assistant "
-                f"template sensor, see {TEMPLATE_DOCS_URL}"
-            )
+    names = resolve_field_names(raw_entries[0])
+    if lenient and not ("value" in names and ("start" in names or "end" in names)):
+        # The spellings come from the first entry, so in strict mode a junk
+        # first entry rejects the payload before any other is looked at. When
+        # the caller has opted into skipping, take the spellings from the first
+        # entry that actually carries them instead.
+        for candidate in raw_entries[1:]:
+            resolved = resolve_field_names(candidate)
+            if "value" in resolved and ("start" in resolved or "end" in resolved):
+                names = resolved
+                break
+    if "start" not in names and "end" not in names:
+        raise TimeseriesFormatError(
+            f"missing required field 'start' in the first entry "
+            f"({_describe_available_keys(raw_entries[0])}). Accepted names: "
+            f"{', '.join(FIELD_ALIASES['start'])} — or, for an hour-ending "
+            f"source, end timestamps only ({', '.join(FIELD_ALIASES['end'])}). "
+            f"The expected format is {{start, end, value}} — shape the source "
+            f"with a Home Assistant template sensor, see {TEMPLATE_DOCS_URL}. "
+            f"Note that {BARE_ARRAY_ALTERNATIVES}."
+        )
+    if "value" not in names:
+        raise TimeseriesFormatError(
+            f"missing required field 'value' in the first entry "
+            f"({_describe_available_keys(raw_entries[0])}). Accepted names: "
+            f"{', '.join(FIELD_ALIASES['value'])}. The expected format is "
+            f"{{start, end, value}} — shape the source with a Home Assistant "
+            f"template sensor, see {TEMPLATE_DOCS_URL}"
+        )
+    start_key = names.get("start")
+    value_key = names["value"]
+    # `end` is optional per entry, so its spelling may first appear anywhere in
+    # the payload — a hand-written profile declares it only on the one entry
+    # that needs a longer span.
+    end_key = names.get("end")
+    if end_key is None:
+        for raw in raw_entries:
+            if isinstance(raw, dict):
+                end_key = next(
+                    (name for name in FIELD_ALIASES["end"] if name in raw), None
+                )
+                if end_key:
+                    break
+    aliased = {
+        canonical: key
+        for canonical, key in (
+            ("start", start_key), ("end", end_key), ("value", value_key)
+        )
+        if key is not None and canonical != key
+    }
+    if aliased:
+        logger.info(
+            "[%s] timeseries fields read as %s",
+            label,
+            ", ".join(f"{c}={k!r}" for c, k in sorted(aliased.items())),
+        )
 
     entries = []
     naive_seen = 0
-    for index, raw in enumerate(raw_entries):
-        # Every entry has to parse. Dropping the bad ones would be friendlier right
-        # up until it corrupts the result: the hourly price path maps this list to
-        # slots by position, so a single missing entry shifts every later price an
-        # hour early — silently, and in the direction that makes power look cheaper.
-        # Rejecting the payload instead lets the caller fall back to cached data.
-        if not isinstance(raw, dict) or "start" not in raw or "value" not in raw:
+    skipped = []
+    # One localizer for the whole payload: resolving the repeated DST hour needs
+    # to know whether this wall clock has already been seen in this series.
+    localizer = _NaiveLocalizer(tz)
+    anchor_key = start_key or end_key
+
+    def _parse_entry(index, raw):
+        """One entry, or TimeseriesFormatError naming what is wrong with it."""
+        naive_here = 0
+        if not isinstance(raw, dict) or anchor_key not in raw or value_key not in raw:
             raise TimeseriesFormatError(
-                f"entry {index} is missing 'start' or 'value' "
+                f"entry {index} is missing '{anchor_key}' or '{value_key}' "
                 f"({_describe_available_keys(raw)})"
             )
+        start = None
+        if start_key is not None:
+            try:
+                start, was_naive = _parse_timestamp(
+                    raw[start_key], tz, field="start", localizer=localizer
+                )
+            except TimeseriesFormatError as exc:
+                raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
+            if was_naive:
+                naive_here += 1
+        end = None
+        if end_key is not None and raw.get(end_key) is not None:
+            try:
+                end, end_was_naive = _parse_timestamp(
+                    raw[end_key], tz, field=end_key, localizer=localizer
+                )
+            except TimeseriesFormatError as exc:
+                raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
+            if end_was_naive:
+                naive_here += 1
+        if (
+            start is not None
+            and end is not None
+            and end.timestamp() <= start.timestamp()
+        ):
+            raise TimeseriesFormatError(
+                f"entry {index} ends at or before it starts "
+                f"({raw[end_key]!r} <= {raw[start_key]!r})"
+            )
         try:
-            start, was_naive = _parse_timestamp(raw["start"], tz)
-        except TimeseriesFormatError as exc:
-            raise TimeseriesFormatError(f"entry {index}: {exc}") from exc
-        try:
-            value = float(raw["value"])
+            value = float(raw[value_key])
         except (TypeError, ValueError) as exc:
             raise TimeseriesFormatError(
-                f"entry {index} has a non-numeric 'value': {raw['value']!r}"
+                f"entry {index} has a non-numeric '{value_key}': {raw[value_key]!r}"
             ) from exc
-        if was_naive:
-            naive_seen += 1
-        entries.append({"start": start, "end": None, "value": value})
+        return {"start": start, "end": end, "value": value}, naive_here
+
+    for index, raw in enumerate(raw_entries):
+        # Strict by default. Dropping bad entries is friendlier right up until
+        # it corrupts the result: a dropped entry becomes a hole, and a hole in
+        # a price series is filled by policy — a null at 18:00 would silently
+        # become the 17:00 price, exactly where the price matters most.
+        # Rejecting the payload keeps the fallback chain intact instead.
+        #
+        # `lenient` is for sources that publish their own housekeeping rows
+        # alongside real ones (EVCC), where one malformed rate must not cost the
+        # other 191. The hole it leaves is visible in `coverage`, so the caller
+        # can report it rather than mistake it for data.
+        try:
+            entry, naive_here = _parse_entry(index, raw)
+        except TimeseriesFormatError as exc:
+            if not lenient:
+                raise
+            if len(skipped) < 5:
+                skipped.append(str(exc))
+            continue
+        naive_seen += naive_here
+        entries.append(entry)
+
+    if skipped:
+        logger.warning(
+            "[%s] %d of %d timeseries entries were unusable and were skipped "
+            "(the slots they would have covered are reported as gaps). First: %s",
+            label,
+            len(raw_entries) - len(entries),
+            len(raw_entries),
+            "; ".join(skipped),
+        )
+    if not entries:
+        raise TimeseriesFormatError(
+            f"none of the {len(raw_entries)} timeseries entries could be read"
+        )
 
     if naive_seen:
         logger.warning(
@@ -219,29 +473,158 @@ def normalize_entries(raw_entries, tz, label="timeseries"):
             TEMPLATE_DOCS_URL,
         )
 
-    entries.sort(key=lambda item: item["start"])
-    _derive_end_timestamps(entries)
+    if start_key is None:
+        _derive_starts_from_ends(entries)
+    # Order and compare by absolute instant. Two aware datetimes sharing a
+    # zoneinfo tzinfo sort and compare in WALL-CLOCK mode (PEP 495), so the two
+    # 02:00 of an autumn transition would read as equal and a correct payload
+    # would be rejected as duplicated.
+    entries.sort(key=lambda item: item["start"].timestamp())
+    for earlier, later in zip(entries, entries[1:]):
+        if later["start"].timestamp() == earlier["start"].timestamp():
+            # A duplicate is always a template bug. The consumers used to
+            # disagree on it (last-wins, double-count, reject) — silently
+            # keeping either value is how a wrong forecast survives.
+            raise TimeseriesFormatError(
+                f"two entries share the start timestamp "
+                f"{later['start'].isoformat()}"
+            )
+    _finalize_entry_spans(entries)
     return entries
 
 
-def _derive_end_timestamps(entries):
+def _nominal_span_seconds(points):
     """
-    Fill each entry's ``end`` from the following entry's ``start``, in place.
+    The typical spacing of a sorted boundary sequence, in seconds.
 
-    ``end`` is part of the documented format but is never read for any calculation;
-    deriving it means a source that omits it (Tibber/EPEX HA integrations) is accepted
-    rather than rejected over a field we do not use. The last entry reuses the
-    preceding delta, falling back to one hour for a single-entry series.
+    The two grids the optimizer itself runs on are recognised from the first
+    delta (mirroring detect_resolution_seconds); any other regular grid falls
+    back to the median spacing, which shrugs off isolated holes. None when
+    there are not two distinct points.
     """
+    deltas = [
+        (later - earlier).total_seconds()
+        for earlier, later in zip(points, points[1:])
+        if later > earlier
+    ]
+    if not deltas:
+        return None
+    first = int(deltas[0])
+    if first in (900, 3600):
+        return first
+    return int(_median(deltas))
+
+
+def _finalize_entry_spans(entries):
+    """
+    Fill each missing ``end``, capped at the series' nominal spacing, in place.
+
+    A source-provided ``end`` is authoritative — it is how a deliberately long
+    entry (one overnight value in a hand-written load profile) is expressed.
+    A derived end reaches at most to the next entry's start AND at most one
+    nominal spacing past its own start: stretching it to "the next start,
+    whatever the distance" would smear the entry before a hole across the
+    hole, and a hole the grid placement cannot see can be neither reported,
+    nor filled by policy, nor marked as forecast. Derived ends carry an
+    ``end_derived`` flag so the probe can say which spans the source declared.
+
+    The last entry gets one nominal spacing (one hour for a single-entry
+    series).
+    """
+    starts = [entry["start"] for entry in entries]
+    nominal = _nominal_span_seconds(starts)
+    if nominal is None:
+        first_end = entries[0].get("end")
+        if first_end is not None:
+            nominal = (first_end - entries[0]["start"]).total_seconds()
+        else:
+            nominal = 3600
+    caps = _derived_span_caps(starts, nominal)
+
     count = len(entries)
-    for index in range(count - 1):
-        entries[index]["end"] = entries[index + 1]["start"]
+    for index, entry in enumerate(entries):
+        if entry.get("end") is not None:
+            continue
+        candidate = entry["start"] + timedelta(seconds=caps[index])
+        if index + 1 < count:
+            candidate = min(candidate, entries[index + 1]["start"])
+        entry["end"] = candidate
+        entry["end_derived"] = True
 
-    if count >= 2:
-        last_delta = entries[-1]["start"] - entries[-2]["start"]
-    else:
-        last_delta = timedelta(hours=1)
-    entries[-1]["end"] = entries[-1]["start"] + last_delta
+
+def _derived_span_caps(starts, fallback_seconds, window=5):
+    """
+    The longest span each entry may be given, in seconds, one per entry.
+
+    A single spacing for the whole payload is wrong the moment a series changes
+    resolution mid-way — EPEX-style sources publish the current day at fifteen
+    minutes and the next at an hour — because capping the coarse half at the
+    fine spacing drops three quarters of every entry in it. So the cap is local.
+
+    An entry keeps the whole gap to its successor when that gap REPEATS: a run
+    of equal gaps is the resolution in force there, not a hole. An isolated
+    large gap is a hole, and the entry before it is capped at the local median
+    spacing so the hole survives into ``coverage`` and can be reported, filled
+    by policy, or marked as forecast.
+
+    Two equal large gaps in a row therefore read as a coarser resolution rather
+    than as two holes. That is the honest reading of start-only data: nothing
+    distinguishes them, which is why a deliberately long entry should declare
+    its own ``end``.
+    """
+    count = len(starts)
+    if count < 2:
+        return [fallback_seconds] * count
+
+    epochs = [moment.timestamp() for moment in starts]
+    gaps = [later - earlier for earlier, later in zip(epochs, epochs[1:])]
+
+    caps = []
+    for index in range(count):
+        if index >= len(gaps):
+            # The last entry has no successor to measure against, so it takes
+            # the spacing in force at the END of the series - not the global
+            # one, which on a payload that changes resolution is the spacing of
+            # the other half.
+            caps.append(min(gaps[-window:]) or fallback_seconds)
+            continue
+        lower = max(0, index - window)
+        # The tightest spacing nearby, not the median: with only a couple of
+        # gaps a median sits between the real resolution and the hole and caps
+        # at neither. The repeat test above is what protects a genuinely
+        # coarser run, so this only ever applies to an isolated outlier.
+        local = min(gaps[lower : index + window + 1]) or fallback_seconds
+        repeats = index + 1 < len(gaps) and gaps[index + 1] == gaps[index]
+        caps.append(gaps[index] if repeats else min(gaps[index], local))
+    return caps
+
+
+def _derive_starts_from_ends(entries):
+    """
+    Derive each ``start`` for an end-only ("hour ending") series, in place.
+
+    The mirror of the end derivation: sorted by ``end``, an entry begins at
+    the previous end, but never more than one nominal spacing before its own
+    end — so a hole between ends stays a hole instead of inflating the entry
+    after it. Derived starts carry a ``start_derived`` flag.
+    """
+    entries.sort(key=lambda item: item["end"].timestamp())
+    for earlier, later in zip(entries, entries[1:]):
+        if later["end"].timestamp() == earlier["end"].timestamp():
+            raise TimeseriesFormatError(
+                f"two entries share the end timestamp {later['end'].isoformat()}"
+            )
+    nominal = _nominal_span_seconds([entry["end"] for entry in entries]) or 3600
+    span_cap = timedelta(seconds=nominal)
+
+    previous_end = None
+    for entry in entries:
+        candidate = entry["end"] - span_cap
+        if previous_end is not None and previous_end > candidate:
+            candidate = previous_end
+        entry["start"] = candidate
+        entry["start_derived"] = True
+        previous_end = entry["end"]
 
 
 def detect_resolution_seconds(entries):
@@ -283,47 +666,14 @@ def convert_price_values(entries, unit):
     return entries
 
 
-def convert_pv_values(entries, unit, resolution_seconds):
+def convert_energy_values(entries, unit):
     """
-    Convert PV entries to Wh per slot in place and return them.
+    Convert PV or managed-load entries to Wh per entry in place, and return them.
 
-    Power units (W, kW) are integrated over the slot length, matching how the EVCC PV
-    adapter treats EVCC's own forecast values. Energy units pass through scaled.
-
-    Args:
-        entries: Normalized entries whose ``value`` is in *unit*.
-        unit: One of PV_UNITS.
-        resolution_seconds: Source slot length in seconds (900 or 3600).
-
-    Raises:
-        TimeseriesFormatError: On an unknown unit.
-    """
-    try:
-        spec = PV_UNITS[unit]
-    except KeyError as exc:
-        raise TimeseriesFormatError(
-            f"unknown PV unit {unit!r}, expected one of {', '.join(sorted(PV_UNITS))}"
-        ) from exc
-
-    factor = spec["factor"]
-    if spec["is_power"]:
-        factor *= resolution_seconds / 3600.0
-
-    for entry in entries:
-        entry["value"] = entry["value"] * factor
-    return entries
-
-
-def convert_load_values(entries, unit):
-    """
-    Convert managed-load entries to Wh per entry in place, and return them.
-
-    Same unit table as PV, but integrated over each entry's *own* span rather than one
-    resolution for the whole series. A load forecast is written by hand far more often
-    than a PV one - a template sensor someone assembled from a heating curve - so it is
-    much more likely to arrive on a half-hourly grid, or with one longer entry
-    overnight. Applying a single slot length to those would silently scale part of the
-    series.
+    Power units (W, kW) are integrated over each entry's *own* span rather than
+    one resolution for the whole series — a half-hourly grid, one longer entry
+    overnight, or a mixed-resolution concatenation would all be silently scaled
+    wrong by a single slot length. Energy units pass through scaled.
 
     Every entry is expected to carry ``end``; `normalize_entries` guarantees that by
     deriving it from the following entry where the source omitted it.
@@ -339,7 +689,7 @@ def convert_load_values(entries, unit):
         spec = PV_UNITS[unit]
     except KeyError as exc:
         raise TimeseriesFormatError(
-            f"unknown load unit {unit!r}, expected one of {', '.join(sorted(PV_UNITS))}"
+            f"unknown unit {unit!r}, expected one of {', '.join(sorted(PV_UNITS))}"
         ) from exc
 
     for entry in entries:

@@ -19,7 +19,12 @@ from typing import Any
 from ruamel.yaml.error import YAMLError
 
 from .store import ConfigStore
-from .schema import ConfigSchema, BOOTSTRAP_KEYS, LEGACY_SENSOR_PLACEHOLDERS
+from .schema import (
+    ConfigSchema,
+    BOOTSTRAP_KEYS,
+    LEGACY_SENSOR_PLACEHOLDERS,
+    MANAGED_LOAD_COVER_TYPES,
+)
 
 logger = logging.getLogger("__main__")
 
@@ -258,6 +263,71 @@ def migrate_sensor_placeholders_to_empty(store: ConfigStore) -> bool:
             )
 
     store.set(_SENSOR_PLACEHOLDER_MIGRATION_KEY, True)
+    return True
+
+
+_MANAGED_LOADS_SEASON_MIGRATION_KEY = "_migrated_managed_loads_season_cleanup_v1"
+
+
+def migrate_managed_loads_season_cleanup(store: ConfigStore) -> bool:
+    """
+    One-time migration: clean up stale season values for managed loads that don't support seasons.
+
+    Issue #322: Managed loads with types that don't support seasons (sauna, hot_water_tank,
+    buffer_tank, external_contingent, external_profile) can retain stale season values
+    (season_start, season_end) in the database. The UI hides these fields via CSS for
+    non-pool types but doesn't clear their values, causing the optimizer to incorrectly
+    reject scheduling as "out of season".
+
+    This migration clears season values for any managed load entry whose type is not in
+    MANAGED_LOAD_COVER_TYPES (currently only "pool_heatpump").
+
+    Args:
+        store: An opened ConfigStore instance.
+
+    Returns:
+        True if the migration ran (first time), False if it was already done.
+    """
+    if store.get(_MANAGED_LOADS_SEASON_MIGRATION_KEY, False):
+        return False
+
+    cleaned = 0
+    
+    # Iterate through all stored keys looking for managed_loads entries
+    all_keys = list(store.get_all().keys())
+    for key in all_keys:
+        # Match managed_loads.N.season_start or managed_loads.N.season_end
+        match = re.match(r"^managed_loads\.(\d+)\.(season_start|season_end)$", key)
+        if not match:
+            continue
+        
+        idx = int(match.group(1))
+        season_field = match.group(2)
+        
+        # Get the type for this load entry
+        type_key = f"managed_loads.{idx}.type"
+        load_type = store.get(type_key)
+        
+        # If type is not in cover types (pool_heatpump), clear the season field
+        if load_type not in MANAGED_LOAD_COVER_TYPES:
+            store.delete(key)
+            cleaned += 1
+            logger.info(
+                "[Migration] Cleared %s for managed_loads[%d] (type: %s) — "
+                "this load type does not support seasons",
+                season_field,
+                idx,
+                load_type,
+            )
+
+    store.set(_MANAGED_LOADS_SEASON_MIGRATION_KEY, True)
+    
+    if cleaned > 0:
+        logger.info(
+            "[Migration] Cleaned up %d stale managed_loads season value(s)",
+            cleaned,
+        )
+    
     return True
 
 
@@ -641,3 +711,94 @@ def _create_data_source(config_dict: dict, store: ConfigStore) -> None:
     batch = _create_data_source_batch(config_dict)
     for key, value in batch.items():
         store.set(key, value)
+
+
+def migrate_clear_deprecated_overrides(store: ConfigStore) -> None:
+    """
+    One-time migration: Clear deprecated per-section data source overrides.
+
+    The old configuration model allowed separate data source configs for load and battery
+    (``load.source``, ``load.url``, ``load.access_token``, ``battery.source``, etc.).
+    These are deprecated in favor of a unified ``data_source`` section.
+
+    During migration from config.yaml, deprecated override fields are preserved as-is.
+    However, if the global ``data_source`` has been properly configured (not "default"),
+    we should clear these deprecated overrides so the merger's inheritance logic works
+    correctly. Otherwise, stale credentials in per-section overrides block the fallback
+    to the global ``data_source``, causing 401 auth errors (see issue #320).
+
+    **Logic:**
+    1. If ``data_source.type`` is a real remote source (homeassistant/openhab),
+       clear all deprecated per-section overrides to "default" / "".
+    2. If ``data_source.type`` is "default" but per-section overrides exist,
+       keep the overrides (user explicitly configured them as Expert settings).
+    3. Guard with marker key to prevent re-running this migration.
+
+    Args:
+        store: An opened ConfigStore instance.
+    """
+    # Guard: skip if already migrated
+    if store.has_key("_migrated_clear_deprecated_overrides"):
+        logger.debug("[Migration] Skipping clear_deprecated_overrides (already migrated)")
+        return
+
+    logger.info("[Migration] Clearing deprecated per-section data source overrides")
+
+    # Get global data_source configuration
+    ds_type = store.get("data_source.type", "default")
+    ds_url = store.get("data_source.url", "")
+    ds_token = store.get("data_source.access_token", "")
+
+    # Get current per-section overrides
+    load_source = store.get("load.source", "default")
+    load_url = store.get("load.url", "")
+    load_token = store.get("load.access_token", "")
+    battery_source = store.get("battery.source", "default")
+    battery_url = store.get("battery.url", "")
+    battery_token = store.get("battery.access_token", "")
+
+    # Decision: should we clear deprecated overrides?
+    clear_overrides = ds_type in ("homeassistant", "openhab")
+
+    batch = {}
+    if clear_overrides:
+        # Global data_source is properly configured — clear all deprecated overrides
+        # to ensure the merger's inheritance logic falls back to global data_source
+        if load_source != "default" or load_url or load_token:
+            logger.info(
+                "[Migration] Clearing deprecated load overrides (had source=%s)",
+                load_source,
+            )
+            batch["load.source"] = "default"
+            batch["load.url"] = ""
+            batch["load.access_token"] = ""
+
+        if battery_source != "default" or battery_url or battery_token:
+            logger.info(
+                "[Migration] Clearing deprecated battery overrides (had source=%s)",
+                battery_source,
+            )
+            batch["battery.source"] = "default"
+            batch["battery.url"] = ""
+            batch["battery.access_token"] = ""
+    else:
+        # Global data_source is "default" — keep any per-section overrides
+        # (user configured them as Expert-level settings)
+        if load_source != "default" or battery_source != "default":
+            logger.debug(
+                "[Migration] Keeping per-section overrides (global data_source is default)"
+            )
+        else:
+            logger.debug("[Migration] No deprecated overrides to clear")
+
+    # Write changes and mark migration as complete
+    batch["_migrated_clear_deprecated_overrides"] = True
+    if batch:  # Only write if there are changes
+        try:
+            store.set_batch(batch)
+            logger.info(
+                "[Migration] Cleared deprecated overrides: %d updates",
+                len(batch) - 1,  # Don't count the marker key
+            )
+        except Exception:
+            logger.exception("[Migration] Failed to clear deprecated overrides")

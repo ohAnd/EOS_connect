@@ -64,7 +64,11 @@ handles these sources more efficiently.
 
 import logging
 import threading
-from datetime import datetime
+
+try:  # running from src/ — src/ is on sys.path
+    from timeseries_grid import horizon_slots, local_midnight
+except ImportError:  # imported as src.config_web (tests)
+    from ..timeseries_grid import horizon_slots, local_midnight
 
 logger = logging.getLogger("__main__")
 
@@ -94,10 +98,16 @@ _FEEDIN_PRICE_FIELD_MAP = {
     "price.feed_in_negative_price_switch": ("negative_price_switch", bool),
 }
 
-# Feed-in data source fields that require reload (source/zone changes)
+# Feed-in data source fields that require reload (source/zone/connection changes)
 _FEEDIN_DATA_FIELDS = {
     "price.feed_in_source",
     "price.feed_in_zone",
+    "price.feed_in_use_ha_central_data_source",
+    "price.feed_in_ha_sensor_name",
+    "price.feed_in_data_path",
+    "price.feed_in_data_url",
+    "price.feed_in_data_token",
+    "price.feed_in_value_unit",
 }
 
 _BATTERY_SOC_FIELDS = {
@@ -140,12 +150,6 @@ _OPTIMIZER_RUN_TRIGGERS = {
 _PRICE_RUN_TRIGGERS = {
     "price.feed_in_price",
     "price.feed_in_static_adder",
-}
-
-# Feed-in related fields that require recalculating feed-in prices
-_FEEDIN_TRIGGERS = {
-    "price.feed_in_price",
-    "price.feed_in_negative_price_switch",
 }
 
 _PV_KEY_PREFIXES = (
@@ -385,10 +389,6 @@ class HotReloadAdapter:
         if key == "price.feed_in_negative_price_switch":
             self._sync_feed_in_negative_price_switch(coerced)
 
-        # Recalculate feed-in prices when feed_in_price or negative_price_switch change
-        if key in _FEEDIN_TRIGGERS:
-            self._recalculate_feedin()
-
         # Feed-in price change invalidates the current optimization result
         if key in _PRICE_RUN_TRIGGERS:
             self._fire_run_trigger(key)
@@ -416,10 +416,8 @@ class HotReloadAdapter:
 
         # Trigger price update to recalculate arrays with new parameters
         try:
-            start_time = datetime.now(self._feed_in_price.time_zone).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+            start_time = local_midnight(self._feed_in_price.time_zone)
+            tgt_duration = horizon_slots(self._feed_in_price.time_frame_base)
             self._feed_in_price.update_prices(tgt_duration, start_time)
             logger.debug("[HotReload] Recalculated feed-in prices after %s change", key)
         except (AttributeError, TypeError, ValueError, OSError, RuntimeError) as e:
@@ -440,10 +438,8 @@ class HotReloadAdapter:
         try:
             old = getattr(self._feed_in_price, "fixed_price_ct_kwh", "?")
             self._feed_in_price.fixed_price_ct_kwh = price_ct_kwh
-            start_time = datetime.now(self._feed_in_price.time_zone).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+            start_time = local_midnight(self._feed_in_price.time_zone)
+            tgt_duration = horizon_slots(self._feed_in_price.time_frame_base)
             self._feed_in_price.update_prices(tgt_duration, start_time)
             logger.info(
                 "[HotReload] Synced FeedInPriceInterface.fixed_price_ct_kwh = %s (was %s)",
@@ -463,10 +459,8 @@ class HotReloadAdapter:
         try:
             old = getattr(self._feed_in_price, "negative_price_switch", "?")
             self._feed_in_price.negative_price_switch = negative_price_switch
-            start_time = datetime.now(self._feed_in_price.time_zone).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+            start_time = local_midnight(self._feed_in_price.time_zone)
+            tgt_duration = horizon_slots(self._feed_in_price.time_frame_base)
             self._feed_in_price.update_prices(tgt_duration, start_time)
             logger.info(
                 "[HotReload] Synced FeedInPriceInterface.negative_price_switch = %s (was %s)",
@@ -500,41 +494,6 @@ class HotReloadAdapter:
             new_val,
             old_val,
         )
-
-    def _recalculate_feedin(self):
-        """Recalculate feed-in prices on the price interface."""
-        if self._price is None:
-            return
-        try:
-            # If using fixed_24h with negative_price_switch, refresh auxiliary stock prices
-            if (self._price.src == "fixed_24h" and self._price.negative_price_switch):
-                # Fetch Akkudoktor stock prices for negative price detection
-                start_time = datetime.now(self._price.time_zone).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
-                success = self._price.refresh_stock_prices_for_feedin_check(48, start_time)
-                if success:
-                    logger.debug(
-                        "[HotReload] Refreshed Akkudoktor stock prices for fixed_24h negative"+
-                        " price detection"
-                    )
-                else:
-                    logger.warning(
-                        "[HotReload] Could not refresh Akkudoktor stock prices for fixed_24h"+
-                        " source"
-                    )
-
-            # Now recalculate feedin prices with potentially updated stock prices
-            feedin = self._price.recalculate_feedin_prices()
-            if feedin is not None:
-                logger.info(
-                    "[HotReload] Recalculated feed-in prices (%d entries)",
-                    len(feedin),
-                )
-        except (AttributeError, TypeError) as exc:
-            logger.debug(
-                "[HotReload] Could not recalculate feed-in prices: %s", exc
-            )
 
     def _apply_optimizer(self, key, new_value):
         """Apply an optimizer config change."""
@@ -830,7 +789,16 @@ class HotReloadAdapter:
                 )
 
             # Update all price config fields including source
+            source_changed = key == "price.source" and self._price.src != new_source
             self._price.src = new_source
+            if source_changed:
+                # The fallback cache belongs to the source being left: it carries
+                # that source's adjustments, and the EVCC path splices it into
+                # its own result. Drop it before anything can serve it.
+                try:
+                    self._price.drop_fallback_cache()
+                except AttributeError:
+                    pass
             self._price.config_source = price_config
             self._price.data_url = price_config.get("data_url", "").strip()
             self._price.data_path = price_config.get("data_path", "attributes.data").strip()
@@ -851,10 +819,8 @@ class HotReloadAdapter:
                 )
                 # Trigger immediate price fetch with new config
                 try:
-                    start_time = datetime.now(self._price.time_zone).replace(
-                        hour=0, minute=0, second=0, microsecond=0
-                    )
-                    tgt_duration = 192 if self._price.time_frame_base == 900 else 48
+                    start_time = local_midnight(self._price.time_zone)
+                    tgt_duration = horizon_slots(self._price.time_frame_base)
                     self._price.update_prices(tgt_duration, start_time)
                     logger.info(
                         "[HotReload] Immediately fetched prices after %s config change", key
@@ -867,6 +833,12 @@ class HotReloadAdapter:
                 # Source change detected but NOT to timeseries/evcc — config updated but
                 # fetch deferred
                 if key == "price.source":
+                    # The deferred fetch leaves the previous source's prices in
+                    # place; its forecast markers must not keep hatching them.
+                    try:
+                        self._price.clear_forecast_metadata()
+                    except AttributeError:
+                        pass
                     logger.debug(
                         "[HotReload] Price source changed to '%s' — config updated, "
                         "fetch deferred to next update cycle", new_source
@@ -912,10 +884,22 @@ class HotReloadAdapter:
 
         try:
             feedin_config = config.get("price", {})
+
+            # Defensive check: ensure feedin_config is a dict before calling .get() on it
+            if not isinstance(feedin_config, dict):
+                logger.error(
+                    "[HotReload] Feed-in config section is not a dict (got %s). "
+                    "Skipping feed-in reload for %s. This indicates a configuration "
+                    "loading issue.",
+                    type(feedin_config).__name__,
+                    key,
+                )
+                return
+
             # Use forced source if provided (callback fired before rebuild_config)
             new_source = force_source if force_source else feedin_config.get("feed_in_source", "fixed").strip()
             new_zone = feedin_config.get("feed_in_zone", "DK1").strip()
-            
+
             if force_source:
                 logger.debug(
                     "[HotReload] Using forced feed-in source '%s' (callback fired"
@@ -926,8 +910,30 @@ class HotReloadAdapter:
             # Update feed-in interface with new configuration
             old_source = self._feed_in_price.source
             old_zone = self._feed_in_price.zone
+            if old_source != new_source:
+                # The forecast markers describe the array the PREVIOUS source
+                # produced. Left in place they keep hatching the new source's
+                # prices as invented - the same reset the grid-price side does.
+                try:
+                    self._feed_in_price.clear_forecast_metadata()
+                except AttributeError:
+                    pass
             self._feed_in_price.source = new_source
             self._feed_in_price.zone = new_zone
+            # Timeseries connection details (central-HA mode already resolved
+            # by the merger into feed_in_data_url/feed_in_data_token).
+            self._feed_in_price.data_url = str(
+                feedin_config.get("feed_in_data_url", "") or ""
+            ).strip()
+            self._feed_in_price.data_path = str(
+                feedin_config.get("feed_in_data_path", "") or "attributes.data"
+            ).strip()
+            self._feed_in_price.data_token = str(
+                feedin_config.get("feed_in_data_token", "") or ""
+            ).strip()
+            self._feed_in_price.value_unit = str(
+                feedin_config.get("feed_in_value_unit", "") or "EUR/kWh"
+            ).strip()
             self._applied_keys.append(key)
 
             logger.info(
@@ -940,10 +946,8 @@ class HotReloadAdapter:
 
             # Trigger immediate feed-in price fetch with new source/zone
             try:
-                start_time = datetime.now(self._feed_in_price.time_zone).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
-                tgt_duration = 192 if self._feed_in_price.time_frame_base == 900 else 48
+                start_time = local_midnight(self._feed_in_price.time_zone)
+                tgt_duration = horizon_slots(self._feed_in_price.time_frame_base)
                 self._feed_in_price.update_prices(tgt_duration, start_time)
                 logger.info(
                     "[HotReload] Immediately fetched feed-in prices after %s config change"

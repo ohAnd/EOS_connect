@@ -8,7 +8,13 @@
 * 
 * SERVER TIME: Used for all data processing and calculations (from data_response["timestamp"])
 * USER TIME: Used for display - chart labels and schedule show in user's local timezone
-* 
+*
+* SLOT INDEXING: never derived from a clock. The backend publishes the
+* authoritative "current_slot" and "anchor" in the controls payload and the
+* optimize response; everything that indexes a midnight-anchored array reads
+* them via ChartManager.payloadSlot()/slotStartTime(). getHours() runs in the
+* BROWSER's zone and is one slot off on DST days - labels only.
+*
 * This allows users in different timezones to see when events happen in their local time
 * while maintaining consistent server-based data processing.
 */

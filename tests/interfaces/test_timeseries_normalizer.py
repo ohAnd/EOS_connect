@@ -5,7 +5,8 @@ validation with an actionable error, derived `end`, timezone handling, and the u
 tables. The payload shapes used here are the ones reported in discussion #214.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 import pytz
@@ -15,7 +16,7 @@ from src.interfaces.timeseries_normalizer import (
     PV_UNITS,
     TimeseriesFormatError,
     convert_price_values,
-    convert_pv_values,
+    convert_energy_values,
     detect_resolution_seconds,
     extract_json_path,
     load_plausibility_message,
@@ -28,33 +29,128 @@ BERLIN = pytz.timezone("Europe/Berlin")
 
 
 class TestFieldValidation:
-    """The format is fixed; the error has to make it obvious how to comply."""
+    """Unknown spellings are rejected; the error has to say how to comply."""
 
-    def test_missing_start_names_the_available_keys(self):
-        payload = [{"start_time": "2026-08-23T00:00:00+02:00", "price_per_kwh": 0.3811}]
+    def test_missing_start_names_the_keys_and_the_accepted_spellings(self):
+        payload = [{"begin": "2026-08-23T00:00:00+02:00", "cost": 0.3811}]
 
         with pytest.raises(TimeseriesFormatError) as exc:
             normalize_entries(payload, BERLIN)
 
         message = str(exc.value)
         assert "'start'" in message
-        assert "'start_time'" in message
-        assert "'price_per_kwh'" in message
+        assert "'begin'" in message
+        assert "start_time" in message  # the accepted-spellings list
 
-    def test_missing_value_names_the_available_keys(self):
-        payload = [{"start": "2026-08-23T00:00:00+02:00", "price_per_kwh": 0.3811}]
+    def test_missing_value_names_the_keys_and_the_accepted_spellings(self):
+        payload = [{"start": "2026-08-23T00:00:00+02:00", "cost": 0.3811}]
 
         with pytest.raises(TimeseriesFormatError) as exc:
             normalize_entries(payload, BERLIN)
 
-        assert "'value'" in str(exc.value)
-        assert "'price_per_kwh'" in str(exc.value)
+        message = str(exc.value)
+        assert "'value'" in message
+        assert "'cost'" in message
+        assert "price_per_kwh" in message
 
     def test_error_points_at_the_template_docs(self):
         with pytest.raises(TimeseriesFormatError) as exc:
             normalize_entries([{"foo": 1}], BERLIN)
 
         assert "timeseries-templates" in str(exc.value)
+
+    def test_mixed_spellings_between_entries_are_rejected(self):
+        """One spelling per payload: a mix is a template bug, not a format."""
+        payload = [
+            {"start_time": "2026-08-23T00:00:00+02:00", "price_per_kwh": 0.38},
+            {"start": "2026-08-23T01:00:00+02:00", "price_per_kwh": 0.37},
+        ]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+
+        assert "entry 1" in str(exc.value)
+        assert "'start_time'" in str(exc.value)
+
+
+class TestFieldAliases:
+    """The spellings the #214 integrations publish are read directly."""
+
+    def test_tibber_hacs_shape_is_accepted(self):
+        payload = [
+            {"start_time": "2026-08-23T00:00:00+02:00", "price_per_kwh": 0.3811},
+            {"start_time": "2026-08-23T00:15:00+02:00", "price_per_kwh": 0.3727},
+        ]
+        entries = normalize_entries(payload, BERLIN)
+        assert entries[0]["value"] == 0.3811
+        assert entries[0]["start"].utcoffset() == timedelta(hours=2)
+
+    def test_epex_spot_hacs_shape_is_accepted(self):
+        payload = [
+            {
+                "start_time": "2026-08-22T00:00:00+02:00",
+                "end_time": "2026-08-22T00:15:00+02:00",
+                "price_per_kwh": 0.1766,
+            },
+            {
+                "start_time": "2026-08-22T00:15:00+02:00",
+                "end_time": "2026-08-22T00:30:00+02:00",
+                "price_per_kwh": 0.1714,
+            },
+        ]
+        entries = normalize_entries(payload, BERLIN)
+        assert [e["value"] for e in entries] == [0.1766, 0.1714]
+
+    def test_tibber_core_action_shape_is_accepted(self):
+        payload = [
+            {"start_time": "2026-08-23T00:00:00.000+02:00", "price": 0.3811},
+            {"start_time": "2026-08-23T01:00:00.000+02:00", "price": 0.3727},
+        ]
+        entries = normalize_entries(payload, BERLIN)
+        assert entries[1]["value"] == 0.3727
+
+    def test_solcast_shape_is_accepted(self):
+        payload = [
+            {"period_start": "2026-08-23T10:00:00+02:00", "pv_estimate": 1.25},
+            {"period_start": "2026-08-23T10:30:00+02:00", "pv_estimate": 1.5},
+        ]
+        entries = normalize_entries(payload, BERLIN)
+        assert entries[0]["value"] == 1.25
+
+    def test_the_canonical_spelling_wins_over_an_alias(self):
+        payload = [
+            {
+                "start": "2026-08-23T05:00:00+02:00",
+                "start_time": "2026-08-23T09:00:00+02:00",
+                "value": 1.0,
+            },
+            {
+                "start": "2026-08-23T06:00:00+02:00",
+                "start_time": "2026-08-23T10:00:00+02:00",
+                "value": 2.0,
+            },
+        ]
+        entries = normalize_entries(payload, BERLIN)
+        assert entries[0]["start"].hour == 5
+
+    def test_alias_use_is_logged_once(self, caplog):
+        payload = [
+            {"start_time": "2026-08-23T00:00:00+02:00", "price_per_kwh": 0.38},
+            {"start_time": "2026-08-23T01:00:00+02:00", "price_per_kwh": 0.37},
+        ]
+        with caplog.at_level("INFO"):
+            normalize_entries(payload, BERLIN, label="PRICE-IF")
+        hits = [r for r in caplog.records if "start_time" in r.getMessage()]
+        assert len(hits) == 1
+
+    def test_canonical_names_are_not_logged_as_aliases(self, caplog):
+        payload = [
+            {"start": "2026-08-23T00:00:00+02:00", "value": 0.38},
+            {"start": "2026-08-23T01:00:00+02:00", "value": 0.37},
+        ]
+        with caplog.at_level("INFO"):
+            normalize_entries(payload, BERLIN)
+        assert not [r for r in caplog.records if "read as" in r.getMessage()]
 
     def test_non_list_payload_rejected(self):
         with pytest.raises(TimeseriesFormatError):
@@ -118,7 +214,7 @@ class TestFieldValidation:
 
 
 class TestEndDerivation:
-    """`end` is part of the documented format but never read — absence must not reject."""
+    """`end` is optional — absence must not reject, and derivation must not invent."""
 
     def test_end_derived_from_next_start(self):
         payload = [
@@ -129,8 +225,9 @@ class TestEndDerivation:
         entries = normalize_entries(payload, BERLIN)
 
         assert entries[0]["end"] == entries[1]["start"]
+        assert entries[0]["end_derived"] is True
 
-    def test_last_end_reuses_the_preceding_delta(self):
+    def test_last_end_gets_the_nominal_spacing(self):
         payload = [
             {"start": "2026-08-23T00:00:00+02:00", "value": 0.3811},
             {"start": "2026-08-23T00:15:00+02:00", "value": 0.3727},
@@ -147,17 +244,102 @@ class TestEndDerivation:
 
         assert entries[0]["end"] - entries[0]["start"] == timedelta(hours=1)
 
-    def test_supplied_end_is_ignored_in_favour_of_the_derived_one(self):
-        # EPEX supplies end_time, EVCC supplies end; neither is read for any
-        # calculation, so the derived value is what the rest of the code sees.
+    def test_a_supplied_end_is_authoritative(self):
+        # A deliberately long entry (one overnight value in a hand-written load
+        # profile) is expressed through an explicit end — it must survive.
         payload = [
-            {"start": "2026-08-23T00:00:00+02:00", "end": "bogus", "value": 0.1766},
-            {"start": "2026-08-23T00:15:00+02:00", "end": "bogus", "value": 0.1716},
+            {"start": "2026-08-23T21:00:00+02:00", "value": 400.0},
+            {
+                "start": "2026-08-23T22:00:00+02:00",
+                "end": "2026-08-24T06:00:00+02:00",
+                "value": 300.0,
+            },
         ]
 
         entries = normalize_entries(payload, BERLIN)
 
-        assert entries[0]["end"] == entries[1]["start"]
+        assert entries[1]["end"] - entries[1]["start"] == timedelta(hours=8)
+        assert "end_derived" not in entries[1]
+
+    def test_an_unparseable_end_rejects_the_payload(self):
+        payload = [
+            {"start": "2026-08-23T00:00:00+02:00", "end": "bogus", "value": 0.1766},
+        ]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+
+        assert "entry 0" in str(exc.value)
+
+    def test_an_end_at_or_before_its_start_rejects_the_payload(self):
+        payload = [
+            {
+                "start": "2026-08-23T01:00:00+02:00",
+                "end": "2026-08-23T01:00:00+02:00",
+                "value": 0.1766,
+            },
+        ]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+
+        assert "ends at or before it starts" in str(exc.value)
+
+    def test_a_derived_end_does_not_stretch_across_a_hole(self):
+        # Hourly series with 11:00 missing: the 10:00 entry keeps its own hour
+        # instead of swallowing the hole — otherwise the hole is invisible to
+        # the grid placement and can be neither reported nor marked.
+        payload = [
+            {"start": "2026-08-23T09:00:00+02:00", "value": 1.0},
+            {"start": "2026-08-23T10:00:00+02:00", "value": 2.0},
+            {"start": "2026-08-23T12:00:00+02:00", "value": 3.0},
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert entries[1]["end"] - entries[1]["start"] == timedelta(hours=1)
+        assert entries[1]["end_derived"] is True
+        assert entries[2]["start"] - entries[1]["end"] == timedelta(hours=1)
+
+
+class TestEndOnlySeries:
+    """A source publishing only interval ends ("hour ending") is accepted."""
+
+    def test_solcast_style_period_ends_derive_their_starts(self):
+        payload = [
+            {"period_end": "2026-08-23T10:30:00+02:00", "pv_estimate": 1.25},
+            {"period_end": "2026-08-23T11:00:00+02:00", "pv_estimate": 1.5},
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert entries[0]["end"] - entries[0]["start"] == timedelta(minutes=30)
+        assert entries[0]["start"].minute == 0
+        assert entries[1]["start"] == entries[0]["end"]
+        assert entries[0]["start_derived"] is True
+
+    def test_a_hole_between_ends_stays_a_hole(self):
+        payload = [
+            {"end": "2026-08-23T10:00:00+02:00", "value": 1.0},
+            {"end": "2026-08-23T11:00:00+02:00", "value": 2.0},
+            {"end": "2026-08-23T14:00:00+02:00", "value": 3.0},
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert entries[2]["start"].hour == 13
+        assert entries[2]["start"] - entries[1]["end"] == timedelta(hours=2)
+
+    def test_duplicate_ends_are_rejected(self):
+        payload = [
+            {"end": "2026-08-23T10:00:00+02:00", "value": 1.0},
+            {"end": "2026-08-23T10:00:00+02:00", "value": 2.0},
+        ]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+
+        assert "share the end timestamp" in str(exc.value)
 
     def test_entries_are_sorted_by_start(self):
         payload = [
@@ -293,41 +475,63 @@ class TestPriceUnitConversion:
         assert entries[0]["value"] < 0
 
 
-class TestPvUnitConversion:
-    """W is canonical because that is what EVCC's solar forecast carries."""
+class TestEnergyUnitConversion:
+    """W is canonical because that is what EVCC's solar forecast carries.
+
+    Power integrates over each entry's OWN span — that is what keeps a
+    mixed-resolution concatenation, a half-hourly grid, or one deliberately
+    long entry from being silently scaled by someone else's slot length.
+    """
+
+    @staticmethod
+    def _entry(value, span_minutes):
+        start = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+        return {
+            "start": start,
+            "end": start + timedelta(minutes=span_minutes),
+            "value": value,
+        }
 
     def test_watts_integrated_over_a_quarter_hour(self):
-        entries = [{"value": 4000.0}]
+        entries = [self._entry(4000.0, 15)]
 
-        convert_pv_values(entries, "W", 900)
+        convert_energy_values(entries, "W")
 
         assert entries[0]["value"] == pytest.approx(1000.0)
 
     def test_watts_over_a_full_hour_are_watt_hours(self):
-        entries = [{"value": 4000.0}]
+        entries = [self._entry(4000.0, 60)]
 
-        convert_pv_values(entries, "W", 3600)
+        convert_energy_values(entries, "W")
 
         assert entries[0]["value"] == pytest.approx(4000.0)
 
-    def test_kilowatts_scaled_and_integrated(self):
-        entries = [{"value": 4.0}]
+    def test_each_entry_uses_its_own_span(self):
+        entries = [self._entry(4000.0, 15), self._entry(4000.0, 60)]
 
-        convert_pv_values(entries, "kW", 900)
+        convert_energy_values(entries, "W")
+
+        assert entries[0]["value"] == pytest.approx(1000.0)
+        assert entries[1]["value"] == pytest.approx(4000.0)
+
+    def test_kilowatts_scaled_and_integrated(self):
+        entries = [self._entry(4.0, 15)]
+
+        convert_energy_values(entries, "kW")
 
         assert entries[0]["value"] == pytest.approx(1000.0)
 
-    def test_energy_units_pass_through_regardless_of_slot_length(self):
-        entries = [{"value": 1000.0}]
+    def test_energy_units_pass_through_regardless_of_span(self):
+        entries = [self._entry(1000.0, 15)]
 
-        convert_pv_values(entries, "Wh", 900)
+        convert_energy_values(entries, "Wh")
 
         assert entries[0]["value"] == pytest.approx(1000.0)
 
     def test_kilowatt_hours_scaled(self):
-        entries = [{"value": 1.0}]
+        entries = [self._entry(1.0, 15)]
 
-        convert_pv_values(entries, "kWh", 900)
+        convert_energy_values(entries, "kWh")
 
         assert entries[0]["value"] == pytest.approx(1000.0)
 
@@ -336,7 +540,7 @@ class TestPvUnitConversion:
 
     def test_unknown_unit_rejected(self):
         with pytest.raises(TimeseriesFormatError):
-            convert_pv_values([{"value": 1.0}], "MW", 900)
+            convert_energy_values([self._entry(1.0, 15)], "MW")
 
 
 class TestPricePlausibility:
@@ -470,3 +674,270 @@ class TestLoadPlausibility:
     def test_nothing_to_check(self):
         assert load_plausibility_message([], "Wh", 3600, 1500.0) is None
         assert load_plausibility_message([100.0], "Wh", 0, 1500.0) is None
+
+
+class TestMillisecondTimestamps:
+    """A HA template using `as_timestamp() * 1000` sends epoch milliseconds.
+
+    `datetime.fromtimestamp` answers that with a bare ValueError ("year must be
+    in 1..9999") that nothing upstream catches — the guard has to turn it into
+    a TimeseriesFormatError that names the actual mistake (B9 in discussion
+    #214's follow-up review).
+    """
+
+    MILLISECONDS = 1_772_000_000_000  # ~2026 in ms; year 58122 as seconds
+
+    def test_milliseconds_become_a_format_error_naming_the_cause(self):
+        """A milliseconds epoch is rejected with a message naming milliseconds."""
+        payload = [{"start": self.MILLISECONDS, "value": 0.25}]
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+        assert "millisecond" in str(exc.value).lower()
+
+    def test_a_timestamp_fromtimestamp_cannot_represent_is_a_format_error(self):
+        """Below the guard but before year 1: the bare ValueError must not escape."""
+        payload = [{"start": -62_200_000_000, "value": 0.25}]
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+        assert "Unix timestamp" in str(exc.value)
+
+    def test_ordinary_unix_seconds_still_parse(self):
+        """The guard must not reject real seconds timestamps."""
+        entries = normalize_entries(
+            [
+                {"start": 1_772_000_000, "value": 0.25},
+                {"start": 1_772_003_600, "value": 0.26},
+            ],
+            BERLIN,
+        )
+        assert entries[0]["start"].year == 2026
+
+
+class TestNaiveTimestampsAcrossDst:
+    """
+    A source rendering local wall clock without an offset, on a transition day.
+
+    This is the common Home Assistant template shape, and once a year it emits
+    "02:00" twice. Resolving both to the standard-time instant made them
+    duplicates and the whole 25-entry payload was rejected - the one day of the
+    year when a correctly configured source lost all of its data.
+    """
+
+    @staticmethod
+    def _wall_clock_day(date):
+        """Every hour the local clock actually shows on that calendar day."""
+        entries = []
+        moment = BERLIN.localize(datetime(date.year, date.month, date.day))
+        while moment.astimezone(BERLIN).date() == date:
+            entries.append(
+                {"start": moment.strftime("%Y-%m-%dT%H:%M:%S"), "value": 0.25}
+            )
+            moment = BERLIN.normalize(moment + timedelta(hours=1))
+        return entries
+
+    @pytest.mark.parametrize("zone", [BERLIN, ZoneInfo("Europe/Berlin")])
+    def test_the_repeated_hour_yields_two_distinct_instants(self, zone):
+        payload = self._wall_clock_day(date(2026, 10, 25))
+        assert len(payload) == 25, "the long day has 25 wall-clock hours"
+
+        entries = normalize_entries(payload, zone)
+
+        instants = [entry["start"].timestamp() for entry in entries]
+        assert len(entries) == 25
+        assert len(set(instants)) == 25, "02:00 must resolve to two instants"
+        assert instants == sorted(instants)
+        assert (instants[-1] - instants[0]) / 3600 == 24
+
+    @pytest.mark.parametrize("zone", [BERLIN, ZoneInfo("Europe/Berlin")])
+    def test_the_short_day_is_accepted_too(self, zone):
+        payload = self._wall_clock_day(date(2026, 3, 29))
+        assert len(payload) == 23
+
+        entries = normalize_entries(payload, zone)
+
+        instants = [entry["start"].timestamp() for entry in entries]
+        assert len(entries) == 23
+        assert len(set(instants)) == 23
+        assert (instants[-1] - instants[0]) / 3600 == 22
+
+    def test_a_genuine_duplicate_is_still_rejected(self):
+        """The check must keep catching real template bugs."""
+        payload = [
+            {"start": "2026-08-23T10:00:00+02:00", "value": 1.0},
+            {"start": "2026-08-23T10:00:00+02:00", "value": 2.0},
+        ]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN)
+
+        assert "share the start timestamp" in str(exc.value)
+
+    def test_a_nonexistent_wall_time_does_not_kill_the_payload(self):
+        """02:30 does not exist on the spring day; it must not raise."""
+        payload = [
+            {"start": "2026-03-29T01:30:00", "value": 1.0},
+            {"start": "2026-03-29T02:30:00", "value": 2.0},  # skipped by the clock
+            {"start": "2026-03-29T04:30:00", "value": 3.0},
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        instants = [entry["start"].timestamp() for entry in entries]
+        assert len(entries) == 3
+        assert instants == sorted(instants)
+
+
+class TestMixedResolutionSpans:
+    """
+    A start-only payload that changes resolution mid-series.
+
+    EPEX-style sources publish the current day at fifteen minutes and the next
+    at an hour. One nominal spacing for the whole payload capped the coarse half
+    at the fine spacing, so every hour of day two arrived carrying a quarter of
+    its energy.
+    """
+
+    ANCHOR = BERLIN.localize(datetime(2026, 8, 23))
+
+    def _span(self, entry):
+        return round(entry["end"].timestamp() - entry["start"].timestamp())
+
+    def test_the_coarse_half_keeps_its_full_hour(self):
+        payload = [
+            {"start": (self.ANCHOR + timedelta(minutes=15 * i)).isoformat(),
+             "value": 1.0}
+            for i in range(96)
+        ] + [
+            {"start": (self.ANCHOR + timedelta(days=1, hours=i)).isoformat(),
+             "value": 1.0}
+            for i in range(24)
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert {self._span(e) for e in entries[:96]} == {900}
+        assert {self._span(e) for e in entries[96:]} == {3600}
+
+    def test_a_lone_fine_entry_does_not_shrink_the_rest(self):
+        """A 15-minute lead entry must not cap every following hour."""
+        payload = [
+            {"start": self.ANCHOR.isoformat(), "value": 1.0},
+            {"start": (self.ANCHOR + timedelta(minutes=15)).isoformat(), "value": 1.0},
+        ] + [
+            {"start": (self.ANCHOR + timedelta(hours=i)).isoformat(), "value": 1.0}
+            for i in range(1, 12)
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert self._span(entries[0]) == 900
+        assert {self._span(e) for e in entries[2:]} == {3600}
+
+    def test_an_isolated_long_gap_is_still_a_hole(self):
+        """The cap must keep doing its job: one outlier gap is a hole."""
+        payload = [
+            {"start": (self.ANCHOR + timedelta(hours=h)).isoformat(), "value": 1.0}
+            for h in (9, 10, 13, 14)
+        ]
+
+        entries = normalize_entries(payload, BERLIN)
+
+        assert self._span(entries[1]) == 3600  # 10:00 does not swallow 11:00-13:00
+        assert entries[2]["start"] - entries[1]["end"] == timedelta(hours=2)
+
+
+class TestLenientMode:
+    """
+    Opt-in tolerance for sources that mix unusable rows in with real ones.
+
+    Strict stays the default: a dropped entry becomes a hole, and a hole in a
+    price series is filled by policy. But since the placement reports holes
+    through `coverage`, a caller that knows its source can trade one bad entry
+    for the other 191 rather than losing the whole fetch.
+    """
+
+    GOOD = [
+        {"start": "2026-08-23T09:00:00+02:00", "value": 1.0},
+        {"start": "2026-08-23T10:00:00+02:00", "value": 2.0},
+        {"start": "2026-08-23T11:00:00+02:00", "value": 3.0},
+    ]
+
+    def test_strict_is_the_default(self):
+        payload = self.GOOD[:1] + [{"start": "nonsense", "value": 1.0}] + self.GOOD[1:]
+
+        with pytest.raises(TimeseriesFormatError):
+            normalize_entries(payload, BERLIN)
+
+    def test_lenient_skips_and_keeps_the_rest(self, caplog):
+        payload = self.GOOD[:1] + [{"start": "nonsense", "value": 1.0}] + self.GOOD[1:]
+
+        with caplog.at_level("WARNING"):
+            entries = normalize_entries(payload, BERLIN, lenient=True)
+
+        assert [entry["value"] for entry in entries] == [1.0, 2.0, 3.0]
+        assert "skipped" in caplog.text
+
+    def test_lenient_skips_a_missing_value(self):
+        payload = [{"start": "2026-08-23T08:00:00+02:00"}] + self.GOOD
+
+        entries = normalize_entries(payload, BERLIN, lenient=True)
+
+        assert [entry["value"] for entry in entries] == [1.0, 2.0, 3.0]
+
+    def test_lenient_still_raises_when_nothing_survives(self):
+        """An empty result must reach the caller, not come back as no entries."""
+        payload = [{"start": "nonsense", "value": 1.0}, {"nothing": "useful"}]
+
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries(payload, BERLIN, lenient=True)
+
+        assert "none of the 2" in str(exc.value)
+
+    def test_a_skipped_entry_leaves_a_visible_hole(self):
+        """The gap must survive into the spans, not be swallowed by its neighbour."""
+        payload = [
+            {"start": f"2026-08-23T{hour:02d}:00:00+02:00", "value": float(hour)}
+            for hour in range(8, 16)
+        ]
+        payload[3]["value"] = "not a number"  # 11:00 is unusable
+
+        entries = normalize_entries(payload, BERLIN, lenient=True)
+
+        assert len(entries) == 7
+        # 10:00 keeps its own hour rather than stretching across the hole.
+        tenth = next(e for e in entries if e["start"].hour == 10)
+        assert tenth["end"] - tenth["start"] == timedelta(hours=1)
+        assert tenth["end"].hour == 11
+
+
+class TestBareArrayRejection:
+    """
+    A payload with no timestamps must name the sources built for that shape.
+
+    "The array begins today at 00:00" is the #214 defect as a feature, so the
+    timeseries path refuses it - but the refusal has to be actionable. Someone
+    who pasted 24 hourly prices wants fixed_24h; telling them to write a
+    template sensor sends them the wrong way.
+    """
+
+    def test_a_list_of_numbers_names_the_alternatives(self):
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries([0.25, 0.30, 0.28], BERLIN)
+
+        message = str(exc.value)
+        assert "fixed_24h" in message
+        assert "push" in message
+        assert "elpris/epex" in message
+
+    def test_entries_without_a_timestamp_name_them_too(self):
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries([{"value": 0.25}, {"value": 0.30}], BERLIN)
+
+        assert "fixed_24h" in str(exc.value)
+
+    def test_an_empty_payload_still_says_empty(self):
+        """The bare-array check must not shadow the clearer message."""
+        with pytest.raises(TimeseriesFormatError) as exc:
+            normalize_entries([], BERLIN)
+
+        assert "empty" in str(exc.value)

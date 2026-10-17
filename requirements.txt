@@ -11,5 +11,7 @@ packaging>=23.2
 # pvlib>=0.13.0
 open-meteo-solar-forecast>=0.1.22
 psutil>=7.0.0
-pymodbus>=3.0.0
+# <3.16: 3.16.0 (2026-10-11) crashes on import without the optional
+# pyserial extra (NameError in pymodbus/transport/serialtransport.py)
+pymodbus>=3.0.0,<3.16
 pulp>=2.7.0,<4

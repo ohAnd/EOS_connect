@@ -19,6 +19,7 @@ from .schema import (
     LEGACY_SENSOR_PLACEHOLDERS,
     LIST_SECTIONS,
     LOCATION_BASED_PV_SOURCES,
+    MANAGED_LOAD_COVER_TYPES,
     REMOTE_DATA_SOURCE_TYPES,
 )
 from .entity_probe import probe_entity
@@ -82,6 +83,9 @@ def get_schema():
             "hot_reload": f.hot_reload,
             "display_group": f.display_group,
         }
+        # Anchors a "Test connection" panel in the UI; absent on ordinary fields.
+        if f.timeseries_domain:
+            field_obj["timeseries_domain"] = f.timeseries_domain
         # Include description_map for fields that have dynamic descriptions
         if f.description_map:
             field_obj["description_map"] = f.description_map
@@ -718,6 +722,48 @@ def _pending_pv_installation_count(data: dict, current_config: dict) -> int:
     return len(listed or [])
 
 
+def _get_managed_loads_entries(data: dict, current_config: dict) -> list[dict]:
+    """
+    Extract managed_loads entries from incoming data and current config.
+    
+    Returns a list of dicts, one per managed load entry, merging incoming changes
+    with stored values so the dependency check sees the full picture.
+    """
+    entries = []
+    
+    # Collect indices from both data and current config
+    indices = set()
+    for key in data:
+        parts = key.split(".")
+        if len(parts) >= 3 and parts[0] == "managed_loads" and parts[1].isdigit():
+            indices.add(int(parts[1]))
+    
+    current_loads = current_config.get("managed_loads", [])
+    if isinstance(current_loads, list):
+        for idx in range(len(current_loads)):
+            indices.add(idx)
+    
+    # Build merged entries
+    for idx in sorted(indices):
+        entry = {}
+        
+        # Start with current config value if it exists
+        if isinstance(current_loads, list) and idx < len(current_loads):
+            entry.update(current_loads[idx])
+        
+        # Override with incoming data
+        for key in data:
+            parts = key.split(".")
+            if len(parts) == 3 and parts[0] == "managed_loads" and parts[1] == str(idx):
+                entry[parts[2]] = data[key]
+        
+        if entry:
+            entries.append(entry)
+    
+    return entries
+
+
+
 def _check_dependencies(data: dict) -> list[dict]:
     """
     Cross-field dependencies that *this request* would leave unsatisfied.
@@ -750,12 +796,17 @@ def _check_dependencies(data: dict) -> list[dict]:
         return val
 
     def touches(*keys):
-        """Whether the request sets any of *keys* — including indexed pv_forecast."""
+        """Whether the request sets any of *keys* — including indexed pv_forecast and managed_loads."""
         for key in keys:
             if key in data:
                 return True
+            # Special handling for list-based sections that use indexed keys
             if key == "pv_forecast" and any(
                 k.startswith("pv_forecast.") for k in data
+            ):
+                return True
+            if key == "managed_loads" and any(
+                k.startswith("managed_loads.") for k in data
             ):
                 return True
         return False
@@ -833,31 +884,52 @@ def _check_dependencies(data: dict) -> list[dict]:
                     "blocking": False,
                 })
 
+    # Managed loads season validation: season fields only apply to pool_heatpump type
+    if touches("managed_loads"):
+        managed_loads = _get_managed_loads_entries(data, current_config)
+        for idx, entry in enumerate(managed_loads):
+            load_type = entry.get("type")
+            season_start = entry.get("season_start", "")
+            season_end = entry.get("season_end", "")
+            
+            # Only validate if this load has non-empty season values
+            if (season_start or season_end) and load_type not in MANAGED_LOAD_COVER_TYPES:
+                dependencies.append({
+                    "field": f"managed_loads.{idx}.season_start",
+                    "reason": (
+                        f"Load '{entry.get('name', f'#{idx}')}' (type: {load_type}) does not support seasons. "
+                        "Seasons only apply to pool heatpump loads."
+                    ),
+                    "requires": f"managed_loads.{idx}.type",
+                    "blocking": True,
+                })
+
     return dependencies
 
 
 # Config keys that make a timeseries probe worthwhile. Saving anything else must not
 # trigger a network round-trip, so an unrelated setting change stays fast and cannot be
 # blocked by a momentarily unreachable endpoint.
+def _timeseries_keys(section, prefix):
+    """The seven config keys a timeseries domain is wired through."""
+    return {
+        f"{section}.{prefix}{suffix}"
+        for suffix in (
+            "source",
+            "data_url",
+            "data_path",
+            "data_token",
+            "value_unit",
+            "use_ha_central_data_source",
+            "ha_sensor_name",
+        )
+    }
+
+
 _TIMESERIES_PROBE_TRIGGERS = {
-    "price": {
-        "price.source",
-        "price.data_url",
-        "price.data_path",
-        "price.data_token",
-        "price.value_unit",
-        "price.use_ha_central_data_source",
-        "price.ha_sensor_name",
-    },
-    "pv": {
-        "pv_forecast_source.source",
-        "pv_forecast_source.data_url",
-        "pv_forecast_source.data_path",
-        "pv_forecast_source.data_token",
-        "pv_forecast_source.value_unit",
-        "pv_forecast_source.use_ha_central_data_source",
-        "pv_forecast_source.ha_sensor_name",
-    },
+    "price": _timeseries_keys("price", ""),
+    "pv": _timeseries_keys("pv_forecast_source", ""),
+    "feed_in": _timeseries_keys("price", "feed_in_"),
 }
 
 # The shared data source only feeds a domain that opted into central mode, so it may
@@ -865,9 +937,13 @@ _TIMESERIES_PROBE_TRIGGERS = {
 # PV endpoint block an unrelated edit of the Home Assistant URL.
 _CENTRAL_DATA_SOURCE_TRIGGERS = {"data_source.url", "data_source.access_token"}
 
+# domain -> (section, key prefix within the section, default sensor, default unit).
+# The feed-in fields live in the price section under a feed_in_ prefix, which is
+# why the prefix is part of the spec rather than an assumption.
 _TIMESERIES_DOMAIN_SECTIONS = {
-    "price": ("price", "sensor.grid_prices", "EUR/kWh"),
-    "pv": ("pv_forecast_source", "sensor.pv_forecast", "W"),
+    "price": ("price", "", "sensor.grid_prices", "EUR/kWh"),
+    "pv": ("pv_forecast_source", "", "sensor.pv_forecast", "W"),
+    "feed_in": ("price", "feed_in_", "sensor.feed_in_prices", "EUR/kWh"),
 }
 
 
@@ -934,7 +1010,8 @@ def _resolve_timeseries_config(domain: str, data: dict, get_value) -> dict:
     from the shared data_source plus the sensor entity, so the probe tests exactly
     what the interface will later fetch.
     """
-    section, default_sensor, default_unit = _TIMESERIES_DOMAIN_SECTIONS[domain]
+    section, prefix, default_sensor, default_unit = _TIMESERIES_DOMAIN_SECTIONS[domain]
+    base = f"{section}.{prefix}"
     get_raw = _raw_value_getter(data)
 
     def merger_style(key, default):
@@ -944,27 +1021,27 @@ def _resolve_timeseries_config(domain: str, data: dict, get_value) -> dict:
 
     # Coerced, not truthiness-tested: pre-flight runs before _coerce_value, so a REST
     # client sending the string "false" would otherwise take the central-HA branch.
-    if _coerce_bool(get_value(f"{section}.use_ha_central_data_source")):
+    if _coerce_bool(get_value(f"{base}use_ha_central_data_source")):
         ds_url = get_value("data_source.url") or ""
-        sensor = merger_style(f"{section}.ha_sensor_name", default_sensor)
+        sensor = merger_style(f"{base}ha_sensor_name", default_sensor)
         # Built exactly as merger._apply_central_ha_data_source builds it — including
         # the absence of rstrip and the empty-string passthrough — so the probe can
         # never pass on a URL the running interface would fetch differently.
         data_url = f"{ds_url}/api/states/{sensor}" if ds_url else ""
         data_token = get_value("data_source.access_token") or ""
-        sensor_field = f"{section}.ha_sensor_name"
-        resource_label = sensor or f"{section}.ha_sensor_name"
+        sensor_field = f"{base}ha_sensor_name"
+        resource_label = sensor or f"{base}ha_sensor_name"
     else:
-        data_url = get_raw(f"{section}.data_url") or ""
-        data_token = get_raw(f"{section}.data_token") or ""
-        sensor_field = f"{section}.data_url"
+        data_url = get_raw(f"{base}data_url") or ""
+        data_token = get_raw(f"{base}data_token") or ""
+        sensor_field = f"{base}data_url"
         resource_label = data_url
 
     return {
         "data_url": data_url,
-        "data_path": get_value(f"{section}.data_path") or "attributes.data",
+        "data_path": get_value(f"{base}data_path") or "attributes.data",
         "data_token": data_token,
-        "value_unit": get_value(f"{section}.value_unit") or default_unit,
+        "value_unit": get_value(f"{base}value_unit") or default_unit,
         "sensor_field": sensor_field,
         "resource_label": resource_label,
     }
@@ -1012,17 +1089,29 @@ def _probe_timeseries_domain(domain: str, data: dict, get_value) -> dict:
     config = _module.get_config() or {}
     time_zone = config.get("time_zone", "UTC")
     time_frame_base = _effective_time_frame_base(get_value)
-    result = probe(
-        domain,
-        resolved["data_url"],
-        resolved["data_path"],
-        resolved["data_token"],
-        resolved["value_unit"],
-        time_zone,
-        resource_label=resolved["resource_label"],
-        time_frame_base=time_frame_base,
-        installed_power_w=_installed_pv_power_w(config) if domain == "pv" else 0,
-    )
+    try:
+        result = probe(
+            domain,
+            resolved["data_url"],
+            resolved["data_path"],
+            resolved["data_token"],
+            resolved["value_unit"],
+            time_zone,
+            resource_label=resolved["resource_label"],
+            time_frame_base=time_frame_base,
+            installed_power_w=_installed_pv_power_w(config),
+        )
+    except Exception:  # pylint: disable=broad-exception-caught
+        # The endpoint promises HTTP 200 with a finding in both directions, and
+        # served errors must not carry exception text - that goes to the log.
+        logger.exception("[CONFIG-API] timeseries probe failed unexpectedly")
+        return {
+            "ok": False,
+            "error": (
+                "The test failed unexpectedly - the EOS Connect log has the "
+                "details."
+            ),
+        }
     # In central-HA mode the actionable field is the sensor name, not the derived URL.
     if not result.get("ok") and result.get("field", "").endswith(".data_url"):
         result["field"] = resolved["sensor_field"]
@@ -1042,14 +1131,14 @@ def _check_timeseries_preflight(data: dict) -> list[dict]:
     errors = []
     get_value = _effective_value_getter(data)
 
-    for domain, (section, _sensor, _unit) in _TIMESERIES_DOMAIN_SECTIONS.items():
-        if get_value(f"{section}.source") != "timeseries":
+    for domain, (section, prefix, _sensor, _unit) in _TIMESERIES_DOMAIN_SECTIONS.items():
+        if get_value(f"{section}.{prefix}source") != "timeseries":
             continue
 
         own_keys_touched = bool(_TIMESERIES_PROBE_TRIGGERS[domain] & data.keys())
         central_touched = bool(
             _CENTRAL_DATA_SOURCE_TRIGGERS & data.keys()
-        ) and _coerce_bool(get_value(f"{section}.use_ha_central_data_source"))
+        ) and _coerce_bool(get_value(f"{section}.{prefix}use_ha_central_data_source"))
         if not (own_keys_touched or central_touched):
             continue
 
@@ -1083,9 +1172,28 @@ def _check_timeseries_preflight(data: dict) -> list[dict]:
             )
             continue
 
+        if result.get("stale"):
+            # The source answered and parsed, but its series does not reach the
+            # optimization window. That is a data problem, not a configuration
+            # one — the window is judged against local midnight TODAY, so an
+            # untouched config that saved yesterday would start failing this
+            # morning and the user could not edit their way out of it. The
+            # tester still shows it red and the interface still falls back.
+            logger.info(
+                "[ConfigAPI] Timeseries pre-flight: the %s series misses the "
+                "current window: %s",
+                domain,
+                result.get("error"),
+            )
+            continue
+
         errors.append(
             {
-                "key": result.get("field", f"{section}.data_url"),
+                # Fall back to the DOMAIN's own URL field, not the section's:
+                # for feed-in that is price.feed_in_data_url, and reporting
+                # against price.data_url pointed the user at the grid-price
+                # field instead.
+                "key": result.get("field", f"{section}.{prefix}data_url"),
                 "error": result.get("error", "Timeseries check failed."),
             }
         )
@@ -1100,7 +1208,7 @@ def test_timeseries():
 
     Body: optional flat dot-notation keys (as for PUT /), so the UI can test values
     the user has typed but not yet saved. Anything absent falls back to the stored
-    config. ``domain`` selects "price" (default) or "pv".
+    config. ``domain`` selects "price" (default), "pv" or "feed_in".
 
     Returns 200 with the probe result in both the success and the failure case — a
     source that does not answer is a finding, not a server error.
@@ -1111,7 +1219,12 @@ def test_timeseries():
 
     domain = data.pop("domain", "price")
     if domain not in _TIMESERIES_DOMAIN_SECTIONS:
-        return jsonify({"error": "domain must be 'price' or 'pv'"}), 400
+        return jsonify(
+            {
+                "error": "domain must be one of: "
+                + ", ".join(sorted(_TIMESERIES_DOMAIN_SECTIONS))
+            }
+        ), 400
 
     get_value = _effective_value_getter(data)
     return jsonify(_probe_timeseries_domain(domain, data, get_value)), 200

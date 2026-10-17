@@ -423,13 +423,16 @@ class BatteryManager {
      */
     setBatteryChargingData(data_response, data_controls) {
         // planned charging
-        var currentHour = new Date(data_response["timestamp"]).getHours(); // ✅ Use server time
         const timestamp = new Date(data_response["timestamp"]);
 
         let price_data = data_response["result"]["Electricity_price"];
         let ac_charge = data_response["ac_charge"];
 
         const time_frame_base = data_controls["used_time_frame_base"];
+        // The slot the response was produced in - ac_charge is anchored there.
+        const responseSlot = ChartManager.payloadSlot(
+            data_response, time_frame_base, timestamp
+        );
 
         // var next_charge_time = ac_charge.slice(currentHour).findIndex((value) => value > 0);
         // if (next_charge_time !== -1) {
@@ -445,20 +448,15 @@ class BatteryManager {
         let nextChargeHour = "--";
         let nextChargeMin = "--";
 
-        if (time_frame_base === 900) {
-            const currentSlot = timestamp.getHours() * 4 + Math.floor(timestamp.getMinutes() / 15);
-            nextChargeIndex = ac_charge.slice(currentSlot).findIndex(value => value > 0);
-            if (nextChargeIndex !== -1) {
-                const slot = currentSlot + nextChargeIndex;
-                nextChargeHour = Math.floor(slot / 4) % 24;
-                nextChargeMin = (slot % 4) * 15;
-            }
-        } else {
-            nextChargeIndex = ac_charge.slice(currentHour).findIndex(value => value > 0);
-            if (nextChargeIndex !== -1) {
-                nextChargeHour = (currentHour + nextChargeIndex) % 24;
-                nextChargeMin = "00";
-            }
+        nextChargeIndex = ac_charge.slice(responseSlot).findIndex(value => value > 0);
+        if (nextChargeIndex !== -1) {
+            // Name the slot through the grid anchor: on a DST day a slot's
+            // wall-clock start is not slot % 24.
+            const startTime = ChartManager.slotStartTime(
+                data_response, responseSlot + nextChargeIndex, time_frame_base
+            );
+            nextChargeHour = startTime.getHours();
+            nextChargeMin = startTime.getMinutes();
         }
 
         // Update UI with next charge time
@@ -474,9 +472,8 @@ class BatteryManager {
         let total_price_count = 0;
         var foundFirst = false;
         if (time_frame_base === 900) {
-            const current_quarterly_slot = timestamp.getHours() * 4 + Math.floor(timestamp.getMinutes() / 15);
-            for (let index = 0; index < ac_charge.slice(current_quarterly_slot).length; index++) {
-                const value = ac_charge[current_quarterly_slot + index];
+            for (let index = 0; index < ac_charge.slice(responseSlot).length; index++) {
+                const value = ac_charge[responseSlot + index];
                 if (value > 0) {
                     if (!foundFirst) {
                         foundFirst = true;
@@ -491,8 +488,8 @@ class BatteryManager {
                 }
             }
         } else {
-            for (let index = 0; index < ac_charge.slice(currentHour).length; index++) {
-                const value = ac_charge[currentHour + index];
+            for (let index = 0; index < ac_charge.slice(responseSlot).length; index++) {
+                const value = ac_charge[responseSlot + index];
 
                 if (value > 0) {
                     if (!foundFirst) {

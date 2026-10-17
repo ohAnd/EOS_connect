@@ -20,6 +20,10 @@ _COLUMNS = (
     "forecast_kwh, created_at, local_date, local_hour, local_offset_minutes, origin"
 )
 
+#: Bumped when a one-time data repair is added to ensure_schema. Stored in the
+#: database's own PRAGMA user_version so each repair runs exactly once.
+_SCHEMA_VERSION = 1
+
 # The table shape, parameterised by name so that `CREATE TABLE` and the rebuild that
 # drops a retired column cannot drift apart.
 _TABLE_SCHEMA = """
@@ -290,6 +294,7 @@ class PvYieldStore:
         )
 
         self._drop_timeframe_id(columns)
+        self._repair_dst_day_forecasts()
 
         # indices
         self._store.execute(
@@ -299,6 +304,48 @@ class PvYieldStore:
             "CREATE INDEX IF NOT EXISTS idx_pv_yield_local_date ON pv_yield_history(local_date)"
         )
         self._ensure_timestamp_unique()
+
+    def _repair_dst_day_forecasts(self) -> None:
+        """
+        Drop forecast values recorded against a wall-clock hour on a DST day.
+
+        Until the slot fix, the hourly forecast was read out of the midnight-
+        anchored array with ``(local_hour % 24) * slots_per_hour``. On a
+        transition day that index is off by one for every hour after the
+        change, so the stored ``forecast_kwh`` describes a different hour than
+        the ``yield_kwh`` beside it. Those pairs feed the scaling factors, and a
+        factor fitted to a mismatched pair is wrong for good - the row outlives
+        the day that produced it.
+
+        The measurement is untouched; only the forecast is set back to NULL,
+        which every consumer already reads as "unknown" and skips. A transition
+        date is recognised from the data itself: it is the only kind of day
+        whose rows carry more than one UTC offset. Rows written before
+        ``local_offset_minutes`` existed cannot be judged and are left alone.
+
+        Guarded by ``user_version`` so it runs exactly once. Without that guard
+        it would also null the CORRECT rows written on every future DST day.
+        """
+        try:
+            version = self._store.query("PRAGMA user_version")[0][0]
+        except (IndexError, TypeError):
+            version = 0
+        if version >= _SCHEMA_VERSION:
+            return
+
+        self._store.execute(
+            """
+            UPDATE pv_yield_history SET forecast_kwh = NULL
+            WHERE forecast_kwh IS NOT NULL
+              AND local_date IN (
+                  SELECT local_date FROM pv_yield_history
+                  WHERE local_offset_minutes IS NOT NULL
+                  GROUP BY local_date
+                  HAVING COUNT(DISTINCT local_offset_minutes) > 1
+              )
+            """
+        )
+        self._store.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
     def _drop_timeframe_id(self, columns: set) -> None:
         """

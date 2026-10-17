@@ -18,7 +18,6 @@ def price_interface():
     mock.fixed_price_adder_ct = 0.0
     mock.relative_price_multiplier = 0.0
     mock.feed_in_tariff_price = 0.0
-    mock.recalculate_feedin_prices = MagicMock(return_value=[0.05, 0.05, 0.05])
     return mock
 
 
@@ -107,10 +106,9 @@ class TestHotReloadPrice:
         assert price_interface.relative_price_multiplier == 0.05
 
     def test_feed_in_price(self, adapter, price_interface):
-        """Changing feed_in_price should update attr and recalculate feed-in."""
+        """Changing feed_in_price should update the interface attribute."""
         adapter.on_config_changed("price.feed_in_price", 0.0, 0.08)
         assert price_interface.feed_in_tariff_price == 0.08
-        price_interface.recalculate_feedin_prices.assert_called_once()
 
     def test_feed_in_price_fires_run_trigger(self, price_interface, battery_interface):
         """Changing feed_in_price should also trigger an immediate optimization run."""
@@ -175,6 +173,41 @@ class TestHotReloadPrice:
         call_args = price_interface.update_prices.call_args
         assert call_args[0][0] == 48  # tgt_duration for 3600 second time frame
 
+    def test_feed_in_data_field_change_reloads_the_connection(
+        self, feed_in_price_interface
+    ):
+        """Editing the timeseries connection must reach the running interface."""
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.source = "timeseries"
+        feed_in_price_interface.zone = "DK1"
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(return_value={
+            "price": {
+                "feed_in_source": "timeseries",
+                "feed_in_zone": "DK1",
+                "feed_in_data_url": "http://ha.local/api/states/sensor.feed_in",
+                "feed_in_data_path": "rates",
+                "feed_in_value_unit": "ct/kWh",
+            }
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+
+        adapter.on_config_changed(
+            "price.feed_in_data_url", "old", "http://ha.local/api/states/sensor.feed_in"
+        )
+
+        assert feed_in_price_interface.data_url == (
+            "http://ha.local/api/states/sensor.feed_in"
+        )
+        assert feed_in_price_interface.value_unit == "ct/kWh"
+        feed_in_price_interface.update_prices.assert_called_once()
+
     def test_price_source_change_skips_immediate_fetch(self, price_interface):
         """Changing price.source FROM timeseries TO another source should NOT fetch.
         
@@ -205,6 +238,54 @@ class TestHotReloadPrice:
 
         # Verify NO immediate fetch was triggered (deferred to next cycle)
         price_interface.update_prices.assert_not_called()
+
+        # The deferred fetch keeps the previous source's prices; its forecast
+        # markers must be dropped so they do not hatch those prices as forecast.
+        price_interface.clear_forecast_metadata.assert_called_once()
+
+        # The fallback cache belongs to timeseries — including its adder and
+        # multiplier, which tibber must never inherit.
+        price_interface.drop_fallback_cache.assert_called_once()
+
+    def test_price_source_change_to_evcc_also_drops_the_cache(self, price_interface):
+        """The immediate-fetch branch must drop the cache too, not just the deferred one.
+
+        EVCC's own incomplete-data fallback splices last_successful_prices into the
+        array it returns, so a cache left over from an exchange source would put
+        that source's adjusted prices into the EVCC result.
+        """
+        price_interface.src = "timeseries"
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=MagicMock(return_value={"price": {"source": "evcc"}}),
+        )
+
+        adapter.on_config_changed("price.source", "timeseries", "evcc")
+
+        price_interface.update_prices.assert_called_once()
+        price_interface.drop_fallback_cache.assert_called_once()
+
+    def test_a_non_source_price_change_keeps_the_cache(self, price_interface):
+        """Editing a data field is not a source change — the cache stays valid."""
+        price_interface.src = "timeseries"
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=MagicMock(
+                return_value={"price": {"source": "timeseries", "data_url": "http://x"}}
+            ),
+        )
+
+        adapter.on_config_changed("price.data_url", "http://old", "http://x")
+
+        price_interface.drop_fallback_cache.assert_not_called()
 
     def test_price_source_change_to_timeseries_triggers_immediate_fetch(self, price_interface):
         """Changing price.source TO timeseries FROM any other source SHOULD fetch.
@@ -460,7 +541,6 @@ class TestHotReloadFeedInPrice:
         price_mock = MagicMock()
         price_mock.src = "fixed"
         price_mock.time_zone = ZoneInfo("Europe/Berlin")
-        price_mock.recalculate_feedin_prices = MagicMock(return_value=[])
         adapter = HotReloadAdapter(
             price_interface=price_mock,
             feed_in_price_interface=feed_in_price_interface,
@@ -768,6 +848,35 @@ class TestHotReloadFeedInSource:
         adapter = HotReloadAdapter(feed_in_price_interface=None)
         adapter.on_config_changed("price.feed_in_source", "fixed", "elpris_dk")
         assert adapter.last_applied == []
+
+    def test_feed_in_config_section_is_list_no_crash(self):
+        """Feed-in reload should handle case where config['price'] is a list (issue #321).
+        
+        Regression test: If config['price'] is accidentally a list instead of a dict,
+        the hot reload should log an error and return gracefully instead of crashing
+        with AttributeError: 'list' object has no attribute 'get'.
+        """
+        feed_in_price_interface = MagicMock()
+        feed_in_price_interface.source = "fixed"
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+
+        # Config provider returns a config where price is a list (wrong type)
+        config_provider = MagicMock(return_value={
+            "price": ["not", "a", "dict"],  # Intentionally wrong type
+        })
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+
+        # This should log an error but not crash
+        adapter.on_config_changed("price.feed_in_source", "fixed", "elpris_dk")
+
+        # Feed-in interface should not be modified
+        assert adapter.last_applied == []
+        feed_in_price_interface.update_prices.assert_not_called()
 
     def test_feed_in_source_change_with_forced_source(self, feed_in_price_interface):
         """Forced source should override config_provider value."""

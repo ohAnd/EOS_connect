@@ -828,7 +828,7 @@
       "default": false,
       "section": "price",
       "level": "standard",
-      "description": "Use centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
+      "description": "Use the centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
       "labels": [],
       "help_url": "config-price.html#price-sources",
       "validation": {},
@@ -846,7 +846,7 @@
       "default": "sensor.grid_prices",
       "section": "price",
       "level": "getting_started",
-      "description": "Home Assistant sensor entity containing price timeseries data (e.g., sensor.grid_prices)",
+      "description": "Home Assistant sensor entity containing the timeseries data (e.g., sensor.grid_prices)",
       "labels": [],
       "help_url": "config-price.html#price-sources",
       "validation": {},
@@ -867,7 +867,7 @@
       "default": "attributes.data",
       "section": "price",
       "level": "standard",
-      "description": "JSON path to timeseries array in response. For HA sensors: 'attributes.data'. For custom HTTP servers: 'data', 'prices', 'values', etc. (default: 'attributes.data')",
+      "description": "JSON path to the timeseries array in the response. For HA sensors: 'attributes.data'. For custom HTTP servers: 'data', 'values', etc.",
       "labels": [],
       "help_url": "config-price.html#price-sources",
       "validation": {},
@@ -885,7 +885,7 @@
       "default": "http://homeassistant.local:8123/api/states/sensor.grid_prices",
       "section": "price",
       "level": "getting_started",
-      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: endpoint URL returning JSON timeseries. Must return a JSON array in EVCC's {start, end, value} format; 'end' is optional. The unit of 'value' is set by price.value_unit.",
+      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: an endpoint returning a JSON array in EVCC's {start, end, value} format; 'end' is optional. The unit of 'value' is set by price.value_unit.",
       "labels": [],
       "help_url": "config-price.html#price-sources",
       "validation": {
@@ -961,7 +961,8 @@
           "fixed",
           "elpris_dk",
           "epex_spot",
-          "evcc"
+          "evcc",
+          "timeseries"
         ]
       },
       "depends_on": null,
@@ -1024,12 +1025,24 @@
       },
       "depends_on": {
         "price.feed_in_source": [
+          "fixed",
           "elpris_dk",
-          "epex_spot"
+          "epex_spot",
+          "evcc",
+          "timeseries"
         ]
       },
       "hot_reload": true,
-      "display_group": "Feed-In Price"
+      "display_group": "Feed-In Price",
+      "description_map": {
+        "price.feed_in_source": {
+          "fixed": "Static adjustment to the fixed feed-in price in ct/kWh",
+          "elpris_dk": "Static adjustment to the Elpris DK price in ct/kWh (e.g., +3.5 for transport costs)",
+          "epex_spot": "Static adjustment to the EPEX Spot price in ct/kWh (e.g., +3.5 for transport costs)",
+          "evcc": "Static adjustment to the EVCC feed-in rate in ct/kWh",
+          "timeseries": "Static adjustment to the sourced feed-in price in ct/kWh"
+        }
+      }
     },
     {
       "key": "price.feed_in_multiplier",
@@ -1046,12 +1059,24 @@
       },
       "depends_on": {
         "price.feed_in_source": [
+          "fixed",
           "elpris_dk",
-          "epex_spot"
+          "epex_spot",
+          "evcc",
+          "timeseries"
         ]
       },
       "hot_reload": true,
-      "display_group": "Feed-In Price"
+      "display_group": "Feed-In Price",
+      "description_map": {
+        "price.feed_in_source": {
+          "fixed": "Multiplier on the fixed feed-in price (1.0 = no change)",
+          "elpris_dk": "Multiplier on the Elpris DK price (1.0 = no change, 1.05 = +5%)",
+          "epex_spot": "Multiplier on the EPEX Spot price (1.0 = no change, 1.05 = +5%)",
+          "evcc": "Multiplier on the EVCC feed-in rate (1.0 = no change)",
+          "timeseries": "Multiplier on the sourced feed-in price (1.0 = no change)"
+        }
+      }
     },
     {
       "key": "price.feed_in_negative_price_switch",
@@ -1067,7 +1092,9 @@
         "price.feed_in_source": [
           "fixed",
           "elpris_dk",
-          "epex_spot"
+          "epex_spot",
+          "evcc",
+          "timeseries"
         ]
       },
       "hot_reload": true,
@@ -1076,9 +1103,136 @@
         "price.feed_in_source": {
           "fixed": "Clamp to 0 when market price (Akkudoktor reference) goes negative",
           "elpris_dk": "Clamp to 0 when market price (Elpris DK) goes negative",
-          "epex_spot": "Clamp to 0 when market price (EPEX Spot) goes negative"
+          "epex_spot": "Clamp to 0 when market price (EPEX Spot) goes negative",
+          "evcc": "Clamp to 0 when the EVCC feed-in rate goes negative",
+          "timeseries": "Clamp to 0 when the sourced feed-in price goes negative"
         }
       }
+    },
+    {
+      "key": "price.feed_in_use_ha_central_data_source",
+      "type": "bool",
+      "default": false,
+      "section": "price",
+      "level": "standard",
+      "description": "Use the centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
+      "labels": [],
+      "help_url": "config-price.html#feed-in-timeseries",
+      "validation": {},
+      "depends_on": {
+        "price.feed_in_source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Price Provider"
+    },
+    {
+      "key": "price.feed_in_ha_sensor_name",
+      "type": "str",
+      "default": "sensor.feed_in_prices",
+      "section": "price",
+      "level": "getting_started",
+      "description": "Home Assistant sensor entity containing the timeseries data (e.g., sensor.feed_in_prices)",
+      "labels": [],
+      "help_url": "config-price.html#feed-in-timeseries",
+      "validation": {},
+      "depends_on": {
+        "price.feed_in_source": [
+          "timeseries"
+        ],
+        "price.feed_in_use_ha_central_data_source": [
+          true
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Price Provider"
+    },
+    {
+      "key": "price.feed_in_data_path",
+      "type": "str",
+      "default": "attributes.data",
+      "section": "price",
+      "level": "standard",
+      "description": "JSON path to the timeseries array in the response. For HA sensors: 'attributes.data'. For custom HTTP servers: 'data', 'values', etc.",
+      "labels": [],
+      "help_url": "config-price.html#feed-in-timeseries",
+      "validation": {},
+      "depends_on": {
+        "price.feed_in_source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Price Provider"
+    },
+    {
+      "key": "price.feed_in_data_url",
+      "type": "str",
+      "default": "http://homeassistant.local:8123/api/states/sensor.feed_in_prices",
+      "section": "price",
+      "level": "getting_started",
+      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: an endpoint returning a JSON array in EVCC's {start, end, value} format; 'end' is optional. The unit of 'value' is set by price.feed_in_value_unit.",
+      "labels": [],
+      "help_url": "config-price.html#feed-in-timeseries",
+      "validation": {
+        "pattern": "^https?://.+"
+      },
+      "depends_on": {
+        "price.feed_in_source": [
+          "timeseries"
+        ],
+        "price.feed_in_use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Price Provider"
+    },
+    {
+      "key": "price.feed_in_data_token",
+      "type": "password",
+      "default": "",
+      "section": "price",
+      "level": "standard",
+      "description": "Optional bearer token for API authentication (used as Authorization: Bearer [token]). Leave empty for unauthenticated endpoints.",
+      "labels": [],
+      "help_url": "config-price.html#feed-in-timeseries",
+      "validation": {},
+      "depends_on": {
+        "price.feed_in_source": [
+          "timeseries"
+        ],
+        "price.feed_in_use_ha_central_data_source": [
+          false
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Price Provider"
+    },
+    {
+      "key": "price.feed_in_value_unit",
+      "type": "select",
+      "default": "EUR/kWh",
+      "section": "price",
+      "level": "getting_started",
+      "description": "Unit of the 'value' field in the feed-in timeseries. Default matches EVCC and the common Home Assistant price integrations (EUR/kWh).",
+      "labels": [],
+      "help_url": "config-price.html#feed-in-timeseries",
+      "validation": {
+        "choices": [
+          "EUR/kWh",
+          "ct/kWh",
+          "EUR/Wh"
+        ]
+      },
+      "depends_on": {
+        "price.feed_in_source": [
+          "timeseries"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Feed-In Price Provider"
     },
     {
       "key": "battery.source",
@@ -1659,7 +1813,7 @@
       "default": false,
       "section": "pv_forecast_source",
       "level": "standard",
-      "description": "Use centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
+      "description": "Use the centrally configured Home Assistant instance (from Data Source) instead of manually specifying URL and token",
       "labels": [],
       "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {},
@@ -1677,7 +1831,7 @@
       "default": "sensor.pv_forecast",
       "section": "pv_forecast_source",
       "level": "getting_started",
-      "description": "Home Assistant sensor entity containing PV forecast timeseries data (e.g., sensor.pv_forecast)",
+      "description": "Home Assistant sensor entity containing the timeseries data (e.g., sensor.pv_forecast)",
       "labels": [],
       "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {},
@@ -1698,7 +1852,7 @@
       "default": "attributes.data",
       "section": "pv_forecast_source",
       "level": "standard",
-      "description": "JSON path to timeseries array in response. For HA sensors: 'attributes.data'. For custom HTTP servers: 'data', 'forecast', 'values', etc. (default: 'attributes.data')",
+      "description": "JSON path to the timeseries array in the response. For HA sensors: 'attributes.data'. For custom HTTP servers: 'data', 'values', etc.",
       "labels": [],
       "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {},
@@ -1716,7 +1870,7 @@
       "default": "http://homeassistant.local:8123/api/states/sensor.pv_forecast",
       "section": "pv_forecast_source",
       "level": "getting_started",
-      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: endpoint URL returning JSON timeseries. Must return a JSON array in EVCC's {start, end, value} format; 'end' is optional. The unit of 'value' is set by pv_forecast_source.value_unit.",
+      "description": "Data source URL. For Home Assistant: http://[HA_HOST]:[PORT]/api/states/[sensor_entity]. For HTTP servers: an endpoint returning a JSON array in EVCC's {start, end, value} format; 'end' is optional. The unit of 'value' is set by pv_forecast_source.value_unit.",
       "labels": [],
       "help_url": "config-solar.html#pv-forecast-sources",
       "validation": {

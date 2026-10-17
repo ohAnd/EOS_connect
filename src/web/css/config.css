@@ -390,6 +390,14 @@
     color: #4caf50;
 }
 
+.config-timeseries-result.warn {
+    border-left-color: #e6a23c;
+}
+
+.config-timeseries-result.warn .fa-circle-check {
+    color: #e6a23c;
+}
+
 .config-timeseries-result.error {
     border-left-color: #ff6b6b;
     color: #ffb3b3;

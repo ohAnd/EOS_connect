@@ -34,17 +34,42 @@ Usage:
 """
 
 from datetime import datetime, timedelta
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 import json
 import logging
 import threading
-import time
 import requests
 
+try:  # running from src/ — src/ is on sys.path
+    from timeseries_grid import (
+        KIND_INTENSIVE,
+        TimeseriesGridError,
+        clamp_report,
+        horizon_slots,
+        local_midnight,
+        place_on_grid,
+    )
+except ImportError:  # imported as src.interfaces (tests)
+    from ..timeseries_grid import (
+        KIND_INTENSIVE,
+        TimeseriesGridError,
+        clamp_report,
+        horizon_slots,
+        local_midnight,
+        place_on_grid,
+    )
+try:  # running from src/ — src/ is on sys.path
+    from interfaces.http_fetch import bearer_request_kwargs, retry_request
+except ImportError:  # imported as src.interfaces (tests)
+    from .http_fetch import bearer_request_kwargs, retry_request
+from .forecast_metadata import ForecastMetadataMixin
 from .timeseries_normalizer import (
+    TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
     convert_price_values,
+    detect_resolution_seconds,
     extract_json_path,
+    median_span_seconds,
     normalize_entries,
     price_plausibility_message,
 )
@@ -52,11 +77,78 @@ from .timeseries_normalizer import (
 logger = logging.getLogger("__main__")
 logger.info("[PRICE-IF] loading module ")
 
+#: What one placement of a price series produced. ``real_slots`` is the slot
+#: index where invented data begins — the first slot after the last one the
+#: source actually covered, or the full horizon when the source covered it all.
+#: It is a SLOT index, which is the whole point: the number of entries a source
+#: sent equals a slot index only when the series starts exactly at the anchor
+#: AND its resolution matches time_frame_base.
+PriceWindow = namedtuple("PriceWindow", "values first_covered real_slots")
+
+
+def fill_price_gaps(values, coverage, slots_per_day):
+    """
+    Fill the slots a price series did not cover, by the established policy.
+
+    - before the first covered slot: the first known price, backwards
+    - an interior hole: the last known price, forwards
+    - the second day, where uncovered: today's value for the same slot
+      (tomorrow repeats today's pattern), else the last known price
+
+    Args:
+        values: Per-slot prices from the intensive placement.
+        coverage: Per-slot coverage fractions; > 0 counts as real data.
+        slots_per_day: 24 or 96 — where the pattern repetition starts.
+
+    Returns:
+        (filled_values, leading_count, forecast_start_index) —
+        forecast_start_index is the first slot of the contiguous uncovered
+        TAIL (None when the last slot is covered), which is exactly what
+        _set_forecast_metadata reports to the UI. ([], 0, None) when nothing
+        is covered at all, so the caller can fall back instead of inventing
+        a flat price.
+    """
+    covered = [fraction > 0 for fraction in coverage]
+    first_data = next((i for i, flag in enumerate(covered) if flag), None)
+    if first_data is None:
+        return [], 0, None
+    last_data = max(i for i, flag in enumerate(covered) if flag)
+
+    first_price = values[first_data]
+    last_known = first_price
+    filled = []
+    for index, flag in enumerate(covered):
+        if flag:
+            last_known = values[index]
+            filled.append(last_known)
+        elif index < first_data:
+            filled.append(first_price)
+        elif index >= slots_per_day and covered[index - slots_per_day]:
+            filled.append(values[index - slots_per_day])
+        else:
+            filled.append(last_known)
+
+    forecast_start = last_data + 1 if last_data + 1 < len(values) else None
+    return filled, first_data, forecast_start
+
+
 AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
 TIBBER_API = "https://api.tibber.com/v1-beta/gql"
 SMARTENERGY_API = "https://apis.smartenergy.at/market/v1/price"
 STROMLIGNING_API_BASE = "https://stromligning.dk/api/prices?lean=true"
 ENERGYFORECAST_API = "https://www.energyforecast.de/api/v1/predictions/next_48_hours"
+
+# Sources that publish a raw exchange price, i.e. energy alone with no grid fee,
+# levy or VAT folded in. Only these get fixed_price_adder_ct / relative_price_multiplier:
+# the adder exists to turn an exchange price into what the meter actually costs.
+#
+# The others already serve a final tariff and must be left alone — Tibber reports
+# price["total"] (energy + tax + fees), Stromligning is queried with ?lean=true
+# (incl. tariffs and VAT), EVCC's /api/tariff/grid has the user's own tariff
+# configuration applied, fixed_24h is a figure the user typed by hand, and
+# default_prices is the 10 ct/kWh placeholder. Adding a grid fee on top of any of
+# those would charge it twice.
+EXCHANGE_PRICE_SOURCES = frozenset({"default", "smartenergy_at", "timeseries"})
 
 # Energyforecast smart price prediction constants
 ENERGYFORECAST_MIN_OVERLAP_HOURS = 6  # Minimum overlapping hours needed for learning
@@ -65,7 +157,7 @@ ENERGYFORECAST_MIN_FACTOR = 0.5  # Minimum allowed multiplicative factor
 ENERGYFORECAST_MAX_OFFSET_CT = 50.0  # Maximum allowed offset in ct/kWh
 
 
-class PriceInterface:
+class PriceInterface(ForecastMetadataMixin):
     """
     The PriceInterface class manages electricity price data retrieval and processing from
     various sources.
@@ -79,7 +171,6 @@ class PriceInterface:
                     (legacy, use FeedInPriceInterface).
         time_zone (str): Timezone for date and time operations.
         current_prices (list): Current prices including taxes (EUR/Wh).
-        current_prices_direct (list): Current prices without tax (EUR/Wh).
         default_prices (list): Default price list if external data is unavailable (EUR/Wh).
 
     Methods:
@@ -89,8 +180,6 @@ class PriceInterface:
             Returns the current prices (EUR/Wh).
         get_current_feedin_prices():
             Returns the current feed-in prices (EUR/Wh).
-        __create_feedin_prices():
-            Generates feed-in prices based on current_prices_direct and configuration.
         __retrieve_prices(tgt_duration, start_time=None):
             Dispatches price retrieval to the configured source.
         __retrieve_prices_from_akkudoktor(tgt_duration, start_time=None):
@@ -162,13 +251,11 @@ class PriceInterface:
         self.time_frame_base = time_frame_base
         self.time_zone = timezone
         self.current_prices = []
-        self.current_prices_direct = []  # without tax
         self.default_prices = [0.0001] * 48  # if external data are not available
         self.price_currency = self.__determine_price_currency()
 
         # Add retry mechanism attributes
         self.last_successful_prices = []
-        self.last_successful_prices_direct = []
         self.consecutive_failures = 0
         self.max_failures = 24  # Max consecutive failures before using default prices
 
@@ -184,13 +271,11 @@ class PriceInterface:
         self._energyforecast_cache = []  # Cached prediction from last call
 
         # Forecast metadata tracking for UI visualization
-        self.forecast_start_index = (
-            None  # Index where forecast/repetition begins (None = all real)
-        )
-        self.forecast_type = (
-            None  # "smart_forecast", "simple_repetition", or None (all real)
-        )
-        self.forecast_source = None  # e.g., "energyforecast.de" for smart forecasts
+        self._init_forecast_metadata()
+        # Prices and forecast metadata are read by the web thread while the
+        # update thread writes them; this tuple is assigned once per update so
+        # a reader never sees new metadata next to old prices.
+        self._published = None
 
         self.__check_config()  # Validate configuration parameters
         logger.info(
@@ -236,11 +321,9 @@ class PriceInterface:
         # Initial update
         try:
             self.update_prices(
-                48,
-                datetime.now(self.time_zone).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                ),
-            )  # Get 48 hours of price data
+                horizon_slots(self.time_frame_base),
+                local_midnight(self.time_zone),
+            )  # Get the full optimization horizon of price data
             logger.info("[PRICE-IF] Initial price update completed")
         except RuntimeError as e:
             logger.error(
@@ -256,11 +339,9 @@ class PriceInterface:
 
                 # Perform price update
                 self.update_prices(
-                    48,
-                    datetime.now(self.time_zone).replace(
-                        hour=0, minute=0, second=0, microsecond=0
-                    ),
-                )  # Get 48 hours of price data
+                    horizon_slots(self.time_frame_base),
+                    local_midnight(self.time_zone),
+                )  # Get the full optimization horizon of price data
                 logger.debug("[PRICE-IF] Periodic price update completed")
 
             except (requests.RequestException, KeyError, ValueError, AttributeError,
@@ -376,10 +457,20 @@ class PriceInterface:
             Logs a debug message indicating that prices have been updated.
         """
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
         self.current_prices = self.__retrieve_prices(tgt_duration, start_time)
+        self._published = (
+            list(self.current_prices),
+            self.forecast_start_index,
+            self.forecast_type,
+            self.forecast_source,
+        )
         logger.debug(
             "[PRICE-IF] Prices updated for %d hours starting from %s",
             tgt_duration,
@@ -393,7 +484,8 @@ class PriceInterface:
         Returns:
             list: A list of current prices (EUR/Wh) for the configured time frame.
         """
-        # logger.debug("[PRICE-IF] Returning current prices: %s", self.current_prices)
+        if self._published is not None:
+            return self._published[0]
         return self.current_prices
 
     def get_price_currency(self):
@@ -407,40 +499,45 @@ class PriceInterface:
 
     def get_forecast_metadata(self):
         """
-        Return metadata about current price forecast/repetition.
-
-        Returns:
-            dict: Contains forecast_start_index, forecast_type, and forecast_source.
-                  - forecast_start_index: Index where prediction/repetition starts
-                    (None if all real)
-                  - forecast_type: "smart_forecast", "simple_repetition", or None
-                  - forecast_source: Source of prediction (e.g., "energyforecast.de") or None
+        The mixin's triple, read from the published snapshot when one exists —
+        a web-thread reader must never see new metadata next to old prices.
         """
-        return {
-            "forecast_start_index": self.forecast_start_index,
-            "forecast_type": self.forecast_type,
-            "forecast_source": self.forecast_source,
-        }
+        if self._published is not None:
+            _, start_index, forecast_type, forecast_source = self._published
+            return {
+                "forecast_start_index": start_index,
+                "forecast_type": forecast_type,
+                "forecast_source": forecast_source,
+            }
+        return super().get_forecast_metadata()
 
-    def _set_forecast_metadata(self, start_index, forecast_type, source=None):
+    def clear_forecast_metadata(self):
         """
-        Update forecast metadata for UI visualization.
+        Drop forecast markers belonging to the previous source.
 
-        Args:
-            start_index (int or None): Index where forecast/repetition begins
-            forecast_type (str or None): "smart_forecast", "simple_repetition", or None
-            source (str or None): Source name (e.g., "energyforecast.de")
+        Used by hot reload when the price source changes without an immediate
+        fetch: the old markers would otherwise keep hatching real prices as
+        forecast until the next update cycle. The published snapshot carries
+        its own copy of the triple, so it is cleared alongside.
         """
-        self.forecast_start_index = start_index
-        self.forecast_type = forecast_type
-        self.forecast_source = source
-        if forecast_type:
-            logger.debug(
-                "[PRICE-IF] Forecast metadata updated: type=%s, start_index=%s, source=%s",
-                forecast_type,
-                start_index,
-                source,
-            )
+        super().clear_forecast_metadata()
+        if self._published is not None:
+            self._published = (self._published[0], None, None, None)
+
+    def drop_fallback_cache(self):
+        """
+        Forget the last successful prices, for a source change.
+
+        ``last_successful_prices`` holds values already shaped by the *previous*
+        source — including its adder and multiplier, which only the exchange
+        sources get (EXCHANGE_PRICE_SOURCES). Carrying that cache into a new
+        source would serve the old source's adjusted prices whenever the new one
+        is short or fails, and the EVCC path splices the cache directly into its
+        own result. The failure counter goes with it: failures counted against
+        the old endpoint say nothing about the new one.
+        """
+        self.last_successful_prices = []
+        self.consecutive_failures = 0
 
     def __retrieve_prices(self, tgt_duration, start_time=None):
         """
@@ -450,8 +547,8 @@ class PriceInterface:
         'stromligning', 'fixed_24h', 'timeseries', 'default'.
 
         Args:
-            tgt_duration (int): The target duration (hours or 15-min slots) for which prices
-            are to be fetched.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly)
+            for which prices are to be fetched.
             start_time (datetime, optional): The start time from which prices are to be fetched.
 
         Returns:
@@ -478,11 +575,19 @@ class PriceInterface:
             prices = self.__retrieve_prices_from_akkudoktor(tgt_duration, start_time)
         else:
             prices = self.default_prices
-            self.current_prices_direct = self.default_prices.copy()
             logger.error(
                 "[PRICE-IF] Price source currently not supported."
                 + " Using default prices (0,10 ct/kWh)."
             )
+            # Nothing below may adjust this: the placeholder is not an exchange
+            # price, and an unsupported source must not silently grow a grid fee.
+            return prices[:tgt_duration]
+
+        if prices and self.src in EXCHANGE_PRICE_SOURCES:
+            # Exchange prices only — see EXCHANGE_PRICE_SOURCES. The cache below
+            # stores the adjusted values, so a fallback serves them as-is and
+            # nothing is ever adjusted twice.
+            prices = self.__apply_price_adjustments(prices)
 
         if not prices:
             self.consecutive_failures += 1
@@ -497,17 +602,11 @@ class PriceInterface:
                     self.max_failures,
                 )
                 prices = self.last_successful_prices[:tgt_duration]
-                self.current_prices_direct = self.last_successful_prices_direct[
-                    :tgt_duration
-                ]
 
                 # Extend if needed
                 if len(prices) < tgt_duration:
-                    remaining_hours = tgt_duration - len(prices)
-                    prices.extend(self.last_successful_prices[:remaining_hours])
-                    self.current_prices_direct.extend(
-                        self.last_successful_prices_direct[:remaining_hours]
-                    )
+                    remaining_slots = tgt_duration - len(prices)
+                    prices.extend(self.last_successful_prices[:remaining_slots])
             else:
                 if len(self.last_successful_prices) == 0:
                     logger.error(
@@ -522,12 +621,10 @@ class PriceInterface:
                         self.consecutive_failures,
                     )
                 prices = self.default_prices[:tgt_duration]
-                self.current_prices_direct = self.default_prices[:tgt_duration].copy()
         else:
             # Success - reset failure counter and store successful prices
             self.consecutive_failures = 0
             self.last_successful_prices = prices.copy()
-            self.last_successful_prices_direct = self.current_prices_direct.copy()
             logger.debug("[PRICE-IF] Prices retrieved successfully. Stored as backup.")
 
         return prices
@@ -552,12 +649,44 @@ class PriceInterface:
             return "EUR"
         return "EUR"
 
+    def __apply_price_adjustments(self, prices):
+        """
+        Apply the user's price corrections to freshly fetched prices.
+
+        (price + fixed_price_adder_ct) * (1 + relative_price_multiplier), then
+        the EUR/Wh sanity clamp — in that order, so a grid fee is multiplied
+        like the energy price is (VAT applies to fees too) and the served value
+        stays bounded.
+
+        Called only for EXCHANGE_PRICE_SOURCES. It used to live in the Akkudoktor
+        fetch alone, which left the fields a silent no-op on the other exchange
+        sources (EPEX-style timeseries, smartenergy_at) whose raw prices need the
+        fee the most — but a source that already reports a final tariff must not
+        be touched at all, or the fee is charged twice.
+        """
+        adder = self.fixed_price_adder_ct / 100000
+        multiplier = 1 + self.relative_price_multiplier
+        if adder == 0 and multiplier == 1:
+            return prices
+
+        adjusted = [round((price + adder) * multiplier, 9) for price in prices]
+        adjusted, clamped, worst = clamp_report(adjusted, -0.5, 1.0)
+        if clamped:
+            logger.warning(
+                "[PRICE-IF] %d adjusted price value(s) outside the EUR/Wh range, "
+                "clamping (worst: %.9f) — check fixed_price_adder_ct and "
+                "relative_price_multiplier",
+                clamped,
+                worst,
+            )
+        return adjusted
+
     def __retrieve_prices_from_akkudoktor(self, tgt_duration, start_time=None):
         """
         Fetches and processes electricity prices for today and tomorrow from Akkudoktor API.
 
         Args:
-            tgt_duration (int): The target duration in hours or 15-min slots.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
@@ -575,11 +704,11 @@ class PriceInterface:
         """
         Core Akkudoktor API fetch logic (without source validation).
         
-        This is used both for primary price retrieval (when src="default") and for
-        auxiliary stock price fetching (when src="fixed_24h" with negative_price_switch).
+        Only reachable for src="default" — __retrieve_prices_from_akkudoktor
+        guards the source before delegating here.
 
         Args:
-            tgt_duration (int): The target duration in hours or 15-min slots.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
@@ -587,9 +716,13 @@ class PriceInterface:
         """
         logger.debug("[PRICE-IF] Fetching prices from akkudoktor ...")
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
         current_hour = start_time.hour
         request_url = (
             AKKUDOKTOR_API_PRICES
@@ -617,24 +750,26 @@ class PriceInterface:
 
         prices = []
         for price in data["values"]:
-            price_with_fixed = (
-                round(price["marketpriceEurocentPerKWh"] / 100000, 9)
-                + self.fixed_price_adder_ct / 100000
-            )
-            price_final = round(
-                price_with_fixed * (1 + self.relative_price_multiplier), 9
-            )
-            prices.append(price_final)
+            # Plain market price; the adder/multiplier are applied centrally in
+            # __retrieve_prices for every dynamic source alike.
+            prices.append(round(price["marketpriceEurocentPerKWh"] / 100000, 9))
 
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
         current_hour = start_time.hour
-        extended_prices = prices[current_hour : current_hour + tgt_duration]
+        # tgt_duration counts slots; this path works in hours until the final
+        # expansion below, so convert once.
+        tgt_hours = int(tgt_duration * self.time_frame_base) // 3600
+        extended_prices = prices[current_hour : current_hour + tgt_hours]
 
-        if len(extended_prices) < tgt_duration:
-            remaining_hours = tgt_duration - len(extended_prices)
+        if len(extended_prices) < tgt_hours:
+            remaining_hours = tgt_hours - len(extended_prices)
             extended_prices.extend(prices[:remaining_hours])
         logger.debug("[PRICE-IF] Prices from AKKUDOKTOR fetched successfully.")
         # for 15 min output only extend the array
@@ -643,7 +778,6 @@ class PriceInterface:
             for price in extended_prices:
                 extended_prices_15min.extend([price] * 4)
             extended_prices = extended_prices_15min
-        self.current_prices_direct = extended_prices.copy()
         return extended_prices
 
     def __retrieve_prices_from_tibber(self, tgt_duration, start_time=None):
@@ -651,7 +785,7 @@ class PriceInterface:
         Fetches and processes electricity prices for today and tomorrow from Tibber API.
 
         Args:
-            tgt_duration (int): The target duration in hours or 15-min slots.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
@@ -779,19 +913,21 @@ class PriceInterface:
         tomorrow_prices_json = json.loads(tomorrow_prices)
 
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
 
         prices = []
-        prices_direct = []
         prices_with_timestamps = []  # Keep timestamp info for smart price prediction
         today_cutoff_idx = 0  # Track where today's real data ends
 
         # Load today's prices and find where real data ends (end of calendar day)
         for price in today_prices_json:
             prices.append(round(price["total"] / 1000, 9))
-            prices_direct.append(round(price["energy"] / 1000, 9))
             prices_with_timestamps.append(
                 {
                     "price": round(price["total"] / 1000, 9),
@@ -809,7 +945,6 @@ class PriceInterface:
         if tomorrow_prices_json:
             for price in tomorrow_prices_json:
                 prices.append(round(price["total"] / 1000, 9))
-                prices_direct.append(round(price["energy"] / 1000, 9))
                 prices_with_timestamps.append(
                     {
                         "price": round(price["total"] / 1000, 9),
@@ -844,7 +979,6 @@ class PriceInterface:
                 )
                 forecast_start_idx = today_cutoff_idx
                 prices.extend(forecast_prices)
-                prices_direct.extend(forecast_prices)
                 self._set_forecast_metadata(
                     start_index=forecast_start_idx,
                     forecast_type="smart_forecast",
@@ -854,7 +988,6 @@ class PriceInterface:
                 # Use simple price repetition when prediction unavailable
                 forecast_start_idx = today_cutoff_idx
                 prices.extend(prices[:extend_amount])
-                prices_direct.extend(prices_direct[:extend_amount])
                 self._set_forecast_metadata(
                     start_index=forecast_start_idx,
                     forecast_type="simple_repetition",
@@ -862,25 +995,20 @@ class PriceInterface:
                 )
 
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
         current_hour = start_time.hour
 
-        # Convert tgt_duration to actual array slots based on time frame
-        if self.time_frame_base == 900:
-            # 15-min intervals: convert hours to 15-min slots
-            actual_slots = tgt_duration * 4
-            array_offset = current_hour * 4
-        else:
-            # Hourly intervals: use as-is
-            actual_slots = tgt_duration
-            array_offset = current_hour
+        # tgt_duration already counts slots; only the offset depends on the frame.
+        actual_slots = tgt_duration
+        array_offset = current_hour * 4 if self.time_frame_base == 900 else current_hour
 
         extended_prices = prices[array_offset : array_offset + actual_slots]
-        extended_prices_direct = prices_direct[
-            array_offset : array_offset + actual_slots
-        ]
 
         # Note: forecast_start_index remains canonical (relative to full 48-hour array)
         # UI will handle time offset when filtering for display
@@ -913,22 +1041,16 @@ class PriceInterface:
                     remaining_hours,
                 )
                 extended_prices.extend(forecast_prices[:remaining_slots])
-                extended_prices_direct.extend(forecast_prices[:remaining_slots])
             else:
                 # Fall back to repeating the last known price value
                 pad_value = extended_prices[-1] if extended_prices else 0.0
-                pad_value_direct = (
-                    extended_prices_direct[-1] if extended_prices_direct else 0.0
-                )
                 logger.debug(
                     "[PRICE-IF] Smart price prediction unavailable, padding %d slots "
                     "with last known price (likely DST adjustment)",
                     remaining_slots,
                 )
                 extended_prices.extend([pad_value] * remaining_slots)
-                extended_prices_direct.extend([pad_value_direct] * remaining_slots)
 
-        self.current_prices_direct = extended_prices_direct.copy()
         logger.debug("[PRICE-IF] Prices from TIBBER fetched successfully.")
         return extended_prices
 
@@ -937,7 +1059,7 @@ class PriceInterface:
         Fetches and processes electricity prices from Stromligning.dk API.
 
         Args:
-            tgt_duration (int): The target duration in hours or 15-min slots.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
@@ -952,9 +1074,13 @@ class PriceInterface:
             return []
 
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
 
         if start_time.tzinfo is None and hasattr(self.time_zone, "localize"):
             start_time = self.time_zone.localize(start_time)
@@ -962,9 +1088,9 @@ class PriceInterface:
         headers = {"accept": "application/json"}
 
         request_url = self._stromligning_url
-        to_param = (start_time + timedelta(hours=tgt_duration)).strftime(
-            "%Y-%m-%dT%H:%M"
-        )
+        to_param = (
+            start_time + timedelta(seconds=tgt_duration * self.time_frame_base)
+        ).strftime("%Y-%m-%dT%H:%M")
         request_url = f"{request_url}&forecast=true&to={to_param}"
 
         logger.debug("[PRICE-IF] Requesting prices from STROMLIGNING: %s", request_url)
@@ -996,7 +1122,9 @@ class PriceInterface:
             return []
 
         tzinfo = start_time.tzinfo
-        horizon_end = start_time + timedelta(hours=tgt_duration)
+        horizon_end = start_time + timedelta(
+            seconds=tgt_duration * self.time_frame_base
+        )
 
         processed_entries = []
         for entry in data:
@@ -1102,7 +1230,6 @@ class PriceInterface:
                     "missing intervals reused the prior value."
                 )
 
-            self.current_prices_direct = prices.copy()
             logger.debug("[PRICE-IF] Prices from STROMLIGNING fetched successfully.")
             return prices
 
@@ -1148,7 +1275,6 @@ class PriceInterface:
                     "missing intervals reused the prior value."
                 )
 
-            self.current_prices_direct = prices.copy()
             logger.debug("[PRICE-IF] Prices from STROMLIGNING fetched successfully.")
             return prices
 
@@ -1157,7 +1283,7 @@ class PriceInterface:
         Fetches and processes electricity prices from SmartEnergy AT API.
 
         Args:
-            tgt_duration (int): The target duration in hours or 15-min slots.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
@@ -1171,9 +1297,13 @@ class PriceInterface:
             )
             return []
         if start_time is None:
-            start_time = datetime.now(self.time_zone).replace(
-                minute=0, second=0, microsecond=0
-            )
+            # Local midnight, not the top of the current hour: slot 0 of every
+            # array this interface produces is midnight, so defaulting to "now"
+            # placed a timestamped series `now.hour` slots early. Production
+            # always passes an explicit anchor, which is why this never bit -
+            # but the feed-in interface already defaults this way and the
+            # asymmetry is a trap for the next caller.
+            start_time = local_midnight(self.time_zone)
         request_url = SMARTENERGY_API
         logger.debug(
             "[PRICE-IF] Requesting prices from SMARTENERGY_AT: %s", request_url
@@ -1301,7 +1431,6 @@ class PriceInterface:
             return []
 
         logger.debug("[PRICE-IF] Prices from SMARTENERGY_AT fetched successfully.")
-        self.current_prices_direct = extended_prices.copy()
         return extended_prices
 
     def _should_call_energyforecast(self):
@@ -1701,34 +1830,10 @@ class PriceInterface:
         return slope, intercept
 
     def _retry_request(self, request_func, error_handler, max_retries=3, delay=1):
-        """
-        Centralized retry logic for API requests with exponential backoff.
-
-        Args:
-            request_func (callable): Function that performs the request and returns the result.
-            error_handler (callable): Function to call on final failure.
-            max_retries (int): Number of retries before error handler is called.
-            delay (int): Initial delay in seconds between retries.
-
-        Returns:
-            The result of request_func, or error_handler on failure.
-        """
-        for attempt in range(max_retries):
-            try:
-                return request_func()
-            except requests.exceptions.Timeout as e:
-                if attempt == max_retries - 1:
-                    return error_handler("timeout", e)
-            except requests.exceptions.RequestException as e:
-                if attempt == max_retries - 1:
-                    return error_handler("request_failed", e)
-            except (ValueError, TypeError) as e:
-                if attempt == max_retries - 1:
-                    return error_handler("invalid_json", e)
-            except (KeyError, AttributeError) as e:
-                if attempt == max_retries - 1:
-                    return error_handler("parsing_error", e)
-            time.sleep(delay)
+        """Delegate to the shared retry loop (interfaces.http_fetch)."""
+        return retry_request(
+            request_func, error_handler, max_retries=max_retries, delay=delay
+        )
 
     def __retrieve_prices_from_fixed24h_array(
         self, tgt_duration, start_time=None  # pylint: disable=unused-argument
@@ -1737,7 +1842,7 @@ class PriceInterface:
         Returns a fixed 24-hour array of prices.
 
         Args:
-            tgt_duration (int): The target duration in hours or 15-min slots.
+            tgt_duration (int): The horizon in slots (48 hourly, 192 quarter-hourly).
             start_time (datetime, optional): The start time for fetching prices.
 
         Returns:
@@ -1754,9 +1859,11 @@ class PriceInterface:
             return []
         # Convert each entry in fixed_24h_array from ct/kWh to EUR/Wh (divide by 100000)
         extended_prices = [round(price / 100000, 9) for price in self.fixed_24h_array]
-        # Extend to tgt_duration if needed
-        if len(extended_prices) < tgt_duration:
-            remaining_hours = tgt_duration - len(extended_prices)
+        # tgt_duration counts slots; this path works in hours until the final
+        # expansion below.
+        tgt_hours = int(tgt_duration * self.time_frame_base) // 3600
+        if len(extended_prices) < tgt_hours:
+            remaining_hours = tgt_hours - len(extended_prices)
             extended_prices.extend(extended_prices[:remaining_hours])
         # for 15 min output only extend the array
         if self.time_frame_base == 900:
@@ -1764,7 +1871,6 @@ class PriceInterface:
             for price in extended_prices:
                 extended_prices_15min.extend([price] * 4)
             extended_prices = extended_prices_15min
-        self.current_prices_direct = extended_prices.copy()
         return extended_prices
 
     def __retrieve_prices_from_url(self, tgt_duration, start_time=None):
@@ -1795,10 +1901,6 @@ class PriceInterface:
             )
             return []
 
-        # Prepare request headers with optional bearer token
-        headers = {"Content-Type": "application/json"}
-        if self.data_token:
-            headers["Authorization"] = f"Bearer {self.data_token}"
 
         logger.debug(
             "[PRICE-IF] Fetching prices from timeseries source: %s (path: %s, unit: %s)",
@@ -1809,7 +1911,9 @@ class PriceInterface:
 
         def request_and_parse():
             """Fetch data and extract timeseries using data_path."""
-            response = requests.get(self.data_url, headers=headers, timeout=10)
+            response = requests.get(
+                self.data_url, **bearer_request_kwargs(self.data_token)
+            )
             response.raise_for_status()
             response_data = response.json()
 
@@ -1849,7 +1953,6 @@ class PriceInterface:
             # Clear any previous errors on success
             self.consecutive_failures = 0
             self.last_successful_prices = prices.copy()
-            self.last_successful_prices_direct = prices.copy()
 
             # State the unit once per unit change. The canonical unit moved from
             # EUR/Wh to EUR/kWh, so a config carried over from an earlier version
@@ -1904,10 +2007,9 @@ class PriceInterface:
 
             # Fetch grid tariff (consumption prices)
             grid_url = f"{evcc_url}/api/tariff/grid"
-            headers = {"Content-Type": "application/json"}
 
             try:
-                response = requests.get(grid_url, headers=headers, timeout=10)
+                response = requests.get(grid_url, **bearer_request_kwargs())
                 response.raise_for_status()
             except requests.exceptions.RequestException as req_err:
                 logger.error(f"[PRICE-IF] Failed to fetch EVCC grid tariff: {req_err}")
@@ -1946,38 +2048,30 @@ class PriceInterface:
                         max_price,
                     )
 
-            # EVCC provides rates with start, end, and value (EUR/kWh)
-            # Convert to timeseries format: [{start, end, value}, ...] with value in EUR/Wh
-            timeseries = []
-            for rate in rates:
-                if not isinstance(rate, dict) or "start" not in rate or "value" not in rate:
-                    logger.warning(f"[PRICE-IF] Skipping invalid EVCC rate entry: {rate}")
-                    continue
-
-                try:
-                    start_str = rate["start"]
-                    end_str = rate.get("end", "")  # May be provided by EVCC
-                    price_eur_kwh = float(rate["value"])
-
-                    # Convert EUR/kWh to EUR/Wh (divide by 1000)
-                    price_eur_wh = price_eur_kwh / 1000.0
-
-                    timeseries.append({
-                        "start": start_str,
-                        "end": end_str if end_str else None,
-                        "value": price_eur_wh
-                    })
-
-                except (ValueError, KeyError, TypeError) as e:
-                    logger.warning(f"[PRICE-IF] Error parsing EVCC rate entry: {e}")
-                    continue
-
-            if not timeseries:
-                logger.error("[PRICE-IF] No valid rates converted from EVCC response")
+            # EVCC provides rates with start, end, and value (EUR/kWh). Parse
+            # them through the shared normalizer — the ends are authoritative,
+            # the timestamps keep their own offsets — and convert the unit via
+            # the common table.
+            try:
+                # Lenient: EVCC publishes rates straight from whatever tariff
+                # plugin the user configured, and one malformed rate must not
+                # cost the other 191. A skipped rate leaves a gap the placement
+                # reports, which is strictly better than losing the fetch.
+                timeseries = normalize_entries(
+                    rates, self.time_zone, label="PRICE-IF", lenient=True
+                )
+                convert_price_values(timeseries, "EUR/kWh")
+            except TimeseriesFormatError as exc:
+                logger.error("[PRICE-IF] Invalid EVCC rates: %s", exc)
                 return []
 
-            # Detect time resolution from first few entries to determine expected count
-            resolution_seconds = self.__detect_price_timeseries_resolution(timeseries)
+            # Same fallback the generic parser uses. Detecting from the first
+            # delta alone is too strict here: skipping an unusable rate leaves
+            # an irregular gap, and refusing the whole fetch because of it would
+            # undo the point of reading the payload leniently.
+            resolution_seconds = detect_resolution_seconds(
+                timeseries
+            ) or median_span_seconds(timeseries)
             if resolution_seconds is None:
                 logger.warning("[PRICE-IF] Could not detect timeseries resolution")
                 return []
@@ -1995,9 +2089,12 @@ class PriceInterface:
 
             # Parse the converted timeseries using standard parser
             # Pass resolution_seconds and start_time for timestamp-aware conversion
-            prices = self.__parse_price_timeseries(timeseries, tgt_duration, resolution_seconds, start_time)
+            window = self.__place_price_timeseries(
+                timeseries, tgt_duration, resolution_seconds, start_time
+            )
+            prices = window.values
 
-            expected_slots = 48 if self.time_frame_base == 3600 else 192
+            expected_slots = horizon_slots(self.time_frame_base)
 
             # Validate EVCC data: only accept exactly 1 or 2 complete full days
             # Partial days, gaps, or mixed data → treat as incomplete error
@@ -2027,17 +2124,16 @@ class PriceInterface:
                 )
 
             if prices and is_incomplete:
-                # Data was incomplete, try fallback chain
-                # Calculate how many real slots we got, accounting for resolution conversion
-                # Resolution conversion (15-min → hourly) happens inside __parse_price_timeseries()
-                if resolution_seconds == 900 and self.time_frame_base == 3600:
-                    # 15-min data was converted to hourly (divided by 4)
-                    num_real_slots = actual_timeseries_count // 4
-                else:
-                    # No conversion, use actual timeseries count
-                    num_real_slots = actual_timeseries_count
-
-                expected_slots = 48 if self.time_frame_base == 3600 else 192
+                # Data was incomplete, try fallback chain.
+                #
+                # The boundary comes from the PLACEMENT, never from len(rates):
+                # an entry count equals a slot index only when the series starts
+                # exactly at the anchor and its resolution matches
+                # time_frame_base. It does not when EVCC publishes from the
+                # current period onwards (the leading slots are backfill, not
+                # real data) nor when an hourly source runs on a 15-minute
+                # system, where 30 entries cover 120 slots.
+                num_real_slots = window.real_slots
                 num_missing_slots = expected_slots - num_real_slots
 
                 # For energyforecast, pass the actual number of prices needed
@@ -2052,8 +2148,25 @@ class PriceInterface:
                     num_forecast_prices_needed,
                 )
 
-                # Extract the real (unpadded) values
+                # The real head of the placed array. Everything from
+                # num_real_slots on is fill_price_gaps' invention, which the
+                # fallbacks below try to replace with something better.
                 real_prices = prices[:num_real_slots] if num_real_slots > 0 else []
+
+                def _complete(head, tail):
+                    """Head + tail, trimmed or padded to exactly the horizon.
+
+                    Every branch must hand back a full-horizon array: the
+                    optimizer pads a short one with its last value, which is how
+                    a 60-value array silently became 192 flat slots.
+                    """
+                    combined = list(head) + list(tail)
+                    if len(combined) > expected_slots:
+                        return combined[:expected_slots]
+                    if len(combined) < expected_slots:
+                        filler = prices[len(combined):expected_slots]
+                        combined.extend(filler)
+                    return combined
 
                 if real_prices and num_missing_slots > 0:
                     # Fallback 1: Try energyforecast.de smart price prediction
@@ -2068,14 +2181,7 @@ class PriceInterface:
                             "prediction to fill %d missing price slots",
                             num_forecast_prices_needed,
                         )
-                        # For 15-min mode, energyforecast returns hourly prices that need expansion
-                        if self.time_frame_base == 900:
-                            # forecast_prices is in 15-min resolution (96 slots for 24h)
-                            # Already in correct format
-                            prices = real_prices + forecast_prices
-                        else:
-                            # hourly mode, use forecast directly
-                            prices = real_prices + forecast_prices
+                        prices = _complete(real_prices, forecast_prices)
 
                         self._set_forecast_metadata(
                             start_index=num_real_slots,
@@ -2093,37 +2199,50 @@ class PriceInterface:
                             num_missing_slots,
                         )
                         yesterday_fill = self.last_successful_prices[num_real_slots:]
-                        prices = real_prices + yesterday_fill
+                        prices = _complete(real_prices, yesterday_fill)
                         self._set_forecast_metadata(
                             start_index=num_real_slots,
                             forecast_type="fallback_history",
                             source="yesterday_prices",
                         )
-                    # Fallback 3: Repeat today's prices for tomorrow (same as Tibber)
+                    # Fallback 3: keep the placement's own gap policy.
                     else:
                         logger.info(
                             "[PRICE-IF] EVCC incomplete, no fallback available. "
                             "Repeating today's prices for tomorrow."
                         )
-                        # Repeat today's real prices to fill tomorrow
-                        prices = real_prices + real_prices
+                        # fill_price_gaps already repeated today's pattern into
+                        # tomorrow's uncovered slots, so `prices` IS the
+                        # repetition and is already horizon-length. Rebuilding
+                        # it as real_prices + real_prices produced a
+                        # 2*num_real_slots array instead.
                         self._set_forecast_metadata(
                             start_index=num_real_slots,
                             forecast_type="simple_repetition",
                             source=None,
                         )
             elif prices and not is_incomplete:
-                # Data is complete (real data only)
-                self._set_forecast_metadata(
-                    start_index=None,
-                    forecast_type="all_real",
-                    source=None,
-                )
+                # "Complete" here means EVCC sent whole days, not that the days
+                # it sent cover the horizon: exactly 24 hourly rates is accepted
+                # as valid, and fill_price_gaps then invents the second day from
+                # the first. Reporting that as all_real served invented prices
+                # to the UI as measured ones, so keep what the placement found.
+                if window.real_slots < expected_slots:
+                    self._set_forecast_metadata(
+                        start_index=window.real_slots,
+                        forecast_type="simple_repetition",
+                        source=None,
+                    )
+                else:
+                    self._set_forecast_metadata(
+                        start_index=None,
+                        forecast_type="all_real",
+                        source=None,
+                    )
 
             if prices:
                 self.consecutive_failures = 0
                 self.last_successful_prices = prices.copy()
-                self.last_successful_prices_direct = prices.copy()
                 logger.info(
                     "[PRICE-IF] EVCC prices finalized: %d values, "
                     "first 4 rates (EUR/Wh): %.9f, %.9f, %.9f, %.9f",
@@ -2140,7 +2259,11 @@ class PriceInterface:
             logger.error(f"[PRICE-IF] Unexpected error fetching EVCC prices: {e}")
             return []
 
-    def __parse_price_timeseries(
+    def __parse_price_timeseries(self, *args, **kwargs):
+        """The served array alone; see __place_price_timeseries for the window."""
+        return self.__place_price_timeseries(*args, **kwargs).values
+
+    def __place_price_timeseries(
         self,
         timeseries,
         tgt_duration,
@@ -2149,354 +2272,173 @@ class PriceInterface:
         value_unit=None,
     ):
         """
-        Parse and validate price timeseries format.
+        Parse a price timeseries and lay it onto the slot grid by timestamp.
 
-        Standardized format: [{start, end, value}, ...]
-        - start: ISO8601 string or Unix timestamp (seconds)
-        - end: optional, derived from the next entry when absent
-        - value: numeric, in *value_unit*
-        - Supports hourly (48 values) or 15-minute (192 values) resolution
+        Standardized format: [{start, end, value}, ...] — accepted field
+        spellings, authoritative ends and capped derived spans per
+        timeseries_normalizer. Prices are a rate, so placement is intensive: a
+        slot averages what covers it, a coarse entry holds its value across
+        every sub-slot (timeseries_grid). An entry's position in the payload
+        means nothing — a source that also publishes yesterday lands on
+        today's slots by its timestamps (discussion #214).
+
+        Slots the series does not cover are filled by fill_price_gaps (first
+        known price backwards, last known forwards, tomorrow repeats today's
+        pattern); a filled tail is reported via _set_forecast_metadata so the
+        UI can hatch it. A series that never touches the window returns [] so
+        the caller's fallback chain serves the last good data instead of
+        fiction.
 
         Args:
-            timeseries: List of price entries with start and value
-            tgt_duration: Target duration in hours
-            resolution_seconds: Pre-detected resolution (900 or 3600), or None to auto-detect
-            start_time: Window start time (datetime) for timestamp-aware conversion
+            timeseries: List of price entries.
+            tgt_duration: Unused; the horizon comes from time_frame_base.
+                Retained for call-site compatibility.
+            resolution_seconds: Pre-detected resolution, or None to detect.
+            start_time: Window anchor (local midnight). None falls back to
+                local_midnight(self.time_zone).
             value_unit: Unit of the incoming values (see
-                timeseries_normalizer.PRICE_UNIT_TO_EUR_PER_WH). ``None`` means the
-                caller already supplies canonical EUR/Wh values and needs no
-                normalization — that is how the EVCC path feeds this method.
+                timeseries_normalizer.PRICE_UNIT_TO_EUR_PER_WH). ``None``
+                means the caller already supplies canonical EUR/Wh values.
 
         Returns:
-            list: Normalized hourly price values in EUR/Wh, or empty on error
+            PriceWindow: the full-horizon EUR/Wh array plus where real data
+            started and where invention begins. ``PriceWindow([], 0, 0)`` on
+            error, so the caller's fallback chain takes over.
         """
         if not timeseries or not isinstance(timeseries, list):
             logger.error("[PRICE-IF] Price timeseries is not a list")
-            return []
+            return PriceWindow([], 0, 0)
 
-        if len(timeseries) == 0:
-            logger.error("[PRICE-IF] Price timeseries is empty")
-            return []
+        try:
+            timeseries = normalize_entries(
+                timeseries, self.time_zone, label="PRICE-IF"
+            )
+            if value_unit is not None:
+                convert_price_values(timeseries, value_unit)
+        except TimeseriesFormatError as exc:
+            logger.error("[PRICE-IF] Invalid price timeseries: %s", exc)
+            return PriceWindow([], 0, 0)
 
         if value_unit is not None:
-            # External source: normalize field/timestamp shape and convert the unit
-            # before any of the resolution logic below looks at the entries.
-            try:
-                timeseries = normalize_entries(
-                    timeseries, self.time_zone, label="PRICE-IF"
-                )
-                convert_price_values(timeseries, value_unit)
-            except TimeseriesFormatError as exc:
-                logger.error("[PRICE-IF] Invalid price timeseries: %s", exc)
-                return []
-
             warning = price_plausibility_message(
                 [entry["value"] for entry in timeseries], value_unit
             )
             if warning:
                 logger.warning("[PRICE-IF] %s", warning)
-        else:
-            # Validate first entry structure for pre-normalized input
-            first = timeseries[0]
-            if not isinstance(first, dict) or not all(
-                k in first for k in ("start", "value")
-            ):
-                logger.error(
-                    "[PRICE-IF] Invalid price timeseries format: missing start or value"
-                )
-                return []
 
-        # Detect time resolution from timestamp delta (unless already provided)
         if resolution_seconds is None:
-            resolution_seconds = self.__detect_price_timeseries_resolution(timeseries)
+            resolution_seconds = detect_resolution_seconds(
+                timeseries
+            ) or median_span_seconds(timeseries)
             if resolution_seconds is None:
                 logger.error("[PRICE-IF] Could not detect price timeseries resolution")
-                return []
+                return PriceWindow([], 0, 0)
 
-        # Validate resolution matches time frame base
-        if resolution_seconds == 900 and self.time_frame_base == 3600:
-            # Source provides 15-min, system wants hourly - OK, convert
-            logger.debug(
-                "[PRICE-IF] Converting source 15-min to system hourly resolution"
-            )
-            timeseries = self.__convert_15min_to_hourly_price_timeseries(timeseries, start_time)
-        elif resolution_seconds == 3600 and self.time_frame_base == 900:
-            # Source provides hourly, system wants 15-min - ERROR
-            # User must choose: either use 3600s time frame or find 15-min source
-            logger.error(
-                "[PRICE-IF] Resolution mismatch: data source provides hourly (3600s) "
-                "but system configured for 15-min (900s) slots. "
-                "Set time_frame_base to 3600 or switch to a data source "
-                "with 15-minute resolution."
-            )
-            return []
-        elif resolution_seconds not in (900, 3600):
-            logger.error(
-                "[PRICE-IF] Unsupported resolution: %d seconds (expected 900 or 3600)",
+        # Any grid places by overlap: a coarser price holds its value across
+        # every slot it spans, a finer one averages into each slot. An hourly
+        # source on a 15-minute system therefore just works. Only a grid so
+        # coarse that one entry blankets many slots is worth flagging — that is
+        # almost always a daily-average sensor configured by mistake.
+        if resolution_seconds > 4 * self.time_frame_base:
+            logger.warning(
+                "[PRICE-IF] Source resolution is %ds — each entry spans %d slots "
+                "and holds its price across all of them; check whether this is "
+                "really a per-slot price series",
                 resolution_seconds,
+                resolution_seconds // self.time_frame_base,
             )
-            return []
+        elif resolution_seconds not in (900, 3600):
+            logger.info(
+                "[PRICE-IF] Unusual source resolution (%ds) — values are placed "
+                "by overlap on the %ds grid",
+                resolution_seconds,
+                self.time_frame_base,
+            )
 
-        # Extract and validate values
+        anchor = (
+            start_time if start_time is not None else local_midnight(self.time_zone)
+        )
+        slot_count = horizon_slots(self.time_frame_base)
         try:
-            values = []
-            for item in timeseries:
-                value = float(item.get("value", 0))
-                # EUR/Wh range: -0.5 to 1.0
-                if value < -0.5 or value > 1.0:
-                    logger.warning(
-                        "[PRICE-IF] Price value %.9f outside range, clamping", value
-                    )
-                    value = max(-0.5, min(1.0, value))
-                values.append(value)
-        except (ValueError, TypeError):
-            logger.error("[PRICE-IF] Failed to extract numeric prices")
-            return []
-
-        # Validate completeness
-        expected_count = 48 if self.time_frame_base == 3600 else 192
-        if len(values) < expected_count:
-            logger.debug(
-                "[PRICE-IF] Incomplete timeseries: got %d, expected %d",
-                len(values),
-                expected_count,
+            placement = place_on_grid(
+                timeseries,
+                anchor,
+                slot_count,
+                self.time_frame_base,
+                KIND_INTENSIVE,
             )
-            # Pad with last value
-            if values:
-                padding_needed = expected_count - len(values)
-                last_value = values[-1]
-                values.extend([last_value] * padding_needed)
+        except TimeseriesGridError as exc:
+            logger.error("[PRICE-IF] Invalid price timeseries: %s", exc)
+            return PriceWindow([], 0, 0)
+
+        values, leading, forecast_start = fill_price_gaps(
+            placement.values, placement.coverage, slots_per_day=slot_count // 2
+        )
+        if not values:
+            logger.warning(
+                "[PRICE-IF] None of %d price entries fell into the %d-slot window "
+                "starting %s — keeping the last good prices. If the source renders "
+                "UTC without an offset, every slot is shifted. See %s",
+                placement.source_count,
+                slot_count,
+                anchor.isoformat(),
+                TEMPLATE_DOCS_URL,
+            )
+            return PriceWindow([], 0, 0)
+
+        covered = sum(1 for fraction in placement.coverage if fraction > 0)
+        if forecast_start is not None:
+            self._set_forecast_metadata(
+                start_index=forecast_start,
+                forecast_type="simple_repetition",
+                source=None,
+            )
+        else:
+            self._set_forecast_metadata(
+                start_index=None, forecast_type="all_real", source=None
+            )
+
+        if leading >= slot_count // 2:
+            # A rolling source fetched mid-day leads by a few hours — normal and
+            # quiet. A series that only starts a full day after the anchor is a
+            # misconfigured window, and its whole first day is invented.
+            logger.warning(
+                "[PRICE-IF] The price series only starts %d slot(s) after the "
+                "window anchor %s — the first day is backfilled with its first "
+                "known price",
+                leading,
+                anchor.isoformat(),
+            )
+        trailing = slot_count - forecast_start if forecast_start is not None else 0
+        interior = slot_count - covered - trailing - leading
+        if interior > 0:
+            logger.warning(
+                "[PRICE-IF] %d slot(s) inside the covered window carried no price "
+                "and were filled from their neighbours — check the source for holes",
+                interior,
+            )
+        if placement.dropped:
+            logger.debug(
+                "[PRICE-IF] %d of %d price entries fall outside the %d-slot window",
+                placement.dropped,
+                placement.source_count,
+                slot_count,
+            )
+
+        values, clamped, worst = clamp_report(values, -0.5, 1.0)
+        if clamped:
+            logger.warning(
+                "[PRICE-IF] %d price value(s) outside the EUR/Wh range, "
+                "clamping (worst: %.9f)",
+                clamped,
+                worst,
+            )
 
         # Round to 9 decimals (EUR precision)
-        values = [round(v, 9) for v in values]
-
-        return values
-
-    def __detect_price_timeseries_resolution(self, timeseries):
-        """
-        Detect time resolution (900s for 15-min, 3600s for hourly).
-
-        Returns:
-            int: Seconds per interval (900 or 3600), or None if cannot detect
-        """
-        if len(timeseries) < 2:
-            return None
-
-        try:
-            # Parse first two timestamps
-            from datetime import datetime as dt_class
-            import pytz
-
-            def parse_ts(ts_str):
-                """Parse timestamp from a datetime, ISO8601 string or Unix seconds."""
-                if isinstance(ts_str, dt_class):
-                    # Already normalized by timeseries_normalizer.
-                    return ts_str
-                if isinstance(ts_str, (int, float)):
-                    return dt_class.fromtimestamp(ts_str, tz=pytz.UTC)
-                if isinstance(ts_str, str):
-                    try:
-                        return dt_class.fromisoformat(ts_str.replace('Z', '+00:00'))
-                    except ValueError:
-                        return dt_class.fromisoformat(ts_str)
-                return None
-
-            start1 = parse_ts(timeseries[0].get("start"))
-            start2 = parse_ts(timeseries[1].get("start"))
-
-            if start1 is None or start2 is None:
-                return None
-
-            delta = int((start2 - start1).total_seconds())
-
-            if delta == 900:
-                logger.debug("[PRICE-IF] Detected 15-minute price resolution")
-                return 900
-            elif delta == 3600:
-                logger.debug("[PRICE-IF] Detected hourly price resolution")
-                return 3600
-            else:
-                logger.warning(
-                    "[PRICE-IF] Unexpected resolution delta: %d seconds", delta
-                )
-                return None
-        except (KeyError, TypeError, ValueError):
-            return None
-
-    def __convert_15min_to_hourly_price_timeseries(self, timeseries, start_time=None):
-        """
-        Convert 15-minute to hourly by averaging prices within each hour slot.
-        
-        Uses timestamps to determine which hour slot each 15-min price belongs to,
-        rather than naive index-based grouping. This ensures prices are correctly
-        aligned to the 48-hour window boundaries.
-
-        Args:
-            timeseries: List of 15-min price entries with start timestamps
-            start_time: Window start time (datetime) for alignment. If None, uses
-                       first timestamp as reference.
-
-        Returns:
-            list: Averaged hourly timeseries aligned to window start
-        """
-        if not timeseries:
-            logger.warning("[PRICE-IF] No 15-min data to convert")
-            return []
-
-        try:
-            from datetime import datetime as dt_class
-            import math
-
-            # Determine window start: use provided start_time or derive from first entry
-            if start_time is None:
-                # Parse first timestamp as reference
-                first_ts = timeseries[0].get("start")
-                if isinstance(first_ts, dt_class):
-                    # Already normalized by timeseries_normalizer.
-                    window_start = first_ts
-                elif isinstance(first_ts, str):
-                    try:
-                        window_start = dt_class.fromisoformat(first_ts.replace('Z', '+00:00'))
-                    except (ValueError, AttributeError):
-                        # Fallback for Python < 3.7 or invalid format
-                        logger.debug(f"[PRICE-IF] Failed to parse timestamp: {first_ts}")
-                        return self.__convert_15min_to_hourly_price_timeseries_naive(timeseries)
-                else:
-                    # Unix timestamp
-                    from datetime import timezone
-                    window_start = dt_class.fromtimestamp(first_ts, tz=timezone.utc)
-            else:
-                # Use provided start_time (already datetime with timezone)
-                window_start = start_time
-
-            # Initialize 48 hour slots
-            hourly = [{"prices": [], "start": None, "end": None} for _ in range(48)]
-
-            # Parse timestamps and group by hour slot
-            for entry in timeseries:
-                try:
-                    # Parse entry timestamp
-                    ts_str = entry.get("start")
-                    if isinstance(ts_str, dt_class):
-                        # Already normalized by timeseries_normalizer.
-                        entry_time = ts_str
-                    elif isinstance(ts_str, str):
-                        entry_time = dt_class.fromisoformat(ts_str.replace('Z', '+00:00'))
-                    else:
-                        from datetime import timezone
-                        entry_time = dt_class.fromtimestamp(ts_str, tz=timezone.utc)
-
-                    # Calculate which hour slot this entry belongs to
-                    time_diff = entry_time - window_start
-                    hours_offset = time_diff.total_seconds() / 3600.0
-                    # Use math.floor to properly handle negative values
-                    # floor(-0.25) = -1, floor(0.25) = 0, floor(1.75) = 1
-                    hour_slot = math.floor(hours_offset)
-
-                    # Validate hour slot is within 48-hour window
-                    if 0 <= hour_slot < 48:
-                        price_value = float(entry.get("value", 0))
-                        hourly[hour_slot]["prices"].append(price_value)
-
-                        # Set start/end timestamps for this slot (from first entry in slot)
-                        if not hourly[hour_slot]["start"]:
-                            hourly[hour_slot]["start"] = ts_str
-                        hourly[hour_slot]["end"] = entry.get("end")
-                except (ValueError, TypeError, AttributeError) as e:
-                    logger.debug(f"[PRICE-IF] Skipping entry during conversion: {e}")
-                    continue
-
-            # Average prices within each hour slot and collect filled/empty info
-            slot_values = [None] * 48  # None means no data for this slot
-            slots_with_data = 0
-            slots_without_data = 0
-
-            for slot_idx, slot_data in enumerate(hourly):
-                if slot_data["prices"]:
-                    slot_values[slot_idx] = sum(slot_data["prices"]) / len(slot_data["prices"])
-                    slots_with_data += 1
-                else:
-                    slots_without_data += 1
-
-            # Find first slot with actual data
-            first_data_slot = next((i for i, v in enumerate(slot_values) if v is not None), None)
-
-            if first_data_slot is None:
-                # No data at all - return empty so fallback chain can handle it
-                logger.warning("[PRICE-IF] No 15-min prices fell within 48-hour window")
-                return []
-
-            # Gap-fill all 48 slots:
-            # - Slots before first data: backward-fill with first known price
-            # - Slots after last data: for slots 24-47 (next day), cycle daily pattern from slots 0-23
-            #   For slots within same day after data ends: forward-fill with last known
-            first_price = slot_values[first_data_slot]
-            last_known = first_price  # Start with first data as seed for pre-data slots
-
-            result = []
-            for slot_idx in range(48):
-                if slot_values[slot_idx] is not None:
-                    last_known = slot_values[slot_idx]
-                    value = last_known
-                elif slot_idx < first_data_slot:
-                    # Before any data: use first known price
-                    value = first_price
-                else:
-                    # Inner gap or post-data within same day: forward-fill with last known
-                    # If we're in the next day (slot >= 24) and have no real data there,
-                    # cycle through today's pattern (slots 0-23) for better forecasting
-                    if slot_idx >= 24:
-                        # Next day: repeat today's pattern
-                        cycle_idx = (slot_idx - 24) % 24  # Map slots 24-47 to 0-23
-                        value = slot_values[cycle_idx] if slot_values[cycle_idx] is not None else last_known
-                    else:
-                        value = last_known
-
-                result.append({"start": hourly[slot_idx]["start"], "end": hourly[slot_idx]["end"], "value": value})
-
-            logger.debug(
-                "[PRICE-IF] Converted %d 15-min prices to 48 hourly slots "
-                "(slots with data: %d, gap-filled: %d)",
-                len(timeseries),
-                slots_with_data,
-                slots_without_data,
-            )
-            return result
-
-        except Exception as e:
-            logger.error(f"[PRICE-IF] Error converting 15-min to hourly: {e}")
-            # Fallback to naive grouping if timestamp parsing fails
-            logger.debug("[PRICE-IF] Falling back to naive grouping")
-            return self.__convert_15min_to_hourly_price_timeseries_naive(timeseries)
-
-    def __convert_15min_to_hourly_price_timeseries_naive(self, timeseries):
-        """
-        Fallback: convert 15-minute to hourly by naive 4-consecutive grouping.
-        
-        This is used when timestamp parsing fails. Groups consecutive 15-min
-        prices in groups of 4 without considering timestamps.
-        
-        Args:
-            timeseries: List of 15-min price entries
-            
-        Returns:
-            list: Averaged hourly timeseries using naive grouping
-        """
-        hourly = []
-        for i in range(0, len(timeseries), 4):
-            group = timeseries[i : i + 4]
-            if not group:
-                continue
-            try:
-                avg_value = (
-                    sum(float(item.get("value", 0)) for item in group) / len(group)
-                )
-                hourly_item = {
-                    "start": group[0].get("start"),
-                    "end": group[-1].get("end"),
-                    "value": avg_value,
-                }
-                hourly.append(hourly_item)
-            except (ValueError, TypeError):
-                pass
-        return hourly
+        return PriceWindow(
+            values=[round(value, 9) for value in values],
+            first_covered=leading,
+            # Where invention starts. forecast_start is None when the source
+            # covered the final slot, i.e. the whole horizon is real.
+            real_slots=forecast_start if forecast_start is not None else slot_count,
+        )

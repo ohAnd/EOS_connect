@@ -10,9 +10,11 @@ from src.config_web.store import ConfigStore
 from src.config_web.schema import ConfigSchema
 from src.config_web.migration import (
     migrate_yaml_to_store,
+    migrate_clear_deprecated_overrides,
     migrate_battery_price_unit_to_ct_kwh,
     migrate_managed_load_power_sensor_to_replaces_sensor,
     migrate_sensor_placeholders_to_empty,
+    migrate_managed_loads_season_cleanup,
     prune_migrated_yaml,
     PRUNE_BACKUP_SUFFIX,
     _flatten_config,
@@ -1188,3 +1190,342 @@ class TestManagedLoadReplacesSensorMigration:
         assert ran_again is False
         assert store.get("managed_loads.0.power_sensor") == "sensor.something_else"
         assert store.get("managed_loads.0.replaces_sensor") == "sensor.heat_pump_power"
+
+
+class TestMigrateClearDeprecatedOverrides:
+    """Tests for migrate_clear_deprecated_overrides."""
+
+    def test_guard_key_prevents_re_running(self, store):
+        """Migration should only run once, guarded by a marker key."""
+        # Set marker to simulate already-run migration
+        store.set("_migrated_clear_deprecated_overrides", True)
+
+        # Set some deprecated overrides
+        store.set("load.source", "homeassistant")
+        store.set("load.url", "http://old:8123")
+        store.set("load.access_token", "old_token")
+
+        migrate_clear_deprecated_overrides(store)
+
+        # Values should NOT be cleared (migration skipped)
+        assert store.get("load.source") == "homeassistant"
+        assert store.get("load.url") == "http://old:8123"
+        assert store.get("load.access_token") == "old_token"
+
+    def test_clears_load_overrides_when_global_datasource_is_remote(self, store):
+        """When global data_source is configured (remote), clear deprecated load overrides."""
+        # Set global data_source to a real remote source
+        store.set("data_source.type", "homeassistant")
+        store.set("data_source.url", "http://new:8123")
+        store.set("data_source.access_token", "new_token")
+
+        # Set deprecated load overrides
+        store.set("load.source", "openhab")
+        store.set("load.url", "http://old_load:8080")
+        store.set("load.access_token", "old_load_token")
+
+        migrate_clear_deprecated_overrides(store)
+
+        # Deprecated overrides should be cleared
+        assert store.get("load.source") == "default"
+        assert store.get("load.url") == ""
+        assert store.get("load.access_token") == ""
+        # Global data_source should not change
+        assert store.get("data_source.type") == "homeassistant"
+        assert store.get("data_source.url") == "http://new:8123"
+        # Guard marker should be set
+        assert store.get("_migrated_clear_deprecated_overrides") is True
+
+    def test_clears_battery_overrides_when_global_datasource_is_remote(self, store):
+        """When global data_source is configured (remote), clear deprecated battery overrides."""
+        # Set global data_source
+        store.set("data_source.type", "homeassistant")
+        store.set("data_source.url", "http://ha:8123")
+        store.set("data_source.access_token", "ha_token")
+
+        # Set deprecated battery overrides
+        store.set("battery.source", "openhab")
+        store.set("battery.url", "http://old_battery:8080")
+        store.set("battery.access_token", "old_battery_token")
+
+        migrate_clear_deprecated_overrides(store)
+
+        # Deprecated overrides should be cleared
+        assert store.get("battery.source") == "default"
+        assert store.get("battery.url") == ""
+        assert store.get("battery.access_token") == ""
+
+    def test_clears_both_load_and_battery_overrides(self, store):
+        """Both load and battery overrides are cleared when global data_source is remote."""
+        store.set("data_source.type", "homeassistant")
+        store.set("data_source.url", "http://ha:8123")
+        store.set("data_source.access_token", "ha_token")
+
+        # Set deprecated overrides on both sections
+        store.set("load.source", "homeassistant")
+        store.set("load.url", "http://old_load:8123")
+        store.set("load.access_token", "old_load_token")
+        store.set("battery.source", "openhab")
+        store.set("battery.url", "http://old_battery:8080")
+        store.set("battery.access_token", "old_battery_token")
+
+        migrate_clear_deprecated_overrides(store)
+
+        # Both should be cleared
+        assert store.get("load.source") == "default"
+        assert store.get("load.url") == ""
+        assert store.get("load.access_token") == ""
+        assert store.get("battery.source") == "default"
+        assert store.get("battery.url") == ""
+        assert store.get("battery.access_token") == ""
+
+    def test_preserves_overrides_when_global_datasource_is_default(self, store):
+        """When global data_source is 'default', keep per-section overrides (Expert setting)."""
+        # Global data_source is default (not configured)
+        store.set("data_source.type", "default")
+        store.set("data_source.url", "")
+        store.set("data_source.access_token", "")
+
+        # Set deprecated overrides (user explicitly configured them as Expert)
+        store.set("load.source", "homeassistant")
+        store.set("load.url", "http://load:8123")
+        store.set("load.access_token", "load_token")
+
+        migrate_clear_deprecated_overrides(store)
+
+        # Overrides should be PRESERVED (not cleared)
+        assert store.get("load.source") == "homeassistant"
+        assert store.get("load.url") == "http://load:8123"
+        assert store.get("load.access_token") == "load_token"
+        # But guard marker should still be set
+        assert store.get("_migrated_clear_deprecated_overrides") is True
+
+    def test_no_op_on_fresh_install(self, store):
+        """On fresh install with no data_source or overrides, migration should be safe no-op."""
+        # Fresh store: no keys set
+
+        migrate_clear_deprecated_overrides(store)
+
+        # Should set only the guard marker
+        assert store.get("_migrated_clear_deprecated_overrides") is True
+        # No other keys should be created
+        all_keys = store.get_all()
+        assert list(all_keys.keys()) == ["_migrated_clear_deprecated_overrides"]
+
+    def test_clears_only_non_empty_overrides(self, store):
+        """Only non-default/non-empty overrides are logged as cleared."""
+        store.set("data_source.type", "homeassistant")
+        store.set("data_source.url", "http://ha:8123")
+        store.set("data_source.access_token", "ha_token")
+
+        # Set some overrides but leave others at defaults
+        store.set("load.source", "homeassistant")
+        # load.url and load.access_token left unset (defaults to "")
+        store.set("battery.source", "default")  # default, so won't trigger cleanup
+        store.set("battery.url", "http://battery:8080")
+
+        migrate_clear_deprecated_overrides(store)
+
+        # load.source should be cleared
+        assert store.get("load.source") == "default"
+        # battery.url should be cleared (non-empty even though source is "default")
+        assert store.get("battery.url") == ""
+
+    def test_handle_missing_data_source_keys(self, store):
+        """Migration handles gracefully when data_source keys are missing."""
+        # Don't set any data_source keys (empty store)
+        # Set some deprecated overrides
+        store.set("load.source", "homeassistant")
+        store.set("load.url", "http://load:8123")
+
+        migrate_clear_deprecated_overrides(store)
+
+        # With missing data_source.type (defaults to "default"),
+        # overrides should be preserved
+        assert store.get("load.source") == "homeassistant"
+        assert store.get("load.url") == "http://load:8123"
+        assert store.get("_migrated_clear_deprecated_overrides") is True
+
+    def test_openhab_treated_like_homeassistant(self, store):
+        """OpenHAB as data_source should also trigger cleanup (it's a remote source)."""
+        store.set("data_source.type", "openhab")
+        store.set("data_source.url", "http://openhab:8080")
+        store.set("data_source.access_token", "oh_token")
+
+        store.set("load.source", "homeassistant")
+        store.set("load.url", "http://old:8123")
+        store.set("load.access_token", "old_token")
+
+        migrate_clear_deprecated_overrides(store)
+
+        # load overrides should be cleared
+        assert store.get("load.source") == "default"
+        assert store.get("load.url") == ""
+        assert store.get("load.access_token") == ""
+
+
+class TestManagedLoadsSeasonCleanup:
+    """Tests for cleaning up stale season values on non-pool load types.
+    
+    Issue #322: Managed loads with types that don't support seasons
+    (sauna, hot_water_tank, buffer_tank, etc.) should not have season values.
+    """
+
+    def test_migration_clears_sauna_seasons(self, store):
+        """Sauna load with seasons should have them cleared."""
+        # Set up a sauna load with seasons (stale data from before #322)
+        store.set("managed_loads.0.id", "sauna_1")
+        store.set("managed_loads.0.name", "Sauna")
+        store.set("managed_loads.0.type", "sauna")
+        store.set("managed_loads.0.season_start", "04-15")
+        store.set("managed_loads.0.season_end", "09-30")
+
+        # Run migration
+        result = migrate_managed_loads_season_cleanup(store)
+
+        assert result is True
+        # Season values should be cleared
+        assert store.get("managed_loads.0.season_start") is None
+        assert store.get("managed_loads.0.season_end") is None
+        # Load itself should still exist
+        assert store.get("managed_loads.0.type") == "sauna"
+
+    def test_migration_clears_hot_water_tank_seasons(self, store):
+        """Hot water tank load with seasons should have them cleared."""
+        store.set("managed_loads.0.id", "hwt_1")
+        store.set("managed_loads.0.name", "Hot Water Tank")
+        store.set("managed_loads.0.type", "hot_water_tank")
+        store.set("managed_loads.0.season_start", "01-01")
+        store.set("managed_loads.0.season_end", "12-31")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        assert store.get("managed_loads.0.season_start") is None
+        assert store.get("managed_loads.0.season_end") is None
+
+    def test_migration_clears_buffer_tank_seasons(self, store):
+        """Buffer tank load with seasons should have them cleared."""
+        store.set("managed_loads.0.id", "buffer_1")
+        store.set("managed_loads.0.name", "Buffer Tank")
+        store.set("managed_loads.0.type", "buffer_tank")
+        store.set("managed_loads.0.season_start", "06-21")
+        store.set("managed_loads.0.season_end", "09-21")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        assert store.get("managed_loads.0.season_start") is None
+        assert store.get("managed_loads.0.season_end") is None
+
+    def test_migration_preserves_pool_heatpump_seasons(self, store):
+        """Pool heatpump seasons should be preserved."""
+        store.set("managed_loads.0.id", "pool_1")
+        store.set("managed_loads.0.name", "Pool")
+        store.set("managed_loads.0.type", "pool_heatpump")
+        store.set("managed_loads.0.season_start", "04-15")
+        store.set("managed_loads.0.season_end", "09-30")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        # Pool heatpump seasons should be preserved
+        assert store.get("managed_loads.0.season_start") == "04-15"
+        assert store.get("managed_loads.0.season_end") == "09-30"
+
+    def test_migration_handles_mixed_loads(self, store):
+        """Migration handles multiple loads correctly."""
+        # Load 0: sauna with seasons (should be cleared)
+        store.set("managed_loads.0.id", "sauna_1")
+        store.set("managed_loads.0.type", "sauna")
+        store.set("managed_loads.0.season_start", "04-15")
+        store.set("managed_loads.0.season_end", "09-30")
+
+        # Load 1: pool_heatpump with seasons (should be preserved)
+        store.set("managed_loads.1.id", "pool_1")
+        store.set("managed_loads.1.type", "pool_heatpump")
+        store.set("managed_loads.1.season_start", "05-01")
+        store.set("managed_loads.1.season_end", "08-31")
+
+        # Load 2: hot_water_tank with seasons (should be cleared)
+        store.set("managed_loads.2.id", "hwt_1")
+        store.set("managed_loads.2.type", "hot_water_tank")
+        store.set("managed_loads.2.season_start", "01-01")
+        store.set("managed_loads.2.season_end", "12-31")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        # Check results
+        assert store.get("managed_loads.0.season_start") is None
+        assert store.get("managed_loads.0.season_end") is None
+        assert store.get("managed_loads.1.season_start") == "05-01"
+        assert store.get("managed_loads.1.season_end") == "08-31"
+        assert store.get("managed_loads.2.season_start") is None
+        assert store.get("managed_loads.2.season_end") is None
+
+    def test_migration_idempotent_on_second_run(self, store):
+        """Migration should be a no-op on second run."""
+        store.set("managed_loads.0.id", "sauna_1")
+        store.set("managed_loads.0.type", "sauna")
+        store.set("managed_loads.0.season_start", "04-15")
+
+        # First run
+        result1 = migrate_managed_loads_season_cleanup(store)
+        assert result1 is True
+        assert store.get("managed_loads.0.season_start") is None
+
+        # Second run (should do nothing)
+        result2 = migrate_managed_loads_season_cleanup(store)
+        assert result2 is False  # Already migrated
+        assert store.get("managed_loads.0.season_start") is None
+
+    def test_migration_skipped_on_empty_store(self, store):
+        """Migration should be skipped on empty store."""
+        result = migrate_managed_loads_season_cleanup(store)
+        
+        # Should complete without error
+        assert result is True
+        assert store.get("_migrated_managed_loads_season_cleanup_v1") is True
+
+    def test_migration_handles_external_contingent_seasons(self, store):
+        """External contingent type seasons should be cleared."""
+        store.set("managed_loads.0.id", "ext_cont_1")
+        store.set("managed_loads.0.type", "external_contingent")
+        store.set("managed_loads.0.season_start", "04-15")
+        store.set("managed_loads.0.season_end", "09-30")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        assert store.get("managed_loads.0.season_start") is None
+        assert store.get("managed_loads.0.season_end") is None
+
+    def test_migration_handles_external_profile_seasons(self, store):
+        """External profile type seasons should be cleared."""
+        store.set("managed_loads.0.id", "ext_prof_1")
+        store.set("managed_loads.0.type", "external_profile")
+        store.set("managed_loads.0.season_start", "04-15")
+        store.set("managed_loads.0.season_end", "09-30")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        assert store.get("managed_loads.0.season_start") is None
+        assert store.get("managed_loads.0.season_end") is None
+
+    def test_migration_only_clears_season_start_if_present(self, store):
+        """Migration handles case where only season_start is present."""
+        store.set("managed_loads.0.id", "sauna_1")
+        store.set("managed_loads.0.type", "sauna")
+        store.set("managed_loads.0.season_start", "04-15")
+        # season_end not set
+
+        migrate_managed_loads_season_cleanup(store)
+
+        assert store.get("managed_loads.0.season_start") is None
+
+    def test_migration_only_clears_season_end_if_present(self, store):
+        """Migration handles case where only season_end is present."""
+        store.set("managed_loads.0.id", "sauna_1")
+        store.set("managed_loads.0.type", "sauna")
+        # season_start not set
+        store.set("managed_loads.0.season_end", "09-30")
+
+        migrate_managed_loads_season_cleanup(store)
+
+        assert store.get("managed_loads.0.season_end") is None
