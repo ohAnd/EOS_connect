@@ -197,7 +197,7 @@ class BatteryInterface:
             return
 
         missing, where = None, "Data Source"
-        if self.url == "":
+        if self.url == "" or "://yourEVCCserver" in str(self.url):
             missing = "the data source URL is not configured"
         elif self.access_token == "" and self.src == "homeassistant":
             missing = "the Home Assistant access token is not configured"
@@ -261,7 +261,13 @@ class BatteryInterface:
             return None  # Default mode doesn't support temperature
 
         try:
-            raw_state = self.__fetch_remote_state(self.src, self.temp_sensor)
+            if self.src == "evcc" and self.__temperature_sensor_is_entity():
+                raw_state, src_name = self.__fetch_temp_via_supplementary()
+            else:
+                raw_state, src_name = (
+                    self.__fetch_remote_state(self.src, self.temp_sensor),
+                    self.src,
+                )
             temp = _state_as_float(raw_state)
 
             # Sanity check: battery temperature should be reasonable
@@ -274,7 +280,9 @@ class BatteryInterface:
 
             self.temp_fail_count = 0
             self.current_temp = temp
-            logger.debug("[BATTERY-IF] Successfully fetched Temp = %s°C", temp)
+            logger.debug(
+                "[BATTERY-IF] Successfully fetched Temp = %s°C via %s", temp, src_name
+            )
             return temp
 
         except (requests.exceptions.RequestException, ValueError, KeyError) as e:
@@ -292,6 +300,47 @@ class BatteryInterface:
                 e,
             )
             return self.current_temp  # Use last known value
+
+    def __temperature_sensor_is_entity(self):
+        """Whether the temp sensor names an entity the supplementary source serves.
+
+        An EVCC data source answers state reads as dotted paths; a temperature
+        sensor named like a Home Assistant entity will never resolve there, and
+        EVCC has no temperature of its own unless a meter reports one. Anything
+        "sensor."-shaped goes to the supplementary connection.
+        """
+        return str(self.temp_sensor).strip().startswith("sensor.")
+
+    def __fetch_temp_via_supplementary(self):
+        """Read the temperature through the supplementary connection, if any.
+
+        Raises the same RequestException/ValueError the direct path would, so the
+        failure handling below treats both identically.
+        """
+        supp_type = str(self.battery_data.get("supplementary_type", "") or "").strip()
+        supp_url = str(self.battery_data.get("supplementary_url", "") or "").strip()
+        if not supp_type or not supp_url or supp_type == "default":
+            raise ValueError(
+                f"Battery temperature sensor '{self.temp_sensor}' is not an EVCC "
+                "value — configure the supplementary Home Assistant connection "
+                "under Settings > Data Source to read it."
+            )
+        supp_token = str(
+            self.battery_data.get("supplementary_access_token", "") or ""
+        ).strip()
+        return (
+            fetch_remote_state(
+                supp_type,
+                self.temp_sensor,
+                url=supp_url,
+                access_token=supp_token,
+                request_timeout=self.request_timeout,
+                ssl_ignore=bool(
+                    self.battery_data.get("supplementary_ssl_ignore", False)
+                ),
+            ),
+            f"supplementary {supp_type}",
+        )
 
     # source-specific price fetchers removed — use __fetch_price_data_unified
 
@@ -315,7 +364,13 @@ class BatteryInterface:
         try:
             raw_state = self.__fetch_remote_state(self.src, self.soc_sensor)
             raw_value = _state_as_float(raw_state)
-            if raw_value <= 1.0:
+            if self.src == "evcc":
+                # EVCC /api/state reports battery.soc in percent (0-100), weighted
+                # across battery meters - no decimal/percent guessing is needed, and
+                # guessing here would read 0.6 as "60% of 1 percent" on a 60% battery
+                # only after the auto-detect below had already settled on a format.
+                soc = raw_value
+            elif raw_value <= 1.0:
                 # Use history to decide which format is closer to the last known value.
                 # If it's the first run (current_soc == 0), we default to decimal (x100)
                 # UNLESS the value is exactly 1.0, which we treat as 1% to avoid
@@ -326,11 +381,6 @@ class BatteryInterface:
 
                     if diff_as_percent < diff_as_decimal:
                         soc = raw_value
-                        # logger.debug(
-                        #     "[BATTERY-IF] Auto-detected percentage format "
-                        #     "(0-1) based on history: %s%%",
-                        #     soc,
-                        # )
                     else:
                         soc = raw_value * 100
                         logger.debug(
@@ -358,9 +408,6 @@ class BatteryInterface:
             else:
                 # Values > 1.0 are clearly percentage format (0-100).
                 soc = raw_value
-                # logger.debug(
-                #     "[BATTERY-IF] Detected percentage format (0-100): %s%%", soc
-                # )
 
             self.soc_fail_count = 0
             return round(soc, 1)
@@ -408,7 +455,7 @@ class BatteryInterface:
             return self.price_euro_per_wh
 
         source_name = self.src.upper()
-        if self.src not in ("homeassistant", "openhab"):
+        if self.src not in ("homeassistant", "openhab", "evcc"):
             logger.warning(
                 "[BATTERY-IF] Unknown price source '%s'. Keeping last value %s.",
                 self.src,
@@ -648,7 +695,9 @@ class BatteryInterface:
                 )
 
                 if self.base_control:
-                    self.base_control.set_current_bat_charge_max(self.max_charge_power_dyn)
+                    self.base_control.set_current_bat_charge_max(
+                        self.max_charge_power_dyn
+                    )
 
                 if self.on_bat_max_changed:
                     self.on_bat_max_changed()
@@ -775,7 +824,7 @@ class BatteryInterface:
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:
                 logger.error(
                     "[battery_interface] Battery state update failed: %s | Config: #battery | ACTION REQUIRED",
-                    e
+                    e,
                 )
             except Exception:  # pylint: disable=broad-except
                 # Anything unforeseen used to kill the thread outright, and nothing

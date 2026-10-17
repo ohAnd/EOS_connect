@@ -82,12 +82,18 @@ class TestConfigSchema:
     def test_data_source_section_exists(self):
         """The unified data_source section should exist."""
         ds_fields = self.schema.get_section("data_source")
-        assert len(ds_fields) == 4  # type, url, access_token, ssl_ignore
+        # type, url, access_token, ssl_ignore + the two EVCC virtual-entity
+        # titles (loadpoint, consumer) + the four supplementary-connection
+        # fields — ten since EVCC became a source type with HA at its side.
+        assert len(ds_fields) == 10
         keys = [f.key for f in ds_fields]
         assert "data_source.type" in keys
         assert "data_source.url" in keys
         assert "data_source.access_token" in keys
         assert "data_source.ssl_ignore" in keys
+        assert "data_source.evcc_loadpoint_title" in keys
+        assert "data_source.evcc_consumer_title" in keys
+        assert "data_source.supplementary_type" in keys
 
     def test_deprecated_fields_have_label(self):
         """Load/battery connection override fields should be marked deprecated."""
@@ -100,7 +106,9 @@ class TestConfigSchema:
         """Certain price/battery fields should be marked hot_reload."""
         assert self.schema.get("price.feed_in_price").hot_reload is True
         assert self.schema.get("battery.min_soc_percentage").hot_reload is True
-        assert self.schema.get("battery.battery_price_include_feedin").hot_reload is True
+        assert (
+            self.schema.get("battery.battery_price_include_feedin").hot_reload is True
+        )
         assert self.schema.get("pv_forecast_source.source").hot_reload is True
         assert self.schema.get("pv_forecast.tilt").hot_reload is True
         # Restart-required fields should NOT be hot_reload
@@ -132,7 +140,9 @@ class TestConfigSchema:
     def test_inverter_url_token_removed(self):
         """Old inverter.url and inverter.token fields should not exist."""
         assert self.schema.get("inverter.url") is None, "inverter.url should be removed"
-        assert self.schema.get("inverter.token") is None, "inverter.token should be removed"
+        assert (
+            self.schema.get("inverter.token") is None
+        ), "inverter.token should be removed"
 
     def test_inverter_mode_sequence_fields_exist(self):
         """New inverter.*.mode-sequence JSON fields should exist."""
@@ -173,7 +183,6 @@ class TestConfigSchema:
 
         for field in [charge_from_grid, avoid_discharge, discharge_allowed]:
             assert "restart_required" in field.labels
-
 
 
 class TestPvForecastApiKey:

@@ -1148,6 +1148,11 @@ class SetupWizard {
                 if (!current || current === "") {
                     return false;
                 }
+            } else if (typeof allowed === "string" && allowed.startsWith("!") && allowed.length > 1) {
+                // "!value": applies while the governing key does NOT hold it.
+                if (String(current) === allowed.slice(1)) {
+                    return false;
+                }
             } else if (Array.isArray(allowed)) {
                 // Compare loosely — schema may store bools/strings
                 const match = allowed.some(v => String(v) === String(current));

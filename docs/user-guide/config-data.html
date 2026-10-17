@@ -66,6 +66,11 @@
                         <a href="../advanced/index.html#openhab">openHAB</a> for what each needs at its
                         end, and <a href="../advanced/index.html#probe-endpoints">Testing one sensor</a>
                         for checking an entity before you save it.</p>
+                    <p><strong>EVCC</strong> is the third choice, for sites that already run EVCC as their
+                            energy manager: it reads
+                        <a href="config-system.html#evcc">EVCC's</a> measured energy history instead of
+                        home-automation sensors. See <a href="#data-source-evcc">EVCC as the data
+                        source</a> below for what to enter where.</p>
                     <div data-schema-section="data_source"></div>
                 </div>
 
@@ -78,6 +83,47 @@
                         <a href="config-managed-loads.html">Managed loads</a> instead &mdash; including
                         the two settings that bound them all together, which are in this group.</p>
                     <div data-schema-section="load"></div>
+                </div>
+
+                <div class="content-section">
+                    <h2 id="data-source-evcc"><i class="fas fa-car-charging-station" aria-hidden="true"></i>
+                        EVCC as the data source</h2>
+                    <p>When <a href="config-system.html#evcc">EVCC</a> is already metering your house
+                        &mdash; grid, PV, battery, household consumption and every wallbox &mdash; EOS
+                        Connect reads that history instead of asking a home-automation system for the
+                        same numbers a second time. Select <strong>evcc</strong> as the data source, enter
+                        your EVCC address in the URL field &mdash; that is the one place the address is
+                        configured (the separate EVCC page stays for its other roles, and its URL field
+                        stands down) &mdash; and every sensor field fills itself in.</p>
+                    <p>EOS Connect resolves what EVCC supplies itself, and shows it on the Battery and
+                        Load pages as read-only values with a <em>from EVCC</em> badge instead of empty
+                        inputs: the household load reads the metered
+                        <code>group:home</code> history, the wallbox <code>group:loadpoint</code>, battery
+                        state of charge the live <code>battery.soc</code>, and the battery price
+                        calculation its power histories and persisted tariff slots. The battery
+                        parameters EVCC knows &mdash; capacity from the meter, minimum and maximum SoC
+                        from EVCC's own battery management &mdash; are likewise filled in and shown as
+                        read-only; switching the disclosure level to <strong>Expert</strong> turns every
+                        one of them back into a normal editable field if you ever need to deviate.</p>
+                    <p><strong>What stays manual on EVCC</strong>: charge and discharge efficiency and
+                        the maximum charge power &mdash; EVCC exposes its battery meter and SoC
+                        management, but no efficiency or power-limit values &mdash; and the optional
+                        battery temperature sensor. The two title fields under Data Source optionally
+                        narrow the wallbox to one loadpoint and name the appliance the additional load
+                        reads.</p>
+                    <p><strong>Where the numbers come from:</strong> EVCC records energy in 15-minute
+                        slots per meter &mdash; consumed energy and fed-back energy in separate columns
+                        &mdash; and EOS Connect integrates those slots into the power values its load
+                        forecast and price calculation work from. Grid export is subtracted from grid
+                        import, so a feed-in meter never reads as consumption. EVCC must have its
+                        database enabled for any of this to answer; if it is offline, the load profile
+                        falls back to the built-in curve and says so in the startup panel.</p>
+                    <div class="alert alert-info">
+                        <p>EVCC is also available as price and PV-forecast source independently
+                            &mdash; see <a href="config-price.html">Tariffs</a> and
+                            <a href="config-solar.html#pv-forecast-evcc">PV forecast from EVCC</a>. Those
+                            work regardless of what the data source here is set to.</p>
+                    </div>
                 </div>
 
                 <div class="content-section">
