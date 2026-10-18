@@ -33,6 +33,13 @@ on:
         type: boolean
         default: false
 
+# Every job here only ever checks the repository out. Saying so explicitly keeps the
+# GITHUB_TOKEN read-only in all four of them — the callers grant more (docker_feature
+# adds packages: write to publish an image), and a called workflow cannot be given
+# less than it asks for, so this is the place to pin it down.
+permissions:
+  contents: read
+
 jobs:
   changes:
     name: Decide which browser jobs are needed
@@ -79,13 +86,17 @@ jobs:
           echo "Base: $base"
           echo "$changed" | sed 's/^/  /'
 
+          # This file is in both lists on purpose: editing the browser jobs is
+          # exactly when you want them to run, and without it a commit that touches
+          # only .github/workflows/ skips the very jobs it changed.
+          self='\.github/workflows/tests\.yml'
           # Anything the browser harness imports counts, not just the UI assets —
           # tests/web/conftest.py builds the app out of config_web, loads and
           # persistence, so a change in any of them can break the page.
-          web_paths='^(src/web/|src/config_web/|src/loads/|src/persistence/|src/docs_links\.py|tests/web/|tests/conftest\.py|pytest\.ini)'
+          web_paths="^(src/web/|src/config_web/|src/loads/|src/persistence/|src/docs_links\.py|tests/web/|tests/conftest\.py|pytest\.ini|$self)"
           # The docs tests read the committed config_schema.json and compare the
           # level filter against ConfigSchema, so the schema and its exporter count.
-          docs_paths='^(docs/|tests/docs/|src/config_web/schema\.py|scripts/export_config_schema\.py|tests/conftest\.py|pytest\.ini)'
+          docs_paths="^(docs/|tests/docs/|src/config_web/schema\.py|scripts/export_config_schema\.py|tests/conftest\.py|pytest\.ini|$self)"
 
           if echo "$changed" | grep -qE "$web_paths"; then web=true; else web=false; fi
           if echo "$changed" | grep -qE "$docs_paths"; then docs=true; else docs=false; fi
