@@ -34,7 +34,7 @@ jobs:
       full: true
 
   publish_image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: tests
     steps:
       - name: Checkout
@@ -93,7 +93,7 @@ jobs:
 
   cleanup_old_develops:
     needs: publish_image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Convert repository owner to lowercase
         run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV

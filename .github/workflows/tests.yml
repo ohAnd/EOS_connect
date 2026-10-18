@@ -12,6 +12,16 @@ name: Tests
 # Every job passes -m explicitly. pytest.ini defaults to -m "not browser" so that a
 # plain local `pytest` is the fast lane, and a job that forgot to say which half it
 # wanted would otherwise silently run the wrong one.
+#
+# The runner is pinned to ubuntu-24.04 rather than ubuntu-latest. That label moves to
+# Ubuntu 26 gradually between 2026-10-19 and 2026-11-19
+# (actions/runner-images#14748), so for a month a job lands on either image depending
+# on when it runs. ``playwright install --with-deps`` apt-installs a per-distro
+# dependency list, and Playwright only gained Ubuntu 26.04 in 1.61 and full support
+# in 1.64 — below that it refuses outright with "does not support chromium on
+# ubuntu26.04-x64". Pinning turns that into a deliberate upgrade: raise the
+# ``playwright`` floor in requirements-dev.txt to >=1.64 first, then move these four
+# jobs to ubuntu-26.04 and watch the browser jobs.
 
 on:
   workflow_call:
@@ -26,7 +36,7 @@ on:
 jobs:
   changes:
     name: Decide which browser jobs are needed
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       web: ${{ steps.filter.outputs.web }}
       docs: ${{ steps.filter.outputs.docs }}
@@ -86,7 +96,7 @@ jobs:
 
   fast:
     name: Unit and regression tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -112,7 +122,7 @@ jobs:
     name: Browser tests — web UI
     needs: changes
     if: needs.changes.outputs.web == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -140,7 +150,7 @@ jobs:
     name: Browser tests — documentation
     needs: changes
     if: needs.changes.outputs.docs == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
