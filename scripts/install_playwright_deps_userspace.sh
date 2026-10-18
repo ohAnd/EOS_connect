@@ -30,4 +30,5 @@ cp -r "${WORK}"/root/usr/lib/*/. "${PREFIX}/lib/"
 echo "Done. ${PREFIX}/lib now holds:"
 ls "${PREFIX}/lib" | sed 's/^/  /' | head -20
 echo
-echo "Now run:  pytest tests/web"
+echo "Now run:  pytest tests/web -m browser"
+echo "          (-m browser is required: the default run excludes them)"

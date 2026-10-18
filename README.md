@@ -197,5 +197,10 @@ If you find this project useful and would like to support its development, pleas
 ## Contributing
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+The test suite runs in two lanes: `pytest` covers everything except the browser
+tests and finishes in seconds, `pytest -m ""` runs all of it. Details in
+[CONTRIBUTING.md](CONTRIBUTING.md) and in the
+[developer documentation](https://ohAnd.github.io/EOS_connect/developer/index.html#testing).
+
 ## License
 MIT License - see [LICENSE](LICENSE) for details.

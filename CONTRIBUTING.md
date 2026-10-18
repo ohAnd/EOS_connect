@@ -22,7 +22,7 @@ Flow
    - Ensure all Python files are formatted with [Black](https://black.readthedocs.io/en/stable/) (`black .`)
      - **Tip for VS Code users:** Install the [Black Formatter extension](https://github.com/microsoft/vscode-black-formatter) for automatic formatting on save. (// VS Code settings.json "[python]": { "editor.formatOnSave": true })
    - Run [pylint](https://pylint.pycqa.org/) and ensure a score of **9.0 or higher** for all files (`pylint src/`)
-   - tests - see info at guidelines below (`pytest tests/`)
+   - tests - see info at guidelines below (`pytest` for the fast lane, `pytest -m ""` for all of it)
 5. Rebase before PR: git fetch origin && git rebase origin/develop
 6. Push: git push -u origin feature/better-forecast
 7. Open PR → base: develop (link issues: Closes #123)
@@ -44,14 +44,31 @@ Guidelines
 - One logical change per PR
 - Add/adjust tests for logic changes
   - Use [pytest](https://docs.pytest.org/) for all unit and integration tests.
-  - Install the tooling with `pip install -r requirements-dev.txt`, then run `pytest tests/`.
-  - Browser tests live in `tests/web/` and drive the real UI assets in Chromium. They
-    need a browser: `playwright install chromium`, plus its shared libraries via
+  - Install the tooling with `pip install -r requirements-dev.txt`.
+  - **The suite runs in two lanes.** 604 of the 3665 tests drive a real Chromium and
+    take about nine tenths of the wall clock, so they are marked `browser` and left
+    out of the default run:
+
+    | command | what it runs | roughly |
+    | --- | --- | --- |
+    | `pytest` | everything except the browser tests | ~15 s |
+    | `pytest -m browser` | only the browser tests | ~2 min |
+    | `pytest -m ""` | the whole suite | ~4 min |
+
+    Add `-n auto` to parallelise any of them (`pytest-xdist`). Use `pytest -m ""`
+    before opening a PR; CI runs the two lanes as separate jobs and gates on both.
+  - Browser tests live in `tests/web/` and `tests/docs/test_docs_rendering.py`, and
+    drive the real UI assets in Chromium. They need a browser:
+    `playwright install chromium`, plus its shared libraries via
     `playwright install-deps chromium` or, without root,
     `scripts/install_playwright_deps_userspace.sh`. Without one the directory skips
     itself rather than failing, so check the summary says it ran.
     Install `playwright` alone — **not** `pytest-playwright`, whose `pytest-base-url`
     dependency breaks 44 unrelated tests (see `tests/web/conftest.py`).
+  - A new test that needs a browser must live under one of those two paths —
+    `tests/conftest.py` marks by path, and `tests/test_staging_markers.py` fails if a
+    browser test turns up anywhere else (it would otherwise run in the lane where CI
+    installs no Chromium).
   - Place tests in the `tests/` directory, organized to mirror the structure of the `src/` directory:
     - Create a subfolder for each source module or feature (e.g., if your code is in `src/interfaces/mqtt_interface.py`, place tests in `tests/interfaces/test_mqtt_interface.py`).
     - Name test files as `test_<uut-filename>.py` (e.g., `test_mqtt_interface.py` for `mqtt_interface.py`).

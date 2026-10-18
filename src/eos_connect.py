@@ -1338,7 +1338,12 @@ class OptimizationScheduler:
                 if self._immediate_run_event.is_set():
                     logger.info("[OPTIMIZATION] Immediate run requested — skipping remaining sleep")
                     break  # Skip the rest of the wait and run now
-                time.sleep(min(1, actual_sleep_interval))  # Sleep in 1-second chunks
+                # Waiting on the event rather than sleeping is what makes both exits
+                # immediate: time.sleep() cannot be woken, so a shutdown or a "run now"
+                # arriving mid-second was not noticed until the second had elapsed.
+                # ``shutdown()`` sets this event too, so a stop wakes the wait here and
+                # the ``_stop_event`` check at the top of the loop returns.
+                self._immediate_run_event.wait(min(1, actual_sleep_interval))
                 actual_sleep_interval -= 1
 
         # self.__start_update_service_optimization_loop()
@@ -1497,12 +1502,13 @@ class OptimizationScheduler:
                 self.__run_control_loop()
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:
                 logger.error("[OPTIMIZATION] Error while running control loop: %s", e)
-                # Break the sleep interval into smaller chunks to allow immediate shutdown
+            # Wait in one-second chunks so a stop is acted on at once: Event.wait()
+            # returns the moment the event is set, where the time.sleep() this used
+            # to call could not be woken and held the thread for the rest of it.
             sleep_interval = 1
             while sleep_interval > 0:
-                if self._stop_event_control_loop.is_set():
+                if self._stop_event_control_loop.wait(min(1, sleep_interval)):
                     return  # Exit immediately if stop event is set
-                time.sleep(min(1, sleep_interval))  # Sleep in 1-second chunks
                 sleep_interval -= 1
         self.__start_update_service_control_loop()
 
@@ -1626,12 +1632,13 @@ class OptimizationScheduler:
                 logger.error(
                     "[OPTIMIZATION] Error while running data control loop: %s", e
                 )
-                # Break the sleep interval into smaller chunks to allow immediate shutdown
+            # Wait in one-second chunks so a stop is acted on at once: Event.wait()
+            # returns the moment the event is set, where the time.sleep() this used
+            # to call could not be woken and held the thread for the rest of it.
             sleep_interval = 15
             while sleep_interval > 0:
-                if self._stop_event_data_loop.is_set():
+                if self._stop_event_data_loop.wait(min(1, sleep_interval)):
                     return  # Exit immediately if stop event is set
-                time.sleep(min(1, sleep_interval))  # Sleep in 1-second chunks
                 sleep_interval -= 1
         self.__start_update_service_data_loop()
 
@@ -1689,6 +1696,9 @@ class OptimizationScheduler:
             and self._update_thread_optimization_loop.is_alive()
         ):
             self._stop_event.set()
+            # The optimization loop waits on the immediate-run event between cycles;
+            # setting it too wakes that wait at once instead of after up to a second.
+            self._immediate_run_event.set()
             self._update_thread_optimization_loop.join()
             logger.info("[OPTIMIZATION] Update service Optimization Loop stopped.")
         if (

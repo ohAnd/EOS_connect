@@ -63,7 +63,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A failed image build has not bumped the version, so there is nothing new to
     # publish; every other trigger is unconditional.
     if: >-
@@ -150,7 +150,7 @@ jobs:
           path: _site
 
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     environment:
       name: github-pages
