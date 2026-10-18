@@ -20,6 +20,8 @@ import threading
 
 import pytest
 
+from tests.conftest import browser_scope
+
 try:
     import playwright.sync_api  # noqa: F401  pylint: disable=unused-import
 except ImportError:  # pragma: no cover - depends on the environment
@@ -93,15 +95,20 @@ def preview_docs_url_fixture(tmp_path_factory):
         server.server_close()
 
 
-@pytest.fixture(name="browser")
+@pytest.fixture(name="browser", scope=browser_scope)
 def browser_fixture():
-    """Chromium for one test, following the pattern in ``tests/web/conftest.py``.
+    """Chromium, shared across the session when this run is browser-only.
 
-    Deliberately function-scoped. Holding ``sync_playwright()`` open across the
-    session leaves an asyncio event loop in place that later async tests pick
-    up, which breaks ``tests/interfaces/test_pv_interface.py`` with "coroutine
-    was never awaited". Opening and closing it per test keeps the suite
-    order-independent.
+    Holding ``sync_playwright()`` open across the session leaves an event loop in
+    this thread, and ``src/interfaces/pv_interface.py`` calls ``asyncio.run()``,
+    which refuses to run inside one -- that is what used to break
+    ``tests/interfaces/test_pv_interface.py`` with "coroutine was never awaited".
+
+    So the scope is decided per run by ``browser_scope`` in ``tests/conftest.py``:
+    session when nothing but browser tests was collected (the browser CI job, or
+    ``pytest tests/docs -m browser``), function otherwise (``pytest -m ""``, where
+    the PV tests share the process). Relaunching costs 304ms a test against 44ms
+    for reusing the browser, so the shared path is worth the conditional.
     """
     # Imported here, not at module scope: the module is skipped when Playwright
     # is absent, and a top-level import would run before that check.
