@@ -52,7 +52,6 @@ from src.loads.api import init_api as init_loads_api, loads_bp
 from src.loads.manager import ManagedLoadManager, ManagedLoadSources
 from src.persistence import PvYieldStore
 
-from tests.conftest import browser_scope
 from tests.config_web.test_api import _FakeModule, _sample_config
 
 try:
@@ -61,15 +60,6 @@ except ImportError:  # pragma: no cover - depends on the environment
     # CI installs requirements.txt plus pytest and nothing else, so skip the whole
     # directory rather than failing collection.
     collect_ignore_glob = ["test_*.py"]
-
-# Shared libraries unpacked by scripts/install_playwright_deps_userspace.sh, for hosts
-# where Chromium's dependencies cannot be apt-installed.  Chromium is a subprocess, so
-# it inherits this; harmless when the directory does not exist.
-_USER_LIBS = os.path.join(os.path.expanduser("~"), ".cache", "ms-playwright-deps", "lib")
-if os.path.isdir(_USER_LIBS):
-    os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(
-        [_USER_LIBS, os.environ.get("LD_LIBRARY_PATH", "")]
-    ).rstrip(os.pathsep)
 
 WEB_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "src", "web"
@@ -242,17 +232,6 @@ def offline_timeseries_fixture(monkeypatch):
     monkeypatch.setattr(config_api, "probe", lambda *a, **kw: {"ok": True, "warnings": []})
 
 
-def _launch_browser(driver):
-    """Chromium, or a skip if this host cannot start it."""
-    try:
-        browser = driver.chromium.launch()
-    # Playwright raises a variety of errors for a browser that will not start
-    # (missing libraries, no sandbox, out of memory); all of them mean "skip".
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        pytest.skip(f"Chromium could not be launched: {exc}")
-    return browser
-
-
 def _open_page(browser, url):
     """A page on *url*, in its own context, with the dashboard's CDN traffic blocked.
 
@@ -281,27 +260,21 @@ def _open_page(browser, url):
     return page
 
 
-@pytest.fixture(name="browser", scope=browser_scope)
-def browser_fixture():
-    """
-    Chromium, shared across the session when this run is browser-only.
+def _suppress_startup_overlay(page):
+    """Keep the boot overlay down for the rest of the test.
 
-    Relaunching the browser for each of the 386 tests here was the single largest
-    cost in the suite. It is only safe to share when nothing in the same process
-    calls ``asyncio.run()`` — see ``browser_scope`` in ``tests/conftest.py`` for why,
-    and for how the scope is chosen per run. Isolation moves down to the per-test
-    context opened in ``_open_page``.
-    """
-    # Imported here, not at module scope: the directory is skipped when Playwright is
-    # absent, and a top-level import would run before that check.
-    from playwright.sync_api import sync_playwright  # pylint: disable=import-outside-toplevel
+    Setting ``style.display`` once is not enough: ``main.js`` puts the overlay back
+    with ``display = 'flex'`` whenever a data response carries an error, and this
+    harness answers ``/api/*`` and ``/json/*`` with ``{}``, so the dashboard's
+    one-second poll re-raises it. Any test that took longer than that to reach its
+    first click then failed on "<div id=\"overlay\"> intercepts pointer events",
+    which is a race in the harness and nothing to do with what is under test.
 
-    with sync_playwright() as driver:
-        browser = _launch_browser(driver)
-        try:
-            yield browser
-        finally:
-            browser.close()
+    A stylesheet wins over the inline style the app sets, so this holds. Only
+    ``page`` and ``develop_page`` get it — ``fresh_page`` must keep the real
+    behaviour, because the wizard hiding the overlay is itself under test.
+    """
+    page.add_style_tag(content="#overlay { display: none !important; }")
 
 
 @pytest.fixture(name="page")
@@ -313,10 +286,7 @@ def page_fixture(browser, server):
     # The startup overlay only clears once the dashboard has rendered its chart from
     # real optimizer output, which this harness does not serve. It covers the menu
     # icon, so dismiss it — booting the dashboard is not what these tests are about.
-    page.evaluate(
-        "() => { const o = document.getElementById('overlay');"
-        " if (o) { o.style.display = 'none'; } }"
-    )
+    _suppress_startup_overlay(page)
     try:
         yield page
     finally:
@@ -360,10 +330,7 @@ def develop_page_fixture(browser, develop_server):
     """A browser page on a develop build, dashboard noise suppressed as in ``page``."""
     page = _open_page(browser, develop_server.url)
     page.wait_for_function("typeof showBackupMenu === 'function'")
-    page.evaluate(
-        "() => { const o = document.getElementById('overlay');"
-        " if (o) { o.style.display = 'none'; } }"
-    )
+    _suppress_startup_overlay(page)
     try:
         yield page
     finally:

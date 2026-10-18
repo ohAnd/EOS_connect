@@ -25,6 +25,7 @@ leak is worth closing on its own - it makes test failures land on the test that 
 them.
 """
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -37,6 +38,19 @@ from src.interfaces.battery_interface import BatteryInterface
 # arguments show up in ``item.fixturenames``. That would push 136 static tests that
 # run in 0.06s into the browser job.
 BROWSER_PATHS = ("tests/web/", "tests/docs/test_docs_rendering.py")
+
+# Shared libraries unpacked by scripts/install_playwright_deps_userspace.sh, for hosts
+# where Chromium's dependencies cannot be apt-installed. Chromium is a subprocess, so
+# it inherits this; harmless when the directory does not exist. It lives here rather
+# than in the two browser conftests because the browser fixture below does, and it has
+# to be in the environment before Chromium is launched.
+_USER_LIBS = os.path.join(
+    os.path.expanduser("~"), ".cache", "ms-playwright-deps", "lib"
+)
+if os.path.isdir(_USER_LIBS):
+    os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(
+        [_USER_LIBS, os.environ.get("LD_LIBRARY_PATH", "")]
+    ).rstrip(os.pathsep)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -90,6 +104,40 @@ def browser_scope(*, fixture_name, config):  # pylint: disable=unused-argument
     test.
     """
     return "session" if getattr(config, "_browser_only", False) else "function"
+
+
+@pytest.fixture(name="browser", scope=browser_scope)
+def browser_fixture():
+    """
+    The one Chromium for the whole run, shared by tests/web and tests/docs.
+
+    There must be exactly one ``sync_playwright()`` alive per process. It owns an
+    event loop, and a second one entered while the first is open raises "Playwright
+    Sync API inside the asyncio loop" — which is what happened when each of the two
+    browser directories kept its own session-scoped driver and a single run covered
+    both. One fixture here, requested from both, cannot get that wrong.
+
+    Isolation is per test either way: the page fixtures open their own context and
+    close it, so sharing the browser costs nothing in separation. Measured on
+    Playwright 1.62, relaunching per test is 304ms against 44ms for a context.
+    """
+    # Imported here, not at module scope: the browser directories are skipped when
+    # Playwright is absent, and a top-level import would run before that check.
+    from playwright.sync_api import (
+        sync_playwright,
+    )  # pylint: disable=import-outside-toplevel
+
+    with sync_playwright() as driver:
+        try:
+            browser = driver.chromium.launch()
+        # Playwright raises a variety of errors for a browser that will not start
+        # (missing libraries, no sandbox, out of memory); all of them mean "skip".
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            pytest.skip(f"Chromium could not be launched: {exc}")
+        try:
+            yield browser
+        finally:
+            browser.close()
 
 
 @pytest.fixture(autouse=True)
