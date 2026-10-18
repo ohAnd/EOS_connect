@@ -297,7 +297,11 @@ class ConfigurationManager {
         return this._orderedSections().map(sec => {
             const meta = CONFIG_SECTIONS[sec] || { icon: "fa-circle", label: sec };
             const cls = sec === this.activeSection ? "active" : "";
-            const visibleCount = this._fieldsForSection(sec).length;
+            const fields = this._fieldsForSection(sec);
+            // A section whose fields are all dependency-hidden (EVCC's URL while
+            // EVCC is already the data source) has nothing to answer; rendering
+            // it gave the settings an empty page that reads as something broken.
+            const visibleCount = fields.filter(f => !this._isDependencyHidden(f)).length;
             if (visibleCount === 0) {
                 return "";
             }
@@ -476,6 +480,68 @@ class ConfigurationManager {
     // ── Individual field rendering ──────────────────────────────
 
     /**
+     * Render a sensor field that EVCC fills in, as a read-only status row.
+     *
+     * EVCC mode resolves the sensor names itself (group:home, battery.soc, …) —
+     * the user should see *what* EVCC supplies here rather than an empty input
+     * inviting the Home Assistant entity id that once stood in the field.
+     * The Test button is kept: it probes the resolved name, which reads better
+     * than a status line with no way to verify it.
+     */
+    _renderEvccManagedField(f, val) {
+        const label = this._prettyLabel(f.key);
+        const resolved = String(val || "").trim();
+        const docsHref = f.help_url
+            ? docsUrl(`user-guide/${f.help_url.split("#")[0]}`)
+            + `?level=${encodeURIComponent(this.level)}`
+            + (f.help_url.includes("#") ? `#${f.help_url.split("#")[1]}` : "")
+            : "";
+        const helpText = f.description
+            ? `<div class="config-help-text always-visible" id="cfg-help-${this._cssKey(f.key)}">
+                ${this._escapeHtml(f.description)} <a href="${docsHref}" target="_blank" rel="noopener">
+                Learn more <i class="fas fa-external-link-alt" style="font-size:0.8em;"></i></a>
+            </div>`
+            : "";
+        // An empty resolution is a finding to show, not an input to fill: the
+        // additional load resolves from a title under Data Source, and nothing
+        // here asks for an entity id this source cannot answer.
+        if (!resolved) {
+            return `
+            <div class="config-field" data-key="${f.key}" id="cfg-field-${this._cssKey(f.key)}">
+                <div class="config-field-label">
+                    <span>${label}</span>
+                    <span class="config-badge" style="background:rgba(255,193,7,0.15); color:#ffc107;">
+                        <i class="fas fa-car" aria-hidden="true"></i> not configured
+                    </span>
+                    ${f.description ? `<button class="config-help-btn" tabindex="-1" onclick="configurationManager._toggleHelp('${f.key}')" title="Help">
+                        <i class="fas fa-circle-question"></i></button>` : ""}
+                </div>
+                <div class="config-field-input">
+                    <input type="text" value="not provided by EVCC" readonly
+                        style="opacity:0.6; cursor:default; color:#888;" />
+                </div>
+                ${helpText}
+            </div>`;
+        }
+        return `
+            <div class="config-field" data-key="${f.key}" id="cfg-field-${this._cssKey(f.key)}">
+                <div class="config-field-label">
+                    <span>${label}</span>
+                    <span class="config-badge" style="background:rgba(74,158,255,0.15); color:#4a9eff;">
+                        <i class="fas fa-car" aria-hidden="true"></i> from EVCC
+                    </span>
+                    ${f.description ? `<button class="config-help-btn" tabindex="-1" onclick="configurationManager._toggleHelp('${f.key}')" title="Help">
+                        <i class="fas fa-circle-question"></i></button>` : ""}
+                </div>
+                <div class="config-field-input">
+                    <input type="text" value="${this._escapeAttr(resolved)}" readonly
+                        style="opacity:0.75; cursor:default; color:#9ad06d;" />
+                </div>
+                ${helpText}
+            </div>${this._renderEntityTester(f, null)}`;
+    }
+
+    /**
      * Render a single config field.
      * @param {Object} f - Field definition from schema
      * @returns {string} Field HTML
@@ -483,6 +549,17 @@ class ConfigurationManager {
     _renderField(f, entryValues = null) {
         const val = this.values[f.key] ?? f.default;
         const isHidden = this._isDependencyHidden(f, entryValues) ? " hidden" : "";
+
+        // A field EVCC manages (labels: "evcc_managed") reads out instead of
+        // asking, whenever EVCC is the data source and the viewer is below the
+        // expert level. The value shown is the resolved EVCC source, not an
+        // input the user would have to fill twice.
+        const evccManaged = (f.labels || []).includes("evcc_managed")
+            && this.values["data_source.type"] === "evcc"
+            && (LEVEL_ORDER[this.level] ?? 2) < (LEVEL_ORDER.expert ?? 2);
+        if (evccManaged) {
+            return this._renderEvccManagedField(f, val);
+        }
 
         let inputHtml;
         switch (f.type) {
@@ -1460,6 +1537,15 @@ class ConfigurationManager {
 
             if (allowed === "!empty") {
                 if (!currentVal || currentVal === "") {
+                    return true;
+                }
+                continue;
+            }
+            // "!value": the negative match — the field applies while the governing
+            // key does NOT hold *value*. How evcc.url steps aside once
+            // data_source.type already points at EVCC.
+            if (typeof allowed === "string" && allowed.startsWith("!") && allowed.length > 1 && allowed !== "!empty") {
+                if (String(currentVal) === allowed.slice(1)) {
                     return true;
                 }
                 continue;

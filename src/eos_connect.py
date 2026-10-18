@@ -264,8 +264,7 @@ battery_config["feed_in_price"] = (
 # BatteryPriceHandler expect price_euro_per_wh_accu in €/Wh internally
 battery_config.pop("price_ct_kwh_accu", None)
 battery_config["price_euro_per_wh_accu"] = (
-    config_manager.config.get("battery", {}).get("price_ct_kwh_accu", 0.0)
-    / 100000.0
+    config_manager.config.get("battery", {}).get("price_ct_kwh_accu", 0.0) / 100000.0
 )
 
 battery_interface = interface_factory.create_battery_interface(
@@ -294,9 +293,34 @@ evcc_interface = interface_factory.create_evcc_interface(
     on_charging_state_change=None,
 )
 
+# When EVCC is the data source for load and battery, it is not merely an optional
+# integration any more - the load profile and the SOC both read it. An unreachable
+# EVCC then degrades those inputs silently (default profile, 5% SOC), which is the
+# situation the startup panel exists to make visible.
+if config_manager.config.get("data_source", {}).get("type") == "evcc" and (
+    not evcc_interface.__dict__.get("evcc_version")
+):
+    startup_validator.add_error(
+        "connectivity",
+        "evcc_data_source",
+        "warning",
+        "EVCC data source unreachable",
+        "EVCC is selected as the data source but its state endpoint did not answer "
+        "at startup. The load profile falls back to the built-in curve and the "
+        "battery SOC to 5% until EVCC is reachable.",
+        action_required=True,
+        config_link="#evcc",
+    )
+
 price_interface = interface_factory.create_price_interface(
-    config_manager.config["price"], time_frame_base, time_zone, evcc_interface, critical=False
-) or PriceInterface(config_manager.config["price"], time_frame_base, time_zone, evcc_interface)
+    config_manager.config["price"],
+    time_frame_base,
+    time_zone,
+    evcc_interface,
+    critical=False,
+) or PriceInterface(
+    config_manager.config["price"], time_frame_base, time_zone, evcc_interface
+)
 
 # Feed-in price interface (for dynamic export pricing)
 # Defensive check: ensure price config is a dict before accessing it
@@ -316,9 +340,7 @@ feed_in_config = {
         "feed_in_static_adder", 0.0
     ),  # ct/kWh (standard unit)
     "multiplier": price_config.get("feed_in_multiplier", 1.0),
-    "fixed_price_ct_kwh": price_config.get(
-        "feed_in_price", 0.0
-    ),  # ct/kWh
+    "fixed_price_ct_kwh": price_config.get("feed_in_price", 0.0),  # ct/kWh
     "negative_price_switch": price_config.get(
         "feed_in_negative_price_switch", False
     ),  # Clamp negative prices to 0 if enabled
@@ -333,6 +355,7 @@ feed_in_config = {
 feed_in_price_interface = interface_factory.create_feed_in_price_interface(
     feed_in_config, time_frame_base, time_zone, evcc_interface, critical=False
 ) or FeedInPriceInterface(feed_in_config, time_frame_base, time_zone, evcc_interface)
+
 
 def site_location():
     """
@@ -440,6 +463,7 @@ try:
 except Exception:
     logger.exception("[Main] Failed to initialize PvAutoscaler")
     pv_autoscaler = None
+
 
 # Managed loads: sensor access, forecasts and the release publisher.
 #
@@ -717,7 +741,9 @@ time.sleep(init_time)
 # up and logging a warning so the first optimization run is not penalised.
 if config_manager.config["pv_forecast"]:
     _pv_poll_deadline = time.time() + 30
-    while not pv_interface.get_current_pv_forecast() and time.time() < _pv_poll_deadline:
+    while (
+        not pv_interface.get_current_pv_forecast() and time.time() < _pv_poll_deadline
+    ):
         time.sleep(1)
     if pv_interface.get_current_pv_forecast():
         logger.info("[Main] PV forecast ready after startup wait")
@@ -787,7 +813,7 @@ except (KeyError, TypeError, ValueError) as e:
 def _deferred_inverter_initialization():
     """
     Initialize the inverter interface in a background thread after web server starts.
-    
+
     This prevents the app from hanging if the inverter is unreachable during startup.
     If initialization fails, the app falls back to NullInverter for display-only mode.
     """
@@ -855,7 +881,9 @@ def create_optimize_request():
         strompreis_euro_pro_wh = price_interface.get_current_prices()
         # Use dynamic feed-in prices from FeedInPriceInterface instead of
         # constant PriceInterface value
-        einspeiseverguetung_euro_pro_wh = feed_in_price_interface.get_current_feedin_prices()
+        einspeiseverguetung_euro_pro_wh = (
+            feed_in_price_interface.get_current_feedin_prices()
+        )
         slots_per_hour = 3600 // time_frame_base
         gesamtlast = load_interface.get_load_profile(EOS_TGT_DURATION * slots_per_hour)
         # Managed loads join the household profile here, and nowhere else. Applied
@@ -863,7 +891,9 @@ def create_optimize_request():
         # once, consistently, for base load and contributions alike.
         gesamtlast = load_manager.apply(gesamtlast, time_frame_base)
 
-        eos_source_for_scale = config_manager.config.get("eos", {}).get("source", "eos_server")
+        eos_source_for_scale = config_manager.config.get("eos", {}).get(
+            "source", "eos_server"
+        )
         if eos_source_for_scale in ("evopt", "local_evopt"):
             now = datetime.now(time_zone)
             # Absolute seconds since true local midnight: the arrays indexed
@@ -909,7 +939,9 @@ def create_optimize_request():
         # This ensures EVopt receives realistic charging limits based on current SOC
         current_dynamic_max = battery_interface.get_max_charge_power()
         config_fixed_max = config_manager.config["battery"]["max_charge_power_w"]
-        is_dynamic = config_manager.config["battery"].get("charging_curve_enabled", True)
+        is_dynamic = config_manager.config["battery"].get(
+            "charging_curve_enabled", True
+        )
 
         if is_dynamic and current_dynamic_max > 0:
             max_charge_power = current_dynamic_max
@@ -1271,7 +1303,9 @@ class OptimizationScheduler:
         the event is consumed at the start of the next sleep, causing that sleep to
         be skipped as well.
         """
-        logger.info("[OPTIMIZATION] Immediate run requested via request_immediate_run()")
+        logger.info(
+            "[OPTIMIZATION] Immediate run requested via request_immediate_run()"
+        )
         self._immediate_run_event.set()
 
     def __start_update_service_optimization_loop(self):
@@ -1336,7 +1370,9 @@ class OptimizationScheduler:
                 if self._stop_event.is_set():
                     return  # Exit immediately if stop event is set
                 if self._immediate_run_event.is_set():
-                    logger.info("[OPTIMIZATION] Immediate run requested — skipping remaining sleep")
+                    logger.info(
+                        "[OPTIMIZATION] Immediate run requested — skipping remaining sleep"
+                    )
                     break  # Skip the rest of the wait and run now
                 # Waiting on the event rather than sleeping is what makes both exits
                 # immediate: time.sleep() cannot be woken, so a shutdown or a "run now"
@@ -1391,11 +1427,14 @@ class OptimizationScheduler:
         if getattr(eos_interface, "schedules_managed_loads", False):
             managed_records = load_manager.schedulable()
             optimized_response, avg_runtime = eos_interface.optimize(
-                json_optimize_input, managed_loads=managed_records,
-                managed_load_budget_w=load_manager.max_power_w
+                json_optimize_input,
+                managed_loads=managed_records,
+                managed_load_budget_w=load_manager.max_power_w,
             )
         else:
-            optimized_response, avg_runtime = eos_interface.optimize(json_optimize_input)
+            optimized_response, avg_runtime = eos_interface.optimize(
+                json_optimize_input
+            )
         # Store the runtime for use in sleep calculation (defensive against None)
         try:
             if avg_runtime is None:
@@ -1426,9 +1465,9 @@ class OptimizationScheduler:
         # The absolute slot this response was produced in, plus the grid anchor
         # it counts from - the UI aligns the midnight-anchored arrays with
         # these instead of re-deriving a slot from a browser clock.
-        optimized_response["current_slot"] = int(
-            (response_now - response_anchor).total_seconds()
-        ) // time_frame_base
+        optimized_response["current_slot"] = (
+            int((response_now - response_anchor).total_seconds()) // time_frame_base
+        )
         optimized_response["anchor"] = response_anchor.isoformat()
         self.last_request_response["response"] = json.dumps(
             optimized_response, indent=4
@@ -1539,8 +1578,9 @@ class OptimizationScheduler:
             # entry for as long as a run could plausibly take, and only then
             # stop acting on data that has gone stale.
             latest = max(control_data, key=lambda entry: entry["valid_until"])
-            grace = timedelta(seconds=max(CONTROL_DATA_GRACE_SECONDS,
-                                          2 * time_frame_base))
+            grace = timedelta(
+                seconds=max(CONTROL_DATA_GRACE_SECONDS, 2 * time_frame_base)
+            )
             if latest["valid_until"] <= now < latest["valid_until"] + grace:
                 last_control_selected_entry = control_data.index(latest)
             else:
@@ -1937,13 +1977,15 @@ mqtt_interface.on_mqtt_command = mqtt_control_callback
 app = Flask(__name__)
 
 # Ensure JSON responses preserve dict insertion order (SECTION_META order)
-app.config['JSON_SORT_KEYS'] = False
+app.config["JSON_SORT_KEYS"] = False
 
 # Phase 2: register the Flask REST API now that app exists.
 try:
     config_web.start_api(app)
 except (ValueError, RuntimeError):
-    logger.exception("[Main] Config web API registration failed — config UI unavailable")
+    logger.exception(
+        "[Main] Config web API registration failed — config UI unavailable"
+    )
 
 # Managed loads REST API. Registered even with nothing configured, so a caller gets a
 # 404 with an explanation rather than a bare Flask 404 that says nothing.
@@ -1954,7 +1996,9 @@ except (ValueError, RuntimeError):
     logger.exception("[Main] Managed loads API registration failed")
 
 # Register hot-reload: live config changes are applied without restart
-from config_web.hot_reload import HotReloadAdapter  # pylint: disable=wrong-import-position
+from config_web.hot_reload import (
+    HotReloadAdapter,
+)  # pylint: disable=wrong-import-position
 
 hot_reload_adapter = HotReloadAdapter(
     price_interface=price_interface,
@@ -2715,7 +2759,10 @@ def get_pv_autoscaling_status():
         # The autoscaler owns the aggregation, so the numbers shown here are the ones the
         # scale factors were actually derived from.
         autoscaler = pv_autoscaler
-        if autoscaler is None and getattr(config_web, "pv_yield_store", None) is not None:
+        if (
+            autoscaler is None
+            and getattr(config_web, "pv_yield_store", None) is not None
+        ):
             # Not running (feature disabled): build a throwaway instance so the page can
             # still show what the factors would be.
             try:
@@ -2782,7 +2829,9 @@ def get_pv_autoscaling_status():
             "api_version": "0.0.1",
         }
 
-        response = Response(json.dumps(response_data, indent=2), content_type="application/json")
+        response = Response(
+            json.dumps(response_data, indent=2), content_type="application/json"
+        )
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -2828,7 +2877,9 @@ if __name__ == "__main__":
             name="InverterInit",
         )
         inverter_init_thread.start()
-        logger.info("[Main] Inverter initialization thread started (runs in background)")
+        logger.info(
+            "[Main] Inverter initialization thread started (runs in background)"
+        )
 
         # Start serving
         logger.info("[Main] Starting EOS Connect web server...")
