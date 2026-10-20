@@ -1558,8 +1558,10 @@
       "default": 5,
       "section": "battery",
       "level": "getting_started",
-      "description": "Minimum battery SOC in percent — your battery's physical operating range. EVCC's battery management limits are behaviour thresholds, not this, so this stays configured here even on an EVCC data source",
-      "labels": [],
+      "description": "Minimum battery SOC in percent — your battery's physical operating range. Filled in from EVCC where the battery reports its own limits; EVCC's site-level buffer/priority SOC are charging behaviour, not this, and are never used for it",
+      "labels": [
+        "evcc_managed"
+      ],
       "help_url": "config-battery.html#battery",
       "validation": {
         "min": 0,
@@ -1575,8 +1577,10 @@
       "default": 100,
       "section": "battery",
       "level": "getting_started",
-      "description": "Maximum battery SOC in percent — your battery's physical operating range. EVCC's battery management limits are behaviour thresholds, not this, so this stays configured here even on an EVCC data source",
-      "labels": [],
+      "description": "Maximum battery SOC in percent — your battery's physical operating range. Filled in from EVCC where the battery reports its own limits; EVCC's site-level buffer/priority SOC are charging behaviour, not this, and are never used for it",
+      "labels": [
+        "evcc_managed"
+      ],
       "help_url": "config-battery.html#battery",
       "validation": {
         "min": 0,

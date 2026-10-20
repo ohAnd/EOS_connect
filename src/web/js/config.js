@@ -66,6 +66,7 @@ class ConfigurationManager {
         this.schema = null;        // array of field defs from /api/config/schema
         this.values = {};          // flat {dot.key: value}
         this.originalValues = {};  // snapshot for dirty detection
+        this.resolvedValues = {};  // what the merge derives, not what it stores
         this.level = localStorage.getItem("config_level") || "standard";
         this.activeSection = null;
         this.toastContainer = null;
@@ -160,10 +161,12 @@ class ConfigurationManager {
         // Derived values go in as if they had been stored, and into
         // originalValues with them: they are not the user's edit, so they must
         // never count as a change and never be written back on save.
+        this.resolvedValues = {};
         if (resolvedRes && resolvedRes.ok) {
             try {
                 const resolved = await resolvedRes.json();
-                for (const [k, v] of Object.entries(resolved || {})) {
+                this.resolvedValues = resolved || {};
+                for (const [k, v] of Object.entries(this.resolvedValues)) {
                     this.values[k] = v;
                 }
             } catch (e) {
@@ -573,8 +576,14 @@ class ConfigurationManager {
         // asking, whenever EVCC is the data source and the viewer is below the
         // expert level. The value shown is the resolved EVCC source, not an
         // input the user would have to fill twice.
+        // ...and only where the resolution actually produced a value. EVCC
+        // reports a battery's SoC limits through a capability not every
+        // integration implements, so "EVCC manages this" is a per-site fact,
+        // not a property of the field. Rendering it read-only regardless left
+        // a field the user had to set and could not.
         const evccManaged = (f.labels || []).includes("evcc_managed")
             && this.values["data_source.type"] === "evcc"
+            && Object.prototype.hasOwnProperty.call(this.resolvedValues || {}, f.key)
             && (LEVEL_ORDER[this.level] ?? 2) < (LEVEL_ORDER.expert ?? 2);
         if (evccManaged) {
             return this._renderEvccManagedField(f, val);
