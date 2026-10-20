@@ -25,31 +25,24 @@ import requests
 
 try:  # running from src/ as a script — src/ is on sys.path
     from interfaces.state_source import SUPPORTED_SOURCES, fetch_remote_state
-    from interfaces.load_interface import EVCC_HISTORY_GROUPS, EVCC_TARIFF_NAMES
+    from interfaces.evcc_entities import (
+        EVCC_HISTORY_GROUPS,
+        is_evcc_history_entity,
+        is_evcc_reference,
+        is_evcc_state_key,
+    )
 except ImportError:  # imported as src.config_web (tests)
     from ..interfaces.state_source import SUPPORTED_SOURCES, fetch_remote_state
-    from ..interfaces.load_interface import EVCC_HISTORY_GROUPS, EVCC_TARIFF_NAMES
+    from ..interfaces.evcc_entities import (
+        EVCC_HISTORY_GROUPS,
+        is_evcc_history_entity,
+        is_evcc_reference,
+        is_evcc_state_key,
+    )
 
 logger = logging.getLogger("__main__")
 
 REQUEST_TIMEOUT_SECONDS = 30
-
-
-def _is_evcc_virtual_entity(sensor):
-    """Whether *sensor* names an EVCC history series or tariff (group:/tariff:)."""
-    if not sensor or not isinstance(sensor, str):
-        return False
-    parts = sensor.strip().split(":")
-    if parts[0] == "tariff" and len(parts) == 2:
-        return parts[1] in EVCC_TARIFF_NAMES
-    if len(parts) not in (2, 3) or parts[0] != "group":
-        return False
-    return parts[1] in EVCC_HISTORY_GROUPS
-
-
-def _is_evcc_state_path(sensor):
-    """Whether *sensor* is a dotted path into EVCC's live state (battery.soc)."""
-    return bool(sensor) and ":" not in str(sensor) and "." in str(sensor)
 
 
 def _probe_virtual_entity(sensor, url, request_timeout):
@@ -61,6 +54,16 @@ def _probe_virtual_entity(sensor, url, request_timeout):
     something the user can act on: a battery title mistyped reads as zero slots,
     not as a server error.
     """
+    if not is_evcc_history_entity(sensor):
+        return {
+            "ok": False,
+            "error": (
+                f"'{sensor}' is not a series EVCC keeps. Use group:<name> or "
+                f"group:<name>:<title> with one of {', '.join(EVCC_HISTORY_GROUPS)}, "
+                "or tariff:grid / tariff:feedin for the price history."
+            ),
+        }
+
     parts = sensor.strip().split(":")
     now = datetime.now(timezone.utc)
     start = now - timedelta(hours=24)
@@ -277,9 +280,11 @@ def probe_entity(source, sensor, url, access_token="", ssl_ignore=False):
     if not str(url or "").strip():
         return {"ok": False, "error": "The data source URL is not configured."}
 
-    if _is_evcc_virtual_entity(sensor):
+    # Shape first, validity second: a "group:" name that does not exist is still
+    # an EVCC reference, and saying so beats reporting it as a missing entity.
+    if is_evcc_reference(sensor):
         return _probe_virtual_entity(sensor, url, REQUEST_TIMEOUT_SECONDS)
-    if _is_evcc_state_path(sensor) and source == "evcc":
+    if source == "evcc" and is_evcc_state_key(sensor):
         return _probe_evcc_state_path(sensor, url, REQUEST_TIMEOUT_SECONDS)
 
     label = "Entity" if source == "homeassistant" else "Item"

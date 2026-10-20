@@ -15,27 +15,18 @@ import random
 import requests
 import pytz
 
+# The grammar for EVCC's virtual entity names lives in one place; see
+# interfaces/evcc_entities.py for why. Re-exported because this module is
+# where callers have always found the group names.
+from .evcc_entities import (  # noqa: F401  (re-export)
+    EVCC_HISTORY_GROUPS,
+    EVCC_TARIFF_NAMES,
+    evcc_entity_parts,
+    is_evcc_history_entity,
+)
+
 logger = logging.getLogger("__main__")
 logger.info("[LOAD-IF] loading module ")
-
-# Groups EVCC's energy history endpoint can answer with, verified against
-# evcc-io/evcc core/metrics/collector.go. Each becomes a virtual entity
-# "group:<name>" (whole group) or "group:<name>:<title>" (one series, e.g. one
-# wallbox named by its loadpoint title).
-EVCC_HISTORY_GROUPS = (
-    "home",
-    "grid",
-    "pv",
-    "battery",
-    "loadpoint",
-    "consumer",
-    "meter",
-    "forecast",
-)
-# Persisted tariff slots, "tariff:<name>". EVCC stores what its tariff source
-# produced at the time - the price history the battery price calculation works
-# from. Names are the usages EVCC persists (grid, feedin) per core/metrics/tariffs.go.
-EVCC_TARIFF_NAMES = ("grid", "feedin")
 
 
 class LoadInterface:
@@ -225,7 +216,7 @@ class LoadInterface:
                 logger.warning("[LOAD-IF] %s", self.configuration_message)
                 self.src = "default"
                 return False
-            if self.src == "evcc" and not self.__is_valid_evcc_entity(self.load_sensor):
+            if self.src == "evcc" and not is_evcc_history_entity(self.load_sensor):
                 # Grammar is checked here rather than only at fetch time so a
                 # typo'd virtual entity is visible at startup, in the same place
                 # every other configuration problem is reported.
@@ -514,7 +505,7 @@ class LoadInterface:
         fetched a range covering this interval, exactly like the Home Assistant
         path - same cache contract, same parity requirement.
         """
-        entity = self.__evcc_entity_parts(entity_id)
+        entity = evcc_entity_parts(entity_id)
         if entity is None:
             if entity_id and entity_id not in self.__evcc_unusable_reported:
                 # Once per name, not once per slot. A profile build asks for 24
@@ -770,37 +761,6 @@ class LoadInterface:
 
         samples.sort(key=lambda pair: pair[0])
         return samples
-
-    def __is_valid_evcc_entity(self, entity):
-        """Whether *entity* names an EVCC history series this source can answer.
-
-        Virtual entity grammar: ``group:<name>`` for a whole history group,
-        ``group:<name>:<title>`` for one series inside it, or ``tariff:<name>``
-        for the persisted tariff slots (the price history the battery price
-        calculation works from). Empty and None are handled by the caller the
-        same way a missing Home Assistant sensor is.
-        """
-        if not entity or not isinstance(entity, str):
-            return False
-        parts = entity.strip().split(":")
-        if parts[0] == "tariff" and len(parts) == 2:
-            return parts[1] in EVCC_TARIFF_NAMES
-        if len(parts) not in (2, 3) or parts[0] != "group":
-            return False
-        return parts[1] in EVCC_HISTORY_GROUPS
-
-    def __evcc_entity_parts(self, entity):
-        """Split ``group:<name>[:<title>]`` or ``tariff:<name>`` into parts.
-
-        Returns (group, title-or-None) with ``tariff:grid`` becoming
-        ``("tariff:grid", None)``, or None when the grammar is not matched.
-        """
-        if not self.__is_valid_evcc_entity(entity):
-            return None
-        parts = str(entity).strip().split(":")
-        if parts[0] == "tariff":
-            return f"tariff:{parts[1]}", None
-        return parts[1], (parts[2] if len(parts) == 3 else None)
 
     @staticmethod
     def __evcc_request_params(entity, start_time, end_time):

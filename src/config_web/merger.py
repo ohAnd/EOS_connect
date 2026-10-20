@@ -11,6 +11,11 @@ import logging
 import re
 from typing import Any, Optional
 
+try:  # running from src/ as a script — src/ is on sys.path
+    from interfaces.evcc_entities import is_evcc_reference
+except ImportError:  # imported as src.config_web (tests)
+    from ..interfaces.evcc_entities import is_evcc_reference
+
 from .store import ConfigStore
 from .schema import ConfigSchema, BOOTSTRAP_KEYS, LIST_SECTIONS
 
@@ -396,7 +401,7 @@ def _apply_evcc_virtual_entities(
         for key in ha_sensors
         if evcc_now
         and str(load.get(key, "") or "").strip()
-        and not _is_evcc_virtual_entity(load.get(key))
+        and not is_evcc_reference(load.get(key))
     }
 
     if evcc_now and not str(load.get("load_sensor", "") or "").strip():
@@ -430,16 +435,6 @@ def _apply_evcc_virtual_entities(
     }
 
 
-def _is_evcc_virtual_entity(entity) -> bool:
-    """Whether *entity* already IS a virtual entity (group:/tariff: grammar)."""
-    if not entity or not isinstance(entity, str):
-        return False
-    parts = entity.strip().split(":")
-    if parts[0] == "tariff" and len(parts) == 2:
-        return True
-    return parts[0] == "group" and len(parts) in (2, 3)
-
-
 def _apply_evcc_battery_entities(
     result: dict, all_settings: dict[str, Any]
 ) -> dict[str, Any]:
@@ -463,7 +458,7 @@ def _apply_evcc_battery_entities(
         return {}
 
     soc = str(battery.get("soc_sensor", "") or "").strip()
-    if soc and not _is_evcc_virtual_entity(soc) and not soc.startswith("battery."):
+    if soc and not is_evcc_reference(soc) and not soc.startswith("battery."):
         battery["soc_sensor"] = "battery.soc"
 
     # The connection the battery's own sensors answer through. The EVCC URL the
@@ -500,7 +495,7 @@ def _apply_evcc_battery_entities(
     }
     for key, virtual in price_sensors.items():
         current = str(battery.get(key, "") or "").strip()
-        if current and not _is_evcc_virtual_entity(current):
+        if current and not is_evcc_reference(current):
             battery[key] = virtual
 
     # Capacity is a physical fact EVCC's meter knows better than a hand-typed
