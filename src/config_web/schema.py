@@ -1399,9 +1399,11 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description=(
             "Minimum battery SOC in percent — your battery's physical operating "
-            "range. EVCC's battery management limits are behaviour thresholds, "
-            "not this, so this stays configured here even on an EVCC data source"
+            "range. Filled in from EVCC where the battery reports its own "
+            "limits; EVCC's site-level buffer/priority SOC are charging "
+            "behaviour, not this, and are never used for it"
         ),
+        labels=["evcc_managed"],
         help_url="config-battery.html#battery",
         validation={"min": 0, "max": 100},
         hot_reload=True,
@@ -1415,9 +1417,11 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description=(
             "Maximum battery SOC in percent — your battery's physical operating "
-            "range. EVCC's battery management limits are behaviour thresholds, "
-            "not this, so this stays configured here even on an EVCC data source"
+            "range. Filled in from EVCC where the battery reports its own "
+            "limits; EVCC's site-level buffer/priority SOC are charging "
+            "behaviour, not this, and are never used for it"
         ),
+        labels=["evcc_managed"],
         help_url="config-battery.html#battery",
         validation={"min": 0, "max": 100},
         hot_reload=True,

@@ -39,15 +39,20 @@ def fetch_evcc_parameters(url, request_timeout=5, max_age=CACHE_SECONDS):
         dict with the keys that were actually present:
         - capacity_wh: aggregated battery capacity in Wh (100%)
         - soc_percentage: current SoC (0-100)
+        - min_soc_percentage / max_soc_percentage: the battery's own operating
+          window, read from ``battery.devices[]``
         Missing keys are absent, not defaulted - the caller decides what a
         missing value is worth. None on any request failure.
 
-        Deliberately absent: min/max SoC. EVCC's bufferSoc/prioritySoc look like
-        SOC bounds but are charging-behaviour thresholds (when surplus stops
-        being stored, what stays in reserve for the household) — mapping them
-        onto the optimizer's physical battery range locked a site out of most
-        of its own battery. The battery's real min/max SoC stay configured
-        manually in EOS Connect.
+        The SoC window comes from the *devices*, not from the site. EVCC's
+        site-level bufferSoc/prioritySoc look like bounds but are
+        charging-behaviour thresholds (when surplus stops being stored, what
+        stays in reserve for the household); mapping those onto the optimizer's
+        physical range locked a site out of most of its own battery. The real
+        limits sit one level down, where EVCC reads them off the battery itself
+        through its BatterySocLimiter capability - the same numbers its own mode
+        control and optimizer work with. Not every battery integration
+        implements it, so both keys stay optional.
     """
     base = str(url or "").rstrip("/")
     if not base or "://yourEVCCserver" in base:
@@ -86,8 +91,63 @@ def _read(base, request_timeout):
         soc = _bounded(battery.get("soc"), 0.0, 100.0)
         if soc is not None:
             parameters["soc_percentage"] = round(soc, 1)
+        parameters.update(_soc_window(battery.get("devices")))
 
     return parameters or None
+
+
+def _soc_window(devices):
+    """The SoC window every listed battery can work inside, or ``{}``.
+
+    EOS Connect models one battery; EVCC reports per device. The conservative
+    cut is the intersection - the highest minimum and the lowest maximum - so no
+    individual battery is driven past its own limit. (Weighting by capacity
+    would average the window and do exactly that to the tighter one.)
+
+    Returns no window at all rather than an impossible one: batteries whose
+    limits do not overlap would hand the optimizer an empty range, and the
+    values the user configured are the better answer there.
+    """
+    if not isinstance(devices, list):
+        return {}
+
+    minimums = [
+        value
+        for value in (
+            _bounded(d.get("minSoc"), 0.0, 100.0)
+            for d in devices
+            if isinstance(d, dict)
+        )
+        if value is not None
+    ]
+    maximums = [
+        value
+        for value in (
+            _bounded(d.get("maxSoc"), 0.0, 100.0)
+            for d in devices
+            if isinstance(d, dict)
+        )
+        if value is not None
+    ]
+
+    window = {}
+    if minimums:
+        window["min_soc_percentage"] = round(max(minimums))
+    if maximums:
+        window["max_soc_percentage"] = round(min(maximums))
+    if (
+        "min_soc_percentage" in window
+        and "max_soc_percentage" in window
+        and window["min_soc_percentage"] >= window["max_soc_percentage"]
+    ):
+        logger.warning(
+            "[EVCC-PARAMS] Battery SoC limits do not overlap (min %s >= max %s); "
+            "keeping the configured values",
+            window["min_soc_percentage"],
+            window["max_soc_percentage"],
+        )
+        return {}
+    return window
 
 
 def _positive(value):

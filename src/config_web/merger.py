@@ -511,12 +511,14 @@ def _apply_evcc_battery_entities(
 
     # Capacity is a physical fact EVCC's meter knows better than a hand-typed
     # number. The SOC bounds are deliberately NOT auto-filled: EVCC's
-    # bufferSoc/prioritySoc are its *charging behaviour* limits (when surplus
-    # leaves the battery, what stays in reserve), not the battery's physical
-    # operating range - mapping them read a site with priority 70 as "min SOC
-    # 70%" and locked the optimizer out of three quarters of the battery.
-    # Efficiency and charge-power limits are not exposed by EVCC either and
-    # stay configurable exactly as they were.
+    # The SoC window comes from ``battery.devices[]``, where EVCC reads it off
+    # each battery through its BatterySocLimiter capability. NOT from the
+    # site-level bufferSoc/prioritySoc: those are *charging behaviour*
+    # thresholds (when surplus stops being stored, what stays in reserve), and
+    # reading them as the physical range once took a site with priority 70 as
+    # "min SOC 70%" and locked the optimizer out of three quarters of the
+    # battery. Efficiency and charge-power limits are not exposed by EVCC at
+    # all and stay configurable exactly as they were.
     parameters = None
     try:
         # Imported late: interfaces is heavier than this module's import graph
@@ -537,8 +539,13 @@ def _apply_evcc_battery_entities(
             "keeping the configured values",
             exc_info=True,
         )
-    if parameters and "capacity_wh" in parameters:
-        battery["capacity_wh"] = parameters["capacity_wh"]
+    # Only what EVCC actually answered. A battery whose integration carries no
+    # SoC limits, or an EVCC that is simply not reachable, leaves the configured
+    # values standing - the same rule the sensor names above follow.
+    from_evcc = ("capacity_wh", "min_soc_percentage", "max_soc_percentage")
+    for key in from_evcc:
+        if parameters and key in parameters:
+            battery[key] = parameters[key]
 
     resolved: dict[str, Any] = {}
     for key in (
@@ -548,9 +555,13 @@ def _apply_evcc_battery_entities(
         "grid_power_sensor",
         "load_power_sensor",
         "price_sensor",
-        "capacity_wh",
     ):
         if key in battery:
+            resolved[f"battery.{key}"] = battery[key]
+    # The physical parameters are only "resolved" when EVCC supplied them;
+    # otherwise the field must stay an ordinary input the user can set.
+    for key in from_evcc:
+        if parameters and key in parameters:
             resolved[f"battery.{key}"] = battery[key]
     # Supplementary connection: computed per merge, nothing for the UI to show.
     return resolved

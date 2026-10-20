@@ -101,10 +101,16 @@
                         <code>group:home</code> history, battery
                         state of charge the live <code>battery.soc</code>, and the battery price
                         calculation its power histories and persisted tariff slots. The battery
-                        parameters EVCC knows &mdash; capacity from the meter, minimum and maximum SoC
-                        from EVCC's own battery management &mdash; are likewise filled in and shown as
-                        read-only; switching the disclosure level to <strong>Expert</strong> turns every
-                        one of them back into a normal editable field if you ever need to deviate.</p>
+                        parameters EVCC knows &mdash; capacity from the meter, and the minimum and
+                        maximum SoC each battery reports as its own operating limits &mdash; are
+                        likewise filled in and shown as read-only; switching the disclosure level to
+                        <strong>Expert</strong> turns every one of them back into a normal editable
+                        field if you ever need to deviate. Not every battery integration reports its
+                        SoC limits: where EVCC has none, those two fields stay ordinary inputs with
+                        whatever you configured. EVCC's site-wide buffer and priority SoC are
+                        deliberately not used for this &mdash; they say when surplus stops being
+                        stored and what stays in reserve for the household, which is charging
+                        behaviour, not the battery's physical range.</p>
                     <p><strong>What stays manual on EVCC</strong>: charge and discharge efficiency and
                         the maximum charge power &mdash; EVCC exposes its battery meter and SoC
                         management, but no efficiency or power-limit values &mdash; and the optional

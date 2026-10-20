@@ -448,3 +448,51 @@ def test_the_merge_leaves_the_store_untouched(tmp_path):
         assert resolved["data_source.url"] == "http://evcc.local:7070"
     finally:
         store.close()
+
+
+def test_the_soc_window_comes_from_evcc_when_the_battery_reports_it():
+    """What EVCC reads off the battery beats a hand-typed range."""
+    with patch(
+        "src.interfaces.evcc_parameters.fetch_evcc_parameters",
+        return_value={"min_soc_percentage": 12, "max_soc_percentage": 96},
+    ):
+        result, resolved = _run(
+            EVCC_SETTINGS,
+            battery={
+                "source": "default",
+                "url": "http://evcc:7070",
+                "min_soc_percentage": 5,
+                "max_soc_percentage": 100,
+                "charge_efficiency": 0.88,
+            },
+        )
+    assert result["battery"]["min_soc_percentage"] == 12
+    assert result["battery"]["max_soc_percentage"] == 96
+    assert resolved["battery.min_soc_percentage"] == 12
+    # Still not EVCC's to know:
+    assert result["battery"]["charge_efficiency"] == 0.88
+
+
+def test_a_battery_without_soc_limits_keeps_the_configured_range():
+    """EVCC's SoC-limit capability is optional, so the field must stay usable.
+
+    It is also left out of the resolution, which is what keeps the settings page
+    rendering it as an input the user can set rather than a read-only row.
+    """
+    with patch(
+        "src.interfaces.evcc_parameters.fetch_evcc_parameters",
+        return_value={"capacity_wh": 15000},
+    ):
+        result, resolved = _run(
+            EVCC_SETTINGS,
+            battery={
+                "source": "default",
+                "url": "http://evcc:7070",
+                "min_soc_percentage": 5,
+                "max_soc_percentage": 100,
+            },
+        )
+    assert result["battery"]["min_soc_percentage"] == 5
+    assert result["battery"]["max_soc_percentage"] == 100
+    assert "battery.min_soc_percentage" not in resolved
+    assert "battery.max_soc_percentage" not in resolved
