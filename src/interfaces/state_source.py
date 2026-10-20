@@ -13,14 +13,23 @@ import requests
 SUPPORTED_SOURCES = ("homeassistant", "openhab", "evcc")
 
 
-def _evcc_state_document(base, request_timeout, ssl_ignore):
-    """One EVCC /api/state document, with the legacy envelope unwrapped.
+def fetch_evcc_state(url, request_timeout=10, ssl_ignore=False):
+    """One EVCC ``/api/state`` document, with the legacy envelope unwrapped.
 
     Older EVCC versions wrapped every response in ``{"result": {...}}``; current
-    ones answer with the state document directly. The same unwrapping is done by
-    ``EvccInterface.__check_config`` and ``__fetch_evcc_state_via_api`` — keep the
-    three in step when the envelope rules change.
+    ones answer with the state document directly. This is the one place that
+    knows it, so a change to EVCC's envelope is a change here - it used to be
+    repeated in ``evcc_parameters`` as well, where it quietly drifted out of
+    reach of the tests covering this one.
+
+    (``EvccInterface`` still carries its own copy for the version probe and its
+    polling loop; that one answers a different question - it needs the raw
+    response for error reporting - and is left alone deliberately.)
+
+    Raises:
+        requests.exceptions.RequestException: Propagated for the caller.
     """
+    base = str(url or "").rstrip("/")
     response = requests.get(
         f"{base}/api/state", timeout=request_timeout, verify=not ssl_ignore
     )
@@ -86,7 +95,7 @@ def fetch_remote_state(
             "Content-Type": "application/json",
         }
     elif source == "evcc":
-        payload = _evcc_state_document(base, request_timeout, ssl_ignore)
+        payload = fetch_evcc_state(base, request_timeout, ssl_ignore)
         value = _evcc_path(payload, sensor)
         return "" if value is None else str(value).strip()
     else:
@@ -131,7 +140,7 @@ def fetch_remote_state_details(
             "Content-Type": "application/json",
         }
     elif source == "evcc":
-        payload = _evcc_state_document(base, request_timeout, ssl_ignore)
+        payload = fetch_evcc_state(base, request_timeout, ssl_ignore)
         value = _evcc_path(payload, sensor)
         return {
             "state": "" if value is None else str(value).strip(),

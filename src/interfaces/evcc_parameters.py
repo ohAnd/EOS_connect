@@ -13,6 +13,8 @@ import time
 
 import requests
 
+from .state_source import fetch_evcc_state
+
 logger = logging.getLogger("__main__")
 
 # The config merge runs on every settings save, and the merge is what asks for
@@ -70,16 +72,9 @@ def fetch_evcc_parameters(url, request_timeout=5, max_age=CACHE_SECONDS):
 def _read(base, request_timeout):
     """One uncached read of ``/api/state``, unwrapped. None when it fails."""
     try:
-        response = requests.get(f"{base}/api/state", timeout=request_timeout)
-        response.raise_for_status()
-        payload = response.json()
+        payload = fetch_evcc_state(base, request_timeout=request_timeout)
     except (requests.exceptions.RequestException, ValueError) as e:
         logger.warning("[EVCC-PARAMS] Could not read %s/api/state: %s", base, e)
-        return None
-
-    if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
-        payload = payload["result"]
-    if not isinstance(payload, dict):
         return None
 
     battery = payload.get("battery")

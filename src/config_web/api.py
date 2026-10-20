@@ -24,6 +24,11 @@ from .schema import (
     REMOTE_DATA_SOURCE_TYPES,
 )
 from .entity_probe import probe_entity
+
+try:  # running from src/ as a script — src/ is on sys.path
+    from interfaces.evcc_entities import is_evcc_reference, is_evcc_state_key
+except ImportError:  # imported as src.config_web (tests)
+    from ..interfaces.evcc_entities import is_evcc_reference, is_evcc_state_key
 from .timeseries_probe import probe
 
 logger = logging.getLogger("__main__")
@@ -1344,9 +1349,8 @@ def _entity_probe_connection(key: str, get_value, data: Optional[dict] = None):
         # live state - dotted like ``battery.soc`` or bare like ``pvEnergy``.
         # Only a Home Assistant entity id is unmistakably not EVCC's, and that
         # is the one shape that has to go elsewhere.
-        reads_from_evcc = bool(sensor_name) and (
-            sensor_name.startswith(("group:", "tariff:"))
-            or (":" not in sensor_name and not sensor_name.startswith("sensor."))
+        reads_from_evcc = is_evcc_reference(sensor_name) or is_evcc_state_key(
+            sensor_name
         )
         if not reads_from_evcc:
             supp_type = get_value("data_source.supplementary_type")

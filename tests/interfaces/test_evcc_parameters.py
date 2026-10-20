@@ -38,7 +38,8 @@ def _answers(state):
     response.status_code = 200
     response.json.return_value = state
     response.raise_for_status.return_value = None
-    return patch("src.interfaces.evcc_parameters.requests.get", return_value=response)
+    # state_source is what issues the request now; evcc_parameters only asks it.
+    return patch("src.interfaces.state_source.requests.get", return_value=response)
 
 
 def test_capacity_comes_back_in_wh():
@@ -123,7 +124,7 @@ def test_the_site_level_buffer_and_priority_soc_are_never_read():
 
 def test_an_unreachable_site_answers_none():
     with patch(
-        "src.interfaces.evcc_parameters.requests.get",
+        "src.interfaces.state_source.requests.get",
         side_effect=requests.exceptions.ConnectionError("down"),
     ):
         assert fetch_evcc_parameters(URL) is None
@@ -136,7 +137,7 @@ def test_the_answer_is_cached_including_the_failure():
     not one per save.
     """
     with patch(
-        "src.interfaces.evcc_parameters.requests.get",
+        "src.interfaces.state_source.requests.get",
         side_effect=requests.exceptions.ConnectionError("down"),
     ) as getter:
         assert fetch_evcc_parameters(URL) is None
@@ -145,6 +146,6 @@ def test_the_answer_is_cached_including_the_failure():
 
 
 def test_the_placeholder_address_is_not_asked():
-    with patch("src.interfaces.evcc_parameters.requests.get") as getter:
+    with patch("src.interfaces.state_source.requests.get") as getter:
         assert fetch_evcc_parameters("http://yourEVCCserver:7070") is None
     getter.assert_not_called()
