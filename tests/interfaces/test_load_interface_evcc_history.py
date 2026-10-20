@@ -276,6 +276,88 @@ def test_the_open_slot_divides_by_the_time_that_has_elapsed():
     assert all(value == pytest.approx(1200.0) for value in values)
 
 
+def test_a_whole_group_asks_evcc_to_sum_it():
+    """A group reference without a title must ask EVCC to do the summing.
+
+    EVCC's handler reads ``grouped := q.Get("grouped") == "true"``, so the
+    parameter cannot simply be left out: its default is per-entity series, and a
+    group with two meters then arrives as two of them. The group filter rides
+    along so EVCC narrows the query instead of answering with every meter it has
+    and letting this module throw most of it away.
+    """
+    fake = FakeEvccHistory(WATTS)
+    interface = _interface()
+    with _connected(fake):
+        interface.fetch_historical_energy_data(
+            "group:pv", DAY_START, DAY_START + timedelta(hours=1)
+        )
+    params = fake.calls[0]
+    assert params["grouped"] == "true"
+    assert params["group"] == "pv"
+    assert "title" not in params
+
+
+def test_a_titled_reference_asks_for_that_one_series():
+    """With a title the per-entity answer is the point, so no grouped=true."""
+    fake = FakeEvccHistory(WATTS)
+    interface = _interface()
+    with _connected(fake):
+        interface.fetch_historical_energy_data(
+            "group:loadpoint:Carport", DAY_START, DAY_START + timedelta(hours=1)
+        )
+    params = fake.calls[0]
+    assert params["group"] == "loadpoint"
+    assert params["title"] == "Carport"
+    assert params.get("grouped") != "true"
+
+
+def test_two_series_of_one_group_are_added_not_dropped():
+    """Should a site answer per entity anyway, its meters still add up.
+
+    Two batteries measured in the same slot are the group's power together, not
+    whichever series the merge happened to write last. Keeping one of them was a
+    silent undercount feeding straight into the battery price calculation.
+    """
+    slot_start = DAY_START
+    interface = _interface()
+    with patch("src.interfaces.load_interface.requests.get") as getter, patch(
+        "src.interfaces.load_interface.time.sleep"
+    ):
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = [
+            {
+                "group": "battery",
+                "title": "Battery 1",
+                "data": [
+                    {
+                        "start": slot_start.isoformat(),
+                        "end": (slot_start + timedelta(minutes=15)).isoformat(),
+                        "energy": 0.25,  # 1000 W
+                    }
+                ],
+            },
+            {
+                "group": "battery",
+                "title": "Battery 2",
+                "data": [
+                    {
+                        "start": slot_start.isoformat(),
+                        "end": (slot_start + timedelta(minutes=15)).isoformat(),
+                        "energy": 0.1,  # 400 W
+                    }
+                ],
+            },
+        ]
+        getter.return_value = response
+        samples = interface.fetch_historical_energy_data(
+            "group:battery", slot_start, slot_start + timedelta(minutes=15)
+        )
+    values = [entry["state"] for entry in samples]
+    assert values, "the group answers"
+    assert all(value == pytest.approx(1400.0) for value in values)
+
+
 def test_return_energy_is_subtracted():
     """Grid export (returnEnergy) leaves the grid import, or feed-in reads as load."""
     slot_start = DAY_START
