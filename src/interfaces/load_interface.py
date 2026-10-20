@@ -867,15 +867,16 @@ class LoadInterface:
             return []
 
         samples = []
+        now_utc = self.__to_utc(self.__now())
         for one in series:
             for slot in one.get("data") or []:
                 slot_start = self.__to_utc(slot.get("start"))
                 slot_end = self.__to_utc(slot.get("end"))
                 if slot_start is None or slot_end is None or slot_end <= slot_start:
                     continue
-                # Clip to the request range: history answers whole slots, and a
-                # request that starts mid-slot (the rolling price-handler window)
-                # must not integrate a slot it only partially asked for.
+                # Clip the *stamps* to the request range: history answers whole
+                # slots, and a window that opens mid-slot must not hand out
+                # samples outside what it asked for.
                 clipped_start = max(slot_start, start_utc)
                 clipped_end = min(slot_end, end_utc)
                 if clipped_end <= clipped_start:
@@ -883,7 +884,19 @@ class LoadInterface:
 
                 energy_kwh = self.__as_float(slot.get("energy")) or 0.0
                 retour_kwh = self.__as_float(slot.get("returnEnergy")) or 0.0
-                hours = (clipped_end - clipped_start).total_seconds() / 3600.0
+                # The rate, however, is integrated over the span the energy was
+                # measured in, which begins at the slot's own start - not at the
+                # clipped one. ``energy`` is the whole slot's; dividing it by the
+                # fraction the caller happened to ask for inflates the rate by
+                # exactly that fraction, and the price handler's rolling window
+                # (``now - lookback - 12 h``) never starts on a slot boundary. A
+                # 0.9 kWh quarter-hour asked for from minute 7 read as 6750 W
+                # instead of its actual 3600 W.
+                # The upper bound is "now" rather than the slot's end, because
+                # the slot still being filled carries only the energy accumulated
+                # so far - there, elapsed time is the honest divisor.
+                measured_end = min(slot_end, now_utc) if now_utc else slot_end
+                hours = (measured_end - slot_start).total_seconds() / 3600.0
                 # Signed power. EVCC's rule is the same for every group
                 # (verified against a live 0.317 site): ``energy`` accumulates
                 # the positive direction - charging for the battery meter,
