@@ -9,15 +9,31 @@ the envelope (legacy {"result": ...} wrapping included).
 """
 
 import logging
+import time
 
 import requests
 
 logger = logging.getLogger("__main__")
 
+# The config merge runs on every settings save, and the merge is what asks for
+# these. Without a cache a save waited on an HTTP round trip - or on the whole
+# timeout, when EVCC was down - before the page came back. Failures are cached
+# too, for the same reason: an unreachable instance must cost one timeout, not
+# one per save.
+CACHE_SECONDS = 60
+_cache: dict = {}
 
-def fetch_evcc_parameters(url, request_timeout=10):
+
+def clear_cache():
+    """Forget every cached answer. For tests and for a changed EVCC address."""
+    _cache.clear()
+
+
+def fetch_evcc_parameters(url, request_timeout=5, max_age=CACHE_SECONDS):
     """
     Read the battery parameters EVCC exposes, or None when EVCC does not answer.
+
+    Answers are cached per URL for *max_age* seconds, misses included.
 
     Returns:
         dict with the keys that were actually present:
@@ -36,6 +52,18 @@ def fetch_evcc_parameters(url, request_timeout=10):
     base = str(url or "").rstrip("/")
     if not base or "://yourEVCCserver" in base:
         return None
+
+    cached = _cache.get(base)
+    if cached is not None and (time.monotonic() - cached[0]) < max_age:
+        return cached[1]
+
+    parameters = _read(base, request_timeout)
+    _cache[base] = (time.monotonic(), parameters)
+    return parameters
+
+
+def _read(base, request_timeout):
+    """One uncached read of ``/api/state``, unwrapped. None when it fails."""
     try:
         response = requests.get(f"{base}/api/state", timeout=request_timeout)
         response.raise_for_status()

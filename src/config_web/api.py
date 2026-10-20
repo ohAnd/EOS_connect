@@ -411,6 +411,17 @@ def export_config():
     return jsonify(export_settings_dict())
 
 
+@config_bp.route("/resolved", methods=["GET"])
+def resolved_config():
+    """Values the merge derives rather than stores (EVCC data source only).
+
+    Separate from ``/export`` on purpose: that one is the store, and doubles as
+    the backup payload. A derived value written into a backup comes back as a
+    user setting on restore and stops being derived.
+    """
+    return jsonify(_module.resolved_values())
+
+
 @config_bp.route("/import", methods=["POST"])
 def import_config():
     """Import a flat JSON dict of settings (from backup).

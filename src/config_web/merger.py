@@ -9,7 +9,7 @@ from the SQLite store. Resolves the unified ``data_source`` into per-section
 
 import logging
 import re
-from typing import Any
+from typing import Any, Optional
 
 from .store import ConfigStore
 from .schema import ConfigSchema, BOOTSTRAP_KEYS, LIST_SECTIONS
@@ -27,6 +27,7 @@ def build_merged_config(
     bootstrap_config: dict,
     store: ConfigStore,
     schema: ConfigSchema,
+    resolved_out: Optional[dict] = None,
 ) -> dict:
     """
     Build a merged config dict that has the EXACT same shape as ``config_manager.config``.
@@ -36,22 +37,25 @@ def build_merged_config(
     2. Bootstrap config.yaml (for bootstrap-only keys)
     3. Schema defaults (fallback)
 
-    Resolutions the EVCC data source makes (the single URL, virtual entities,
-    battery parameters read from EVCC) are written back into the store before
-    the dict is returned — the settings UI reads the store, and a resolution
-    that only existed in the merged dict would leave those pages showing the
-    stale Home Assistant names the user is trying to get away from.
+    What the EVCC data source resolves (the address, the virtual entities, the
+    battery parameters EVCC reports) is *derived* here on every merge and never
+    stored. Storing it pinned values that then went stale - a capacity from
+    before the battery was extended, an address that could no longer be edited
+    because the next merge wrote the old one back - and it put derived values
+    into the backup file, which ``/api/config/export`` doubles as.
 
     Args:
         bootstrap_config: The ``config_manager.config`` dict (for bootstrap keys).
         store: An opened ConfigStore with migrated/edited values.
         schema: The ConfigSchema registry.
+        resolved_out: Optional dict, filled with the flat dot-keyed values the
+            EVCC resolution derived. The settings UI shows these for the fields
+            it renders read-only; everything else reads the store as before.
 
     Returns:
         A nested dict identical in shape to the original config dict.
     """
     all_settings = store.get_all()
-    _original_settings = dict(all_settings)
     defaults = schema.defaults_dict()
     result = {}
 
@@ -97,7 +101,7 @@ def build_merged_config(
     )
 
     # Resolve data_source -> load/battery connection fields
-    evcc_writeback = _apply_data_source_inheritance(result, all_settings)
+    evcc_resolved = _apply_data_source_inheritance(result, all_settings)
 
     # Inject data_source credentials to inverter when type is homeassistant
     _apply_inverter_data_source_injection(result, all_settings)
@@ -105,17 +109,11 @@ def build_merged_config(
     # Apply central HA data source for price and PV sources
     _apply_central_ha_data_source(result, all_settings)
 
-    # Persist only what the EVCC resolutions changed, back into the store. The
-    # settings UI reads the store (GET /api/config/export), so a resolved value
-    # that only existed in the merged dict - the mirrored EVCC URL, the virtual
-    # entities, the battery parameters EVCC reported - would never have reached
-    # those pages. Named by the resolution itself rather than diffed: a diff of
-    # the whole merged dict would write schema *defaults* into the store, and
-    # every replace-mode import would end up owning them.
-    if evcc_writeback:
-        store.set_batch(
-            {k: v for k, v in evcc_writeback.items() if _original_settings.get(k) != v}
-        )
+    # Handed to the caller rather than written anywhere. ``store`` stays
+    # read-only for the whole of this function - that is the point.
+    if resolved_out is not None:
+        resolved_out.clear()
+        resolved_out.update(evcc_resolved)
 
     return result
 
@@ -290,48 +288,38 @@ def _apply_data_source_inheritance(
     skipped so a half-configured setup does not look connected.
 
     Returns:
-        Flat store keys the resolution changed, for the caller to persist. Empty
-        when EVCC is not involved - the plain HA/openHAB inheritance is computed
-        fresh on every merge and never needs storing.
+        Flat dot-keyed values the resolution derived, for the settings UI to
+        display. Empty when EVCC is not involved - the plain HA/openHAB
+        inheritance is recomputed on every merge and has nothing to show.
     """
-    writeback: dict[str, Any] = {}
+    resolved: dict[str, Any] = {}
     ds_type = all_settings.get("data_source.type", "default")
     ds_url = all_settings.get("data_source.url", "")
     ds_token = all_settings.get("data_source.access_token", "")
     ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
 
-    evcc_url = all_settings.get("evcc.url", "")
+    evcc_url = str(all_settings.get("evcc.url", "") or "").strip()
     if ds_type == "evcc":
-        # One input, two keys: the setup writes the EVCC address under
-        # data_source.url (the page the user is on), and the evcc section keeps
-        # serving the roles that read it from there (inverter controller, price
-        # and PV source). While EVCC is the data source, the display and both
-        # keys follow the *evcc* address: it is the one the running roles were
-        # configured against, and a Home Assistant URL left in data_source.url
-        # from the previous connection is stale here, not an input — it must not
-        # win just because it parses as a URL. A data_source.url the user typed
-        # after the switch only wins while evcc.url is still unset/placeholder.
-        ds_url_typed = str(all_settings.get("data_source.url", "") or "").strip()
-        # What "the user typed an EVCC address here" looks like: any URL that is
-        # not one of the schema's shipped defaults. The Home Assistant default
-        # (`http://homeassistant:8123`) and the openHAB spelling are leftovers of
-        # the previous connection, not an EVCC address to hand across.
-        if ds_url_typed not in ("", "http://homeassistant:8123", "http://openhab:8080"):
-            if not _is_evcc_url_usable(evcc_url):
-                all_settings["evcc.url"] = ds_url_typed
-                writeback["evcc.url"] = ds_url_typed
-                evcc_url = ds_url_typed
-            elif ds_url_typed != evcc_url:
-                # Both sides hold a real URL that disagree: evcc.url is the one
-                # the running roles were configured against, and the field the
-                # user sees mirrors it.
-                all_settings["data_source.url"] = evcc_url
-                writeback["data_source.url"] = evcc_url
-        elif _is_evcc_url_usable(evcc_url):
-            if all_settings.get("data_source.url") != evcc_url:
-                writeback["data_source.url"] = evcc_url
-            all_settings["data_source.url"] = evcc_url
-        ds_url = evcc_url if _is_evcc_url_usable(evcc_url) else ""
+        # One address, two keys. The Data Source URL field is the input: what
+        # the user last typed there wins, and the ``evcc`` section follows it so
+        # the roles reading that section - inverter controller, price and PV
+        # source - point at the same instance. Only while the field still holds
+        # a shipped default of the *previous* connection is it treated as empty
+        # and the evcc section's own address stands in.
+        #
+        # Nothing is written back. The earlier version mirrored the two keys
+        # into the store, which meant the next merge overwrote a freshly typed
+        # address with the old one - the EVCC URL could not be changed at all
+        # once it had been set, because the page carrying the other copy is
+        # hidden while EVCC is the data source.
+        typed = str(all_settings.get("data_source.url", "") or "").strip()
+        if typed in ("", "http://homeassistant:8123", "http://openhab:8080"):
+            typed = ""
+        resolved_url = typed or (evcc_url if _is_evcc_url_usable(evcc_url) else "")
+        if resolved_url and isinstance(result.get("evcc"), dict):
+            result["evcc"]["url"] = resolved_url
+        resolved["data_source.url"] = resolved_url
+        ds_url = resolved_url
         ds_token = ""
 
     for section in _DATA_SOURCE_SECTIONS:
@@ -351,9 +339,9 @@ def _apply_data_source_inheritance(
         # If section has its own source set, keep it (Expert override)
 
     if ds_type == "evcc":
-        writeback.update(_apply_evcc_virtual_entities(result, all_settings) or {})
-        writeback.update(_apply_evcc_battery_entities(result, all_settings) or {})
-    return writeback
+        resolved.update(_apply_evcc_virtual_entities(result, all_settings) or {})
+        resolved.update(_apply_evcc_battery_entities(result, all_settings) or {})
+    return resolved
 
 
 def _is_evcc_placeholder(url) -> bool:
@@ -439,8 +427,8 @@ def _apply_evcc_virtual_entities(
             f"group:consumer:{consumer_title}" if consumer_title else ""
         )
 
-    # Only the user-visible sensor names are store-worthy; the merger computes
-    # source/url on every pass and the store's copy would pin those.
+    # Only the user-visible sensor names are worth showing; source and url are
+    # recomputed every pass and the user never sees them on these pages.
     return {
         f"load.{key}": load[key]
         for key in ("load_sensor", "car_charge_load_sensor", "additional_load_1_sensor")
@@ -458,7 +446,9 @@ def _is_evcc_virtual_entity(entity) -> bool:
     return parts[0] == "group" and len(parts) in (2, 3)
 
 
-def _apply_evcc_battery_entities(result: dict, all_settings: dict[str, Any]) -> None:
+def _apply_evcc_battery_entities(
+    result: dict, all_settings: dict[str, Any]
+) -> dict[str, Any]:
     """
     Switch the battery section's stale Home Assistant names to EVCC equivalents.
 
@@ -531,7 +521,14 @@ def _apply_evcc_battery_entities(result: dict, all_settings: dict[str, Any]) -> 
     try:
         # Imported late: interfaces is heavier than this module's import graph
         # wants at module load, and EVCC mode is the only case that needs it.
-        from interfaces.evcc_parameters import fetch_evcc_parameters
+        # Both spellings, because this package is a top-level one at runtime
+        # (the container starts from src/) and a sub-package under the tests -
+        # the same dual import entity_probe.py carries, guarded by
+        # tests/config_web/test_runtime_import_layout.py.
+        try:
+            from interfaces.evcc_parameters import fetch_evcc_parameters
+        except ImportError:
+            from ..interfaces.evcc_parameters import fetch_evcc_parameters
 
         parameters = fetch_evcc_parameters(battery.get("url", ""))
     except (ImportError, OSError, ValueError):
@@ -543,7 +540,7 @@ def _apply_evcc_battery_entities(result: dict, all_settings: dict[str, Any]) -> 
     if parameters and "capacity_wh" in parameters:
         battery["capacity_wh"] = parameters["capacity_wh"]
 
-    writeback: dict[str, Any] = {}
+    resolved: dict[str, Any] = {}
     for key in (
         "soc_sensor",
         "battery_power_sensor",
@@ -554,9 +551,9 @@ def _apply_evcc_battery_entities(result: dict, all_settings: dict[str, Any]) -> 
         "capacity_wh",
     ):
         if key in battery:
-            writeback[f"battery.{key}"] = battery[key]
-    # Supplementary connection: computed per merge, the store's copy stays bare.
-    return writeback
+            resolved[f"battery.{key}"] = battery[key]
+    # Supplementary connection: computed per merge, nothing for the UI to show.
+    return resolved
 
 
 def _apply_inverter_data_source_injection(

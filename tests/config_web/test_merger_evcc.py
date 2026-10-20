@@ -8,7 +8,31 @@ user typed themselves alone.
 """
 
 # pylint: disable=protected-access
-from src.config_web.merger import _apply_data_source_inheritance
+from unittest.mock import patch
+
+import pytest
+
+from src.config_web.merger import (
+    _apply_data_source_inheritance,
+    build_merged_config,
+)
+from src.config_web.schema import ConfigSchema
+from src.config_web.store import ConfigStore
+
+
+@pytest.fixture(autouse=True)
+def _no_evcc_call():
+    """No test here reaches a real EVCC.
+
+    The resolution asks EVCC for its battery parameters, and the merge now runs
+    that on every pass rather than once - an unmocked test would hang on a
+    proxy or, worse, pick up whatever answers at that address.
+    """
+    with patch(
+        "src.interfaces.evcc_parameters.fetch_evcc_parameters", return_value=None
+    ):
+        yield
+
 
 EVCC_SETTINGS = {
     "data_source.type": "evcc",
@@ -20,15 +44,15 @@ EVCC_SETTINGS = {
 
 
 def _run(settings, load=None, battery=None):
-    """Apply the inheritance to copies of everything and return (result, settings).
+    """Apply the inheritance and return ``(merged_result, resolved_values)``.
 
-    Copies: the merger writes resolved values back into *settings* (store-level
-    sync), and a test that shares one fixture dict with the next case would leak
-    the values it wrote. Tests that assert on the write-back use the returned
-    settings; the others ignore it.
+    The resolution derives; it never writes. *settings* is copied anyway so a
+    test that shares a fixture dict with the next case cannot be the thing that
+    proves it - two tests assert on the untouched copy directly.
     """
     settings = dict(settings)
     result = {
+        "evcc": {"url": settings.get("evcc.url", "")},
         "load": (
             load
             if load is not None
@@ -40,12 +64,12 @@ def _run(settings, load=None, battery=None):
             else {"source": "default", "url": "", "access_token": ""}
         ),
     }
-    _apply_data_source_inheritance(result, settings)
-    return result, settings
+    resolved = _apply_data_source_inheritance(result, settings)
+    return result, resolved
 
 
 def test_evcc_url_comes_from_the_evcc_section():
-    result, settings = _run(EVCC_SETTINGS)
+    result, _resolved = _run(EVCC_SETTINGS)
     assert result["load"]["source"] == "evcc"
     assert result["load"]["url"] == "http://evcc:7070"
     assert result["battery"]["source"] == "evcc"
@@ -58,13 +82,15 @@ def test_evcc_url_comes_from_the_evcc_section():
 def test_placeholder_evcc_url_leaves_the_sections_empty():
     """The schema placeholder is not an EVCC instance - a half-configured setup
     must not look connected."""
-    result, settings = _run({**EVCC_SETTINGS, "evcc.url": "http://yourEVCCserver:7070"})
+    result, _resolved = _run(
+        {**EVCC_SETTINGS, "evcc.url": "http://yourEVCCserver:7070"}
+    )
     assert result["load"]["url"] == ""
     assert result["load"]["source"] == "evcc"
 
 
 def test_virtual_entities_are_prefilled():
-    result, settings = _run(EVCC_SETTINGS)
+    result, _resolved = _run(EVCC_SETTINGS)
     assert result["load"]["load_sensor"] == "group:home"
     # No consumer title configured - the additional load stays empty, not guessed.
     assert result["load"].get("additional_load_1_sensor", "") == ""
@@ -77,12 +103,12 @@ def test_the_wallbox_field_stays_empty_on_evcc():
     from a base load that never carried it. The field is not offered on an EVCC
     data source, and the merger leaves nothing in it to act on.
     """
-    result, settings = _run(EVCC_SETTINGS)
+    result, _resolved = _run(EVCC_SETTINGS)
     assert result["load"]["car_charge_load_sensor"] == ""
 
 
 def test_consumer_title_fills_the_additional_load():
-    result, settings = _run(
+    result, _resolved = _run(
         {
             **EVCC_SETTINGS,
             "data_source.evcc_consumer_title": "HeatPump",
@@ -93,7 +119,7 @@ def test_consumer_title_fills_the_additional_load():
 
 
 def test_user_typed_entities_are_never_overwritten():
-    result, settings = _run(
+    result, _resolved = _run(
         EVCC_SETTINGS,
         load={
             "source": "default",
@@ -109,7 +135,7 @@ def test_user_typed_entities_are_never_overwritten():
 
 def test_expert_homeassistant_override_is_kept():
     """A load section kept on Home Assistant while the source is EVCC elsewhere."""
-    result, settings = _run(
+    result, _resolved = _run(
         EVCC_SETTINGS,
         load={
             "source": "homeassistant",
@@ -132,7 +158,7 @@ def test_stale_ha_sensor_names_are_prefilled_on_a_switch():
     configured. The prefill only claims names that are unmistakably Home
     Assistant's ("sensor." prefix); anything else typed by a user stays.
     """
-    result, settings = _run(
+    result, _resolved = _run(
         EVCC_SETTINGS,
         load={
             "source": "default",
@@ -153,7 +179,7 @@ def test_stale_ha_sensor_names_are_prefilled_on_a_switch():
 
 def test_already_virtual_entities_are_kept():
     """An EVCC setup restored from a backup keeps its own virtual entities."""
-    result, settings = _run(
+    result, _resolved = _run(
         EVCC_SETTINGS,
         load={
             "source": "default",
@@ -175,7 +201,7 @@ def test_battery_stale_names_move_to_evcc_equivalents():
     EVCC directly, and leaving the HA names in place would strand the SOC at 5%
     and silence the price calculation.
     """
-    result, settings = _run(
+    result, _resolved = _run(
         EVCC_SETTINGS,
         battery={
             "source": "default",
@@ -198,7 +224,7 @@ def test_battery_stale_names_move_to_evcc_equivalents():
 
 
 def test_battery_existing_virtual_entities_are_kept():
-    result, settings = _run(
+    result, _resolved = _run(
         EVCC_SETTINGS,
         battery={
             "source": "default",
@@ -213,7 +239,7 @@ def test_battery_existing_virtual_entities_are_kept():
 
 
 def test_battery_untouched_when_source_not_evcc():
-    result, settings = _run(
+    result, _resolved = _run(
         {
             "data_source.type": "homeassistant",
             "data_source.url": "http://ha:8123",
@@ -226,28 +252,25 @@ def test_battery_untouched_when_source_not_evcc():
     assert result["battery"]["soc_sensor"] == "sensor.battery_soc"
 
 
-def test_stale_ha_url_does_not_become_the_evcc_url():
-    """Switching from an HA setup leaves the HA address in data_source.url.
+def test_a_shipped_default_url_is_not_an_evcc_address():
+    """The default left from the previous connection does not win.
 
-    That address is the *previous* connection, not an EVCC address to hand
-    across: the merged config follows evcc.url, and the Data Source field shows
-    the EVCC address so the one URL the user sees is the one in use.
+    ``http://homeassistant:8123`` in the Data Source field is what the schema
+    ships, not something the user typed at an EVCC instance - so the evcc
+    section's own address stands in.
     """
-    settings = {
-        **EVCC_SETTINGS,
-        "data_source.url": "http://192.168.1.50:8123",  # a real-looking HA address
-    }
-    result, settings = _run(settings)
+    settings = {**EVCC_SETTINGS, "data_source.url": "http://homeassistant:8123"}
+    result, resolved = _run(settings)
     assert result["load"]["url"] == "http://evcc:7070"
-    # Mirror written back at store level, so the UI's field shows it too.
-    assert settings["data_source.url"] == "http://evcc:7070"
+    assert result["evcc"]["url"] == "http://evcc:7070"
+    assert resolved["data_source.url"] == "http://evcc:7070"
 
 
-def test_typed_evcc_url_on_data_source_hands_across():
-    """A URL the user typed into the Data Source field becomes evcc.url.
+def test_a_typed_url_wins_and_reaches_the_evcc_section():
+    """What the user typed into the Data Source field is the address.
 
-    The distinguishing mark of "typed" is not being one of the shipped default
-    connection URLs; the placeholder evcc.url takes it.
+    Both keys follow it, so the roles reading the evcc section - inverter
+    controller, price and PV source - talk to the same instance.
     """
     settings = {
         "data_source.type": "evcc",
@@ -256,39 +279,84 @@ def test_typed_evcc_url_on_data_source_hands_across():
         "data_source.ssl_ignore": False,
         "evcc.url": "http://yourEVCCserver:7070",
     }
-    result, settings = _run(settings)
-    assert settings["evcc.url"] == "http://my-evcc.local:7070"
+    result, resolved = _run(settings)
     assert result["load"]["url"] == "http://my-evcc.local:7070"
+    assert result["evcc"]["url"] == "http://my-evcc.local:7070"
+    assert resolved["data_source.url"] == "http://my-evcc.local:7070"
 
 
-def test_battery_params_autofill_from_evcc():
-    """Capacity and the SOC bounds come from the EVCC battery meter.
+def test_a_changed_url_is_not_reverted_to_the_stored_one():
+    """Moving EVCC to another host has to stick.
 
-    The fields stay configured - an unreachable EVCC leaves them as they are -
-    but on a site EVCC answers, its values are the ones the battery model runs
-    with. Efficiency and charge-power limits are NOT exposed by EVCC and are
-    never touched.
+    The earlier version mirrored both keys into the store, so the next merge
+    overwrote the freshly typed address with the old one - and the page holding
+    the other copy is hidden while EVCC is the data source, which left no way
+    to change the address at all.
     """
-    result, settings = _run(
+    settings = {
+        "data_source.type": "evcc",
+        "data_source.url": "http://new-host:7070",  # just typed
+        "data_source.access_token": "",
+        "data_source.ssl_ignore": False,
+        "evcc.url": "http://old-host:7070",  # what the store still holds
+    }
+    before = dict(settings)
+    result, resolved = _run(settings)
+    assert result["load"]["url"] == "http://new-host:7070"
+    assert resolved["data_source.url"] == "http://new-host:7070"
+    # And the resolution kept its hands off the settings it was given.
+    assert settings == before
+
+
+def test_nothing_is_written_back_into_the_settings():
+    """The resolution derives; it never edits the store it reads."""
+    settings = {**EVCC_SETTINGS}
+    before = dict(settings)
+    _run(settings)
+    assert settings == before
+
+
+def test_capacity_comes_from_the_evcc_battery_meter():
+    """Capacity is a physical fact the meter knows better than a typed number.
+
+    Efficiency and charge-power limits are NOT exposed by EVCC and stay exactly
+    as configured.
+    """
+    battery = {
+        "source": "default",
+        "url": "http://evcc:7070",
+        "soc_sensor": "sensor.battery_soc",
+        "capacity_wh": 11059,
+        "charge_efficiency": 0.88,
+        "max_charge_power_w": 5000,
+    }
+    with patch(
+        "src.interfaces.evcc_parameters.fetch_evcc_parameters",
+        return_value={"capacity_wh": 15000},
+    ):
+        result, resolved = _run(EVCC_SETTINGS, battery=battery)
+    assert result["battery"]["capacity_wh"] == 15000
+    assert resolved["battery.capacity_wh"] == 15000
+    assert result["battery"]["charge_efficiency"] == 0.88
+    assert result["battery"]["max_charge_power_w"] == 5000
+
+
+def test_an_unreachable_evcc_leaves_the_configured_capacity():
+    """No answer is not a reason to overwrite what the user configured."""
+    result, _resolved = _run(
         EVCC_SETTINGS,
         battery={
             "source": "default",
             "url": "http://evcc:7070",
             "soc_sensor": "sensor.battery_soc",
             "capacity_wh": 11059,
-            "charge_efficiency": 0.88,
-            "max_charge_power_w": 5000,
         },
     )
-    # The merger reaches EVCC (patched in tests/conftest via no-network? No -
-    # this helper would make a live request). Assert only on non-network keys
-    # when EVCC does not answer: capacity stays as configured.
-    assert result["battery"]["charge_efficiency"] == 0.88
-    assert result["battery"]["max_charge_power_w"] == 5000
+    assert result["battery"]["capacity_wh"] == 11059
 
 
 def test_other_types_do_not_get_evcc_treatment():
-    result, settings = _run(
+    result, _resolved = _run(
         {
             "data_source.type": "homeassistant",
             "data_source.url": "http://ha.local:8123",
@@ -347,3 +415,36 @@ def test_temp_sensor_stays_readable_through_supplementary_without_a_rewrite():
         },
     )
     assert result["battery"]["sensor_battery_temperature"] == "sensor.battery_temp"
+
+
+def test_the_merge_leaves_the_store_untouched(tmp_path):
+    """End to end: a full merge on an EVCC setup writes nothing.
+
+    The resolution used to mirror its results into the store so the settings UI
+    would see them. That pinned derived values - a capacity from before the
+    battery was extended, an address the next merge overwrote - and put them
+    into ``/api/config/export``, which is also the backup payload. They reach
+    the UI through ``resolved_out`` instead.
+    """
+    store = ConfigStore(str(tmp_path / "merge.db"))
+    store.open()
+    try:
+        store.set_batch(
+            {
+                "data_source.type": "evcc",
+                "data_source.url": "http://evcc.local:7070",
+                "load.load_sensor": "sensor.stale_from_home_assistant",
+            }
+        )
+        before = store.get_all()
+
+        resolved = {}
+        merged = build_merged_config({}, store, ConfigSchema(), resolved_out=resolved)
+
+        assert store.get_all() == before, "the merge is read-only on the store"
+        # ...while the resolution still reached the merged config and the UI.
+        assert merged["load"]["load_sensor"] == "group:home"
+        assert resolved["load.load_sensor"] == "group:home"
+        assert resolved["data_source.url"] == "http://evcc.local:7070"
+    finally:
+        store.close()
