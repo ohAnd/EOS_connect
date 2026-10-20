@@ -158,3 +158,72 @@ def test_every_autoscaling_field_applies_without_a_restart(schema):
         assert field.hot_reload or "restart_required" in labels, (
             f"{field.key} neither hot-reloads nor asks for a restart"
         )
+
+
+class TestEvccAsTheCentralSource:
+    """EVCC publishes the PV counter itself; the timeseries domains it cannot.
+
+    Both used to be handed the EVCC address wholesale, which gave the price and
+    PV-forecast domains a ``<evcc>/api/states/<entity>`` URL that can only 404 -
+    EVCC has no such endpoint - and left the autoscaler pointing at a host it
+    could not read an entity from either.
+    """
+
+    def _evcc(self, store, schema, **extra):
+        settings = {
+            "data_source__type": "evcc",
+            "data_source__url": "http://evcc.local:7070",
+            "pv_autoscaling__enabled": True,
+            "pv_autoscaling__use_ha_central_data_source": True,
+        }
+        settings.update(extra)
+        return _merged(store, schema, **settings)
+
+    def test_the_counter_comes_from_evccs_own_state(self, store, schema):
+        """``pvEnergy`` is the site's cumulative PV energy - exactly the field."""
+        pv_auto = self._evcc(store, schema)["pv_autoscaling"]
+        assert pv_auto["src"] == "evcc"
+        assert pv_auto["url"] == "http://evcc.local:7070"
+        assert pv_auto["sensor_entity_id"] == "pvEnergy"
+        assert pv_auto["access_token"] == ""
+
+    def test_a_home_assistant_counter_name_is_replaced(self, store, schema):
+        """It cannot resolve against EVCC's state, so carrying it over is no help."""
+        pv_auto = self._evcc(
+            store, schema, pv_autoscaling__sensor_entity_id="sensor.pv_total"
+        )["pv_autoscaling"]
+        assert pv_auto["sensor_entity_id"] == "pvEnergy"
+
+    def test_a_name_the_user_chose_is_kept(self, store, schema):
+        """A site reading some other key of EVCC's state keeps it."""
+        pv_auto = self._evcc(
+            store, schema, pv_autoscaling__sensor_entity_id="pv.0.energy"
+        )["pv_autoscaling"]
+        assert pv_auto["sensor_entity_id"] == "pv.0.energy"
+
+    def test_a_timeseries_domain_uses_the_supplementary_connection(self, store, schema):
+        """A Home Assistant entity needs a Home Assistant to read it from."""
+        merged = self._evcc(
+            store,
+            schema,
+            price__use_ha_central_data_source=True,
+            price__ha_sensor_name="sensor.grid_prices",
+            data_source__supplementary_type="homeassistant",
+            data_source__supplementary_url="http://ha.local:8123",
+            data_source__supplementary_access_token="tok",
+        )
+        assert (
+            merged["price"]["data_url"]
+            == "http://ha.local:8123/api/states/sensor.grid_prices"
+        )
+        assert merged["price"]["data_token"] == "tok"
+
+    def test_without_a_supplementary_connection_no_url_is_invented(self, store, schema):
+        """Better an unset URL than one that is guaranteed to 404."""
+        merged = self._evcc(
+            store,
+            schema,
+            price__use_ha_central_data_source=True,
+            price__ha_sensor_name="sensor.grid_prices",
+        )
+        assert "evcc.local" not in str(merged["price"].get("data_url", ""))

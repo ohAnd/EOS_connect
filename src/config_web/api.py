@@ -10,6 +10,7 @@ only needs one line: ``app.register_blueprint(config_bp)``.
 import json
 import logging
 import re
+from typing import Optional
 from flask import Blueprint, jsonify, request as flask_request, Response
 
 from .hot_reload import _coerce_bool
@@ -1295,7 +1296,7 @@ def test_entity():
         return jsonify({"error": "key must name a sensor field"}), 400
 
     get_value = _effective_value_getter(data)
-    source, url, token, ssl_ignore = _entity_probe_connection(key, get_value)
+    source, url, token, ssl_ignore = _entity_probe_connection(key, get_value, data)
     result = probe_entity(
         source,
         get_value(key),
@@ -1306,7 +1307,7 @@ def test_entity():
     return jsonify(result), 200
 
 
-def _entity_probe_connection(key: str, get_value):
+def _entity_probe_connection(key: str, get_value, data: Optional[dict] = None):
     """
     The connection the interface behind *key* actually reads through.
 
@@ -1319,6 +1320,8 @@ def _entity_probe_connection(key: str, get_value):
     (``sensor.*`` — the battery temperature is the recurring case) reads through
     the supplementary connection instead: EVCC has no /api/states endpoint, so
     probing it with an HA entity id would report a working sensor as missing.
+    Everything else goes to EVCC, at the address the merge resolved rather than
+    whichever of the two copies the store happens to hold.
 
     Returns ``(source, url, access_token, ssl_ignore)``.
     """
@@ -1337,14 +1340,15 @@ def _entity_probe_connection(key: str, get_value):
     ds_type = get_value("data_source.type")
     if ds_type == "evcc":
         sensor_name = str(get_value(key) or "").strip()
-        is_virtual = sensor_name.startswith(("group:", "tariff:"))
-        is_evcc_path = (
-            bool(sensor_name)
-            and ":" not in sensor_name
-            and "." in sensor_name
-            and not sensor_name.startswith("sensor.")
+        # Anything EVCC answers itself: a history reference, or a key in its
+        # live state - dotted like ``battery.soc`` or bare like ``pvEnergy``.
+        # Only a Home Assistant entity id is unmistakably not EVCC's, and that
+        # is the one shape that has to go elsewhere.
+        reads_from_evcc = bool(sensor_name) and (
+            sensor_name.startswith(("group:", "tariff:"))
+            or (":" not in sensor_name and not sensor_name.startswith("sensor."))
         )
-        if not (is_virtual or is_evcc_path):
+        if not reads_from_evcc:
             supp_type = get_value("data_source.supplementary_type")
             supp_url = get_value("data_source.supplementary_url")
             if supp_type in ("homeassistant", "openhab") and supp_url:
@@ -1354,6 +1358,18 @@ def _entity_probe_connection(key: str, get_value):
                     get_value("data_source.supplementary_access_token"),
                     bool(get_value("data_source.supplementary_ssl_ignore")),
                 )
+        else:
+            # A URL in the request body is the one being tried out; otherwise
+            # the resolved address, because the stored data_source.url may be a
+            # leftover default while the evcc section carries the real one.
+            typed = str((data or {}).get("data_source.url", "") or "").strip()
+            resolved = _module.resolved_values().get("data_source.url", "")
+            return (
+                "evcc",
+                typed or resolved or get_value("data_source.url"),
+                "",
+                bool(get_value("data_source.ssl_ignore")),
+            )
 
     return (
         get_value("data_source.type"),

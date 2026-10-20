@@ -346,6 +346,33 @@ class TestSupplementaryConnectionRouting:
         assert probe.call_args.args[2] == "http://ha.local:8123"
         assert probe.call_args.kwargs["access_token"] == "supp-tok"
 
+    def test_a_bare_state_key_still_tests_the_evcc_connection(self, client):
+        """``pvEnergy`` is a key in EVCC's state, dotless but not an entity id.
+
+        The earlier rule asked for a dot to recognise an EVCC state path, which
+        sent the PV auto-scaling counter off to the supplementary Home Assistant
+        instead - where it does not exist.
+        """
+        with patch(
+            "src.config_web.api.probe_entity",
+            return_value={"ok": True, "error": "", "value": "4200"},
+        ) as probe:
+            client.post(
+                "/api/config/test-entity",
+                data=json.dumps(
+                    {
+                        "key": "pv_autoscaling.sensor_entity_id",
+                        "pv_autoscaling.sensor_entity_id": "pvEnergy",
+                        "pv_autoscaling.use_ha_central_data_source": True,
+                        **self.EVCC_DS,
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        assert probe.call_args.args[0] == "evcc"
+        assert probe.call_args.args[2] == "http://evcc:7070"
+
     def test_virtual_entities_still_test_the_evcc_connection(self, client):
         with patch(
             "src.config_web.api.probe_entity",
