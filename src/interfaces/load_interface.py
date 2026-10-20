@@ -32,9 +32,6 @@ EVCC_HISTORY_GROUPS = (
     "meter",
     "forecast",
 )
-# Groups carrying more than one metered series, where "grouped=false" keeps the
-# per-entity series separate and a title filter picks one.
-EVCC_GROUPS_WITH_SOURCES = ("loadpoint", "consumer", "meter", "pv")
 # Persisted tariff slots, "tariff:<name>". EVCC stores what its tariff source
 # produced at the time - the price history the battery price calculation works
 # from. Names are the usages EVCC persists (grid, feedin) per core/metrics/tariffs.go.
@@ -805,12 +802,26 @@ class LoadInterface:
         """Query string for one EVCC history request, RFC3339 bounds."""
         start_iso = start_time.astimezone(timezone.utc).isoformat()
         end_iso = end_time.astimezone(timezone.utc).isoformat()
-        params = {"from": start_iso, "to": end_iso, "aggregate": "15m"}
         group, title = entity
-        if group in EVCC_GROUPS_WITH_SOURCES:
-            params["grouped"] = "false"
+        # ``group`` narrows the query in EVCC instead of pulling every meter's
+        # day and discarding most of it here.
+        params = {
+            "from": start_iso,
+            "to": end_iso,
+            "aggregate": "15m",
+            "group": group,
+        }
         if title:
+            # One named series out of the group - EVCC answers per entity for
+            # anything but "grouped=true", which is also its default.
             params["title"] = title
+        else:
+            # The whole group, summed by EVCC's own query. Its handler reads
+            # ``grouped := q.Get("grouped") == "true"``, so leaving the parameter
+            # out asks for per-entity series: a group with two members - two
+            # batteries, two PV meters, two wallboxes - then arrived as two
+            # series that had to be merged here.
+            params["grouped"] = "true"
         return params
 
     def __fetch_evcc_history_series(self, entity, start_utc, end_utc):
@@ -866,9 +877,16 @@ class LoadInterface:
             )
             return []
 
-        samples = []
         now_utc = self.__to_utc(self.__now())
+        per_series = []
         for one in series:
+            # One step function per series, keyed by stamp. Within a series the
+            # later write wins on purpose: adjacent slots share a boundary stamp
+            # (one closes where the next opens), and the slot *starting* there is
+            # the one whose rate holds until the following stamp - which is the
+            # step function __process_energy_data integrates.
+            steps = {}
+            per_series.append(steps)
             for slot in one.get("data") or []:
                 slot_start = self.__to_utc(slot.get("start"))
                 slot_end = self.__to_utc(slot.get("end"))
@@ -912,20 +930,29 @@ class LoadInterface:
                     (energy_kwh - retour_kwh) * 1000.0 / hours if hours > 0 else 0.0
                 )
                 for stamp in (clipped_start, clipped_end):
-                    samples.append(
-                        (
-                            stamp,
-                            {
-                                "state": power_w,
-                                "last_updated": stamp.isoformat(),
-                                "attributes": {"unit_of_measurement": "W"},
-                            },
-                        )
-                    )
-        # Same stamps can appear when two series of one group were merged; a dict
-        # keyed by stamp keeps the first answer, which is the earliest series' slot.
-        deduped = {stamp: sample for stamp, sample in samples}
-        return [(stamp, deduped[stamp]) for stamp in sorted(deduped)]
+                    steps[stamp] = power_w
+
+        # Across series the rates *add*: a group is the sum of its meters, not
+        # one of them. EVCC is asked to do this itself (grouped=true), so the
+        # normal answer is a single series and this loop is a no-op - it is the
+        # safety net for a site or version that still answers per entity, where
+        # keeping one series was a silent undercount.
+        totals = {}
+        for steps in per_series:
+            for stamp, power_w in steps.items():
+                totals[stamp] = totals.get(stamp, 0.0) + power_w
+
+        return [
+            (
+                stamp,
+                {
+                    "state": totals[stamp],
+                    "last_updated": stamp.isoformat(),
+                    "attributes": {"unit_of_measurement": "W"},
+                },
+            )
+            for stamp in sorted(totals)
+        ]
 
     def __fetch_evcc_tariff_series(self, usage, start_utc, end_utc):
         """EVCC's persisted tariff slots as (utc, price €/Wh) point samples.
