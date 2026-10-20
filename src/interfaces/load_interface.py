@@ -65,16 +65,10 @@ class LoadInterface:
         self.car_charge_load_sensor = config.get("car_charge_load_sensor", "")
         self.additional_load_1_sensor = config.get("additional_load_1_sensor", "")
         # EVCC as data source: the sensor fields stay in the config dict but hold
-        # *virtual* entity ids like "group:home" or "group:loadpoint:Garage" naming
-        # a series of EVCC's energy history instead of a Home Assistant entity. All
-        # three roles then flow through the same history fetch below, and the
+        # *virtual* entity ids like "group:home" or "group:consumer:Sauna" naming
+        # a series of EVCC's energy history instead of a Home Assistant entity.
+        # Every role then flows through the same history fetch below, and the
         # subtraction logic never learns the difference.
-        self.evcc_loadpoint_title = str(
-            config.get("evcc_loadpoint_title", "") or ""
-        ).strip()
-        self.evcc_consumer_title = str(
-            config.get("evcc_consumer_title", "") or ""
-        ).strip()
         # Power sensors of managed loads, whose measured history has to leave the
         # household base load for the same reason the two above do: their predicted
         # consumption is added back on top, and counting the appliance twice is exactly
@@ -130,6 +124,9 @@ class LoadInterface:
         # exactly like the Home Assistant cache, so the parity contract of the day
         # cache holds for this source too.
         self.__evcc_history_cache = {}
+        # Entity names this source cannot read, already reported. The profile
+        # build asks per slot, and the answer does not change between them.
+        self.__evcc_unusable_reported = set()
         # unit_of_measurement / device_class per entity. Recorder statistics rows
         # carry no unit, so the statistics fallback has to learn it from the
         # entity itself to return watts like the history path does.
@@ -489,10 +486,18 @@ class LoadInterface:
         """
         entity = self.__evcc_entity_parts(entity_id)
         if entity is None:
-            if entity_id:
-                logger.error(
-                    "[LOAD-IF] EVCC - '%s' is not a valid virtual entity "
-                    "(group:<name> or group:<name>:<title>).",
+            if entity_id and entity_id not in self.__evcc_unusable_reported:
+                # Once per name, not once per slot. A profile build asks for 24
+                # slots across four days per entity, so a managed load still
+                # carrying its Home Assistant sensor name filled the log with a
+                # hundred identical lines and buried everything else.
+                self.__evcc_unusable_reported.add(entity_id)
+                logger.warning(
+                    "[LOAD-IF] '%s' is not a name the EVCC data source can read, "
+                    "so nothing is subtracted for it. EVCC names its own series: "
+                    "group:home, or group:consumer:<title> / "
+                    "group:loadpoint:<title> with the title shown on EVCC's "
+                    "energy page. | Config: #load | ACTION REQUIRED",
                     entity_id,
                 )
             return []

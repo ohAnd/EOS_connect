@@ -107,15 +107,38 @@ def test_the_wallbox_field_stays_empty_on_evcc():
     assert result["load"]["car_charge_load_sensor"] == ""
 
 
-def test_consumer_title_fills_the_additional_load():
+def test_an_additional_load_the_user_named_is_kept():
+    """EVCC's own series, typed into the field that uses it."""
     result, _resolved = _run(
-        {
-            **EVCC_SETTINGS,
-            "data_source.evcc_consumer_title": "HeatPump",
-        }
+        EVCC_SETTINGS,
+        load={
+            "source": "default",
+            "url": "",
+            "access_token": "",
+            "additional_load_1_sensor": "group:consumer:HeatPump",
+        },
     )
     assert result["load"]["load_sensor"] == "group:home"
     assert result["load"]["additional_load_1_sensor"] == "group:consumer:HeatPump"
+
+
+def test_a_stale_additional_load_name_is_cleared_not_guessed():
+    """There is nothing to derive: EVCC's titles are their owner's.
+
+    What must not survive is the Home Assistant entity id - this source cannot
+    answer it, so the field would look configured while subtracting nothing.
+    """
+    result, resolved = _run(
+        EVCC_SETTINGS,
+        load={
+            "source": "default",
+            "url": "",
+            "access_token": "",
+            "additional_load_1_sensor": "sensor.heatpump_power",
+        },
+    )
+    assert result["load"]["additional_load_1_sensor"] == ""
+    assert resolved["load.additional_load_1_sensor"] == ""
 
 
 def test_user_typed_entities_are_never_overwritten():

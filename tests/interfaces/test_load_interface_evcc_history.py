@@ -18,6 +18,7 @@ back exactly 7/14 days and a drifting wall clock would make the fixture miss.
 # request plumbing. Reaching for them is the point, not an accident.
 # pylint: disable=duplicate-code,protected-access
 
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -491,3 +492,42 @@ def test_tariff_unknown_name_is_rejected():
             == []
         )
     getter.assert_not_called()
+
+
+def test_an_unreadable_name_is_reported_once_not_per_slot(caplog):
+    """A profile build asks per slot; the answer does not change between them.
+
+    A managed load still carrying its Home Assistant sensor name produced one
+    error per slot per day - around a hundred identical lines for a single
+    misconfigured appliance, which buried everything else in the log. The name
+    is reported once, with what EVCC actually calls its series.
+    """
+    interface = _interface()
+    with caplog.at_level(logging.WARNING, logger="__main__"):
+        for _ in range(5):
+            assert (
+                interface.fetch_historical_energy_data(
+                    "sensor.heatpump_power", DAY_START, DAY_START + timedelta(hours=1)
+                )
+                == []
+            )
+    reported = [r for r in caplog.records if "sensor.heatpump_power" in r.getMessage()]
+    assert len(reported) == 1, [r.getMessage() for r in reported]
+    assert "group:consumer:<title>" in reported[0].getMessage()
+
+
+def test_each_unreadable_name_is_reported_on_its_own():
+    """Reporting once must not mean reporting only the first one."""
+    interface = _interface()
+    seen = []
+    with patch.object(
+        LoadInterface, "_LoadInterface__now", return_value=DAY_START
+    ), patch(
+        "src.interfaces.load_interface.logger.warning",
+        side_effect=lambda *a: seen.append(a[1]),
+    ):
+        for name in ("sensor.one", "sensor.two", "sensor.one"):
+            interface.fetch_historical_energy_data(
+                name, DAY_START, DAY_START + timedelta(hours=1)
+            )
+    assert seen == ["sensor.one", "sensor.two"]
