@@ -654,13 +654,17 @@ _ALL_FIELDS: list[FieldDef] = [
         section="load",
         level="standard",
         description=(
-            "Entity/item for wallbox power data in watts — e.g. sensor.wallbox_power "
-            "(Home Assistant) or group:loadpoint (EVCC fills this in: every "
-            "charging point it meters)"
+            "Entity/item for wallbox power data in watts — e.g. "
+            "sensor.wallbox_power (leave empty if not used). Not offered with an "
+            "EVCC data source: its household meter already excludes every "
+            "charging point, so there is nothing left to subtract"
         ),
-        labels=["restart_required", "evcc_managed"],
+        labels=["restart_required"],
         help_url="config-data.html#load",
-        depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
+        # Home Assistant and openHAB only. EVCC's ``group:home`` is a residual
+        # that already has the loadpoints taken out, so subtracting them a second
+        # time would remove charging energy the base load never carried.
+        depends_on={"data_source.type": ["homeassistant", "openhab"]},
         display_group="Sensors",
     ),
     FieldDef(

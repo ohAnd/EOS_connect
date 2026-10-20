@@ -64,42 +64,46 @@ def test_placeholder_evcc_url_leaves_the_sections_empty():
 
 
 def test_virtual_entities_are_prefilled():
-    result, settings = _run(
-        {**EVCC_SETTINGS, "data_source.evcc_loadpoint_title": "Garage"}
-    )
+    result, settings = _run(EVCC_SETTINGS)
     assert result["load"]["load_sensor"] == "group:home"
-    assert result["load"]["car_charge_load_sensor"] == "group:loadpoint:Garage"
     # No consumer title configured - the additional load stays empty, not guessed.
     assert result["load"].get("additional_load_1_sensor", "") == ""
+
+
+def test_the_wallbox_field_stays_empty_on_evcc():
+    """``group:home`` is EVCC's residual: the loadpoints are already out of it.
+
+    Naming the wallbox here would subtract the charging energy a second time,
+    from a base load that never carried it. The field is not offered on an EVCC
+    data source, and the merger leaves nothing in it to act on.
+    """
+    result, settings = _run(EVCC_SETTINGS)
+    assert result["load"]["car_charge_load_sensor"] == ""
 
 
 def test_consumer_title_fills_the_additional_load():
     result, settings = _run(
         {
             **EVCC_SETTINGS,
-            "data_source.evcc_loadpoint_title": "",
             "data_source.evcc_consumer_title": "HeatPump",
         }
     )
     assert result["load"]["load_sensor"] == "group:home"
-    assert result["load"]["car_charge_load_sensor"] == "group:loadpoint"
     assert result["load"]["additional_load_1_sensor"] == "group:consumer:HeatPump"
 
 
 def test_user_typed_entities_are_never_overwritten():
     result, settings = _run(
-        {**EVCC_SETTINGS, "data_source.evcc_loadpoint_title": "Garage"},
+        EVCC_SETTINGS,
         load={
             "source": "default",
             "url": "",
             "access_token": "",
             "load_sensor": "group:grid",
-            "car_charge_load_sensor": "group:loadpoint:Carport",
             "additional_load_1_sensor": "group:consumer:Sauna",
         },
     )
     assert result["load"]["load_sensor"] == "group:grid"
-    assert result["load"]["car_charge_load_sensor"] == "group:loadpoint:Carport"
     assert result["load"]["additional_load_1_sensor"] == "group:consumer:Sauna"
 
 
@@ -129,7 +133,7 @@ def test_stale_ha_sensor_names_are_prefilled_on_a_switch():
     Assistant's ("sensor." prefix); anything else typed by a user stays.
     """
     result, settings = _run(
-        {**EVCC_SETTINGS, "data_source.evcc_loadpoint_title": "Garage"},
+        EVCC_SETTINGS,
         load={
             "source": "default",
             "url": "",
@@ -140,7 +144,8 @@ def test_stale_ha_sensor_names_are_prefilled_on_a_switch():
         },
     )
     assert result["load"]["load_sensor"] == "group:home"
-    assert result["load"]["car_charge_load_sensor"] == "group:loadpoint:Garage"
+    # The wallbox name goes, it does not move: see the residual above.
+    assert result["load"]["car_charge_load_sensor"] == ""
     # Without a consumer title configured, the additional load is dropped instead
     # of pointing somewhere wrong.
     assert result["load"]["additional_load_1_sensor"] == ""
@@ -155,11 +160,11 @@ def test_already_virtual_entities_are_kept():
             "url": "",
             "access_token": "",
             "load_sensor": "group:home",
-            "car_charge_load_sensor": "group:loadpoint:Carport",
+            "additional_load_1_sensor": "group:consumer:Carport",
         },
     )
     assert result["load"]["load_sensor"] == "group:home"
-    assert result["load"]["car_charge_load_sensor"] == "group:loadpoint:Carport"
+    assert result["load"]["additional_load_1_sensor"] == "group:consumer:Carport"
 
 
 def test_battery_stale_names_move_to_evcc_equivalents():
