@@ -211,6 +211,11 @@ def test_slots_are_clipped_to_the_requested_range():
     clipped to the 8 minutes actually requested. The stamps bound that span and
     the rate stays the slot's own average (0.9 kWh over 15 min = 3600 W), which
     is what the integration downstream turns back into the clipped energy.
+
+    The rate is the point of this test. Integrating the whole slot's energy over
+    only the requested 8 minutes reported 6750 W for a 3600 W quarter-hour, and
+    the price handler's window - which never opens on a slot boundary - took
+    that inflated first sample into its charging-event detection.
     """
     slot_start = DAY_START + timedelta(hours=6)
     fake = FakeEvccHistory([3600])
@@ -224,9 +229,51 @@ def test_slots_are_clipped_to_the_requested_range():
     values = [entry["state"] for entry in samples]
     stamps = [datetime.fromisoformat(entry["last_updated"]) for entry in samples]
     assert values, "the clipped slot is answered"
+    # 0.9 kWh over the slot's own 15 minutes, whatever slice was asked for.
+    assert all(value == pytest.approx(3600.0) for value in values)
     # The stamps are the requested window's edges, not the slot's.
     assert stamps[0] == slot_start + timedelta(minutes=7)
     assert stamps[-1] == slot_start + timedelta(minutes=15)
+
+
+def test_the_open_slot_divides_by_the_time_that_has_elapsed():
+    """The slot still being filled carries only the energy accumulated so far.
+
+    Its nominal end lies in the future, so dividing by the full 15 minutes would
+    under-report the current power by whatever fraction of the slot is still to
+    come. The divisor has to be the elapsed part - which is why the fix for the
+    clipped-range case above bounds the integration span at "now" rather than at
+    the slot's end. The clock is pinned five minutes into the slot.
+    """
+    slot_start = DAY_START + timedelta(hours=6)
+    pinned_now = slot_start + timedelta(minutes=5)
+    interface = _interface()
+    with patch("src.interfaces.load_interface.requests.get") as getter, patch(
+        "src.interfaces.load_interface.time.sleep"
+    ), patch.object(LoadInterface, "_LoadInterface__now", return_value=pinned_now):
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = [
+            {
+                "group": "home",
+                "title": None,
+                "data": [
+                    {
+                        "start": slot_start.isoformat(),
+                        "end": (slot_start + timedelta(minutes=15)).isoformat(),
+                        # 5 of 15 minutes elapsed, 0.1 kWh so far = 1200 W
+                        "energy": 0.1,
+                    }
+                ],
+            }
+        ]
+        getter.return_value = response
+        samples = interface.fetch_historical_energy_data(
+            "group:home", slot_start, pinned_now
+        )
+    values = [entry["state"] for entry in samples]
+    assert values, "the open slot is answered"
+    assert all(value == pytest.approx(1200.0) for value in values)
 
 
 def test_return_energy_is_subtracted():
