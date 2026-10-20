@@ -137,6 +137,21 @@ class TestConfigSchema:
             field = self.schema.get(key)
             assert field.depends_on == {"inverter.type": ["homeassistant"]}, key
 
+    def test_the_wallbox_sensor_is_not_offered_for_evcc(self):
+        """EVCC's ``group:home`` already excludes every loadpoint.
+
+        Offering the wallbox field there invites a second subtraction of energy
+        the base load never carried. The gate has to name Home Assistant and
+        openHAB explicitly - putting REMOTE_DATA_SOURCE_TYPES back would pull
+        EVCC in with them, which is how the double subtraction got in.
+        """
+        field = self.schema.get("load.car_charge_load_sensor")
+        assert field is not None
+        assert field.depends_on == {
+            "data_source.type": ["homeassistant", "openhab"]
+        }, field.depends_on
+        assert "evcc_managed" not in (field.labels or [])
+
     def test_inverter_url_token_removed(self):
         """Old inverter.url and inverter.token fields should not exist."""
         assert self.schema.get("inverter.url") is None, "inverter.url should be removed"

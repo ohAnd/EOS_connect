@@ -375,18 +375,15 @@ def _apply_evcc_virtual_entities(
     """
     Pre-fill the load section's virtual entities when EVCC becomes the data source.
 
-    The household load then reads group ``home`` and the wallbox group
-    ``loadpoint`` — optionally narrowed to one loadpoint by title. These are the
-    defaults a site needs most; every field stays editable, and an entity the user
-    typed themselves is never overwritten.
+    The household load reads group ``home``. That group is EVCC's *residual*
+    house consumption - ``grid + max(0, pv) + battery - totalChargePower`` - so
+    it is already the base load this interface wants, with every loadpoint taken
+    out. The wallbox field therefore stays empty here; see below.
     """
     load = result.get("load")
     if not isinstance(load, dict):
         return {}
 
-    loadpoint_title = str(
-        all_settings.get("data_source.evcc_loadpoint_title", "") or ""
-    ).strip()
     consumer_title = str(
         all_settings.get("data_source.evcc_consumer_title", "") or ""
     ).strip()
@@ -404,7 +401,6 @@ def _apply_evcc_virtual_entities(
     # told in the web UI what was filled (the fields are visible there either way).
     ha_sensors = {
         "load_sensor",
-        "car_charge_load_sensor",
         "additional_load_1_sensor",
     }
     stale = {
@@ -419,22 +415,16 @@ def _apply_evcc_virtual_entities(
         load["load_sensor"] = "group:home"
     if evcc_now and "load_sensor" in stale and "sensor." in stale["load_sensor"]:
         load["load_sensor"] = "group:home"
-    if evcc_now and not str(load.get("car_charge_load_sensor", "") or "").strip():
-        load["car_charge_load_sensor"] = (
-            f"group:loadpoint:{loadpoint_title}"
-            if loadpoint_title
-            else "group:loadpoint"
-        )
-    if (
-        evcc_now
-        and "car_charge_load_sensor" in stale
-        and "sensor." in stale["car_charge_load_sensor"]
-    ):
-        load["car_charge_load_sensor"] = (
-            f"group:loadpoint:{loadpoint_title}"
-            if loadpoint_title
-            else "group:loadpoint"
-        )
+    if evcc_now:
+        # Nothing to name for the wallbox, and naming it is actively wrong:
+        # ``group:home`` has already had every loadpoint subtracted by EVCC, so
+        # the per-slot subtraction in get_load_profile_for_day would take the
+        # charging energy off a base load that never carried it. Where the house
+        # drew more than the car, the profile silently lost that energy; where it
+        # drew less, the guard held and every charging slot logged "household
+        # load smaller than controllables" instead. A name carried over from a
+        # Home Assistant setup is cleared for the same reason.
+        load["car_charge_load_sensor"] = ""
     if (
         evcc_now
         and consumer_title

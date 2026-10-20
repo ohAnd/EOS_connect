@@ -98,7 +98,7 @@
                     <p>EOS Connect resolves what EVCC supplies itself, and shows it on the Battery and
                         Load pages as read-only values with a <em>from EVCC</em> badge instead of empty
                         inputs: the household load reads the metered
-                        <code>group:home</code> history, the wallbox <code>group:loadpoint</code>, battery
+                        <code>group:home</code> history, battery
                         state of charge the live <code>battery.soc</code>, and the battery price
                         calculation its power histories and persisted tariff slots. The battery
                         parameters EVCC knows &mdash; capacity from the meter, minimum and maximum SoC
@@ -108,9 +108,15 @@
                     <p><strong>What stays manual on EVCC</strong>: charge and discharge efficiency and
                         the maximum charge power &mdash; EVCC exposes its battery meter and SoC
                         management, but no efficiency or power-limit values &mdash; and the optional
-                        battery temperature sensor. The two title fields under Data Source optionally
-                        narrow the wallbox to one loadpoint and name the appliance the additional load
-                        reads.</p>
+                        battery temperature sensor. The consumer title under Data Source names the
+                        appliance the additional load reads.</p>
+                    <p><strong>No wallbox sensor is needed.</strong> EVCC's household meter is a
+                        residual &mdash; grid plus solar plus battery, <em>minus</em> every charging
+                        point &mdash; so <code>group:home</code> is already the base load without the
+                        car. The wallbox field is therefore not offered with an EVCC data source;
+                        setting one would subtract the charging energy from a profile that never
+                        contained it. On Home Assistant or openHAB, where the house meter normally
+                        includes the wallbox, the field stays and is subtracted as before.</p>
                     <p><strong>Where the numbers come from:</strong> EVCC records energy in 15-minute
                         slots per meter &mdash; consumed energy and fed-back energy in separate columns
                         &mdash; and EOS Connect integrates those slots into the power values its load
