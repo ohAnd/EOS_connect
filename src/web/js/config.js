@@ -110,9 +110,14 @@ class ConfigurationManager {
      * Fetch schema and current values from the API.
      */
     async _loadData() {
-        const [schemaRes, valuesRes] = await Promise.all([
+        const [schemaRes, valuesRes, resolvedRes] = await Promise.all([
             fetch("api/config/schema"),
             fetch("api/config/export"),
+            // Values the merge derives rather than stores - the EVCC data
+            // source resolves its own entity names, address and battery
+            // capacity. They are deliberately absent from /export, which is
+            // the store and doubles as the backup payload.
+            fetch("api/config/resolved"),
         ]);
 
         if (!schemaRes.ok) {
@@ -149,6 +154,20 @@ class ConfigurationManager {
         for (const f of this.schema) {
             if (!(f.key in this.values) && !LIST_SECTIONS.has(f.section)) {
                 this.values[f.key] = f.default;
+            }
+        }
+
+        // Derived values go in as if they had been stored, and into
+        // originalValues with them: they are not the user's edit, so they must
+        // never count as a change and never be written back on save.
+        if (resolvedRes && resolvedRes.ok) {
+            try {
+                const resolved = await resolvedRes.json();
+                for (const [k, v] of Object.entries(resolved || {})) {
+                    this.values[k] = v;
+                }
+            } catch (e) {
+                console.warn("[ConfigManager] resolved values unavailable:", e);
             }
         }
 

@@ -3,6 +3,8 @@ Unit tests for the REST API Blueprint.
 """
 
 import json
+from unittest.mock import patch
+
 import pytest
 from flask import Flask
 from src.config_web.store import ConfigStore
@@ -76,6 +78,14 @@ class _FakeModule:
     def get_config(self):
         """Return current merged config."""
         return build_merged_config(self._config, self._store, self._schema)
+
+    def resolved_values(self):
+        """Values the merge derives rather than stores, as the real module does."""
+        resolved = {}
+        build_merged_config(
+            self._config, self._store, self._schema, resolved_out=resolved
+        )
+        return resolved
 
     def rebuild_config(self):
         """No-op for tests."""
@@ -1431,3 +1441,41 @@ class TestManagedLoadsSeasonsValidation:
         assert client.store.get("managed_loads.0.type") == "sauna"
         assert client.store.get("managed_loads.0.season_start") is None or \
                client.store.get("managed_loads.0.season_start") == ""
+
+
+class TestResolvedValues:
+    """``GET /api/config/resolved`` — what the merge derives, not what it stores."""
+
+    def test_it_is_empty_without_an_evcc_data_source(self, client):
+        """Nothing is derived for Home Assistant or openHAB."""
+        res = client.get("/api/config/resolved")
+        assert res.status_code == 200
+        assert res.get_json() == {}
+
+    def test_an_evcc_setup_gets_its_entity_names(self, client):
+        """The names the settings page renders read-only come from here.
+
+        They are deliberately not in ``/export``: that is the store, and the
+        backup file is the same payload - a derived value restored from a backup
+        would stop being derived.
+        """
+        client.store.set_batch(
+            {
+                "data_source.type": "evcc",
+                "data_source.url": "http://evcc.local:7070",
+                # The sample config pins load.source, which the merger honours
+                # as an expert override; clear it so the section inherits.
+                "load.source": "default",
+                "load.load_sensor": "sensor.left_over_from_home_assistant",
+            }
+        )
+        with patch(
+            "src.interfaces.evcc_parameters.fetch_evcc_parameters", return_value=None
+        ):
+            resolved = client.get("/api/config/resolved").get_json()
+            exported = client.get("/api/config/export").get_json()
+
+        assert resolved["load.load_sensor"] == "group:home"
+        assert resolved["data_source.url"] == "http://evcc.local:7070"
+        # The store still holds what the user actually set.
+        assert exported["load.load_sensor"] == "sensor.left_over_from_home_assistant"
