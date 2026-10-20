@@ -511,8 +511,9 @@ _ALL_FIELDS: list[FieldDef] = [
         section="data_source",
         level="standard",
         description=(
-            "Second connection for the readings EVCC cannot supply — battery "
-            "temperature, the PV auto-scaling counter"
+            "Second connection for the readings EVCC cannot supply — the "
+            "battery temperature, and any price or PV forecast that reads a "
+            "Home Assistant entity through the central data source"
         ),
         labels=["restart_required"],
         help_url="config-data.html#data-source-evcc",
@@ -1879,7 +1880,12 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="pv_autoscaling",
         level="getting_started",
-        description="Entity/item for the cumulative PV generation counter (kWh) - REQUIRED for autoscaling to work",
+        description=(
+            "Entity/item for the cumulative PV generation counter (kWh) - "
+            "REQUIRED for autoscaling to work. EVCC fills this in with "
+            "pvEnergy, the site total from its live state"
+        ),
+        labels=["evcc_managed"],
         help_url="config-solar.html#pv-autoscaling",
         depends_on={"pv_autoscaling.enabled": [True]},
         validation={"required": True},
@@ -1892,9 +1898,12 @@ _ALL_FIELDS: list[FieldDef] = [
         default="homeassistant",
         section="pv_autoscaling",
         level="standard",
-        description="Data source type (Home Assistant or OpenHAB) for reading PV sensor",
+        description=(
+            "Data source type for reading the PV counter (Home Assistant, "
+            "OpenHAB, or EVCC - which publishes the site total as pvEnergy)"
+        ),
         help_url="config-solar.html#pv-autoscaling",
-        validation={"choices": ["homeassistant", "openhab"]},
+        validation={"choices": ["homeassistant", "openhab", "evcc"]},
         depends_on={
             "pv_autoscaling.enabled": [True],
             "pv_autoscaling.use_ha_central_data_source": [False],

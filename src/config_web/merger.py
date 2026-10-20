@@ -20,7 +20,7 @@ logger = logging.getLogger("__main__")
 _DATA_SOURCE_SECTIONS = ("load", "battery")
 
 # data_source.type values the PV autoscaler can actually read a counter from.
-_AUTOSCALER_SOURCES = frozenset({"homeassistant", "openhab"})
+_AUTOSCALER_SOURCES = frozenset({"homeassistant", "openhab", "evcc"})
 
 
 def build_merged_config(
@@ -107,7 +107,7 @@ def build_merged_config(
     _apply_inverter_data_source_injection(result, all_settings)
 
     # Apply central HA data source for price and PV sources
-    _apply_central_ha_data_source(result, all_settings)
+    _apply_central_ha_data_source(result, all_settings, evcc_resolved)
 
     # Handed to the caller rather than written anywhere. ``store`` stays
     # read-only for the whole of this function - that is the point.
@@ -595,9 +595,11 @@ _CENTRAL_HA_SECTIONS = (
 )
 
 
-def _apply_central_ha_data_source(result: dict, all_settings: dict[str, Any]) -> None:
+def _apply_central_ha_data_source(
+    result: dict, all_settings: dict[str, Any], evcc_resolved: Optional[dict] = None
+) -> None:
     """
-    Apply the central Home Assistant data source to every section that opted in.
+    Apply the central data source to every section that opted in.
 
     When a section's use_ha_central_data_source toggle is true, its connection
     details are constructed from the centrally configured data_source (url and
@@ -605,14 +607,43 @@ def _apply_central_ha_data_source(result: dict, all_settings: dict[str, Any]) ->
     domains come from _CENTRAL_HA_SECTIONS; pv_autoscaling keeps its own block
     because its key names and source handling differ.
 
+    An EVCC data source splits the two apart, because the two needs differ:
+
+    - the timeseries domains want a *named Home Assistant entity* read from
+      ``/api/states/<name>``, an endpoint EVCC does not have. They go to the
+      supplementary connection, which exists for exactly this, and are left
+      alone with a warning when there is none. Handing them the EVCC address
+      produced a URL that could only 404.
+    - the PV auto-scaling counter EVCC *does* have: ``pvEnergy`` in its live
+      state is the site's cumulative PV energy, which is what that field asks
+      for. No second connection needed.
+
     Args:
         result: The merged config dict to modify in-place.
         all_settings: All settings from the store.
+        evcc_resolved: The EVCC resolution so far; the counter name is added to
+            it, and the resolved address is read from it rather than from the
+            store, which may hold either copy.
     """
     ds_type = all_settings.get("data_source.type", "default")
     ds_url = all_settings.get("data_source.url", "")
     ds_token = all_settings.get("data_source.access_token", "")
     ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
+
+    evcc_url = ""
+    if ds_type == "evcc":
+        evcc_url = (evcc_resolved or {}).get("data_source.url", "") or ""
+        supp_type = str(all_settings.get("data_source.supplementary_type", "") or "")
+        if supp_type in ("homeassistant", "openhab"):
+            ds_url = str(all_settings.get("data_source.supplementary_url", "") or "")
+            ds_token = str(
+                all_settings.get("data_source.supplementary_access_token", "") or ""
+            )
+            ds_ssl_ignore = bool(
+                all_settings.get("data_source.supplementary_ssl_ignore", False)
+            )
+        else:
+            ds_url, ds_token = "", ""
 
     # One spec per timeseries-capable domain instead of a copy-pasted block per
     # section: (section, key prefix within it, default sensor). Must stay in
@@ -621,16 +652,46 @@ def _apply_central_ha_data_source(result: dict, all_settings: dict[str, Any]) ->
         target = result.get(section)
         if not isinstance(target, dict):
             continue
-        if target.get(f"{prefix}use_ha_central_data_source"):
-            sensor_name = target.get(f"{prefix}ha_sensor_name", default_sensor)
-            # Construct HA API URL from sensor entity
-            target[f"{prefix}data_url"] = f"{ds_url}/api/states/{sensor_name}"
-            target[f"{prefix}data_token"] = ds_token
+        if not target.get(f"{prefix}use_ha_central_data_source"):
+            continue
+        if ds_type == "evcc" and not ds_url:
+            logger.warning(
+                "[ConfigMerger] %s%s reads a Home Assistant entity through the "
+                "central data source, which is EVCC - it has no /api/states "
+                "endpoint. Configure the supplementary connection under Settings "
+                "> Data Source, or give the domain its own URL.",
+                section,
+                f".{prefix.rstrip('_')}" if prefix else "",
+            )
+            continue
+        sensor_name = target.get(f"{prefix}ha_sensor_name", default_sensor)
+        # Construct HA API URL from sensor entity
+        target[f"{prefix}data_url"] = f"{ds_url}/api/states/{sensor_name}"
+        target[f"{prefix}data_token"] = ds_token
 
     # Apply to pv_autoscaling section
     if "pv_autoscaling" in result:
         pv_auto = result["pv_autoscaling"]
         if pv_auto.get("use_ha_central_data_source"):
+            if ds_type == "evcc":
+                pv_auto["url"] = evcc_url
+                pv_auto["access_token"] = ""
+                pv_auto["ssl_ignore"] = bool(
+                    all_settings.get("data_source.ssl_ignore", False)
+                )
+                pv_auto["src"] = "evcc"
+                # ``pvEnergy`` is the site's cumulative PV energy in EVCC's live
+                # state, read through the same state reader as battery.soc. A
+                # name left from a Home Assistant setup cannot resolve there, so
+                # it is replaced rather than carried over.
+                current = str(pv_auto.get("sensor_entity_id", "") or "").strip()
+                if not current or current.startswith("sensor."):
+                    pv_auto["sensor_entity_id"] = "pvEnergy"
+                if evcc_resolved is not None:
+                    evcc_resolved["pv_autoscaling.sensor_entity_id"] = pv_auto[
+                        "sensor_entity_id"
+                    ]
+                return
             pv_auto["url"] = ds_url
             pv_auto["access_token"] = ds_token
             pv_auto["ssl_ignore"] = ds_ssl_ignore

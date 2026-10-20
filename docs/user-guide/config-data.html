@@ -132,6 +132,14 @@
                         setting one would subtract the charging energy from a profile that never
                         contained it. On Home Assistant or openHAB, where the house meter normally
                         includes the wallbox, the field stays and is subtracted as before.</p>
+                    <p><strong>The supplementary connection.</strong> A few readings are not EVCC's
+                        to give: the optional battery temperature, and any price or PV forecast you
+                        have set to read a Home Assistant entity through the central data source
+                        &mdash; EVCC has no <code>/api/states</code> endpoint to serve those from.
+                        Configure a second Home Assistant or openHAB connection under Data Source
+                        and those fields use it; leave it unset and they are left alone rather than
+                        pointed at an address that cannot answer. The PV auto-scaling counter is
+                        <em>not</em> among them: EVCC supplies that itself.</p>
                     <p><strong>Where the numbers come from:</strong> EVCC records energy in 15-minute
                         slots per meter &mdash; consumed energy and fed-back energy in separate columns
                         &mdash; and EOS Connect integrates those slots into the power values its load

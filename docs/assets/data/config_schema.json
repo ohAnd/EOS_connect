@@ -102,7 +102,7 @@
       "default": "default",
       "section": "data_source",
       "level": "standard",
-      "description": "Second connection for the readings EVCC cannot supply — battery temperature, the PV auto-scaling counter",
+      "description": "Second connection for the readings EVCC cannot supply — the battery temperature, and any price or PV forecast that reads a Home Assistant entity through the central data source",
       "labels": [
         "restart_required"
       ],
@@ -2332,8 +2332,10 @@
       "default": "",
       "section": "pv_autoscaling",
       "level": "getting_started",
-      "description": "Entity/item for the cumulative PV generation counter (kWh) - REQUIRED for autoscaling to work",
-      "labels": [],
+      "description": "Entity/item for the cumulative PV generation counter (kWh) - REQUIRED for autoscaling to work. EVCC fills this in with pvEnergy, the site total from its live state",
+      "labels": [
+        "evcc_managed"
+      ],
       "help_url": "config-solar.html#pv-autoscaling",
       "validation": {
         "required": true
@@ -2352,13 +2354,14 @@
       "default": "homeassistant",
       "section": "pv_autoscaling",
       "level": "standard",
-      "description": "Data source type (Home Assistant or OpenHAB) for reading PV sensor",
+      "description": "Data source type for reading the PV counter (Home Assistant, OpenHAB, or EVCC - which publishes the site total as pvEnergy)",
       "labels": [],
       "help_url": "config-solar.html#pv-autoscaling",
       "validation": {
         "choices": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
         ]
       },
       "depends_on": {
