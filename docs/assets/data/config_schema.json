@@ -97,46 +97,6 @@
       "display_group": "Connection"
     },
     {
-      "key": "data_source.evcc_loadpoint_title",
-      "type": "str",
-      "default": "",
-      "section": "data_source",
-      "level": "expert",
-      "description": "Title of one EVCC loadpoint whose history stands for the wallbox (empty = all loadpoints summed)",
-      "labels": [
-        "restart_required"
-      ],
-      "help_url": "config-data.html#data-source-evcc",
-      "validation": {},
-      "depends_on": {
-        "data_source.type": [
-          "evcc"
-        ]
-      },
-      "hot_reload": false,
-      "display_group": "Connection"
-    },
-    {
-      "key": "data_source.evcc_consumer_title",
-      "type": "str",
-      "default": "",
-      "section": "data_source",
-      "level": "expert",
-      "description": "Title of one EVCC consumer or extra meter for the additional load (empty = not used)",
-      "labels": [
-        "restart_required"
-      ],
-      "help_url": "config-data.html#data-source-evcc",
-      "validation": {},
-      "depends_on": {
-        "data_source.type": [
-          "evcc"
-        ]
-      },
-      "hot_reload": false,
-      "display_group": "Connection"
-    },
-    {
       "key": "data_source.supplementary_type",
       "type": "select",
       "default": "default",
@@ -344,10 +304,9 @@
       "default": "",
       "section": "load",
       "level": "standard",
-      "description": "Entity/item for additional load power in watts (Home Assistant, openHAB; EVCC names one of its metered appliances via the Data Source consumer title; leave empty if not used)",
+      "description": "Entity/item for additional load power in watts — e.g. sensor.heatpump_power (Home Assistant) or group:consumer:HeatPump (EVCC, naming one of its metered appliances by its EVCC title). Leave empty if not used",
       "labels": [
-        "restart_required",
-        "evcc_managed"
+        "restart_required"
       ],
       "help_url": "config-data.html#load",
       "validation": {},
@@ -3127,7 +3086,7 @@
       "default": "",
       "section": "managed_loads",
       "level": "getting_started",
-      "description": "Entity/item for this load's power draw in watts (W), like every other sensor in EOS Connect. It answers two questions a meter reading cannot: is the appliance running right now, and how fast is it heating - which is what the efficiency is measured from. Its history also leaves the household base load, so the appliance is never counted twice. If you only have a kWh meter, add a derivative helper in Home Assistant and point this at that",
+      "description": "Entity/item for this load's power draw in watts (W), like every other sensor in EOS Connect. It answers two questions a meter reading cannot: is the appliance running right now, and how fast is it heating - which is what the efficiency is measured from. Its history also leaves the household base load, so the appliance is never counted twice. If you only have a kWh meter, add a derivative helper in Home Assistant and point this at that. On an EVCC data source the name is one of EVCC's own metered series, e.g. group:consumer:Sauna",
       "labels": [
         "restart_required"
       ],

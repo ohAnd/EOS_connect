@@ -367,14 +367,14 @@ def _apply_evcc_virtual_entities(
     house consumption - ``grid + max(0, pv) + battery - totalChargePower`` - so
     it is already the base load this interface wants, with every loadpoint taken
     out. The wallbox field therefore stays empty here; see below.
+
+    Only ``group:home`` is derivable. Everything else EVCC meters carries a
+    title its owner chose, so the additional load is the user's to name - all
+    this does there is clear a name the new source cannot answer.
     """
     load = result.get("load")
     if not isinstance(load, dict):
         return {}
-
-    consumer_title = str(
-        all_settings.get("data_source.evcc_consumer_title", "") or ""
-    ).strip()
 
     # The inheritance loop above has already written "evcc" into source - either
     # from the central setting or because the section overrode it the same way.
@@ -413,19 +413,13 @@ def _apply_evcc_virtual_entities(
         # load smaller than controllables" instead. A name carried over from a
         # Home Assistant setup is cleared for the same reason.
         load["car_charge_load_sensor"] = ""
-    if (
-        evcc_now
-        and consumer_title
-        and not str(load.get("additional_load_1_sensor", "") or "").strip()
-    ):
-        load["additional_load_1_sensor"] = f"group:consumer:{consumer_title}"
     if evcc_now and "additional_load_1_sensor" in stale:
-        # Stale Home Assistant name: replaced with the consumer title when one is
-        # configured, dropped otherwise - the additional load then simply stays
-        # unset, instead of pointing at a name this source cannot answer.
-        load["additional_load_1_sensor"] = (
-            f"group:consumer:{consumer_title}" if consumer_title else ""
-        )
+        # Cleared, not guessed. EVCC meters appliances under names their owner
+        # chose, so there is no name to derive - the user picks the series on
+        # EVCC's own energy page and types "group:consumer:<title>" here. What
+        # must not stay is the Home Assistant entity id: this source cannot
+        # answer it, so it would silently subtract nothing while looking set.
+        load["additional_load_1_sensor"] = ""
 
     # Only the user-visible sensor names are worth showing; source and url are
     # recomputed every pass and the user never sees them on these pages.

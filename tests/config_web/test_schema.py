@@ -82,18 +82,28 @@ class TestConfigSchema:
     def test_data_source_section_exists(self):
         """The unified data_source section should exist."""
         ds_fields = self.schema.get_section("data_source")
-        # type, url, access_token, ssl_ignore + the two EVCC virtual-entity
-        # titles (loadpoint, consumer) + the four supplementary-connection
-        # fields — ten since EVCC became a source type with HA at its side.
-        assert len(ds_fields) == 10
+        # type, url, access_token, ssl_ignore + the four supplementary-connection
+        # fields — eight since EVCC became a source type with HA at its side.
+        assert len(ds_fields) == 8
         keys = [f.key for f in ds_fields]
         assert "data_source.type" in keys
         assert "data_source.url" in keys
         assert "data_source.access_token" in keys
         assert "data_source.ssl_ignore" in keys
-        assert "data_source.evcc_loadpoint_title" in keys
-        assert "data_source.evcc_consumer_title" in keys
         assert "data_source.supplementary_type" in keys
+
+    def test_no_evcc_series_is_named_from_the_data_source_page(self):
+        """EVCC's loadpoints and consumers carry titles their owner chose.
+
+        Two fields here once built "group:loadpoint:<title>" and
+        "group:consumer:<title>" strings for the load section. The loadpoint one
+        went with the wallbox subtraction; the consumer one only saved typing a
+        prefix, at the price of a field in one section silently deciding the
+        value of a field in another. The name belongs where it is used.
+        """
+        keys = [f.key for f in self.schema.all_fields()]
+        assert "data_source.evcc_loadpoint_title" not in keys
+        assert "data_source.evcc_consumer_title" not in keys
 
     def test_deprecated_fields_have_label(self):
         """Load/battery connection override fields should be marked deprecated."""

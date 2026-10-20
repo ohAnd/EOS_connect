@@ -114,8 +114,17 @@
                     <p><strong>What stays manual on EVCC</strong>: charge and discharge efficiency and
                         the maximum charge power &mdash; EVCC exposes its battery meter and SoC
                         management, but no efficiency or power-limit values &mdash; and the optional
-                        battery temperature sensor. The consumer title under Data Source names the
-                        appliance the additional load reads.</p>
+                        battery temperature sensor.</p>
+                    <p><strong>Naming an appliance.</strong> Only the household meter has a name
+                        EOS Connect can derive &mdash; everything else EVCC measures carries a title
+                        you gave it. So the additional load and a managed load's power sensor are
+                        typed in the field that uses them, as
+                        <code>group:consumer:&lt;title&gt;</code>, with the title exactly as it
+                        appears on EVCC's own energy page (it is case-sensitive). Use <em>Test</em>
+                        next to the field to check it before saving. A Home Assistant entity id left
+                        in one of these fields is cleared when you switch to EVCC: this source
+                        cannot read it, and leaving it would look configured while measuring
+                        nothing.</p>
                     <p><strong>No wallbox sensor is needed.</strong> EVCC's household meter is a
                         residual &mdash; grid plus solar plus battery, <em>minus</em> every charging
                         point &mdash; so <code>group:home</code> is already the base load without the

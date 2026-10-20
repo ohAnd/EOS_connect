@@ -505,36 +505,6 @@ _ALL_FIELDS: list[FieldDef] = [
         display_group="Connection",
     ),
     FieldDef(
-        key="data_source.evcc_loadpoint_title",
-        field_type="str",
-        default="",
-        section="data_source",
-        level="expert",
-        description=(
-            "Title of one EVCC loadpoint whose history stands for the wallbox "
-            "(empty = all loadpoints summed)"
-        ),
-        labels=["restart_required"],
-        help_url="config-data.html#data-source-evcc",
-        depends_on={"data_source.type": ["evcc"]},
-        display_group="Connection",
-    ),
-    FieldDef(
-        key="data_source.evcc_consumer_title",
-        field_type="str",
-        default="",
-        section="data_source",
-        level="expert",
-        description=(
-            "Title of one EVCC consumer or extra meter for the additional load "
-            "(empty = not used)"
-        ),
-        labels=["restart_required"],
-        help_url="config-data.html#data-source-evcc",
-        depends_on={"data_source.type": ["evcc"]},
-        display_group="Connection",
-    ),
-    FieldDef(
         key="data_source.supplementary_type",
         field_type="select",
         default="default",
@@ -674,11 +644,12 @@ _ALL_FIELDS: list[FieldDef] = [
         section="load",
         level="standard",
         description=(
-            "Entity/item for additional load power in watts (Home Assistant, "
-            "openHAB; EVCC names one of its metered appliances via the Data "
-            "Source consumer title; leave empty if not used)"
+            "Entity/item for additional load power in watts — e.g. "
+            "sensor.heatpump_power (Home Assistant) or group:consumer:HeatPump "
+            "(EVCC, naming one of its metered appliances by its EVCC title). "
+            "Leave empty if not used"
         ),
-        labels=["restart_required", "evcc_managed"],
+        labels=["restart_required"],
         help_url="config-data.html#load",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Additional Load",
@@ -2434,7 +2405,8 @@ _ALL_FIELDS: list[FieldDef] = [
             "what the efficiency is measured from. Its history also leaves the "
             "household base load, so the appliance is never counted twice. If you only "
             "have a kWh meter, add a derivative helper in Home Assistant and point "
-            "this at that"
+            "this at that. On an EVCC data source the name is one of EVCC's own "
+            "metered series, e.g. group:consumer:Sauna"
         ),
         labels=["restart_required"],
         help_url="config-managed-loads.html#managed-loads-sensor",
