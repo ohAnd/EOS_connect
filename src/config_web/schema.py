@@ -2153,8 +2153,10 @@ _ALL_FIELDS: list[FieldDef] = [
         labels=["restart_required"],
         help_url="config-system.html#evcc",
         # One input, not two: with EVCC as the data source the address is typed
-        # on the Data Source page and this field stands down, mirrored by the
-        # merger's bidirectional sync.
+        # on the Data Source page and this field stands down. The merge resolves
+        # it from there for every role that reads the evcc section, so there is
+        # nothing to keep in sync - and nothing written back here either, which
+        # is what once made the address impossible to change.
         depends_on={"data_source.type": "!evcc"},
         display_group="Connection",
     ),
