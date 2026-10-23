@@ -83,6 +83,10 @@ class ConfigWebModule:
         self._schema = ConfigSchema()
         self._store = None
         self._merged_config = None
+        # What the EVCC resolution derived on the last merge, flat and
+        # dot-keyed. Served to the settings UI, which otherwise reads the store
+        # and would show the stale names a switch to EVCC is meant to replace.
+        self._evcc_resolved: dict = {}
         self._hot_reload_callbacks = []
 
     # ------------------------------------------------------------------
@@ -249,11 +253,24 @@ class ConfigWebModule:
 
     def rebuild_config(self):
         """Rebuild the merged config from store + bootstrap."""
+        resolved: dict = {}
         self._merged_config = build_merged_config(
             self._config_manager.config,
             self._store,
             self._schema,
+            resolved_out=resolved,
         )
+        self._evcc_resolved = resolved
+
+    def resolved_values(self) -> dict:
+        """Values the merge derives rather than stores, flat and dot-keyed.
+
+        Empty unless EVCC is the data source. The settings UI overlays these on
+        the stored values so a read-only "from EVCC" field shows what the app
+        actually runs with - they are deliberately absent from the store, and
+        therefore from ``/api/config/export`` and the backup file it doubles as.
+        """
+        return dict(self._evcc_resolved)
 
     # ------------------------------------------------------------------
     # Hot-reload (Phase 4 — registration point)

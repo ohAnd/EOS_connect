@@ -15,6 +15,7 @@
         "choices": [
           "homeassistant",
           "openhab",
+          "evcc",
           "default"
         ]
       },
@@ -28,7 +29,7 @@
       "default": "http://homeassistant:8123",
       "section": "data_source",
       "level": "getting_started",
-      "description": "URL of your Home Assistant or OpenHAB instance",
+      "description": "URL of your Home Assistant, OpenHAB or EVCC instance",
       "labels": [
         "restart_required"
       ],
@@ -39,11 +40,19 @@
       "depends_on": {
         "data_source.type": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
         ]
       },
       "hot_reload": false,
-      "display_group": "Connection"
+      "display_group": "Connection",
+      "description_map": {
+        "data_source.type": {
+          "evcc": "URL of your EVCC instance — the only place the address is configured when EVCC reads the consumption",
+          "homeassistant": "URL of your Home Assistant instance",
+          "openhab": "URL of your OpenHAB instance"
+        }
+      }
     },
     {
       "key": "data_source.access_token",
@@ -80,11 +89,111 @@
       "depends_on": {
         "data_source.type": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
         ]
       },
       "hot_reload": false,
       "display_group": "Connection"
+    },
+    {
+      "key": "data_source.supplementary_type",
+      "type": "select",
+      "default": "default",
+      "section": "data_source",
+      "level": "standard",
+      "description": "Second connection for the readings EVCC cannot supply — the battery temperature, and any price or PV forecast that reads a Home Assistant entity through the central data source",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "config-data.html#data-source-evcc",
+      "validation": {
+        "choices": [
+          "homeassistant",
+          "openhab",
+          "default"
+        ]
+      },
+      "depends_on": {
+        "data_source.type": [
+          "evcc"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Supplementary Home Assistant"
+    },
+    {
+      "key": "data_source.supplementary_url",
+      "type": "str",
+      "default": "http://homeassistant:8123",
+      "section": "data_source",
+      "level": "standard",
+      "description": "URL of that instance (Home Assistant or openHAB)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "config-data.html#data-source-evcc",
+      "validation": {
+        "pattern": "^https?://.+"
+      },
+      "depends_on": {
+        "data_source.type": [
+          "evcc"
+        ],
+        "data_source.supplementary_type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Supplementary Home Assistant"
+    },
+    {
+      "key": "data_source.supplementary_access_token",
+      "type": "password",
+      "default": "",
+      "section": "data_source",
+      "level": "standard",
+      "description": "Access token of that instance (Home Assistant only)",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "config-data.html#data-source-evcc",
+      "validation": {},
+      "depends_on": {
+        "data_source.type": [
+          "evcc"
+        ],
+        "data_source.supplementary_type": [
+          "homeassistant"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Supplementary Home Assistant"
+    },
+    {
+      "key": "data_source.supplementary_ssl_ignore",
+      "type": "bool",
+      "default": false,
+      "section": "data_source",
+      "level": "expert",
+      "description": "Disable SSL verification for the supplementary connection",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "config-data.html#data-source-evcc",
+      "validation": {},
+      "depends_on": {
+        "data_source.type": [
+          "evcc"
+        ],
+        "data_source.supplementary_type": [
+          "homeassistant",
+          "openhab"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Supplementary Home Assistant"
     },
     {
       "key": "load.source",
@@ -102,6 +211,7 @@
         "choices": [
           "homeassistant",
           "openhab",
+          "evcc",
           "default",
           ""
         ]
@@ -150,16 +260,18 @@
       "default": "",
       "section": "load",
       "level": "getting_started",
-      "description": "Entity/item reporting household load power in watts — e.g. sensor.house_power (Home Assistant) or Load_Power (openHAB)",
+      "description": "Entity/item reporting household load power in watts — e.g. sensor.house_power (Home Assistant), Load_Power (openHAB) or group:home (EVCC fills this in: the household meter it measures)",
       "labels": [
-        "restart_required"
+        "restart_required",
+        "evcc_managed"
       ],
       "help_url": "config-data.html#load",
       "validation": {},
       "depends_on": {
         "data_source.type": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
         ]
       },
       "hot_reload": false,
@@ -171,7 +283,7 @@
       "default": "",
       "section": "load",
       "level": "standard",
-      "description": "Entity/item for wallbox power data in watts — e.g. sensor.wallbox_power (leave empty if not used)",
+      "description": "Entity/item for wallbox power data in watts — e.g. sensor.wallbox_power (leave empty if not used). Not offered with an EVCC data source: its household meter already excludes every charging point, so there is nothing left to subtract",
       "labels": [
         "restart_required"
       ],
@@ -192,13 +304,19 @@
       "default": "",
       "section": "load",
       "level": "standard",
-      "description": "Entity/item for additional load power in watts (leave empty if not used)",
+      "description": "Entity/item for additional load power in watts — e.g. sensor.heatpump_power (Home Assistant) or group:consumer:HeatPump (EVCC, naming one of its metered appliances by its EVCC title). Leave empty if not used",
       "labels": [
         "restart_required"
       ],
       "help_url": "config-data.html#load",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": [
+          "homeassistant",
+          "openhab",
+          "evcc"
+        ]
+      },
       "hot_reload": false,
       "display_group": "Additional Load"
     },
@@ -1250,6 +1368,7 @@
         "choices": [
           "homeassistant",
           "openhab",
+          "evcc",
           "default",
           ""
         ]
@@ -1298,16 +1417,18 @@
       "default": "",
       "section": "battery",
       "level": "getting_started",
-      "description": "Entity/item for battery state of charge — e.g. sensor.battery_soc (Home Assistant) or battery_SOC (openHAB)",
+      "description": "Entity/item for battery state of charge — e.g. sensor.battery_soc (Home Assistant); EVCC fills this in from its live battery state",
       "labels": [
-        "restart_required"
+        "restart_required",
+        "evcc_managed"
       ],
       "help_url": "config-battery.html#battery",
       "validation": {},
       "depends_on": {
         "data_source.type": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
         ]
       },
       "hot_reload": false,
@@ -1319,9 +1440,10 @@
       "default": 11059,
       "section": "battery",
       "level": "getting_started",
-      "description": "Battery capacity in Wh",
+      "description": "Battery capacity in Wh. EVCC fills this in from its battery meter when EVCC reads the data",
       "labels": [
-        "restart_required"
+        "restart_required",
+        "evcc_managed"
       ],
       "help_url": "config-battery.html#battery",
       "validation": {
@@ -1395,8 +1517,10 @@
       "default": 5,
       "section": "battery",
       "level": "getting_started",
-      "description": "Minimum battery SOC in percent",
-      "labels": [],
+      "description": "Minimum battery SOC in percent — your battery's physical operating range. Filled in from EVCC where the battery reports its own limits; EVCC's site-level buffer/priority SOC are charging behaviour, not this, and are never used for it",
+      "labels": [
+        "evcc_managed"
+      ],
       "help_url": "config-battery.html#battery",
       "validation": {
         "min": 0,
@@ -1412,8 +1536,10 @@
       "default": 100,
       "section": "battery",
       "level": "getting_started",
-      "description": "Maximum battery SOC in percent",
-      "labels": [],
+      "description": "Maximum battery SOC in percent — your battery's physical operating range. Filled in from EVCC where the battery reports its own limits; EVCC's site-level buffer/priority SOC are charging behaviour, not this, and are never used for it",
+      "labels": [
+        "evcc_managed"
+      ],
       "help_url": "config-battery.html#battery",
       "validation": {
         "min": 0,
@@ -1445,7 +1571,7 @@
       "default": "",
       "section": "battery",
       "level": "standard",
-      "description": "Sensor for battery temperature in °C (leave empty if not available)",
+      "description": "Sensor for battery temperature in °C (leave empty if not available). On an EVCC data source this reads through the supplementary Home Assistant connection — EVCC has no temperature of its own",
       "labels": [
         "restart_required"
       ],
@@ -1454,7 +1580,8 @@
       "depends_on": {
         "data_source.type": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
         ]
       },
       "hot_reload": false,
@@ -1562,9 +1689,10 @@
       "default": "",
       "section": "battery",
       "level": "standard",
-      "description": "Sensor for battery power in W (positive = charging)",
+      "description": "Sensor for battery power in W, positive = charging. EVCC supplies its battery history directly, charged and discharged separately",
       "labels": [
-        "restart_required"
+        "restart_required",
+        "evcc_managed"
       ],
       "help_url": "config-battery.html#battery-price",
       "validation": {},
@@ -1582,9 +1710,10 @@
       "default": "",
       "section": "battery",
       "level": "standard",
-      "description": "Sensor for PV power in W",
+      "description": "Sensor for PV power in W. EVCC supplies its PV meter history",
       "labels": [
-        "restart_required"
+        "restart_required",
+        "evcc_managed"
       ],
       "help_url": "config-battery.html#battery-price",
       "validation": {},
@@ -1602,9 +1731,10 @@
       "default": "",
       "section": "battery",
       "level": "standard",
-      "description": "Sensor for grid power in W (positive = import)",
+      "description": "Sensor for grid power in W, positive = import. EVCC supplies its grid meter history",
       "labels": [
-        "restart_required"
+        "restart_required",
+        "evcc_managed"
       ],
       "help_url": "config-battery.html#battery-price",
       "validation": {},
@@ -1622,9 +1752,10 @@
       "default": "",
       "section": "battery",
       "level": "standard",
-      "description": "Sensor for load power in W",
+      "description": "Sensor for load power in W. EVCC supplies its household history",
       "labels": [
-        "restart_required"
+        "restart_required",
+        "evcc_managed"
       ],
       "help_url": "config-battery.html#battery-price",
       "validation": {},
@@ -1642,9 +1773,10 @@
       "default": "",
       "section": "battery",
       "level": "standard",
-      "description": "Sensor for electricity price in €/kWh or ct/kWh",
+      "description": "Sensor for electricity price. EVCC supplies its persisted tariff slots",
       "labels": [
-        "restart_required"
+        "restart_required",
+        "evcc_managed"
       ],
       "help_url": "config-battery.html#battery-price",
       "validation": {},
@@ -2200,8 +2332,10 @@
       "default": "",
       "section": "pv_autoscaling",
       "level": "getting_started",
-      "description": "Entity/item for the cumulative PV generation counter (kWh) - REQUIRED for autoscaling to work",
-      "labels": [],
+      "description": "Entity/item for the cumulative PV generation counter (kWh) - REQUIRED for autoscaling to work. EVCC fills this in with pvEnergy, the site total from its live state",
+      "labels": [
+        "evcc_managed"
+      ],
       "help_url": "config-solar.html#pv-autoscaling",
       "validation": {
         "required": true
@@ -2220,13 +2354,14 @@
       "default": "homeassistant",
       "section": "pv_autoscaling",
       "level": "standard",
-      "description": "Data source type (Home Assistant or OpenHAB) for reading PV sensor",
+      "description": "Data source type for reading the PV counter (Home Assistant, OpenHAB, or EVCC - which publishes the site total as pvEnergy)",
       "labels": [],
       "help_url": "config-solar.html#pv-autoscaling",
       "validation": {
         "choices": [
           "homeassistant",
-          "openhab"
+          "openhab",
+          "evcc"
         ]
       },
       "depends_on": {
@@ -2482,7 +2617,7 @@
       "default": 5000,
       "section": "inverter",
       "level": "standard",
-      "description": "Maximum inverter grid charge rate in W",
+      "description": "Maximum inverter grid charge rate in W — not exposed by EVCC even when EVCC controls the battery, so this stays manual",
       "labels": [
         "restart_required"
       ],
@@ -2501,7 +2636,7 @@
       "default": 5000,
       "section": "inverter",
       "level": "standard",
-      "description": "Maximum inverter PV charge rate in W",
+      "description": "Maximum inverter PV charge rate in W — not exposed by EVCC even when EVCC controls the battery, so this stays manual",
       "labels": [
         "restart_required"
       ],
@@ -2580,13 +2715,15 @@
       "default": "http://yourEVCCserver:7070",
       "section": "evcc",
       "level": "getting_started",
-      "description": "URL to your EVCC installation (leave default or empty if not used)",
+      "description": "URL to your EVCC installation (leave default or empty if not used; configured under Data Source when EVCC reads the consumption)",
       "labels": [
         "restart_required"
       ],
       "help_url": "config-system.html#evcc",
       "validation": {},
-      "depends_on": null,
+      "depends_on": {
+        "data_source.type": "!evcc"
+      },
       "hot_reload": false,
       "display_group": "Connection"
     },
@@ -2952,7 +3089,7 @@
       "default": "",
       "section": "managed_loads",
       "level": "getting_started",
-      "description": "Entity/item for this load's power draw in watts (W), like every other sensor in EOS Connect. It answers two questions a meter reading cannot: is the appliance running right now, and how fast is it heating - which is what the efficiency is measured from. Its history also leaves the household base load, so the appliance is never counted twice. If you only have a kWh meter, add a derivative helper in Home Assistant and point this at that",
+      "description": "Entity/item for this load's power draw in watts (W), like every other sensor in EOS Connect. It answers two questions a meter reading cannot: is the appliance running right now, and how fast is it heating - which is what the efficiency is measured from. Its history also leaves the household base load, so the appliance is never counted twice. If you only have a kWh meter, add a derivative helper in Home Assistant and point this at that. On an EVCC data source the name is one of EVCC's own metered series, e.g. group:consumer:Sauna",
       "labels": [
         "restart_required"
       ],
@@ -3791,13 +3928,13 @@
       "icon": "fa-car",
       "label": "EVCC"
     },
-    "inverter": {
-      "icon": "fa-microchip",
-      "label": "Inverter"
-    },
     "data_source": {
       "icon": "fa-plug",
       "label": "Data Source"
+    },
+    "inverter": {
+      "icon": "fa-microchip",
+      "label": "Inverter"
     },
     "battery": {
       "icon": "fa-battery-full",

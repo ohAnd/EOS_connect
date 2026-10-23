@@ -9,16 +9,17 @@ migration logic, and GitHub Pages documentation all consume this registry.
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-
 # Keys that stay in config.yaml / options.json (bootstrap) — NOT stored in SQLite.
 # Includes both config.yaml names and HA addon options.json names.
-BOOTSTRAP_KEYS = frozenset({
-    "eos_connect_web_port",
-    "web_port",
-    "time_zone",
-    "log_level",
-    "data_path",
-})
+BOOTSTRAP_KEYS = frozenset(
+    {
+        "eos_connect_web_port",
+        "web_port",
+        "time_zone",
+        "log_level",
+        "data_path",
+    }
+)
 
 
 # Sensor names the schema used to ship as defaults. They were hints, never entities —
@@ -33,16 +34,18 @@ BOOTSTRAP_KEYS = frozenset({
 # tests/config_web/test_runtime_import_layout.py), so it cannot import this — and it
 # does not need to: by the time a value reaches an interface it is either empty or a
 # real entity name.
-LEGACY_SENSOR_PLACEHOLDERS = frozenset({
-    "Load_Power",
-    "battery_SOC",
-    "Wallbox_Power",
-    "additional_load_1_sensor",
-})
+LEGACY_SENSOR_PLACEHOLDERS = frozenset(
+    {
+        "Load_Power",
+        "battery_SOC",
+        "Wallbox_Power",
+        "additional_load_1_sensor",
+    }
+)
 
 # data_source.type values that actually poll a remote instance. A plain list because
 # it is serialized into ``depends_on`` and shipped to the browser.
-REMOTE_DATA_SOURCE_TYPES = ["homeassistant", "openhab"]
+REMOTE_DATA_SOURCE_TYPES = ["homeassistant", "openhab", "evcc"]
 
 # The sensors load and battery cannot read anything without, once a remote data source
 # is connected. Maps the config key to the Settings section that sets it.
@@ -57,19 +60,19 @@ DATA_SOURCE_REQUIRED_SENSORS = {
 # and the JSON export script.
 # Order reflects recommended user setup flow (for wizard and settings organization).
 SECTION_META = {
-    "eos":                {"icon": "fa-server",          "label": "Optimizer"},
-    "evcc":               {"icon": "fa-car",             "label": "EVCC"},
-    "inverter":           {"icon": "fa-microchip",       "label": "Inverter"},
-    "data_source":        {"icon": "fa-plug",            "label": "Data Source"},
-    "battery":            {"icon": "fa-battery-full",    "label": "Battery"},
-    "load":               {"icon": "fa-bolt",            "label": "Load"},
-    "managed_loads":      {"icon": "fa-sliders",         "label": "Managed Loads"},
-    "price":              {"icon": "fa-coins",           "label": "Price"},
-    "pv_forecast_source": {"icon": "fa-sun",             "label": "PV Source"},
-    "pv_forecast":        {"icon": "fa-solar-panel",     "label": "PV Installations"},
-    "pv_autoscaling":     {"icon": "fa-chart-line",      "label": "PV Auto-Scaling"},
-    "mqtt":               {"icon": "fa-tower-broadcast",  "label": "MQTT"},
-    "system":             {"icon": "fa-gears",           "label": "System"},
+    "eos": {"icon": "fa-server", "label": "Optimizer"},
+    "evcc": {"icon": "fa-car", "label": "EVCC"},
+    "data_source": {"icon": "fa-plug", "label": "Data Source"},
+    "inverter": {"icon": "fa-microchip", "label": "Inverter"},
+    "battery": {"icon": "fa-battery-full", "label": "Battery"},
+    "load": {"icon": "fa-bolt", "label": "Load"},
+    "managed_loads": {"icon": "fa-sliders", "label": "Managed Loads"},
+    "price": {"icon": "fa-coins", "label": "Price"},
+    "pv_forecast_source": {"icon": "fa-sun", "label": "PV Source"},
+    "pv_forecast": {"icon": "fa-solar-panel", "label": "PV Installations"},
+    "pv_autoscaling": {"icon": "fa-chart-line", "label": "PV Auto-Scaling"},
+    "mqtt": {"icon": "fa-tower-broadcast", "label": "MQTT"},
+    "system": {"icon": "fa-gears", "label": "System"},
 }
 
 # Outside-temperature providers. Mirrors ``interfaces.temperature_forecast
@@ -79,7 +82,12 @@ TEMPERATURE_SOURCES = ["openmeteo", "akkudoktor"]
 
 
 # Location-based PV forecast sources that require pv_forecast array configuration
-LOCATION_BASED_PV_SOURCES = ["akkudoktor", "openmeteo", "openmeteo_local", "forecast_solar"]
+LOCATION_BASED_PV_SOURCES = [
+    "akkudoktor",
+    "openmeteo",
+    "openmeteo_local",
+    "forecast_solar",
+]
 
 
 # Sections stored as a *list of entries* rather than a flat group of keys. Their
@@ -107,7 +115,10 @@ MANAGED_LOAD_TYPES = [
 
 # Types whose demand comes from stored heat, so the thermal fields apply.
 MANAGED_LOAD_THERMAL_TYPES = [
-    "pool_heatpump", "sauna", "hot_water_tank", "buffer_tank",
+    "pool_heatpump",
+    "sauna",
+    "hot_water_tank",
+    "buffer_tank",
 ]
 
 # Types the planner and the release gate apply to - everything except a pushed profile,
@@ -183,8 +194,7 @@ class ConfigSchema:
         level_order = {"getting_started": 0, "standard": 1, "expert": 2}
         max_level = level_order.get(level, 2)
         return [
-            f for f in self._fields.values()
-            if level_order.get(f.level, 2) <= max_level
+            f for f in self._fields.values() if level_order.get(f.level, 2) <= max_level
         ]
 
     def all_fields(self) -> list[FieldDef]:
@@ -258,7 +268,7 @@ class ConfigSchema:
 
         Returns a dict like: {"load": {"source": "default", ...}, "battery": {...}, ...}
         Top-level keys (no dot) become top-level dict entries.
-        
+
         Special handling: the sections in ``LIST_SECTIONS`` are lists built separately
         by the merger, so they are excluded from the flat defaults dict and seeded as
         empty lists instead.
@@ -286,6 +296,7 @@ class ConfigSchema:
 # ---------------------------------------------------------------------------
 # Field definitions — the SINGLE SOURCE OF TRUTH
 # ---------------------------------------------------------------------------
+
 
 def _timeseries_source_fields(
     section,
@@ -443,7 +454,7 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Primary data source for load and battery data",
         labels=["restart_required"],
         help_url="config-data.html#data-source",
-        validation={"choices": ["homeassistant", "openhab", "default"]},
+        validation={"choices": ["homeassistant", "openhab", "evcc", "default"]},
         display_group="Connection",
     ),
     FieldDef(
@@ -452,12 +463,22 @@ _ALL_FIELDS: list[FieldDef] = [
         default="http://homeassistant:8123",
         section="data_source",
         level="getting_started",
-        description="URL of your Home Assistant or OpenHAB instance",
+        description="URL of your Home Assistant, OpenHAB or EVCC instance",
         labels=["restart_required"],
         help_url="config-data.html#data-source",
         validation={"pattern": r"^https?://.+"},
-        depends_on={"data_source.type": ["homeassistant", "openhab"]},
+        depends_on={"data_source.type": ["homeassistant", "openhab", "evcc"]},
         display_group="Connection",
+        description_map={
+            "data_source.type": {
+                "evcc": (
+                    "URL of your EVCC instance — the only place the address is "
+                    "configured when EVCC reads the consumption"
+                ),
+                "homeassistant": "URL of your Home Assistant instance",
+                "openhab": "URL of your OpenHAB instance",
+            }
+        },
     ),
     FieldDef(
         key="data_source.access_token",
@@ -480,10 +501,72 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Disable SSL certificate verification (use with private/self-signed CA)",
         labels=["restart_required"],
         help_url="config-data.html#data-source",
-        depends_on={"data_source.type": ["homeassistant", "openhab"]},
+        depends_on={"data_source.type": ["homeassistant", "openhab", "evcc"]},
         display_group="Connection",
     ),
-
+    FieldDef(
+        key="data_source.supplementary_type",
+        field_type="select",
+        default="default",
+        section="data_source",
+        level="standard",
+        description=(
+            "Second connection for the readings EVCC cannot supply — the "
+            "battery temperature, and any price or PV forecast that reads a "
+            "Home Assistant entity through the central data source"
+        ),
+        labels=["restart_required"],
+        help_url="config-data.html#data-source-evcc",
+        validation={"choices": ["homeassistant", "openhab", "default"]},
+        depends_on={"data_source.type": ["evcc"]},
+        display_group="Supplementary Home Assistant",
+    ),
+    FieldDef(
+        key="data_source.supplementary_url",
+        field_type="str",
+        default="http://homeassistant:8123",
+        section="data_source",
+        level="standard",
+        description="URL of that instance (Home Assistant or openHAB)",
+        labels=["restart_required"],
+        help_url="config-data.html#data-source-evcc",
+        validation={"pattern": r"^https?://.+"},
+        depends_on={
+            "data_source.type": ["evcc"],
+            "data_source.supplementary_type": ["homeassistant", "openhab"],
+        },
+        display_group="Supplementary Home Assistant",
+    ),
+    FieldDef(
+        key="data_source.supplementary_access_token",
+        field_type="password",
+        default="",
+        section="data_source",
+        level="standard",
+        description="Access token of that instance (Home Assistant only)",
+        labels=["restart_required"],
+        help_url="config-data.html#data-source-evcc",
+        depends_on={
+            "data_source.type": ["evcc"],
+            "data_source.supplementary_type": ["homeassistant"],
+        },
+        display_group="Supplementary Home Assistant",
+    ),
+    FieldDef(
+        key="data_source.supplementary_ssl_ignore",
+        field_type="bool",
+        default=False,
+        section="data_source",
+        level="expert",
+        description="Disable SSL verification for the supplementary connection",
+        labels=["restart_required"],
+        help_url="config-data.html#data-source-evcc",
+        depends_on={
+            "data_source.type": ["evcc"],
+            "data_source.supplementary_type": ["homeassistant", "openhab"],
+        },
+        display_group="Supplementary Home Assistant",
+    ),
     # ===== LOAD =====
     FieldDef(
         key="load.source",
@@ -493,7 +576,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Override data source for load (uses global data source if empty)",
         labels=["deprecated", "restart_required"],
-        validation={"choices": ["homeassistant", "openhab", "default", ""]},
+        validation={"choices": ["homeassistant", "openhab", "evcc", "default", ""]},
         display_group="Connection Override",
         help_url="config-data.html#load",
     ),
@@ -527,9 +610,10 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description=(
             "Entity/item reporting household load power in watts — e.g. "
-            "sensor.house_power (Home Assistant) or Load_Power (openHAB)"
+            "sensor.house_power (Home Assistant), Load_Power (openHAB) or "
+            "group:home (EVCC fills this in: the household meter it measures)"
         ),
-        labels=["restart_required"],
+        labels=["restart_required", "evcc_managed"],
         help_url="config-data.html#load",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
@@ -541,12 +625,17 @@ _ALL_FIELDS: list[FieldDef] = [
         section="load",
         level="standard",
         description=(
-            "Entity/item for wallbox power data in watts — e.g. sensor.wallbox_power "
-            "(leave empty if not used)"
+            "Entity/item for wallbox power data in watts — e.g. "
+            "sensor.wallbox_power (leave empty if not used). Not offered with an "
+            "EVCC data source: its household meter already excludes every "
+            "charging point, so there is nothing left to subtract"
         ),
         labels=["restart_required"],
         help_url="config-data.html#load",
-        depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
+        # Home Assistant and openHAB only. EVCC's ``group:home`` is a residual
+        # that already has the loadpoints taken out, so subtracting them a second
+        # time would remove charging energy the base load never carried.
+        depends_on={"data_source.type": ["homeassistant", "openhab"]},
         display_group="Sensors",
     ),
     FieldDef(
@@ -555,9 +644,15 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="load",
         level="standard",
-        description="Entity/item for additional load power in watts (leave empty if not used)",
+        description=(
+            "Entity/item for additional load power in watts — e.g. "
+            "sensor.heatpump_power (Home Assistant) or group:consumer:HeatPump "
+            "(EVCC, naming one of its metered appliances by its EVCC title). "
+            "Leave empty if not used"
+        ),
         labels=["restart_required"],
         help_url="config-data.html#load",
+        depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Additional Load",
     ),
     FieldDef(
@@ -586,7 +681,6 @@ _ALL_FIELDS: list[FieldDef] = [
         depends_on={"load.additional_load_1_sensor": "!empty"},
         display_group="Additional Load",
     ),
-
     FieldDef(
         key="load.managed_loads_max_power_w",
         field_type="int",
@@ -617,7 +711,6 @@ _ALL_FIELDS: list[FieldDef] = [
         validation={"min": 30, "max": 3600},
         display_group="Managed Loads",
     ),
-
     # ===== EOS =====
     FieldDef(
         key="eos.source",
@@ -713,14 +806,13 @@ _ALL_FIELDS: list[FieldDef] = [
         default=False,
         section="eos",
         level="expert",
-        description="Enable PV-to-battery charge control from optimizer dc_charge signal"+
-        " (Fronius Gen24 only)",
+        description="Enable PV-to-battery charge control from optimizer dc_charge signal"
+        + " (Fronius Gen24 only)",
         labels=["experimental"],
         help_url="config-optimizer.html#eos",
         display_group="Advanced",
         hot_reload=True,
     ),
-
     # --- Local EVopt (built-in optimizer) settings ---
     FieldDef(
         key="eos.local_evopt_charging_strategy",
@@ -730,13 +822,15 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Charging strategy for the built-in optimizer",
         help_url="config-optimizer.html#local-evopt",
-        validation={"choices": [
-            "charge_before_export",
-            "discharge_before_import",
-            "maximize_self_consumption",
-            "attenuate_grid_peaks",
-            "none",
-        ]},
+        validation={
+            "choices": [
+                "charge_before_export",
+                "discharge_before_import",
+                "maximize_self_consumption",
+                "attenuate_grid_peaks",
+                "none",
+            ]
+        },
         depends_on={"eos.source": "local_evopt"},
         display_group="Local Optimizer",
         hot_reload=True,
@@ -749,11 +843,13 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Discharging strategy for the built-in optimizer",
         help_url="config-optimizer.html#local-evopt",
-        validation={"choices": [
-            "discharge_before_import",
-            "emergency_reserve",
-            "none",
-        ]},
+        validation={
+            "choices": [
+                "discharge_before_import",
+                "emergency_reserve",
+                "none",
+            ]
+        },
         depends_on={"eos.source": "local_evopt"},
         display_group="Local Optimizer",
         hot_reload=True,
@@ -781,10 +877,12 @@ _ALL_FIELDS: list[FieldDef] = [
         description="How charge left in the battery at the end of the planning "
         "horizon is priced",
         help_url="config-optimizer.html#local-evopt",
-        validation={"choices": [
-            "cheapest_ahead",
-            "stored_price",
-        ]},
+        validation={
+            "choices": [
+                "cheapest_ahead",
+                "stored_price",
+            ]
+        },
         depends_on={"eos.source": "local_evopt"},
         display_group="Local Optimizer",
         hot_reload=True,
@@ -852,10 +950,12 @@ _ALL_FIELDS: list[FieldDef] = [
         description="How charge left in the battery at the end of the planning "
         "horizon is priced",
         help_url="config-optimizer.html#local-evopt",
-        validation={"choices": [
-            "cheapest_ahead",
-            "stored_price",
-        ]},
+        validation={
+            "choices": [
+                "cheapest_ahead",
+                "stored_price",
+            ]
+        },
         depends_on={"eos.source": "evopt"},
         display_group="External Optimizer",
         hot_reload=True,
@@ -888,7 +988,6 @@ _ALL_FIELDS: list[FieldDef] = [
         display_group="External Optimizer",
         labels=["restart_required"],
     ),
-
     # ===== PRICE =====
     FieldDef(
         key="price.source",
@@ -899,9 +998,17 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Data source for electricity prices",
         hot_reload=True,
         help_url="config-price.html#price",
-        validation={"choices": [
-            "tibber", "smartenergy_at", "stromligning", "fixed_24h", "timeseries", "evcc", "default"
-        ]},
+        validation={
+            "choices": [
+                "tibber",
+                "smartenergy_at",
+                "stromligning",
+                "fixed_24h",
+                "timeseries",
+                "evcc",
+                "default",
+            ]
+        },
         display_group="Grid Price Provider",
     ),
     FieldDef(
@@ -942,7 +1049,7 @@ _ALL_FIELDS: list[FieldDef] = [
         key="price.fixed_24h_array",
         field_type="str",
         default="10.1,10.1,10.1,10.1,10.1,23,28.23,28.23,28.23,28.23,28.23,"
-                "23.52,23.52,23.52,23.52,28.17,28.17,34.28,34.28,34.28,34.28,34.28,28,23",
+        "23.52,23.52,23.52,23.52,28.17,28.17,34.28,34.28,34.28,34.28,34.28,28,23",
         section="price",
         level="standard",
         description="Exactly 24 comma-separated prices in ct/kWh (one per hour, 00:00-23:00). Automatically expanded to 48 or 192 slots based on time frame setting.",
@@ -988,7 +1095,6 @@ _ALL_FIELDS: list[FieldDef] = [
         depends_on={"price.energyforecast_enabled": [True]},
         display_group="Grid Price - Forecast (Advanced)",
     ),
-
     # ===== UNIFIED HTTP/HA DATA SOURCE (PRICES) =====
     *_timeseries_source_fields(
         section="price",
@@ -1007,7 +1113,6 @@ _ALL_FIELDS: list[FieldDef] = [
             "internal unit."
         ),
     ),
-
     # ===== DYNAMIC FEED-IN PRICING ====="
     FieldDef(
         key="price.feed_in_source",
@@ -1072,7 +1177,11 @@ _ALL_FIELDS: list[FieldDef] = [
         # be seen nor edited there.
         depends_on={
             "price.feed_in_source": [
-                "fixed", "elpris_dk", "epex_spot", "evcc", "timeseries"
+                "fixed",
+                "elpris_dk",
+                "epex_spot",
+                "evcc",
+                "timeseries",
             ]
         },
         hot_reload=True,
@@ -1098,7 +1207,11 @@ _ALL_FIELDS: list[FieldDef] = [
         },
         depends_on={
             "price.feed_in_source": [
-                "fixed", "elpris_dk", "epex_spot", "evcc", "timeseries"
+                "fixed",
+                "elpris_dk",
+                "epex_spot",
+                "evcc",
+                "timeseries",
             ]
         },
         hot_reload=True,
@@ -1123,7 +1236,11 @@ _ALL_FIELDS: list[FieldDef] = [
         },
         depends_on={
             "price.feed_in_source": [
-                "fixed", "elpris_dk", "epex_spot", "evcc", "timeseries"
+                "fixed",
+                "elpris_dk",
+                "epex_spot",
+                "evcc",
+                "timeseries",
             ]
         },
         hot_reload=True,
@@ -1145,7 +1262,6 @@ _ALL_FIELDS: list[FieldDef] = [
             "(EUR/kWh)."
         ),
     ),
-
     # ===== BATTERY =====
     FieldDef(
         key="battery.source",
@@ -1155,7 +1271,7 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Override data source for battery (uses global data source if empty)",
         labels=["deprecated", "restart_required"],
-        validation={"choices": ["homeassistant", "openhab", "default", ""]},
+        validation={"choices": ["homeassistant", "openhab", "evcc", "default", ""]},
         display_group="Connection Override",
         help_url="config-battery.html#battery",
     ),
@@ -1189,9 +1305,9 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description=(
             "Entity/item for battery state of charge — e.g. sensor.battery_soc "
-            "(Home Assistant) or battery_SOC (openHAB)"
+            "(Home Assistant); EVCC fills this in from its live battery state"
         ),
-        labels=["restart_required"],
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Core",
@@ -1202,8 +1318,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default=11059,
         section="battery",
         level="getting_started",
-        description="Battery capacity in Wh",
-        labels=["restart_required"],
+        description=(
+            "Battery capacity in Wh. EVCC fills this in from its battery meter "
+            "when EVCC reads the data"
+        ),
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery",
         validation={"min": 100, "max": 1000000},
         display_group="Core",
@@ -1250,7 +1369,13 @@ _ALL_FIELDS: list[FieldDef] = [
         default=5,
         section="battery",
         level="getting_started",
-        description="Minimum battery SOC in percent",
+        description=(
+            "Minimum battery SOC in percent — your battery's physical operating "
+            "range. Filled in from EVCC where the battery reports its own "
+            "limits; EVCC's site-level buffer/priority SOC are charging "
+            "behaviour, not this, and are never used for it"
+        ),
+        labels=["evcc_managed"],
         help_url="config-battery.html#battery",
         validation={"min": 0, "max": 100},
         hot_reload=True,
@@ -1262,7 +1387,13 @@ _ALL_FIELDS: list[FieldDef] = [
         default=100,
         section="battery",
         level="getting_started",
-        description="Maximum battery SOC in percent",
+        description=(
+            "Maximum battery SOC in percent — your battery's physical operating "
+            "range. Filled in from EVCC where the battery reports its own "
+            "limits; EVCC's site-level buffer/priority SOC are charging "
+            "behaviour, not this, and are never used for it"
+        ),
+        labels=["evcc_managed"],
         help_url="config-battery.html#battery",
         validation={"min": 0, "max": 100},
         hot_reload=True,
@@ -1285,7 +1416,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for battery temperature in °C (leave empty if not available)",
+        description=(
+            "Sensor for battery temperature in °C (leave empty if not available). "
+            "On an EVCC data source this reads through the supplementary Home "
+            "Assistant connection — EVCC has no temperature of its own"
+        ),
         labels=["restart_required"],
         help_url="config-battery.html#battery",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
@@ -1357,8 +1492,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for battery power in W (positive = charging)",
-        labels=["restart_required"],
+        description=(
+            "Sensor for battery power in W, positive = charging. EVCC supplies "
+            "its battery history directly, charged and discharged separately"
+        ),
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
@@ -1369,8 +1507,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for PV power in W",
-        labels=["restart_required"],
+        description="Sensor for PV power in W. EVCC supplies its PV meter history",
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
@@ -1381,8 +1519,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for grid power in W (positive = import)",
-        labels=["restart_required"],
+        description="Sensor for grid power in W, positive = import. EVCC supplies its grid meter history",
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
@@ -1393,8 +1531,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for load power in W",
-        labels=["restart_required"],
+        description="Sensor for load power in W. EVCC supplies its household history",
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
@@ -1405,8 +1543,8 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for electricity price in €/kWh or ct/kWh",
-        labels=["restart_required"],
+        description="Sensor for electricity price. EVCC supplies its persisted tariff slots",
+        labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price Sensors",
@@ -1449,7 +1587,6 @@ _ALL_FIELDS: list[FieldDef] = [
         depends_on={"battery.price_calculation_enabled": [True]},
         display_group="Battery Price",
     ),
-
     # ===== PV FORECAST SOURCE =====
     FieldDef(
         key="pv_forecast_source.source",
@@ -1464,10 +1601,19 @@ _ALL_FIELDS: list[FieldDef] = [
         ),
         hot_reload=True,
         help_url="config-solar.html#pv-forecast-sources",
-        validation={"choices": [
-            "akkudoktor", "openmeteo", "openmeteo_local",
-            "forecast_solar", "evcc", "solcast", "victron", "timeseries", "default"
-        ]},
+        validation={
+            "choices": [
+                "akkudoktor",
+                "openmeteo",
+                "openmeteo_local",
+                "forecast_solar",
+                "evcc",
+                "solcast",
+                "victron",
+                "timeseries",
+                "default",
+            ]
+        },
         display_group="Provider",
     ),
     FieldDef(
@@ -1516,7 +1662,6 @@ _ALL_FIELDS: list[FieldDef] = [
         display_group="Provider",
         validation={"max_length": 1000, "required": True},
     ),
-
     # Use real data correction for EVCC PV forecast (source-level)
     FieldDef(
         key="pv_forecast_source.use_real_data_correction",
@@ -1530,7 +1675,6 @@ _ALL_FIELDS: list[FieldDef] = [
         depends_on={"pv_forecast_source.source": ["evcc"]},
         display_group="Provider",
     ),
-
     # ===== UNIFIED HTTP/HA DATA SOURCE (PV) =====
     *_timeseries_source_fields(
         section="pv_forecast_source",
@@ -1549,7 +1693,6 @@ _ALL_FIELDS: list[FieldDef] = [
             "slot instead."
         ),
     ),
-
     # ===== PV FORECAST (array of installations) ====="
     # Note: pv_forecast is a list — handled specially by merger/migration.
     # The schema defines the template for ONE pv_forecast entry.
@@ -1706,7 +1849,6 @@ _ALL_FIELDS: list[FieldDef] = [
         },
         display_group="Installation",
     ),
-
     # ===== PV AUTOSCALING =====
     FieldDef(
         key="pv_autoscaling.enabled",
@@ -1738,7 +1880,12 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="pv_autoscaling",
         level="getting_started",
-        description="Entity/item for the cumulative PV generation counter (kWh) - REQUIRED for autoscaling to work",
+        description=(
+            "Entity/item for the cumulative PV generation counter (kWh) - "
+            "REQUIRED for autoscaling to work. EVCC fills this in with "
+            "pvEnergy, the site total from its live state"
+        ),
+        labels=["evcc_managed"],
         help_url="config-solar.html#pv-autoscaling",
         depends_on={"pv_autoscaling.enabled": [True]},
         validation={"required": True},
@@ -1751,10 +1898,16 @@ _ALL_FIELDS: list[FieldDef] = [
         default="homeassistant",
         section="pv_autoscaling",
         level="standard",
-        description="Data source type (Home Assistant or OpenHAB) for reading PV sensor",
+        description=(
+            "Data source type for reading the PV counter (Home Assistant, "
+            "OpenHAB, or EVCC - which publishes the site total as pvEnergy)"
+        ),
         help_url="config-solar.html#pv-autoscaling",
-        validation={"choices": ["homeassistant", "openhab"]},
-        depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
+        validation={"choices": ["homeassistant", "openhab", "evcc"]},
+        depends_on={
+            "pv_autoscaling.enabled": [True],
+            "pv_autoscaling.use_ha_central_data_source": [False],
+        },
         hot_reload=True,
         display_group="Connection",
     ),
@@ -1766,7 +1919,10 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Override URL for data source (used when not reusing central Data Source)",
         help_url="config-solar.html#pv-autoscaling",
-        depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
+        depends_on={
+            "pv_autoscaling.enabled": [True],
+            "pv_autoscaling.use_ha_central_data_source": [False],
+        },
         hot_reload=True,
         display_group="Connection",
     ),
@@ -1778,7 +1934,10 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description="Bearer token for manual data source access (only when not using central data source)",
         help_url="config-solar.html#pv-autoscaling",
-        depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
+        depends_on={
+            "pv_autoscaling.enabled": [True],
+            "pv_autoscaling.use_ha_central_data_source": [False],
+        },
         hot_reload=True,
         display_group="Connection",
     ),
@@ -1790,7 +1949,10 @@ _ALL_FIELDS: list[FieldDef] = [
         level="expert",
         description="Skip TLS certificate verification for the manual data source (self-signed certificates)",
         help_url="config-solar.html#pv-autoscaling",
-        depends_on={"pv_autoscaling.enabled": [True], "pv_autoscaling.use_ha_central_data_source": [False]},
+        depends_on={
+            "pv_autoscaling.enabled": [True],
+            "pv_autoscaling.use_ha_central_data_source": [False],
+        },
         hot_reload=True,
         display_group="Connection",
     ),
@@ -1846,7 +2008,6 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         display_group="Limits",
     ),
-
     # ===== INVERTER =====
     FieldDef(
         key="inverter.type",
@@ -1857,10 +2018,16 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Inverter type for battery control (default = display only, no control)",
         labels=["restart_required"],
         help_url="config-battery.html#inverter",
-        validation={"choices": [
-            "fronius_gen24", "fronius_gen24_legacy", "victron", "evcc",
-            "homeassistant", "default"
-        ]},
+        validation={
+            "choices": [
+                "fronius_gen24",
+                "fronius_gen24_legacy",
+                "victron",
+                "evcc",
+                "homeassistant",
+                "default",
+            ]
+        },
         # No depends_on: only one of these six choices has anything to do with the
         # Home Assistant data source.  Gating the whole select on
         # data_source.type == "homeassistant" hid it from everyone else, which on a
@@ -1877,7 +2044,9 @@ _ALL_FIELDS: list[FieldDef] = [
         description="IP address of the inverter",
         labels=["restart_required"],
         help_url="config-battery.html#inverter",
-        depends_on={"inverter.type": ["fronius_gen24", "fronius_gen24_legacy", "victron"]},
+        depends_on={
+            "inverter.type": ["fronius_gen24", "fronius_gen24_legacy", "victron"]
+        },
         display_group="Hardware",
     ),
     FieldDef(
@@ -1910,7 +2079,10 @@ _ALL_FIELDS: list[FieldDef] = [
         default=5000,
         section="inverter",
         level="standard",
-        description="Maximum inverter grid charge rate in W",
+        description=(
+            "Maximum inverter grid charge rate in W — not exposed by EVCC even "
+            "when EVCC controls the battery, so this stays manual"
+        ),
         labels=["restart_required"],
         help_url="config-battery.html#inverter",
         validation={"min": 0, "max": 100000},
@@ -1922,7 +2094,10 @@ _ALL_FIELDS: list[FieldDef] = [
         default=5000,
         section="inverter",
         level="standard",
-        description="Maximum inverter PV charge rate in W",
+        description=(
+            "Maximum inverter PV charge rate in W — not exposed by EVCC even "
+            "when EVCC controls the battery, so this stays manual"
+        ),
         labels=["restart_required"],
         help_url="config-battery.html#inverter",
         validation={"min": 0, "max": 100000},
@@ -1964,7 +2139,6 @@ _ALL_FIELDS: list[FieldDef] = [
         depends_on={"inverter.type": ["homeassistant"]},
         display_group="Home Assistant Service Calls",
     ),
-
     # ===== EVCC =====
     FieldDef(
         key="evcc.url",
@@ -1972,12 +2146,20 @@ _ALL_FIELDS: list[FieldDef] = [
         default="http://yourEVCCserver:7070",
         section="evcc",
         level="getting_started",
-        description="URL to your EVCC installation (leave default or empty if not used)",
+        description=(
+            "URL to your EVCC installation (leave default or empty if not used; "
+            "configured under Data Source when EVCC reads the consumption)"
+        ),
         labels=["restart_required"],
         help_url="config-system.html#evcc",
+        # One input, not two: with EVCC as the data source the address is typed
+        # on the Data Source page and this field stands down. The merge resolves
+        # it from there for every role that reads the evcc section, so there is
+        # nothing to keep in sync - and nothing written back here either, which
+        # is what once made the address impossible to change.
+        depends_on={"data_source.type": "!evcc"},
         display_group="Connection",
     ),
-
     # ===== MQTT =====
     FieldDef(
         key="mqtt.enabled",
@@ -2072,10 +2254,12 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Prefix for HA MQTT auto-discovery topics",
         labels=["restart_required"],
         help_url="config-system.html#mqtt",
-        depends_on={"mqtt.enabled": [True, "enabled"], "mqtt.ha_mqtt_auto_discovery": [True]},
+        depends_on={
+            "mqtt.enabled": [True, "enabled"],
+            "mqtt.ha_mqtt_auto_discovery": [True],
+        },
         display_group="Home Assistant",
     ),
-
     # ===== SYSTEM (top-level settings) =====
     FieldDef(
         key="refresh_time",
@@ -2199,7 +2383,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "Pool heat pump, sauna, hot water tank and buffer tank are heated stores "
             "that EOS Connect schedules and releases itself. "
             "External energy budget takes a "
-            "\"needs X Wh by then\" push and schedules it. "
+            '"needs X Wh by then" push and schedules it. '
             "External load profile takes a ready-made profile and injects it as given, "
             "with no release signal - use it for space heating or air conditioning"
         ),
@@ -2232,7 +2416,8 @@ _ALL_FIELDS: list[FieldDef] = [
             "what the efficiency is measured from. Its history also leaves the "
             "household base load, so the appliance is never counted twice. If you only "
             "have a kWh meter, add a derivative helper in Home Assistant and point "
-            "this at that"
+            "this at that. On an EVCC data source the name is one of EVCC's own "
+            "metered series, e.g. group:consumer:Sauna"
         ),
         labels=["restart_required"],
         help_url="config-managed-loads.html#managed-loads-sensor",
@@ -2292,7 +2477,6 @@ _ALL_FIELDS: list[FieldDef] = [
         validation={"min": 1, "max": 999},
         display_group="Identity",
     ),
-
     # --- thermal ---
     FieldDef(
         key="managed_loads.temp_sensor",
@@ -2490,7 +2674,6 @@ _ALL_FIELDS: list[FieldDef] = [
         depends_on={"type": MANAGED_LOAD_COVER_TYPES},
         display_group="Physical",
     ),
-
     # --- when it may run ---
     FieldDef(
         key="managed_loads.strategy",
@@ -2660,7 +2843,6 @@ _ALL_FIELDS: list[FieldDef] = [
         depends_on={"type": MANAGED_LOAD_COVER_TYPES},
         display_group="Operation",
     ),
-
     # --- pushed data ---
     FieldDef(
         key="managed_loads.ttl_minutes",
@@ -2678,7 +2860,6 @@ _ALL_FIELDS: list[FieldDef] = [
         depends_on={"type": MANAGED_LOAD_EXTERNAL_TYPES},
         display_group="Pushed data",
     ),
-
     # --- fetched profile ---
     FieldDef(
         key="managed_loads.profile_source",

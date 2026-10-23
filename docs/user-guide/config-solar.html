@@ -94,6 +94,10 @@
                         with what a yield meter actually recorded and applies the ratio. See
                         <a href="daily-use.html#autoscaling">Forecast auto-scaling</a> in the User Guide for
                         what to expect from it.</p>
+                    <p>The meter is a cumulative kWh counter, read from Home Assistant, openHAB or
+                        EVCC. With <a href="config-data.html#data-source-evcc">EVCC as the data
+                        source</a> there is nothing to name: EVCC publishes the site's total PV
+                        energy as <code>pvEnergy</code>, and that is filled in for you.</p>
                     <div data-schema-section="pv_autoscaling"></div>
                 </div>
 
