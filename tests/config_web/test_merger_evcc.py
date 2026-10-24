@@ -596,3 +596,35 @@ class TestHomeAssistantInverterUnderEvcc:
         """inverter.type = evcc reads the evcc section, not this injection."""
         merged = self._merged(tmp_path, **{"inverter.type": "evcc"})
         assert merged["evcc"]["url"] == "http://evcc.local:7070"
+
+
+def test_the_second_connection_reaches_the_load_section_too():
+    """An appliance EVCC does not meter is still readable - just not there.
+
+    The battery has had these keys since EVCC became a source, for its
+    temperature. The load section needs them for the same reason: EVCC meters
+    what it meters, and a pool heat pump it has no consumer series for has a
+    Home Assistant entity behind it.
+    """
+    result, _resolved = _run(
+        {
+            **EVCC_SETTINGS,
+            "data_source.supplementary_type": "homeassistant",
+            "data_source.supplementary_url": "http://ha.local:8123",
+            "data_source.supplementary_access_token": "tok",
+        }
+    )
+    for section in ("load", "battery"):
+        assert result[section]["supplementary_type"] == "homeassistant", section
+        assert result[section]["supplementary_url"] == "http://ha.local:8123", section
+        assert result[section]["supplementary_access_token"] == "tok", section
+
+
+def test_switching_the_second_connection_off_clears_it_everywhere():
+    """Blanked rather than carried over, so nothing keeps reading from it."""
+    result, _resolved = _run(
+        {**EVCC_SETTINGS, "data_source.supplementary_type": "default"}
+    )
+    for section in ("load", "battery"):
+        assert result[section]["supplementary_type"] == "", section
+        assert result[section]["supplementary_url"] == "", section

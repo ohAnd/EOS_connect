@@ -497,10 +497,11 @@ def test_tariff_unknown_name_is_rejected():
 def test_an_unreadable_name_is_reported_once_not_per_slot(caplog):
     """A profile build asks per slot; the answer does not change between them.
 
-    A managed load still carrying its Home Assistant sensor name produced one
-    error per slot per day - around a hundred identical lines for a single
-    misconfigured appliance, which buried everything else in the log. The name
-    is reported once, with what EVCC actually calls its series.
+    A managed load carrying a Home Assistant sensor name needs the second
+    connection, and with none configured there is nothing to read it with. That
+    produced one line per slot per day - around a hundred identical ones for a
+    single appliance, which buried everything else. Once per name now, naming
+    the thing that is missing.
     """
     interface = _interface()
     with caplog.at_level(logging.WARNING, logger="__main__"):
@@ -513,7 +514,7 @@ def test_an_unreadable_name_is_reported_once_not_per_slot(caplog):
             )
     reported = [r for r in caplog.records if "sensor.heatpump_power" in r.getMessage()]
     assert len(reported) == 1, [r.getMessage() for r in reported]
-    assert "group:consumer:<title>" in reported[0].getMessage()
+    assert "supplementary data source" in reported[0].getMessage()
 
 
 def test_each_unreadable_name_is_reported_on_its_own():
@@ -531,3 +532,102 @@ def test_each_unreadable_name_is_reported_on_its_own():
                 name, DAY_START, DAY_START + timedelta(hours=1)
             )
     assert seen == ["sensor.one", "sensor.two"]
+
+
+# ---------------------------------------------------------------------------
+# The second connection: EVCC meters what it meters
+# ---------------------------------------------------------------------------
+
+SUPPLEMENTARY = {
+    "supplementary_type": "homeassistant",
+    "supplementary_url": "http://ha.local:8123",
+    "supplementary_access_token": "tok",
+}
+
+
+def _capture():
+    """A requests.get stand-in that records where it was pointed."""
+    calls = []
+
+    def getter(url, params=None, **kwargs):  # pylint: disable=unused-argument
+        calls.append(url)
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = []
+        return response
+
+    return calls, getter
+
+
+def test_an_evcc_series_goes_to_evcc():
+    calls, getter = _capture()
+    interface = _interface(**SUPPLEMENTARY)
+    with patch("src.interfaces.load_interface.requests.get", getter), patch(
+        "src.interfaces.load_interface.time.sleep"
+    ):
+        interface.fetch_historical_energy_data(
+            "group:consumer:Sauna", DAY_START, DAY_START + timedelta(hours=1)
+        )
+    assert calls and all("evcc:7070" in url for url in calls), calls
+
+
+def test_an_entity_id_goes_to_the_second_connection():
+    """EVCC cannot answer an appliance it does not meter - but it exists.
+
+    The name is the discriminator, the same rule the battery interface uses for
+    its temperature. Without it a pool heat pump that EVCC has no consumer
+    series for was simply unreadable, however well Home Assistant knew it.
+    """
+    calls, getter = _capture()
+    interface = _interface(**SUPPLEMENTARY)
+    with patch("src.interfaces.load_interface.requests.get", getter), patch(
+        "src.interfaces.load_interface.time.sleep"
+    ):
+        interface.fetch_historical_energy_data(
+            "sensor.heatpump_power", DAY_START, DAY_START + timedelta(hours=1)
+        )
+    assert calls and all("ha.local:8123" in url for url in calls), calls
+
+
+def test_without_a_second_connection_nothing_is_read_and_it_is_said_once(caplog):
+    """No connection is a configuration gap, not a broken name."""
+    calls, getter = _capture()
+    interface = _interface()  # no supplementary configured
+    with patch("src.interfaces.load_interface.requests.get", getter), patch(
+        "src.interfaces.load_interface.time.sleep"
+    ), caplog.at_level(logging.WARNING, logger="__main__"):
+        for _ in range(3):
+            assert (
+                interface.fetch_historical_energy_data(
+                    "sensor.heatpump_power", DAY_START, DAY_START + timedelta(hours=1)
+                )
+                == []
+            )
+    assert not calls, "nothing is requested when there is nowhere to ask"
+    said = [r for r in caplog.records if "sensor.heatpump_power" in r.getMessage()]
+    assert len(said) == 1
+    assert "supplementary data source" in said[0].getMessage()
+
+
+def test_a_non_evcc_source_is_unaffected():
+    """One source answers everything; there is nothing to decide."""
+    calls, getter = _capture()
+    interface = LoadInterface(
+        {
+            "source": "homeassistant",
+            "url": "http://ha.local:8123",
+            "access_token": "tok",
+            "load_sensor": "sensor.house",
+            "max_retries": 1,
+            "retry_backoff": 0,
+        },
+        3600,
+        "UTC",
+    )
+    with patch("src.interfaces.load_interface.requests.get", getter), patch(
+        "src.interfaces.load_interface.time.sleep"
+    ):
+        interface.fetch_historical_energy_data(
+            "sensor.house", DAY_START, DAY_START + timedelta(hours=1)
+        )
+    assert calls and all("ha.local:8123" in url for url in calls), calls

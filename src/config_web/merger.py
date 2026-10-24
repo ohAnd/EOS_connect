@@ -344,9 +344,41 @@ def _apply_data_source_inheritance(
         # If section has its own source set, keep it (Expert override)
 
     if ds_type == "evcc":
+        # The second connection reaches both sections: the battery for its
+        # temperature, the load for any appliance EVCC does not meter.
+        for section in ("load", "battery"):
+            if isinstance(result.get(section), dict):
+                _apply_supplementary(result[section], all_settings)
         resolved.update(_apply_evcc_virtual_entities(result, all_settings) or {})
         resolved.update(_apply_evcc_battery_entities(result, all_settings) or {})
     return resolved
+
+
+def _apply_supplementary(section: dict, all_settings: dict[str, Any]) -> None:
+    """Copy the supplementary connection into one section, or blank it.
+
+    A non-remote choice means "no second connection": the keys are cleared
+    rather than carried over from a previous save, so a connection that was
+    switched off does not keep being read from.
+    """
+    supp_type = str(all_settings.get("data_source.supplementary_type", "") or "")
+    usable = supp_type in ("homeassistant", "openhab")
+    section["supplementary_type"] = supp_type if usable else ""
+    section["supplementary_url"] = (
+        str(all_settings.get("data_source.supplementary_url", "") or "")
+        if usable
+        else ""
+    )
+    section["supplementary_access_token"] = (
+        str(all_settings.get("data_source.supplementary_access_token", "") or "")
+        if usable
+        else ""
+    )
+    section["supplementary_ssl_ignore"] = (
+        bool(all_settings.get("data_source.supplementary_ssl_ignore", False))
+        if usable
+        else False
+    )
 
 
 def _is_evcc_placeholder(url) -> bool:
@@ -461,30 +493,9 @@ def _apply_evcc_battery_entities(
     if soc and not is_evcc_reference(soc) and not soc.startswith("battery."):
         battery["soc_sensor"] = "battery.soc"
 
-    # The connection the battery's own sensors answer through. The EVCC URL the
-    # section inherited only reaches /api/state and /api/history/*; a sensor
-    # name carried over from an Home Assistant setup (the battery temperature is
-    # the recurring case) needs the supplementary connection to stay readable.
-    # A non-remote supplementary choice means "no second connection": the keys
-    # are blanked rather than carried over from the previous save.
-    supp_type = str(all_settings.get("data_source.supplementary_type", "") or "")
-    supplementary_usable = supp_type in ("homeassistant", "openhab")
-    battery["supplementary_type"] = supp_type if supplementary_usable else ""
-    battery["supplementary_url"] = (
-        str(all_settings.get("data_source.supplementary_url", "") or "")
-        if supplementary_usable
-        else ""
-    )
-    battery["supplementary_access_token"] = (
-        str(all_settings.get("data_source.supplementary_access_token", "") or "")
-        if supplementary_usable
-        else ""
-    )
-    battery["supplementary_ssl_ignore"] = (
-        bool(all_settings.get("data_source.supplementary_ssl_ignore", False))
-        if supplementary_usable
-        else False
-    )
+    # The second connection is copied in by the caller, for this section and
+    # the load one alike - see _apply_supplementary. The battery needs it for
+    # its temperature, which EVCC does not carry at all.
 
     price_sensors = {
         "battery_power_sensor": "group:battery",

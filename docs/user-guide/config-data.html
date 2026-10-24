@@ -132,6 +132,12 @@
                         setting one would subtract the charging energy from a profile that never
                         contained it. On Home Assistant or openHAB, where the house meter normally
                         includes the wallbox, the field stays and is subtracted as before.</p>
+                    <p><strong>An appliance EVCC does not meter.</strong> The additional load and a
+                        managed load's power sensor accept either kind of name: an EVCC series when
+                        EVCC meters that appliance, or an ordinary Home Assistant / openHAB entity
+                        id when it does not. The name decides where it is read from &mdash; an entity
+                        id goes to the supplementary data source below. Without one configured the
+                        sensor is simply not read, and the log says so once.</p>
                     <p><strong>The supplementary data source.</strong> A few things are not EVCC's
                         to give: the optional battery temperature, an inverter you control
                         <em>through Home Assistant</em> (<code>inverter.type</code> set to

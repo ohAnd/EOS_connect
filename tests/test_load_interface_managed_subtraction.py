@@ -47,14 +47,19 @@ def _profile_for_one_hour(interface, house_w, sensor_readings):
         return _samples(sensor_readings.get(entity_id, 0))
 
     with patch.object(
+        # The one entry point every caller goes through now; which connection
+        # answers is decided behind it, and this test is about the arithmetic
+        # on top of whatever comes back.
         LoadInterface,
-        "_LoadInterface__fetch_historical_energy_data_from_homeassistant",
+        "fetch_historical_energy_data",
         side_effect=fake_history,
     ), patch.object(
         LoadInterface,
         "_LoadInterface__get_additional_load_list_from_to",
         side_effect=lambda item, s, e: fake_history(item, s, e),
-    ), patch("src.interfaces.load_interface.logger"):
+    ), patch(
+        "src.interfaces.load_interface.logger"
+    ):
         return interface.get_load_profile_for_day(start, end)
 
 
