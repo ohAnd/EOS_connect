@@ -306,15 +306,21 @@ def test_dst_end_day_is_unchanged():
     assert cached == per_slot
 
 
-def test_naive_local_bounds_are_unchanged():
-    """`time_zone: UTC` leaves the interface on naive local datetimes.
+def test_naive_bounds_are_read_in_the_configured_zone():
+    """Naive day bounds belong to the configured zone, not the host's.
 
-    The day bounds then arrive naive while Home Assistant answers in UTC, and both
-    have to land in the same frame or every slice comes back empty.
+    They arrive naive from ``__now()`` while Home Assistant answers in UTC, and
+    both have to land in the same frame or every slice comes back empty. Which
+    frame that is has to follow the setting: reading a naive bound on the host
+    clock instead is what shifted a whole load profile by the host's offset on
+    any container that did not happen to run the configured zone.
     """
     day_start = datetime(2026, 3, 3, 0, 0)
     series = _series(
-        day_start.astimezone(timezone.utc), DAY_VALUES, 15, {"unit_of_measurement": "W"}
+        day_start.replace(tzinfo=timezone.utc),
+        DAY_VALUES,
+        15,
+        {"unit_of_measurement": "W"},
     )
 
     per_slot, cached, _ = _both_ways(

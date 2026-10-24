@@ -4,7 +4,7 @@ from various sources such as OpenHAB and Home Assistant. It also includes method
 load profiles based on historical energy consumption data.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 import logging
 from urllib.parse import quote
 import threading
@@ -133,24 +133,9 @@ class LoadInterface:
         logger.debug("[LOAD-IF] Using URL: %s", self.url)
         logger.debug("[LOAD-IF] Using access token: %s", self.access_token)
 
-        # Handle timezone properly
-        if tz_name == "UTC" or tz_name is None:
-            self.time_zone = None  # Use local timezone
-        elif isinstance(tz_name, str):
-            # Try to convert string timezone to proper timezone object
-            try:
-                # zoneinfo.ZoneInfo may raise ZoneInfoNotFoundError
-                self.time_zone = ZoneInfo(tz_name)
-            except ZoneInfoNotFoundError:
-                # fallback to pytz if available, otherwise use local (None)
-                try:
-                    self.time_zone = pytz.timezone(tz_name)
-                except pytz.UnknownTimeZoneError:
-                    logger.warning(
-                        "[LOAD-IF] Cannot parse timezone '%s', using local time",
-                        tz_name,
-                    )
-                    self.time_zone = None
+        # The configured zone decides where a day starts, so it has to survive
+        # whatever shape it arrives in - see __resolve_time_zone.
+        self.time_zone = self.__resolve_time_zone(tz_name)
 
         self.configuration_state = "unknown"  # 'valid', 'incomplete', or 'invalid'
         self.configuration_valid = False
@@ -335,6 +320,51 @@ class LoadInterface:
             for sensor in (source or [])
             if str(sensor or "").strip()
         ]
+
+    @staticmethod
+    def __resolve_time_zone(tz_name):
+        """The configured zone as a tzinfo, or None to fall back to local time.
+
+        This decides where a day begins, and a day boundary that is off by an
+        hour shifts the whole load profile by that hour: the profile is built on
+        a midnight-to-midnight grid, while the optimizer indexes it from midnight
+        in the *configured* zone. The two have to be the same midnight.
+
+        It therefore has to accept every shape the callers actually use.
+        ``eos_connect`` builds ``pytz.timezone(...)`` and passes the **object**;
+        the tests and the config pass a name. A tzinfo object used to match
+        neither branch of the check here and fell through to the ``None`` default
+        - the configured zone was silently discarded and the grid was built on
+        the host's clock instead. Where those two agree, nothing is visible; in a
+        container they need not agree at all, and a Home Assistant add-on runs
+        UTC. That is how a correctly configured site ended up with a load
+        forecast shifted by its own UTC offset.
+
+        ``"UTC"`` is resolved rather than treated as "no zone" for the same
+        reason: it is a configured zone like any other, and reading it as "use
+        whatever the host says" reintroduces the bug mirrored.
+        """
+        if tz_name is None:
+            return None
+        if isinstance(tz_name, tzinfo):
+            return tz_name
+        if not isinstance(tz_name, str):
+            logger.warning(
+                "[LOAD-IF] Cannot use timezone %r of type %s, using local time",
+                tz_name,
+                type(tz_name).__name__,
+            )
+            return None
+        try:
+            return ZoneInfo(tz_name)
+        except (ZoneInfoNotFoundError, ValueError):
+            try:
+                return pytz.timezone(tz_name)
+            except pytz.UnknownTimeZoneError:
+                logger.warning(
+                    "[LOAD-IF] Cannot parse timezone '%s', using local time", tz_name
+                )
+                return None
 
     def __now(self):
         """Current local time, in the frame the load profile is built in.
@@ -558,7 +588,9 @@ class LoadInterface:
     @staticmethod
     def __covers(samples, start_utc, end_utc):
         """True when the samples reach both ends of the requested interval."""
-        return bool(samples) and samples[0][0] <= start_utc and samples[-1][0] >= end_utc
+        return (
+            bool(samples) and samples[0][0] <= start_utc and samples[-1][0] >= end_utc
+        )
 
     def __fetch_homeassistant_history(self, entity_id, start_utc, end_utc):
         """State history from /api/history/period as sorted (utc, sample) pairs."""
@@ -827,11 +859,17 @@ class LoadInterface:
                 start_idx = 0
                 end_idx = len(history_values) - 1
                 while start_idx < end_idx:
-                    if self.__as_float(history_values[start_idx].get("state")) is not None:
+                    if (
+                        self.__as_float(history_values[start_idx].get("state"))
+                        is not None
+                    ):
                         break
                     start_idx += 1
                 while start_idx < end_idx:
-                    if self.__as_float(history_values[end_idx].get("state")) is not None:
+                    if (
+                        self.__as_float(history_values[end_idx].get("state"))
+                        is not None
+                    ):
                         break
                     end_idx -= 1
 
@@ -900,7 +938,12 @@ class LoadInterface:
             try:
                 state = data["data"][i].get("state")
                 # Check if state is valid/non-empty
-                if state is None or state == "" or state == "unavailable" or state == "unknown":
+                if (
+                    state is None
+                    or state == ""
+                    or state == "unavailable"
+                    or state == "unknown"
+                ):
                     # Invalid state - try to fill with last known value
                     if last_valid_state is not None:
                         data["data"][i]["state"] = last_valid_state
@@ -935,7 +978,11 @@ class LoadInterface:
                 "Last known value was used. This indicates data gaps or corrupted states in Home Assistant history.",
                 len(filled_indices),
                 debug_sensor if debug_sensor else "unknown sensor",
-                filled_indices[:10] + ["..."] if len(filled_indices) > 10 else filled_indices
+                (
+                    filled_indices[:10] + ["..."]
+                    if len(filled_indices) > 10
+                    else filled_indices
+                ),
             )
 
         return data
@@ -1024,7 +1071,9 @@ class LoadInterface:
                             float(data["data"][i]["state"])
                             # data[i] is valid, so error is in data[i+1]
                             problematic_state = data["data"][i + 1].get("state", "N/A")
-                            problematic_time = data["data"][i + 1].get("last_updated", "N/A")
+                            problematic_time = data["data"][i + 1].get(
+                                "last_updated", "N/A"
+                            )
                             error_context = (
                                 f"[Index {i}] Valid: '{data['data'][i]['state']}' @ "
                                 f"{data['data'][i]['last_updated'].split('.')[0] if '.' in str(data['data'][i]['last_updated']) else data['data'][i]['last_updated']}, "
@@ -1033,10 +1082,10 @@ class LoadInterface:
                         except (ValueError, KeyError):
                             # Error is in data[i]
                             problematic_state = data["data"][i].get("state", "N/A")
-                            problematic_time = data["data"][i].get("last_updated", "N/A")
-                            error_context = (
-                                f"[Index {i}] PROBLEMATIC: '{problematic_state}' @ {problematic_time}"
+                            problematic_time = data["data"][i].get(
+                                "last_updated", "N/A"
                             )
+                            error_context = f"[Index {i}] PROBLEMATIC: '{problematic_state}' @ {problematic_time}"
 
                     # Generate debug URL only if we have a valid timestamp
                     if problematic_time and isinstance(problematic_time, str):
