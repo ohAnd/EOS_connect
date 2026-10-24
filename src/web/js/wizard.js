@@ -69,19 +69,19 @@ class SetupWizard {
                 description: "Select and configure the optimization backend (EOS Server or EVopt).",
             },
             {
-                id: "evcc",
-                title: "EVCC (Optional)",
-                icon: "fa-car",
-                sections: ["evcc"],
-                description: "Optional — Define here to use EVCC as a data source for PV forecasts, as an inverter control gateway, and/or for car charging dependent control. If not used, simply skip this step.",
-                isOptional: true,
-            },
-            {
                 id: "data_source",
                 title: "Data Source",
                 icon: "fa-plug",
                 sections: ["data_source"],
-                description: "Connect to Home Assistant or OpenHAB to read sensor data.",
+                description: "Where the measured data comes from: Home Assistant, OpenHAB, or EVCC. Asked before the EVCC step, because choosing EVCC here is what configures its address — the EVCC step then has nothing left to ask.",
+            },
+            {
+                id: "evcc",
+                title: "EVCC (Optional)",
+                icon: "fa-car",
+                sections: ["evcc"],
+                description: "Optional — Define here to use EVCC as a PV forecast source, as an inverter control gateway, and/or for car charging dependent control. Skip this step if EVCC is already the data source, or if you do not use it at all.",
+                isOptional: true,
             },
             {
                 id: "inverter",

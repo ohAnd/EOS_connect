@@ -38,6 +38,16 @@ class TestConfigSchema:
         assert "battery" in sections
         assert "system" in sections
 
+    def test_data_source_is_offered_before_evcc(self):
+        """Choosing EVCC as the data source is what configures its address.
+
+        The EVCC section then has nothing left to answer and drops out of the
+        nav entirely. Offering it first asked for the same URL twice - once on
+        a page that was about to disappear.
+        """
+        sections = self.schema.sections()
+        assert sections.index("data_source") < sections.index("evcc")
+
     def test_get_section(self):
         """Should return only fields for the requested section."""
         battery_fields = self.schema.get_section("battery")

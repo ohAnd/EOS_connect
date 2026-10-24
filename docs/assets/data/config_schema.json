@@ -3924,13 +3924,13 @@
       "icon": "fa-server",
       "label": "Optimizer"
     },
-    "evcc": {
-      "icon": "fa-car",
-      "label": "EVCC"
-    },
     "data_source": {
       "icon": "fa-plug",
       "label": "Data Source"
+    },
+    "evcc": {
+      "icon": "fa-car",
+      "label": "EVCC"
     },
     "inverter": {
       "icon": "fa-microchip",

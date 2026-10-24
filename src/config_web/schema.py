@@ -61,8 +61,11 @@ DATA_SOURCE_REQUIRED_SENSORS = {
 # Order reflects recommended user setup flow (for wizard and settings organization).
 SECTION_META = {
     "eos": {"icon": "fa-server", "label": "Optimizer"},
-    "evcc": {"icon": "fa-car", "label": "EVCC"},
+    # Data Source before EVCC: picking EVCC here is what configures its address,
+    # and the EVCC section then has nothing left to answer and drops out of the
+    # nav. Asking for it first meant asking for the same URL twice.
     "data_source": {"icon": "fa-plug", "label": "Data Source"},
+    "evcc": {"icon": "fa-car", "label": "EVCC"},
     "inverter": {"icon": "fa-microchip", "label": "Inverter"},
     "battery": {"icon": "fa-battery-full", "label": "Battery"},
     "load": {"icon": "fa-bolt", "label": "Load"},
