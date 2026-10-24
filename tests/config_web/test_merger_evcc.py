@@ -519,3 +519,80 @@ def test_a_battery_without_soc_limits_keeps_the_configured_range():
     assert result["battery"]["max_soc_percentage"] == 100
     assert "battery.min_soc_percentage" not in resolved
     assert "battery.max_soc_percentage" not in resolved
+
+
+class TestHomeAssistantInverterUnderEvcc:
+    """A Home Assistant inverter is driven through HA's own service calls.
+
+    EVCC has none, so handing the inverter the EVCC address aimed the
+    controller at a host that cannot answer it - the same mistake the
+    timeseries domains made, in a place that was missed when those were fixed.
+    """
+
+    def _merged(self, tmp_path, **extra):
+        store = ConfigStore(str(tmp_path / "inv.db"))
+        store.open()
+        try:
+            settings = {
+                "data_source.type": "evcc",
+                "data_source.url": "http://evcc.local:7070",
+                "inverter.type": "homeassistant",
+            }
+            settings.update(extra)
+            store.set_batch(settings)
+            return build_merged_config({}, store, ConfigSchema())
+        finally:
+            store.close()
+
+    def test_it_uses_the_supplementary_home_assistant(self, tmp_path):
+        merged = self._merged(
+            tmp_path,
+            **{
+                "data_source.supplementary_type": "homeassistant",
+                "data_source.supplementary_url": "http://ha.local:8123",
+                "data_source.supplementary_access_token": "tok",
+            },
+        )
+        assert merged["inverter"]["url"] == "http://ha.local:8123"
+        assert merged["inverter"]["token"] == "tok"
+
+    def test_without_one_no_address_is_invented(self, tmp_path):
+        """Better an unset URL than the EVCC one, which can only fail."""
+        merged = self._merged(tmp_path)
+        assert "evcc.local" not in str(merged["inverter"].get("url", ""))
+
+    def test_an_openhab_supplementary_does_not_qualify(self, tmp_path):
+        """openHAB cannot serve Home Assistant service calls either."""
+        merged = self._merged(
+            tmp_path,
+            **{
+                "data_source.supplementary_type": "openhab",
+                "data_source.supplementary_url": "http://oh.local:8080",
+            },
+        )
+        assert "oh.local" not in str(merged["inverter"].get("url", ""))
+        assert "evcc.local" not in str(merged["inverter"].get("url", ""))
+
+    def test_a_home_assistant_data_source_is_unchanged(self, tmp_path):
+        """The ordinary case keeps working exactly as before."""
+        store = ConfigStore(str(tmp_path / "ha.db"))
+        store.open()
+        try:
+            store.set_batch(
+                {
+                    "data_source.type": "homeassistant",
+                    "data_source.url": "http://ha.local:8123",
+                    "data_source.access_token": "tok",
+                    "inverter.type": "homeassistant",
+                }
+            )
+            merged = build_merged_config({}, store, ConfigSchema())
+        finally:
+            store.close()
+        assert merged["inverter"]["url"] == "http://ha.local:8123"
+        assert merged["inverter"]["token"] == "tok"
+
+    def test_an_evcc_inverter_is_not_touched(self, tmp_path):
+        """inverter.type = evcc reads the evcc section, not this injection."""
+        merged = self._merged(tmp_path, **{"inverter.type": "evcc"})
+        assert merged["evcc"]["url"] == "http://evcc.local:7070"

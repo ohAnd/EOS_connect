@@ -565,6 +565,17 @@ def _apply_inverter_data_source_injection(
     When inverter.type is "homeassistant", inject the data_source.url and
     data_source.access_token as inverter.url and inverter.token respectively.
     This ensures the inverter uses the same HA credentials as the load/battery interfaces.
+
+    Except when the data source is EVCC, which has no service calls to make: a
+    Home Assistant inverter is driven through HA's own API, and handing it the
+    EVCC address produced a controller aimed at a host that cannot answer it.
+    It takes the supplementary connection there - and only a Home Assistant one,
+    since openHAB cannot serve HA service calls either. With no supplementary
+    connection the fields are left alone rather than filled with something that
+    cannot work.
+
+    (``inverter.type = "evcc"`` is a different controller and unaffected: it
+    reads the evcc section, which the merge resolves from the same address.)
     """
     if "inverter" not in result:
         return
@@ -573,11 +584,25 @@ def _apply_inverter_data_source_injection(
     if inverter.get("type") != "homeassistant":
         return
 
-    ds_url = all_settings.get("data_source.url", "")
-    ds_token = all_settings.get("data_source.access_token", "")
-    ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
+    ds_type = all_settings.get("data_source.type", "default")
+    if ds_type == "evcc":
+        if all_settings.get("data_source.supplementary_type") != "homeassistant":
+            logger.warning(
+                "[ConfigMerger] The inverter is controlled through Home Assistant "
+                "but the data source is EVCC, which has no service calls. "
+                "Configure the supplementary Home Assistant connection under "
+                "Settings > Data Source for the inverter to reach it."
+            )
+            return
+        ds_url = all_settings.get("data_source.supplementary_url", "")
+        ds_token = all_settings.get("data_source.supplementary_access_token", "")
+        ds_ssl_ignore = all_settings.get("data_source.supplementary_ssl_ignore", False)
+    else:
+        ds_url = all_settings.get("data_source.url", "")
+        ds_token = all_settings.get("data_source.access_token", "")
+        ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
 
-    # Inject credentials from data_source
+    # Inject credentials from the connection that can actually serve them
     inverter["url"] = ds_url
     inverter["token"] = ds_token
     inverter["ssl_ignore"] = ds_ssl_ignore
