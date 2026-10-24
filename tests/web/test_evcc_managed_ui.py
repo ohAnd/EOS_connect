@@ -13,6 +13,7 @@ read-only regardless left a field the user had to fill and could not.
 """
 
 import json
+import re
 
 import pytest
 
@@ -192,3 +193,48 @@ def test_the_wizard_applies_the_same_negative_dependency(page):
         "notEmptyRejectsBlank": False,
         "notEmptyAcceptsValue": True,
     }
+
+
+def _computed(page, selector, prop):
+    return page.evaluate(
+        """([sel, prop]) => {
+            const el = document.querySelector(sel);
+            return el ? getComputedStyle(el).getPropertyValue(prop) : null;
+        }""",
+        [selector, prop],
+    )
+
+
+def test_a_derived_field_is_styled_by_the_theme_not_the_browser(evcc_page):
+    """It rendered without the .config-input base, so it came out a white box.
+
+    The class is the contract, but a class with no rule behind it would satisfy
+    that and still render light - hence the computed colour. Dark rather than an
+    exact value: the palette is a design decision, "not the browser default" is
+    the regression.
+    """
+    _select(evcc_page, "load")
+    sel = f"#cfg-field-{_css_key('load.load_sensor')} input"
+
+    classes = evcc_page.evaluate("(sel) => document.querySelector(sel).className", sel)
+    assert "config-input" in classes
+    assert "config-input-readonly" in classes
+
+    background = _computed(evcc_page, sel, "background-color")
+    channels = [int(n) for n in re.findall(r"\d+", background)[:3]]
+    assert channels, f"no colour parsed from {background!r}"
+    assert all(c < 100 for c in channels), f"{background} is not a dark ground"
+
+
+def test_the_badge_uses_the_accent_colour_class(evcc_page):
+    """Same reason: the badge carried its colours inline instead of a class."""
+    _select(evcc_page, "load")
+    badge = evcc_page.evaluate(
+        """(sel) => {
+            const el = document.querySelector(sel);
+            return el ? el.className : null;
+        }""",
+        f"#cfg-field-{_css_key('load.load_sensor')} .config-badge",
+    )
+    assert badge is not None, "the from-EVCC badge is rendered"
+    assert "config-badge-evcc" in badge

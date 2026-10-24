@@ -532,7 +532,7 @@ class ConfigurationManager {
             <div class="config-field" data-key="${f.key}" id="cfg-field-${this._cssKey(f.key)}">
                 <div class="config-field-label">
                     <span>${label}</span>
-                    <span class="config-badge" style="background:rgba(255,193,7,0.15); color:#ffc107;">
+                    <span class="config-badge config-badge-unavailable">
                         <i class="fas fa-car" aria-hidden="true"></i> not configured
                     </span>
                     ${f.description ? `<button class="config-help-btn" tabindex="-1" onclick="configurationManager._toggleHelp('${f.key}')" title="Help">
@@ -540,7 +540,7 @@ class ConfigurationManager {
                 </div>
                 <div class="config-field-input">
                     <input type="text" value="not provided by EVCC" readonly
-                        style="opacity:0.6; cursor:default; color:#888;" />
+                        class="config-input config-input-readonly" />
                 </div>
                 ${helpText}
             </div>`;
@@ -549,7 +549,7 @@ class ConfigurationManager {
             <div class="config-field" data-key="${f.key}" id="cfg-field-${this._cssKey(f.key)}">
                 <div class="config-field-label">
                     <span>${label}</span>
-                    <span class="config-badge" style="background:rgba(74,158,255,0.15); color:#4a9eff;">
+                    <span class="config-badge config-badge-evcc">
                         <i class="fas fa-car" aria-hidden="true"></i> from EVCC
                     </span>
                     ${f.description ? `<button class="config-help-btn" tabindex="-1" onclick="configurationManager._toggleHelp('${f.key}')" title="Help">
@@ -557,7 +557,7 @@ class ConfigurationManager {
                 </div>
                 <div class="config-field-input">
                     <input type="text" value="${this._escapeAttr(resolved)}" readonly
-                        style="opacity:0.75; cursor:default; color:#9ad06d;" />
+                        class="config-input config-input-readonly" />
                 </div>
                 ${helpText}
             </div>${this._renderEntityTester(f, null)}`;
