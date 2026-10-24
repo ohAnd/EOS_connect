@@ -336,6 +336,25 @@
     color: #ffc107;
 }
 
+/* A note about the setup around a field, not about its value - so it reads
+   as information, not as the error styling just above. */
+.config-field-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 0.82em;
+    color: #9bb8d4;
+    background-color: rgba(74, 158, 255, 0.08);
+    border-left: 3px solid #4a9eff;
+    border-radius: 4px;
+    padding: 8px 12px;
+}
+
+.config-field-notice a {
+    color: #4a9eff;
+    white-space: nowrap;
+}
+
 /* --- Help tooltip --- */
 .config-help-btn {
     background: none;

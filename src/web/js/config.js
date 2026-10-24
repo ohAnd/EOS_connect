@@ -560,7 +560,31 @@ class ConfigurationManager {
                         class="config-input config-input-readonly" />
                 </div>
                 ${helpText}
-            </div>${this._renderEntityTester(f, null)}`;
+            </div>${this._renderNotice(f)}${this._renderEntityTester(f, null)}`;
+    }
+
+    /**
+     * A note under the field, shown while its condition holds.
+     *
+     * Not a validation error and not part of the description: it is about the
+     * *setup* around the field - something EVCC cannot answer and a second
+     * connection would. It carries a link to the section that resolves it,
+     * because "configure it elsewhere" without saying where is a dead end.
+     */
+    _renderNotice(f, entryValues = null) {
+        const notice = f.notice_when;
+        if (!notice || !this._conditionsMet(notice.when, entryValues)) {
+            return "";
+        }
+        const link = notice.link
+            ? `<a href="#" onclick="configurationManager._selectSection('${notice.link}'); return false;">
+                   Set it up <i class="fas fa-arrow-right" style="font-size:0.8em;"></i></a>`
+            : "";
+        return `
+            <div class="config-field config-field-notice" data-notice-for="${f.key}">
+                <i class="fas fa-circle-info" aria-hidden="true"></i>
+                <span>${this._escapeHtml(notice.text)} ${link}</span>
+            </div>`;
     }
 
     /**
@@ -650,7 +674,7 @@ class ConfigurationManager {
                 </div>
                 ${helpText}
                 <div class="config-field-error" id="cfg-err-${this._cssKey(f.key)}"></div>
-            </div>${this._renderEntityTester(f, entryValues)}${this._renderTemperatureCoordinateNotice(f)}`;
+            </div>${this._renderNotice(f, entryValues)}${this._renderEntityTester(f, entryValues)}${this._renderTemperatureCoordinateNotice(f)}`;
     }
 
     /**
@@ -1554,7 +1578,19 @@ class ConfigurationManager {
         if (!f.depends_on) {
             return false;
         }
-        for (const [depKey, allowed] of Object.entries(f.depends_on)) {
+        return !this._conditionsMet(f.depends_on, entryValues);
+    }
+
+    /**
+     * Whether every entry of a depends_on-shaped condition holds right now.
+     *
+     * Shared by the visibility gate and by notice_when, so a notice cannot drift
+     * away from the rule that decides whether the field is even shown. The
+     * backend's _dependency_met and the wizard's _isDependencyMet are the other
+     * two implementations of the same three cases.
+     */
+    _conditionsMet(conditions, entryValues = null) {
+        for (const [depKey, allowed] of Object.entries(conditions || {})) {
             // A key without a dot is resolved *within the entry*: in managed_loads,
             // "type" means this card's type. Two cards of different types have to be
             // judged independently, which is why pv_forecast never needed this — its
@@ -1565,16 +1601,16 @@ class ConfigurationManager {
 
             if (allowed === "!empty") {
                 if (!currentVal || currentVal === "") {
-                    return true;
+                    return false;
                 }
                 continue;
             }
-            // "!value": the negative match — the field applies while the governing
-            // key does NOT hold *value*. How evcc.url steps aside once
+            // "!value": the negative match — the condition holds while the
+            // governing key does NOT hold *value*. How evcc.url steps aside once
             // data_source.type already points at EVCC.
             if (typeof allowed === "string" && allowed.startsWith("!") && allowed.length > 1 && allowed !== "!empty") {
                 if (String(currentVal) === allowed.slice(1)) {
-                    return true;
+                    return false;
                 }
                 continue;
             }
@@ -1585,16 +1621,16 @@ class ConfigurationManager {
                     a === currentVal || String(a) === String(currentVal)
                 );
                 if (!match) {
-                    return true;
+                    return false;
                 }
             } else {
-                // Single string value — hide if current value doesn't match
+                // Single string value — the condition needs an exact match
                 if (allowed !== currentVal && String(allowed) !== String(currentVal)) {
-                    return true;
+                    return false;
                 }
             }
         }
-        return false;
+        return true;
     }
 
     /**

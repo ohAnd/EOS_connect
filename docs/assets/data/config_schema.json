@@ -318,7 +318,20 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Additional Load"
+      "display_group": "Additional Load",
+      "notice_when": {
+        "when": {
+          "data_source.type": [
+            "evcc"
+          ],
+          "data_source.supplementary_type": [
+            "default",
+            ""
+          ]
+        },
+        "text": "EVCC only meters what it meters. To name a Home Assistant or openHAB entity here instead of an EVCC series (group:consumer:<title>), set up a supplementary data source.",
+        "link": "data_source"
+      }
     },
     {
       "key": "load.additional_load_1_runtime",
@@ -977,7 +990,20 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Grid Price Provider"
+      "display_group": "Grid Price Provider",
+      "notice_when": {
+        "when": {
+          "data_source.type": [
+            "evcc"
+          ],
+          "data_source.supplementary_type": [
+            "default",
+            ""
+          ]
+        },
+        "text": "Reading a Home Assistant entity through the central data source needs one that has entities - EVCC does not. Set up a supplementary data source, or pick EVCC as this source directly instead.",
+        "link": "data_source"
+      }
     },
     {
       "key": "price.data_path",
@@ -1264,7 +1290,20 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Feed-In Price Provider"
+      "display_group": "Feed-In Price Provider",
+      "notice_when": {
+        "when": {
+          "data_source.type": [
+            "evcc"
+          ],
+          "data_source.supplementary_type": [
+            "default",
+            ""
+          ]
+        },
+        "text": "Reading a Home Assistant entity through the central data source needs one that has entities - EVCC does not. Set up a supplementary data source, or pick EVCC as this source directly instead.",
+        "link": "data_source"
+      }
     },
     {
       "key": "price.feed_in_data_path",
@@ -1585,7 +1624,20 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Sensors"
+      "display_group": "Sensors",
+      "notice_when": {
+        "when": {
+          "data_source.type": [
+            "evcc"
+          ],
+          "data_source.supplementary_type": [
+            "default",
+            ""
+          ]
+        },
+        "text": "EVCC does not report a battery temperature at all. To use one, set up a supplementary data source.",
+        "link": "data_source"
+      }
     },
     {
       "key": "battery.price_ct_kwh_accu",
@@ -1976,7 +2028,20 @@
         ]
       },
       "hot_reload": true,
-      "display_group": "Provider"
+      "display_group": "Provider",
+      "notice_when": {
+        "when": {
+          "data_source.type": [
+            "evcc"
+          ],
+          "data_source.supplementary_type": [
+            "default",
+            ""
+          ]
+        },
+        "text": "Reading a Home Assistant entity through the central data source needs one that has entities - EVCC does not. Set up a supplementary data source, or pick EVCC as this source directly instead.",
+        "link": "data_source"
+      }
     },
     {
       "key": "pv_forecast_source.data_path",
@@ -2545,7 +2610,20 @@
       },
       "depends_on": null,
       "hot_reload": false,
-      "display_group": "Hardware"
+      "display_group": "Hardware",
+      "notice_when": {
+        "when": {
+          "data_source.type": [
+            "evcc"
+          ],
+          "data_source.supplementary_type": [
+            "default",
+            ""
+          ]
+        },
+        "text": "A Home Assistant inverter is driven through HA's own service calls, which EVCC cannot make. Choosing it here needs a supplementary Home Assistant connection.",
+        "link": "data_source"
+      }
     },
     {
       "key": "inverter.address",
@@ -3104,7 +3182,20 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Identity"
+      "display_group": "Identity",
+      "notice_when": {
+        "when": {
+          "data_source.type": [
+            "evcc"
+          ],
+          "data_source.supplementary_type": [
+            "default",
+            ""
+          ]
+        },
+        "text": "EVCC only meters what it meters. To name a Home Assistant or openHAB entity here instead of an EVCC series (group:consumer:<title>), set up a supplementary data source.",
+        "link": "data_source"
+      }
     },
     {
       "key": "managed_loads.replaces_sensor",

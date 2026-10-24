@@ -13,7 +13,9 @@ has to agree with the two frontends that implement the same rule in JavaScript
 what decides whether an unmet field is validated on save.
 """
 
-from src.config_web.api import _dependency_met
+import pytest
+
+from src.config_web.api import _conditions_met, _dependency_met
 from src.config_web.schema import ConfigSchema
 
 SCHEMA = ConfigSchema()
@@ -75,3 +77,77 @@ def test_the_stored_config_is_consulted_when_the_payload_is_silent():
     assert _dependency_met(field, {}, config, "evcc.url") is False
     config = {"data_source": {"type": "homeassistant"}}
     assert _dependency_met(field, {}, config, "evcc.url") is True
+
+
+# ---------------------------------------------------------------------------
+# notice_when — the same condition language, for a different purpose
+# ---------------------------------------------------------------------------
+
+EVCC_NO_SECOND = {
+    "data_source.type": "evcc",
+    "data_source.supplementary_type": "default",
+}
+
+
+def _notice(key):
+    field = SCHEMA.get(key)
+    assert field is not None, key
+    assert field.notice_when, f"{key} carries no notice"
+    return field.notice_when
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "battery.sensor_battery_temperature",
+        "inverter.type",
+        "load.additional_load_1_sensor",
+        "managed_loads.power_sensor",
+        "price.ha_sensor_name",
+        "price.feed_in_ha_sensor_name",
+        "pv_forecast_source.ha_sensor_name",
+    ],
+)
+def test_every_notice_points_somewhere_and_says_something(key):
+    """A notice that cannot be acted on is noise."""
+    notice = _notice(key)
+    assert notice["link"] == "data_source"
+    assert "supplementary" in notice["text"] or "second" in notice["text"]
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "battery.sensor_battery_temperature",
+        "inverter.type",
+        "managed_loads.power_sensor",
+    ],
+)
+def test_a_notice_shows_only_while_it_has_something_to_say(key):
+    """EVCC selected and no second source yet - and it goes once there is one.
+
+    A hint that stays after it has been acted on trains people to ignore hints.
+    """
+    notice = _notice(key)
+    assert _conditions_met(notice["when"], EVCC_NO_SECOND, {}, key) is True
+
+    done = {**EVCC_NO_SECOND, "data_source.supplementary_type": "homeassistant"}
+    assert _conditions_met(notice["when"], done, {}, key) is False
+
+    on_home_assistant = {"data_source.type": "homeassistant"}
+    assert _conditions_met(notice["when"], on_home_assistant, {}, key) is False
+
+
+def test_the_notice_condition_speaks_the_depends_on_language():
+    """It reuses the evaluator rather than inventing a second one.
+
+    Two condition languages in one schema is how the visibility rule and the
+    notice start disagreeing about the same situation.
+    """
+    notice = _notice("battery.sensor_battery_temperature")
+    assert set(notice["when"]) <= {
+        "data_source.type",
+        "data_source.supplementary_type",
+    }
+    for allowed in notice["when"].values():
+        assert isinstance(allowed, list), allowed

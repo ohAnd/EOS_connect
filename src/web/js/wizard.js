@@ -358,9 +358,29 @@ class SetupWizard {
                 <label>${this._escapeHtml(label)}${this._isRequired(f) ? ' <span class="required">*</span>' : ""}</label>
                 ${inputHtml}
                 <div class="field-hint">${this._escapeHtml(f.description)}</div>
+                ${this._renderNotice(f)}
                 <div class="field-error" id="wiz-err-${cssKey}"></div>
             </div>
         `;
+    }
+
+    /**
+     * A note about the setup around a field, while its condition holds.
+     *
+     * Same data and same evaluator as the settings page: a rule implemented
+     * once in the schema has to read the same in both places, or the wizard
+     * quietly tells a new user something different.
+     */
+    _renderNotice(f) {
+        const notice = f.notice_when;
+        if (!notice || !this._conditionsMet(notice.when)) {
+            return "";
+        }
+        return `
+            <div class="field-notice" data-notice-for="${this._escapeAttr(f.key)}">
+                <i class="fas fa-circle-info" aria-hidden="true"></i>
+                <span>${this._escapeHtml(notice.text)}</span>
+            </div>`;
     }
 
     /**
@@ -1142,7 +1162,18 @@ class SetupWizard {
         if (!f.depends_on) {
             return true;
         }
-        for (const [depKey, allowed] of Object.entries(f.depends_on)) {
+        return this._conditionsMet(f.depends_on);
+    }
+
+    /**
+     * Whether every entry of a depends_on-shaped condition holds.
+     *
+     * Shared with notice_when so a notice cannot drift away from the rule that
+     * decides whether the field is shown at all - the same split config.js and
+     * api._conditions_met make.
+     */
+    _conditionsMet(conditions) {
+        for (const [depKey, allowed] of Object.entries(conditions || {})) {
             const current = this.values[depKey];
             if (allowed === "!empty") {
                 if (!current || current === "") {

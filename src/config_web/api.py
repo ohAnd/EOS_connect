@@ -95,6 +95,9 @@ def get_schema():
         # Include description_map for fields that have dynamic descriptions
         if f.description_map:
             field_obj["description_map"] = f.description_map
+        # A note about the setup around the field; see FieldDef.notice_when.
+        if f.notice_when:
+            field_obj["notice_when"] = f.notice_when
         fields.append(field_obj)
 
     data = {
@@ -1522,8 +1525,20 @@ def _dependency_met(field_def, data: dict, current_config: dict, key: str = "") 
     """
     if not field_def.depends_on:
         return True
+    return _conditions_met(field_def.depends_on, data, current_config, key)
 
-    for dep_key, allowed in field_def.depends_on.items():
+
+def _conditions_met(
+    conditions: dict, data: dict, current_config: dict, key: str = ""
+) -> bool:
+    """Whether every entry of a depends_on-shaped condition holds.
+
+    Shared with ``notice_when``: a notice that decided its own conditions would
+    drift away from the rule that governs whether the field is shown at all.
+    ``config.js:_conditionsMet`` and ``wizard.js:_conditionsMet`` are the other
+    two implementations of these same three cases.
+    """
+    for dep_key, allowed in (conditions or {}).items():
         current = _dependency_value(dep_key, key, data, current_config)
 
         if allowed == "!empty":

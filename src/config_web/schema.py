@@ -159,7 +159,12 @@ class FieldDef:
     help_url: str = ""  # link to GitHub Pages docs anchor
     validation: dict = field(default_factory=dict)  # min, max, pattern, choices
     depends_on: Optional[dict] = None  # conditional visibility rules
-    description_map: Optional[dict] = None  # dynamic descriptions with parent refs
+    description_map: Optional[dict] = None
+    # A note shown under the field while a condition holds, with a link to the
+    # section that resolves it. Shaped {"when": <depends_on-shaped>, "text": str,
+    # "link": <section>} - "when" is evaluated by the same code that decides
+    # whether the field is visible at all, so the two cannot drift apart.
+    notice_when: Optional[dict] = None  # dynamic descriptions with parent refs
     hot_reload: bool = False
     display_group: str = ""  # sub-grouping for UI layout
     # Set on a value_unit field to anchor a "Test connection" panel: names the
@@ -257,6 +262,8 @@ class ConfigSchema:
             # Include description_map for fields that have dynamic descriptions
             if f.description_map:
                 field_obj["description_map"] = f.description_map
+            if f.notice_when:
+                field_obj["notice_when"] = f.notice_when
             result.append(field_obj)
         return result
 
@@ -365,6 +372,23 @@ def _timeseries_source_fields(
                 f"(e.g., {default_sensor})"
             ),
             help_url=help_url,
+            notice_when={
+                # The central connection is the data source, and on EVCC that
+                # has no /api/states to read a named entity from. EVCC is
+                # selectable as a source in its own right just above; this is
+                # for a site that deliberately wants a Home Assistant entity.
+                "when": {
+                    "data_source.type": ["evcc"],
+                    "data_source.supplementary_type": ["default", ""],
+                },
+                "text": (
+                    "Reading a Home Assistant entity through the central data "
+                    "source needs one that has entities - EVCC does not. Set up "
+                    "a supplementary data source, or pick EVCC as this source "
+                    "directly instead."
+                ),
+                "link": "data_source",
+            },
             depends_on={
                 **gate,
                 f"{key_prefix}use_ha_central_data_source": [True],
@@ -658,6 +682,18 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="config-data.html#load",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Additional Load",
+        notice_when={
+            "when": {
+                "data_source.type": ["evcc"],
+                "data_source.supplementary_type": ["default", ""],
+            },
+            "text": (
+                "EVCC only meters what it meters. To name a Home Assistant or "
+                "openHAB entity here instead of an EVCC series "
+                "(group:consumer:<title>), set up a supplementary data source."
+            ),
+            "link": "data_source",
+        },
     ),
     FieldDef(
         key="load.additional_load_1_runtime",
@@ -1429,6 +1465,17 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="config-battery.html#battery",
         depends_on={"data_source.type": REMOTE_DATA_SOURCE_TYPES},
         display_group="Sensors",
+        notice_when={
+            "when": {
+                "data_source.type": ["evcc"],
+                "data_source.supplementary_type": ["default", ""],
+            },
+            "text": (
+                "EVCC does not report a battery temperature at all. To use "
+                "one, set up a supplementary data source."
+            ),
+            "link": "data_source",
+        },
     ),
     FieldDef(
         key="battery.price_ct_kwh_accu",
@@ -2038,6 +2085,18 @@ _ALL_FIELDS: list[FieldDef] = [
         # fresh install (type "default") meant the wizard's Inverter step rendered
         # nothing at all.  The HA-specific fields below carry the dependency instead.
         display_group="Hardware",
+        notice_when={
+            "when": {
+                "data_source.type": ["evcc"],
+                "data_source.supplementary_type": ["default", ""],
+            },
+            "text": (
+                "A Home Assistant inverter is driven through HA's own service "
+                "calls, which EVCC cannot make. Choosing it here needs a "
+                "supplementary Home Assistant connection."
+            ),
+            "link": "data_source",
+        },
     ),
     FieldDef(
         key="inverter.address",
@@ -2427,6 +2486,18 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="config-managed-loads.html#managed-loads-sensor",
         depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Identity",
+        notice_when={
+            "when": {
+                "data_source.type": ["evcc"],
+                "data_source.supplementary_type": ["default", ""],
+            },
+            "text": (
+                "EVCC only meters what it meters. To name a Home Assistant or "
+                "openHAB entity here instead of an EVCC series "
+                "(group:consumer:<title>), set up a supplementary data source."
+            ),
+            "link": "data_source",
+        },
     ),
     FieldDef(
         key="managed_loads.replaces_sensor",

@@ -238,3 +238,55 @@ def test_the_badge_uses_the_accent_colour_class(evcc_page):
     )
     assert badge is not None, "the from-EVCC badge is rendered"
     assert "config-badge-evcc" in badge
+
+
+def test_a_notice_appears_where_evcc_cannot_help(evcc_page):
+    """The battery temperature is the clearest case: EVCC has none at all.
+
+    The notice carries the link, because "configure it elsewhere" without
+    saying where is a dead end.
+    """
+    _select(evcc_page, "battery")
+    notice = evcc_page.evaluate("""() => {
+            const el = document.querySelector(
+                '[data-notice-for="battery.sensor_battery_temperature"]');
+            return el ? {text: el.innerText, link: !!el.querySelector("a")} : null;
+        }""")
+    assert notice is not None, "the notice is rendered"
+    assert "supplementary" in notice["text"]
+    assert notice["link"], "it links to where the second source is configured"
+
+
+def test_the_notice_goes_once_the_second_source_exists(evcc_page, server):
+    """A hint that stays after it has been acted on trains people to ignore it."""
+    server.store.set_batch(
+        {
+            "data_source.supplementary_type": "homeassistant",
+            "data_source.supplementary_url": "http://ha.local:8123",
+        }
+    )
+    # Reopen so the schema and values are fetched afresh.
+    evcc_page.evaluate("async () => { await showConfigurationMenu(); }")
+    evcc_page.wait_for_selector(".config-field")
+    _select(evcc_page, "battery")
+
+    present = evcc_page.evaluate("""() => !!document.querySelector(
+            '[data-notice-for="battery.sensor_battery_temperature"]')""")
+    assert present is False
+
+
+def test_no_notice_without_evcc(page, server, monkeypatch):
+    """Every other data source reads everything through one connection."""
+    monkeypatch.setattr(
+        "src.interfaces.evcc_parameters.fetch_evcc_parameters",
+        lambda *a, **k: None,
+    )
+    server.store.set_batch({"data_source.type": "homeassistant"})
+    page.evaluate("() => showConfigurationMenu()")
+    page.wait_for_selector(".config-field")
+    _select(page, "battery")
+
+    assert (
+        page.evaluate("() => document.querySelectorAll('.config-field-notice').length")
+        == 0
+    )
