@@ -102,6 +102,27 @@ class TestConfigSchema:
         assert "data_source.ssl_ignore" in keys
         assert "data_source.supplementary_type" in keys
 
+    def test_the_second_connection_is_named_for_what_it_is(self):
+        """It takes openHAB too, and serves more than sensors.
+
+        "Supplementary Home Assistant" was wrong on both counts from the start,
+        and the list of what needs it has only grown - battery temperature, an
+        inverter driven through Home Assistant, price and PV entities read
+        centrally.
+        """
+        groups = {
+            f.display_group
+            for f in self.schema.get_section("data_source")
+            if "supplementary" in f.key
+        }
+        assert groups == {"Supplementary Data Source"}, groups
+
+    def test_the_second_connection_is_off_until_asked_for(self):
+        """Most EVCC sites need none of it, so nothing is pre-selected."""
+        field = self.schema.get("data_source.supplementary_type")
+        assert field.default == "default"
+        assert "default" in field.validation["choices"]
+
     def test_no_evcc_series_is_named_from_the_data_source_page(self):
         """EVCC's loadpoints and consumers carry titles their owner chose.
 

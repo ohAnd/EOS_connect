@@ -132,13 +132,14 @@
                         setting one would subtract the charging energy from a profile that never
                         contained it. On Home Assistant or openHAB, where the house meter normally
                         includes the wallbox, the field stays and is subtracted as before.</p>
-                    <p><strong>The supplementary connection.</strong> A few things are not EVCC's
+                    <p><strong>The supplementary data source.</strong> A few things are not EVCC's
                         to give: the optional battery temperature, an inverter you control
                         <em>through Home Assistant</em> (<code>inverter.type</code> set to
                         homeassistant &mdash; EVCC has no service calls to make), and any price or PV
                         forecast you have set to read a Home Assistant entity through the central
                         data source. Configure a second Home Assistant or openHAB connection under
-                        Data Source and those use it; leave it unset and they are left alone rather
+                        Data Source and those use it; it is off by default and should stay off
+                        unless one of these applies. Left unset, those fields are left alone rather
                         than pointed at an address that cannot answer. Two notes: the inverter case
                         needs a <em>Home Assistant</em> supplementary connection specifically, since
                         openHAB cannot serve those service calls either &mdash; and the PV

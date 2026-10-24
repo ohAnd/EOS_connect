@@ -514,15 +514,16 @@ _ALL_FIELDS: list[FieldDef] = [
         section="data_source",
         level="standard",
         description=(
-            "Second connection for the readings EVCC cannot supply — the "
-            "battery temperature, and any price or PV forecast that reads a "
-            "Home Assistant entity through the central data source"
+            "A second connection, for what EVCC does not carry: the battery "
+            "temperature, an inverter controlled through Home Assistant, and "
+            "any price or PV forecast set to read a Home Assistant entity. "
+            "Leave it off unless one of those applies"
         ),
         labels=["restart_required"],
         help_url="config-data.html#data-source-evcc",
         validation={"choices": ["homeassistant", "openhab", "default"]},
         depends_on={"data_source.type": ["evcc"]},
-        display_group="Supplementary Home Assistant",
+        display_group="Supplementary Data Source",
     ),
     FieldDef(
         key="data_source.supplementary_url",
@@ -530,7 +531,7 @@ _ALL_FIELDS: list[FieldDef] = [
         default="http://homeassistant:8123",
         section="data_source",
         level="standard",
-        description="URL of that instance (Home Assistant or openHAB)",
+        description="URL of that second instance (Home Assistant or openHAB)",
         labels=["restart_required"],
         help_url="config-data.html#data-source-evcc",
         validation={"pattern": r"^https?://.+"},
@@ -538,7 +539,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "data_source.type": ["evcc"],
             "data_source.supplementary_type": ["homeassistant", "openhab"],
         },
-        display_group="Supplementary Home Assistant",
+        display_group="Supplementary Data Source",
     ),
     FieldDef(
         key="data_source.supplementary_access_token",
@@ -553,7 +554,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "data_source.type": ["evcc"],
             "data_source.supplementary_type": ["homeassistant"],
         },
-        display_group="Supplementary Home Assistant",
+        display_group="Supplementary Data Source",
     ),
     FieldDef(
         key="data_source.supplementary_ssl_ignore",
@@ -568,7 +569,7 @@ _ALL_FIELDS: list[FieldDef] = [
             "data_source.type": ["evcc"],
             "data_source.supplementary_type": ["homeassistant", "openhab"],
         },
-        display_group="Supplementary Home Assistant",
+        display_group="Supplementary Data Source",
     ),
     # ===== LOAD =====
     FieldDef(

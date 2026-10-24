@@ -102,7 +102,7 @@
       "default": "default",
       "section": "data_source",
       "level": "standard",
-      "description": "Second connection for the readings EVCC cannot supply — the battery temperature, and any price or PV forecast that reads a Home Assistant entity through the central data source",
+      "description": "A second connection, for what EVCC does not carry: the battery temperature, an inverter controlled through Home Assistant, and any price or PV forecast set to read a Home Assistant entity. Leave it off unless one of those applies",
       "labels": [
         "restart_required"
       ],
@@ -120,7 +120,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Supplementary Home Assistant"
+      "display_group": "Supplementary Data Source"
     },
     {
       "key": "data_source.supplementary_url",
@@ -128,7 +128,7 @@
       "default": "http://homeassistant:8123",
       "section": "data_source",
       "level": "standard",
-      "description": "URL of that instance (Home Assistant or openHAB)",
+      "description": "URL of that second instance (Home Assistant or openHAB)",
       "labels": [
         "restart_required"
       ],
@@ -146,7 +146,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Supplementary Home Assistant"
+      "display_group": "Supplementary Data Source"
     },
     {
       "key": "data_source.supplementary_access_token",
@@ -169,7 +169,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Supplementary Home Assistant"
+      "display_group": "Supplementary Data Source"
     },
     {
       "key": "data_source.supplementary_ssl_ignore",
@@ -193,7 +193,7 @@
         ]
       },
       "hot_reload": false,
-      "display_group": "Supplementary Home Assistant"
+      "display_group": "Supplementary Data Source"
     },
     {
       "key": "load.source",
