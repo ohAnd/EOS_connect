@@ -8,6 +8,7 @@ the two apart before saving, which is only worth anything if its verdicts are ri
 """
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,6 +19,7 @@ from src.config_web.api import config_bp, init_api
 from src.config_web.entity_probe import probe_entity
 from src.config_web.schema import ConfigSchema
 from src.config_web.store import ConfigStore
+from src.interfaces.load_interface import LoadInterface
 from tests.config_web.test_api import _FakeModule, _sample_config
 
 
@@ -278,27 +280,84 @@ class TestEvccVirtualEntityProbes:
         assert result["value"] == pytest.approx(800.0)
 
     def test_group_without_the_named_title_says_so(self):
-        response = MagicMock()
-        response.status_code = 200
-        response.json.return_value = [
-            {"group": "loadpoint", "title": "Garage", "data": []}
-            and {
-                "group": "loadpoint",
-                "title": "Garage",
-                "data": [
-                    {
-                        "start": "2026-10-12T10:00:00+02:00",
-                        "end": "2026-10-12T10:15:00+02:00",
-                        "energy": 0,
-                    }
-                ],
-            }
-        ]
-        with patch("src.config_web.entity_probe.requests.get", return_value=response):
+        """EVCC filters the title server-side, so a miss answers empty.
+
+        The two requests are answered differently here on purpose: the filtered
+        one as EVCC really answers it (nothing), the unfiltered one with the
+        series that do exist. A mock that returns the same payload for both
+        would pass even if the probe asked for the summed group, which cannot
+        carry titles at all.
+        """
+
+        def answer(url, params=None, **kwargs):  # pylint: disable=unused-argument
+            response = MagicMock()
+            response.status_code = 200
+            if (params or {}).get("title"):
+                response.json.return_value = []
+            else:
+                assert (params or {}).get(
+                    "grouped"
+                ) == "false", "the title list needs per-entity series"
+                response.json.return_value = [
+                    {"group": "loadpoint", "title": "Garage", "data": []}
+                ]
+            return response
+
+        with patch("src.config_web.entity_probe.requests.get", answer):
             result = probe_entity("evcc", "group:loadpoint:Carport", "http://evcc:7070")
 
         assert result["ok"] is False
         assert "no series titled" in result["error"]
+        # And it says which titles EVCC does have - a mistyped title is the
+        # common case, and the answer is useless without the alternatives.
+        assert "Garage" in result["error"]
+
+    def test_it_asks_evcc_exactly_what_the_load_interface_asks(self):
+        """The Test button answers "will the interface read this?".
+
+        It can only answer that if it sends the same request. The two used to
+        differ: the probe asked per entity and summed the series itself while
+        the interface asked EVCC to sum them. Same numbers by agreement, not by
+        construction - and the probe is the thing whose job is to agree.
+        """
+        seen = []
+
+        def capture(url, params=None, **kwargs):  # pylint: disable=unused-argument
+            seen.append(dict(params or {}))
+            response = MagicMock()
+            response.status_code = 200
+            response.json.return_value = []
+            return response
+
+        with patch("src.config_web.entity_probe.requests.get", capture):
+            probe_entity("evcc", "group:pv", "http://evcc:7070")
+        probe_params = seen[0]
+
+        seen.clear()
+        with patch("src.interfaces.load_interface.requests.get", capture), patch(
+            "src.interfaces.load_interface.time.sleep"
+        ):
+            interface = LoadInterface(
+                {
+                    "source": "evcc",
+                    "url": "http://evcc:7070",
+                    "load_sensor": "group:pv",
+                    "max_retries": 1,
+                    "retry_backoff": 0,
+                },
+                900,
+                "UTC",
+            )
+            interface.fetch_historical_energy_data(
+                "group:pv",
+                datetime(2026, 10, 12, tzinfo=timezone.utc),
+                datetime(2026, 10, 12, 1, tzinfo=timezone.utc),
+            )
+        interface_params = seen[0]
+
+        for key in ("group", "grouped", "aggregate"):
+            assert probe_params.get(key) == interface_params.get(key), key
+        assert probe_params["grouped"] == "true", "a whole group is summed by EVCC"
 
     def test_tariff_answers_the_grid_column(self):
         response = MagicMock()

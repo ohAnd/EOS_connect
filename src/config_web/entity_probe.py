@@ -27,6 +27,8 @@ try:  # running from src/ as a script — src/ is on sys.path
     from interfaces.state_source import SUPPORTED_SOURCES, fetch_remote_state
     from interfaces.evcc_entities import (
         EVCC_HISTORY_GROUPS,
+        evcc_entity_parts,
+        evcc_history_params,
         is_evcc_history_entity,
         is_evcc_reference,
         is_evcc_state_key,
@@ -35,6 +37,8 @@ except ImportError:  # imported as src.config_web (tests)
     from ..interfaces.state_source import SUPPORTED_SOURCES, fetch_remote_state
     from ..interfaces.evcc_entities import (
         EVCC_HISTORY_GROUPS,
+        evcc_entity_parts,
+        evcc_history_params,
         is_evcc_history_entity,
         is_evcc_reference,
         is_evcc_state_key,
@@ -106,19 +110,45 @@ def _probe_virtual_entity(sensor, url, request_timeout):
                 ),
             }
 
-        params = {
-            "from": start.isoformat(),
-            "to": now.isoformat(),
-            "aggregate": "15m",
-            "grouped": "false",
-        }
-        group, title = (parts[1], parts[2] if len(parts) == 3 else None)
-        if title:
-            params["title"] = title
+        # The same request the load interface makes, built by the same code -
+        # a Test button that queries differently can agree today and be wrong
+        # tomorrow, and answering "will the interface read this?" is its job.
+        group, title = evcc_entity_parts(sensor)
         response = requests.get(
-            f"{url}/api/history/energy", params=params, timeout=request_timeout
+            f"{url}/api/history/energy",
+            params=evcc_history_params((group, title), start, now),
+            timeout=request_timeout,
         )
         series = response.json() or []
+        titles_seen = []
+        if title:
+            # A title that matches nothing is filtered out by EVCC, so the
+            # answer is empty and says nothing about why. One extra request
+            # without the filter turns that into the list of titles it does
+            # have - the mistyped-title case is the common one.
+            try:
+                probe_all = requests.get(
+                    f"{url}/api/history/energy",
+                    # Deliberately *not* the interface's request: this one asks
+                    # a different question. grouped=true would answer with the
+                    # group summed into a single untitled series, which is the
+                    # one thing that cannot list the titles.
+                    params={
+                        "from": start.astimezone(timezone.utc).isoformat(),
+                        "to": now.astimezone(timezone.utc).isoformat(),
+                        "aggregate": "15m",
+                        "group": group,
+                        "grouped": "false",
+                    },
+                    timeout=request_timeout,
+                )
+                titles_seen = [
+                    entry.get("title")
+                    for entry in (probe_all.json() or [])
+                    if isinstance(entry, dict) and entry.get("group") == group
+                ]
+            except (requests.exceptions.RequestException, ValueError):
+                titles_seen = []
     except requests.exceptions.RequestException as exc:
         logger.warning(
             "[EntityProbe] EVCC history for %r failed: %s",
@@ -142,15 +172,14 @@ def _probe_virtual_entity(sensor, url, request_timeout):
     ]
     slots = sum(len(entry.get("data") or []) for entry in matching)
     if not slots:
-        if title and any(
-            isinstance(entry, dict) and entry.get("group") == group for entry in series
-        ):
+        if title and titles_seen:
+            named = ", ".join(t for t in titles_seen if t) or "(untitled)"
             return {
                 "ok": False,
                 "error": (
                     f"EVCC meters group '{group}' but has no series titled "
-                    f"'{title}'. Titles of a group are listed on EVCC's own "
-                    "energy page — the title filter is case-sensitive."
+                    f"'{title}'. It has: {named}. The title filter is "
+                    "case-sensitive."
                 ),
             }
         return {
@@ -164,52 +193,38 @@ def _probe_virtual_entity(sensor, url, request_timeout):
 
     # The last slot is still being filled at request time (its energy covers
     # only the elapsed fraction), so it under-reads as a "constant" whatever
-    # the moment happens to be. Closed slots only, and the *net* Wh each.
-    closed = [slot for entry in matching for slot in (entry.get("data") or [])[:-1]]
-    nets = [
-        (slot.get("energy") or 0.0) - (slot.get("returnEnergy") or 0.0)
-        for slot in closed
-    ]
+    # the moment happens to be. The last *closed* slot of each series it is,
+    # and the net Wh - energy minus what was fed back.
+    #
+    # EVCC has already summed a whole group (grouped=true, same as the load
+    # interface asks), so "each series" is normally one. Summing anyway is the
+    # safety net for a version that answers per entity, where taking one series
+    # would silently under-report the rest.
+    total = 0.0
+    latest_slot = None
+    for entry in matching:
+        data = entry.get("data") or []
+        last_closed = data[-2] if len(data) >= 2 else None
+        if last_closed is None:
+            continue
+        total += (last_closed.get("energy") or 0.0) - (
+            last_closed.get("returnEnergy") or 0.0
+        )
+        latest_slot = latest_slot or last_closed.get("start")
 
-    # A whole-group reference sums every series EVCC puts into the group —
-    # the same thing EVCC's own grouped answers do. loadpoint group carries
-    # both the heat pump and the wallbox; taking one series' value would
-    # misreport the other's car as connected.
-    if title is None and len(matching) > 1:
-        total = 0.0
-        for entry in matching:
-            data = entry.get("data") or []
-            # The same still-filling rule: last *closed* slot each.
-            last_closed = data[-2] if len(data) >= 2 else None
-            if last_closed is not None:
-                total += (last_closed.get("energy") or 0.0) - (
-                    last_closed.get("returnEnergy") or 0.0
-                )
-        titles = [entry.get("title") or "(untitled)" for entry in matching]
-        return {
-            "ok": True,
-            "error": "",
-            # kWh per 15-min slot to average W: ×1000 (kWh→Wh) ×4 (15 min).
-            "value": round(total * 1000.0 * 4.0, 1),
-            "detail": (
-                f"{slots} slots in the last 24 h; summed series: "
-                f"{', '.join(titles)} — average W over the last closed slot"
-            ),
-        }
+    detail = f"{slots} slots in the last 24 h, average over the last closed slot"
+    if latest_slot:
+        detail += f" ({latest_slot})"
+    if len(matching) > 1:
+        named = ", ".join(entry.get("title") or "(untitled)" for entry in matching)
+        detail += f"; summed series: {named}"
 
-    # Single series (or a group that only has one): report the last closed
-    # slot's average power. kWh per 15-min slot × 1000 × 4 = W, the unit the
-    # field is named for and what EVCC's live power readings compare against.
-    value = round(nets[-1] * 4000.0, 1) if nets else None
-    latest_slot = closed[-1].get("start") if closed else None
     return {
         "ok": True,
         "error": "",
-        "value": value,
-        "detail": (
-            f"{slots} slots in the last 24 h, average over the last closed "
-            f"slot ({latest_slot})"
-        ),
+        # kWh per 15-min slot to average W: x1000 (kWh->Wh) x4 (15 min).
+        "value": round(total * 4000.0, 1) if latest_slot else None,
+        "detail": detail,
     }
 
 

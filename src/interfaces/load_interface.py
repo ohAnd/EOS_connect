@@ -22,6 +22,7 @@ from .evcc_entities import (  # noqa: F401  (re-export)
     EVCC_HISTORY_GROUPS,
     EVCC_TARIFF_NAMES,
     evcc_entity_parts,
+    evcc_history_params,
     is_evcc_history_entity,
 )
 
@@ -762,33 +763,6 @@ class LoadInterface:
         samples.sort(key=lambda pair: pair[0])
         return samples
 
-    @staticmethod
-    def __evcc_request_params(entity, start_time, end_time):
-        """Query string for one EVCC history request, RFC3339 bounds."""
-        start_iso = start_time.astimezone(timezone.utc).isoformat()
-        end_iso = end_time.astimezone(timezone.utc).isoformat()
-        group, title = entity
-        # ``group`` narrows the query in EVCC instead of pulling every meter's
-        # day and discarding most of it here.
-        params = {
-            "from": start_iso,
-            "to": end_iso,
-            "aggregate": "15m",
-            "group": group,
-        }
-        if title:
-            # One named series out of the group - EVCC answers per entity for
-            # anything but "grouped=true", which is also its default.
-            params["title"] = title
-        else:
-            # The whole group, summed by EVCC's own query. Its handler reads
-            # ``grouped := q.Get("grouped") == "true"``, so leaving the parameter
-            # out asks for per-entity series: a group with two members - two
-            # batteries, two PV meters, two wallboxes - then arrived as two
-            # series that had to be merged here.
-            params["grouped"] = "true"
-        return params
-
     def __fetch_evcc_history_series(self, entity, start_utc, end_utc):
         """One EVCC history group's series as sorted (utc, sample) pairs.
 
@@ -811,7 +785,7 @@ class LoadInterface:
         response = self.__request_with_retries(
             "get",
             url,
-            params=self.__evcc_request_params(entity, start_utc, end_utc),
+            params=evcc_history_params(entity, start_utc, end_utc),
             item_label=f"{entity} (EVCC history)",
         )
         if response is None:

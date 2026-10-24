@@ -298,7 +298,7 @@ evcc_interface = interface_factory.create_evcc_interface(
 # EVCC then degrades those inputs silently (default profile, 5% SOC), which is the
 # situation the startup panel exists to make visible.
 if config_manager.config.get("data_source", {}).get("type") == "evcc" and (
-    not evcc_interface.__dict__.get("evcc_version")
+    not getattr(evcc_interface, "evcc_version", None)
 ):
     startup_validator.add_error(
         "connectivity",

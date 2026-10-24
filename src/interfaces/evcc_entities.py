@@ -24,6 +24,8 @@ their typo with a default would hide it rather than fix it.
 Validates the group and tariff names, which is what turns a typo into a message.
 """
 
+from datetime import timezone
+
 # Groups EVCC's energy history endpoint can answer with, verified against
 # evcc-io/evcc core/metrics/collector.go. Each becomes a virtual entity
 # "group:<name>" (whole group) or "group:<name>:<title>" (one series, e.g. one
@@ -101,3 +103,37 @@ def is_evcc_state_key(name) -> bool:
         return False
     stripped = name.strip()
     return bool(stripped) and ":" not in stripped and not stripped.startswith("sensor.")
+
+
+def evcc_history_params(entity, start, end, aggregate="15m"):
+    """Query parameters for one ``/api/history/energy`` request.
+
+    Shared, because the entity probe and the load interface have to ask EVCC the
+    *same* question. The probe exists to answer "will the interface read this?",
+    and two hand-written parameter sets can agree today and drift tomorrow -
+    they already had: the probe asked per entity and summed the series itself
+    while the interface asked EVCC to sum them.
+
+    ``grouped`` has to be sent explicitly for a whole group: EVCC's handler
+    reads ``grouped := q.Get("grouped") == "true"``, so leaving it out asks for
+    per-entity series instead of their sum.
+
+    Args:
+        entity: ``(group, title_or_None)`` as ``evcc_entity_parts`` returns it.
+        start, end: timezone-aware bounds; sent as RFC3339 UTC.
+        aggregate: EVCC bucket size. ``15m`` is its native slot.
+    """
+    group, title = entity
+    params = {
+        "from": start.astimezone(timezone.utc).isoformat(),
+        "to": end.astimezone(timezone.utc).isoformat(),
+        "aggregate": aggregate,
+        # Narrows the query in EVCC instead of pulling every meter and
+        # discarding most of it.
+        "group": group,
+    }
+    if title:
+        params["title"] = title
+    else:
+        params["grouped"] = "true"
+    return params
