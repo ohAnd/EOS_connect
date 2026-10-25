@@ -59,6 +59,19 @@ def _evcc_path(payload, path):
     return current
 
 
+def needs_access_token(source) -> bool:
+    """Whether *source* authenticates reads with a bearer token.
+
+    Home Assistant does. openHAB's REST items are read without one, and EVCC's
+    API carries no authentication at all - which is why its PV counter is read
+    correctly with the token field left empty.
+
+    Kept beside ``fetch_remote_state``, the function that decides it per source,
+    so a caller warning about a missing token asks here rather than assuming.
+    """
+    return str(source or "").strip() == "homeassistant"
+
+
 def fetch_remote_state(
     source, sensor, url, access_token="", request_timeout=10, ssl_ignore=False
 ):

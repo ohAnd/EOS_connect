@@ -14,6 +14,7 @@ import pytest
 import requests
 
 from src.interfaces.state_source import (
+    needs_access_token,
     SUPPORTED_SOURCES,
     fetch_remote_state,
     fetch_remote_state_details,
@@ -100,3 +101,29 @@ def test_http_error_propagates():
         requests.exceptions.HTTPError
     ):
         fetch_remote_state("evcc", "battery.soc", "http://evcc:7070")
+
+
+class TestWhichSourcesAuthenticate:
+    """
+    Only Home Assistant sends a bearer token - see ``fetch_remote_state``.
+
+    The startup check for the PV auto-scaling counter did not ask: it warned
+    about an empty token whatever the source was, and promised a 401 that an
+    unauthenticated API cannot return. On an EVCC site that warning stood on
+    the alerts panel while the counter was being read correctly.
+    """
+
+    def test_home_assistant_needs_one(self):
+        assert needs_access_token("homeassistant") is True
+
+    def test_the_unauthenticated_sources_do_not(self):
+        """openHAB serves items without one; EVCC has no auth at all."""
+        assert needs_access_token("openhab") is False
+        assert needs_access_token("evcc") is False
+
+    def test_an_absent_source_is_not_claimed_to_need_one(self):
+        for source in ("", None, "   ", "default"):
+            assert needs_access_token(source) is False
+
+    def test_surrounding_whitespace_does_not_hide_the_answer(self):
+        assert needs_access_token(" homeassistant ") is True

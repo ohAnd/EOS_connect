@@ -46,7 +46,11 @@ from interfaces.inverters.null_inverter import NullInverter
 from interfaces.inverters.evcc_inverter import EvccInverter
 from interfaces.pv_autoscaler import PvAutoscaler, TIMEFRAME_IDS, timeframe_bounds
 from interfaces.load_profile_source import fetch_profile
-from interfaces.state_source import fetch_remote_state, fetch_remote_state_details
+from interfaces.state_source import (
+    fetch_remote_state,
+    fetch_remote_state_details,
+    needs_access_token,
+)
 from interfaces.evcc_entities import connection_for, connections_from_section
 from loads import api as loads_api
 from loads import mqtt_topics as managed_load_topics
@@ -417,15 +421,23 @@ try:
     if not pv_autoscaler_cfg.get("enabled"):
         logger.info("[Main] PvAutoscaler is disabled — skipping data source checks")
     elif pv_autoscaler_cfg.get("use_ha_central_data_source"):
-        token_status = "SET" if pv_autoscaler_cfg.get("access_token") else "NOT SET"
+        # Only Home Assistant authenticates these reads. EVCC has no auth at
+        # all and openHAB serves items without one, so an empty token there is
+        # the correct configuration - not a 401 waiting to happen.
+        src = pv_autoscaler_cfg.get("src", "homeassistant")
+        wants_token = needs_access_token(src)
+        if pv_autoscaler_cfg.get("access_token"):
+            token_status = "SET"
+        else:
+            token_status = "NOT SET" if wants_token else "not needed"
         logger.info(
             "[Main] PvAutoscaler using CENTRAL data source: url=%s, src=%s, token=%s",
             pv_autoscaler_cfg.get("url", "(not set)"),
-            pv_autoscaler_cfg.get("src", "homeassistant"),
+            src,
             token_status,
         )
 
-        if not pv_autoscaler_cfg.get("access_token"):
+        if wants_token and not pv_autoscaler_cfg.get("access_token"):
             logger.warning(
                 "[Main] PvAutoscaler: access_token is EMPTY! Requests to %s will fail with 401.",
                 pv_autoscaler_cfg.get("url", "(not set)"),
