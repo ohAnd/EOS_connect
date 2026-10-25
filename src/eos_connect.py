@@ -47,6 +47,7 @@ from interfaces.inverters.evcc_inverter import EvccInverter
 from interfaces.pv_autoscaler import PvAutoscaler, TIMEFRAME_IDS, timeframe_bounds
 from interfaces.load_profile_source import fetch_profile
 from interfaces.state_source import fetch_remote_state, fetch_remote_state_details
+from interfaces.evcc_entities import connection_for, connections_from_section
 from loads import api as loads_api
 from loads import mqtt_topics as managed_load_topics
 from loads.manager import ManagedLoadManager, ManagedLoadSources
@@ -470,29 +471,63 @@ except Exception:
 # Everything the manager needs arrives as a callable, which is what keeps the `loads`
 # package free of imports from `interfaces` - it asks for "the price series" and does
 # not care which interface produced it.
+# Names already reported as needing the second connection. Once per name, not
+# once per reading - a managed load is polled on every cycle.
+_managed_load_unreachable = set()
+
+
+def _managed_load_connection(sensor):
+    """The connection that answers *sensor*, or None if none can.
+
+    A managed load names a household appliance, and EVCC does not meter the
+    dishwasher. Asking it anyway returned an empty reading rather than an
+    error, so the load looked idle forever while the supplementary connection
+    that could have answered sat unused in the same config section.
+    """
+    primary, supplementary = connections_from_section(
+        config_manager.config.get("load", {})
+    )
+    conn = connection_for(sensor, primary, supplementary)
+    if conn is None and sensor not in _managed_load_unreachable:
+        _managed_load_unreachable.add(sensor)
+        logger.warning(
+            "[Main] managed load sensor '%s' is not something EVCC meters, so "
+            "it needs the supplementary data source - configure one under "
+            "Settings > Data Source, or name an EVCC series instead. The load "
+            "reads as unavailable meanwhile. "
+            "| Config: #data-source | ACTION REQUIRED",
+            sensor,
+        )
+    return conn
+
+
 def _managed_load_read_sensor(sensor):
-    """Read one entity for a managed load, through the configured data source."""
-    load_config = config_manager.config.get("load", {})
+    """Read one entity for a managed load, through the connection that has it."""
+    conn = _managed_load_connection(sensor)
+    if conn is None:
+        return None
     return fetch_remote_state(
-        source=load_config.get("source", ""),
+        source=conn.src,
         sensor=sensor,
-        url=load_config.get("url", ""),
-        access_token=load_config.get("access_token", ""),
+        url=conn.url,
+        access_token=conn.access_token,
         request_timeout=config_manager.config.get("request_timeout", 10),
-        ssl_ignore=bool(load_config.get("ssl_ignore", False)),
+        ssl_ignore=conn.ssl_ignore,
     )
 
 
 def _managed_load_read_sensor_details(sensor):
     """Read one entity together with its unit, so a kWh counter can be spotted."""
-    load_config = config_manager.config.get("load", {})
+    conn = _managed_load_connection(sensor)
+    if conn is None:
+        return None
     return fetch_remote_state_details(
-        source=load_config.get("source", ""),
+        source=conn.src,
         sensor=sensor,
-        url=load_config.get("url", ""),
-        access_token=load_config.get("access_token", ""),
+        url=conn.url,
+        access_token=conn.access_token,
         request_timeout=config_manager.config.get("request_timeout", 10),
-        ssl_ignore=bool(load_config.get("ssl_ignore", False)),
+        ssl_ignore=conn.ssl_ignore,
     )
 
 

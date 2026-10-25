@@ -24,11 +24,18 @@ from .schema import (
     REMOTE_DATA_SOURCE_TYPES,
 )
 from .entity_probe import probe_entity
+from .merger import central_connections
 
 try:  # running from src/ as a script — src/ is on sys.path
-    from interfaces.evcc_entities import is_evcc_reference, is_evcc_state_key
+    from interfaces.evcc_entities import (
+        connection_for,
+        ha_entity_connection,
+    )
 except ImportError:  # imported as src.config_web (tests)
-    from ..interfaces.evcc_entities import is_evcc_reference, is_evcc_state_key
+    from ..interfaces.evcc_entities import (
+        connection_for,
+        ha_entity_connection,
+    )
 from .timeseries_probe import probe
 
 logger = logging.getLogger("__main__")
@@ -1077,20 +1084,13 @@ def _resolve_timeseries_config(domain: str, data: dict, get_value) -> dict:
     central = _coerce_bool(get_value(f"{base}use_ha_central_data_source"))
     ds_url, ds_token = "", ""
     if central:
-        if get_value("data_source.type") == "evcc":
-            if get_value("data_source.supplementary_type") in (
-                "homeassistant",
-                "openhab",
-            ):
-                ds_url = get_value("data_source.supplementary_url") or ""
-                ds_token = get_value("data_source.supplementary_access_token") or ""
-            else:
-                # The merger warns and moves on without touching the domain's
-                # own fields, so central mode is effectively off here.
-                central = False
+        conn = ha_entity_connection(*_central_connections(get_value))
+        if conn is None:
+            # The merger warns and moves on without touching the domain's own
+            # fields, so central mode is effectively off here.
+            central = False
         else:
-            ds_url = get_value("data_source.url") or ""
-            ds_token = get_value("data_source.access_token") or ""
+            ds_url, ds_token = conn.url, conn.access_token
 
     if central:
         sensor = merger_style(f"{base}ha_sensor_name", default_sensor)
@@ -1336,6 +1336,30 @@ def test_entity():
     return jsonify(result), 200
 
 
+def _central_connections(get_value):
+    """The two data source connections, read through *get_value*.
+
+    ``central_connections`` takes a settings mapping; the API resolves values one
+    key at a time so a pending request body can win over the store. This bridges
+    the two without either side growing its own copy of the rule.
+    """
+    return central_connections(
+        {
+            f"data_source.{name}": get_value(f"data_source.{name}")
+            for name in (
+                "type",
+                "url",
+                "access_token",
+                "ssl_ignore",
+                "supplementary_type",
+                "supplementary_url",
+                "supplementary_access_token",
+                "supplementary_ssl_ignore",
+            )
+        }
+    )
+
+
 def _entity_probe_connection(key: str, get_value, data: Optional[dict] = None):
     """
     The connection the interface behind *key* actually reads through.
@@ -1369,24 +1393,13 @@ def _entity_probe_connection(key: str, get_value, data: Optional[dict] = None):
     ds_type = get_value("data_source.type")
     if ds_type == "evcc":
         sensor_name = str(get_value(key) or "").strip()
-        # Anything EVCC answers itself: a history reference, or a key in its
-        # live state - dotted like ``battery.soc`` or bare like ``pvEnergy``.
-        # Only a Home Assistant entity id is unmistakably not EVCC's, and that
-        # is the one shape that has to go elsewhere.
-        reads_from_evcc = is_evcc_reference(sensor_name) or is_evcc_state_key(
-            sensor_name
-        )
-        if not reads_from_evcc:
-            supp_type = get_value("data_source.supplementary_type")
-            supp_url = get_value("data_source.supplementary_url")
-            if supp_type in ("homeassistant", "openhab") and supp_url:
-                return (
-                    supp_type,
-                    supp_url,
-                    get_value("data_source.supplementary_access_token"),
-                    bool(get_value("data_source.supplementary_ssl_ignore")),
-                )
-        else:
+        # Which connection answers this name is evcc_entities.connection_for -
+        # the same rule the interfaces follow, so "the test passed" keeps
+        # meaning "the interface will read the same value".
+        conn = connection_for(sensor_name, *_central_connections(get_value))
+        if conn is not None and conn.src != "evcc":
+            return (conn.src, conn.url, conn.access_token, conn.ssl_ignore)
+        if conn is not None:
             # A URL in the request body is the one being tried out; otherwise
             # the resolved address, because the stored data_source.url may be a
             # leftover default while the evcc section carries the real one.

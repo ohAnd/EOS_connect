@@ -12,9 +12,17 @@ import re
 from typing import Any, Optional
 
 try:  # running from src/ as a script — src/ is on sys.path
-    from interfaces.evcc_entities import is_evcc_reference
+    from interfaces.evcc_entities import (
+        connections_from_section,
+        ha_entity_connection,
+        is_evcc_reference,
+    )
 except ImportError:  # imported as src.config_web (tests)
-    from ..interfaces.evcc_entities import is_evcc_reference
+    from ..interfaces.evcc_entities import (
+        connections_from_section,
+        ha_entity_connection,
+        is_evcc_reference,
+    )
 
 from .store import ConfigStore
 from .schema import ConfigSchema, BOOTSTRAP_KEYS, LIST_SECTIONS
@@ -626,6 +634,38 @@ _CENTRAL_HA_SECTIONS = (
 )
 
 
+def central_connections(all_settings: dict[str, Any]):
+    """The two connections ``data_source.*`` describes.
+
+    One flat-to-section adapter so the store's dotted keys and the sections the
+    interfaces receive are read by the *same* builder. The two shapes are the
+    reason this rule had drifted: the merge resolves ``data_source`` into
+    ``load`` and ``battery``, and every reader of the other shape had written
+    its own version of "is there a usable second connection".
+
+    Returns:
+        ``(primary, supplementary_or_None)``.
+    """
+    return connections_from_section(
+        {
+            "source": all_settings.get("data_source.type", "default"),
+            "url": all_settings.get("data_source.url", ""),
+            "access_token": all_settings.get("data_source.access_token", ""),
+            "ssl_ignore": all_settings.get("data_source.ssl_ignore", False),
+            "supplementary_type": all_settings.get(
+                "data_source.supplementary_type", ""
+            ),
+            "supplementary_url": all_settings.get("data_source.supplementary_url", ""),
+            "supplementary_access_token": all_settings.get(
+                "data_source.supplementary_access_token", ""
+            ),
+            "supplementary_ssl_ignore": all_settings.get(
+                "data_source.supplementary_ssl_ignore", False
+            ),
+        }
+    )
+
+
 def _apply_central_ha_data_source(
     result: dict, all_settings: dict[str, Any], evcc_resolved: Optional[dict] = None
 ) -> None:
@@ -657,24 +697,17 @@ def _apply_central_ha_data_source(
             store, which may hold either copy.
     """
     ds_type = all_settings.get("data_source.type", "default")
-    ds_url = all_settings.get("data_source.url", "")
-    ds_token = all_settings.get("data_source.access_token", "")
-    ds_ssl_ignore = all_settings.get("data_source.ssl_ignore", False)
+
+    # Which connection serves /api/states is decided once, by the rule the
+    # interfaces and the Test button share - see evcc_entities.connection_for.
+    central = ha_entity_connection(*central_connections(all_settings))
+    ds_url = central.url if central else ""
+    ds_token = central.access_token if central else ""
+    ds_ssl_ignore = central.ssl_ignore if central else False
 
     evcc_url = ""
     if ds_type == "evcc":
         evcc_url = (evcc_resolved or {}).get("data_source.url", "") or ""
-        supp_type = str(all_settings.get("data_source.supplementary_type", "") or "")
-        if supp_type in ("homeassistant", "openhab"):
-            ds_url = str(all_settings.get("data_source.supplementary_url", "") or "")
-            ds_token = str(
-                all_settings.get("data_source.supplementary_access_token", "") or ""
-            )
-            ds_ssl_ignore = bool(
-                all_settings.get("data_source.supplementary_ssl_ignore", False)
-            )
-        else:
-            ds_url, ds_token = "", ""
 
     # One spec per timeseries-capable domain instead of a copy-pasted block per
     # section: (section, key prefix within it, default sensor). Must stay in

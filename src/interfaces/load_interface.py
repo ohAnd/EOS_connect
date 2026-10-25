@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone, tzinfo
 import logging
 from urllib.parse import quote
 import threading
-from collections import namedtuple
 import time
 import math
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -23,6 +22,9 @@ from .evcc_entities import (  # noqa: F401  (re-export)
     EVCC_HISTORY_GROUPS,
     is_evcc_reference,
     EVCC_TARIFF_NAMES,
+    Connection,
+    connection_for,
+    connections_from_section,
     evcc_entity_parts,
     evcc_history_params,
     is_evcc_history_entity,
@@ -35,7 +37,6 @@ logger.info("[LOAD-IF] loading module ")
 # ever one per interface; now a single load profile can need two, because EVCC
 # meters what it meters and an appliance it does not know still has a Home
 # Assistant entity behind it.
-Connection = namedtuple("Connection", "src url access_token ssl_ignore")
 
 
 class LoadInterface:
@@ -170,18 +171,10 @@ class LoadInterface:
         self.time_zone = self.__resolve_time_zone(tz_name)
 
         # The second connection, for sensors EVCC cannot answer. Absent on every other
-        # data source, where one connection reads everything.
-        supp_src = str(config.get("supplementary_type", "") or "").strip()
-        self.__supplementary = (
-            Connection(
-                supp_src,
-                str(config.get("supplementary_url", "") or "").strip(),
-                str(config.get("supplementary_access_token", "") or "").strip(),
-                bool(config.get("supplementary_ssl_ignore", False)),
-            )
-            if supp_src in ("homeassistant", "openhab")
-            else None
-        )
+        # data source, where one connection reads everything. Built by the same
+        # helper the managed-load readers and the profile fetch use, so all
+        # three agree on when a supplementary connection counts as configured.
+        _, self.__supplementary = connections_from_section(config)
         # Names that need the second connection while none is configured,
         # already reported. Once per name, not once per slot.
         self.__needs_supplementary_reported = set()
@@ -508,18 +501,21 @@ class LoadInterface:
         return Connection(self.src, self.url, self.access_token, self.ssl_ignore)
 
     def __connection_for(self, entity_id):
-        """The connection that can answer *entity_id*, or None if none can.
+        """The connection that can answer *entity_id* for a history fetch.
 
-        One data source answers everything it is asked - except EVCC, which
-        answers only what it meters. An appliance EVCC does not know still has
-        a Home Assistant entity behind it, and that entity is readable: just not
-        there. So on an EVCC source the *name* decides, by the same rule the
-        battery interface has used for the temperature since EVCC became a
-        source. Everywhere else there is one connection and nothing to decide.
+        The rule is ``evcc_entities.connection_for`` - shared, because the live
+        readers and the config UI's Test button have to reach the same verdict
+        for the same name. What is specific here is the question asked of it:
+        only a metered series has history behind it, so a live state key like
+        ``battery.soc`` routes to the supplementary connection rather than to
+        EVCC's history endpoint, which has nothing to answer it with.
         """
-        if self.src != "evcc" or is_evcc_reference(entity_id):
-            return self.__primary_connection()
-        return self.__supplementary
+        return connection_for(
+            entity_id,
+            self.__primary_connection(),
+            self.__supplementary,
+            evcc_serves=is_evcc_reference,
+        )
 
     def __report_missing_supplementary(self, entity_id):
         """Say once per name that this one needs the second connection."""

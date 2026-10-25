@@ -24,6 +24,7 @@ their typo with a default would hide it rather than fix it.
 Validates the group and tariff names, which is what turns a typo into a message.
 """
 
+from collections import namedtuple
 from datetime import timezone
 
 # Groups EVCC's energy history endpoint can answer with, verified against
@@ -137,3 +138,97 @@ def evcc_history_params(entity, start, end, aggregate="15m"):
     else:
         params["grouped"] = "true"
     return params
+
+
+# A resolved connection to one data source. The four things every reader needs
+# and nothing more: which protocol answers, where, with what credential, and
+# whether a self-signed certificate is acceptable.
+Connection = namedtuple("Connection", "src url access_token ssl_ignore")
+
+
+def evcc_serves_live(name) -> bool:
+    """Whether EVCC itself answers *name* in a live read.
+
+    Either shape works live: a series it meters, or a key in its state
+    document. Both are EVCC's; only a Home Assistant entity id is not.
+    """
+    return is_evcc_reference(name) or is_evcc_state_key(name)
+
+
+def connection_for(name, primary, supplementary, evcc_serves=evcc_serves_live):
+    """The connection that can answer *name*, or None if neither can.
+
+    One data source answers everything it is asked - except EVCC, which answers
+    only what it meters. An appliance EVCC does not know still has a Home
+    Assistant entity behind it, and that entity is readable: just not there. So
+    on an EVCC source the *name* decides; everywhere else there is one
+    connection and nothing to decide.
+
+    This is the rule itself, held in one place because it had been written four
+    times and the copies disagreed - one knew about live state keys and one did
+    not, one required the supplementary URL and one did not, and the config UI's
+    Test button once probed a host nothing read from.
+
+    Args:
+        name: The entity as configured - an EVCC reference, a live state key, or
+            a Home Assistant entity id.
+        primary: The configured data source connection.
+        supplementary: The second connection, or None when none is configured.
+        evcc_serves: Which names EVCC answers in this context. Live reads take
+            the default; a history fetch passes ``is_evcc_reference``, because
+            a state key has no history series behind it.
+    """
+    if getattr(primary, "src", "") != "evcc" or evcc_serves(name):
+        return primary
+    return supplementary
+
+
+def ha_entity_connection(primary, supplementary):
+    """The connection that answers plain Home Assistant entity ids.
+
+    The config UI's "use the central data source" mode addresses entities by
+    ``sensor.``-style id and reads them from ``/api/states/<id>`` - the one
+    shape EVCC never serves, whatever the id says. So the question is not which
+    name was configured but which connection speaks that protocol at all, and
+    the answer is the supplementary one on an EVCC site.
+    """
+    return connection_for("sensor.", primary, supplementary)
+
+
+def connections_from_section(section):
+    """The primary and supplementary connections a merged section carries.
+
+    ``load`` and ``battery`` both arrive in this shape - the merge resolves the
+    ``data_source`` section into them and emits none of its own.
+
+    A supplementary type with no URL behind it is treated as absent. It cannot
+    answer anything, and saying so lets the caller report "configure one"
+    instead of issuing a request against an empty host.
+
+    Returns:
+        ``(primary, supplementary_or_None)``.
+    """
+    section = section or {}
+
+    def text(key):
+        return str(section.get(key, "") or "").strip()
+
+    primary = Connection(
+        text("source"),
+        text("url"),
+        text("access_token"),
+        bool(section.get("ssl_ignore", False)),
+    )
+    supp_src = text("supplementary_type")
+    supp_url = text("supplementary_url")
+    supplementary = (
+        Connection(
+            supp_src,
+            supp_url,
+            text("supplementary_access_token"),
+            bool(section.get("supplementary_ssl_ignore", False)),
+        )
+        if supp_src in ("homeassistant", "openhab") and supp_url
+        else None
+    )
+    return primary, supplementary

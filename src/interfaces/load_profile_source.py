@@ -30,6 +30,7 @@ try:  # running from src/ — src/ is on sys.path
     from interfaces.http_fetch import bearer_request_kwargs
 except ImportError:  # imported as src.interfaces (tests)
     from .http_fetch import bearer_request_kwargs
+from .evcc_entities import connection_for, connections_from_section
 from .timeseries_normalizer import (
     PV_UNITS,
     TimeseriesFormatError,
@@ -60,9 +61,9 @@ class ProfileSourceError(ValueError):
     """
 
 
-def _endpoint(entry, connection):
+def _endpoint(entry, connection, ssl_ignore=False):
     """
-    Resolve the URL and token for one entry.
+    Resolve the URL, token and certificate handling for one entry.
 
     *connection* is the central connection **as the merge resolved it** - the
     ``load`` section carries it, alongside every other sensor read through the
@@ -72,25 +73,36 @@ def _endpoint(entry, connection):
     database-configured install, and a perfectly configured profile reported
     "no entity configured" - blaming the one thing that *was* set.
 
-    Built as `merger._apply_central_ha_data_source` builds the price and PV ones,
-    so that what is fetched here is what the config UI shows.
+    Which of the section's two connections answers is
+    ``evcc_entities.connection_for``, the same rule the load interface and the
+    config UI's Test button follow. A forecast lives in a Home Assistant entity,
+    and EVCC has no ``/api/states`` to serve one from - this used to build that
+    URL against EVCC anyway.
     """
     if entry.get("use_ha_central_data_source", True):
-        base = str((connection or {}).get("url", "") or "")
         sensor = str(entry.get("ha_sensor_name", "") or "").strip()
         if not sensor:
             raise ProfileSourceError(
                 "no entity configured - set the entity holding the load forecast"
             )
-        if not base:
+        primary, supplementary = connections_from_section(connection)
+        conn = connection_for(sensor, primary, supplementary)
+        if conn is None:
+            raise ProfileSourceError(
+                f"'{sensor}' is not something EVCC serves, so reading it needs "
+                "the supplementary data source - configure one under Settings > "
+                "Data Source, or give this forecast its own URL"
+            )
+        if not conn.url:
             raise ProfileSourceError(
                 "no data source connection - the central data source has no URL "
                 "configured, so there is nowhere to read the forecast from"
             )
         return (
-            f"{base}/api/states/{sensor}",
-            str((connection or {}).get("access_token", "") or ""),
+            f"{conn.url}/api/states/{sensor}",
+            conn.access_token,
             sensor,
+            conn.ssl_ignore,
         )
 
     url = str(entry.get("data_url", "") or "").strip()
@@ -98,7 +110,8 @@ def _endpoint(entry, connection):
         raise ProfileSourceError(
             "no endpoint configured - set the URL the load forecast is served from"
         )
-    return url, str(entry.get("data_token", "") or ""), url
+    # Its own URL, so the section's certificate setting is all there is to go on.
+    return url, str(entry.get("data_token", "") or ""), url, ssl_ignore
 
 
 def fetch_profile(entry, connection=None, time_zone=None, ssl_ignore=False):
@@ -113,7 +126,9 @@ def fetch_profile(entry, connection=None, time_zone=None, ssl_ignore=False):
             merged config, which is where the merge puts it. Reads ``url`` and
             ``access_token``.
         time_zone: Zone the source's naive timestamps belong to, if it sends any.
-        ssl_ignore: Skip certificate verification, for a self-signed instance.
+        ssl_ignore: Skip certificate verification, for a self-signed instance. Used
+            for an entry carrying its own URL; a central read takes the flag from
+            whichever of the section's connections answers it.
 
     Returns:
         dict: ``{"entries": [{"start": datetime, "end": datetime, "value": float}],
@@ -124,7 +139,7 @@ def fetch_profile(entry, connection=None, time_zone=None, ssl_ignore=False):
     Raises:
         ProfileSourceError: with a message written for the user.
     """
-    url, token, label = _endpoint(entry, connection)
+    url, token, label, ssl_ignore = _endpoint(entry, connection, ssl_ignore)
     data_path = str(entry.get("data_path", "") or "attributes.data").strip()
     unit = str(entry.get("value_unit", "") or "W").strip()
 

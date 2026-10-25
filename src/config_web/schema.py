@@ -539,9 +539,9 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description=(
             "A second connection, for what EVCC does not carry: the battery "
-            "temperature, an inverter controlled through Home Assistant, and "
-            "any price or PV forecast set to read a Home Assistant entity. "
-            "Leave it off unless one of those applies"
+            "temperature, an inverter controlled through Home Assistant, the "
+            "sensors behind managed loads, and any forecast set to read a Home "
+            "Assistant entity. Leave it off unless one of those applies"
         ),
         labels=["restart_required"],
         help_url="config-data.html#data-source-evcc",

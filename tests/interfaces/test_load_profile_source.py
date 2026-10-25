@@ -365,12 +365,60 @@ def test_the_merged_config_carries_the_connection_this_needs():
 
     assert "data_source" not in merged, "the merge deliberately emits no such section"
 
-    url, token, _label = _endpoint(
+    url, token, _label, _ssl = _endpoint(
         {"use_ha_central_data_source": True, "ha_sensor_name": "sensor.pool_forecast"},
         merged["load"],
     )
     assert url == "http://ha.local:8123/api/states/sensor.pool_forecast"
     assert token == "tok"
+
+
+def test_an_evcc_source_reads_the_forecast_through_the_supplementary():
+    """
+    A forecast lives in a Home Assistant entity, and EVCC has no /api/states to
+    serve one from. The central connection under EVCC is therefore the
+    supplementary one - this used to build the URL against EVCC itself and 404.
+    """
+    load_section = {
+        "source": "evcc",
+        "url": "http://evcc.local:7070",
+        "access_token": "",
+        "supplementary_type": "homeassistant",
+        "supplementary_url": "http://ha.local:8123",
+        "supplementary_access_token": "supp-token",
+        "supplementary_ssl_ignore": True,
+    }
+
+    url, token, _label, ssl_ignore = _endpoint(
+        {"use_ha_central_data_source": True, "ha_sensor_name": "sensor.pool_forecast"},
+        load_section,
+    )
+
+    assert url == "http://ha.local:8123/api/states/sensor.pool_forecast"
+    assert token == "supp-token"
+    assert ssl_ignore is True, "the answering connection's flag, not the primary's"
+
+
+def test_evcc_without_a_supplementary_says_which_one_is_missing():
+    """Not "no entity configured" - the entity is fine, there is nowhere to ask."""
+    load_section = {
+        "source": "evcc",
+        "url": "http://evcc.local:7070",
+        "supplementary_type": "",
+    }
+
+    with pytest.raises(ProfileSourceError) as excinfo:
+        _endpoint(
+            {
+                "use_ha_central_data_source": True,
+                "ha_sensor_name": "sensor.pool_forecast",
+            },
+            load_section,
+        )
+
+    message = str(excinfo.value)
+    assert "supplementary" in message
+    assert "sensor.pool_forecast" in message
 
 
 def test_a_missing_connection_is_not_blamed_on_the_entity():
