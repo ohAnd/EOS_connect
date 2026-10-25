@@ -33,7 +33,7 @@ Usage:
     current_feedin_prices = price_interface.get_current_feedin_prices()
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from collections import defaultdict, namedtuple
 import json
 import logging
@@ -84,6 +84,62 @@ logger.info("[PRICE-IF] loading module ")
 #: sent equals a slot index only when the series starts exactly at the anchor
 #: AND its resolution matches time_frame_base.
 PriceWindow = namedtuple("PriceWindow", "values first_covered real_slots")
+
+
+def whole_local_days_covered(timeseries, resolution_seconds, time_zone):
+    """How many complete local calendar days *timeseries* covers, 0 if not whole.
+
+    Measured, not counted. A local day holds 24 hours of slots on all but two
+    days a year; when the clock changes it holds 23 or 25, so a complete
+    quarter-hour day is 92 or 100 entries rather than 96. Counting entries
+    rejected a correct full day on exactly those two days - the ones whose
+    price curve is least like any other day's - and sent the fetch down the
+    cache fallback instead of repeating the day's own pattern.
+
+    Measuring is also stricter than counting: a series with a hole in it and a
+    matching surplus elsewhere used to pass and no longer does.
+
+    Args:
+        timeseries: Normalized entries, each with aware ``start`` and ``end``.
+        resolution_seconds: Slot length the entries were detected to have.
+        time_zone: Zone the calendar days belong to; UTC edges are converted.
+
+    Returns:
+        The number of whole local days covered, or 0 when the series does not
+        start and end on a local midnight or is not contiguous.
+    """
+    if not timeseries or not resolution_seconds:
+        return 0
+    start = timeseries[0].get("start")
+    end = timeseries[-1].get("end")
+    if start is None or end is None:
+        return 0
+    if time_zone is not None:
+        start = start.astimezone(time_zone)
+        end = end.astimezone(time_zone)
+
+    midnight = (0, 0, 0)
+    if (start.hour, start.minute, start.second) != midnight:
+        return 0
+    if (end.hour, end.minute, end.second) != midnight:
+        return 0
+
+    days = (end.date() - start.date()).days
+    if days < 1:
+        return 0
+
+    # Contiguous: the entries fill the span exactly - no gap, no overlap.
+    #
+    # Measured in UTC on purpose. Subtracting two aware datetimes that share a
+    # tzinfo *object* gives the wall-clock difference, offsets ignored - that is
+    # Python's documented behaviour, and it would call the 25-hour day 24 hours
+    # long and reject it for the second time, by a different route.
+    span = (
+        end.astimezone(dt_timezone.utc) - start.astimezone(dt_timezone.utc)
+    ).total_seconds()
+    if len(timeseries) * resolution_seconds != span:
+        return 0
+    return days
 
 
 def fill_price_gaps(values, coverage, slots_per_day):
@@ -2096,32 +2152,33 @@ class PriceInterface(ForecastMetadataMixin):
 
             expected_slots = horizon_slots(self.time_frame_base)
 
-            # Validate EVCC data: only accept exactly 1 or 2 complete full days
-            # Partial days, gaps, or mixed data → treat as incomplete error
-            # This ensures cyclic padding only uses trustworthy complete daily patterns
-            is_valid_complete_data = False
-            if resolution_seconds == 900:  # 15-min resolution
-                # Accept exactly 96 entries (1 day) or 192 entries (2 days)
-                is_valid_complete_data = actual_timeseries_count in [96, 192]
-            elif resolution_seconds == 3600:  # Hourly resolution
-                # Accept exactly 24 entries (1 day) or 48 entries (2 days)
-                is_valid_complete_data = actual_timeseries_count in [24, 48]
+            # Validate EVCC data: only whole local calendar days, contiguous.
+            # Partial days, gaps, or mixed data → treat as incomplete error.
+            # This ensures cyclic padding only uses trustworthy complete daily
+            # patterns - and a day is measured, not counted, so the 25-hour one
+            # in October and the 23-hour one in March still qualify.
+            complete_days = whole_local_days_covered(
+                timeseries, resolution_seconds, self.time_zone
+            )
+            is_valid_complete_data = 0 < complete_days <= 2
 
             if is_incomplete and is_valid_complete_data:
                 logger.debug(
-                    "[PRICE-IF] EVCC provided exactly %d entries (%s) — treating as "
-                    "valid complete data and using cyclic pattern for gap-filling",
+                    "[PRICE-IF] EVCC provided %d complete day(s) in %d entries — "
+                    "treating as valid complete data and using cyclic pattern "
+                    "for gap-filling",
+                    complete_days,
                     actual_timeseries_count,
-                    "1 full day" if actual_timeseries_count in [96, 24] else "2 full days",
                 )
                 is_incomplete = False
             elif is_incomplete and not is_valid_complete_data:
                 logger.warning(
-                    "[PRICE-IF] EVCC data is incomplete/invalid: %d entries provided "
-                    "(expected exactly 96 or 192 for 15-min, or 24 or 48 for hourly). "
+                    "[PRICE-IF] EVCC data is incomplete/invalid: %d entries do not "
+                    "form one or two whole days without gaps. "
                     "Falling back to cache or energyforecast",
                     actual_timeseries_count,
                 )
+
 
             if prices and is_incomplete:
                 # Data was incomplete, try fallback chain.
