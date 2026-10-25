@@ -1067,14 +1067,35 @@ def _resolve_timeseries_config(domain: str, data: dict, get_value) -> dict:
 
     # Coerced, not truthiness-tested: pre-flight runs before _coerce_value, so a REST
     # client sending the string "false" would otherwise take the central-HA branch.
-    if _coerce_bool(get_value(f"{base}use_ha_central_data_source")):
-        ds_url = get_value("data_source.url") or ""
+    # Resolved exactly as merger._apply_central_ha_data_source resolves it —
+    # including the EVCC detour, the absence of rstrip and the empty-string
+    # passthrough — so the probe can never pass on a URL the running interface
+    # would fetch differently. It did exactly that once: the merger learnt to
+    # send EVCC sites to the supplementary connection and this mirror was left
+    # behind, so the Test button reported on an address nothing reads from.
+    # (The duplication itself is the next commit.)
+    central = _coerce_bool(get_value(f"{base}use_ha_central_data_source"))
+    ds_url, ds_token = "", ""
+    if central:
+        if get_value("data_source.type") == "evcc":
+            if get_value("data_source.supplementary_type") in (
+                "homeassistant",
+                "openhab",
+            ):
+                ds_url = get_value("data_source.supplementary_url") or ""
+                ds_token = get_value("data_source.supplementary_access_token") or ""
+            else:
+                # The merger warns and moves on without touching the domain's
+                # own fields, so central mode is effectively off here.
+                central = False
+        else:
+            ds_url = get_value("data_source.url") or ""
+            ds_token = get_value("data_source.access_token") or ""
+
+    if central:
         sensor = merger_style(f"{base}ha_sensor_name", default_sensor)
-        # Built exactly as merger._apply_central_ha_data_source builds it — including
-        # the absence of rstrip and the empty-string passthrough — so the probe can
-        # never pass on a URL the running interface would fetch differently.
         data_url = f"{ds_url}/api/states/{sensor}" if ds_url else ""
-        data_token = get_value("data_source.access_token") or ""
+        data_token = ds_token
         sensor_field = f"{base}ha_sensor_name"
         resource_label = sensor or f"{base}ha_sensor_name"
     else:
