@@ -79,6 +79,16 @@ def _state_as_float(raw_state):
 # Generic implementation - suitable for any LiFePO4 battery system.
 
 
+class SensorNotReadable(ValueError):
+    """The configured name cannot be read through any configured connection.
+
+    A ValueError, because that is what the three readers already catch - but a
+    distinguishable one. Everything else they catch is a request that failed
+    this time and may succeed next time; this one cannot, and retrying it five
+    times only buries the single sentence that says what to do about it.
+    """
+
+
 class BatteryInterface:
     """
     BatteryInterface is a class that provides an interface for fetching the State of Charge (SOC)
@@ -149,6 +159,9 @@ class BatteryInterface:
         self.request_timeout = request_timeout  # Store configurable timeout
 
         self.soc_fail_count = 0
+        # Sensors already reported as having nowhere to be read from. Once per
+        # name: the condition is a setting, not a passing failure.
+        self.__unreadable_reported = set()
 
         self.configuration_state = "unknown"  # 'valid', 'incomplete', or 'invalid'
         self.configuration_valid = False
@@ -282,6 +295,12 @@ class BatteryInterface:
             )
             return temp
 
+        except SensorNotReadable as exc:
+            # Not a failed request - a setting. Say it once, leave temperature
+            # compensation off, and do not spend the retry budget on it.
+            self.__report_unreadable(self.temp_sensor, exc)
+            return None
+
         except (requests.exceptions.RequestException, ValueError, KeyError) as e:
             self.temp_fail_count += 1
             if self.temp_fail_count >= 5:
@@ -321,12 +340,26 @@ class BatteryInterface:
         primary, supplementary = connections_from_section(self.battery_data)
         conn = connection_for(sensor, primary, supplementary)
         if conn is None:
-            raise ValueError(
-                f"Battery sensor '{sensor}' is not an EVCC value — configure "
-                "the supplementary Home Assistant connection under Settings > "
-                "Data Source to read it."
+            raise SensorNotReadable(
+                f"'{sensor}' is not a value EVCC carries, so it needs the "
+                "supplementary data source - configure one under Settings > "
+                "Data Source, or name an EVCC value instead. "
+                "| Config: #data-source | ACTION REQUIRED"
             )
         return conn
+
+    def __report_unreadable(self, label, error):
+        """Say once per sensor that it has nowhere to be read from.
+
+        Once, because the condition is a setting and will hold until someone
+        changes it. The readers below used to run it through their retry
+        counters, which repeated a warning every poll that never named the fix
+        - the one sentence that does was in a debug line nobody on INFO sees.
+        """
+        if label in self.__unreadable_reported:
+            return
+        self.__unreadable_reported.add(label)
+        logger.warning("[BATTERY-IF] %s %s", label, error)
 
     # source-specific price fetchers removed — use __fetch_price_data_unified
 
@@ -460,6 +493,10 @@ class BatteryInterface:
                 self.price_euro_per_wh,
             )
             return self.price_euro_per_wh
+        except SensorNotReadable as exc:
+            self.__report_unreadable(self.price_sensor, exc)
+            return self.price_euro_per_wh
+
         except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
             logger.warning(
                 "[BATTERY-IF] %s - Error fetching price sensor data: %s. "
@@ -480,6 +517,11 @@ class BatteryInterface:
         return self.price_euro_per_wh
 
     def _handle_soc_error(self, source, error, last_soc):
+        if isinstance(error, SensorNotReadable):
+            # The name has nowhere to be read from, and counting to five does
+            # not change that. The configured SOC stands meanwhile.
+            self.__report_unreadable(self.soc_sensor, error)
+            return last_soc
         self.soc_fail_count += 1
         if self.soc_fail_count < 5:
             logger.warning(

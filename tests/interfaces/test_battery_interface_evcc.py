@@ -7,7 +7,10 @@ directly instead of running the auto-detection the Home Assistant path needs.
 """
 
 # pylint: disable=protected-access
+import logging
+
 import pytest
+import requests
 
 from unittest.mock import MagicMock, patch
 
@@ -186,3 +189,106 @@ class TestWhichConnectionAnswersEachSensor:
         assert seen["source"] == "homeassistant"
         assert seen["url"] == "http://ha:8123"
         assert seen["access_token"] == "tok"
+
+
+class TestAnUnreadableSensorIsSaidOnce:
+    """
+    A missing connection is a setting, not a passing failure.
+
+    All three readers ran it through their retry counters, so a measured run
+    produced this every thirty seconds, forever:
+
+        Temperature sensor unavailable (5 failures). …
+        Temperature sensor unavailable (6 failures). …
+        Temperature sensor unavailable (7 failures). …
+
+    - which never says that the fix is a supplementary data source. That
+    sentence existed only in the debug lines before it, where nobody running on
+    INFO ever sees it.
+    """
+
+    def _interface_without_supplementary(self, **overrides):
+        return _interface(sensor_battery_temperature="sensor.akku_temp", **overrides)
+
+    @staticmethod
+    def _own(caplog, needle):
+        """Only the lines about *needle* - the poll thread logs its own."""
+        return [r.getMessage() for r in caplog.records if needle in r.getMessage()]
+
+    def test_the_warning_names_the_fix(self, caplog):
+        interface = self._interface_without_supplementary()
+
+        with caplog.at_level(logging.WARNING, logger="__main__"):
+            interface._BatteryInterface__battery_request_current_temp()
+
+        warnings = self._own(caplog, "sensor.akku_temp")
+        assert len(warnings) == 1, warnings
+        assert "supplementary" in warnings[0]
+        assert "ACTION REQUIRED" in warnings[0]
+
+    def test_it_is_not_repeated_on_every_cycle(self, caplog):
+        interface = self._interface_without_supplementary()
+
+        with caplog.at_level(logging.WARNING, logger="__main__"):
+            for _ in range(12):
+                interface._BatteryInterface__battery_request_current_temp()
+
+        assert len(self._own(caplog, "sensor.akku_temp")) == 1
+
+    def test_the_retry_budget_is_not_spent_on_it(self):
+        """
+        Five attempts cannot fix a setting. The counter staying at zero is what
+        keeps a real outage - later, on the same sensor - reported honestly.
+        """
+        interface = self._interface_without_supplementary()
+
+        for _ in range(8):
+            interface._BatteryInterface__battery_request_current_temp()
+
+        assert interface.temp_fail_count == 0
+
+    def test_temperature_compensation_is_simply_off(self):
+        interface = self._interface_without_supplementary()
+        assert interface._BatteryInterface__battery_request_current_temp() is None
+
+    def test_a_real_outage_still_escalates(self):
+        """The other failures are unchanged - they may succeed next time."""
+        interface = _interface(
+            sensor_battery_temperature="battery.temp",
+            **TestWhichConnectionAnswersEachSensor.SUPPLEMENTED,
+        )
+
+        interface.temp_fail_count = 0  # the constructor's own cycle already ran
+        with patch(
+            "src.interfaces.battery_interface.fetch_remote_state",
+            side_effect=requests.exceptions.ConnectionError("down"),
+        ):
+            for _ in range(3):
+                interface._BatteryInterface__battery_request_current_temp()
+
+        assert interface.temp_fail_count == 3
+
+    def test_the_soc_reader_says_it_once_too(self, caplog):
+        interface = _interface(soc_sensor="sensor.akku_soc")
+
+        with caplog.at_level(logging.WARNING, logger="__main__"):
+            for _ in range(6):
+                interface._BatteryInterface__fetch_soc_data_unified()
+
+        warnings = self._own(caplog, "sensor.akku_soc")
+        assert len(warnings) == 1, warnings
+        assert interface.soc_fail_count == 0
+
+    def test_each_sensor_gets_its_own_sentence(self, caplog):
+        """Once per name, not once per interface - two problems, two messages."""
+        interface = _interface(
+            soc_sensor="sensor.akku_soc", sensor_battery_temperature="sensor.akku_temp"
+        )
+
+        with caplog.at_level(logging.WARNING, logger="__main__"):
+            for _ in range(4):
+                interface._BatteryInterface__fetch_soc_data_unified()
+                interface._BatteryInterface__battery_request_current_temp()
+
+        assert len(self._own(caplog, "sensor.akku_soc")) == 1
+        assert len(self._own(caplog, "sensor.akku_temp")) == 1
