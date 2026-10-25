@@ -2086,14 +2086,18 @@ _ALL_FIELDS: list[FieldDef] = [
         # nothing at all.  The HA-specific fields below carry the dependency instead.
         display_group="Hardware",
         notice_when={
+            # The selected type is part of the condition. Without it the note
+            # stood on the page for every inverter - a Fronius owner was told
+            # about Home Assistant service calls they will never make.
             "when": {
+                "inverter.type": ["homeassistant"],
                 "data_source.type": ["evcc"],
                 "data_source.supplementary_type": ["default", ""],
             },
             "text": (
                 "A Home Assistant inverter is driven through HA's own service "
-                "calls, which EVCC cannot make. Choosing it here needs a "
-                "supplementary Home Assistant connection."
+                "calls, which EVCC cannot make. This needs a supplementary "
+                "Home Assistant connection."
             ),
             "link": "data_source",
         },

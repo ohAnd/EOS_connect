@@ -115,6 +115,13 @@ def test_every_notice_points_somewhere_and_says_something(key):
     assert "supplementary" in notice["text"] or "second" in notice["text"]
 
 
+# What else has to hold before each notice applies at all. The inverter one
+# speaks about Home Assistant service calls, so it has nothing to say until a
+# Home Assistant inverter is the one selected - it used to stand on the page
+# for a Fronius owner too.
+ALSO_NEEDED = {"inverter.type": {"inverter.type": "homeassistant"}}
+
+
 @pytest.mark.parametrize(
     "key",
     [
@@ -129,13 +136,29 @@ def test_a_notice_shows_only_while_it_has_something_to_say(key):
     A hint that stays after it has been acted on trains people to ignore hints.
     """
     notice = _notice(key)
-    assert _conditions_met(notice["when"], EVCC_NO_SECOND, {}, key) is True
+    active = {**EVCC_NO_SECOND, **ALSO_NEEDED.get(key, {})}
+    assert _conditions_met(notice["when"], active, {}, key) is True
 
-    done = {**EVCC_NO_SECOND, "data_source.supplementary_type": "homeassistant"}
+    done = {**active, "data_source.supplementary_type": "homeassistant"}
     assert _conditions_met(notice["when"], done, {}, key) is False
 
     on_home_assistant = {"data_source.type": "homeassistant"}
     assert _conditions_met(notice["when"], on_home_assistant, {}, key) is False
+
+
+def test_the_inverter_notice_is_silent_for_every_other_inverter():
+    """
+    It explains Home Assistant service calls. On a Fronius, a Victron or the
+    default there are none to explain, and the note stood there regardless -
+    on the one page a new user sees before anything else is configured.
+    """
+    notice = _notice("inverter.type")
+
+    for inverter_type in ("default", "fronius_gen24", "victron", "evcc"):
+        state = {**EVCC_NO_SECOND, "inverter.type": inverter_type}
+        assert (
+            _conditions_met(notice["when"], state, {}, "inverter.type") is False
+        ), inverter_type
 
 
 def test_the_notice_condition_speaks_the_depends_on_language():

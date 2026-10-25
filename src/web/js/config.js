@@ -1665,6 +1665,20 @@ class ConfigurationManager {
             }
         }
 
+        // A notice whose condition names a field on this same page has to be
+        // re-evaluated, and it is rendered rather than toggled - so re-render the
+        // section. Until now every notice condition pointed at the Data Source
+        // page, where navigating back rebuilt the section anyway and hid this.
+        const governsNotice = this.schema.some(
+            f => f.notice_when && f.notice_when.when
+                && changedKey in f.notice_when.when
+                && f.section === this.activeSection
+        );
+        if (governsNotice) {
+            this._selectSection(this.activeSection);
+            return;
+        }
+
         for (const f of this.schema) {
             if (f.depends_on && changedKey in f.depends_on) {
                 const hidden = this._isDependencyHidden(f);

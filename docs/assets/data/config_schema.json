@@ -2613,6 +2613,9 @@
       "display_group": "Hardware",
       "notice_when": {
         "when": {
+          "inverter.type": [
+            "homeassistant"
+          ],
           "data_source.type": [
             "evcc"
           ],
@@ -2621,7 +2624,7 @@
             ""
           ]
         },
-        "text": "A Home Assistant inverter is driven through HA's own service calls, which EVCC cannot make. Choosing it here needs a supplementary Home Assistant connection.",
+        "text": "A Home Assistant inverter is driven through HA's own service calls, which EVCC cannot make. This needs a supplementary Home Assistant connection.",
         "link": "data_source"
       }
     },

@@ -360,3 +360,40 @@ def test_the_load_notice_stays_visible(evcc_page):
     """Exactly the case that was correct before and must remain so."""
     _select(evcc_page, "load")
     assert _notice_visible(evcc_page, "load.additional_load_1_sensor") is True
+
+
+def test_the_inverter_notice_waits_for_the_inverter_it_describes(evcc_page):
+    """
+    It explains Home Assistant service calls. With any other inverter selected
+    there are none to explain - and it stood on the Inverter page regardless,
+    which on a fresh install is one of the first pages anyone opens.
+    """
+    _select(evcc_page, "inverter")
+    assert _notice_visible(evcc_page, "inverter.type") is not True
+
+
+def test_it_appears_as_soon_as_that_inverter_is_chosen(evcc_page):
+    """
+    On the same page as the field it watches, so nothing re-renders on its own.
+    Every notice condition until now pointed at the Data Source page, where
+    navigating back rebuilt the section and hid that this was never wired up.
+    """
+    _select(evcc_page, "inverter")
+    evcc_page.evaluate(
+        "() => configurationManager._onFieldChange('inverter.type', 'homeassistant')"
+    )
+
+    assert _notice_visible(evcc_page, "inverter.type") is True
+
+
+def test_and_goes_again_when_the_inverter_changes_back(evcc_page):
+    """The other direction, on the same page - a one-way notice is still noise."""
+    _select(evcc_page, "inverter")
+    evcc_page.evaluate(
+        "() => configurationManager._onFieldChange('inverter.type', 'homeassistant')"
+    )
+    evcc_page.evaluate(
+        "() => configurationManager._onFieldChange('inverter.type', 'fronius_gen24')"
+    )
+
+    assert _notice_visible(evcc_page, "inverter.type") is not True
