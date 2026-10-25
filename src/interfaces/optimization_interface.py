@@ -595,6 +595,21 @@ class OptimizationInterface:
                 next_quarter.strftime("%H:%M:%S"),
             )
 
+        # Skip a quarter that is too close to reach. This must happen before the
+        # gap-fill check: otherwise a run finishing a few seconds before a
+        # boundary fails the gap-fill check against the near quarter, is then
+        # moved to the following one, and no run happens for a full slot.
+        absolute_min_seconds = max(avg_runtime * 0.5, 30)
+        if (
+            quarter_aligned_start - current_time
+        ).total_seconds() < absolute_min_seconds:
+            next_quarter += timedelta(minutes=15)
+            quarter_aligned_start = next_quarter - timedelta(seconds=avg_runtime)
+            logger.debug(
+                "[OPTIMIZATION] Quarter too close, moved to next: %s",
+                next_quarter.strftime("%H:%M:%S"),
+            )
+
         time_until_quarter_start = (
             quarter_aligned_start - current_time
         ).total_seconds()
@@ -623,15 +638,6 @@ class OptimizationInterface:
             return normal_next_start
 
         # Otherwise, use quarter-aligned timing
-        absolute_min_seconds = max(avg_runtime * 0.5, 30)
-        if time_until_quarter_start < absolute_min_seconds:
-            next_quarter += timedelta(minutes=15)
-            quarter_aligned_start = next_quarter - timedelta(seconds=avg_runtime)
-            logger.debug(
-                "[OPTIMIZATION] Quarter too close, moved to next: %s",
-                next_quarter.strftime("%H:%M:%S"),
-            )
-
         logger.info(
             "[OPTIMIZATION] Quarter-hour aligned run: start %s, finish at %s",
             quarter_aligned_start.strftime("%H:%M:%S"),

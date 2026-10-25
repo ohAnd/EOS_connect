@@ -169,6 +169,18 @@ KeyError: 0</code></pre>
                     </div>
 
                     <div data-level="expert">
+                        <h3 id="tb-optimization-pause">The optimization pauses for a whole quarter hour</h3>
+                        <p><strong>Symptom:</strong> in quarter-hourly mode the optimization usually runs
+                            several times per slot, but now and then the log shows a pause of a full
+                            quarter hour right after a run:</p>
+                        <pre><code>[OPTIMIZATION] Quarter-hour aligned run: start 12:59:58, finish at 13:00:00
+[Main] Next optimization at 12:59:58 (based on average runtime of 1 seconds). Sleeping for 15 min 0 seconds</code></pre>
+                        <p><strong>Cause:</strong> a run that finished a few seconds before a quarter-hour
+                            boundary skipped that boundary, and the runs in between were not scheduled
+                            against the next one.</p>
+                        <p><strong>Fix:</strong> update EOS Connect. After such a run the next one follows
+                            at the usual interval.</p>
+
                         <h3 id="tb-logs">Reading the log</h3>
                         <p>Set <code>log_level: debug</code> (or <code>EOS_LOG_LEVEL=debug</code>) and
                             watch the startup sequence: it reports the selected optimizer backend, the
