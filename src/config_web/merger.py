@@ -41,6 +41,7 @@ def build_merged_config(
     store: ConfigStore,
     schema: ConfigSchema,
     resolved_out: Optional[dict] = None,
+    pending: Optional[dict] = None,
 ) -> dict:
     """
     Build a merged config dict that has the EXACT same shape as ``config_manager.config``.
@@ -64,11 +65,21 @@ def build_merged_config(
         resolved_out: Optional dict, filled with the flat dot-keyed values the
             EVCC resolution derived. The settings UI shows these for the fields
             it renders read-only; everything else reads the store as before.
+        pending: Optional flat dot-keyed values to merge *as if* they had been
+            saved, without saving them. The setup wizard holds every answer
+            until the final save, so during the wizard the store still
+            describes the previous installation - and a question like "does
+            this site's battery report its SoC limits to EVCC" can only be
+            answered against the address the user has just typed. Nothing is
+            written: this function has not written to the store since the EVCC
+            resolution became per-merge, and *pending* does not change that.
 
     Returns:
         A nested dict identical in shape to the original config dict.
     """
     all_settings = store.get_all()
+    if pending:
+        all_settings.update(pending)
     defaults = schema.defaults_dict()
     result = {}
 

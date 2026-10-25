@@ -438,6 +438,41 @@ def resolved_config():
     return jsonify(_module.resolved_values())
 
 
+@config_bp.route("/resolved", methods=["POST"])
+def resolve_pending_config():
+    """The same answer, for a configuration that has not been saved yet.
+
+    The settings page edits a saved installation, so GET suffices there. The
+    setup wizard holds every answer until one final save: ask before that and
+    the store still describes the previous installation, so a field the wizard
+    should present as "EVCC provides this" looks unmanaged, and one it should
+    keep asking for looks managed.
+
+    Which of the two it is cannot be decided in the frontend. EVCC reports a
+    battery's SoC limits through a capability not every integration
+    implements - it is a fact about the site, readable only from the address
+    the user has just typed. So the question goes where the rule already
+    lives, rather than being reimplemented next to the caller.
+
+    Body: flat dot-keyed values, coerced through the schema and otherwise
+    treated exactly as a save would treat them - except that nothing is saved.
+    """
+    data = flask_request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "expected an object of setting values"}), 400
+
+    pending = {}
+    for key, value in data.items():
+        field_def = _resolve_schema_key(key)
+        if field_def is None:
+            # Unknown keys are dropped rather than refused, the way a save
+            # drops them: a frontend may carry UI state alongside the answers.
+            continue
+        pending[key] = _coerce_value(field_def, value)
+
+    return jsonify(_module.resolve_pending(pending))
+
+
 @config_bp.route("/import", methods=["POST"])
 def import_config():
     """Import a flat JSON dict of settings (from backup).

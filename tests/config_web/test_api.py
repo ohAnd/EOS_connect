@@ -87,6 +87,18 @@ class _FakeModule:
         )
         return resolved
 
+    def resolve_pending(self, pending):
+        """What the merge would derive if *pending* were saved, as the real one does."""
+        resolved = {}
+        build_merged_config(
+            self._config,
+            self._store,
+            self._schema,
+            resolved_out=resolved,
+            pending=pending,
+        )
+        return resolved
+
     def rebuild_config(self):
         """No-op for tests."""
 
@@ -1479,3 +1491,114 @@ class TestResolvedValues:
         assert resolved["data_source.url"] == "http://evcc.local:7070"
         # The store still holds what the user actually set.
         assert exported["load.load_sensor"] == "sensor.left_over_from_home_assistant"
+
+
+class TestResolvingAConfigurationThatIsNotSavedYet:
+    """
+    The setup wizard holds every answer until one final save.
+
+    Ask ``GET /resolved`` during it and the store still describes the previous
+    installation: a field the wizard should present as "EVCC provides this"
+    looks unmanaged, and one it should keep asking for looks managed. Which of
+    the two it is cannot be decided in the frontend - EVCC reports a battery's
+    SoC limits through a capability not every integration implements, so it is
+    a fact about the site, readable only from the address just typed.
+    """
+
+    PENDING = {
+        "data_source.type": "evcc",
+        "data_source.url": "http://evcc.local:7070",
+    }
+
+    @pytest.fixture(name="wizard_client")
+    def wizard_client_fixture(self, tmp_path):
+        """A store still describing a Home Assistant installation."""
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        schema = ConfigSchema()
+        store = ConfigStore(str(tmp_path / "pending.db"))
+        store.open()
+        config = _sample_config()
+        migrate_yaml_to_store(config, store, schema)
+        store.set_batch(
+            {
+                "data_source.type": "homeassistant",
+                "data_source.url": "http://ha.local:8123",
+                # The sample pins these per section, which outranks the data
+                # source; a fresh install leaves them to it.
+                "load.source": "",
+                "load.url": "",
+                "battery.source": "",
+                "battery.url": "",
+            }
+        )
+        init_api(store, schema, _FakeModule(config, store, schema))
+        app.register_blueprint(config_bp)
+        with app.test_client() as client:
+            client.store = store
+            yield client
+        store.close()
+
+    def _post(self, client, body, evcc_reports):
+        with patch(
+            "src.interfaces.evcc_parameters.fetch_evcc_parameters",
+            return_value=evcc_reports,
+        ):
+            return client.post("/api/config/resolved", json=body)
+
+    def test_the_saved_configuration_still_derives_nothing(self, wizard_client):
+        """The store says Home Assistant, and that is what GET answers for."""
+        assert wizard_client.get("/api/config/resolved").get_json() == {}
+
+    def test_the_pending_one_derives_what_evcc_names(self, wizard_client):
+        resp = self._post(wizard_client, self.PENDING, {"capacity_wh": 22000})
+
+        assert resp.status_code == 200
+        resolved = resp.get_json()
+        assert resolved["load.load_sensor"] == "group:home"
+        assert resolved["battery.soc_sensor"] == "battery.soc"
+        assert resolved["battery.capacity_wh"] == 22000
+
+    def test_soc_limits_appear_only_where_evcc_reports_them(self, wizard_client):
+        """
+        The distinction the wizard cannot make for itself. A battery whose
+        integration implements no SoC limiter leaves these as questions.
+        """
+        without = self._post(
+            wizard_client, self.PENDING, {"capacity_wh": 22000}
+        ).get_json()
+        assert "battery.min_soc_percentage" not in without
+        assert "battery.max_soc_percentage" not in without
+
+        with_limits = self._post(
+            wizard_client,
+            self.PENDING,
+            {"capacity_wh": 22000, "min_soc_percentage": 7, "max_soc_percentage": 95},
+        ).get_json()
+        assert with_limits["battery.min_soc_percentage"] == 7
+        assert with_limits["battery.max_soc_percentage"] == 95
+
+    def test_nothing_is_written(self, wizard_client):
+        """
+        It answers for a configuration, it does not adopt one. The wizard asks
+        this on every step it reaches, including ones the user then walks back.
+        """
+        before = dict(wizard_client.store.get_all())
+
+        self._post(wizard_client, self.PENDING, {"capacity_wh": 22000})
+
+        assert wizard_client.store.get_all() == before
+
+    def test_keys_the_schema_does_not_know_are_dropped(self, wizard_client):
+        """A frontend may carry its own state alongside the answers."""
+        resp = self._post(
+            wizard_client,
+            {**self.PENDING, "wizardUiState": {"step": 4}},
+            {"capacity_wh": 22000},
+        )
+
+        assert resp.status_code == 200
+        assert resp.get_json()["load.load_sensor"] == "group:home"
+
+    def test_an_empty_body_is_the_saved_answer(self, wizard_client):
+        assert wizard_client.post("/api/config/resolved", json={}).get_json() == {}

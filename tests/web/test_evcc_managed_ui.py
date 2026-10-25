@@ -397,3 +397,105 @@ def test_and_goes_again_when_the_inverter_changes_back(evcc_page):
     )
 
     assert _notice_visible(evcc_page, "inverter.type") is not True
+
+
+def _open_wizard(page):
+    page.evaluate("() => showSetupWizard()")
+    page.wait_for_function("typeof setupWizard !== 'undefined' && !!setupWizard")
+    # show() loads the schema before it can render anything; without waiting for
+    # that, driving it to a step renders an empty one.
+    page.wait_for_function("!!setupWizard.schema && setupWizard.schema.length > 0")
+
+
+def _wizard_field(page, key):
+    """How the wizard presents *key*: as a question, or as a reading."""
+    return page.evaluate(
+        """(key) => {
+            const css = key.replace(/\\./g, "-");
+            const el = document.getElementById(`wiz-field-${css}`);
+            if (!el) { return null; }
+            const input = el.querySelector("input");
+            return {
+                collected: el.hasAttribute("data-key"),
+                readonly: input ? input.hasAttribute("readonly") : null,
+                value: input ? input.value : null,
+                badge: !!el.querySelector(".wizard-badge-evcc"),
+            };
+        }""",
+        key,
+    )
+
+
+def _render_battery_step(page, resolved, data_source="evcc"):
+    """Put the wizard on its battery step with a given resolution in hand."""
+    page.evaluate(
+        """([resolved, dataSource]) => {
+            setupWizard.values["data_source.type"] = dataSource;
+            setupWizard.resolvedValues = resolved;
+            const index = setupWizard.steps.findIndex(s => s.id === "battery");
+            setupWizard.currentStep = index;
+            setupWizard._render();
+        }""",
+        [resolved, data_source],
+    )
+
+
+def test_the_wizard_reads_out_what_evcc_manages(page):
+    """
+    The settings page has shown these read-only since EVCC became a source.
+    The wizard went on asking for them - a new user on EVCC was handed empty
+    boxes for names the merge fills in the moment they press save.
+    """
+    _open_wizard(page)
+    _render_battery_step(page, {"battery.soc_sensor": "battery.soc"})
+
+    field = _wizard_field(page, "battery.soc_sensor")
+    assert field is not None, "the field is on the battery step"
+    assert field["readonly"] is True
+    assert field["value"] == "battery.soc"
+    assert field["badge"] is True
+
+
+def test_a_value_shown_this_way_is_never_collected(page):
+    """
+    ``_collectCurrentStep`` gathers by ``data-key``, and the payload is what
+    gets saved. A derived value that rode along would land in the store, which
+    is the one thing deriving it per merge exists to avoid - a capacity from
+    before the battery was extended, an address that cannot be changed.
+    """
+    _open_wizard(page)
+    _render_battery_step(page, {"battery.capacity_wh": 22000})
+
+    assert _wizard_field(page, "battery.capacity_wh")["collected"] is False
+
+    collected = page.evaluate("""() => {
+            setupWizard.values["battery.capacity_wh"] = undefined;
+            setupWizard._collectCurrentStep();
+            return setupWizard.values["battery.capacity_wh"];
+        }""")
+    assert collected is None
+
+
+def test_a_field_evcc_did_not_answer_stays_a_question(page):
+    """
+    EVCC reports SoC limits through a capability not every battery integration
+    implements. Reading them out regardless would leave a field the user has to
+    set and cannot - the settings page learnt this the same way.
+    """
+    _open_wizard(page)
+    _render_battery_step(page, {"battery.soc_sensor": "battery.soc"})
+
+    limit = _wizard_field(page, "battery.min_soc_percentage")
+    assert limit is not None, "still shown"
+    assert limit["readonly"] is not True, "and still editable"
+    assert limit["collected"] is True, "and still saved"
+
+
+def test_without_evcc_nothing_reads_out(page):
+    """Every other data source answers nothing by itself."""
+    _open_wizard(page)
+    _render_battery_step(
+        page, {"battery.soc_sensor": "battery.soc"}, data_source="homeassistant"
+    )
+
+    assert _wizard_field(page, "battery.soc_sensor")["readonly"] is not True
