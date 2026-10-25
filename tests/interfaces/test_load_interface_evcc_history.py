@@ -21,6 +21,7 @@ back exactly 7/14 days and a drifting wall clock would make the fixture miss.
 import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -631,3 +632,60 @@ def test_a_non_evcc_source_is_unaffected():
             "sensor.house", DAY_START, DAY_START + timedelta(hours=1)
         )
     assert calls and all("ha.local:8123" in url for url in calls), calls
+
+
+def test_the_prefetch_line_names_the_connection_that_answers(caplog):
+    """
+    Not the configured source. Under EVCC a Home Assistant entity is served by
+    the supplementary connection, and the line used to print "EVCC" for it -
+    which during a live diagnosis read as a misrouting that was not happening.
+    """
+    config = {
+        "source": "evcc",
+        "url": "http://evcc.local:7070",
+        "load_sensor": "group:home",
+        "supplementary_type": "homeassistant",
+        "supplementary_url": "http://ha.local:8123",
+        "supplementary_access_token": "tok",
+    }
+    interface = LoadInterface.__new__(LoadInterface)
+    LoadInterface.__init__(interface, config, 3600, tz_name="Europe/Berlin")
+
+    start = datetime(2026, 10, 18, tzinfo=ZoneInfo("Europe/Berlin"))
+    end = start + timedelta(days=1)
+
+    with patch.object(
+        LoadInterface, "fetch_historical_energy_data", return_value=[]
+    ), caplog.at_level(logging.DEBUG, logger="__main__"):
+        prefetch = interface._LoadInterface__prefetch_homeassistant_day
+        prefetch("group:home", start, end)
+        prefetch("sensor.pool_pump", start, end)
+
+    lines = [r.getMessage() for r in caplog.records if "Prefetching" in str(r.msg)]
+    assert any("EVCC - Prefetching 'group:home'" in line for line in lines), lines
+    assert any(
+        "HOMEASSISTANT - Prefetching 'sensor.pool_pump'" in line for line in lines
+    ), lines
+
+
+def test_the_prefetch_line_says_so_when_nothing_can_answer(caplog):
+    """No supplementary configured - the name has nowhere to be read from."""
+    config = {
+        "source": "evcc",
+        "url": "http://evcc.local:7070",
+        "load_sensor": "group:home",
+    }
+    interface = LoadInterface.__new__(LoadInterface)
+    LoadInterface.__init__(interface, config, 3600, tz_name="Europe/Berlin")
+
+    start = datetime(2026, 10, 18, tzinfo=ZoneInfo("Europe/Berlin"))
+
+    with patch.object(
+        LoadInterface, "fetch_historical_energy_data", return_value=[]
+    ), caplog.at_level(logging.DEBUG, logger="__main__"):
+        interface._LoadInterface__prefetch_homeassistant_day(
+            "sensor.pool_pump", start, start + timedelta(days=1)
+        )
+
+    lines = [r.getMessage() for r in caplog.records if "Prefetching" in str(r.msg)]
+    assert any("NO SOURCE FOR - Prefetching" in line for line in lines), lines

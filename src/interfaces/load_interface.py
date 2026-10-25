@@ -1615,9 +1615,14 @@ class LoadInterface:
         self.__homeassistant_history_cache.pop(entity_id, None)
         self.__evcc_history_cache.pop(entity_id, None)
 
+        # Named for the connection that will answer, not for the configured
+        # source. Under EVCC a Home Assistant entity is served by the
+        # supplementary connection, and saying "EVCC" here sent a live
+        # diagnosis hunting a misrouting that was not happening.
+        conn = self.__connection_for(entity_id)
         logger.debug(
             "[LOAD-IF] %s - Prefetching '%s' for %s to %s once for the complete day.",
-            self.src.upper(),
+            conn.src.upper() if conn else "NO SOURCE FOR",
             entity_id,
             start_time,
             end_time,
