@@ -130,7 +130,20 @@
                         <p>Home Assistant's recorder purges detailed state history after
                             <code>purge_keep_days</code> (10 by default), while the load profile looks
                             back 14 days. For days whose history is gone, EOS Connect falls back to
-                            recorder <em>statistics</em>, which are kept indefinitely.</p>
+                            recorder <em>statistics</em> &mdash; five-minute buckets first, hourly
+                            long-term statistics second. Only the hourly ones are kept indefinitely;
+                            the five-minute buckets are purged on the same schedule as the history
+                            itself. At the default setting, the fourteen-day-old day therefore
+                            arrives as 24 hourly values.</p>
+                        <p>Whether that matters depends on how finely you plan. At
+                            <a href="config-optimizer.html#time-slot-config"><code>eos.time_frame</code></a>
+                            3600 it is the same profile either way &mdash; 24 values for 24 slots. At
+                            900 it is not, because each hourly value then has to stand for four
+                            quarter-hours, and the shape within the hour is gone from half the
+                            samples the profile averages. If you plan in quarter-hours, set
+                            <code>purge_keep_days: 15</code> under <code>recorder</code> in
+                            <code>configuration.yaml</code> and restart Home Assistant. It costs
+                            database size, in proportion to how many entities the recorder keeps.</p>
                         <p>That fallback calls the <code>recorder.get_statistics</code> action, so the
                             long-lived access token needs permission to call services. On a Home Assistant
                             too old to offer it, the log says so once and the profile simply uses the days

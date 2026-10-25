@@ -82,6 +82,12 @@
                         cannot follow belong under
                         <a href="config-managed-loads.html">Managed loads</a> instead &mdash; including
                         the two settings that bound them all together, which are in this group.</p>
+                    <p>Both of those days have to still be readable. Home Assistant keeps detailed
+                        history for <code>purge_keep_days</code> &mdash; 10 by default &mdash; so the
+                        fourteen-day-old one is served from recorder statistics instead, which is
+                        exact at hourly planning and coarse at quarter-hourly:
+                        <a href="troubleshooting.html#tb-ha-purged">Older days come back empty</a>
+                        says what to set and when it is worth it.</p>
                     <div data-schema-section="load"></div>
                 </div>
 
