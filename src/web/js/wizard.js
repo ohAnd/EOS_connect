@@ -36,6 +36,9 @@ class SetupWizard {
     constructor() {
         this.schema = null;
         this.values = {};
+        // What the merge would derive from the answers so far - see
+        // _refreshResolved. Empty until a step needs it.
+        this.resolvedValues = {};
         this.currentStep = 0;
         this.skippedSteps = new Set();
         // Replaced by the list the schema endpoint serves; this is only what to fall
@@ -150,7 +153,7 @@ class SetupWizard {
         try {
             await this._loadData();
             this.currentStep = 0;
-            this._render();
+            await this._enterStep();
         } catch (err) {
             console.error("[SetupWizard] Failed to load:", err);
             document.getElementById("full_screen_content").innerHTML = `
@@ -206,6 +209,52 @@ class SetupWizard {
     /**
      * Render the current wizard step into the overlay.
      */
+    /**
+     * Move to the step the wizard is now on, with what EVCC resolves for it.
+     *
+     * Separate from ``_render`` because the answer comes from the server: the
+     * wizard holds every answer until one final save, so the store still
+     * describes the previous installation and nothing local can say whether
+     * this site's battery reports its SoC limits.
+     */
+    async _enterStep() {
+        await this._refreshResolved();
+        this._render();
+    }
+
+    /**
+     * Ask what the merge would derive from the answers so far.
+     *
+     * Only where it can matter: a step carrying fields EVCC manages, with EVCC
+     * chosen as the data source. Everywhere else the answer is empty and the
+     * request is not worth making.
+     *
+     * A failure leaves the fields as ordinary inputs. Asking for something the
+     * user does not need to supply is a small cost; a wizard that will not move
+     * because a lookup failed is not.
+     */
+    async _refreshResolved() {
+        const step = this.steps[this.currentStep];
+        const managed = (this._getVisibleStepFields(step) || []).some(
+            f => (f.labels || []).includes("evcc_managed")
+        );
+        if (!managed || this.values["data_source.type"] !== "evcc") {
+            this.resolvedValues = {};
+            return;
+        }
+        try {
+            const res = await fetch("api/config/resolved", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(this.values),
+            });
+            this.resolvedValues = res.ok ? await res.json() : {};
+        } catch (err) {
+            console.warn("[SetupWizard] could not resolve EVCC values:", err);
+            this.resolvedValues = {};
+        }
+    }
+
     _render() {
         const step = this.steps[this.currentStep];
         const totalSteps = this.steps.length;
@@ -327,6 +376,23 @@ class SetupWizard {
      * @returns {string} HTML string
      */
     _renderField(f) {
+        // A field EVCC manages reads out instead of asking - the same rule the
+        // settings page applies, asked of the same resolution. The level check
+        // it also makes is implicit here: the wizard only ever shows
+        // getting_started fields, which is below expert.
+        //
+        // Only where the resolution actually produced a value. EVCC reports a
+        // battery's SoC limits through a capability not every integration
+        // implements, so "EVCC manages this" is a fact about the site. Showing
+        // it read-only regardless would leave a field the user has to set and
+        // cannot.
+        if (
+            (f.labels || []).includes("evcc_managed")
+            && this.values["data_source.type"] === "evcc"
+            && Object.prototype.hasOwnProperty.call(this.resolvedValues || {}, f.key)
+        ) {
+            return this._renderEvccManagedField(f);
+        }
         const value = this.values[f.key] !== undefined ? this.values[f.key] : f.default;
         const cssKey = f.key.replace(/\./g, "-");
         const label = this._prettyLabel(f.key);
@@ -360,6 +426,33 @@ class SetupWizard {
                 <div class="field-hint">${this._escapeHtml(f.description)}</div>
                 ${this._renderNotice(f)}
                 <div class="field-error" id="wiz-err-${cssKey}"></div>
+            </div>
+        `;
+    }
+
+    /**
+     * A field the data source fills in, shown rather than asked for.
+     *
+     * Carries no ``data-key`` and no error row on purpose: ``_collectCurrentStep``
+     * gathers by that attribute, and a derived value collected here would be
+     * saved - which is the one thing the resolution exists to avoid. It is
+     * derived on every merge precisely so it cannot go stale in the store.
+     */
+    _renderEvccManagedField(f) {
+        const cssKey = f.key.replace(/\./g, "-");
+        const label = this._prettyLabel(f.key);
+        const value = String(this.resolvedValues[f.key] ?? "").trim();
+        return `
+            <div class="wizard-field" id="wiz-field-${cssKey}">
+                <label>${this._escapeHtml(label)}
+                    <span class="wizard-badge-evcc">
+                        <i class="fas fa-car" aria-hidden="true"></i> from EVCC
+                    </span>
+                </label>
+                <input type="text" class="wizard-input-readonly" readonly
+                    value="${this._escapeAttr(value)}"
+                    data-evcc-managed="${this._escapeAttr(f.key)}">
+                <div class="field-hint">${this._escapeHtml(f.description)}</div>
             </div>
         `;
     }
@@ -819,7 +912,7 @@ class SetupWizard {
             this.skippedSteps.add(step.id);
             if (this.currentStep < this.steps.length - 1) {
                 this.currentStep++;
-                this._render();
+                this._enterStep();
             }
         }
     }
@@ -828,7 +921,7 @@ class SetupWizard {
         if (this.currentStep > 0) {
             this._collectCurrentStep();
             this.currentStep--;
-            this._render();
+            this._enterStep();
         }
     }
 
@@ -854,7 +947,7 @@ class SetupWizard {
             await this._finish();
         } else {
             this.currentStep++;
-            this._render();
+            await this._enterStep();
         }
     }
 

@@ -437,3 +437,31 @@
     border-radius: 4px;
     padding: 8px 12px;
 }
+
+/* A field the data source fills in, shown rather than asked for. Mirrors
+   .config-input-readonly and .config-badge-evcc on the settings page: the same
+   field should not look like a different kind of thing depending on which
+   screen it is read from. */
+.wizard-input-readonly,
+.wizard-input-readonly:focus {
+    width: 100%;
+    background-color: rgba(44, 44, 44, 0.8);
+    color: #b0b0b0;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    padding: 8px 10px;
+    box-shadow: none;
+    cursor: default;
+}
+
+.wizard-badge-evcc {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 0.72em;
+    font-weight: 600;
+    background-color: rgba(74, 158, 255, 0.15);
+    color: #4a9eff;
+    vertical-align: middle;
+}

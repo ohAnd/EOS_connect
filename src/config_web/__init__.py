@@ -262,6 +262,24 @@ class ConfigWebModule:
         )
         self._evcc_resolved = resolved
 
+    def resolve_pending(self, pending: dict) -> dict:
+        """What the merge would derive if *pending* were saved.
+
+        The setup wizard holds every answer until one final save, so asking
+        ``resolved_values`` during it describes the previous installation. This
+        answers for the configuration being typed instead - same merge, same
+        rules, one authority. Nothing is written.
+        """
+        resolved: dict = {}
+        build_merged_config(
+            self._config_manager.config,
+            self._store,
+            self._schema,
+            resolved_out=resolved,
+            pending=pending,
+        )
+        return resolved
+
     def resolved_values(self) -> dict:
         """Values the merge derives rather than stores, flat and dot-keyed.
 
