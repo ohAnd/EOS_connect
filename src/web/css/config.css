@@ -168,6 +168,20 @@
     box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.2);
 }
 
+/* A field the data source fills in: shown, not asked for. It keeps the shape
+   and column of an editable input so the form does not go ragged, but reads as
+   inert - dimmer ground, muted text, no caret and no focus ring. Without the
+   .config-input base it fell back to the browser default, which is a white box
+   in a dark theme. */
+.config-input-readonly,
+.config-input-readonly:focus {
+    background-color: rgba(44, 44, 44, 0.8);
+    color: #b0b0b0;
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: none;
+    cursor: default;
+}
+
 .config-input.invalid {
     border-color: #dc3545;
     box-shadow: 0 0 0 2px rgba(220, 53, 69, 0.2);
@@ -307,6 +321,38 @@
 .config-badge-hot {
     background-color: rgba(40, 167, 69, 0.2);
     color: #28a745;
+}
+
+/* A value the data source resolves itself - the accent colour, because it is
+   information about the field rather than a warning about it. */
+.config-badge-evcc {
+    background-color: rgba(74, 158, 255, 0.15);
+    color: #4a9eff;
+}
+
+/* ...and the same field where the source has nothing to offer. */
+.config-badge-unavailable {
+    background-color: rgba(255, 193, 7, 0.15);
+    color: #ffc107;
+}
+
+/* A note about the setup around a field, not about its value - so it reads
+   as information, not as the error styling just above. */
+.config-field-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 0.82em;
+    color: #9bb8d4;
+    background-color: rgba(74, 158, 255, 0.08);
+    border-left: 3px solid #4a9eff;
+    border-radius: 4px;
+    padding: 8px 12px;
+}
+
+.config-field-notice a {
+    color: #4a9eff;
+    white-space: nowrap;
 }
 
 /* --- Help tooltip --- */

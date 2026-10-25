@@ -69,19 +69,19 @@ class SetupWizard {
                 description: "Select and configure the optimization backend (EOS Server or EVopt).",
             },
             {
-                id: "evcc",
-                title: "EVCC (Optional)",
-                icon: "fa-car",
-                sections: ["evcc"],
-                description: "Optional — Define here to use EVCC as a data source for PV forecasts, as an inverter control gateway, and/or for car charging dependent control. If not used, simply skip this step.",
-                isOptional: true,
-            },
-            {
                 id: "data_source",
                 title: "Data Source",
                 icon: "fa-plug",
                 sections: ["data_source"],
-                description: "Connect to Home Assistant or OpenHAB to read sensor data.",
+                description: "Where the measured data comes from: Home Assistant, OpenHAB, or EVCC. Asked before the EVCC step, because choosing EVCC here is what configures its address — the EVCC step then has nothing left to ask.",
+            },
+            {
+                id: "evcc",
+                title: "EVCC (Optional)",
+                icon: "fa-car",
+                sections: ["evcc"],
+                description: "Optional — Define here to use EVCC as a PV forecast source, as an inverter control gateway, and/or for car charging dependent control. Skip this step if EVCC is already the data source, or if you do not use it at all.",
+                isOptional: true,
             },
             {
                 id: "inverter",
@@ -358,9 +358,29 @@ class SetupWizard {
                 <label>${this._escapeHtml(label)}${this._isRequired(f) ? ' <span class="required">*</span>' : ""}</label>
                 ${inputHtml}
                 <div class="field-hint">${this._escapeHtml(f.description)}</div>
+                ${this._renderNotice(f)}
                 <div class="field-error" id="wiz-err-${cssKey}"></div>
             </div>
         `;
+    }
+
+    /**
+     * A note about the setup around a field, while its condition holds.
+     *
+     * Same data and same evaluator as the settings page: a rule implemented
+     * once in the schema has to read the same in both places, or the wizard
+     * quietly tells a new user something different.
+     */
+    _renderNotice(f) {
+        const notice = f.notice_when;
+        if (!notice || !this._conditionsMet(notice.when)) {
+            return "";
+        }
+        return `
+            <div class="field-notice" data-notice-for="${this._escapeAttr(f.key)}">
+                <i class="fas fa-circle-info" aria-hidden="true"></i>
+                <span>${this._escapeHtml(notice.text)}</span>
+            </div>`;
     }
 
     /**
@@ -1142,10 +1162,26 @@ class SetupWizard {
         if (!f.depends_on) {
             return true;
         }
-        for (const [depKey, allowed] of Object.entries(f.depends_on)) {
+        return this._conditionsMet(f.depends_on);
+    }
+
+    /**
+     * Whether every entry of a depends_on-shaped condition holds.
+     *
+     * Shared with notice_when so a notice cannot drift away from the rule that
+     * decides whether the field is shown at all - the same split config.js and
+     * api._conditions_met make.
+     */
+    _conditionsMet(conditions) {
+        for (const [depKey, allowed] of Object.entries(conditions || {})) {
             const current = this.values[depKey];
             if (allowed === "!empty") {
                 if (!current || current === "") {
+                    return false;
+                }
+            } else if (typeof allowed === "string" && allowed.startsWith("!") && allowed.length > 1) {
+                // "!value": applies while the governing key does NOT hold it.
+                if (String(current) === allowed.slice(1)) {
                     return false;
                 }
             } else if (Array.isArray(allowed)) {

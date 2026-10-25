@@ -1,6 +1,6 @@
 """
 This module provides the `LoadInterface` class, which is used to fetch and process energy data
-from various sources such as OpenHAB and Home Assistant. It also includes methods to create
+from various sources such as OpenHAB, Home Assistant and EVCC. It also includes methods to create
 load profiles based on historical energy consumption data.
 """
 
@@ -15,8 +15,28 @@ import random
 import requests
 import pytz
 
+# The grammar for EVCC's virtual entity names lives in one place; see
+# interfaces/evcc_entities.py for why. Re-exported because this module is
+# where callers have always found the group names.
+from .evcc_entities import (  # noqa: F401  (re-export)
+    EVCC_HISTORY_GROUPS,
+    is_evcc_reference,
+    EVCC_TARIFF_NAMES,
+    Connection,
+    connection_for,
+    connections_from_section,
+    evcc_entity_parts,
+    evcc_history_params,
+    is_evcc_history_entity,
+)
+
 logger = logging.getLogger("__main__")
 logger.info("[LOAD-IF] loading module ")
+
+# One place a sensor is read from. Until EVCC became a source there was only
+# ever one per interface; now a single load profile can need two, because EVCC
+# meters what it meters and an appliance it does not know still has a Home
+# Assistant entity behind it.
 
 
 class LoadInterface:
@@ -45,6 +65,11 @@ class LoadInterface:
         self.load_sensor = config.get("load_sensor", "")
         self.car_charge_load_sensor = config.get("car_charge_load_sensor", "")
         self.additional_load_1_sensor = config.get("additional_load_1_sensor", "")
+        # EVCC as data source: the sensor fields stay in the config dict but hold
+        # *virtual* entity ids like "group:home" or "group:consumer:Sauna" naming
+        # a series of EVCC's energy history instead of a Home Assistant entity.
+        # Every role then flows through the same history fetch below, and the
+        # subtraction logic never learns the difference.
         # Power sensors of managed loads, whose measured history has to leave the
         # household base load for the same reason the two above do: their predicted
         # consumption is added back on top, and counting the appliance twice is exactly
@@ -95,6 +120,14 @@ class LoadInterface:
         # the other interfaces down with it. The day is fetched once and every
         # slot is then cut out of the cached series locally.
         self.__homeassistant_history_cache = {}
+        # Same idea for EVCC: one /api/history/energy request per virtual entity
+        # per day, slots carved out of it locally. Keyed by the virtual entity id
+        # exactly like the Home Assistant cache, so the parity contract of the day
+        # cache holds for this source too.
+        self.__evcc_history_cache = {}
+        # Entity names this source cannot read, already reported. The profile
+        # build asks per slot, and the answer does not change between them.
+        self.__evcc_unusable_reported = set()
         # unit_of_measurement / device_class per entity. Recorder statistics rows
         # carry no unit, so the statistics fallback has to learn it from the
         # entity itself to return watts like the history path does.
@@ -137,6 +170,15 @@ class LoadInterface:
         # whatever shape it arrives in - see __resolve_time_zone.
         self.time_zone = self.__resolve_time_zone(tz_name)
 
+        # The second connection, for sensors EVCC cannot answer. Absent on every other
+        # data source, where one connection reads everything. Built by the same
+        # helper the managed-load readers and the profile fetch use, so all
+        # three agree on when a supplementary connection counts as configured.
+        _, self.__supplementary = connections_from_section(config)
+        # Names that need the second connection while none is configured,
+        # already reported. Once per name, not once per slot.
+        self.__needs_supplementary_reported = set()
+
         self.configuration_state = "unknown"  # 'valid', 'incomplete', or 'invalid'
         self.configuration_valid = False
         self.configuration_message = ""
@@ -154,7 +196,7 @@ class LoadInterface:
         Returns:
             bool: True if the configuration is valid, False otherwise.
         """
-        if self.src not in ["openhab", "homeassistant", "default"]:
+        if self.src not in ["openhab", "homeassistant", "evcc", "default"]:
             self.configuration_state = "invalid"
             self.configuration_message = (
                 f"Load source '{self.src}' is not supported. "
@@ -167,12 +209,21 @@ class LoadInterface:
             return False
         if self.src != "default":
             missing, where = None, "Data Source"
-            if self.url == "":
+            evcc_url_unconfigured = self.url == "" or "://yourEVCCserver" in str(
+                self.url
+            )
+            if evcc_url_unconfigured:
                 missing = "the data source URL is not configured"
             elif self.access_token == "" and self.src == "homeassistant":
                 missing = "the Home Assistant access token is not configured"
             elif self.load_sensor == "":
-                missing, where = "no load sensor is set", "Load"
+                missing = (
+                    "no load sensor is set (an EVCC data source names a history "
+                    "group like 'group:home' instead of a sensor)"
+                    if self.src == "evcc"
+                    else "no load sensor is set"
+                )
+                where = "Load"
 
             if missing:
                 self.configuration_state = "incomplete"
@@ -180,6 +231,20 @@ class LoadInterface:
                     f"Load source '{self.src}' is selected, but {missing}. "
                     "The built-in default load profile is used instead — set it under "
                     f"Settings > {where} to optimize against your real consumption."
+                )
+                logger.warning("[LOAD-IF] %s", self.configuration_message)
+                self.src = "default"
+                return False
+            if self.src == "evcc" and not is_evcc_history_entity(self.load_sensor):
+                # Grammar is checked here rather than only at fetch time so a
+                # typo'd virtual entity is visible at startup, in the same place
+                # every other configuration problem is reported.
+                self.configuration_state = "incomplete"
+                self.configuration_message = (
+                    f"Load entity '{self.load_sensor}' is not an EVCC history "
+                    "reference (group:<name> or group:<name>:<title>, e.g. "
+                    "'group:home'). The built-in default load profile is used "
+                    "instead — set it under Settings > Load."
                 )
                 logger.warning("[LOAD-IF] %s", self.configuration_message)
                 self.src = "default"
@@ -235,6 +300,7 @@ class LoadInterface:
         item_label="",
         json_data=None,
         status_sink=None,
+        ssl_ignore=None,
     ):
         """
         Perform an HTTP request with retries and exponential backoff.
@@ -259,7 +325,9 @@ class LoadInterface:
                         params=params,
                         headers=headers,
                         timeout=timeout,
-                        verify=not self.ssl_ignore,
+                        verify=not (
+                            self.ssl_ignore if ssl_ignore is None else ssl_ignore
+                        ),
                     )
                 else:
                     response = requests.request(
@@ -269,7 +337,9 @@ class LoadInterface:
                         headers=headers,
                         json=json_data,
                         timeout=timeout,
-                        verify=not self.ssl_ignore,
+                        verify=not (
+                            self.ssl_ignore if ssl_ignore is None else ssl_ignore
+                        ),
                     )
                 response.raise_for_status()
                 return response
@@ -420,30 +490,159 @@ class LoadInterface:
             return None
         return None if math.isnan(number) else number
 
+    def __primary_connection(self):
+        """The configured connection, read now rather than remembered.
+
+        ``__check_config`` can still demote ``src`` to "default" after the
+        constructor has run, and a hot reload rewrites these fields in place. A
+        snapshot taken once would keep fetching from a source that has since
+        been withdrawn.
+        """
+        return Connection(self.src, self.url, self.access_token, self.ssl_ignore)
+
+    def __connection_for(self, entity_id):
+        """The connection that can answer *entity_id* for a history fetch.
+
+        The rule is ``evcc_entities.connection_for`` - shared, because the live
+        readers and the config UI's Test button have to reach the same verdict
+        for the same name. What is specific here is the question asked of it:
+        only a metered series has history behind it, so a live state key like
+        ``battery.soc`` routes to the supplementary connection rather than to
+        EVCC's history endpoint, which has nothing to answer it with.
+        """
+        return connection_for(
+            entity_id,
+            self.__primary_connection(),
+            self.__supplementary,
+            evcc_serves=is_evcc_reference,
+        )
+
+    def __report_missing_supplementary(self, entity_id):
+        """Say once per name that this one needs the second connection."""
+        if not entity_id or entity_id in self.__needs_supplementary_reported:
+            return
+        self.__needs_supplementary_reported.add(entity_id)
+        logger.warning(
+            "[LOAD-IF] '%s' is not a series EVCC meters, so it needs the "
+            "supplementary data source - configure one under Settings > Data "
+            "Source, or name an EVCC series instead (group:consumer:<title>). "
+            "Nothing is subtracted for it meanwhile. "
+            "| Config: #data-source | ACTION REQUIRED",
+            entity_id,
+        )
+
     # get load data from url persistance source
     def fetch_historical_energy_data(self, entity_id, start_time, end_time):
         """
-        Public wrapper to fetch historical energy data from the configured source.
+        Public wrapper to fetch historical energy data for one sensor.
+
+        The connection follows the name, not the interface: see
+        __connection_for. This is the only place that decides it, so every
+        caller - the profile build, the managed-load subtraction, the battery
+        price handler - gets the same answer for the same name.
         """
-        if self.src == "homeassistant":
+        conn = self.__connection_for(entity_id)
+        if conn is None:
+            self.__report_missing_supplementary(entity_id)
+            return []
+        if conn.src == "homeassistant":
             return self.__fetch_historical_energy_data_from_homeassistant(
-                entity_id, start_time, end_time
+                entity_id, start_time, end_time, conn
             )
-        elif self.src == "openhab":
+        if conn.src == "openhab":
             return self.__fetch_historical_energy_data_from_openhab(
+                entity_id, start_time, end_time, conn
+            )
+        if conn.src == "evcc":
+            return self.__fetch_historical_energy_data_from_evcc(
                 entity_id, start_time, end_time
             )
         return []
 
+    def __fetch_historical_energy_data_from_evcc(self, entity_id, start_time, end_time):
+        """
+        Fetch one EVCC history series as the sample shape every consumer expects.
+
+        Args:
+            entity_id (str): Virtual entity "group:<name>" or "group:<name>:<title>".
+            start_time (datetime): The start time for the historical data.
+            end_time (datetime): The end time for the historical data.
+
+        Returns:
+            list: Samples in the Home Assistant history shape
+            ``[{"state": float W, "last_updated": ISO8601, "attributes": {...}}]``,
+            which is what makes this source interchangeable with the other two:
+            the slot integration, the managed-load subtraction and the battery
+            price handler all consume this shape already.
+
+        Served from the cached day series when the day prefetch has already
+        fetched a range covering this interval, exactly like the Home Assistant
+        path - same cache contract, same parity requirement.
+        """
+        entity = evcc_entity_parts(entity_id)
+        if entity is None:
+            if entity_id and entity_id not in self.__evcc_unusable_reported:
+                # Once per name, not once per slot. A profile build asks for 24
+                # slots across four days per entity, so a managed load still
+                # carrying its Home Assistant sensor name filled the log with a
+                # hundred identical lines and buried everything else.
+                self.__evcc_unusable_reported.add(entity_id)
+                # A Home Assistant entity id no longer lands here - it is
+                # routed to the supplementary connection instead. What reaches
+                # this point is a name that *claims* to be an EVCC series and
+                # is not one, which is a typo rather than a missing connection.
+                logger.warning(
+                    "[LOAD-IF] '%s' looks like an EVCC series but is not one, "
+                    "so nothing is subtracted for it. EVCC's own names are "
+                    "group:home, group:consumer:<title> or "
+                    "group:loadpoint:<title>, with the title exactly as shown "
+                    "on EVCC's energy page. | Config: #load | ACTION REQUIRED",
+                    entity_id,
+                )
+            return []
+
+        start_utc = self.__to_utc(start_time)
+        end_utc = self.__to_utc(end_time)
+        if start_utc is None or end_utc is None:
+            return []
+
+        cached = self.__evcc_cached_samples(entity_id, start_utc, end_utc)
+        if cached is not None:
+            return self.__slice_series(cached, entity_id, start_utc, end_utc)
+
+        samples = self.__fetch_evcc_history_series(entity, start_utc, end_utc)
+        if samples and self.__prefetching:
+            self.__evcc_history_cache[entity_id] = {
+                "start": start_utc,
+                "end": end_utc,
+                "samples": samples,
+            }
+        if not samples:
+            return []
+
+        # Direct (non-cached) answers already carry the requested bounds - the
+        # series is clipped during the fetch. Copies: __slice_series would rewrite
+        # state in place on adjacent slots otherwise.
+        return [dict(sample) for _, sample in samples]
+
+    def __evcc_cached_samples(self, entity_id, start_utc, end_utc):
+        """Cached (utc, sample) pairs covering the interval, or None."""
+        entry = self.__evcc_history_cache.get(entity_id)
+        if not entry:
+            return None
+        if entry["start"] <= start_utc and entry["end"] >= end_utc:
+            return entry["samples"]
+        return None
+
     def __fetch_historical_energy_data_from_openhab(
-        self, openhab_item, start_time, end_time
+        self, openhab_item, start_time, end_time, conn
     ):
         """
         Fetch energy data from the specified OpenHAB item URL within the given time range.
         """
         if openhab_item == "":
             return []
-        openhab_item_url = self.url + "/rest/persistence/items/" + openhab_item
+        openhab_item_url = conn.url + "/rest/persistence/items/" + openhab_item
         params = {"starttime": start_time.isoformat(), "endtime": end_time.isoformat()}
         response = self.__request_with_retries(
             "get", openhab_item_url, params=params, item_label=openhab_item
@@ -476,15 +675,15 @@ class LoadInterface:
     # handed to the optimizer changes - the caching is meant to save requests, not
     # to produce different numbers.
 
-    def __homeassistant_headers(self):
+    def __homeassistant_headers(self, conn):
         """Auth headers for the Home Assistant REST API."""
         return {
-            "Authorization": f"Bearer {self.access_token}",
+            "Authorization": f"Bearer {conn.access_token}",
             "Content-Type": "application/json",
         }
 
     def __fetch_historical_energy_data_from_homeassistant(
-        self, entity_id, start_time, end_time
+        self, entity_id, start_time, end_time, conn
     ):
         """
         Fetch historical energy data for a specific entity from Home Assistant.
@@ -514,7 +713,7 @@ class LoadInterface:
         if cached is not None:
             return self.__slice_series(cached, entity_id, start_utc, end_utc)
 
-        samples = self.__fetch_homeassistant_series(entity_id, start_utc, end_utc)
+        samples = self.__fetch_homeassistant_series(entity_id, start_utc, end_utc, conn)
         if samples and self.__prefetching:
             # Only the day prefetch fills the cache - see __prefetch_homeassistant_day.
             self.__homeassistant_history_cache[entity_id] = {
@@ -552,7 +751,7 @@ class LoadInterface:
             return entry["samples"]
         return None
 
-    def __fetch_homeassistant_series(self, entity_id, start_utc, end_utc):
+    def __fetch_homeassistant_series(self, entity_id, start_utc, end_utc, conn):
         """Fetch one range from Home Assistant as sorted (utc, sample) pairs.
 
         State history is preferred: it has the original sample resolution and the
@@ -562,11 +761,15 @@ class LoadInterface:
         they still cover the optimizer's 14-day look-back when state history for
         that day is long gone.
         """
-        samples = self.__fetch_homeassistant_history(entity_id, start_utc, end_utc)
+        samples = self.__fetch_homeassistant_history(
+            entity_id, start_utc, end_utc, conn
+        )
         if len(samples) >= 2:
             return samples
 
-        short_term = self.__fetch_statistics(entity_id, start_utc, end_utc, "5minute")
+        short_term = self.__fetch_statistics(
+            entity_id, start_utc, end_utc, "5minute", conn
+        )
         if self.__covers(short_term, start_utc, end_utc):
             logger.info(
                 "[LOAD-IF] HOMEASSISTANT - Using 5-minute statistics for '%s' (%d samples).",
@@ -575,7 +778,7 @@ class LoadInterface:
             )
             return short_term
 
-        hourly = self.__fetch_statistics(entity_id, start_utc, end_utc, "hour")
+        hourly = self.__fetch_statistics(entity_id, start_utc, end_utc, "hour", conn)
         if hourly:
             logger.info(
                 "[LOAD-IF] HOMEASSISTANT - Using hourly statistics for '%s' (%d samples).",
@@ -592,16 +795,16 @@ class LoadInterface:
             bool(samples) and samples[0][0] <= start_utc and samples[-1][0] >= end_utc
         )
 
-    def __fetch_homeassistant_history(self, entity_id, start_utc, end_utc):
+    def __fetch_homeassistant_history(self, entity_id, start_utc, end_utc, conn):
         """State history from /api/history/period as sorted (utc, sample) pairs."""
         response = self.__request_with_retries(
             "get",
-            f"{self.url}/api/history/period/{start_utc.isoformat()}",
+            f"{conn.url}/api/history/period/{start_utc.isoformat()}",
             params={
                 "filter_entity_id": entity_id,
                 "end_time": end_utc.isoformat(),
             },
-            headers=self.__homeassistant_headers(),
+            headers=self.__homeassistant_headers(conn),
             item_label=entity_id,
         )
         if response is None:
@@ -641,7 +844,185 @@ class LoadInterface:
         samples.sort(key=lambda pair: pair[0])
         return samples
 
-    def __entity_attributes(self, entity_id):
+    def __fetch_evcc_history_series(self, entity, start_utc, end_utc):
+        """One EVCC history group's series as sorted (utc, sample) pairs.
+
+        The endpoint returns kWh per 15-minute slot with an ``energy`` (consumed)
+        and a ``returnEnergy`` (fed back) column. Power is what every consumer of
+        this interface expects, so each slot is integrated into its average W and
+        stamped twice, opening and closing — the same two-edge shape a Home
+        Assistant history period opens with, which is what lets the slot
+        integration downstream treat this source like any other.
+
+        A tariff entity (``tariff:grid``) is answered from the separate persisted
+        tariff slots instead: values in currency/kWh, delivered as the point
+        samples the price handler normalizes.
+        """
+        if entity[0] == "tariff:grid":
+            return self.__fetch_evcc_tariff_series("grid", start_utc, end_utc)
+        if entity[0] == "tariff:feedin":
+            return self.__fetch_evcc_tariff_series("feedin", start_utc, end_utc)
+        url = f"{self.url}/api/history/energy"
+        response = self.__request_with_retries(
+            "get",
+            url,
+            params=evcc_history_params(entity, start_utc, end_utc),
+            item_label=f"{entity} (EVCC history)",
+        )
+        if response is None:
+            return []
+
+        try:
+            payload = response.json()
+        except (ValueError, TypeError):
+            logger.error("[LOAD-IF] EVCC - Invalid JSON from %s", url)
+            return []
+        if not isinstance(payload, list):
+            return []
+
+        series = []
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("group") == entity[0] and (
+                entity[1] is None or entry.get("title") == entity[1]
+            ):
+                series.append(entry)
+        if not series:
+            logger.debug(
+                "[LOAD-IF] EVCC - No history series for '%s' between %s and %s.",
+                entity[0],
+                start_utc,
+                end_utc,
+            )
+            return []
+
+        now_utc = self.__to_utc(self.__now())
+        per_series = []
+        for one in series:
+            # One step function per series, keyed by stamp. Within a series the
+            # later write wins on purpose: adjacent slots share a boundary stamp
+            # (one closes where the next opens), and the slot *starting* there is
+            # the one whose rate holds until the following stamp - which is the
+            # step function __process_energy_data integrates.
+            steps = {}
+            per_series.append(steps)
+            for slot in one.get("data") or []:
+                slot_start = self.__to_utc(slot.get("start"))
+                slot_end = self.__to_utc(slot.get("end"))
+                if slot_start is None or slot_end is None or slot_end <= slot_start:
+                    continue
+                # Clip the *stamps* to the request range: history answers whole
+                # slots, and a window that opens mid-slot must not hand out
+                # samples outside what it asked for.
+                clipped_start = max(slot_start, start_utc)
+                clipped_end = min(slot_end, end_utc)
+                if clipped_end <= clipped_start:
+                    continue
+
+                energy_kwh = self.__as_float(slot.get("energy")) or 0.0
+                retour_kwh = self.__as_float(slot.get("returnEnergy")) or 0.0
+                # The rate, however, is integrated over the span the energy was
+                # measured in, which begins at the slot's own start - not at the
+                # clipped one. ``energy`` is the whole slot's; dividing it by the
+                # fraction the caller happened to ask for inflates the rate by
+                # exactly that fraction, and the price handler's rolling window
+                # (``now - lookback - 12 h``) never starts on a slot boundary. A
+                # 0.9 kWh quarter-hour asked for from minute 7 read as 6750 W
+                # instead of its actual 3600 W.
+                # The upper bound is "now" rather than the slot's end, because
+                # the slot still being filled carries only the energy accumulated
+                # so far - there, elapsed time is the honest divisor.
+                measured_end = min(slot_end, now_utc) if now_utc else slot_end
+                hours = (measured_end - slot_start).total_seconds() / 3600.0
+                # Signed power. EVCC's rule is the same for every group
+                # (verified against a live 0.317 site): ``energy`` accumulates
+                # the positive direction - charging for the battery meter,
+                # importing for grid, producing for PV - and ``returnEnergy``
+                # the return direction. The signed net is exactly the
+                # conventions the battery price calculation pins for EVCC
+                # (battery positive_charging, grid positive_import). Positive
+                # only stays positive: clamping negatives here would erase the
+                # discharge signal, and a discharging slot would read as a
+                # no-op instead of "discharge, not charge". Consumers of the
+                # load profile path take abs() of the integrated average.
+                power_w = (
+                    (energy_kwh - retour_kwh) * 1000.0 / hours if hours > 0 else 0.0
+                )
+                for stamp in (clipped_start, clipped_end):
+                    steps[stamp] = power_w
+
+        # Across series the rates *add*: a group is the sum of its meters, not
+        # one of them. EVCC is asked to do this itself (grouped=true), so the
+        # normal answer is a single series and this loop is a no-op - it is the
+        # safety net for a site or version that still answers per entity, where
+        # keeping one series was a silent undercount.
+        totals = {}
+        for steps in per_series:
+            for stamp, power_w in steps.items():
+                totals[stamp] = totals.get(stamp, 0.0) + power_w
+
+        return [
+            (
+                stamp,
+                {
+                    "state": totals[stamp],
+                    "last_updated": stamp.isoformat(),
+                    "attributes": {"unit_of_measurement": "W"},
+                },
+            )
+            for stamp in sorted(totals)
+        ]
+
+    def __fetch_evcc_tariff_series(self, usage, start_utc, end_utc):
+        """EVCC's persisted tariff slots as (utc, price €/Wh) point samples.
+
+        ``GET /api/history/tariffs`` answers 15-minute slots with ``grid`` and
+        ``feedin`` columns in currency/kWh - the price history the battery price
+        calculation attributes grid-charged energy with. Point samples (one per
+        slot start) rather than the two-edge power shape: the price handler reads
+        nearest-sample values, and a slot boundary stamp is exactly that.
+        """
+        response = self.__request_with_retries(
+            "get",
+            f"{self.url}/api/history/tariffs",
+            params={
+                "from": start_utc.astimezone(timezone.utc).isoformat(),
+                "to": end_utc.astimezone(timezone.utc).isoformat(),
+                "aggregate": "15m",
+            },
+            item_label=f"tariff:{usage} (EVCC history)",
+        )
+        if response is None:
+            return []
+
+        try:
+            slots = response.json()
+        except (ValueError, TypeError):
+            logger.error("[LOAD-IF] EVCC - Invalid JSON from /api/history/tariffs")
+            return []
+        if not isinstance(slots, list):
+            return []
+
+        # The price handler's converter divides anything above 1.0 by 100 (its
+        # ct/kWh heuristic); EVCC answers currency/kWh, values like 0.27 - inside
+        # the range the converter expects. EUR/kWh is also exactly what the
+        # price_data key wants, so no conversion happens here at all.
+        column = "grid" if usage == "grid" else "feedin"
+        samples = []
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            value = self.__as_float(slot.get(column))
+            stamp = self.__to_utc(slot.get("start"))
+            if value is None or stamp is None:
+                continue
+            if stamp < start_utc or stamp >= end_utc:
+                continue
+            samples.append((stamp, {"state": value, "last_updated": stamp.isoformat()}))
+        return samples
+
+    def __entity_attributes(self, entity_id, conn):
         """Attributes of an entity, fetched once per process."""
         if entity_id in self.__homeassistant_attribute_cache:
             return self.__homeassistant_attribute_cache[entity_id]
@@ -649,8 +1030,8 @@ class LoadInterface:
         attributes = {}
         response = self.__request_with_retries(
             "get",
-            f"{self.url}/api/states/{entity_id}",
-            headers=self.__homeassistant_headers(),
+            f"{conn.url}/api/states/{entity_id}",
+            headers=self.__homeassistant_headers(conn),
             item_label=f"{entity_id} (attributes)",
         )
         if response is not None:
@@ -661,7 +1042,7 @@ class LoadInterface:
         self.__homeassistant_attribute_cache[entity_id] = attributes
         return attributes
 
-    def __statistics_unit_factor(self, entity_id):
+    def __statistics_unit_factor(self, entity_id, conn):
         """Multiplier that brings statistics values to W / Wh.
 
         Statistics rows carry no unit, so it comes from the entity. The same
@@ -669,11 +1050,11 @@ class LoadInterface:
         itself says which of the two the row holds.
         """
         unit = str(
-            self.__entity_attributes(entity_id).get("unit_of_measurement", "")
+            self.__entity_attributes(entity_id, conn).get("unit_of_measurement", "")
         ).strip()
         return 1000.0 if unit in ("kW", "kWh") else 1.0
 
-    def __fetch_statistics(self, entity_id, start_utc, end_utc, period):
+    def __fetch_statistics(self, entity_id, start_utc, end_utc, period, conn):
         """Recorder statistics for a range, as sorted (utc, sample) pairs in W."""
         if self.__statistics_unsupported or self.__statistics_failed_this_build:
             return []
@@ -685,9 +1066,9 @@ class LoadInterface:
         refused = []
         response = self.__request_with_retries(
             "post",
-            f"{self.url}/api/services/recorder/get_statistics",
+            f"{conn.url}/api/services/recorder/get_statistics",
             params={"return_response": "true"},
-            headers=self.__homeassistant_headers(),
+            headers=self.__homeassistant_headers(conn),
             timeout=max(self.request_timeout, 30),
             item_label=f"{entity_id} ({period} statistics)",
             json_data={
@@ -732,7 +1113,9 @@ class LoadInterface:
             )
             return []
 
-        return self.__statistics_rows_to_samples(entity_id, rows, start_utc, end_utc)
+        return self.__statistics_rows_to_samples(
+            entity_id, rows, start_utc, end_utc, conn
+        )
 
     def __statistics_row_power(self, row, factor, hours, previous_state):
         """Average power for one statistics bucket, and the meter reading to carry.
@@ -754,7 +1137,7 @@ class LoadInterface:
                 value = (state - previous_state) * factor / hours
         return value, state if state is not None else previous_state
 
-    def __statistics_rows_to_samples(self, entity_id, rows, start_utc, end_utc):
+    def __statistics_rows_to_samples(self, entity_id, rows, start_utc, end_utc, conn):
         """Turn statistics buckets into the sample shape the history path produces.
 
         `mean` is the average power over a measurement bucket. `change` is the
@@ -763,7 +1146,7 @@ class LoadInterface:
         between consecutive buckets, never as a value in its own right, which is
         what made a 100 kWh counter arrive at the optimizer as 100 kW.
         """
-        factor = self.__statistics_unit_factor(entity_id)
+        factor = self.__statistics_unit_factor(entity_id, conn)
         deduped = {}
         previous_state = None
 
@@ -1184,22 +1567,9 @@ class LoadInterface:
             - All load values are multiplied by the determined unit factor before being returned.
         """
 
-        if self.src == "openhab":
-            additional_load_data = self.__fetch_historical_energy_data_from_openhab(
-                item, start_time, end_time
-            )
-        elif self.src == "homeassistant":
-            additional_load_data = (
-                self.__fetch_historical_energy_data_from_homeassistant(
-                    item, start_time, end_time
-                )
-            )
-        else:
-            logger.error(
-                "[LOAD-IF] Car Load source '%s' currently not supported. Using default.",
-                self.src,
-            )
-            return []
+        additional_load_data = self.fetch_historical_energy_data(
+            item, start_time, end_time
+        )
 
         # multiply every value with car_load_unit_factor before returning
         for data_entry in additional_load_data:
@@ -1221,12 +1591,15 @@ class LoadInterface:
         every slot is then cut out of the cached series. This is the only writer of
         that cache: it is the only caller that asks for a complete, finished day.
         A rolling window ending at "now" - what `fetch_historical_energy_data` gets
-        from the battery price handler - must keep going out to Home Assistant, or it
+        from the battery price handler - must keep going out to the source, or it
         would be answered from a frozen snapshot. That is why the fetch below is the
         only one allowed to fill the cache, flagged rather than passed as an argument
         so the normal fetch entry point stays the single place a range is requested.
+
+        The EVCC path shares the method name for test parity but fills its own
+        cache; the request it makes is the same one-day /api/history/energy call.
         """
-        if not entity_id or self.src != "homeassistant":
+        if not entity_id or self.src not in ("homeassistant", "evcc"):
             return
 
         start_utc = self.__to_utc(start_time)
@@ -1240,18 +1613,25 @@ class LoadInterface:
         # comes back empty, so a stale entry left here would answer this day's
         # coverage check with the wrong day's data.
         self.__homeassistant_history_cache.pop(entity_id, None)
+        self.__evcc_history_cache.pop(entity_id, None)
 
+        # Named for the connection that will answer, not for the configured
+        # source. Under EVCC a Home Assistant entity is served by the
+        # supplementary connection, and saying "EVCC" here sent a live
+        # diagnosis hunting a misrouting that was not happening.
+        conn = self.__connection_for(entity_id)
         logger.debug(
-            "[LOAD-IF] HOMEASSISTANT - Prefetching '%s' for %s to %s once for the complete day.",
+            "[LOAD-IF] %s - Prefetching '%s' for %s to %s once for the complete day.",
+            conn.src.upper() if conn else "NO SOURCE FOR",
             entity_id,
             start_time,
             end_time,
         )
         self.__prefetching = True
         try:
-            self.__fetch_historical_energy_data_from_homeassistant(
-                entity_id, start_time, end_time
-            )
+            # Through the one dispatch, so a sensor served by the supplementary
+            # connection gets its day cached the same way the EVCC ones do.
+            self.fetch_historical_energy_data(entity_id, start_time, end_time)
         finally:
             self.__prefetching = False
 
@@ -1281,12 +1661,13 @@ class LoadInterface:
             "[LOAD-IF] Creating day load profile from %s to %s", start_time, end_time
         )
 
-        # Fetch every Home Assistant sensor this day needs exactly once. The slot
-        # loop below then reads from the local cache, instead of the 24 requests
-        # per sensor that made a large recorder time out (issue #302). Managed
-        # loads belong in here too: they are subtracted per slot further down, so
-        # leaving them out would keep the request storm for anyone using them.
-        if self.src == "homeassistant":
+        # Fetch every sensor this day needs exactly once. The slot loop below then
+        # reads from the local cache, instead of the 24 requests per sensor that
+        # made a large recorder time out (issue #302). Managed loads belong in here
+        # too: they are subtracted per slot further down, so leaving them out would
+        # keep the request storm for anyone using them. EVCC virtual entities
+        # prefetch through their own cache with the identical contract.
+        if self.src in ("homeassistant", "evcc"):
             entities = [
                 self.load_sensor,
                 self.car_charge_load_sensor,
@@ -1304,20 +1685,9 @@ class LoadInterface:
             # logger.debug(
             #     "[LOAD-IF] Fetching data for %s to %s", current_time_slot, next_slot
             # )
-            if self.src == "openhab":
-                energy_data = self.__fetch_historical_energy_data_from_openhab(
-                    self.load_sensor, current_time_slot, next_slot
-                )
-            elif self.src == "homeassistant":
-                energy_data = self.__fetch_historical_energy_data_from_homeassistant(
-                    self.load_sensor, current_time_slot, next_slot
-                )
-            else:
-                logger.error(
-                    "[LOAD-IF] Load source '%s' currently not supported. Using default.",
-                    self.src,
-                )
-                return []
+            energy_data = self.fetch_historical_energy_data(
+                self.load_sensor, current_time_slot, next_slot
+            )
 
             car_load_energy = 0
             # check if car load sensor is configured
@@ -1571,13 +1941,14 @@ class LoadInterface:
                 # Nothing from 7 and 14 days ago is normal on a new install; nothing
                 # from yesterday either, on a source that is actually connected, is
                 # not. Home Assistant answers an unknown entity with 200 and an empty
-                # list rather than a 404, so a wrong sensor name produces no error
-                # anywhere — it just quietly becomes this synthetic curve, and the
-                # dashboard looks plausible while the optimizer runs on fiction.
+                # list rather than a 404 (and EVCC answers an unknown group the same
+                # way), so a wrong sensor name produces no error anywhere — it just
+                # quietly becomes this synthetic curve, and the dashboard looks
+                # plausible while the optimizer runs on fiction.
                 # The "| Config:" and "| ACTION REQUIRED" suffixes are what
                 # parseAlertMeta() in web/js/main.js turns into the startup-errors
                 # panel's badge and deep link.
-                if self.src in ("openhab", "homeassistant"):
+                if self.src in ("openhab", "homeassistant", "evcc"):
                     logger.warning(
                         "[LOAD-IF] '%s' returned no consumption data for the last two "
                         "weeks. If this is not a new installation, check that the "
@@ -1605,6 +1976,7 @@ class LoadInterface:
         # The four days of raw samples have served their purpose. Nothing until the
         # next rebuild reads them, and they are the largest thing this interface holds.
         self.__homeassistant_history_cache.clear()
+        self.__evcc_history_cache.clear()
         return load_profile
 
     def get_load_profile(self, tgt_duration, start_time=None):
@@ -1616,6 +1988,7 @@ class LoadInterface:
         - Default: Returns a predefined static load profile.
         - OpenHAB: Fetches the load profile from an OpenHAB instance.
         - Home Assistant: Fetches the load profile from a Home Assistant instance.
+        - EVCC: Fetches it from the EVCC energy history (virtual entities).
 
         Args:
             tgt_duration (int): The target duration in hours for which the load profile is needed.
@@ -1631,7 +2004,7 @@ class LoadInterface:
         if self.src == "default":
             logger.info("[LOAD-IF] Using load source default")
             return self._get_default_profile()[:tgt_duration]
-        if self.src in ("openhab", "homeassistant"):
+        if self.src in ("openhab", "homeassistant", "evcc"):
             if self.load_sensor == "" or self.load_sensor is None:
                 logger.error(
                     "[LOAD-IF] Load sensor not configured for source '%s'. Using default.",
@@ -1666,7 +2039,7 @@ class LoadInterface:
             request builder discounts the in-progress slot - and handing out the held
             list itself would let that accumulate, shrinking the slot on every run.
         """
-        if self.src not in ("openhab", "homeassistant") or not self.load_sensor:
+        if self.src not in ("openhab", "homeassistant", "evcc") or not self.load_sensor:
             return self._get_default_profile()
 
         with self.__profile_lock:

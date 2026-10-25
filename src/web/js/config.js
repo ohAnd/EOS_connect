@@ -66,6 +66,7 @@ class ConfigurationManager {
         this.schema = null;        // array of field defs from /api/config/schema
         this.values = {};          // flat {dot.key: value}
         this.originalValues = {};  // snapshot for dirty detection
+        this.resolvedValues = {};  // what the merge derives, not what it stores
         this.level = localStorage.getItem("config_level") || "standard";
         this.activeSection = null;
         this.toastContainer = null;
@@ -110,9 +111,14 @@ class ConfigurationManager {
      * Fetch schema and current values from the API.
      */
     async _loadData() {
-        const [schemaRes, valuesRes] = await Promise.all([
+        const [schemaRes, valuesRes, resolvedRes] = await Promise.all([
             fetch("api/config/schema"),
             fetch("api/config/export"),
+            // Values the merge derives rather than stores - the EVCC data
+            // source resolves its own entity names, address and battery
+            // capacity. They are deliberately absent from /export, which is
+            // the store and doubles as the backup payload.
+            fetch("api/config/resolved"),
         ]);
 
         if (!schemaRes.ok) {
@@ -149,6 +155,22 @@ class ConfigurationManager {
         for (const f of this.schema) {
             if (!(f.key in this.values) && !LIST_SECTIONS.has(f.section)) {
                 this.values[f.key] = f.default;
+            }
+        }
+
+        // Derived values go in as if they had been stored, and into
+        // originalValues with them: they are not the user's edit, so they must
+        // never count as a change and never be written back on save.
+        this.resolvedValues = {};
+        if (resolvedRes && resolvedRes.ok) {
+            try {
+                const resolved = await resolvedRes.json();
+                this.resolvedValues = resolved || {};
+                for (const [k, v] of Object.entries(this.resolvedValues)) {
+                    this.values[k] = v;
+                }
+            } catch (e) {
+                console.warn("[ConfigManager] resolved values unavailable:", e);
             }
         }
 
@@ -297,7 +319,11 @@ class ConfigurationManager {
         return this._orderedSections().map(sec => {
             const meta = CONFIG_SECTIONS[sec] || { icon: "fa-circle", label: sec };
             const cls = sec === this.activeSection ? "active" : "";
-            const visibleCount = this._fieldsForSection(sec).length;
+            const fields = this._fieldsForSection(sec);
+            // A section whose fields are all dependency-hidden (EVCC's URL while
+            // EVCC is already the data source) has nothing to answer; rendering
+            // it gave the settings an empty page that reads as something broken.
+            const visibleCount = fields.filter(f => !this._isDependencyHidden(f)).length;
             if (visibleCount === 0) {
                 return "";
             }
@@ -476,6 +502,99 @@ class ConfigurationManager {
     // ── Individual field rendering ──────────────────────────────
 
     /**
+     * Render a sensor field that EVCC fills in, as a read-only status row.
+     *
+     * EVCC mode resolves the sensor names itself (group:home, battery.soc, …) —
+     * the user should see *what* EVCC supplies here rather than an empty input
+     * inviting the Home Assistant entity id that once stood in the field.
+     * The Test button is kept: it probes the resolved name, which reads better
+     * than a status line with no way to verify it.
+     */
+    _renderEvccManagedField(f, val) {
+        const label = this._prettyLabel(f.key);
+        const resolved = String(val || "").trim();
+        const docsHref = f.help_url
+            ? docsUrl(`user-guide/${f.help_url.split("#")[0]}`)
+            + `?level=${encodeURIComponent(this.level)}`
+            + (f.help_url.includes("#") ? `#${f.help_url.split("#")[1]}` : "")
+            : "";
+        const helpText = f.description
+            ? `<div class="config-help-text always-visible" id="cfg-help-${this._cssKey(f.key)}">
+                ${this._escapeHtml(f.description)} <a href="${docsHref}" target="_blank" rel="noopener">
+                Learn more <i class="fas fa-external-link-alt" style="font-size:0.8em;"></i></a>
+            </div>`
+            : "";
+        // An empty resolution is a finding to show, not an input to fill: the
+        // additional load resolves from a title under Data Source, and nothing
+        // here asks for an entity id this source cannot answer.
+        if (!resolved) {
+            return `
+            <div class="config-field" data-key="${f.key}" id="cfg-field-${this._cssKey(f.key)}">
+                <div class="config-field-label">
+                    <span>${label}</span>
+                    <span class="config-badge config-badge-unavailable">
+                        <i class="fas fa-car" aria-hidden="true"></i> not configured
+                    </span>
+                    ${f.description ? `<button class="config-help-btn" tabindex="-1" onclick="configurationManager._toggleHelp('${f.key}')" title="Help">
+                        <i class="fas fa-circle-question"></i></button>` : ""}
+                </div>
+                <div class="config-field-input">
+                    <input type="text" value="not provided by EVCC" readonly
+                        class="config-input config-input-readonly" />
+                </div>
+                ${helpText}
+            </div>`;
+        }
+        return `
+            <div class="config-field" data-key="${f.key}" id="cfg-field-${this._cssKey(f.key)}">
+                <div class="config-field-label">
+                    <span>${label}</span>
+                    <span class="config-badge config-badge-evcc">
+                        <i class="fas fa-car" aria-hidden="true"></i> from EVCC
+                    </span>
+                    ${f.description ? `<button class="config-help-btn" tabindex="-1" onclick="configurationManager._toggleHelp('${f.key}')" title="Help">
+                        <i class="fas fa-circle-question"></i></button>` : ""}
+                </div>
+                <div class="config-field-input">
+                    <input type="text" value="${this._escapeAttr(resolved)}" readonly
+                        class="config-input config-input-readonly" />
+                </div>
+                ${helpText}
+            </div>${this._renderNotice(f)}${this._renderEntityTester(f, null)}`;
+    }
+
+    /**
+     * A note under the field, shown while its condition holds.
+     *
+     * Not a validation error and not part of the description: it is about the
+     * *setup* around the field - something EVCC cannot answer and a second
+     * connection would. It carries a link to the section that resolves it,
+     * because "configure it elsewhere" without saying where is a dead end.
+     */
+    _renderNotice(f, entryValues = null) {
+        const notice = f.notice_when;
+        if (!notice || !this._conditionsMet(notice.when, entryValues)) {
+            return "";
+        }
+        // The note belongs to its field, exactly as the Test button does. It is a
+        // sibling of the field div rather than a child, so it does not inherit the
+        // field's hidden class and has to be told - without this it outlived the
+        // field it explains. On the Price and PV pages, where the sensor name is
+        // gated away as soon as EVCC is picked as that source, the leftover note
+        // advised picking EVCC as the source: the thing already done.
+        const hidden = this._isDependencyHidden(f, entryValues) ? " hidden" : "";
+        const link = notice.link
+            ? `<a href="#" onclick="configurationManager._selectSection('${notice.link}'); return false;">
+                   Set it up <i class="fas fa-arrow-right" style="font-size:0.8em;"></i></a>`
+            : "";
+        return `
+            <div class="config-field config-field-notice${hidden}" data-notice-for="${f.key}">
+                <i class="fas fa-circle-info" aria-hidden="true"></i>
+                <span>${this._escapeHtml(notice.text)} ${link}</span>
+            </div>`;
+    }
+
+    /**
      * Render a single config field.
      * @param {Object} f - Field definition from schema
      * @returns {string} Field HTML
@@ -483,6 +602,23 @@ class ConfigurationManager {
     _renderField(f, entryValues = null) {
         const val = this.values[f.key] ?? f.default;
         const isHidden = this._isDependencyHidden(f, entryValues) ? " hidden" : "";
+
+        // A field EVCC manages (labels: "evcc_managed") reads out instead of
+        // asking, whenever EVCC is the data source and the viewer is below the
+        // expert level. The value shown is the resolved EVCC source, not an
+        // input the user would have to fill twice.
+        // ...and only where the resolution actually produced a value. EVCC
+        // reports a battery's SoC limits through a capability not every
+        // integration implements, so "EVCC manages this" is a per-site fact,
+        // not a property of the field. Rendering it read-only regardless left
+        // a field the user had to set and could not.
+        const evccManaged = (f.labels || []).includes("evcc_managed")
+            && this.values["data_source.type"] === "evcc"
+            && Object.prototype.hasOwnProperty.call(this.resolvedValues || {}, f.key)
+            && (LEVEL_ORDER[this.level] ?? 2) < (LEVEL_ORDER.expert ?? 2);
+        if (evccManaged) {
+            return this._renderEvccManagedField(f, val);
+        }
 
         let inputHtml;
         switch (f.type) {
@@ -545,7 +681,7 @@ class ConfigurationManager {
                 </div>
                 ${helpText}
                 <div class="config-field-error" id="cfg-err-${this._cssKey(f.key)}"></div>
-            </div>${this._renderEntityTester(f, entryValues)}${this._renderTemperatureCoordinateNotice(f)}`;
+            </div>${this._renderNotice(f, entryValues)}${this._renderEntityTester(f, entryValues)}${this._renderTemperatureCoordinateNotice(f)}`;
     }
 
     /**
@@ -1449,7 +1585,19 @@ class ConfigurationManager {
         if (!f.depends_on) {
             return false;
         }
-        for (const [depKey, allowed] of Object.entries(f.depends_on)) {
+        return !this._conditionsMet(f.depends_on, entryValues);
+    }
+
+    /**
+     * Whether every entry of a depends_on-shaped condition holds right now.
+     *
+     * Shared by the visibility gate and by notice_when, so a notice cannot drift
+     * away from the rule that decides whether the field is even shown. The
+     * backend's _dependency_met and the wizard's _isDependencyMet are the other
+     * two implementations of the same three cases.
+     */
+    _conditionsMet(conditions, entryValues = null) {
+        for (const [depKey, allowed] of Object.entries(conditions || {})) {
             // A key without a dot is resolved *within the entry*: in managed_loads,
             // "type" means this card's type. Two cards of different types have to be
             // judged independently, which is why pv_forecast never needed this — its
@@ -1460,7 +1608,16 @@ class ConfigurationManager {
 
             if (allowed === "!empty") {
                 if (!currentVal || currentVal === "") {
-                    return true;
+                    return false;
+                }
+                continue;
+            }
+            // "!value": the negative match — the condition holds while the
+            // governing key does NOT hold *value*. How evcc.url steps aside once
+            // data_source.type already points at EVCC.
+            if (typeof allowed === "string" && allowed.startsWith("!") && allowed.length > 1 && allowed !== "!empty") {
+                if (String(currentVal) === allowed.slice(1)) {
+                    return false;
                 }
                 continue;
             }
@@ -1471,16 +1628,16 @@ class ConfigurationManager {
                     a === currentVal || String(a) === String(currentVal)
                 );
                 if (!match) {
-                    return true;
+                    return false;
                 }
             } else {
-                // Single string value — hide if current value doesn't match
+                // Single string value — the condition needs an exact match
                 if (allowed !== currentVal && String(allowed) !== String(currentVal)) {
-                    return true;
+                    return false;
                 }
             }
         }
-        return false;
+        return true;
     }
 
     /**
@@ -1508,15 +1665,31 @@ class ConfigurationManager {
             }
         }
 
+        // A notice whose condition names a field on this same page has to be
+        // re-evaluated, and it is rendered rather than toggled - so re-render the
+        // section. Until now every notice condition pointed at the Data Source
+        // page, where navigating back rebuilt the section anyway and hid this.
+        const governsNotice = this.schema.some(
+            f => f.notice_when && f.notice_when.when
+                && changedKey in f.notice_when.when
+                && f.section === this.activeSection
+        );
+        if (governsNotice) {
+            this._selectSection(this.activeSection);
+            return;
+        }
+
         for (const f of this.schema) {
             if (f.depends_on && changedKey in f.depends_on) {
                 const hidden = this._isDependencyHidden(f);
-                // The field and its connection-test row travel together — a Test
-                // button for a field that is not applicable is a control that cannot
-                // do anything.
+                // The field, its connection-test row and its note travel together —
+                // a Test button for a field that is not applicable is a control that
+                // cannot do anything, and a note about it explains something that is
+                // no longer on screen.
                 const els = [
                     document.getElementById(`cfg-field-${this._cssKey(f.key)}`),
                     document.querySelector(`[data-entity-tester="${f.key}"]`),
+                    document.querySelector(`[data-notice-for="${f.key}"]`),
                 ];
                 for (const el of els) {
                     if (el) {

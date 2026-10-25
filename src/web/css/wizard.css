@@ -421,3 +421,19 @@
     color: #ccc;
     line-height: 1.6;
 }
+
+/* A note about the setup around a field - information, not the error styling.
+   Mirrors .config-field-notice on the settings page; the wizard cannot link
+   into a section, so it only states what is missing. */
+.field-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 6px;
+    font-size: 0.82em;
+    color: #9bb8d4;
+    background-color: rgba(74, 158, 255, 0.08);
+    border-left: 3px solid #4a9eff;
+    border-radius: 4px;
+    padding: 8px 12px;
+}

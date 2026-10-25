@@ -1,11 +1,13 @@
 """Tests for EVCC price source integration."""
 
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from unittest.mock import Mock
 
 import pytest
+import pytz
 
-from src.interfaces.price_interface import PriceInterface
+from src.interfaces.price_interface import PriceInterface, whole_local_days_covered
 
 # Accessing protected members is fine in white-box tests.
 # pylint: disable=protected-access
@@ -530,3 +532,103 @@ class TestEvccPlacesBySlotNotEntryCount:
         assert len(iface.get_current_prices()) == 48
         assert metadata["forecast_start_index"] == 24
         assert metadata["forecast_type"] == "simple_repetition"
+
+
+class TestACompleteDayIsMeasuredNotCounted:
+    """
+    A local day holds 96 quarter-hours on all but two days a year.
+
+    When the clock goes back it holds 100 and when it springs forward 92, and
+    the old check demanded exactly 96 or 192. So twice a year EVCC's correct,
+    gapless, complete day was rejected - on the two days whose price curve is
+    least like any other day's - and the fetch fell back to the cache instead
+    of repeating that day's own pattern.
+
+    Measured against a real payload: EVCC served 100 quarter-hours on
+    2026-10-25, the first twelve at +02:00 and the rest at +01:00.
+    """
+
+    BERLIN = pytz.timezone("Europe/Berlin")
+
+    def _day(self, date_str, slots, resolution_seconds=900):
+        """A contiguous local day, built the way the normalizer hands them over."""
+        zone = ZoneInfo("Europe/Berlin")
+        start = datetime.fromisoformat(f"{date_str}T00:00:00").replace(tzinfo=zone)
+        step = timedelta(seconds=resolution_seconds)
+        # Stepped in UTC so a transition is crossed rather than repeated: adding
+        # to a zone-aware wall clock would keep returning the same local hour.
+        cursor = start.astimezone(timezone.utc)
+        entries = []
+        for _ in range(slots):
+            nxt = cursor + step
+            entries.append(
+                {
+                    "start": cursor.astimezone(zone),
+                    "end": nxt.astimezone(zone),
+                    "value": 0.2,
+                }
+            )
+            cursor = nxt
+        return entries
+
+    def test_an_ordinary_day_is_one_day(self):
+        entries = self._day("2026-10-20", 96)
+        assert whole_local_days_covered(entries, 900, self.BERLIN) == 1
+
+    def test_the_day_the_clock_goes_back_is_still_one_day(self):
+        """25 hours, 100 slots - the case the live instance reported."""
+        entries = self._day("2026-10-25", 100)
+        assert entries[-1]["end"].strftime("%Y-%m-%d %H:%M") == "2026-10-26 00:00"
+        assert whole_local_days_covered(entries, 900, self.BERLIN) == 1
+
+    def test_the_day_the_clock_springs_forward_is_still_one_day(self):
+        """23 hours, 92 slots - the same defect in the other direction."""
+        entries = self._day("2027-03-28", 92)
+        assert entries[-1]["end"].strftime("%Y-%m-%d %H:%M") == "2027-03-29 00:00"
+        assert whole_local_days_covered(entries, 900, self.BERLIN) == 1
+
+    def test_two_ordinary_days_are_two_days(self):
+        entries = self._day("2026-10-20", 192)
+        assert whole_local_days_covered(entries, 900, self.BERLIN) == 2
+
+    def test_hourly_resolution_works_the_same_way(self):
+        assert (
+            whole_local_days_covered(
+                self._day("2026-10-20", 24, 3600), 3600, self.BERLIN
+            )
+            == 1
+        )
+        assert (
+            whole_local_days_covered(
+                self._day("2026-10-25", 25, 3600), 3600, self.BERLIN
+            )
+            == 1
+        )
+
+    def test_a_short_day_is_not_a_day(self):
+        assert (
+            whole_local_days_covered(self._day("2026-10-20", 95), 900, self.BERLIN) == 0
+        )
+
+    def test_a_series_that_does_not_start_at_midnight_is_not_a_day(self):
+        """96 entries, but shifted - the count alone could not tell."""
+        entries = self._day("2026-10-20", 97)[1:]
+        assert len(entries) == 96
+        assert whole_local_days_covered(entries, 900, self.BERLIN) == 0
+
+    def test_a_hole_with_a_matching_surplus_is_not_a_day(self):
+        """
+        The case counting could never catch: drop a slot in the middle and
+        append one past midnight. Still 96 entries, still starts at midnight,
+        and the old check called it complete.
+        """
+        entries = self._day("2026-10-20", 97)
+        del entries[40]
+        assert len(entries) == 96
+        assert whole_local_days_covered(entries, 900, self.BERLIN) == 0
+
+    def test_an_empty_series_is_not_a_day(self):
+        assert whole_local_days_covered([], 900, self.BERLIN) == 0
+        assert (
+            whole_local_days_covered(self._day("2026-10-20", 96), 0, self.BERLIN) == 0
+        )

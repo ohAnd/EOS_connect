@@ -42,6 +42,7 @@ import time
 from datetime import datetime
 import requests
 from .battery_price_handler import BatteryPriceHandler
+from .evcc_entities import connection_for, connections_from_section
 from .state_source import SUPPORTED_SOURCES, fetch_remote_state
 
 logger = logging.getLogger("__main__")
@@ -76,6 +77,16 @@ def _state_as_float(raw_state):
 # - Thermal protection (40-60°C): Reduces power to protect battery
 #
 # Generic implementation - suitable for any LiFePO4 battery system.
+
+
+class SensorNotReadable(ValueError):
+    """The configured name cannot be read through any configured connection.
+
+    A ValueError, because that is what the three readers already catch - but a
+    distinguishable one. Everything else they catch is a request that failed
+    this time and may succeed next time; this one cannot, and retrying it five
+    times only buries the single sentence that says what to do about it.
+    """
 
 
 class BatteryInterface:
@@ -148,6 +159,9 @@ class BatteryInterface:
         self.request_timeout = request_timeout  # Store configurable timeout
 
         self.soc_fail_count = 0
+        # Sensors already reported as having nowhere to be read from. Once per
+        # name: the condition is a setting, not a passing failure.
+        self.__unreadable_reported = set()
 
         self.configuration_state = "unknown"  # 'valid', 'incomplete', or 'invalid'
         self.configuration_valid = False
@@ -197,7 +211,7 @@ class BatteryInterface:
             return
 
         missing, where = None, "Data Source"
-        if self.url == "":
+        if self.url == "" or "://yourEVCCserver" in str(self.url):
             missing = "the data source URL is not configured"
         elif self.access_token == "" and self.src == "homeassistant":
             missing = "the Home Assistant access token is not configured"
@@ -261,7 +275,9 @@ class BatteryInterface:
             return None  # Default mode doesn't support temperature
 
         try:
-            raw_state = self.__fetch_remote_state(self.src, self.temp_sensor)
+            conn = self.__connection_for(self.temp_sensor)
+            src_name = conn.src if conn.src == self.src else f"supplementary {conn.src}"
+            raw_state = self.__fetch_remote_state(self.temp_sensor)
             temp = _state_as_float(raw_state)
 
             # Sanity check: battery temperature should be reasonable
@@ -274,8 +290,16 @@ class BatteryInterface:
 
             self.temp_fail_count = 0
             self.current_temp = temp
-            logger.debug("[BATTERY-IF] Successfully fetched Temp = %s°C", temp)
+            logger.debug(
+                "[BATTERY-IF] Successfully fetched Temp = %s°C via %s", temp, src_name
+            )
             return temp
+
+        except SensorNotReadable as exc:
+            # Not a failed request - a setting. Say it once, leave temperature
+            # compensation off, and do not spend the retry budget on it.
+            self.__report_unreadable(self.temp_sensor, exc)
+            return None
 
         except (requests.exceptions.RequestException, ValueError, KeyError) as e:
             self.temp_fail_count += 1
@@ -293,29 +317,82 @@ class BatteryInterface:
             )
             return self.current_temp  # Use last known value
 
+    def __connection_for(self, sensor):
+        """The connection that answers *sensor*, raising when none can.
+
+        One data source answers everything it is asked - except EVCC, which
+        answers only what it meters. The temperature is the standing example:
+        EVCC has no temperature of its own, so an entity id has to be read
+        through the supplementary connection.
+
+        It is no longer decided for the temperature alone. The SOC and the
+        €/Wh price sensor were asked of EVCC whatever they were named, and an
+        entity id there resolved to nothing rather than to an error. The rule
+        is ``evcc_entities.connection_for``, shared with the load interface and
+        the config UI's Test button so the same name gets the same verdict
+        everywhere.
+
+        Raises:
+            ValueError: when the name needs the second connection and none is
+                configured - the same exception the direct path raises, so the
+                caller's failure handling treats both identically.
+        """
+        primary, supplementary = connections_from_section(self.battery_data)
+        conn = connection_for(sensor, primary, supplementary)
+        if conn is None:
+            raise SensorNotReadable(
+                f"'{sensor}' is not a value EVCC carries, so it needs the "
+                "supplementary data source - configure one under Settings > "
+                "Data Source, or name an EVCC value instead. "
+                "| Config: #data-source | ACTION REQUIRED"
+            )
+        return conn
+
+    def __report_unreadable(self, label, error):
+        """Say once per sensor that it has nowhere to be read from.
+
+        Once, because the condition is a setting and will hold until someone
+        changes it. The readers below used to run it through their retry
+        counters, which repeated a warning every poll that never named the fix
+        - the one sentence that does was in a debug line nobody on INFO sees.
+        """
+        if label in self.__unreadable_reported:
+            return
+        self.__unreadable_reported.add(label)
+        # The message names the sensor itself; *label* is only what keeps this
+        # to one line per name.
+        logger.warning("[BATTERY-IF] %s", error)
+
     # source-specific price fetchers removed — use __fetch_price_data_unified
 
-    def __fetch_remote_state(self, source, sensor):
-        """Fetch the raw state string from OpenHAB or Home Assistant.
+    def __fetch_remote_state(self, sensor):
+        """Fetch the raw state string for *sensor*, through whatever answers it.
 
         Returns the trimmed state string. Raises the original requests
         exceptions for callers to handle.
         """
+        conn = self.__connection_for(sensor)
         return fetch_remote_state(
-            source,
+            conn.src,
             sensor,
-            url=self.url,
-            access_token=self.access_token,
+            url=conn.url,
+            access_token=conn.access_token,
             request_timeout=self.request_timeout,
-            ssl_ignore=self.ssl_ignore,
+            ssl_ignore=conn.ssl_ignore,
         )
 
     def __fetch_soc_data_unified(self):
         """Unified SOC fetch using the configured `self.src` source."""
         try:
-            raw_state = self.__fetch_remote_state(self.src, self.soc_sensor)
+            raw_state = self.__fetch_remote_state(self.soc_sensor)
             raw_value = _state_as_float(raw_state)
-            if raw_value <= 1.0:
+            if self.src == "evcc":
+                # EVCC /api/state reports battery.soc in percent (0-100), weighted
+                # across battery meters - no decimal/percent guessing is needed, and
+                # guessing here would read 0.6 as "60% of 1 percent" on a 60% battery
+                # only after the auto-detect below had already settled on a format.
+                soc = raw_value
+            elif raw_value <= 1.0:
                 # Use history to decide which format is closer to the last known value.
                 # If it's the first run (current_soc == 0), we default to decimal (x100)
                 # UNLESS the value is exactly 1.0, which we treat as 1% to avoid
@@ -326,11 +403,6 @@ class BatteryInterface:
 
                     if diff_as_percent < diff_as_decimal:
                         soc = raw_value
-                        # logger.debug(
-                        #     "[BATTERY-IF] Auto-detected percentage format "
-                        #     "(0-1) based on history: %s%%",
-                        #     soc,
-                        # )
                     else:
                         soc = raw_value * 100
                         logger.debug(
@@ -358,9 +430,6 @@ class BatteryInterface:
             else:
                 # Values > 1.0 are clearly percentage format (0-100).
                 soc = raw_value
-                # logger.debug(
-                #     "[BATTERY-IF] Detected percentage format (0-100): %s%%", soc
-                # )
 
             self.soc_fail_count = 0
             return round(soc, 1)
@@ -380,7 +449,7 @@ class BatteryInterface:
             return self.price_euro_per_wh
 
         # Use top-level `source` for all remote fetches (SOC and price)
-        raw_state = self.__fetch_remote_state(self.src, self.price_sensor)
+        raw_state = self.__fetch_remote_state(self.price_sensor)
         return _state_as_float(raw_state)
 
     def __update_price_euro_per_wh(self):
@@ -408,7 +477,7 @@ class BatteryInterface:
             return self.price_euro_per_wh
 
         source_name = self.src.upper()
-        if self.src not in ("homeassistant", "openhab"):
+        if self.src not in ("homeassistant", "openhab", "evcc"):
             logger.warning(
                 "[BATTERY-IF] Unknown price source '%s'. Keeping last value %s.",
                 self.src,
@@ -426,6 +495,10 @@ class BatteryInterface:
                 self.price_euro_per_wh,
             )
             return self.price_euro_per_wh
+        except SensorNotReadable as exc:
+            self.__report_unreadable(self.price_sensor, exc)
+            return self.price_euro_per_wh
+
         except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
             logger.warning(
                 "[BATTERY-IF] %s - Error fetching price sensor data: %s. "
@@ -446,6 +519,11 @@ class BatteryInterface:
         return self.price_euro_per_wh
 
     def _handle_soc_error(self, source, error, last_soc):
+        if isinstance(error, SensorNotReadable):
+            # The name has nowhere to be read from, and counting to five does
+            # not change that. The configured SOC stands meanwhile.
+            self.__report_unreadable(self.soc_sensor, error)
+            return last_soc
         self.soc_fail_count += 1
         if self.soc_fail_count < 5:
             logger.warning(
@@ -648,7 +726,9 @@ class BatteryInterface:
                 )
 
                 if self.base_control:
-                    self.base_control.set_current_bat_charge_max(self.max_charge_power_dyn)
+                    self.base_control.set_current_bat_charge_max(
+                        self.max_charge_power_dyn
+                    )
 
                 if self.on_bat_max_changed:
                     self.on_bat_max_changed()
@@ -775,7 +855,7 @@ class BatteryInterface:
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:
                 logger.error(
                     "[battery_interface] Battery state update failed: %s | Config: #battery | ACTION REQUIRED",
-                    e
+                    e,
                 )
             except Exception:  # pylint: disable=broad-except
                 # Anything unforeseen used to kill the thread outright, and nothing

@@ -79,6 +79,17 @@ class BatteryPriceHandler:
             "price_history_lookback_hours", 48
         )
 
+        # EVCC's history serves 15-minute slots rather than Home Assistant's
+        # state-change resolution. One EVCC slot is 900 s apart between samples,
+        # so the HA-tuned 600 s gap tolerance would close a charging event at
+        # every slot boundary and leave every one of them a single point - which
+        # is below the two points the energy split needs, and the whole
+        # calculation ends with "no energy charged". Slotted data gets the
+        # tolerance of one missed slot plus a boundary's worth of grace.
+        self.max_gap_seconds_identify = (
+            2400 if self.source == "evcc" else self.MAX_GAP_SECONDS_IDENTIFY
+        )
+
         # Sensor configuration
         self.battery_power_sensor = config.get("battery_power_sensor", "")
         self.pv_power_sensor = config.get("pv_power_sensor", "")
@@ -108,8 +119,22 @@ class BatteryPriceHandler:
             if self.price_calculation_enabled
             else None
         )
-        self.battery_power_convention: Optional[str] = None  # Will be auto-detected
-        self.grid_power_convention: Optional[str] = None  # Will be auto-detected
+        # EVCC's history endpoint answers with an energy and a returnEnergy
+        # column per slot - charge and discharge are already separated, so the
+        # sign conventions are known before any data is seen. Every other source
+        # leaves them None for the energy-balance fit
+        # (_detect_sensor_conventions) to decide from real samples.
+        if self.source == "evcc":
+            self.battery_power_convention = "positive_charging"
+            self.grid_power_convention = "positive_import"
+            logger.info(
+                "[BATTERY-PRICE] EVCC source: conventions fixed (battery "
+                "positive_charging, grid positive_import) - detection skipped"
+            )
+        else:  # auto-detect later from data
+            self.battery_power_convention = None
+            self.grid_power_convention = None
+
         self.last_analysis_results = {
             "stored_energy_price": self.price_euro_per_wh_accu,
             "duration_of_analysis": 0,
@@ -845,7 +870,7 @@ class BatteryPriceHandler:
                 else:
                     # Check for gap even if power is still above threshold
                     gap = (timestamp - last_charging_time).total_seconds()
-                    if gap < self.MAX_GAP_SECONDS_IDENTIFY:
+                    if gap < self.max_gap_seconds_identify:
                         current_event["end_time"] = timestamp
                         current_event["power_points"].append(point)
                     else:
@@ -860,7 +885,7 @@ class BatteryPriceHandler:
                 last_charging_time = timestamp
             elif current_event is not None:
                 gap = (timestamp - last_charging_time).total_seconds()
-                if gap < self.MAX_GAP_SECONDS_IDENTIFY:
+                if gap < self.max_gap_seconds_identify:
                     current_event["end_time"] = timestamp
                     current_event["power_points"].append(point)
                 else:
@@ -933,7 +958,7 @@ class BatteryPriceHandler:
             delta_seconds = (p_end["timestamp"] - p_start["timestamp"]).total_seconds()
 
             # Cap delta to avoid huge jumps if data is missing within an event
-            if delta_seconds > self.MAX_GAP_SECONDS_IDENTIFY:
+            if delta_seconds > self.max_gap_seconds_identify:
                 delta_seconds = self.DEFAULT_DELTA_SECONDS
 
             time_hours = delta_seconds / 3600.0

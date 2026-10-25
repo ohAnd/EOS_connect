@@ -38,6 +38,16 @@ class TestConfigSchema:
         assert "battery" in sections
         assert "system" in sections
 
+    def test_data_source_is_offered_before_evcc(self):
+        """Choosing EVCC as the data source is what configures its address.
+
+        The EVCC section then has nothing left to answer and drops out of the
+        nav entirely. Offering it first asked for the same URL twice - once on
+        a page that was about to disappear.
+        """
+        sections = self.schema.sections()
+        assert sections.index("data_source") < sections.index("evcc")
+
     def test_get_section(self):
         """Should return only fields for the requested section."""
         battery_fields = self.schema.get_section("battery")
@@ -82,12 +92,49 @@ class TestConfigSchema:
     def test_data_source_section_exists(self):
         """The unified data_source section should exist."""
         ds_fields = self.schema.get_section("data_source")
-        assert len(ds_fields) == 4  # type, url, access_token, ssl_ignore
+        # type, url, access_token, ssl_ignore + the four supplementary-connection
+        # fields — eight since EVCC became a source type with HA at its side.
+        assert len(ds_fields) == 8
         keys = [f.key for f in ds_fields]
         assert "data_source.type" in keys
         assert "data_source.url" in keys
         assert "data_source.access_token" in keys
         assert "data_source.ssl_ignore" in keys
+        assert "data_source.supplementary_type" in keys
+
+    def test_the_second_connection_is_named_for_what_it_is(self):
+        """It takes openHAB too, and serves more than sensors.
+
+        "Supplementary Home Assistant" was wrong on both counts from the start,
+        and the list of what needs it has only grown - battery temperature, an
+        inverter driven through Home Assistant, price and PV entities read
+        centrally.
+        """
+        groups = {
+            f.display_group
+            for f in self.schema.get_section("data_source")
+            if "supplementary" in f.key
+        }
+        assert groups == {"Supplementary Data Source"}, groups
+
+    def test_the_second_connection_is_off_until_asked_for(self):
+        """Most EVCC sites need none of it, so nothing is pre-selected."""
+        field = self.schema.get("data_source.supplementary_type")
+        assert field.default == "default"
+        assert "default" in field.validation["choices"]
+
+    def test_no_evcc_series_is_named_from_the_data_source_page(self):
+        """EVCC's loadpoints and consumers carry titles their owner chose.
+
+        Two fields here once built "group:loadpoint:<title>" and
+        "group:consumer:<title>" strings for the load section. The loadpoint one
+        went with the wallbox subtraction; the consumer one only saved typing a
+        prefix, at the price of a field in one section silently deciding the
+        value of a field in another. The name belongs where it is used.
+        """
+        keys = [f.key for f in self.schema.all_fields()]
+        assert "data_source.evcc_loadpoint_title" not in keys
+        assert "data_source.evcc_consumer_title" not in keys
 
     def test_deprecated_fields_have_label(self):
         """Load/battery connection override fields should be marked deprecated."""
@@ -100,7 +147,9 @@ class TestConfigSchema:
         """Certain price/battery fields should be marked hot_reload."""
         assert self.schema.get("price.feed_in_price").hot_reload is True
         assert self.schema.get("battery.min_soc_percentage").hot_reload is True
-        assert self.schema.get("battery.battery_price_include_feedin").hot_reload is True
+        assert (
+            self.schema.get("battery.battery_price_include_feedin").hot_reload is True
+        )
         assert self.schema.get("pv_forecast_source.source").hot_reload is True
         assert self.schema.get("pv_forecast.tilt").hot_reload is True
         # Restart-required fields should NOT be hot_reload
@@ -129,10 +178,27 @@ class TestConfigSchema:
             field = self.schema.get(key)
             assert field.depends_on == {"inverter.type": ["homeassistant"]}, key
 
+    def test_the_wallbox_sensor_is_not_offered_for_evcc(self):
+        """EVCC's ``group:home`` already excludes every loadpoint.
+
+        Offering the wallbox field there invites a second subtraction of energy
+        the base load never carried. The gate has to name Home Assistant and
+        openHAB explicitly - putting REMOTE_DATA_SOURCE_TYPES back would pull
+        EVCC in with them, which is how the double subtraction got in.
+        """
+        field = self.schema.get("load.car_charge_load_sensor")
+        assert field is not None
+        assert field.depends_on == {
+            "data_source.type": ["homeassistant", "openhab"]
+        }, field.depends_on
+        assert "evcc_managed" not in (field.labels or [])
+
     def test_inverter_url_token_removed(self):
         """Old inverter.url and inverter.token fields should not exist."""
         assert self.schema.get("inverter.url") is None, "inverter.url should be removed"
-        assert self.schema.get("inverter.token") is None, "inverter.token should be removed"
+        assert (
+            self.schema.get("inverter.token") is None
+        ), "inverter.token should be removed"
 
     def test_inverter_mode_sequence_fields_exist(self):
         """New inverter.*.mode-sequence JSON fields should exist."""
@@ -173,7 +239,6 @@ class TestConfigSchema:
 
         for field in [charge_from_grid, avoid_discharge, discharge_allowed]:
             assert "restart_required" in field.labels
-
 
 
 class TestPvForecastApiKey:
