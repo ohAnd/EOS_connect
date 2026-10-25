@@ -290,3 +290,73 @@ def test_no_notice_without_evcc(page, server, monkeypatch):
         page.evaluate("() => document.querySelectorAll('.config-field-notice').length")
         == 0
     )
+
+
+def _notice_visible(page, key):
+    """Whether the note for *key* is rendered AND on screen."""
+    return page.evaluate(
+        """(key) => {
+            const el = document.querySelector(`[data-notice-for="${key}"]`);
+            if (!el) { return null; }
+            return el.offsetParent !== null;
+        }""",
+        key,
+    )
+
+
+def test_a_notice_does_not_outlive_the_field_it_explains(evcc_page):
+    """
+    The note is a sibling of its field, not a child, so it does not inherit the
+    field's hidden class.
+
+    On the Price page with EVCC picked as the price source, the sensor name is
+    gated away - and the leftover note advised setting up a supplementary
+    source "or pick EVCC as this source directly instead", which is what the
+    reader had just done. The same note on the Load page is correct, because
+    the field it belongs to is on screen.
+    """
+    _select(evcc_page, "price")
+    evcc_page.evaluate(
+        "() => configurationManager._onFieldChange('price.source', 'evcc')"
+    )
+
+    field_hidden = evcc_page.evaluate("""() => {
+            const el = document.querySelector('#cfg-field-price-ha_sensor_name');
+            return el ? el.classList.contains('hidden') : null;
+        }""")
+    assert field_hidden is True, "the sensor name is not applicable to an EVCC source"
+    assert _notice_visible(evcc_page, "price.ha_sensor_name") is not True
+
+
+def test_the_notice_is_shown_while_its_field_applies(evcc_page):
+    """The other half of the rule - gating it away always would be no better."""
+    _select(evcc_page, "price")
+    evcc_page.evaluate(
+        "() => configurationManager._onFieldChange('price.source', 'timeseries')"
+    )
+    evcc_page.evaluate(
+        "() => configurationManager._onFieldChange('price.use_ha_central_data_source', true)"
+    )
+
+    assert _notice_visible(evcc_page, "price.ha_sensor_name") is True
+
+
+def test_a_notice_is_hidden_from_the_first_render(evcc_page, server):
+    """
+    Not only after a change. The screenshot that found this was a page opened
+    with the EVCC source already stored - nothing had changed on screen, so the
+    dependency update that hides the field never ran, and the note was there
+    from the first paint.
+    """
+    server.store.set_batch({"price.source": "evcc"})
+    evcc_page.evaluate("async () => { await showConfigurationMenu(); }")
+    evcc_page.wait_for_selector(".config-field")
+    _select(evcc_page, "price")
+
+    assert _notice_visible(evcc_page, "price.ha_sensor_name") is not True
+
+
+def test_the_load_notice_stays_visible(evcc_page):
+    """Exactly the case that was correct before and must remain so."""
+    _select(evcc_page, "load")
+    assert _notice_visible(evcc_page, "load.additional_load_1_sensor") is True

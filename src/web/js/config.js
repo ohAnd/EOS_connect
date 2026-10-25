@@ -576,12 +576,19 @@ class ConfigurationManager {
         if (!notice || !this._conditionsMet(notice.when, entryValues)) {
             return "";
         }
+        // The note belongs to its field, exactly as the Test button does. It is a
+        // sibling of the field div rather than a child, so it does not inherit the
+        // field's hidden class and has to be told - without this it outlived the
+        // field it explains. On the Price and PV pages, where the sensor name is
+        // gated away as soon as EVCC is picked as that source, the leftover note
+        // advised picking EVCC as the source: the thing already done.
+        const hidden = this._isDependencyHidden(f, entryValues) ? " hidden" : "";
         const link = notice.link
             ? `<a href="#" onclick="configurationManager._selectSection('${notice.link}'); return false;">
                    Set it up <i class="fas fa-arrow-right" style="font-size:0.8em;"></i></a>`
             : "";
         return `
-            <div class="config-field config-field-notice" data-notice-for="${f.key}">
+            <div class="config-field config-field-notice${hidden}" data-notice-for="${f.key}">
                 <i class="fas fa-circle-info" aria-hidden="true"></i>
                 <span>${this._escapeHtml(notice.text)} ${link}</span>
             </div>`;
@@ -1661,12 +1668,14 @@ class ConfigurationManager {
         for (const f of this.schema) {
             if (f.depends_on && changedKey in f.depends_on) {
                 const hidden = this._isDependencyHidden(f);
-                // The field and its connection-test row travel together — a Test
-                // button for a field that is not applicable is a control that cannot
-                // do anything.
+                // The field, its connection-test row and its note travel together —
+                // a Test button for a field that is not applicable is a control that
+                // cannot do anything, and a note about it explains something that is
+                // no longer on screen.
                 const els = [
                     document.getElementById(`cfg-field-${this._cssKey(f.key)}`),
                     document.querySelector(`[data-entity-tester="${f.key}"]`),
+                    document.querySelector(`[data-notice-for="${f.key}"]`),
                 ];
                 for (const el of els) {
                     if (el) {
