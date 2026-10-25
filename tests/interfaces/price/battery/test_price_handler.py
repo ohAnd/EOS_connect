@@ -219,7 +219,7 @@ def test_battery_discharging_not_attributed():
     load_power = 3500.0
 
     # Should return zeros for discharging
-    pv_to_bat, grid_to_bat = handler._calculate_power_split(
+    split = handler._calculate_power_split(
         battery_power, pv_power, grid_power, load_power
     )
 
@@ -241,13 +241,13 @@ def test_calculate_power_split_grid_normalization_inverted_grid():
     load_power = 100.0
     battery_power = 500.0
 
-    pv_to_bat, grid_to_bat = handler._calculate_power_split(
+    split = handler._calculate_power_split(
         battery_power, pv_power, grid_power, load_power
     )
 
     # Grid import 600W, load 100W → grid surplus 500W goes to battery
-    assert grid_to_bat == pytest.approx(500.0)
-    assert pv_to_bat == pytest.approx(0.0)
+    assert split.grid_to_battery == pytest.approx(500.0)
+    assert split.pv_to_battery == pytest.approx(0.0)
 
 
 def test_end_to_end_detection_and_attribution_inverted_grid():
@@ -522,7 +522,7 @@ def test_power_split_calculation():
     )
 
     # Test case: Grid import (positive), PV=0, Load=500W, Battery charging 3kW
-    pv_to_bat, grid_to_bat = handler._calculate_power_split(
+    split = handler._calculate_power_split(
         battery_power=3000.0,
         pv_power=0.0,
         grid_power=3500.0,  # Import from grid
@@ -530,8 +530,8 @@ def test_power_split_calculation():
     )
 
     # Expected: grid_for_load=500, grid_surplus=3000, all 3kW to battery from grid
-    assert grid_to_bat == 3000.0, "All battery charging should come from grid"
-    assert pv_to_bat == 0.0, "No PV charging"
+    assert split.grid_to_battery == 3000.0, "All battery charging should come from grid"
+    assert split.pv_to_battery == 0.0, "No PV charging"
 
 
 def test_power_split_with_pv_and_grid():
@@ -547,7 +547,7 @@ def test_power_split_with_pv_and_grid():
     )
 
     # PV=2kW, Grid=2kW, Load=500W, Battery=3kW
-    pv_to_bat, grid_to_bat = handler._calculate_power_split(
+    split = handler._calculate_power_split(
         battery_power=3000.0, pv_power=2000.0, grid_power=2000.0, load_power=500.0
     )
 
@@ -556,8 +556,8 @@ def test_power_split_with_pv_and_grid():
     # - PV surplus: 1500W → to battery
     # - Grid for load: 0W (already covered by PV)
     # - Grid surplus: 2000W → to battery (1500W remaining capacity)
-    assert pv_to_bat == 1500.0, "PV surplus should charge battery"
-    assert grid_to_bat == 1500.0, "Grid should cover remaining battery charge"
+    assert split.pv_to_battery == 1500.0, "PV surplus should charge battery"
+    assert split.grid_to_battery == 1500.0, "Grid should cover remaining battery charge"
 
 
 # =========================================================================
