@@ -10,10 +10,19 @@ as the current battery €/Wh price.
 """
 
 import logging
+from collections import namedtuple
 from datetime import datetime, timedelta, tzinfo
 import threading
 from typing import Dict, List, Optional, Tuple, Any
 import pytz
+
+# What one interval's split could place, and what it could not. The remainder
+# is carried rather than guessed at, so the event can bound it - see
+# _settle_unexplained_charge.
+PowerSplit = namedtuple(
+    "PowerSplit", "pv_to_battery grid_to_battery unexplained unused_pv_surplus"
+)
+
 
 logger = logging.getLogger("__main__")
 logger.info("[BATTERY-PRICE] loading module")
@@ -38,6 +47,14 @@ class BatteryPriceHandler:
 
     # Constants for algorithm tuning
     MAX_GAP_SECONDS_IDENTIFY = 600  # Gap tolerance when identifying charging events
+    # Streams the window balance is drawn from, and the index names
+    # _get_aligned_value walks them with.
+    _BALANCE_STREAMS = ("pv_power", "grid_power", "load_power", "battery_power")
+    _BALANCE_INDEX_KEYS = ("pv", "grid", "load", "battery")
+    MAX_BALANCE_STEP_HOURS = 2.0  # A longer hole says nothing about the balance
+    # How short the balance has to come before an unmetered PV source is the
+    # better explanation than measurement scatter.
+    UNMETERED_PV_DEFICIT_RATIO = 0.10
     MAX_GAP_MINUTES_MERGE = 30  # Gap tolerance when merging fetch ranges
     BUFFER_HOURS_LOOKBACK = 12  # Extra history to fetch for session reconstruction
     DEFAULT_DELTA_SECONDS = 300  # Fallback time delta between points
@@ -922,6 +939,71 @@ class BatteryPriceHandler:
             events_list.append(event)
 
     # pylint: disable=too-many-locals
+    def _window_has_unmetered_pv(self, historical_data: Dict) -> bool:
+        """Whether the window shows PV the PV series does not report.
+
+        A DC-coupled inverter charges the battery straight off the panels, and
+        that energy never reaches the AC side the PV meter sits on. The split
+        has always assumed it: anything it could not explain from the measured
+        surpluses it charged to PV. On an AC-coupled site that assumption has
+        nothing behind it, and since the measured series are stamped on each
+        meter's own clock, what it picks up instead is their misalignment -
+        always in the same direction, because the branch only fires one way.
+
+        The window's own energy balance settles it. Sum what came in against
+        what went out: a site whose battery is fed from somewhere unmetered
+        cannot balance, it comes up short by roughly what was fed. A site that
+        balances has no such source, so charge the split cannot explain is the
+        one thing left - grid - however the slot in question reads.
+
+        Measured on a real EVCC site: 26.567 kWh in against 25.715 out, a 3.3%
+        surplus rather than a deficit, while the branch was booking 18% of the
+        day's charging to PV.
+        """
+        battery = historical_data.get("battery_power", [])
+        if not battery:
+            return False
+
+        stamps = sorted(
+            {
+                point["timestamp"]
+                for key in self._BALANCE_STREAMS
+                for point in historical_data.get(key, [])
+            }
+        )
+        if len(stamps) < 2:
+            return False
+
+        indices = {name: 0 for name in self._BALANCE_INDEX_KEYS}
+        charged_wh = 0.0
+        residual_wh = 0.0
+        for first, second in zip(stamps, stamps[1:]):
+            hours = (second - first).total_seconds() / 3600.0
+            if hours <= 0 or hours > self.MAX_BALANCE_STEP_HOURS:
+                continue
+            pv = self._get_aligned_value(
+                historical_data.get("pv_power", []), first, indices, "pv"
+            )
+            grid = self._get_aligned_value(
+                historical_data.get("grid_power", []), first, indices, "grid"
+            )
+            load = self._get_aligned_value(
+                historical_data.get("load_power", []), first, indices, "load"
+            )
+            bat = self._get_aligned_value(battery, first, indices, "battery")
+            if self.battery_power_convention == "negative_charging":
+                bat = -bat
+            if (self.grid_power_convention or "positive_import") != "positive_import":
+                grid = -grid
+            residual_wh += (pv + grid - load - bat) * hours
+            charged_wh += max(0.0, bat) * hours
+
+        if charged_wh <= 0:
+            return False
+        # A deficit, and one large enough not to be rounding: the balance of a
+        # metered site closes to within a few percent either way.
+        return -residual_wh > charged_wh * self.UNMETERED_PV_DEFICIT_RATIO
+
     def _split_energy_sources(
         self, event: Dict, historical_data: Dict
     ) -> Dict[str, float]:
@@ -946,6 +1028,16 @@ class BatteryPriceHandler:
             "grid": not historical_data.get("grid_power", []),
             "load": not historical_data.get("load_power", []),
         }
+
+        # Charge no interval could place, with the price that was running at the
+        # time, and the PV surplus that went spare elsewhere in this event.
+        deferred: List[Tuple[float, float]] = []
+        unused_pv_wh = 0.0
+
+        # Whether this site has PV the PV series does not report. Drawn from the
+        # whole window rather than the event, because a single event is far too
+        # short to tell a real unmetered source from measurement scatter.
+        unmetered_pv = self._window_has_unmetered_pv(historical_data)
 
         # Indices for stream alignment
         indices = {"pv": 0, "grid": 0, "load": 0, "price": 0}
@@ -981,19 +1073,33 @@ class BatteryPriceHandler:
                 fallback_func=self._get_fallback_price,
             )
 
-            # Use average battery power for the interval, normalized to positive for charging
-            raw_avg_power = (p_start["value"] + p_end["value"]) / 2.0
+            # The value holding over the interval, normalized to positive for
+            # charging. A step, not a trapezoid: every series reaching here is a
+            # step function - a Home Assistant state holds until the next one is
+            # reported, and an EVCC slot's rate holds until the following stamp
+            # ("the slot *starting* there is the one whose rate holds", says the
+            # load interface that builds it). The three other streams are read
+            # that way by _get_aligned_value; averaging this one across the
+            # boundary shifted it half a slot against them, which on EVCC's
+            # 15-minute slots showed up as the battery charging in slots where
+            # nothing was available to charge it.
+            raw_avg_power = p_start["value"]
             if self.battery_power_convention == "negative_charging":
                 avg_battery_power = -raw_avg_power
             else:
                 avg_battery_power = raw_avg_power
 
-            pv_to_bat, grid_to_bat = self._calculate_power_split(
+            split = self._calculate_power_split(
                 avg_battery_power, pv_power, grid_power, load_power
             )
 
-            grid_energy_wh = grid_to_bat * time_hours
-            totals["pv_to_battery_wh"] += pv_to_bat * time_hours
+            if split.unexplained > 0:
+                # Settled once the event is known - see below.
+                deferred.append((split.unexplained * time_hours, current_price))
+            unused_pv_wh += split.unused_pv_surplus * time_hours
+
+            grid_energy_wh = split.grid_to_battery * time_hours
+            totals["pv_to_battery_wh"] += split.pv_to_battery * time_hours
             totals["grid_to_battery_wh"] += grid_energy_wh
             totals["total_battery_wh"] += avg_battery_power * time_hours
             totals["total_pv_wh"] += pv_power * time_hours
@@ -1005,8 +1111,8 @@ class BatteryPriceHandler:
             try:
                 if (
                     pv_power <= 5.0
-                    and pv_to_bat > 0
-                    and grid_to_bat == 0
+                    and split.pv_to_battery > 0
+                    and split.grid_to_battery == 0
                     and avg_battery_power > self.charging_threshold_w
                 ):
                     # Normalize grid for diagnostics
@@ -1085,6 +1191,8 @@ class BatteryPriceHandler:
                 # Never fail processing due to diagnostics
                 pass
 
+        self._settle_unexplained_charge(totals, deferred, unused_pv_wh, unmetered_pv)
+
         # Log warning if sensor data was missing for this event
         if any(missing_sensors.values()):
             missing_list = [k for k, v in missing_sensors.items() if v]
@@ -1132,14 +1240,58 @@ class BatteryPriceHandler:
         indices[key] = idx
         return data[idx]["value"]
 
+    def _settle_unexplained_charge(
+        self,
+        totals: Dict[str, float],
+        deferred: List[Tuple[float, float]],
+        unused_pv_wh: float,
+        unmetered_pv: bool,
+    ) -> None:
+        """Place the charge no single interval could account for.
+
+        Two things produce it, and they want opposite answers. A DC-coupled
+        inverter charges the battery off the panels without the energy ever
+        reaching the AC side the PV meter sits on, so the charge really is PV
+        and the meter simply cannot see it. Meters stamped on their own clocks
+        produce the same appearance for a different reason: the battery's slot
+        says it is charging before the PV or grid slot says anything is
+        flowing. That is not PV, it is a boundary.
+
+        ``_window_has_unmetered_pv`` separates the two over the window. Where
+        there is no unmetered source, PV is measured in full, so what it can
+        have given this event is bounded by its own surplus - and the part of
+        that surplus no interval used is exactly the headroom a boundary
+        shifted out of place. Spend that, charge the rest to grid at the price
+        that was running, and the one-sided lean is gone: measured against a
+        site reading 34% PV through Home Assistant, the same event read 44%
+        before and 33% after.
+        """
+        if not deferred:
+            return
+        budget = float("inf") if unmetered_pv else max(0.0, unused_pv_wh)
+        for energy_wh, price in deferred:
+            from_pv = min(energy_wh, budget)
+            budget -= from_pv
+            from_grid = energy_wh - from_pv
+            totals["pv_to_battery_wh"] += from_pv
+            totals["grid_to_battery_wh"] += from_grid
+            totals["grid_cost_euro"] += (from_grid / 1000.0) * price
+
     def _calculate_power_split(
         self,
         battery_power: float,
         pv_power: float,
         grid_power: float,
         load_power: float,
-    ) -> Tuple[float, float]:
-        """Determine how battery charging power is split between PV and grid."""
+    ) -> PowerSplit:
+        """How this interval's battery charging divides between PV and grid.
+
+        Reports what it could not place as well as what it could. The caller
+        settles the remainder over the whole event, because a single interval
+        has no way to tell a real unmetered source from two meters whose slot
+        boundaries do not quite line up - and treating every remainder as PV,
+        which is what used to happen here, turns the second into the first.
+        """
         # Normalize grid power to import-positive for surplus calculation
         grid_norm = (
             grid_power
@@ -1162,10 +1314,12 @@ class BatteryPriceHandler:
             grid_to_battery = min(remaining_battery, grid_surplus)
             remaining_battery = max(0, remaining_battery - grid_to_battery)
 
-        if remaining_battery > 0:
-            pv_to_battery += remaining_battery
-
-        return pv_to_battery, grid_to_battery
+        return PowerSplit(
+            pv_to_battery=pv_to_battery,
+            grid_to_battery=grid_to_battery,
+            unexplained=remaining_battery,
+            unused_pv_surplus=max(0.0, pv_surplus - pv_to_battery),
+        )
 
     def _get_fallback_price(self, timestamp: datetime) -> float:
         """Get fallback price when historical data is not available."""
