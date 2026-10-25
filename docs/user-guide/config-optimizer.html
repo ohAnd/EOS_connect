@@ -160,6 +160,17 @@
                         <code>3600</code> seconds (hourly, the default) or <code>900</code> (quarter-hourly).
                         Quarter-hourly follows a volatile tariff more closely and costs more computation.
                         Changing it needs a restart.</p>
+                    <p>It also decides what happens to data that arrives more finely than
+                        the slots. Prices are a rate, so an hourly slot <em>averages</em> the
+                        quarter-hours it covers &mdash; a spike in one of them is flattened
+                        into the other three, and the plan cannot act on what it can no longer
+                        see. Load is energy, so it is summed instead: the total stays exact,
+                        but the shape within the hour is gone.
+                        <a href="config-data.html#data-source-evcc">EVCC</a> is the case where
+                        both arrive that way &mdash; its energy history and its persisted
+                        tariff slots are quarter-hourly &mdash; so <code>900</code> plans on
+                        what it actually measured. What that costs is the size of the problem
+                        the optimizer solves: 192 slots across the horizon instead of 48.</p>
 
                     <div data-schema-section="eos" data-schema-anchor="time-slot-config"></div>
 

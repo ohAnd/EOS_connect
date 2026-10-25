@@ -111,6 +111,13 @@
                         deliberately not used for this &mdash; they say when surplus stops being
                         stored and what stays in reserve for the household, which is charging
                         behaviour, not the battery's physical range.</p>
+                    <p><strong>Planning resolution.</strong> EVCC measures in quarter-hours and
+                        stores its tariff the same way. With
+                        <a href="config-optimizer.html#time-slot-config"><code>eos.time_frame</code></a>
+                        left at its hourly default, those four slots are folded into one before
+                        the optimizer sees them &mdash; summed for load, averaged for price.
+                        Setting it to <code>900</code> is what lets a plan act on the quarter
+                        EVCC measured rather than the hour it was averaged into.</p>
                     <p><strong>What stays manual on EVCC</strong>: charge and discharge efficiency and
                         the maximum charge power &mdash; EVCC exposes its battery meter and SoC
                         management, but no efficiency or power-limit values &mdash; and the optional
