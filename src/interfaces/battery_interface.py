@@ -42,6 +42,7 @@ import time
 from datetime import datetime
 import requests
 from .battery_price_handler import BatteryPriceHandler
+from .evcc_entities import connection_for, connections_from_section
 from .state_source import SUPPORTED_SOURCES, fetch_remote_state
 
 logger = logging.getLogger("__main__")
@@ -261,13 +262,9 @@ class BatteryInterface:
             return None  # Default mode doesn't support temperature
 
         try:
-            if self.src == "evcc" and self.__temperature_sensor_is_entity():
-                raw_state, src_name = self.__fetch_temp_via_supplementary()
-            else:
-                raw_state, src_name = (
-                    self.__fetch_remote_state(self.src, self.temp_sensor),
-                    self.src,
-                )
+            conn = self.__connection_for(self.temp_sensor)
+            src_name = conn.src if conn.src == self.src else f"supplementary {conn.src}"
+            raw_state = self.__fetch_remote_state(self.temp_sensor)
             temp = _state_as_float(raw_state)
 
             # Sanity check: battery temperature should be reasonable
@@ -301,68 +298,58 @@ class BatteryInterface:
             )
             return self.current_temp  # Use last known value
 
-    def __temperature_sensor_is_entity(self):
-        """Whether the temp sensor names an entity the supplementary source serves.
+    def __connection_for(self, sensor):
+        """The connection that answers *sensor*, raising when none can.
 
-        An EVCC data source answers state reads as dotted paths; a temperature
-        sensor named like a Home Assistant entity will never resolve there, and
-        EVCC has no temperature of its own unless a meter reports one. Anything
-        "sensor."-shaped goes to the supplementary connection.
+        One data source answers everything it is asked - except EVCC, which
+        answers only what it meters. The temperature is the standing example:
+        EVCC has no temperature of its own, so an entity id has to be read
+        through the supplementary connection.
+
+        It is no longer decided for the temperature alone. The SOC and the
+        €/Wh price sensor were asked of EVCC whatever they were named, and an
+        entity id there resolved to nothing rather than to an error. The rule
+        is ``evcc_entities.connection_for``, shared with the load interface and
+        the config UI's Test button so the same name gets the same verdict
+        everywhere.
+
+        Raises:
+            ValueError: when the name needs the second connection and none is
+                configured - the same exception the direct path raises, so the
+                caller's failure handling treats both identically.
         """
-        return str(self.temp_sensor).strip().startswith("sensor.")
-
-    def __fetch_temp_via_supplementary(self):
-        """Read the temperature through the supplementary connection, if any.
-
-        Raises the same RequestException/ValueError the direct path would, so the
-        failure handling below treats both identically.
-        """
-        supp_type = str(self.battery_data.get("supplementary_type", "") or "").strip()
-        supp_url = str(self.battery_data.get("supplementary_url", "") or "").strip()
-        if not supp_type or not supp_url or supp_type == "default":
+        primary, supplementary = connections_from_section(self.battery_data)
+        conn = connection_for(sensor, primary, supplementary)
+        if conn is None:
             raise ValueError(
-                f"Battery temperature sensor '{self.temp_sensor}' is not an EVCC "
-                "value — configure the supplementary Home Assistant connection "
-                "under Settings > Data Source to read it."
+                f"Battery sensor '{sensor}' is not an EVCC value — configure "
+                "the supplementary Home Assistant connection under Settings > "
+                "Data Source to read it."
             )
-        supp_token = str(
-            self.battery_data.get("supplementary_access_token", "") or ""
-        ).strip()
-        return (
-            fetch_remote_state(
-                supp_type,
-                self.temp_sensor,
-                url=supp_url,
-                access_token=supp_token,
-                request_timeout=self.request_timeout,
-                ssl_ignore=bool(
-                    self.battery_data.get("supplementary_ssl_ignore", False)
-                ),
-            ),
-            f"supplementary {supp_type}",
-        )
+        return conn
 
     # source-specific price fetchers removed — use __fetch_price_data_unified
 
-    def __fetch_remote_state(self, source, sensor):
-        """Fetch the raw state string from OpenHAB or Home Assistant.
+    def __fetch_remote_state(self, sensor):
+        """Fetch the raw state string for *sensor*, through whatever answers it.
 
         Returns the trimmed state string. Raises the original requests
         exceptions for callers to handle.
         """
+        conn = self.__connection_for(sensor)
         return fetch_remote_state(
-            source,
+            conn.src,
             sensor,
-            url=self.url,
-            access_token=self.access_token,
+            url=conn.url,
+            access_token=conn.access_token,
             request_timeout=self.request_timeout,
-            ssl_ignore=self.ssl_ignore,
+            ssl_ignore=conn.ssl_ignore,
         )
 
     def __fetch_soc_data_unified(self):
         """Unified SOC fetch using the configured `self.src` source."""
         try:
-            raw_state = self.__fetch_remote_state(self.src, self.soc_sensor)
+            raw_state = self.__fetch_remote_state(self.soc_sensor)
             raw_value = _state_as_float(raw_state)
             if self.src == "evcc":
                 # EVCC /api/state reports battery.soc in percent (0-100), weighted
@@ -427,7 +414,7 @@ class BatteryInterface:
             return self.price_euro_per_wh
 
         # Use top-level `source` for all remote fetches (SOC and price)
-        raw_state = self.__fetch_remote_state(self.src, self.price_sensor)
+        raw_state = self.__fetch_remote_state(self.price_sensor)
         return _state_as_float(raw_state)
 
     def __update_price_euro_per_wh(self):
