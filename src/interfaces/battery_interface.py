@@ -359,7 +359,9 @@ class BatteryInterface:
         if label in self.__unreadable_reported:
             return
         self.__unreadable_reported.add(label)
-        logger.warning("[BATTERY-IF] %s %s", label, error)
+        # The message names the sensor itself; *label* is only what keeps this
+        # to one line per name.
+        logger.warning("[BATTERY-IF] %s", error)
 
     # source-specific price fetchers removed — use __fetch_price_data_unified
 
