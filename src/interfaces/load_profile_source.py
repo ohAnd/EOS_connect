@@ -60,24 +60,38 @@ class ProfileSourceError(ValueError):
     """
 
 
-def _endpoint(entry, data_source):
+def _endpoint(entry, connection):
     """
     Resolve the URL and token for one entry.
 
-    Built exactly as `merger._apply_central_ha_data_source` builds the price and PV
-    ones, so that what is fetched here is what the config UI shows and what a probe
-    would later test.
+    *connection* is the central connection **as the merge resolved it** - the
+    ``load`` section carries it, alongside every other sensor read through the
+    same host. It used to be read from the ``data_source`` section, which the
+    merge deliberately does not emit: it resolves that section into ``load`` and
+    ``battery`` instead. So the caller handed over an empty dict on every
+    database-configured install, and a perfectly configured profile reported
+    "no entity configured" - blaming the one thing that *was* set.
+
+    Built as `merger._apply_central_ha_data_source` builds the price and PV ones,
+    so that what is fetched here is what the config UI shows.
     """
     if entry.get("use_ha_central_data_source", True):
-        base = str((data_source or {}).get("url", "") or "")
+        base = str((connection or {}).get("url", "") or "")
         sensor = str(entry.get("ha_sensor_name", "") or "").strip()
-        if not base or not sensor:
+        if not sensor:
             raise ProfileSourceError(
                 "no entity configured - set the entity holding the load forecast"
             )
-        return f"{base}/api/states/{sensor}", str(
-            (data_source or {}).get("access_token", "") or ""
-        ), sensor
+        if not base:
+            raise ProfileSourceError(
+                "no data source connection - the central data source has no URL "
+                "configured, so there is nowhere to read the forecast from"
+            )
+        return (
+            f"{base}/api/states/{sensor}",
+            str((connection or {}).get("access_token", "") or ""),
+            sensor,
+        )
 
     url = str(entry.get("data_url", "") or "").strip()
     if not url:
@@ -87,7 +101,7 @@ def _endpoint(entry, data_source):
     return url, str(entry.get("data_token", "") or ""), url
 
 
-def fetch_profile(entry, data_source=None, time_zone=None, ssl_ignore=False):
+def fetch_profile(entry, connection=None, time_zone=None, ssl_ignore=False):
     """
     Fetch, validate and unit-convert one managed load's forecast.
 
@@ -95,8 +109,9 @@ def fetch_profile(entry, data_source=None, time_zone=None, ssl_ignore=False):
         entry: The resolved ``managed_loads`` entry. Reads ``use_ha_central_data_source``,
             ``ha_sensor_name`` or ``data_url``/``data_token``, ``data_path``,
             ``value_unit`` and ``rated_power_w``.
-        data_source: The central ``data_source`` config section, for the shared URL and
-            token.
+        connection: The resolved central connection - the ``load`` section of the
+            merged config, which is where the merge puts it. Reads ``url`` and
+            ``access_token``.
         time_zone: Zone the source's naive timestamps belong to, if it sends any.
         ssl_ignore: Skip certificate verification, for a self-signed instance.
 
@@ -109,7 +124,7 @@ def fetch_profile(entry, data_source=None, time_zone=None, ssl_ignore=False):
     Raises:
         ProfileSourceError: with a message written for the user.
     """
-    url, token, label = _endpoint(entry, data_source)
+    url, token, label = _endpoint(entry, connection)
     data_path = str(entry.get("data_path", "") or "attributes.data").strip()
     unit = str(entry.get("value_unit", "") or "W").strip()
 
@@ -163,8 +178,8 @@ def fetch_profile(entry, data_source=None, time_zone=None, ssl_ignore=False):
         # falls back to what its entries actually span. Unlike price and PV, a load
         # forecast is usually hand-built, so refusing anything but 15 or 60 minutes
         # would turn a working template sensor into a support question.
-        resolution_seconds = (
-            detect_resolution_seconds(entries) or median_span_seconds(entries)
+        resolution_seconds = detect_resolution_seconds(entries) or median_span_seconds(
+            entries
         )
         if not resolution_seconds:
             raise ProfileSourceError(
@@ -185,12 +200,18 @@ def fetch_profile(entry, data_source=None, time_zone=None, ssl_ignore=False):
     if warning:
         logger.warning(
             "[%s] '%s': %s | Config: #managed-loads",
-            LABEL, entry.get("id", "?"), warning,
+            LABEL,
+            entry.get("id", "?"),
+            warning,
         )
 
     logger.debug(
         "[%s] '%s' fetched %d entries at %ds from %s",
-        LABEL, entry.get("id", "?"), len(entries), resolution_seconds, label,
+        LABEL,
+        entry.get("id", "?"),
+        len(entries),
+        resolution_seconds,
+        label,
     )
     return {"entries": entries, "resolution_seconds": resolution_seconds}
 

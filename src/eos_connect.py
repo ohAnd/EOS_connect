@@ -554,10 +554,15 @@ def _managed_load_read_profile(entry):
     failure is reported - the manager keeps the previous profile and warns once, rather
     than blanking the forecast because Home Assistant happened to be restarting.
     """
+    # The load section, because that is where the merge puts the central
+    # connection: it resolves data_source into load and battery and emits no
+    # data_source section of its own. Asking for one returned an empty dict on
+    # every database-configured install, which is every install since the
+    # settings moved out of config.yaml.
     load_config = config_manager.config.get("load", {})
     return fetch_profile(
         entry,
-        data_source=config_manager.config.get("data_source", {}),
+        connection=load_config,
         time_zone=time_zone,
         ssl_ignore=bool(load_config.get("ssl_ignore", False)),
     )
