@@ -72,6 +72,24 @@
                             issue; a <code>FileNotFoundError</code> naming <code>cbc</code> is this one.</p>
                     </div>
 
+                    <h3 id="tb-eos-devices">Nothing starts after an EOS server update</h3>
+                    <p><strong>Symptom:</strong> with <code>eos.source</code> set to
+                        <code>eos_server</code>, EOS Connect stops while starting up and the web
+                        interface never appears &mdash; so the settings cannot be reached either. The
+                        log ends with:</p>
+                    <pre><code>ERROR [Factory] Failed to create optimization_interface (critical=True):
+  Failed to load optimizer configuration: 0
+...
+KeyError: 0</code></pre>
+                    <p><strong>Cause:</strong> EOS reorganised how it stores devices. Its
+                        <code>devices/electric_vehicles</code> configuration used to be a list and is
+                        now keyed by device ID, and EOS Connect read the first entry by position while
+                        checking the server's charge rates.</p>
+                    <p><strong>Fix:</strong> update EOS Connect. It reads both layouts now, and leaves
+                        the charge rates alone on servers that fill them in themselves. A server
+                        configuration that does not look the way EOS Connect expects is logged from now
+                        on instead of stopping the start, so the settings stay reachable.</p>
+
                     <h3 id="tb-ssl">Self-signed certificates</h3>
                     <p>EOS Connect validates TLS certificates when talking to Home Assistant or OpenHAB.
                         With a private CA you can turn that off in <em>Settings &rsaquo; Data Source
