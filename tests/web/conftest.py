@@ -35,12 +35,12 @@ three ``config.yaml`` keys, so migration writes seven defaults and marks neither
 
 import logging
 import os
-import socket
 import threading
 from zoneinfo import ZoneInfo
 
 import pytest
 from flask import Flask, jsonify, make_response, render_template_string, send_from_directory
+from werkzeug.serving import make_server
 
 from src.config_web.api import config_bp, init_api
 from src.docs_links import DOCS_BASE_PREVIEW, DOCS_BASE_RELEASE
@@ -73,12 +73,6 @@ BOOTSTRAP_ONLY_CONFIG = {
     "time_zone": "Europe/Berlin",
     "log_level": "info",
 }
-
-
-def _free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def _build_app(store, schema, module, docs_base=DOCS_BASE_RELEASE):
@@ -182,20 +176,38 @@ def _serve(tmp_path, db_name, bootstrap_config, *, migrate, docs_base=DOCS_BASE_
     pv_store.ensure_schema()
     module.pv_yield_store = pv_store
 
-    port = _free_port()
     app = _build_app(store, schema, module, docs_base=docs_base)
     # The dashboard polls several endpoints a second; its request log drowns out the
     # test output without saying anything useful.
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
+    # Bound here rather than inside the thread, and on port 0 rather than one
+    # picked beforehand. Starting a thread is not the same as being ready to
+    # accept, so the first page.goto could arrive before Flask was listening and
+    # fail with ERR_CONNECTION_REFUSED - seen twice in CI, green on a re-run.
+    # Asking for a port, closing it and letting the server bind it again left a
+    # second gap in between for anything else on the machine to take it.
+    # threaded=True is what app.run defaults to; the dashboard issues several
+    # requests at once and a serial server would queue them.
+    server = make_server("127.0.0.1", 0, app, threaded=True)
+    # The poll interval is how long shutdown() waits to be noticed, and this
+    # fixture is function scoped: at the default half-second it added some three
+    # minutes across the browser lane for nothing.
     thread = threading.Thread(
-        target=lambda: app.run(host="127.0.0.1", port=port, use_reloader=False),
-        daemon=True,
+        target=lambda: server.serve_forever(poll_interval=0.02), daemon=True
     )
     thread.start()
 
     try:
-        yield _Server(f"http://127.0.0.1:{port}", store, pv_store)
+        yield _Server(f"http://127.0.0.1:{server.port}", store, pv_store)
     finally:
+        # Every browser test gets its own server - the fixture is function
+        # scoped - and none of them used to end. Each left a listening socket
+        # and a thread alive for the rest of the session, several hundred of
+        # them by the end of the lane, which is exactly the condition under
+        # which a server is slow to come up.
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
         store.close()
 
 
