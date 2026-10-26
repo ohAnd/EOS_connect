@@ -16,6 +16,16 @@ import pytz
 
 logger = logging.getLogger("__main__")
 
+# Charge rates EOS_connect pushes into an EOS server that has none of its own,
+# as a factor of the maximum charging power.
+DEFAULT_EV_CHARGE_RATES = sorted([0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0])
+
+# The EOS device rework keys ``devices/*`` by device_id instead of listing them,
+# and fills in its own charge rates. It shipped in 0.3.0 dev builds, and PEP 440
+# sorts those *before* 0.3.0 - comparing against the plain release would miss
+# every build that actually carries the change.
+EOS_DEVICE_MAPPING_VERSION = "0.3.0.dev0"
+
 
 class EOSBackend:
     """
@@ -58,33 +68,10 @@ class EOSBackend:
                         "[OPT-EOS] Detected EOS version >= 0.1.0 - config optimization values OK"
                     )
 
-                config_devices = self.__get_config_path("devices/electric_vehicles")
-                if config_devices is None:
-                    # if config_devices[0].get("charge_rates", None) is None:
-                    config_devices = [{}]
-                    config_devices[0]["charge_rates"] = sorted(
-                        [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
-                    )
-                    self.__set_config_path("devices/electric_vehicles", config_devices)
-                    logger.warning(
-                        "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with charge "
-                        + "rates for electric vehicles"
-                    )
-                elif "charge_rates" not in config_devices[0]:
-                    config_devices[0]["charge_rates"] = sorted(
-                        [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
-                    )
-                    self.__set_config_path("devices/electric_vehicles", config_devices)
-                    logger.warning(
-                        "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with charge "
-                        + "rates for electric vehicles"
-                    )
-                else:
-                    logger.info(
-                        "[OPT-EOS] Detected EOS version >= 0.1.0 - config charge rates for "
-                        + "electric vehicles OK"
-                    )
+                self.__ensure_ev_charge_rates()
             logger.info("[OPT-EOS] Configuration validation successful")
+        except requests.exceptions.RequestException as e:
+            self.__report_config_check_failed(e)
         except ValueError as e:
             logger.error("[OPT-EOS] EOS backend configuration error: %s", str(e))
             logger.error(
@@ -92,6 +79,89 @@ class EOSBackend:
                 "Use Settings to fix configuration"
             )
             raise  # Let caller handle graceful degradation instead of sys.exit(1)
+        except (KeyError, TypeError, IndexError, AttributeError) as e:
+            # An EOS server whose config does not look the way we expect is not a
+            # reason to refuse to start: this interface is created with
+            # critical=True, long before the web server comes up, so raising here
+            # takes the settings UI down with it - and the settings UI is exactly
+            # what the user needs to get out of the situation (#349).
+            self.__report_config_check_failed(e)
+
+    def __report_config_check_failed(self, error):
+        """
+        Log that the EOS server configuration could not be checked, and carry on.
+
+        The optimizer still works against whatever the server has configured; a
+        run that then fails reports itself per cycle, which leaves the add-on
+        running and the settings reachable.
+        """
+        logger.error(
+            "[OPT-EOS] Could not check the configuration of the EOS server at %s: "
+            "%s: %s | Config: #eos | ACTION REQUIRED",
+            self.base_url,
+            type(error).__name__,
+            error,
+        )
+        logger.warning(
+            "[OPT-EOS] Continuing with the configuration the EOS server already has - "
+            "optimization may fail until it is corrected"
+        )
+
+    def __ensure_ev_charge_rates(self):
+        """
+        Make sure the electric vehicles on the EOS server carry charge rates.
+
+        ``devices/electric_vehicles`` changed shape with the EOS device rework: it
+        used to be a list of device dicts and is now a mapping keyed by device_id.
+        Both are read here and written back the way the server handed them over.
+        Indexing ``[0]`` into the mapping is what stopped the add-on from starting
+        against a current EOS build (#349).
+        """
+        config_devices = self.__get_config_path("devices/electric_vehicles")
+
+        if config_devices is None:
+            if self.is_eos_version_at_least(EOS_DEVICE_MAPPING_VERSION):
+                # Mapping-era servers default the charge rates themselves, and a
+                # list pushed into a mapping field would only earn a 422.
+                logger.info(
+                    "[OPT-EOS] No electric vehicles configured - EOS supplies its own "
+                    "charge rates"
+                )
+                return
+            config_devices = [{"charge_rates": list(DEFAULT_EV_CHARGE_RATES)}]
+            self.__set_config_path("devices/electric_vehicles", config_devices)
+            logger.warning(
+                "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with charge "
+                + "rates for electric vehicles"
+            )
+            return
+
+        devices = (
+            list(config_devices.values())
+            if isinstance(config_devices, dict)
+            else list(config_devices)
+        )
+        # The dicts are the ones inside config_devices, so filling them in here is
+        # what gets written back below - in the original shape, whichever it was.
+        without_rates = [
+            device
+            for device in devices
+            if isinstance(device, dict) and "charge_rates" not in device
+        ]
+        if not without_rates:
+            logger.info(
+                "[OPT-EOS] Detected EOS version >= 0.1.0 - config charge rates for "
+                + "electric vehicles OK"
+            )
+            return
+
+        for device in without_rates:
+            device["charge_rates"] = list(DEFAULT_EV_CHARGE_RATES)
+        self.__set_config_path("devices/electric_vehicles", config_devices)
+        logger.warning(
+            "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with charge "
+            + "rates for electric vehicles"
+        )
 
     def _get_expected_hourly_slots(self):
         """
