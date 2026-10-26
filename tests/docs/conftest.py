@@ -19,7 +19,6 @@ import functools
 import http.server
 import os
 import shutil
-import socket
 import threading
 
 import pytest
@@ -34,12 +33,6 @@ DOCS_DIR = os.path.join(
 )
 
 
-def _free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
     """SimpleHTTPRequestHandler without the per-request logging."""
 
@@ -49,14 +42,18 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 @pytest.fixture(name="docs_url", scope="session")
 def docs_url_fixture():
-    """Serve docs/ on a loopback port for the duration of the session."""
-    port = _free_port()
+    """Serve docs/ on a loopback port for the duration of the session.
+
+    Port 0 lets the OS choose and the server keeps the socket it was handed.
+    Picking a free port first, closing it and binding it again leaves a window
+    in between for anything else on the machine to take it.
+    """
     handler = functools.partial(_QuietHandler, directory=DOCS_DIR)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{port}/"
+        yield f"http://127.0.0.1:{server.server_port}/"
     finally:
         server.shutdown()
         server.server_close()
@@ -77,13 +74,12 @@ def preview_docs_url_fixture(tmp_path_factory):
     root = tmp_path_factory.mktemp("pages-site")
     shutil.copytree(DOCS_DIR, os.path.join(str(root), "develop"))
 
-    port = _free_port()
     handler = functools.partial(_QuietHandler, directory=str(root))
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{port}/develop/"
+        yield f"http://127.0.0.1:{server.server_port}/develop/"
     finally:
         server.shutdown()
         server.server_close()
