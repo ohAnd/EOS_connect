@@ -596,5 +596,116 @@ class TestDynamicOverrideLogic:
             assert override_array[12] == False
 
 
+SLOTS_PER_DAY_QUARTER_HOURLY = 96
+
+
+def _quarter_hour_case(pv_by_slot, ac_charge_by_slot=None):
+    """Quarter-hourly request/response pair; every slot has load 100 Wh and no discharge."""
+    slots = SLOTS_PER_DAY_QUARTER_HOURLY
+    pv = [0] * slots
+    for slot, value in pv_by_slot.items():
+        pv[slot] = value
+    ac_charge = [0] * slots
+    for slot, value in (ac_charge_by_slot or {}).items():
+        ac_charge[slot] = value
+    request = {"ems": {"pv_prognose_wh": pv, "gesamtlast": [100] * slots}}
+    response = {
+        "ac_charge": ac_charge,
+        "dc_charge": [0] * slots,
+        "discharge_allowed": [0] * slots,
+        "start_solution": [0, 0],
+    }
+    return request, response
+
+
+class TestOverrideCarriedIntoNextSlot:
+    """The control loop switches to the next-slot entry at the boundary, so that
+    entry has to carry the override from the first second (issue #347)."""
+
+    @pytest.fixture
+    def quarter_hour_interface(self, berlin_timezone):
+        """Interface at 900 s resolution with the override enabled."""
+        config = {
+            "source": "evopt",
+            "server": "localhost",
+            "port": 8503,
+            "timeout": 60,
+            "time_frame": 900,
+            "dyn_override_discharge_allowed_pv_greater_load": True,
+        }
+        with patch("src.interfaces.optimization_interface.EVOptBackend"):
+            yield OptimizationInterface(
+                config=config, time_frame_base=900, timezone=berlin_timezone
+            )
+
+    @staticmethod
+    def _examine(interface, timezone, request, response, enabled=True):
+        """Run one examination at 09:44:59, 1 s before slot 39 (09:45) begins."""
+        interface.last_eos_request = request
+        interface.dyn_override_discharge_allowed = enabled
+        with patch("src.interfaces.optimization_interface.datetime") as mock_datetime:
+            mock_datetime.now.return_value = timezone.localize(
+                datetime(2024, 10, 4, 9, 44, 59)
+            )
+            mock_datetime.side_effect = lambda *args, **kwargs: datetime(
+                *args, **kwargs
+            )
+            interface.examine_response_to_control_data(response)
+        return interface.get_last_control_data()
+
+    def test_next_slot_entry_carries_override(
+        self, quarter_hour_interface, berlin_timezone
+    ):
+        """Run finishing just before the boundary: PV > Load only in the next slot."""
+        request, response = _quarter_hour_case({39: 221})
+        control_data = self._examine(
+            quarter_hour_interface, berlin_timezone, request, response
+        )
+
+        assert control_data[0]["slot"] == 38
+        assert control_data[1]["slot"] == 39
+        assert control_data[0]["discharge_allowed"] == False
+        assert control_data[1]["discharge_allowed"] == True
+        assert control_data[1]["dyn_override_active"] == True
+        assert control_data[0]["dyn_override_active"] == False
+
+    def test_next_slot_entry_untouched_when_pv_not_above_load(
+        self, quarter_hour_interface, berlin_timezone
+    ):
+        """No PV surplus in the next slot: the optimizer's value stays."""
+        request, response = _quarter_hour_case({38: 500, 39: 100})
+        control_data = self._examine(
+            quarter_hour_interface, berlin_timezone, request, response
+        )
+
+        assert control_data[0]["discharge_allowed"] == True
+        assert control_data[1]["discharge_allowed"] == False
+        assert control_data[1]["dyn_override_active"] == False
+
+    def test_next_slot_entry_respects_grid_charging(
+        self, quarter_hour_interface, berlin_timezone
+    ):
+        """Grid charging requested for the next slot takes precedence over the override."""
+        request, response = _quarter_hour_case({39: 500}, ac_charge_by_slot={39: 0.4})
+        control_data = self._examine(
+            quarter_hour_interface, berlin_timezone, request, response
+        )
+
+        assert control_data[1]["discharge_allowed"] == False
+        assert control_data[1]["dyn_override_active"] == False
+
+    def test_next_slot_entry_untouched_when_override_disabled(
+        self, quarter_hour_interface, berlin_timezone
+    ):
+        """With the feature off, the next-slot entry keeps the optimizer's value."""
+        request, response = _quarter_hour_case({38: 500, 39: 500})
+        control_data = self._examine(
+            quarter_hour_interface, berlin_timezone, request, response, enabled=False
+        )
+
+        assert control_data[1]["discharge_allowed"] == False
+        assert control_data[1]["dyn_override_active"] == False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
