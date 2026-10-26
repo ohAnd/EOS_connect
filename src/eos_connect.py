@@ -1167,7 +1167,12 @@ last_control_data = {
 }
 
 
-def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_allowed):
+def setting_control_data(
+    ac_charge_demand_rel,
+    dc_charge_demand_rel,
+    discharge_allowed,
+    dyn_override_active=None,
+):
     """
     Process the optimized response from EOS and update the load interface.
 
@@ -1175,6 +1180,9 @@ def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_a
         ac_charge_demand_rel (float): The relative AC charge demand.
         dc_charge_demand_rel (float): The relative DC charge demand.
         discharge_allowed (bool): Whether discharge is allowed (True/False).
+        dyn_override_active (bool | None): Dynamic PV>Load override state of the
+            control entry the values were taken from. None falls back to the
+            current slot's entry.
     """
     # Safety check: Prevent AC charging if battery SoC exceeds maximum
     current_soc = battery_interface.get_current_soc()
@@ -1204,9 +1212,10 @@ def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_a
     base_control.set_current_discharge_allowed(bool(discharge_allowed))
 
     # Set the dynamic override discharge allowed active flag from latest optimization data
-    dyn_override_active = eos_interface.get_last_control_data()[0].get(
-        "dyn_override_active", False
-    )
+    if dyn_override_active is None:
+        dyn_override_active = eos_interface.get_last_control_data()[0].get(
+            "dyn_override_active", False
+        )
     base_control.set_dyn_override_discharge_allowed_active(dyn_override_active)
 
     # set the current battery state of charge
@@ -1683,7 +1692,14 @@ class OptimizationScheduler:
             #     dc_charge_demand,
             #     discharge_allowed,
             # )
-            setting_control_data(ac_charge_demand, dc_charge_demand, discharge_allowed)
+            setting_control_data(
+                ac_charge_demand,
+                dc_charge_demand,
+                discharge_allowed,
+                eos_interface.get_last_control_data()[last_control_selected_entry].get(
+                    "dyn_override_active", False
+                ),
+            )
             # get recent evcc states
             base_control.set_current_evcc_charging_state(
                 evcc_interface.get_charging_state()
@@ -1841,9 +1857,6 @@ def change_control_state():
             # Real inverter (Fronius, Victron, etc.)
             inverter_fronius_en = True
 
-    current_overall_state = base_control.get_current_overall_state_number()
-    current_overall_state_text = base_control.get_current_overall_state()
-
     mqtt_interface.update_publish_topics(
         {
             "control/overall_state": {
@@ -1920,7 +1933,14 @@ def change_control_state():
     )
 
     # Check if the overall state of the inverter was changed recently and consume the event
-    if base_control.was_overall_state_changed_recently(consume=True):
+    # Consume the change flag BEFORE reading the state. The optimization thread can
+    # change the state at any moment; read the other way round, a change landing in
+    # between was consumed together with the old one and the stale state was written
+    # to the inverter, which then stayed there with nothing left to correct it.
+    state_changed = base_control.was_overall_state_changed_recently(consume=True)
+    current_overall_state = base_control.get_current_overall_state_number()
+    current_overall_state_text = base_control.get_current_overall_state()
+    if state_changed:
         logger.debug("[Main] Overall state changed recently")
         if inverter_fronius_en and mode_uses_dc_charge_limit(current_overall_state):
             inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
