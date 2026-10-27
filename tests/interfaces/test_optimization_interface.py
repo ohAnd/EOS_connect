@@ -724,19 +724,25 @@ def test_next_run_unchanged_cases(
     )
 
 
+@pytest.mark.parametrize(
+    "base",
+    [
+        datetime(2026, 10, 24, 12, 0, 0),
+        datetime(2026, 10, 24, 23, 45, 0),  # crosses midnight
+    ],
+)
+@pytest.mark.parametrize("update_interval", [60, 180, 300, 900])
 @pytest.mark.parametrize("avg_runtime", [1, 2, 4, 7])
-def test_no_full_slot_without_run(scheduler, avg_runtime):
-    """With a 180 s update interval, no idle period reaches a full slot,
-    wherever in the quarter the previous run ended."""
-    update_interval = 180
-    base = datetime(2026, 10, 24, 12, 0, 0)
-    for offset in range(0, 900, 1):
+def test_no_full_slot_without_run(scheduler, base, update_interval, avg_runtime):
+    """Idle time after any run never reaches a full slot, for every end second."""
+    for offset in range(0, 1800, 1):
         finish = base + timedelta(seconds=offset)
         next_run = scheduler.calculate_next_run_time(
             finish, avg_runtime, update_interval
         )
         idle = (next_run - finish).total_seconds()
         assert 0 < idle <= 2 * update_interval, (
-            f"finish {finish:%H:%M:%S}, avg {avg_runtime}s: "
-            f"next run {next_run:%H:%M:%S} ({idle:.0f}s idle)"
+            f"finish {finish:%H:%M:%S}, avg {avg_runtime}s, "
+            f"interval {update_interval}s: next run {next_run:%H:%M:%S} "
+            f"({idle:.0f}s idle)"
         )
