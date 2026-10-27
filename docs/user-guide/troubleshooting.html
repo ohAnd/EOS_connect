@@ -166,9 +166,7 @@ KeyError: 0</code></pre>
                             long-lived access token needs permission to call services. On a Home Assistant
                             too old to offer it, the log says so once and the profile simply uses the days
                             it can still read.</p>
-                    </div>
 
-                    <div data-level="expert">
                         <h3 id="tb-optimization-pause">The optimization pauses for a whole quarter hour</h3>
                         <p><strong>Symptom:</strong> in quarter-hourly mode the optimization usually runs
                             several times per slot, but now and then the log shows a pause of a full
@@ -180,7 +178,9 @@ KeyError: 0</code></pre>
                             against the next one.</p>
                         <p><strong>Fix:</strong> update EOS Connect. After such a run the next one follows
                             at the usual interval.</p>
+                    </div>
 
+                    <div data-level="expert">
                         <h3 id="tb-logs">Reading the log</h3>
                         <p>Set <code>log_level: debug</code> (or <code>EOS_LOG_LEVEL=debug</code>) and
                             watch the startup sequence: it reports the selected optimizer backend, the
