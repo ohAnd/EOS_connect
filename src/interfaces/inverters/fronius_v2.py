@@ -662,11 +662,21 @@ class FroniusV2(BaseInverter):
             )
             if response.status_code == 200:
                 if auth:
-                    self.__retrieve_auth_from_response(response)
+                    if self.__split_response_auth_header(response).get("nc"):
+                        self.__retrieve_auth_from_response(response)
+                    else:
+                        self.ncvalue_num += 1
                 return response
             # 401 - unauthorized , relogin
             # 403 - is forbidden, what happens at 01.00 in the night
             if response.status_code in (401, 403):
+                logger.warning(
+                    "[Inverter] %s %s rejected with %d, re-login (attempt %d/2)",
+                    method,
+                    path,
+                    response.status_code,
+                    i + 1,
+                )
                 self.__retrieve_auth_from_response(response)
                 self.login()
             else:
@@ -677,6 +687,11 @@ class FroniusV2(BaseInverter):
                     f"\tnonce {self.nonce} \n"
                     f"\tpayload {payload}"
                 )
+        logger.warning(
+            "[Inverter] %s %s still rejected after re-login, no response returned",
+            method,
+            path,
+        )
         return None
 
     def __send_one_http_request(
