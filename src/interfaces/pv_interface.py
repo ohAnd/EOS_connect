@@ -35,6 +35,7 @@ import requests
 import pandas as pd
 import numpy as np
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
+from open_meteo_solar_forecast.exceptions import OpenMeteoSolarForecastError
 from .temperature_forecast import (
     AKKUDOKTOR,
     DEFAULT_TEMPERATURE_PROVIDER,
@@ -946,8 +947,13 @@ class PvInterface:
             # upstream API traffic for every provider - which breaks the request budget
             # Solcast and forecast.solar are rate-limited on - and lets a transient
             # failure on one of the two calls desynchronise the raw/scaled pair.
-            pv_forcast_array_raw = self.get_summarized_pv_forecast(scale=False)
-            pv_forcast_array = self.apply_autoscaling(pv_forcast_array_raw)
+            try:
+                pv_forcast_array_raw = self.get_summarized_pv_forecast(scale=False)
+                pv_forcast_array = self.apply_autoscaling(pv_forcast_array_raw)
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.exception("[PV-IF] Unexpected error fetching PV forecast")
+                pv_forcast_array_raw = self.pv_forcast_array_raw
+                pv_forcast_array = self.pv_forcast_array
             if not self.pv_forcast_request_error["error"]:
                 logger.debug("[PV-IF] PV forecast updated successfully")
                 self.pv_forcast_array = pv_forcast_array
@@ -2396,7 +2402,12 @@ class PvInterface:
             ) as forecast:
                 estimate = await forecast.estimate()
 
-        except (aiohttp.ClientError, ConnectionError) as e:
+        except (
+            aiohttp.ClientError,
+            ConnectionError,
+            TimeoutError,
+            OpenMeteoSolarForecastError,
+        ) as e:
             return self._handle_interface_error(
                 "connection_error",
                 f"OpenMeteo Solar Forecast connection error: {e}",
