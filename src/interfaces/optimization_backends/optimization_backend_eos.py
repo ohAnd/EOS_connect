@@ -47,7 +47,25 @@ class EOSBackend:
                 # check config for needed values
                 config_optimization = self.__get_config_path("optimization")
                 config_optimization_upodate_needed = False
-                if config_optimization.get("horizon_hours", 0) != 48:
+                horizon_updated = False
+                # Newer EOS builds keep the horizon per algorithm, under
+                # optimization.genetic (or genetic0), and no longer read the
+                # top-level key: writing only that one left them at their default
+                # of 24 hours. Set the nested key on its own path, so the computed
+                # fields of the optimization object are not sent back with it.
+                algorithm_section = str(
+                    config_optimization.get("algorithm", "GENETIC")
+                ).lower()
+                algorithm_config = config_optimization.get(algorithm_section)
+                if (
+                    isinstance(algorithm_config, dict)
+                    and "horizon_hours" in algorithm_config
+                ):
+                    if algorithm_config["horizon_hours"] != 48:
+                        horizon_updated = self.__set_config_path(
+                            f"optimization/{algorithm_section}/horizon_hours", 48
+                        )
+                elif config_optimization.get("horizon_hours", 0) != 48:
                     config_optimization["horizon_hours"] = 48
                     config_optimization_upodate_needed = True
                 if config_optimization.get("genetic", None) is None:
@@ -57,11 +75,17 @@ class EOSBackend:
                     }
                     config_optimization_upodate_needed = True
                 if config_optimization_upodate_needed:
-                    self.__set_config_path("optimization", config_optimization)
+                    if self.__set_config_path("optimization", config_optimization):
+                        logger.warning(
+                            "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with "
+                            + ": %s",
+                            config_optimization,
+                        )
+                elif horizon_updated:
                     logger.warning(
-                        "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with "
-                        + ": %s",
-                        config_optimization,
+                        "[OPT-EOS] Detected EOS version >= 0.1.0 - set "
+                        + "optimization.%s.horizon_hours to 48",
+                        algorithm_section,
                     )
                 else:
                     logger.info(
@@ -384,6 +408,9 @@ class EOSBackend:
             path (str): The configuration path.
             value (dict or list): The configuration value as a JSON-serializable
             object or a list of such objects.
+
+        Returns:
+            bool: True if EOS accepted the value.
         """
 
         def convert_sets(obj):
@@ -411,6 +438,8 @@ class EOSBackend:
             logger.error(
                 "[OPT-EOS] Failed to set config value for path '%s': %s", path, e
             )
+            return False
+        return True
 
     def send_measurement_to_eos(self, dataframe):
         """
