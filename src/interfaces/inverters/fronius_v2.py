@@ -2,6 +2,7 @@
 
 import time
 import os
+import sys
 import logging
 import json
 import hashlib
@@ -71,6 +72,7 @@ class FroniusV2(BaseInverter):
         self.cnonce = "NaN"
         self.login_attempts = 0
         self.nonce = 0
+        self._last_auth_ok = None  # monotonic time of last authenticated 200
         self.algorithm = "SHA256"  # Will be determined by firmware version
 
         # --- Startup mode flags (deferred initialization) ---
@@ -219,7 +221,7 @@ class FroniusV2(BaseInverter):
             with open(BATTERY_CONFIG_FILENAME, "w", encoding="utf-8") as f:
                 f.write(response.text)
         else:
-            logger.warning(
+            logger.debug(
                 "[Inverter] Battery config file already exists. Not writing to %s",
                 BATTERY_CONFIG_FILENAME,
             )
@@ -379,7 +381,7 @@ class FroniusV2(BaseInverter):
             with open(TIMEOFUSE_CONFIG_FILENAME, "w", encoding="utf-8") as f:
                 f.write(json.dumps(result))
         else:
-            logger.warning(
+            logger.debug(
                 "[Inverter] Time of use config file already exists. Not writing to %s",
                 TIMEOFUSE_CONFIG_FILENAME,
             )
@@ -615,6 +617,11 @@ class FroniusV2(BaseInverter):
         """Get the planned battery charge/discharge schedule."""
         config = {"timeofuse": timeofuselist}
         payload = json.dumps(config)
+        logger.info(
+            "[Inverter] timeofuse write from %s (%d rules)",
+            sys._getframe(1).f_code.co_name,
+            len(timeofuselist),
+        )
         response = self.send_request(
             self.api_praefix + "/config/timeofuse",
             method="POST",
@@ -657,11 +664,14 @@ class FroniusV2(BaseInverter):
             headers = {}
         for i in range(2):
             # Try tp send the request, if it fails, try to login and resend
+            sent_nc = self.ncvalue_num
+            sent_nonce = self.nonce
             response = self.__send_one_http_request(
                 path, method, payload, params, headers, auth
             )
             if response.status_code == 200:
                 if auth:
+                    self._last_auth_ok = time.monotonic()
                     if self.__split_response_auth_header(response).get("nc"):
                         self.__retrieve_auth_from_response(response)
                     else:
@@ -670,14 +680,33 @@ class FroniusV2(BaseInverter):
             # 401 - unauthorized , relogin
             # 403 - is forbidden, what happens at 01.00 in the night
             if response.status_code in (401, 403):
-                logger.warning(
-                    "[Inverter] %s %s rejected with %d, re-login (attempt %d/2)",
+                last_ok = (
+                    f"{time.monotonic() - self._last_auth_ok:.0f}s ago"
+                    if self._last_auth_ok is not None
+                    else "never"
+                )
+                # Expected: first handshake (no nonce sent yet) or a stale nonce retried once
+                stale = i == 0 and 'stale="true"' in response.headers.get("X-WWW-Authenticate", "")
+                expected = sent_nonce == 0 or stale
+                log_level = logging.DEBUG if expected else logging.WARNING
+                logger.log(
+                    log_level,
+                    "[Inverter] %s %s rejected with %d, re-login (attempt %d/2) "
+                    "| sent nc=%d nonce=%s | challenge=%s | last ok %s",
                     method,
                     path,
                     response.status_code,
                     i + 1,
+                    sent_nc,
+                    sent_nonce,
+                    response.headers.get("X-WWW-Authenticate", ""),
+                    last_ok,
                 )
                 self.__retrieve_auth_from_response(response)
+                # Stale nonce: the challenge carries a fresh nonce, so retry without a full login
+                if stale:
+                    logger.debug("[Inverter] Stale nonce, retrying %s %s with new nonce", method, path)
+                    continue
                 self.login()
             else:
                 raise RuntimeError(
