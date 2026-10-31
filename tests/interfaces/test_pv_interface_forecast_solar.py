@@ -17,6 +17,7 @@ import requests
 
 from src.interfaces import pv_interface as pv_module
 from src.interfaces.pv_interface import (
+    FORECAST_API_MAX_RETRIES,
     FORECAST_SOLAR_DEFAULT_HOLD_S,
     FORECAST_SOLAR_MAX_HOLD_S,
     FORECAST_SOLAR_MIN_HOLD_S,
@@ -355,6 +356,130 @@ def test_a_body_that_cannot_be_parsed_still_yields_a_hold():
     hold = pv._PvInterface__forecast_solar_retry_after_seconds(Broken(status_code=429))
 
     assert hold == FORECAST_SOLAR_DEFAULT_HOLD_S
+
+
+# --------------------------------------------------------------- slow server (#358)
+
+
+def _capture_attempts(monkeypatch, responder):
+    """
+    Patch requests.get to record each attempt's timeout and drive the response.
+
+    ``responder`` is called with the timeout the attempt was given; raising from it
+    stands in for a server that did not answer within it, returning a response for
+    one that did.
+    """
+    timeouts = []
+
+    def mock_get(_url, *_args, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        return responder(kwargs["timeout"])
+
+    monkeypatch.setattr("requests.get", mock_get)
+    return timeouts
+
+
+def test_a_slow_answer_is_waited_out_on_the_next_attempt(monkeypatch):
+    """
+    The bug in #358: retrying a 5 s timeout with another 5 s cannot succeed against a
+    server that needs eight.  The second attempt has to be given more time.
+    """
+    pv = _make_pv()
+    monkeypatch.setattr(pv_module.time, "sleep", lambda _s: None)
+    success = _MockResponse(payload=_success_payload())
+
+    def responder(timeout):
+        if timeout < 12:  # the service is answering in ~8 s right now
+            raise requests.exceptions.Timeout()
+        return success
+
+    timeouts = _capture_attempts(monkeypatch, responder)
+
+    result = pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
+
+    assert timeouts == [5, 12]  # and no third request against the quota
+    assert len(result) == 48
+    assert pv.pv_forcast_request_error["error"] is None
+
+
+def test_the_timeouts_grow_across_the_three_attempts(monkeypatch):
+    """A server that never answers is given 5, then 12, then 30 seconds."""
+    pv = _make_pv()
+    monkeypatch.setattr(pv_module.time, "sleep", lambda _s: None)
+
+    def responder(_timeout):
+        raise requests.exceptions.Timeout()
+
+    timeouts = _capture_attempts(monkeypatch, responder)
+
+    pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
+
+    assert timeouts == [5, 12, 30]
+
+
+def test_the_cache_still_covers_a_server_that_never_answers(monkeypatch):
+    """Exhausting the ladder is a failed fetch like any other - the cache answers."""
+    pv = _make_pv()
+    pv.last_successful_pv_forecast = [13] * 48
+    monkeypatch.setattr(pv_module.time, "sleep", lambda _s: None)
+
+    def responder(_timeout):
+        raise requests.exceptions.Timeout()
+
+    _capture_attempts(monkeypatch, responder)
+
+    result = pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
+
+    assert result == [13] * 48
+    assert pv.pv_forcast_request_error["error"] == "timeout"
+
+
+def test_the_timeout_message_names_what_was_tried(monkeypatch):
+    """
+    A requests Timeout stringifies to the whole URL or to nothing, so the old
+    "Forecast.Solar API error: " told the reader neither that it timed out nor for
+    how long.  The reporter in #358 asked for 30 s - the log has to show they got it.
+    """
+    pv = _make_pv()
+    monkeypatch.setattr(pv_module.time, "sleep", lambda _s: None)
+
+    def responder(_timeout):
+        raise requests.exceptions.Timeout()
+
+    _capture_attempts(monkeypatch, responder)
+
+    pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
+
+    message = str(pv.pv_forcast_request_error["message"])
+    assert "5/12/30 s" in message
+    assert "cached forecast" in message
+
+
+@pytest.mark.parametrize(
+    "exception",
+    [
+        requests.exceptions.Timeout(),
+        requests.exceptions.ConnectionError(),
+        requests.exceptions.HTTPError("500 error"),
+    ],
+)
+def test_no_failure_mode_spends_more_than_three_requests(monkeypatch, exception):
+    """
+    The quota guard.  The public tier allows 12 requests an hour and the update
+    interval already puts four cycles in one, so a cycle may never exceed three -
+    whatever the service is doing wrong.
+    """
+    pv = _make_pv()
+    monkeypatch.setattr(pv_module.time, "sleep", lambda _s: None)
+
+    def responder(_timeout):
+        raise exception
+
+    timeouts = _capture_attempts(monkeypatch, responder)
+
+    pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
+
+    assert len(timeouts) <= FORECAST_API_MAX_RETRIES == 3
 
 
 # ------------------------------------------------------------------- auth + interval

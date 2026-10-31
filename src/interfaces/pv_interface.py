@@ -69,6 +69,13 @@ TEMP_REFRESH_INTERVAL_S = 3600
 TEMP_MAX_RETRIES = 2
 TEMP_RETRY_DELAY_S = 2
 
+# Attempts for the public forecast APIs (Forecast.Solar, Open-Meteo).  They answer in
+# well under a second when healthy but go through spells of double-digit response times
+# (#358), so each attempt is given more time than the last - see `escalating_timeouts`.
+# The count stays at three because Forecast.Solar's public tier allows twelve requests
+# an hour and the update interval already puts four cycles in one.
+FORECAST_API_MAX_RETRIES = 3
+
 # Forecast.Solar meters requests per "zone" - the caller's IP address, or the API key
 # once one is configured - and the public tier allows 12 per hour.  Their own guidance
 # is blunt about the failure mode: "If you ignore the 'retry at' timestamp and call over
@@ -209,9 +216,17 @@ except ImportError:  # imported as src.interfaces (tests)
         place_on_grid,
     )
 try:  # running from src/ — src/ is on sys.path
-    from interfaces.http_fetch import bearer_request_kwargs, retry_request
+    from interfaces.http_fetch import (
+        bearer_request_kwargs,
+        escalating_timeouts,
+        retry_request,
+    )
 except ImportError:  # imported as src.interfaces (tests)
-    from .http_fetch import bearer_request_kwargs, retry_request
+    from .http_fetch import (
+        bearer_request_kwargs,
+        escalating_timeouts,
+        retry_request,
+    )
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
@@ -1655,6 +1670,9 @@ class PvInterface:
             error_detail = str(exception)
             # Provide more helpful error messages based on error type
             if error_type == "timeout":
+                # The 10s is bearer_request_kwargs' default, which this path still
+                # uses on every attempt.  Put it on an escalating ladder like the
+                # public forecast APIs and this line has to name the ladder instead.
                 error_msg = (
                     f"Timeseries data source timeout after 10s - "
                     f"check network connectivity to {data_url} | "
@@ -2018,9 +2036,9 @@ class PvInterface:
             else self.__create_forecast_request(pv_config_entry)
         )
 
-        def request_func():
+        def request_func(timeout):
             response = requests.get(
-                EOS_API_GET_PV_FORECAST, params=forecast_params, timeout=5
+                EOS_API_GET_PV_FORECAST, params=forecast_params, timeout=timeout
             )
             # A relayed 429 has to be recognised before raise_for_status() turns it into
             # an ordinary 500: retrying it is what the provider is asking us not to do.
@@ -2055,7 +2073,11 @@ class PvInterface:
         )
         try:
             day_values = self._retry_request(
-                request_func, error_handler, retries, delay
+                request_func,
+                error_handler,
+                retries,
+                delay,
+                timeouts=escalating_timeouts(retries),
             )
         except _AkkudoktorRateLimit as exc:
             hold = self._akkudoktor_hold_seconds
@@ -2284,8 +2306,8 @@ class PvInterface:
             f"&timezone={timezone}"
         )
 
-        def request_func():
-            response = requests.get(url, timeout=5)
+        def request_func(timeout):
+            response = requests.get(url, timeout=timeout)
             response.raise_for_status()
             return response
 
@@ -2297,7 +2319,11 @@ class PvInterface:
                 "openmeteo_api",
             )
 
-        response = self._retry_request(request_func, error_handler)
+        response = self._retry_request(
+            request_func,
+            error_handler,
+            timeouts=escalating_timeouts(FORECAST_API_MAX_RETRIES),
+        )
 
         def json_func():
             return response.json()
@@ -2630,8 +2656,10 @@ class PvInterface:
             loggable_url,
         )
 
-        def request_func():
-            response = requests.get(url, timeout=5)
+        timeouts = escalating_timeouts(FORECAST_API_MAX_RETRIES)
+
+        def request_func(timeout):
+            response = requests.get(url, timeout=timeout)
             if response.status_code == 429:
                 raise _ForecastSolarRateLimit(
                     self.__forecast_solar_retry_after_seconds(response)
@@ -2647,6 +2675,15 @@ class PvInterface:
                     "Forecast.Solar rejected the API key - check api_key in"
                     " Settings -> PV Source, or clear it to use the public tier"
                 )
+            elif error_type == "timeout":
+                # A requests Timeout stringifies to the whole mangled URL or to
+                # nothing at all, neither of which tells the reader what was tried.
+                message = (
+                    "Forecast.Solar did not answer within "
+                    + "/".join(str(t) for t in timeouts)
+                    + " s - the service is slow or unreachable;"
+                    " using the cached forecast"
+                )
             else:
                 message = f"Forecast.Solar API error: {exception}"
             return self._handle_interface_error(
@@ -2657,7 +2694,9 @@ class PvInterface:
             )
 
         try:
-            response = self._retry_request(request_func, error_handler)
+            response = self._retry_request(
+                request_func, error_handler, timeouts=timeouts
+            )
         except _ForecastSolarRateLimit as exc:
             self._forecast_solar_hold_until = datetime.now() + timedelta(
                 seconds=exc.hold_seconds
@@ -3436,10 +3475,16 @@ class PvInterface:
 
         return aoi
 
-    def _retry_request(self, request_func, error_handler, max_retries=3, delay=1):
+    def _retry_request(
+        self, request_func, error_handler, max_retries=3, delay=1, timeouts=None
+    ):
         """Delegate to the shared retry loop (interfaces.http_fetch)."""
         return retry_request(
-            request_func, error_handler, max_retries=max_retries, delay=delay
+            request_func,
+            error_handler,
+            max_retries=max_retries,
+            delay=delay,
+            timeouts=timeouts,
         )
 
     def _handle_interface_error(

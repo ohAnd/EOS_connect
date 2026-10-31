@@ -20,6 +20,50 @@ import requests
 
 DEFAULT_TIMEOUT_SECONDS = 10
 
+# Bounds for `escalating_timeouts`.  The base is what a healthy public forecast API
+# needs several times over, so the common case still fails fast; the cap is the
+# patience a slow spell is worth before the cached forecast is the better answer.
+ESCALATING_TIMEOUT_BASE_S = 5
+ESCALATING_TIMEOUT_CAP_S = 30
+
+
+def escalating_timeouts(
+    attempts, base=ESCALATING_TIMEOUT_BASE_S, cap=ESCALATING_TIMEOUT_CAP_S
+):
+    """
+    Per-attempt timeouts that grow from ``base`` to ``cap``.
+
+    Repeating a request with the timeout that just expired cannot succeed against a
+    server that is merely slow - it only spends the request budget (Forecast.Solar
+    meters the public tier at 12 per hour, see issue #358).  Giving each attempt more
+    time than the last turns the same number of requests into a real second chance.
+
+    The ladder is defined by its ends rather than by a growth factor, so the attempt
+    count can change without anyone recomputing where it lands: the first attempt gets
+    ``base``, the last gets ``cap``, and the ones between are spread geometrically and
+    rounded to whole seconds.
+
+        escalating_timeouts(2) -> (5, 30)
+        escalating_timeouts(3) -> (5, 12, 30)
+        escalating_timeouts(5) -> (5, 8, 12, 19, 30)
+
+    Args:
+        attempts: Number of attempts the ladder has to cover.
+        base: Timeout of the first attempt, in seconds.
+        cap: Timeout of the last attempt, in seconds. Clamped up to ``base`` when
+            someone passes a cap below it, so the ladder never shrinks.
+
+    Returns:
+        tuple: One timeout per attempt, non-decreasing.
+    """
+    cap = max(base, cap)
+    if attempts <= 1:
+        return (base,)
+    ratio = cap / base
+    return tuple(
+        round(base * ratio ** (step / (attempts - 1))) for step in range(attempts)
+    )
+
 
 def bearer_request_kwargs(token=None, timeout=DEFAULT_TIMEOUT_SECONDS, ssl_ignore=False):
     """
@@ -43,35 +87,47 @@ def bearer_request_kwargs(token=None, timeout=DEFAULT_TIMEOUT_SECONDS, ssl_ignor
     return kwargs
 
 
-def retry_request(request_func, error_handler, max_retries=3, delay=1):
+def retry_request(request_func, error_handler, max_retries=3, delay=1, timeouts=None):
     """
     Centralized retry logic for API requests.
 
     Args:
         request_func (callable): Function that performs the request and returns
-            the result.
+            the result. Called with no arguments, or with the attempt's timeout
+            when ``timeouts`` is given - see below.
         error_handler (callable): Called as ``error_handler(kind, exception)``
             on final failure; its return value is returned.
-        max_retries (int): Attempts before the error handler is called.
+        max_retries (int): Attempts before the error handler is called. Ignored
+            when ``timeouts`` is given.
         delay (int): Delay in seconds between attempts.
+        timeouts (sequence, optional): One timeout per attempt, typically from
+            `escalating_timeouts`. Its length replaces ``max_retries``, and each
+            attempt's value is passed to ``request_func`` as its only argument -
+            so a caller that wants a growing timeout writes
+            ``def request_func(timeout): requests.get(url, timeout=timeout)``.
+            Left out, ``request_func`` keeps being called with no arguments: the
+            pure parse closures that also come through here have no timeout to
+            take, and neither do the callers whose timeout is already fixed.
 
     Returns:
         The result of request_func, or the error handler's result on failure.
     """
-    for attempt in range(max_retries):
+    attempts = tuple(timeouts) if timeouts else (None,) * max_retries
+    last = len(attempts) - 1
+    for attempt, timeout in enumerate(attempts):
         try:
-            return request_func()
+            return request_func() if timeout is None else request_func(timeout)
         except requests.exceptions.Timeout as exc:
-            if attempt == max_retries - 1:
+            if attempt == last:
                 return error_handler("timeout", exc)
         except requests.exceptions.RequestException as exc:
-            if attempt == max_retries - 1:
+            if attempt == last:
                 return error_handler("request_failed", exc)
         except (ValueError, TypeError) as exc:
-            if attempt == max_retries - 1:
+            if attempt == last:
                 return error_handler("invalid_json", exc)
         except (KeyError, AttributeError) as exc:
-            if attempt == max_retries - 1:
+            if attempt == last:
                 return error_handler("parsing_error", exc)
         time.sleep(delay)
     return None

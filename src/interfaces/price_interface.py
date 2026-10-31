@@ -1885,10 +1885,16 @@ class PriceInterface(ForecastMetadataMixin):
 
         return slope, intercept
 
-    def _retry_request(self, request_func, error_handler, max_retries=3, delay=1):
+    def _retry_request(
+        self, request_func, error_handler, max_retries=3, delay=1, timeouts=None
+    ):
         """Delegate to the shared retry loop (interfaces.http_fetch)."""
         return retry_request(
-            request_func, error_handler, max_retries=max_retries, delay=delay
+            request_func,
+            error_handler,
+            max_retries=max_retries,
+            delay=delay,
+            timeouts=timeouts,
         )
 
     def __retrieve_prices_from_fixed24h_array(
