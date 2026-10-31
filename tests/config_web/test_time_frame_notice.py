@@ -1,15 +1,17 @@
 """
 Quarter-hourly planning and the one optimizer that cannot do it.
 
-``eos.time_frame`` offers 900 and 3600 whatever the optimizer is, but the
-Akkudoktor EOS server plans in hourly slots only: EOS Connect drives it through
-``/optimize``, whose GENETIC0 algorithm exposes ``interval_sec`` as a computed
-constant of 3600 - no setting changes it. The form used to accept 900 there and
-``eos_connect.py`` dropped it back to 3600 at startup with nothing but a log
-line, so the setting looked as if it had reverted on its own (issue #353).
+``eos.time_frame`` offers 900 and 3600 whatever the optimizer is, but with the
+Akkudoktor EOS server it depends on the build: the deprecated ``/optimize``
+endpoint runs GENETIC0, whose ``interval_sec`` is a computed constant of 3600,
+and only recent builds add ``/v1/optimize``, which accepts 900. The form used to
+accept 900 regardless and ``eos_connect.py`` dropped it back to 3600 at startup
+with nothing but a log line, so the setting looked as if it had reverted on its
+own (issue #353).
 
-The notice has to reach the form, and the startup fallback has to keep naming
-the server as the reason.
+EOS Connect now asks the server instead. The notice still has to reach the form,
+because the answer is only known at startup, and the fallback has to keep saying
+what would fix it.
 """
 
 import re
@@ -47,12 +49,15 @@ def test_it_stays_out_of_the_way_for_the_others():
         assert _notice_shows_for(source) is False, source
 
 
-def test_the_notice_names_the_server_and_the_way_out():
-    """A notice that only says "no" leaves the reader guessing."""
+def test_the_notice_names_the_condition_and_the_way_out():
+    """
+    A notice that only says "no" leaves the reader guessing - and saying "no"
+    at all would now be wrong, because a recent build does support it.
+    """
     text = SCHEMA.get("eos.time_frame").notice_when["text"]
-    assert "EOS server" in text
+    assert "recent" in text, "the limit is the build, not the server as such"
     assert "hourly" in text
-    assert "EVopt" in text, "say which optimizer does support it"
+    assert "EVopt" in text, "say which optimizer always supports it"
 
 
 def test_the_startup_fallback_blames_the_server_not_the_setting():
@@ -68,6 +73,7 @@ def test_the_startup_fallback_blames_the_server_not_the_setting():
     )
     assert block, "the 15-min fallback is gone - update this test with it"
     warning = block.group(0)
-    assert "Akkudoktor EOS" in warning, "name the optimizer that cannot do it"
-    assert "hourly" in warning
-    assert "EVopt" in warning, "name the optimizers that can"
+    assert "supports_genetic_optimize" in warning, "the server has to be asked"
+    assert "Akkudoktor EOS" in warning, "name the optimizer it depends on"
+    assert "newer EOS build" in warning, "say what would fix it"
+    assert "EVopt" in warning, "name the optimizers that always can"
