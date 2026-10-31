@@ -497,7 +497,41 @@ def test_rejected_api_key_reports_an_actionable_error(monkeypatch, status):
     message = str(pv.pv_forcast_request_error["message"])
     assert pv.pv_forcast_request_error["error"] == "request_failed"
     assert "rejected the API key" in message
+    assert str(status) in message
     assert "WRONG" not in message
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_rejected_api_key_is_asked_about_exactly_once(monkeypatch, status):
+    """
+    The same shape as the 429 fix: a rejected key cannot start working between two
+    attempts a second apart, so retrying it only spent two more of the twelve
+    requests the public tier allows per hour.
+    """
+    pv = _make_pv(api_key="WRONG")
+    monkeypatch.setattr(pv_module.time, "sleep", lambda _s: None)
+    urls = _capture_urls(monkeypatch, _MockResponse(status_code=status))
+
+    pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
+
+    assert len(urls) == 1
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_rejected_api_key_still_counts_as_a_failed_fetch(monkeypatch, status):
+    """
+    Unlike the 429 hold, which protects the cache it serves from, a bad key is a real
+    misconfiguration - it has to keep counting towards max_failures.
+    """
+    pv = _make_pv(api_key="WRONG")
+    pv.last_successful_pv_forecast = [9] * 48
+    monkeypatch.setattr(pv_module.time, "sleep", lambda _s: None)
+    _capture_urls(monkeypatch, _MockResponse(status_code=status))
+
+    result = pv._PvInterface__get_pv_forecast_forecast_solar_api(pv.config[0])
+
+    assert pv.consecutive_failures == 1
+    assert result == [9] * 48  # the cache still covers this cycle
 
 
 @pytest.mark.parametrize(

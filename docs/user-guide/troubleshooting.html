@@ -223,6 +223,20 @@ KeyError: 0</code></pre>
                             <a href="config-solar.html#pv-forecast-sources">Who supplies the
                                 forecast</a>.</p>
 
+                        <h3 id="tb-pv-key">Forecast.Solar rejects the API key</h3>
+                        <p><strong>Symptom:</strong> the PV forecast never updates and the log
+                            repeats, once per cycle:</p>
+                        <pre><code>[PV-IF] Forecast.Solar rejected the API key (HTTP 401) - check api_key in
+  Settings &rsaquo; PV Source, or clear it to use the public tier</code></pre>
+                        <p><strong>Fix:</strong> correct the key under <em>Settings &rsaquo; PV
+                                Source</em>, or clear the field entirely &mdash; an empty key is
+                            valid and selects the free tier. A key that has expired or belongs to a
+                            different account gives the same message.</p>
+                        <p>The key itself is never written to the log, and neither are your
+                            coordinates: both sit in the request path, so the URL is masked before
+                            it is logged. Log excerpts from this message are safe to paste into a
+                            bug report.</p>
+
                         <h3 id="tb-optimization-pause">The optimization pauses for a whole quarter hour</h3>
                         <p><strong>Symptom:</strong> in quarter-hourly mode the optimization usually runs
                             several times per slot, but now and then the log shows a pause of a full

@@ -101,6 +101,22 @@ class _ForecastSolarRateLimit(Exception):
         self.hold_seconds = hold_seconds
 
 
+class _ForecastSolarAuthError(Exception):
+    """
+    A 401/403 from Forecast.Solar, raised so it escapes ``_retry_request``.
+
+    Not a ``RequestException``, for the same reason as ``_ForecastSolarRateLimit``:
+    that family is caught and retried, and a rejected key is the one failure that
+    cannot possibly heal between two attempts a second apart.  The two extra requests
+    bought nothing but a slower error message, at two more of the twelve the public
+    tier allows per hour.
+    """
+
+    def __init__(self, status_code):
+        super().__init__(f"API key rejected (HTTP {status_code})")
+        self.status_code = status_code
+
+
 # api.akkudoktor.net proxies an upstream weather service and does not pass its status
 # through: every upstream fault arrives as a 500 whose *body* names the real code, e.g.
 # "Request failed with status code 429".  ``raise_for_status()`` reports only "500 Server
@@ -217,12 +233,14 @@ except ImportError:  # imported as src.interfaces (tests)
     )
 try:  # running from src/ — src/ is on sys.path
     from interfaces.http_fetch import (
+        DEFAULT_TIMEOUT_SECONDS,
         bearer_request_kwargs,
         escalating_timeouts,
         retry_request,
     )
 except ImportError:  # imported as src.interfaces (tests)
     from .http_fetch import (
+        DEFAULT_TIMEOUT_SECONDS,
         bearer_request_kwargs,
         escalating_timeouts,
         retry_request,
@@ -1670,11 +1688,13 @@ class PvInterface:
             error_detail = str(exception)
             # Provide more helpful error messages based on error type
             if error_type == "timeout":
-                # The 10s is bearer_request_kwargs' default, which this path still
-                # uses on every attempt.  Put it on an escalating ladder like the
-                # public forecast APIs and this line has to name the ladder instead.
+                # Read from the same constant the request uses rather than written
+                # out, so the number in the log cannot quietly stop being the number
+                # that was waited.  Should this path ever move onto an escalating
+                # ladder, it is the ladder that belongs here.
                 error_msg = (
-                    f"Timeseries data source timeout after 10s - "
+                    "Timeseries data source timeout after "
+                    f"{DEFAULT_TIMEOUT_SECONDS}s - "
                     f"check network connectivity to {data_url} | "
                     f"Recovery: {self.consecutive_failures + 1}/{self.max_failures}"
                 )
@@ -2665,17 +2685,12 @@ class PvInterface:
                     self.__forecast_solar_retry_after_seconds(response)
                 )
             if response.status_code in (401, 403):
-                raise requests.exceptions.RequestException("auth_error")
+                raise _ForecastSolarAuthError(response.status_code)
             response.raise_for_status()
             return response
 
         def error_handler(error_type, exception):
-            if str(exception) == "auth_error":
-                message = (
-                    "Forecast.Solar rejected the API key - check api_key in"
-                    " Settings -> PV Source, or clear it to use the public tier"
-                )
-            elif error_type == "timeout":
+            if error_type == "timeout":
                 # A requests Timeout stringifies to the whole mangled URL or to
                 # nothing at all, neither of which tells the reader what was tried.
                 message = (
@@ -2709,6 +2724,17 @@ class PvInterface:
             # background because it runs every cycle until the hold expires.
             self._log_error_diagnostics("rate_limit", "forecast_solar")
             return self.__forecast_solar_hold_response(pv_config_entry, exc.hold_seconds)
+        except _ForecastSolarAuthError as exc:
+            # Reported as request_failed, like any other refused fetch: it is the
+            # request count that had to change here, not what the user is told.
+            return self._handle_interface_error(
+                "request_failed",
+                f"Forecast.Solar rejected the API key (HTTP {exc.status_code})"
+                " - check api_key in Settings -> PV Source, or clear it to use"
+                " the public tier",
+                pv_config_entry,
+                "forecast_solar",
+            )
 
         # _retry_request hands back the error handler's fallback - a forecast list -
         # when every attempt failed.  Without this the list fell through to .json()
