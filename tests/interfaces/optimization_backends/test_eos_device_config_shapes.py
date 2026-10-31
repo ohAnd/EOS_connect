@@ -21,6 +21,7 @@ Usage:
 """
 
 import json
+from contextlib import ExitStack
 from unittest.mock import Mock, patch
 import pytest
 import pytz
@@ -394,3 +395,80 @@ class TestDeviceConfigShapes:
         backend = EOSBackend(base_url, time_frame_base, berlin_timezone)
 
         assert backend.eos_version == self.MAPPING_ERA_VERSION
+
+    # ------------------------------------------------------------------
+    # What the log is allowed to claim
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _patched(devices, eos_version):
+        """
+        Patch requests for one server, as a context manager pair.
+
+        Used instead of the decorators above so a test taking ``caplog`` stays
+        inside pylint's argument limit.
+
+        Args:
+            devices: JSON the server returns for devices/electric_vehicles.
+            eos_version: Version the server reports on /v1/health.
+
+        Returns:
+            contextlib.ExitStack: Entered stack; ``mock_get``/``mock_put`` are
+            reachable through the returned mocks tuple.
+        """
+        module = "src.interfaces.optimization_backends.optimization_backend_eos"
+        stack = ExitStack()
+        mock_get = stack.enter_context(patch(module + ".requests.get"))
+        mock_put = stack.enter_context(patch(module + ".requests.put"))
+        TestDeviceConfigShapes._responses(mock_get, mock_put, eos_version, devices)
+        return stack, mock_put
+
+    def test_rejected_charge_rate_write_is_not_reported_as_updated(
+        self, base_url, time_frame_base, berlin_timezone, caplog
+    ):
+        """
+        A rejected charge-rate PUT must not be logged as a successful update.
+
+        The same mismatch on the ``optimization`` path is what made #357 so hard
+        to spot: the server refused the write and the log said the config had
+        been updated anyway, so nothing pointed at the server.
+
+        Args:
+            base_url: Base URL fixture.
+            time_frame_base: Time frame base fixture.
+            berlin_timezone: Timezone fixture.
+            caplog: pytest log capture fixture.
+        """
+        stack, mock_put = self._patched([{}], self.LIST_ERA_VERSION)
+        with stack:
+            mock_put.return_value.raise_for_status.side_effect = (
+                requests.exceptions.HTTPError("400 Client Error")
+            )
+            EOSBackend(base_url, time_frame_base, berlin_timezone)
+
+            assert self._device_puts(mock_put), "the write must still be attempted"
+
+        assert "config updated with charge rates" not in caplog.text
+        assert (
+            "Failed to set config value for path 'devices/electric_vehicles'"
+            in caplog.text
+        )
+
+    def test_accepted_charge_rate_write_is_still_reported(
+        self, base_url, time_frame_base, berlin_timezone, caplog
+    ):
+        """
+        The happy path keeps its message - gating the log on acceptance must not
+        silence a write that went through.
+
+        Args:
+            base_url: Base URL fixture.
+            time_frame_base: Time frame base fixture.
+            berlin_timezone: Timezone fixture.
+            caplog: pytest log capture fixture.
+        """
+        stack, _mock_put = self._patched([{}], self.LIST_ERA_VERSION)
+        with stack:
+            EOSBackend(base_url, time_frame_base, berlin_timezone)
+
+        assert "config updated with charge rates" in caplog.text

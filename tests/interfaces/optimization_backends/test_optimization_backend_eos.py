@@ -647,6 +647,126 @@ class TestRetrieveEOSVersion:
         mock_get.assert_called_with(base_url + "/v1/health", timeout=10)
 
 
+class TestHorizonPerAlgorithm:
+    """
+    Newer EOS builds read the horizon from optimization.genetic (or genetic0), not
+    from the top-level key. Writing only the top-level key left them at 24 hours.
+    """
+
+    @staticmethod
+    def _make_backend(optimization_config, base_url, time_frame_base, tz):
+        """Build an EOSBackend against a mocked EOS; return it with the PUT mock."""
+        version = Mock()
+        version.json.return_value = {"status": "alive", "version": "0.3.0.dev2"}
+        version.raise_for_status = Mock()
+        optimization = Mock()
+        optimization.json.return_value = optimization_config
+        optimization.raise_for_status = Mock()
+        devices = Mock()
+        devices.json.return_value = []
+        devices.raise_for_status = Mock()
+
+        def get_side_effect(url, **kwargs):  # pylint: disable=unused-argument
+            if "/v1/health" in url:
+                return version
+            if "/v1/config/optimization" in url:
+                return optimization
+            return devices
+
+        module = "src.interfaces.optimization_backends.optimization_backend_eos"
+        with patch(module + ".requests.get", side_effect=get_side_effect), patch(
+            module + ".requests.put"
+        ) as mock_put:
+            mock_put.return_value.raise_for_status = Mock()
+            backend = EOSBackend(base_url, time_frame_base, tz)
+        return backend, mock_put
+
+    @staticmethod
+    def _optimization_puts(mock_put):
+        """(path, value) of every PUT below /v1/config/optimization."""
+        puts = []
+        for call in mock_put.call_args_list:
+            url = call.args[0]
+            if "/v1/config/optimization" in url:
+                path = url.split("/v1/config/", 1)[1]
+                puts.append((path, json.loads(call.kwargs["data"])))
+        return puts
+
+    def test_nested_horizon_is_set_on_its_own_path(
+        self, base_url, time_frame_base, berlin_timezone
+    ):
+        """Only the nested key is written, and the computed fields stay behind."""
+        config = {
+            "algorithm": "GENETIC",
+            "genetic": {"horizon_hours": 24, "individuals": 300},
+            "algorithms": ["GENETIC", "GENETIC0"],
+            "keys": ["battery1_soc_factor"],
+        }
+        _, mock_put = self._make_backend(
+            config, base_url, time_frame_base, berlin_timezone
+        )
+        assert self._optimization_puts(mock_put) == [
+            ("optimization/genetic/horizon_hours", 48)
+        ]
+
+    def test_genetic0_gets_its_own_horizon(
+        self, base_url, time_frame_base, berlin_timezone
+    ):
+        """The horizon of the selected algorithm is the one that counts."""
+        config = {
+            "algorithm": "GENETIC0",
+            "genetic": {"horizon_hours": 24},
+            "genetic0": {"horizon_hours": 24},
+        }
+        _, mock_put = self._make_backend(
+            config, base_url, time_frame_base, berlin_timezone
+        )
+        assert self._optimization_puts(mock_put) == [
+            ("optimization/genetic0/horizon_hours", 48)
+        ]
+
+    def test_nested_horizon_of_48_is_left_alone(
+        self, base_url, time_frame_base, berlin_timezone
+    ):
+        """No write when EOS already plans over 48 hours."""
+        config = {"algorithm": "GENETIC", "genetic": {"horizon_hours": 48}}
+        _, mock_put = self._make_backend(
+            config, base_url, time_frame_base, berlin_timezone
+        )
+        assert not self._optimization_puts(mock_put)
+
+    def test_failed_write_is_not_reported_as_updated(
+        self, base_url, time_frame_base, berlin_timezone, caplog
+    ):
+        """A rejected PUT must not be logged as a successful config update."""
+        config = {"horizon_hours": 24, "genetic": {"individuals": 300}}
+        version = Mock()
+        version.json.return_value = {"status": "alive", "version": "0.2.0+dev"}
+        optimization = Mock()
+        optimization.json.return_value = config
+        rejected = Mock()
+        rejected.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            "400 Client Error"
+        )
+
+        def get_side_effect(url, **kwargs):  # pylint: disable=unused-argument
+            if "/v1/health" in url:
+                return version
+            if "/v1/config/optimization" in url:
+                return optimization
+            devices = Mock()
+            devices.json.return_value = []
+            return devices
+
+        module = "src.interfaces.optimization_backends.optimization_backend_eos"
+        with patch(module + ".requests.get", side_effect=get_side_effect), patch(
+            module + ".requests.put", return_value=rejected
+        ):
+            EOSBackend(base_url, time_frame_base, berlin_timezone)
+        assert "config updated" not in caplog.text
+        assert "Failed to set config value for path 'optimization'" in caplog.text
+
+
 @pytest.mark.parametrize(
     "current_version, compare_to, expected",
     [
