@@ -187,12 +187,21 @@ class EOSGeneticPath:
                     "[OPT-EOS] Mirrored %s into the EOS device configuration", group
                 )
 
-    def _apply_run_settings(self, now=None):
+    def _apply_run_settings(self, eos_request, now=None):
         """
-        Put the slot width and the horizon the data supports on the server.
+        Put the slot width, the horizon and the battery price on the server.
 
-        Both are written every run: the horizon moves with the clock, and the
-        slot width can change under a restart.
+        All three are written every run: the horizon moves with the clock, the
+        battery price moves with the PV and grid mix, and the slot width can
+        change under a restart.
+
+        The battery price is the one value of the old request body that is not
+        an observation and has no home in ``RuntimeForecasts``. It used to ride
+        along as ``ems.preis_euro_pro_wh_akku`` and decided what charge left at
+        the end of the horizon is worth. Dropping it would hand that judgement
+        to the server's own AUTO proxy and quietly overrule what the battery
+        interface worked out, so it is mapped onto the setting EOS documents as
+        "the historical behaviour": FIXED mode with an explicit price.
 
         Returns:
             int: The horizon in hours that was applied.
@@ -200,6 +209,15 @@ class EOSGeneticPath:
         horizon_hours = self._available_horizon_hours(now)
         self._set_config("optimization/genetic/interval_sec", self.time_frame_base)
         self._set_config("optimization/genetic/horizon_hours", horizon_hours)
+
+        battery_price = (eos_request.get("ems") or {}).get("preis_euro_pro_wh_akku")
+        if battery_price is not None:
+            self._set_config("optimization/genetic/terminal_value_mode", "FIXED")
+            self._set_config(
+                # The request prices a Wh; this setting prices a kWh.
+                "optimization/genetic/terminal_value_euro_per_kwh",
+                float(battery_price) * 1000,
+            )
         return horizon_hours
 
     # ------------------------------------------------------------------
@@ -324,7 +342,7 @@ class EOSGeneticPath:
         total_slots = horizon_slots(self.time_frame_base)
 
         self._mirror_devices(eos_request)
-        horizon_hours = self._apply_run_settings(now)
+        horizon_hours = self._apply_run_settings(eos_request, now)
         body = self._build_body(eos_request)
 
         request_url = self.base_url + GENETIC_OPTIMIZE_PATH

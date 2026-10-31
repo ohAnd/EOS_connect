@@ -134,7 +134,7 @@ class TestRollingHorizon:
     def test_interval_and_horizon_are_both_published(self):
         writes = []
         now = BERLIN.localize(datetime(2026, 10, 31, 12, 0))
-        _path(900, writes)._apply_run_settings(now)
+        _path(900, writes)._apply_run_settings({"ems": {}}, now)
         assert ("optimization/genetic/interval_sec", 900) in writes
         assert ("optimization/genetic/horizon_hours", 36) in writes
 
