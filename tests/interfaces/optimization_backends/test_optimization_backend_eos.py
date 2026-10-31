@@ -725,6 +725,44 @@ class TestHorizonPerAlgorithm:
             ("optimization/genetic0/horizon_hours", 48)
         ]
 
+    def test_genetic0_wins_over_the_configured_algorithm(
+        self, base_url, time_frame_base, berlin_timezone
+    ):
+        """
+        The endpoint decides the section, not the configuration.
+
+        A current EOS carries both sections and defaults optimization.algorithm
+        to GENETIC - but POST /optimize, the only endpoint this backend calls,
+        is hardwired to GENETIC0 and never reads optimization.algorithm. The
+        horizon it honours is genetic0's, so writing genetic's left the endpoint
+        on its own default.
+        """
+        config = {
+            "algorithm": "GENETIC",
+            "genetic": {"horizon_hours": 24, "interval_sec": 3600},
+            "genetic0": {"horizon_hours": 24, "interval_sec": 3600},
+            "algorithms": ["GENETIC", "GENETIC0"],
+            "keys": [],
+        }
+        _, mock_put = self._make_backend(
+            config, base_url, time_frame_base, berlin_timezone
+        )
+        assert self._optimization_puts(mock_put) == [
+            ("optimization/genetic0/horizon_hours", 48)
+        ]
+
+    def test_a_server_without_genetic0_keeps_the_old_section(
+        self, base_url, time_frame_base, berlin_timezone
+    ):
+        """Older builds have no genetic0; nothing about them changes."""
+        config = {"algorithm": "GENETIC", "genetic": {"horizon_hours": 24}}
+        _, mock_put = self._make_backend(
+            config, base_url, time_frame_base, berlin_timezone
+        )
+        assert self._optimization_puts(mock_put) == [
+            ("optimization/genetic/horizon_hours", 48)
+        ]
+
     def test_nested_horizon_of_48_is_left_alone(
         self, base_url, time_frame_base, berlin_timezone
     ):

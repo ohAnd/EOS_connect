@@ -53,9 +53,20 @@ class EOSBackend:
                 # top-level key: writing only that one left them at their default
                 # of 24 hours. Set the nested key on its own path, so the computed
                 # fields of the optimization object are not sent back with it.
-                algorithm_section = str(
-                    config_optimization.get("algorithm", "GENETIC")
-                ).lower()
+                #
+                # Which section counts is decided by the endpoint, not by the
+                # configuration: POST /optimize - the only one this backend calls -
+                # is hardwired to the GENETIC0 algorithm and never reads
+                # optimization.algorithm. So where the server has a genetic0
+                # section, that is the horizon it honours; following
+                # optimization.algorithm instead (GENETIC by default) wrote a key
+                # this endpoint does not read. Older servers have no genetic0 and
+                # keep the previous behaviour.
+                algorithm_section = (
+                    "genetic0"
+                    if isinstance(config_optimization.get("genetic0"), dict)
+                    else str(config_optimization.get("algorithm", "GENETIC")).lower()
+                )
                 algorithm_config = config_optimization.get(algorithm_section)
                 if (
                     isinstance(algorithm_config, dict)
