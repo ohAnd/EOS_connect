@@ -153,11 +153,11 @@ class EOSBackend:
                 )
                 return
             config_devices = [{"charge_rates": list(DEFAULT_EV_CHARGE_RATES)}]
-            self.__set_config_path("devices/electric_vehicles", config_devices)
-            logger.warning(
-                "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with charge "
-                + "rates for electric vehicles"
-            )
+            if self.__set_config_path("devices/electric_vehicles", config_devices):
+                logger.warning(
+                    "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with charge "
+                    + "rates for electric vehicles"
+                )
             return
 
         devices = (
@@ -181,11 +181,11 @@ class EOSBackend:
 
         for device in without_rates:
             device["charge_rates"] = list(DEFAULT_EV_CHARGE_RATES)
-        self.__set_config_path("devices/electric_vehicles", config_devices)
-        logger.warning(
-            "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with charge "
-            + "rates for electric vehicles"
-        )
+        if self.__set_config_path("devices/electric_vehicles", config_devices):
+            logger.warning(
+                "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with charge "
+                + "rates for electric vehicles"
+            )
 
     def _get_expected_hourly_slots(self):
         """
