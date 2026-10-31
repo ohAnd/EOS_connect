@@ -14,6 +14,17 @@ import numpy as np
 from packaging import version
 import pytz
 
+try:  # running from src/ as a script - src/ is on sys.path
+    from interfaces.optimization_backends.optimization_backend_eos_genetic import (
+        EOSGeneticPath,
+        supports_genetic_optimize,
+    )
+except ImportError:  # imported as src.interfaces... (tests)
+    from .optimization_backend_eos_genetic import (
+        EOSGeneticPath,
+        supports_genetic_optimize,
+    )
+
 logger = logging.getLogger("__main__")
 
 # Charge rates EOS_connect pushes into an EOS server that has none of its own,
@@ -40,6 +51,7 @@ class EOSBackend:
         self.last_optimization_runtimes = [0] * 5
         self.last_optimization_runtime_number = 0
         self.eos_version = "0.0.2"  # default
+        self._genetic_path = None
         try:
             self.eos_version = self._retrieve_eos_version()
             # if self.eos_version in ["0.1.0+dev", "0.2.0+dev"]:
@@ -104,6 +116,33 @@ class EOSBackend:
                     )
 
                 self.__ensure_ev_charge_rates()
+                # EOS marks the endpoint this backend grew up on deprecated, so
+                # wherever the current one is available it is the one used - for
+                # hourly runs too, not only for the quarter-hourly slots that
+                # need it. That leaves the legacy path to the servers that have
+                # nothing else, which is where it can eventually be retired.
+                #
+                # Asked here rather than in __init__'s first lines so a server
+                # below 0.1.0 is still left completely alone: it cannot have the
+                # endpoint, and probing it would cost a request for nothing.
+                if supports_genetic_optimize(self.base_url):
+                    self._genetic_path = EOSGeneticPath(
+                        self.base_url,
+                        self.time_frame_base,
+                        self.time_zone,
+                        self.__get_config_path,
+                        self.__set_config_path,
+                    )
+                    logger.info(
+                        "[OPT-EOS] EOS server offers /v1/optimize - using it "
+                        "for %d s slots",
+                        self.time_frame_base,
+                    )
+                else:
+                    logger.info(
+                        "[OPT-EOS] EOS server has only the deprecated /optimize "
+                        "endpoint - using it; 15-min slots need a newer EOS build"
+                    )
             logger.info("[OPT-EOS] Configuration validation successful")
         except requests.exceptions.RequestException as e:
             self.__report_config_check_failed(e)
@@ -295,6 +334,8 @@ class EOSBackend:
         Send the optimize request to the EOS server.
         Returns (response_json, avg_runtime)
         """
+        if self._genetic_path is not None:
+            return self._genetic_path.optimize(eos_request, timeout)
         # Adjust all arrays for DST before sending to EOS server.
         # Sources always produce 48 (hourly) or 192 (15-min) slots.
         # For old EOS (< 0.1.0), the server computed a DST-aware expected

@@ -32,6 +32,9 @@ from interfaces.base_control import (
     calculate_tgt_dc_charge_power,
     mode_uses_dc_charge_limit,
 )
+from interfaces.optimization_backends.optimization_backend_eos_genetic import (
+    supports_genetic_optimize,
+)
 from interfaces.load_interface import LoadInterface
 from interfaces.battery_interface import BatteryInterface
 from interfaces.evcc_interface import EvccInterface
@@ -184,15 +187,31 @@ if time_frame_base not in (900, 3600):
     )
     time_frame_base = 3600
 elif time_frame_base == 900 and eos_source not in ("evopt", "local_evopt"):
-    # The limit is the EOS server's, not ours: /optimize runs its GENETIC0
-    # algorithm, whose interval is a computed constant of 3600 s, so there is
-    # no setting that would make it plan quarter-hourly (issue #353).
-    logger.warning(
-        "[Config] 15-min time_frame is not available with the Akkudoktor EOS "
-        "server - its optimize endpoint plans in hourly slots only. Using 3600. "
-        "EVopt and Local EVopt do support 900."
+    # Whether the Akkudoktor EOS server can plan quarter-hourly depends on its
+    # build, so it is asked rather than assumed (issue #353). The old
+    # /optimize endpoint runs GENETIC0, whose interval is a computed constant
+    # of 3600 s; only /v1/optimize accepts 900, and only recent builds have it.
+    #
+    # This has to happen here, before the optimization interface is built: the
+    # answer decides the width of every series the run assembles, and that is
+    # settled long before any backend exists.
+    _eos_config = config_manager.config.get("eos", {})
+    _eos_base_url = (
+        f"http://{_eos_config.get('server', '192.168.1.1')}"
+        f":{_eos_config.get('port', 8503)}"
     )
-    time_frame_base = 3600
+    if eos_source == "eos_server" and supports_genetic_optimize(_eos_base_url):
+        logger.info(
+            "[Config] EOS server at %s plans in 15-min slots - keeping time_frame 900",
+            _eos_base_url,
+        )
+    else:
+        logger.warning(
+            "[Config] 15-min time_frame is not available with this Akkudoktor EOS "
+            "server - its optimize endpoint plans in hourly slots only. Using 3600. "
+            "A newer EOS build supports it; EVopt and Local EVopt always do."
+        )
+        time_frame_base = 3600
 
 # PHASE 2: Initialize core interfaces (critical - stop on failure)
 eos_interface = interface_factory.create_optimization_interface(

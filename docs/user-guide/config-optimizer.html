@@ -172,13 +172,23 @@
                         what it actually measured. What that costs is the size of the problem
                         the optimizer solves: 192 slots across the horizon instead of 48.</p>
                     <div class="alert alert-info">
-                        <p><strong>Quarter-hourly needs EVopt or Local EVopt.</strong> The
-                            Akkudoktor EOS server plans in hourly slots only: EOS Connect drives
-                            it through its <code>/optimize</code> endpoint, whose algorithm
-                            reports its interval as a fixed 3600&nbsp;s &mdash; there is no
-                            setting on the server that changes it. Choosing <code>900</code>
-                            with <code>eos.source: eos_server</code> therefore falls back to
-                            hourly on the next restart, and the log says so.</p>
+                        <p><strong>With the Akkudoktor EOS server, quarter-hourly needs a recent
+                            build.</strong> EOS has two optimization endpoints. The older
+                            <code>/optimize</code> runs an algorithm whose interval is fixed at
+                            3600&nbsp;s; only <code>/v1/optimize</code>, added in later builds,
+                            accepts 900. EOS&nbsp;0.2.0 and 0.3.0 do not have it.</p>
+                        <p>You do not have to work out which you are running: EOS Connect asks the
+                            server when it starts. If it can, your <code>900</code> stands and the
+                            requests are reshaped for that endpoint behind the scenes. If it
+                            cannot &mdash; or is unreachable &mdash; the run falls back to hourly
+                            and the log says why. EVopt and the built-in Local EVopt always plan
+                            quarter-hourly.</p>
+                        <p>A server that offers <code>/v1/optimize</code> is talked to through it
+                            for hourly planning as well, not only for quarter-hourly. EOS marks
+                            the older endpoint deprecated, and following that keeps the legacy
+                            path to the servers that have nothing else. Nothing about this is
+                            configurable and nothing about it is visible in the plan &mdash; the
+                            log line at startup names the endpoint in use.</p>
                     </div>
 
                     <div data-schema-section="eos" data-schema-anchor="time-slot-config"></div>

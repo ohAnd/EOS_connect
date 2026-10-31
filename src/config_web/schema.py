@@ -801,18 +801,19 @@ _ALL_FIELDS: list[FieldDef] = [
         validation={"choices": [900, 3600]},
         display_group="Optimization",
         notice_when={
-            # Picking 900 here with the Akkudoktor EOS server used to be
-            # accepted by the form and then silently dropped back to 3600 at
-            # startup, with only a log line to say so (issue #353). The limit
-            # is the server's: EOS_connect drives it through /optimize, whose
-            # GENETIC0 algorithm reports interval_sec as a computed constant
-            # of 3600 - there is no setting to change.
+            # Whether the Akkudoktor EOS server can plan quarter-hourly depends
+            # on its build: the deprecated /optimize endpoint runs GENETIC0,
+            # whose interval_sec is a computed constant of 3600, and only recent
+            # builds add /v1/optimize, which accepts 900 (issue #353). EOS
+            # Connect asks the server at startup rather than making the user
+            # find this out, so the notice describes the condition, not a ban.
             "when": {"eos.source": ["eos_server"]},
             "text": (
-                "The Akkudoktor EOS server plans in hourly slots only - it is "
-                "driven through its optimize endpoint, whose algorithm is fixed "
-                "to 3600 s. Choosing 900 here falls back to hourly on restart. "
-                "EVopt and the built-in Local EVopt do support quarter-hourly."
+                "Quarter-hourly planning needs a recent Akkudoktor EOS build - "
+                "older ones run an optimizer fixed to hourly slots. EOS Connect "
+                "asks your server when it starts and falls back to hourly if it "
+                "cannot, saying so in the log. EVopt and the built-in Local "
+                "EVopt always support it."
             ),
             "link": "eos",
         },
