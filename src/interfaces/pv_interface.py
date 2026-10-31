@@ -40,6 +40,8 @@ from .temperature_forecast import (
     AKKUDOKTOR,
     DEFAULT_TEMPERATURE_PROVIDER,
     OPENMETEO,
+    TEMP_MAX_RETRIES,
+    TEMP_RETRY_DELAY_S,
     TemperatureForecastError,
     fetch_openmeteo_temperature,
 )
@@ -63,11 +65,15 @@ DEFAULT_PV_NOMINAL_POWER_W = 4000
 # for one new data point.  A successful forecast is reused until it is this old.
 TEMP_REFRESH_INTERVAL_S = 3600
 
-# Retry policy for the temperature request.  Deliberately shorter than the PV one: the
-# cache is the real recovery strategy here (a held forecast is a good answer, a held PV
-# array is not), and every retry blocks the shared update loop.
-TEMP_MAX_RETRIES = 2
-TEMP_RETRY_DELAY_S = 2
+# TEMP_MAX_RETRIES / TEMP_RETRY_DELAY_S are imported from temperature_forecast above:
+# both temperature providers answer the same question, so they share one retry policy.
+
+# Attempts for the public forecast APIs (Forecast.Solar, Open-Meteo).  They answer in
+# well under a second when healthy but go through spells of double-digit response times
+# (#358), so each attempt is given more time than the last - see `escalating_timeouts`.
+# The count stays at three because Forecast.Solar's public tier allows twelve requests
+# an hour and the update interval already puts four cycles in one.
+FORECAST_API_MAX_RETRIES = 3
 
 # Forecast.Solar meters requests per "zone" - the caller's IP address, or the API key
 # once one is configured - and the public tier allows 12 per hour.  Their own guidance
@@ -92,6 +98,22 @@ class _ForecastSolarRateLimit(Exception):
     def __init__(self, hold_seconds):
         super().__init__(f"rate limited, holding off for {hold_seconds}s")
         self.hold_seconds = hold_seconds
+
+
+class _ForecastSolarAuthError(Exception):
+    """
+    A 401/403 from Forecast.Solar, raised so it escapes ``_retry_request``.
+
+    Not a ``RequestException``, for the same reason as ``_ForecastSolarRateLimit``:
+    that family is caught and retried, and a rejected key is the one failure that
+    cannot possibly heal between two attempts a second apart.  The two extra requests
+    bought nothing but a slower error message, at two more of the twelve the public
+    tier allows per hour.
+    """
+
+    def __init__(self, status_code):
+        super().__init__(f"API key rejected (HTTP {status_code})")
+        self.status_code = status_code
 
 
 # api.akkudoktor.net proxies an upstream weather service and does not pass its status
@@ -209,9 +231,19 @@ except ImportError:  # imported as src.interfaces (tests)
         place_on_grid,
     )
 try:  # running from src/ — src/ is on sys.path
-    from interfaces.http_fetch import bearer_request_kwargs, retry_request
+    from interfaces.http_fetch import (
+        DEFAULT_TIMEOUT_SECONDS,
+        bearer_request_kwargs,
+        escalating_timeouts,
+        retry_request,
+    )
 except ImportError:  # imported as src.interfaces (tests)
-    from .http_fetch import bearer_request_kwargs, retry_request
+    from .http_fetch import (
+        DEFAULT_TIMEOUT_SECONDS,
+        bearer_request_kwargs,
+        escalating_timeouts,
+        retry_request,
+    )
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_URL,
     TimeseriesFormatError,
@@ -1655,8 +1687,13 @@ class PvInterface:
             error_detail = str(exception)
             # Provide more helpful error messages based on error type
             if error_type == "timeout":
+                # Read from the same constant the request uses rather than written
+                # out, so the number in the log cannot quietly stop being the number
+                # that was waited.  Should this path ever move onto an escalating
+                # ladder, it is the ladder that belongs here.
                 error_msg = (
-                    f"Timeseries data source timeout after 10s - "
+                    "Timeseries data source timeout after "
+                    f"{DEFAULT_TIMEOUT_SECONDS}s - "
                     f"check network connectivity to {data_url} | "
                     f"Recovery: {self.consecutive_failures + 1}/{self.max_failures}"
                 )
@@ -2018,9 +2055,9 @@ class PvInterface:
             else self.__create_forecast_request(pv_config_entry)
         )
 
-        def request_func():
+        def request_func(timeout):
             response = requests.get(
-                EOS_API_GET_PV_FORECAST, params=forecast_params, timeout=5
+                EOS_API_GET_PV_FORECAST, params=forecast_params, timeout=timeout
             )
             # A relayed 429 has to be recognised before raise_for_status() turns it into
             # an ordinary 500: retrying it is what the provider is asking us not to do.
@@ -2055,7 +2092,11 @@ class PvInterface:
         )
         try:
             day_values = self._retry_request(
-                request_func, error_handler, retries, delay
+                request_func,
+                error_handler,
+                retries,
+                delay,
+                timeouts=escalating_timeouts(retries),
             )
         except _AkkudoktorRateLimit as exc:
             hold = self._akkudoktor_hold_seconds
@@ -2284,8 +2325,8 @@ class PvInterface:
             f"&timezone={timezone}"
         )
 
-        def request_func():
-            response = requests.get(url, timeout=5)
+        def request_func(timeout):
+            response = requests.get(url, timeout=timeout)
             response.raise_for_status()
             return response
 
@@ -2297,7 +2338,11 @@ class PvInterface:
                 "openmeteo_api",
             )
 
-        response = self._retry_request(request_func, error_handler)
+        response = self._retry_request(
+            request_func,
+            error_handler,
+            timeouts=escalating_timeouts(FORECAST_API_MAX_RETRIES),
+        )
 
         def json_func():
             return response.json()
@@ -2630,22 +2675,28 @@ class PvInterface:
             loggable_url,
         )
 
-        def request_func():
-            response = requests.get(url, timeout=5)
+        timeouts = escalating_timeouts(FORECAST_API_MAX_RETRIES)
+
+        def request_func(timeout):
+            response = requests.get(url, timeout=timeout)
             if response.status_code == 429:
                 raise _ForecastSolarRateLimit(
                     self.__forecast_solar_retry_after_seconds(response)
                 )
             if response.status_code in (401, 403):
-                raise requests.exceptions.RequestException("auth_error")
+                raise _ForecastSolarAuthError(response.status_code)
             response.raise_for_status()
             return response
 
         def error_handler(error_type, exception):
-            if str(exception) == "auth_error":
+            if error_type == "timeout":
+                # A requests Timeout stringifies to the whole mangled URL or to
+                # nothing at all, neither of which tells the reader what was tried.
                 message = (
-                    "Forecast.Solar rejected the API key - check api_key in"
-                    " Settings -> PV Source, or clear it to use the public tier"
+                    "Forecast.Solar did not answer within "
+                    + "/".join(str(t) for t in timeouts)
+                    + " s - the service is slow or unreachable;"
+                    " using the cached forecast"
                 )
             else:
                 message = f"Forecast.Solar API error: {exception}"
@@ -2657,7 +2708,9 @@ class PvInterface:
             )
 
         try:
-            response = self._retry_request(request_func, error_handler)
+            response = self._retry_request(
+                request_func, error_handler, timeouts=timeouts
+            )
         except _ForecastSolarRateLimit as exc:
             self._forecast_solar_hold_until = datetime.now() + timedelta(
                 seconds=exc.hold_seconds
@@ -2670,6 +2723,17 @@ class PvInterface:
             # background because it runs every cycle until the hold expires.
             self._log_error_diagnostics("rate_limit", "forecast_solar")
             return self.__forecast_solar_hold_response(pv_config_entry, exc.hold_seconds)
+        except _ForecastSolarAuthError as exc:
+            # Reported as request_failed, like any other refused fetch: it is the
+            # request count that had to change here, not what the user is told.
+            return self._handle_interface_error(
+                "request_failed",
+                f"Forecast.Solar rejected the API key (HTTP {exc.status_code})"
+                " - check api_key in Settings -> PV Source, or clear it to use"
+                " the public tier",
+                pv_config_entry,
+                "forecast_solar",
+            )
 
         # _retry_request hands back the error handler's fallback - a forecast list -
         # when every attempt failed.  Without this the list fell through to .json()
@@ -3436,10 +3500,16 @@ class PvInterface:
 
         return aoi
 
-    def _retry_request(self, request_func, error_handler, max_retries=3, delay=1):
+    def _retry_request(
+        self, request_func, error_handler, max_retries=3, delay=1, timeouts=None
+    ):
         """Delegate to the shared retry loop (interfaces.http_fetch)."""
         return retry_request(
-            request_func, error_handler, max_retries=max_retries, delay=delay
+            request_func,
+            error_handler,
+            max_retries=max_retries,
+            delay=delay,
+            timeouts=timeouts,
         )
 
     def _handle_interface_error(

@@ -64,6 +64,13 @@
                         below; Solcast and Victron use a site configured at their end and need a key;
                         EVCC and timeseries take a curve someone else already produced. Which of them you
                         pick decides whether the installations section below is used at all.</p>
+                    <p>The public services occasionally answer slowly. Nothing needs configuring for
+                        that: each attempt is given more time than the one before, and the last
+                        successful forecast is used until a fresh one arrives &mdash; see
+                        <a href="troubleshooting.html#tb-pv-slow">A forecast provider is slow to
+                            answer</a>. Forecast.Solar additionally meters its free tier at
+                        12&nbsp;requests per hour per IP address; EOS Connect stays inside that budget
+                        on its own, and an API key raises it.</p>
                     <div data-schema-section="pv_forecast_source" data-schema-anchor="pv-forecast-sources"></div>
                 </div>
 

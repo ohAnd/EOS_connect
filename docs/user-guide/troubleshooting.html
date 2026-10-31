@@ -201,6 +201,48 @@ KeyError: 0</code></pre>
                             too old to offer it, the log says so once and the profile simply uses the days
                             it can still read.</p>
 
+                        <h3 id="tb-pv-slow">A forecast provider is slow to answer</h3>
+                        <p><strong>Symptom:</strong> the PV or outside-temperature forecast stops
+                            updating while the provider is having a bad day, and the log reports a
+                            timeout:</p>
+                        <pre><code>[PV-IF] Forecast.Solar did not answer within 5/12/30 s - the service is
+  slow or unreachable; using the cached forecast</code></pre>
+                        <p><strong>Cause:</strong> the public forecast services &mdash;
+                            Forecast.Solar, Open-Meteo and akkudoktor.net &mdash; normally answer in
+                            well under a second, but go through spells of double-digit response
+                            times. EOS Connect used to give each attempt the same five seconds, so
+                            retrying could not help: all three attempts hit the same wall.</p>
+                        <p><strong>Fix:</strong> update EOS Connect. Each attempt now waits longer
+                            than the one before &mdash; the PV forecast tries five seconds, then
+                            twelve, then thirty &mdash; so a slow spell is simply ridden out.
+                            Nothing to configure, and no extra requests are made: the number of
+                            attempts is unchanged.</p>
+                        <p>The outside-temperature forecast does the same with two attempts, five
+                            seconds and then thirty. It settles for fewer deliberately: a held
+                            temperature curve is a perfectly good answer, where a held PV array is
+                            not, and every retry holds up the shared update cycle.</p>
+                        <p>If the message appears anyway, the provider did not answer within thirty
+                            seconds. The last successful forecast keeps being used in the meantime,
+                            so a passing outage costs nothing. Note that Forecast.Solar's free tier
+                            allows 12&nbsp;requests per hour per IP address &mdash; a separate
+                            limit, with its own message &mdash; see
+                            <a href="config-solar.html#pv-forecast-sources">Who supplies the
+                                forecast</a>.</p>
+
+                        <h3 id="tb-pv-key">Forecast.Solar rejects the API key</h3>
+                        <p><strong>Symptom:</strong> the PV forecast never updates and the log
+                            repeats, once per cycle:</p>
+                        <pre><code>[PV-IF] Forecast.Solar rejected the API key (HTTP 401) - check api_key in
+  Settings &rsaquo; PV Source, or clear it to use the public tier</code></pre>
+                        <p><strong>Fix:</strong> correct the key under <em>Settings &rsaquo; PV
+                                Source</em>, or clear the field entirely &mdash; an empty key is
+                            valid and selects the free tier. A key that has expired or belongs to a
+                            different account gives the same message.</p>
+                        <p>The key itself is never written to the log, and neither are your
+                            coordinates: both sit in the request path, so the URL is masked before
+                            it is logged. Log excerpts from this message are safe to paste into a
+                            bug report.</p>
+
                         <h3 id="tb-optimization-pause">The optimization pauses for a whole quarter hour</h3>
                         <p><strong>Symptom:</strong> in quarter-hourly mode the optimization usually runs
                             several times per slot, but now and then the log shows a pause of a full
