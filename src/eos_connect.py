@@ -184,9 +184,13 @@ if time_frame_base not in (900, 3600):
     )
     time_frame_base = 3600
 elif time_frame_base == 900 and eos_source not in ("evopt", "local_evopt"):
+    # The limit is the EOS server's, not ours: /optimize runs its GENETIC0
+    # algorithm, whose interval is a computed constant of 3600 s, so there is
+    # no setting that would make it plan quarter-hourly (issue #353).
     logger.warning(
-        "[Config] 15-min time_frame only supported with EVopt or Local EVopt "
-        "source; defaulting to 3600"
+        "[Config] 15-min time_frame is not available with the Akkudoktor EOS "
+        "server - its optimize endpoint plans in hourly slots only. Using 3600. "
+        "EVopt and Local EVopt do support 900."
     )
     time_frame_base = 3600
 

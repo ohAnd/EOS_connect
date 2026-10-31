@@ -800,6 +800,22 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="config-optimizer.html#time-slot-config",
         validation={"choices": [900, 3600]},
         display_group="Optimization",
+        notice_when={
+            # Picking 900 here with the Akkudoktor EOS server used to be
+            # accepted by the form and then silently dropped back to 3600 at
+            # startup, with only a log line to say so (issue #353). The limit
+            # is the server's: EOS_connect drives it through /optimize, whose
+            # GENETIC0 algorithm reports interval_sec as a computed constant
+            # of 3600 - there is no setting to change.
+            "when": {"eos.source": ["eos_server"]},
+            "text": (
+                "The Akkudoktor EOS server plans in hourly slots only - it is "
+                "driven through its optimize endpoint, whose algorithm is fixed "
+                "to 3600 s. Choosing 900 here falls back to hourly on restart. "
+                "EVopt and the built-in Local EVopt do support quarter-hourly."
+            ),
+            "link": "eos",
+        },
     ),
     FieldDef(
         key="eos.timeout",

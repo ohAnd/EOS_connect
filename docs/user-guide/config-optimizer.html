@@ -171,6 +171,15 @@
                         tariff slots are quarter-hourly &mdash; so <code>900</code> plans on
                         what it actually measured. What that costs is the size of the problem
                         the optimizer solves: 192 slots across the horizon instead of 48.</p>
+                    <div class="alert alert-info">
+                        <p><strong>Quarter-hourly needs EVopt or Local EVopt.</strong> The
+                            Akkudoktor EOS server plans in hourly slots only: EOS Connect drives
+                            it through its <code>/optimize</code> endpoint, whose algorithm
+                            reports its interval as a fixed 3600&nbsp;s &mdash; there is no
+                            setting on the server that changes it. Choosing <code>900</code>
+                            with <code>eos.source: eos_server</code> therefore falls back to
+                            hourly on the next restart, and the log says so.</p>
+                    </div>
 
                     <div data-schema-section="eos" data-schema-anchor="time-slot-config"></div>
 

@@ -495,7 +495,16 @@
       },
       "depends_on": null,
       "hot_reload": false,
-      "display_group": "Optimization"
+      "display_group": "Optimization",
+      "notice_when": {
+        "when": {
+          "eos.source": [
+            "eos_server"
+          ]
+        },
+        "text": "The Akkudoktor EOS server plans in hourly slots only - it is driven through its optimize endpoint, whose algorithm is fixed to 3600 s. Choosing 900 here falls back to hourly on restart. EVopt and the built-in Local EVopt do support quarter-hourly.",
+        "link": "eos"
+      }
     },
     {
       "key": "eos.timeout",
