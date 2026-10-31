@@ -90,6 +90,31 @@ KeyError: 0</code></pre>
                         configuration that does not look the way EOS Connect expects is logged from now
                         on instead of stopping the start, so the settings stay reachable.</p>
 
+                    <h3 id="tb-eos-horizon">EOS plans only 24 hours instead of 48</h3>
+                    <p><strong>Symptom:</strong> with <code>eos.source</code> set to
+                        <code>eos_server</code>, EOS Connect sends 48 hours of prices, PV and load, but
+                        the plan only ever reaches into tomorrow. Nothing in the log looks wrong
+                        &mdash; it even reports the horizon being set:</p>
+                    <pre><code>WARNING [OPT-EOS] Detected EOS version &gt;= 0.1.0 - config updated with : {... 'horizon_hours': 48}</code></pre>
+                    <p>It costs the most on a tariff that moves hour by hour, such as Tibber: charging
+                        tonight for an expensive morning the day after tomorrow, or holding charge back
+                        because tomorrow brings sun, are decisions in the second day &mdash; and the
+                        second day was never planned.</p>
+                    <p><strong>Cause:</strong> EOS moved the optimization horizon. It used to sit at
+                        <code>optimization.horizon_hours</code>; newer builds keep it per algorithm
+                        under <code>optimization.genetic</code> (or <code>genetic0</code>) and no longer
+                        read the old key. EOS Connect wrote only the old one. Newer EOS does fold a flat
+                        value into the algorithm's section, but only where the nested value is still
+                        unset &mdash; and it never is, so the 48 was dropped without an error.</p>
+                    <p><strong>Fix:</strong> update EOS Connect. It now writes the horizon to the key
+                        the selected algorithm actually reads, and reports a configuration update only
+                        when the server accepted it. Older EOS servers keep the previous behaviour. To
+                        check your server yourself:</p>
+                    <pre><code>curl http://&lt;eos&gt;:8503/v1/config/optimization/genetic/horizon_hours</code></pre>
+                    <p>It should answer <code>48</code>. On an EOS build that still uses the old layout
+                        the path does not exist; <code>/v1/config/optimization</code> shows
+                        <code>horizon_hours</code> at the top level there instead.</p>
+
                     <h3 id="tb-ssl">Self-signed certificates</h3>
                     <p>EOS Connect validates TLS certificates when talking to Home Assistant or OpenHAB.
                         With a private CA you can turn that off in <em>Settings &rsaquo; Data Source
