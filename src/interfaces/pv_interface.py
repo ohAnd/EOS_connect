@@ -40,6 +40,8 @@ from .temperature_forecast import (
     AKKUDOKTOR,
     DEFAULT_TEMPERATURE_PROVIDER,
     OPENMETEO,
+    TEMP_MAX_RETRIES,
+    TEMP_RETRY_DELAY_S,
     TemperatureForecastError,
     fetch_openmeteo_temperature,
 )
@@ -63,11 +65,8 @@ DEFAULT_PV_NOMINAL_POWER_W = 4000
 # for one new data point.  A successful forecast is reused until it is this old.
 TEMP_REFRESH_INTERVAL_S = 3600
 
-# Retry policy for the temperature request.  Deliberately shorter than the PV one: the
-# cache is the real recovery strategy here (a held forecast is a good answer, a held PV
-# array is not), and every retry blocks the shared update loop.
-TEMP_MAX_RETRIES = 2
-TEMP_RETRY_DELAY_S = 2
+# TEMP_MAX_RETRIES / TEMP_RETRY_DELAY_S are imported from temperature_forecast above:
+# both temperature providers answer the same question, so they share one retry policy.
 
 # Attempts for the public forecast APIs (Forecast.Solar, Open-Meteo).  They answer in
 # well under a second when healthy but go through spells of double-digit response times
