@@ -18,6 +18,7 @@ from flask import (
     request,
     send_from_directory,
 )
+from werkzeug.exceptions import NotFound
 from version import __version__
 from boot_state import BOOT
 from boot_server import BootGate, build_boot_app
@@ -2537,9 +2538,16 @@ def serve_test_json_files(filename):
                 content_type="application/json",
             )
 
-        # Check if file exists in test directory
-        file_path = os.path.join(json_test_directory, filename)
-        if not os.path.exists(file_path):
+        # The missing-file case is left to send_from_directory, which answers it
+        # with NotFound.  Joining the path here to stat it first was the only
+        # place filename reached a path expression without passing through
+        # safe_join (CodeQL py/path-injection) — see _serve_asset in
+        # web_routes.py, which this mirrors.
+        try:
+            return send_from_directory(
+                json_test_directory, filename, mimetype="application/json"
+            )
+        except NotFound:
             logger.warning("[Web] Test JSON file not found: %s", filename)
             logger.debug("[Web] Looked in directory: %s", json_test_directory)
             return Response(
@@ -2547,11 +2555,6 @@ def serve_test_json_files(filename):
                 status=404,
                 content_type="application/json",
             )
-
-        # logger.info("[Web] Serving test JSON file: %s from %s", filename, json_test_directory)
-        return send_from_directory(
-            json_test_directory, filename, mimetype="application/json"
-        )
 
     except (OSError, IOError, ValueError) as e:
         logger.error("[Web] Error serving test JSON file %s: %s", filename, e)
