@@ -7,6 +7,7 @@
  */
 
 /* global showFullScreenOverlay, closeFullScreenOverlay, CONFIG_SECTIONS */
+/* global configurationManager, ConfigurationManager */
 
 /**
  * Friendlier option text for the PV source dropdown.
@@ -1140,12 +1141,16 @@ class SetupWizard {
                     <h2 style="color:#fff;margin-bottom:8px;">Setup Complete!</h2>
                     <p style="color:#aaa;max-width:480px;margin-bottom:24px;">
                         Your configuration has been saved.
-                        Please <strong style="color:#ffc107;">restart EOS Connect</strong> for the new settings to take effect.
+                        <strong style="color:#ffc107;">Restart EOS Connect</strong> for the new settings to take effect.
                     </p>
                     <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;">
-                        <button onclick="closeFullScreenOverlay();"
+                        <button onclick="restartAfterWizard()"
                                 style="background:#4a9eff;color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:0.95em;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
-                            <i class="fas fa-times"></i> Close
+                            <i class="fas fa-rotate"></i> Restart now
+                        </button>
+                        <button onclick="closeFullScreenOverlay();"
+                                style="background:rgba(74,158,255,0.15);color:#fff;border:2px solid rgba(74,158,255,0.4);border-radius:8px;padding:10px 24px;font-size:0.95em;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
+                            <i class="fas fa-times"></i> Later
                         </button>
                         <button onclick="closeFullScreenOverlay(); if(typeof showConfigurationMenu === 'function') showConfigurationMenu();"
                                 style="background:rgba(74,158,255,0.15);color:#fff;border:2px solid rgba(74,158,255,0.4);border-radius:8px;padding:10px 24px;font-size:0.95em;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
@@ -1382,4 +1387,23 @@ async function checkWizardStatus() {
     } catch {
         _wizardCheckDone = false;       // allow retry on transient failure
     }
+}
+
+
+/**
+ * Restart from the wizard's closing screen.
+ *
+ * The wizard is the one place a restart needs no confirmation of its own - the
+ * screen it sits on already says the settings need one. It does need to cope
+ * with the settings panel never having been opened, which is the normal
+ * first-run path, so the manager is created on demand the way backup.js does.
+ */
+function restartAfterWizard() {
+    if (typeof configurationManager === "undefined") {
+        return;
+    }
+    if (!configurationManager) {
+        configurationManager = new ConfigurationManager();
+    }
+    configurationManager._doRestart("completed the setup wizard");
 }

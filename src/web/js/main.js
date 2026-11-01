@@ -477,6 +477,12 @@ const bootProgress = {
     },
 };
 
+// main.js is the last script the page loads, and config.js needs to re-arm this
+// after triggering a restart. A top-level const lives in the global *lexical*
+// scope, where even `typeof` throws for a script that runs before this one; the
+// window property is a plain lookup that cannot.
+window.bootProgress = bootProgress;
+
 // Wired here rather than inline in the HTML so the overlay markup stays free of
 // behaviour; showConfigurationMenu is defined in ui.js.
 document.addEventListener("DOMContentLoaded", () => {

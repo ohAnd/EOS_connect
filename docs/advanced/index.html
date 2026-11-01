@@ -454,6 +454,29 @@ curl -X POST "http://localhost:8081/api/backup/import?dry_run=1" \
                         <code>Cache-Control: no-store</code> and report
                         <code>"api_version": "0.0.1"</code>.</p>
 
+                    <h3 id="restart-api">Restart</h3>
+                    <p><code>POST /api/config/restart</code> restarts EOS Connect in place. It answers
+                        <strong>202</strong> immediately and tears down afterwards &mdash; the response
+                        has to reach you over the socket the shutdown is about to close. A second call
+                        while one is already running answers <strong>409</strong>.</p>
+                    <pre><code>curl -sS -X POST http://localhost:8081/api/config/restart \
+  -H 'Content-Type: application/json' -d '{"reason":"applied MQTT settings"}'
+
+{"status": "restarting", "pid": 1, "poll": "/api/boot/status"}</code></pre>
+                    <p>The optional <code>reason</code> is recorded in the log, truncated at 200
+                        characters. Poll <a href="#boot-api"><code>/api/boot/status</code></a> to follow
+                        the restart: it starts answering again a second or so later, and 404s once the
+                        application is back up.</p>
+                    <p>The process is replaced with <code>os.execv</code> rather than exited, so the
+                        container never stops and the PID does not change. That is also how you verify
+                        one happened: the log shows the startup banner a second time while
+                        <code>docker ps</code> reports unchanged container uptime.</p>
+                    <div class="alert alert-info">
+                        <p>Served by the settings blueprint, which the boot server also mounts &mdash; so
+                            this endpoint answers during a slow start and in rescue mode, not only on a
+                            fully started application.</p>
+                    </div>
+
                     <h3 id="boot-api">Startup progress</h3>
                     <p><code>GET /api/boot/status</code> reports how far the current start has got. It
                         exists only while EOS Connect is still starting: once the application is up the

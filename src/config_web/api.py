@@ -9,6 +9,7 @@ only needs one line: ``app.register_blueprint(config_bp)``.
 
 import json
 import logging
+import os
 import re
 from typing import Optional
 from flask import Blueprint, jsonify, request as flask_request, Response
@@ -37,6 +38,11 @@ except ImportError:  # imported as src.config_web (tests)
         ha_entity_connection,
     )
 from .timeseries_probe import probe
+
+try:  # running from src/ as a script — src/ is on sys.path
+    from restart import RESTART
+except ImportError:  # imported as src.config_web (tests)
+    from ..restart import RESTART
 
 logger = logging.getLogger("__main__")
 
@@ -397,6 +403,54 @@ def get_restart_required():
     """Return list of fields that have been changed and require a restart."""
     fields = _store.get("_restart_pending", []) or []
     return jsonify({"fields": fields})
+
+
+@config_bp.route("/restart", methods=["POST"])
+def restart_application():
+    """
+    Restart EOS Connect in place.
+
+    Deliberately on this blueprint rather than on the application's own routes:
+    ``config_bp`` is registered on the boot server too, so the restart is
+    reachable while a slow start is still running and while the application sits
+    in rescue mode after a failed one.  That is what closes the loop on #349 —
+    correct the setting that broke the start, press restart, come back up.
+
+    Answers immediately and tears down afterwards.  The response has to reach
+    the browser over a socket the teardown is about to close, so the ordering is
+    not a detail.
+
+    Pressed while the application is still starting, the restart is honoured as
+    soon as that start finishes rather than interrupting it halfway: the main
+    thread is building the interfaces at that point, and tearing down a
+    half-constructed application is not something worth getting right.
+    """
+    body = flask_request.get_json(silent=True) or {}
+    reason = str(body.get("reason") or "requested from the web interface")[:200]
+
+    if not RESTART.request(reason=reason, source="web interface"):
+        return (
+            jsonify(
+                {
+                    "status": "already_restarting",
+                    "error": "A restart is already under way.",
+                }
+            ),
+            409,
+        )
+
+    return (
+        jsonify(
+            {
+                "status": "restarting",
+                "pid": os.getpid(),
+                # The page polls this to tell "it is coming back" from "it never
+                # went away": the route only exists while a start is in progress.
+                "poll": "/api/boot/status",
+            }
+        ),
+        202,
+    )
 
 
 # ------------------------------------------------------------------

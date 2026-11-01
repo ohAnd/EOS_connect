@@ -270,6 +270,12 @@ class ConfigurationManager {
                     <input type="file" id="cfg-import-file" accept=".json"
                            style="display:none;"
                            onchange="configurationManager._importConfig(this.files[0])">
+                    <button onclick="configurationManager.restartNow('restarted from the settings header')"
+                            class="config-btn config-btn-secondary config-header-tool"
+                            style="padding:5px 10px;font-size:0.8em;"
+                            title="Restart EOS Connect">
+                        <i class="fas fa-rotate"></i>
+                    </button>
                     <button onclick="closeFullScreenOverlay(); showSetupWizard();"
                             style="background:#4a9eff;color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:0.8em;cursor:pointer;display:inline-flex;align-items:center;gap:5px;"
                             title="Run Setup Wizard">
@@ -444,10 +450,7 @@ class ConfigurationManager {
         const groups = this._groupFields(fields);
 
         // Restart banner
-        let html = `<div class="config-restart-banner" id="cfg-restart-banner">
-            <i class="fas fa-rotate"></i>
-            <span id="cfg-restart-msg">Restart required for changes to take effect.</span>
-        </div>`;
+        let html = this._restartBannerHtml();
 
         // Unmet dependencies banner
         html += `<div class="config-unmet-deps-banner" id="cfg-unmet-deps-banner">
@@ -1091,10 +1094,7 @@ class ConfigurationManager {
         // Collect PV installations from store — keys like pv_forecast.0.name, pv_forecast.1.name, etc.
         const installations = this._getPvInstallations();
 
-        let html = `<div class="config-restart-banner" id="cfg-restart-banner">
-            <i class="fas fa-rotate"></i>
-            <span id="cfg-restart-msg">Restart required for changes to take effect.</span>
-        </div>`;
+        let html = this._restartBannerHtml();
 
         html += `<div class="config-section-title">
             <i class="fa-solid ${meta.icon}" style="color:#4a9eff;"></i>
@@ -1176,10 +1176,7 @@ class ConfigurationManager {
 
         const entries = this._getListEntries(section);
 
-        let html = `<div class="config-restart-banner" id="cfg-restart-banner">
-            <i class="fas fa-rotate"></i>
-            <span id="cfg-restart-msg">Restart required for changes to take effect.</span>
-        </div>`;
+        let html = this._restartBannerHtml();
 
         html += `<div class="config-section-title">
             <i class="fa-solid ${meta.icon || card.icon || "fa-sliders"}" style="color:#4a9eff;"></i>
@@ -2296,6 +2293,129 @@ class ConfigurationManager {
     }
 
     // ── Restart banner ──────────────────────────────────────────
+
+    /**
+     * The restart-required banner, with the button that acts on it.
+     *
+     * One definition rather than the three identical copies this used to be:
+     * they were rendered from three different section paths and would have had
+     * to grow the button three times.
+     * @returns {string} Banner HTML
+     */
+    _restartBannerHtml() {
+        return `<div class="config-restart-banner" id="cfg-restart-banner">
+            <i class="fas fa-rotate"></i>
+            <span id="cfg-restart-msg">Restart required for changes to take effect.</span>
+            <button class="config-btn config-btn-primary config-restart-banner-btn"
+                    onclick="configurationManager.restartNow('applied changed settings')">
+                <i class="fas fa-rotate"></i> Restart now
+            </button>
+        </div>`;
+    }
+
+    /**
+     * Ask, then restart EOS Connect.
+     *
+     * Confirmation goes through the overlay the rest of the UI uses; there is
+     * no window.confirm anywhere in this project.
+     * @param {string} reason Recorded in the log, so it is clear what triggered it
+     */
+    restartNow(reason = "requested from the web interface") {
+        // Held on the manager rather than interpolated into the button's
+        // onclick: the reason is free text, and any quote in it would close the
+        // attribute early and take the rest of the markup with it.
+        this._pendingRestartReason = reason;
+
+        const pending = this.restartFields.length
+            ? `<p style="color:#ccc;font-size:0.9em;margin:0 0 14px 0;">
+                 Waiting to be applied: <strong>${this.restartFields.join(", ")}</strong>
+               </p>`
+            : "";
+
+        showFullScreenOverlay("Restart EOS Connect", `
+            <div style="padding:8px 4px;max-width:520px;">
+                ${pending}
+                <p style="color:#ccc;font-size:0.9em;margin:0 0 14px 0;">
+                    EOS Connect restarts in place and comes back on this address.
+                    Optimization and inverter control pause for a few seconds;
+                    your settings and history are not touched.
+                </p>
+                <div style="display:flex;gap:10px;justify-content:flex-end;">
+                    <button class="config-btn config-btn-secondary"
+                            onclick="closeFullScreenOverlay()">Cancel</button>
+                    <button class="config-btn config-btn-primary"
+                            id="cfg-restart-confirm"
+                            onclick="configurationManager._doRestart()">
+                        <i class="fas fa-rotate"></i> Restart now
+                    </button>
+                </div>
+            </div>`);
+    }
+
+    /**
+     * Post the restart and hand over to the progress overlay.
+     */
+    async _doRestart(reason) {
+        reason = reason || this._pendingRestartReason
+            || "requested from the web interface";
+
+        const btn = document.getElementById("cfg-restart-confirm");
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fas fa-rotate fa-spin"></i> Restarting ...`;
+        }
+
+        try {
+            const res = await fetch("api/config/restart", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reason }),
+            });
+
+            if (res.status === 409) {
+                this._showToast("A restart is already under way.", "warning");
+                closeFullScreenOverlay();
+                return;
+            }
+            if (!res.ok) {
+                throw new Error(`HTTP ${res.status}`);
+            }
+        } catch (err) {
+            // The restart tears the socket down as it goes, so a dropped
+            // connection here is the expected case, not a failure: the server
+            // accepted the request and then stopped answering. Carry on to the
+            // progress overlay either way - it polls until the app is back, and
+            // if nothing was accepted it simply never leaves the first step.
+            console.warn("[EOS Connect] Restart request did not complete cleanly:", err);
+        }
+
+        closeFullScreenOverlay();
+        this._showRestartProgress();
+    }
+
+    /**
+     * Cover the page until the application answers again.
+     *
+     * Polls /api/boot/status, which exists only while a start is in progress -
+     * so its reappearance means the restart took, and its disappearance means
+     * the new process is fully up. Behind Home Assistant ingress the proxy
+     * answers 502 in between; that is a step on the way, not an error.
+     */
+    _showRestartProgress() {
+        if (window.bootProgress) {
+            window.bootProgress.reset();
+        }
+
+        const overlay = document.getElementById("overlay");
+        const waiting = document.getElementById("waiting_text");
+        const errorText = document.getElementById("waiting_error_text");
+        if (overlay) overlay.style.display = "flex";
+        if (waiting) waiting.innerText = "Restarting ...";
+        if (errorText) errorText.innerText = "";
+
+        // init() runs every second and takes over the overlay as soon as the
+        // boot status answers again; nothing more is needed here.
+    }
 
     /**
      * Show the restart-required banner in the content area.
