@@ -26,6 +26,7 @@ from flask import (
     request,
     send_from_directory,
 )
+from werkzeug.exceptions import NotFound
 
 try:  # running from src/ as a script — src/ is on sys.path
     from version import __version__
@@ -106,7 +107,19 @@ def register_static_routes(flask_app, base_path):
 
 
 def _serve_asset(directory, filename, suffix, mimetype, kind):
-    """One guarded ``send_from_directory`` for both asset kinds."""
+    """
+    One guarded ``send_from_directory`` for both asset kinds.
+
+    The missing-file case is left to ``send_from_directory``, which already
+    answers it with ``NotFound``, rather than being pre-empted by an
+    ``os.path.exists`` on a path built from ``filename``: that join was the one
+    place the URL reached a path expression unfiltered.  It was never
+    exploitable — the route converter rejects slashes and ``send_from_directory``
+    joins through ``safe_join`` — but both branches of the check returned the
+    same 404 anyway, so the check bought nothing in exchange for being the one
+    thing a reader (and CodeQL) has to reason about.  Traversal attempts land in
+    the same ``NotFound`` as a plain typo.
+    """
     try:
         if not filename.endswith(suffix):
             logger.warning(
@@ -114,16 +127,17 @@ def _serve_asset(directory, filename, suffix, mimetype, kind):
             )
             return "Not Found", 404
 
-        if not os.path.exists(os.path.join(directory, filename)):
+        try:
+            response = send_from_directory(
+                directory,
+                filename,
+                mimetype=mimetype,
+                max_age=ASSET_CACHE_MAX_AGE_SECONDS,
+            )
+        except NotFound:
             logger.warning("[Web] %s file not found: %s", kind, filename)
             return "Not Found", 404
 
-        response = send_from_directory(
-            directory,
-            filename,
-            mimetype=mimetype,
-            max_age=ASSET_CACHE_MAX_AGE_SECONDS,
-        )
         return _no_store(response)
 
     except (OSError, IOError, ValueError) as e:
