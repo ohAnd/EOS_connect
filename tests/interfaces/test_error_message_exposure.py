@@ -22,6 +22,7 @@ is shared, and `test_optimization_backend_eos.py` is already at pylint's module-
 limit.
 """
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -252,3 +253,73 @@ def test_the_curated_404_still_names_the_entity():
     assert "sensor.house_power" in error
     assert "not found" in error
     assert LEAKY_HOST not in error
+
+
+# ---------------------------------------------------------------------------
+# Credentials in the log
+#
+# The messages above are about exception text reaching an endpoint. This one is
+# worse in kind: a working credential. ``GET /logs`` serves the in-memory buffer
+# with no authentication, and the whole point of that endpoint is that people
+# copy from it into bug reports — which is exactly how a live Home Assistant
+# long-lived token reached a GitHub issue.
+# ---------------------------------------------------------------------------
+
+#: Shaped like the real thing — three dot-separated base64 segments — so a test
+#: that looked only for the word "token" could not pass by accident.
+FAKE_HA_TOKEN = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+    "eyJpc3MiOiJ0ZXN0IiwiaWF0IjoxNzMyMzE1OTc4fQ."
+    "s3cr3t-signature-that-must-never-be-logged"
+)
+
+
+def _load_interface_log(caplog, token):
+    """Every record LoadInterface emits while being constructed with *token*."""
+    from src.interfaces.load_interface import (  # noqa: PLC0415
+        LoadInterface,
+    )
+
+    config = {
+        "source": "homeassistant",
+        "url": "http://ha.local:8123",
+        "access_token": token,
+        "load_sensor": "sensor.house_power",
+        "car_charge_load_sensor": "",
+        "additional_load_1_sensor": "",
+    }
+    with caplog.at_level(logging.DEBUG, logger="__main__"):
+        LoadInterface(config, 3600, pytz.timezone("Europe/Berlin"))
+    return "\n".join(record.getMessage() for record in caplog.records)
+
+
+def test_the_access_token_is_never_written_to_the_log(caplog):
+    """
+    The line this guards used to log the token in full at DEBUG. It reached the
+    unauthenticated /logs endpoint and from there into pasted bug reports.
+    """
+    log = _load_interface_log(caplog, FAKE_HA_TOKEN)
+
+    assert FAKE_HA_TOKEN not in log
+    # Not even a recognisable piece of it: a JWT's payload segment alone is
+    # enough to identify the install, and the signature is the secret part.
+    assert "s3cr3t-signature-that-must-never-be-logged" not in log
+    assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in log
+
+
+def test_the_log_still_says_whether_a_token_arrived(caplog):
+    """
+    Redacting must not cost the diagnosis it existed for. A token truncated on
+    paste is a real failure mode, so the length has to survive.
+    """
+    log = _load_interface_log(caplog, FAKE_HA_TOKEN)
+
+    assert "Access token" in log
+    assert f"{len(FAKE_HA_TOKEN)} characters" in log
+
+
+def test_a_missing_token_is_reported_as_missing(caplog):
+    log = _load_interface_log(caplog, "")
+
+    assert "not set" in log
+    assert "0 characters" not in log
