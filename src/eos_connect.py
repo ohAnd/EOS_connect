@@ -22,6 +22,7 @@ from werkzeug.exceptions import NotFound
 from version import __version__
 from boot_state import BOOT
 from boot_server import BootGate, build_boot_app
+from restart import RESTART
 from web_routes import register_log_routes, register_static_routes
 from config import ConfigManager
 from log_handler import MemoryLogHandler
@@ -219,6 +220,11 @@ logger.info(
 #: rescue mode all come down to.
 shutdown_event = threading.Event()
 
+# A restart asked for over HTTP is a shutdown that comes back. It frees the main
+# thread the same way a signal does; what happens next is decided where the wait
+# ends, by asking RESTART.requested.
+RESTART.on_request = shutdown_event.set
+
 
 def _request_shutdown(signum, _frame):
     """Wake the main thread so a signal gets the same teardown as Ctrl-C."""
@@ -262,14 +268,23 @@ def _enter_rescue_mode():
         fatal.get("component", "a required interface"),
         actual_port,
     )
+    def _rescue_teardown():
+        """The little there is to stop: nothing past the failure was started."""
+        http_server.stop()
+        config_web.stop()
+
     try:
         shutdown_event.wait()
     except KeyboardInterrupt:
         logger.info("[Main] Shutting down EOS Connect (user requested)")
-    finally:
-        http_server.stop()
-        config_web.stop()
-        logging.shutdown()
+    else:
+        if RESTART.requested:
+            # The way out of rescue mode: the user corrected the setting in the
+            # configuration UI the boot server kept serving, and pressed restart.
+            RESTART.run(_rescue_teardown)  # never returns
+
+    _rescue_teardown()
+    logging.shutdown()
     sys.exit(0)
 
 ###################################################################################################
@@ -2901,12 +2916,18 @@ if __name__ == "__main__":
         shutdown_event.wait()
     except KeyboardInterrupt:
         logger.info("[Main] Shutting down EOS Connect (user requested)")
-    finally:
-        try:
-            _shutdown_all()
-        except Exception:  # pylint: disable=broad-except
-            logger.exception("[Main] Error during shutdown")
-            exit_code = 1
-        logging.shutdown()  # This will call close() on all handlers
-        logger.info("[Main] Cleanup complete. Goodbye!")
-        sys.exit(exit_code)
+    else:
+        if RESTART.requested:
+            # Same teardown as every other way out, but under a deadline and
+            # followed by execv instead of exit: the process is replaced in
+            # place, so the container never stops. See src/restart.py.
+            RESTART.run(_shutdown_all)  # never returns
+
+    try:
+        _shutdown_all()
+    except Exception:  # pylint: disable=broad-except
+        logger.exception("[Main] Error during shutdown")
+        exit_code = 1
+    logging.shutdown()  # This will call close() on all handlers
+    logger.info("[Main] Cleanup complete. Goodbye!")
+    sys.exit(exit_code)

@@ -22,6 +22,7 @@ is shared, and `test_optimization_backend_eos.py` is already at pylint's module-
 limit.
 """
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -252,3 +253,180 @@ def test_the_curated_404_still_names_the_entity():
     assert "sensor.house_power" in error
     assert "not found" in error
     assert LEAKY_HOST not in error
+
+
+# ---------------------------------------------------------------------------
+# Credentials in the log
+#
+# The messages above are about exception text reaching an endpoint. This one is
+# worse in kind: a working credential. ``GET /logs`` serves the in-memory buffer
+# with no authentication, and the whole point of that endpoint is that people
+# copy from it into bug reports — which is exactly how a live Home Assistant
+# long-lived token reached a GitHub issue.
+# ---------------------------------------------------------------------------
+
+#: Shaped like the real thing — three dot-separated base64 segments — so a test
+#: that looked only for the word "token" could not pass by accident.
+FAKE_HA_TOKEN = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+    "eyJpc3MiOiJ0ZXN0IiwiaWF0IjoxNzMyMzE1OTc4fQ."
+    "s3cr3t-signature-that-must-never-be-logged"
+)
+
+
+def _load_interface_log(caplog, token):
+    """Every record LoadInterface emits while being constructed with *token*."""
+    from src.interfaces.load_interface import (  # noqa: PLC0415
+        LoadInterface,
+    )
+
+    config = {
+        "source": "homeassistant",
+        "url": "http://ha.local:8123",
+        "access_token": token,
+        "load_sensor": "sensor.house_power",
+        "car_charge_load_sensor": "",
+        "additional_load_1_sensor": "",
+    }
+    with caplog.at_level(logging.DEBUG, logger="__main__"):
+        LoadInterface(config, 3600, pytz.timezone("Europe/Berlin"))
+    return "\n".join(record.getMessage() for record in caplog.records)
+
+
+def test_the_access_token_is_never_written_to_the_log(caplog):
+    """
+    The line this guards used to log the token in full at DEBUG. It reached the
+    unauthenticated /logs endpoint and from there into pasted bug reports.
+    """
+    log = _load_interface_log(caplog, FAKE_HA_TOKEN)
+
+    assert FAKE_HA_TOKEN not in log
+    # Not even a recognisable piece of it: a JWT's payload segment alone is
+    # enough to identify the install, and the signature is the secret part.
+    assert "s3cr3t-signature-that-must-never-be-logged" not in log
+    assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in log
+
+
+def test_the_log_still_says_whether_a_token_arrived(caplog):
+    """
+    Redacting must not cost the diagnosis it existed for. A token truncated on
+    paste is a real failure mode, so the length has to survive.
+    """
+    log = _load_interface_log(caplog, FAKE_HA_TOKEN)
+
+    assert "Access token" in log
+    assert f"{len(FAKE_HA_TOKEN)} characters" in log
+
+
+def test_a_missing_token_is_reported_as_missing(caplog):
+    log = _load_interface_log(caplog, "")
+
+    assert "not set" in log
+    assert "0 characters" not in log
+
+
+# ---------------------------------------------------------------------------
+# Credentials in a URL an exception quotes back
+#
+# Forecast.Solar carries the API key as the first path segment. pv_interface
+# builds a masked `loggable_url` for exactly that reason — and then the generic
+# error branch stringified the requests exception, which quotes the URL it
+# tried and puts the key straight back. logger.error also fills the alert
+# buffer, and the bug report copies the last 50 alerts into a public issue.
+# ---------------------------------------------------------------------------
+
+FORECAST_SOLAR_KEY = "fs-Abc123SecretKeyXyz"
+
+
+def _forecast_solar_log(caplog, exception, api_key=FORECAST_SOLAR_KEY):
+    """
+    Drive the real request path with *exception* raised by requests.get, and
+    return everything it logged.
+
+    Deliberately not a reimplementation of the masking: the bug was that the
+    careful ``loggable_url`` a few lines up was undone by the generic error
+    branch, and only the real path can show whether that still holds.
+    """
+    from src.interfaces.pv_interface import PvInterface  # noqa: PLC0415
+
+    with patch.object(
+        PvInterface, "_PvInterface__update_pv_state_loop", lambda self: None
+    ):
+        pv = PvInterface(
+            {"source": "forecast_solar", "api_key": api_key},
+            [],
+            3600,
+            {},
+            timezone="UTC",
+        )
+
+    entry = {
+        "name": "roof", "lat": 47.5, "lon": 8.5,
+        "azimuth": 90, "tilt": 30, "power": 4600,
+    }
+
+    # The real path retries three times with a one-second pause. Nothing here is
+    # about the retry schedule, and paying for it would add eight seconds to a
+    # fifteen-second lane.
+    with caplog.at_level(logging.DEBUG, logger="__main__"):
+        with patch("src.interfaces.http_fetch.time.sleep"):
+            with patch(
+                "src.interfaces.pv_interface.requests.get", side_effect=exception
+            ):
+                pv._PvInterface__get_pv_forecast_forecast_solar_api(entry)
+
+    return "\n".join(record.getMessage() for record in caplog.records)
+
+
+def test_a_connection_error_does_not_carry_the_forecast_solar_key(caplog):
+    """
+    The key is the first path segment, and a ConnectionError quotes the path:
+    "Max retries exceeded with url: /KEY/estimate/...".
+    """
+    log = _forecast_solar_log(
+        caplog,
+        requests.exceptions.ConnectionError(
+            "HTTPSConnectionPool(host='api.forecast.solar', port=443): "
+            f"Max retries exceeded with url: /{FORECAST_SOLAR_KEY}/estimate/47.5/8.5"
+        ),
+    )
+
+    assert FORECAST_SOLAR_KEY not in log
+    # The diagnosis has to survive the masking.
+    assert "api.forecast.solar" in log
+
+
+def test_an_http_error_does_not_carry_the_forecast_solar_key(caplog):
+    """``raise_for_status()`` stringifies to "... for url: <the whole URL>"."""
+    url = f"https://api.forecast.solar/{FORECAST_SOLAR_KEY}/estimate/47.5/8.5/30/90/4.6"
+    log = _forecast_solar_log(
+        caplog,
+        requests.exceptions.HTTPError(
+            f"500 Server Error: Internal Server Error for url: {url}"
+        ),
+    )
+
+    assert FORECAST_SOLAR_KEY not in log
+    assert "500" in log
+
+
+def test_the_request_url_itself_is_never_logged(caplog):
+    """The debug line that announces the fetch uses the masked URL."""
+    log = _forecast_solar_log(
+        caplog, requests.exceptions.ConnectionError("connection refused")
+    )
+
+    assert FORECAST_SOLAR_KEY not in log
+    assert "api.forecast.solar/***/" in log
+
+
+def test_a_keyless_install_still_reports_its_error(caplog):
+    """Forecast.Solar also answers keyless; nothing to mask, nothing to break."""
+    log = _forecast_solar_log(
+        caplog,
+        requests.exceptions.ConnectionError("connection refused"),
+        api_key="",
+    )
+
+    assert "connection refused" in log
+    assert "***" not in log

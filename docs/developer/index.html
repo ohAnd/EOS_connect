@@ -158,6 +158,65 @@
                         </table>
                     </div>
 
+                    <h3 id="restarting-in-place">Restarting in place</h3>
+                    <p><code>src/restart.py</code> holds the request, bounds the teardown and replaces
+                        the process. It owns no teardown sequence of its own &mdash;
+                        <code>_shutdown_all()</code> in eos_connect.py is the one every exit path uses,
+                        and a second list here would be a second place to forget a component.</p>
+                    <p><strong>Why <code>os.execv</code> and not exit-and-be-restarted.</strong> The
+                        obvious approach fails on two of the three supported run modes:</p>
+                    <div class="scroll-x">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Run mode</th>
+                                    <th>PID 1</th>
+                                    <th>On process exit</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>docker compose</code></td>
+                                    <td>python</td>
+                                    <td><code>restart: unless-stopped</code> brings it back</td>
+                                </tr>
+                                <tr>
+                                    <td><code>docker run</code></td>
+                                    <td>python</td>
+                                    <td><strong>stays dead</strong> &mdash; documented without a
+                                        <code>--restart</code> flag</td>
+                                </tr>
+                                <tr>
+                                    <td>HA add-on</td>
+                                    <td>s6-overlay <code>/init</code></td>
+                                    <td><strong>stays dead</strong> &mdash; s6 tears the container down,
+                                        and no add-on manifest declares <code>watchdog:</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>Calling the Supervisor API instead was ruled out for the same reason it would not
+                        help: it does nothing for Docker, <code>SUPERVISOR_TOKEN</code> is never read, and
+                        the add-on manifests grant neither <code>hassio_api</code> nor
+                        <code>hassio_role</code> &mdash; that would be a change in a second repository.
+                        <code>execv</code> replaces the process image, so the PID does not change, the
+                        container never exits and s6 never sees a service stop. One mechanism, identical
+                        everywhere.</p>
+                    <p>Two details carry it:</p>
+                    <ul>
+                        <li><strong>The command line is frozen at import</strong>
+                            (<code>_frozen_argv()</code>), before anything can <code>chdir</code>. The
+                            repository Dockerfile starts the app with a <em>relative</em> path, and
+                            <code>sys.argv[1]</code> may be a config directory the user passed.
+                            <code>sys.executable</code> covers <code>python</code> and the add-on's
+                            <code>/opt/venv/bin/python</code> alike.</li>
+                        <li><strong>The teardown has a deadline</strong> (10&nbsp;s).
+                            <code>optimization_scheduler.shutdown()</code> joins without one, and a run
+                            blocked on its backend can hold that for the full three-minute timeout.
+                            Cutting it short leaks nothing: <code>execv</code> replaces the whole process
+                            image and every thread goes with it.</li>
+                    </ul>
+
                     <h3 id="interface-factory">The interface factory</h3>
                     <p><code>src/interface_factory.py</code> exposes ten <code>create_*</code> methods, one per
                         interface. Each delegates to the private <code>_create_interface()</code>, which

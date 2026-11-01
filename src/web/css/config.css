@@ -566,6 +566,16 @@
     display: flex;
 }
 
+/* Pushed to the far end of the banner row, so the message keeps reading as the
+   message and the action does not sit in the middle of the sentence. */
+.config-restart-banner-btn {
+    margin-left: auto;
+    flex-shrink: 0;
+    padding: 5px 12px;
+    font-size: 0.95em;
+    white-space: nowrap;
+}
+
 /* --- Unmet dependencies banner --- */
 .config-unmet-deps-banner {
     display: none;

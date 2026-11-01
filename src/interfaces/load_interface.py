@@ -164,7 +164,17 @@ class LoadInterface:
 
         logger.debug("[LOAD-IF] Initializing LoadInterface with source: %s", self.src)
         logger.debug("[LOAD-IF] Using URL: %s", self.url)
-        logger.debug("[LOAD-IF] Using access token: %s", self.access_token)
+        # Never the token itself. This line reaches GET /logs, which has no
+        # authentication, and users paste that into bug reports - which is how a
+        # live Home Assistant long-lived token ended up in a GitHub issue. The
+        # length is the part that actually helps: a token truncated on paste is
+        # a real failure mode, and whitespace damage is already reported above.
+        logger.debug(
+            "[LOAD-IF] Access token: %s",
+            f"set ({len(self.access_token)} characters)"
+            if self.access_token
+            else "not set",
+        )
 
         # The configured zone decides where a day starts, so it has to survive
         # whatever shape it arrives in - see __resolve_time_zone.

@@ -11,7 +11,7 @@ request — Flask bars route registration once an app has served one.
 # pylint: disable=protected-access,redefined-outer-name
 
 import sys
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 import pytz
@@ -25,6 +25,7 @@ from src.config_web.merger import build_merged_config
 from src.config_web.migration import migrate_yaml_to_store
 from src.config_web.schema import ConfigSchema
 from src.config_web.store import ConfigStore
+from src.restart import RestartManager
 
 from tests.config_web.test_api import _FakeModule, _sample_config
 
@@ -198,6 +199,18 @@ def test_config_api_answers_during_boot(boot_app):
         assert client.get("/api/config/").status_code == 200
         assert client.get("/api/config/schema").status_code == 200
         assert client.get("/api/backup/info").status_code == 200
+
+
+def test_the_restart_endpoint_is_reachable_during_boot(boot_app):
+    """
+    The loop #349 leaves open, closed: the start failed on a setting, the boot
+    server is still serving the configuration UI, and the restart that applies
+    the correction has to be reachable from there too. It rides along on
+    config_bp for exactly that reason.
+    """
+    with boot_app.test_client() as client:
+        with patch("src.config_web.api.RESTART", RestartManager(exec_argv=["x"])):
+            assert client.post("/api/config/restart").status_code == 202
 
 
 def test_index_and_assets_are_the_real_ones(boot_app):
