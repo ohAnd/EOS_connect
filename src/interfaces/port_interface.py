@@ -18,22 +18,39 @@ class _WaitressServerAdapter:
     """
     Adapter providing a gevent-compatible interface over a waitress WSGI server.
 
-    Exposes ``serve_forever()`` and ``stop()`` so the rest of eos_connect.py
-    does not need to know which WSGI server is in use.
+    Exposes ``run_forever()``, ``serve_forever()`` and ``stop()`` so the rest of
+    eos_connect.py does not need to know which WSGI server is in use.
+
+    On signals, for the record, because the obvious assumption is wrong:
+    waitress installs **no** signal handlers at all — there is not one
+    ``signal.signal`` call in the package.  ``BaseWSGIServer.run()`` only catches
+    ``SystemExit`` and ``KeyboardInterrupt`` raised *inside* its asyncore loop.
+    So Ctrl-C works, because Python's own default handler raises
+    ``KeyboardInterrupt`` there; **SIGTERM is not handled**, and without a
+    handler of our own ``docker stop`` kills the process outright, with no
+    teardown and no clean database close.  eos_connect.py installs that handler.
     """
 
     def __init__(self, server):
         self._server = server
 
-    def serve_forever(self):
-        """Start serving requests (blocking call).
+    def run_forever(self):
+        """Serve requests until :meth:`stop` is called (blocking).
 
-        Waitress swallows both KeyboardInterrupt (Ctrl-C) and SIGTERM internally
-        before returning normally, so the caller's ``except KeyboardInterrupt``
-        block would never fire.  Re-raising KeyboardInterrupt after ``run()``
-        returns restores the expected shutdown path in eos_connect.py.
+        The thread-friendly half of ``serve_forever()``: it returns quietly
+        instead of raising, which is what a background serving thread wants.
         """
         self._server.run()
+
+    def serve_forever(self):
+        """Serve requests on the calling thread, then raise ``KeyboardInterrupt``.
+
+        Waitress swallows the ``KeyboardInterrupt`` that Ctrl-C raises inside its
+        loop and returns normally, so a caller's ``except KeyboardInterrupt``
+        block would never fire.  Re-raising after ``run()`` returns restores the
+        expected shutdown path for anyone serving on the main thread.
+        """
+        self.run_forever()
         # run() only returns because a stop signal was received
         raise KeyboardInterrupt
 
