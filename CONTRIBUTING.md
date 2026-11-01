@@ -105,7 +105,7 @@ battery_interface = factory.create_battery_interface(
     load_interface,   # battery pricing needs the load series
     time_zone,
     base_control,     # where the resulting control decisions are applied
-    critical=True,    # halt startup if this interface cannot be built
+    critical=True,    # a failure here is fatal: rescue mode, not a degraded run
 )
 ```
 

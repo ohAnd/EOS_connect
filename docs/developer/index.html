@@ -53,7 +53,7 @@
 
                     <h3 id="startup-sequence">Startup sequence</h3>
                     <p>Everything below happens at module level in <code>src/eos_connect.py</code>, in this
-                        order, before the web server binds.</p>
+                        order. The socket is bound third, before anything that can block.</p>
                     <ol>
                         <li><strong>Bootstrap config.</strong> <code>ConfigManager</code>
                             (<code>src/config.py</code>) reads the three keys in <code>src/config.yaml</code>
@@ -67,15 +67,58 @@
                             value the user set in the web UI into the config dict. Everything constructed after
                             this point therefore receives authoritative values &mdash; there is no post-init
                             re-sync step.</li>
+                        <li><strong>Bind and serve.</strong>
+                            <code>PortInterface.create_web_server_with_port_check()</code> binds
+                            <code>0.0.0.0</code> on the configured port (default 8081), and waitress serves
+                            it from a daemon thread. What it serves is a <code>BootGate</code> &mdash; see
+                            <a href="#boot-server">The boot server</a>.</li>
                         <li><strong>Build the interfaces</strong> through
-                            <code>InterfaceFactory</code>, in dependency order.</li>
+                            <code>InterfaceFactory</code>, in dependency order. Each one marks its step on
+                            <code>BOOT</code> (<code>src/boot_state.py</code>) as it goes, which is what
+                            <code>/api/boot/status</code> serves.</li>
                         <li><strong>Start the scheduler.</strong> <code>OptimizationScheduler</code> spawns
                             its three daemon threads.</li>
-                        <li><strong>Serve.</strong>
-                            <code>PortInterface.create_web_server_with_port_check()</code> binds
-                            <code>0.0.0.0</code> on the configured port (default 8081) and hands Flask to
-                            waitress.</li>
+                        <li><strong>Hand over.</strong> Once the last <code>@app.route</code> has run,
+                            <code>boot_gate.target</code> is set to the real Flask app and
+                            <code>BOOT.set_ready()</code> is called. The main thread then waits on
+                            <code>shutdown_event</code>.</li>
                     </ol>
+
+                    <h3 id="boot-server">The boot server</h3>
+                    <p>The interfaces above reach the network: an unreachable MQTT broker costs a TCP
+                        timeout, a large recorder costs the load-profile build, and there is a fixed
+                        settle sleep. Binding after all of that meant 15&ndash;45&nbsp;s of
+                        <em>connection refused</em>, and a start that died on a bad setting took the
+                        configuration UI with it (issues #349, #310, #83).</p>
+                    <p>The real Flask app cannot simply answer earlier. Flask bars route registration
+                        once an app has served a request (<code>_check_setup_finished</code>), so a page
+                        load arriving mid-startup would turn the next <code>@app.route</code> into an
+                        <code>AssertionError</code>. Instead <code>src/boot_server.py</code> builds a
+                        second, complete app and puts a gate in front:</p>
+                    <ul>
+                        <li><code>BootGate</code> is the WSGI callable waitress is given. While
+                            <code>target</code> is <code>None</code> it serves the boot app; afterwards it
+                            serves the real one. The socket, the thread and the port never change, so
+                            there is no hand-over window.</li>
+                        <li>The boot app serves the same <code>index.html</code>, JavaScript and CSS as
+                            the real one &mdash; shared from <code>src/web_routes.py</code> &mdash; plus
+                            the log routes, <code>/api/boot/status</code>, and
+                            <strong><code>config_bp</code> and <code>backup_bp</code></strong>. That last
+                            part is the point: the settings API answers throughout startup and in rescue
+                            mode. The same blueprint objects are registered on both apps, which Flask
+                            allows.</li>
+                        <li>Dashboard endpoints get the <code>{"status": "starting up"}</code> placeholder
+                            the frontend already renders. Unknown URLs still 404, so the two apps agree
+                            on what exists.</li>
+                    </ul>
+                    <p>When a <code>critical=True</code> interface fails, the factory no longer re-raises.
+                        It records the failure on <code>BOOT.set_fatal()</code> and returns
+                        <code>None</code>; <code>eos_connect.py</code> checks <code>BOOT.fatal</code> once,
+                        after the four required interfaces, and enters <strong>rescue mode</strong>: the
+                        rest of the module is abandoned, the gate is never handed over, and the boot app
+                        keeps serving the settings. The module-level sequence is dropped rather than
+                        nursed along with stand-in objects, because half of what follows reads from the
+                        interface that just failed.</p>
 
                     <p>Only four environment variables are read, and all four are bootstrap-only
                         (<code>src/config.py:205-212</code>). Everything else lives in the database.</p>
@@ -119,9 +162,11 @@
                     <p><code>src/interface_factory.py</code> exposes ten <code>create_*</code> methods, one per
                         interface. Each delegates to the private <code>_create_interface()</code>, which
                         catches whatever the constructor raises, registers it through
-                        <code>StartupValidator.add_error()</code>, and then either re-raises (when
-                        <code>critical=True</code>) or returns <code>None</code> so the caller can substitute a
-                        degraded stand-in.</p>
+                        <code>StartupValidator.add_error()</code>, marks the matching boot step failed,
+                        and returns <code>None</code> so the caller can substitute a degraded stand-in.
+                        <strong>It never re-raises.</strong> A <code>critical=True</code> failure
+                        additionally calls <code>BOOT.set_fatal()</code>, which is what puts the
+                        application into rescue mode rather than ending the process.</p>
                     <p><code>StartupValidator</code> (<code>src/startup_validator.py</code>, 58 lines) keeps no
                         state of its own. It formats one log line onto the <code>__main__</code> logger, with
                         <code>| Config: #section</code> and <code>| ACTION REQUIRED</code> markers appended.
@@ -148,7 +193,7 @@ battery_interface = factory.create_battery_interface(
     time_zone,          # time_zone: tzinfo
     base_control,       # base_control: BaseControl
     request_timeout=10,
-    critical=True,      # halt startup on failure
+    critical=True,      # a failure here is fatal: rescue mode, not a degraded run
 )</code></pre>
                     </div>
                     <p>Note the import paths. <code>_import_and_create()</code> imports

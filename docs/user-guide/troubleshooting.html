@@ -72,6 +72,26 @@
                             issue; a <code>FileNotFoundError</code> naming <code>cbc</code> is this one.</p>
                     </div>
 
+                    <h3 id="tb-rescue">A required component cannot start</h3>
+                    <p><strong>Symptom:</strong> the web interface opens, but instead of the
+                        dashboard it shows <em>Startup stopped &mdash; check the configuration</em>
+                        and names the component that failed. The log carries:</p>
+                    <pre><code>ERROR [Main] Startup cannot complete: optimization_interface could not be created.
+  Running in RESCUE MODE &mdash; the web interface stays available ...</code></pre>
+                    <p><strong>Cause:</strong> one of the four components EOS Connect cannot work
+                        without &mdash; the optimizer, the inverter, the load source or the battery
+                        &mdash; could not be built from the current settings. Almost always a
+                        setting that points somewhere it should not.</p>
+                    <p><strong>What happens:</strong> EOS Connect stays running instead of stopping.
+                        Optimization and inverter control are paused, but the settings, the log
+                        viewer and the startup errors are all reachable. This matters most in the
+                        Home Assistant add-on: a component failure used to end the process, and
+                        the Supervisor then shut the container down, taking the settings UI with
+                        it &mdash; so the one tool that could fix the problem was gone.</p>
+                    <p><strong>Fix:</strong> open <strong>Open configuration</strong> from the
+                        message, correct the setting it names, then restart EOS Connect. The
+                        startup errors panel and the log viewer both carry the full message.</p>
+
                     <h3 id="tb-eos-devices">Nothing starts after an EOS server update</h3>
                     <p><strong>Symptom:</strong> with <code>eos.source</code> set to
                         <code>eos_server</code>, EOS Connect stops while starting up and the web
@@ -88,7 +108,10 @@ KeyError: 0</code></pre>
                     <p><strong>Fix:</strong> update EOS Connect. It reads both layouts now, and leaves
                         the charge rates alone on servers that fill them in themselves. A server
                         configuration that does not look the way EOS Connect expects is logged from now
-                        on instead of stopping the start, so the settings stay reachable.</p>
+                        on instead of stopping the start, so the settings stay reachable. Any other failure of
+                        a required component now ends in rescue mode rather than a stopped
+                        container &mdash; see <a href="#tb-rescue">A required component cannot
+                        start</a>.</p>
 
                     <h3 id="tb-eos-horizon">The EOS optimization horizon is not set</h3>
                     <p><strong>Symptom:</strong> with <code>eos.source</code> set to

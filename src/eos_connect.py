@@ -8,19 +8,21 @@ from datetime import datetime, timedelta
 import time
 import logging
 import json
+import signal
 import threading
 import pytz
 import requests
 from flask import (
     Flask,
     Response,
-    make_response,
-    render_template_string,
     request,
     send_from_directory,
 )
+from werkzeug.exceptions import NotFound
 from version import __version__
-from docs_links import docs_base_url
+from boot_state import BOOT
+from boot_server import BootGate, build_boot_app
+from web_routes import register_log_routes, register_static_routes
 from config import ConfigManager
 from log_handler import MemoryLogHandler
 from startup_validator import StartupValidator
@@ -147,13 +149,130 @@ STARTUP_ALERTS_SINCE = datetime.now(time_zone).isoformat()
 # post-init re-sync is needed.
 config_web = ConfigWebModule(config_manager)
 try:
-    config_web.start_db()
+    with BOOT.step("config_db"):
+        config_web.start_db()
 except (OSError, RuntimeError):
+    # Caught outside the step so the failure is recorded rather than swallowed:
+    # the start continues on config.yaml values, but the boot status has to say
+    # the settings database is not there, because every setting the user made in
+    # the web UI is missing from this run.
     logger.exception(
         "[Main] Config database startup failed — continuing with config.yaml values. "
         "Check data directory permissions and disk space."
     )
 
+###################################################################################################
+# Phase 1b: bind the web server, right here, before anything that can block.
+#
+# Everything below this line talks to the network: an unreachable MQTT broker
+# costs a TCP timeout, a large recorder costs the load-profile build, and the
+# interface settle is a hard sleep. Until this change the socket was bound after
+# all of it, so a start that took a minute was a minute of "connection refused"
+# — and a start that died on a bad setting took the configuration UI down with
+# it, leaving no way to correct the setting that caused it (#349, #310, #83).
+#
+# The gate serves a small stand-in app until the real one is complete; see
+# boot_server.py for why the real app cannot simply answer earlier.
+HOST = "0.0.0.0"
+# In HA addon mode the port is always 8081 (mapped via the addon's ports: config);
+# elsewhere it is whatever the user configured.
+desired_port = config_manager.config.get("eos_connect_web_port", 8081)
+
+logger.info("[Main] Initializing EOS Connect web server...")
+boot_gate = BootGate(
+    build_boot_app(
+        config_web=config_web,
+        memory_handler=memory_handler,
+        base_path=base_path,
+        time_zone=time_zone,
+        startup_alerts_since=STARTUP_ALERTS_SINCE,
+        boot_state=BOOT,
+    )
+)
+try:
+    http_server, actual_port = PortInterface.create_web_server_with_port_check(
+        HOST, desired_port, boot_gate, logger
+    )
+except RuntimeError as exc:
+    # PortInterface has already logged the conflict and how to resolve it. There
+    # is no rescue mode for this one: the UI that would let the user change the
+    # port is the very thing that cannot bind.
+    logger.error("[Main] %s", exc)
+    logger.error("[Main] EOS Connect cannot start without its web interface.")
+    sys.exit(1)
+except (OSError, ImportError) as exc:
+    logger.error("[Main] Unexpected error creating the web server: %s", exc)
+    logger.error("[Main] EOS Connect cannot start. Please check the logs.")
+    sys.exit(1)
+
+threading.Thread(
+    target=http_server.run_forever, daemon=True, name="WebServer"
+).start()
+logger.info(
+    "[Main] Web interface available at: http://localhost:%s "
+    "— startup progress is shown there while the rest comes up",
+    actual_port,
+)
+
+#: Set to end the process. The main thread waits on this instead of serving,
+#: now that waitress runs on its own thread: it is what Ctrl-C, SIGTERM and
+#: rescue mode all come down to.
+shutdown_event = threading.Event()
+
+
+def _request_shutdown(signum, _frame):
+    """Wake the main thread so a signal gets the same teardown as Ctrl-C."""
+    logger.info("[Main] Received %s — shutting down", signal.Signals(signum).name)
+    shutdown_event.set()
+
+
+# waitress installs no signal handlers of its own — there is not one
+# `signal.signal` call in the package, and `run()` only catches what is raised
+# inside its own loop (which is why Ctrl-C has always worked and SIGTERM never
+# did). Without this, `docker stop` and an add-on stop kill the process
+# outright: no inverter released, no MQTT goodbye, no clean database close.
+# Installed here rather than in __main__ so that rescue mode, which never gets
+# that far, is covered by it as well.
+signal.signal(signal.SIGTERM, _request_shutdown)
+
+
+def _enter_rescue_mode():
+    """
+    Stay up with a broken configuration, serving the UI that can mend it.
+
+    Reached when a required interface could not be created. Before this, that
+    ended the process — and under the HA add-on s6 then tore the container down,
+    so the one tool that could fix the offending setting disappeared along with
+    it (#349, #310, #83).
+
+    This never returns. The module-level sequence below is abandoned
+    deliberately rather than nursed along with stand-in objects: half of it
+    reads from the interfaces that just failed, and a stand-in that quietly
+    answers None for a battery SOC produces a dashboard that looks plausible and
+    is wrong. The boot server keeps serving the configuration API, the logs and
+    the startup-error panel, which is everything needed to find the problem,
+    correct it and restart.
+    """
+    fatal = BOOT.fatal or {}
+    logger.error(
+        "[Main] Startup cannot complete: %s could not be created. "
+        "Running in RESCUE MODE — the web interface stays available at "
+        "http://localhost:%s so the configuration can be corrected. "
+        "Optimization and inverter control are paused until the next restart.",
+        fatal.get("component", "a required interface"),
+        actual_port,
+    )
+    try:
+        shutdown_event.wait()
+    except KeyboardInterrupt:
+        logger.info("[Main] Shutting down EOS Connect (user requested)")
+    finally:
+        http_server.stop()
+        config_web.stop()
+        logging.shutdown()
+    sys.exit(0)
+
+###################################################################################################
 # Initialize startup validator to collect errors during initialization
 startup_validator = StartupValidator()
 
@@ -227,7 +346,8 @@ eos_interface = interface_factory.create_optimization_interface(
     ),
 )
 
-base_control = BaseControl(config_manager.config, time_zone, time_frame_base)
+with BOOT.step("base_control"):
+    base_control = BaseControl(config_manager.config, time_zone, time_frame_base)
 
 # PHASE 3: Initialize other interfaces using factory
 inverter_interface = interface_factory.create_inverter_interface(
@@ -275,7 +395,8 @@ load_interface = interface_factory.create_load_interface(
 # on its own, and the same failure there is caught and logged rather than fatal.
 if load_interface is not None:
     try:
-        load_interface.refresh_load_profile()
+        with BOOT.step("load_profile"):
+            load_interface.refresh_load_profile()
     except (requests.exceptions.RequestException, ValueError, KeyError) as e:
         logger.warning(
             "[Main] Could not build the load profile at startup (%s); "
@@ -303,6 +424,13 @@ battery_interface = interface_factory.create_battery_interface(
     request_timeout=config_manager.config.get("request_timeout", 10),
     critical=True,
 )
+
+# All four interfaces the application cannot work without have now been
+# attempted. The factory no longer raises on a critical failure, so this is the
+# one place that decides what a failure means — and the last point at which
+# nothing below has been touched yet.
+if BOOT.fatal:
+    _enter_rescue_mode()  # never returns
 
 # Non-critical interfaces (startup continues if these fail)
 mqtt_interface = interface_factory.create_mqtt_interface(
@@ -668,13 +796,18 @@ load_manager.external_scheduler = getattr(
 )
 
 if load_manager.enabled_ids():
-    mqtt_interface.register_topics(managed_load_topics.build_topics(load_manager))
-    load_manager.check_power_sensors()
-    load_manager.backfill()
-    load_manager.start()
+    with BOOT.step("load_sensors"):
+        mqtt_interface.register_topics(
+            managed_load_topics.build_topics(load_manager)
+        )
+        load_manager.check_power_sensors()
+        load_manager.backfill()
+        load_manager.start()
     logger.info(
         "[MAIN] Managed loads active: %s", ", ".join(load_manager.enabled_ids())
     )
+else:
+    BOOT.skip("load_sensors", "no managed loads configured")
 
 
 # Callback functions for event handling
@@ -807,7 +940,8 @@ def mqtt_control_callback(mqtt_cmd):
 # wait for the interfaces to initialize - depend on entries for pv_forecast
 init_time = 3 + 1 * len(config_manager.config["pv_forecast"])
 logger.info("[Main] Waiting %s seconds for interfaces to initialize", init_time)
-time.sleep(init_time)
+with BOOT.step("settle", f"{init_time} s"):
+    time.sleep(init_time)
 
 # After the base wait, poll until PV forecast data is actually populated.
 # The background thread fetches all PV sources SEQUENTIALLY, so with multiple
@@ -815,6 +949,7 @@ time.sleep(init_time)
 # = 8 s while init_time = 7 s).  We give up to 30 extra seconds before giving
 # up and logging a warning so the first optimization run is not penalised.
 if config_manager.config["pv_forecast"]:
+    BOOT.begin("pv_wait")
     _pv_poll_deadline = time.time() + 30
     while (
         not pv_interface.get_current_pv_forecast() and time.time() < _pv_poll_deadline
@@ -822,17 +957,22 @@ if config_manager.config["pv_forecast"]:
         time.sleep(1)
     if pv_interface.get_current_pv_forecast():
         logger.info("[Main] PV forecast ready after startup wait")
+        BOOT.finish("pv_wait")
     else:
         logger.warning(
             "[Main] PV forecast not available after %d s startup wait; "
             "first optimization run will proceed without PV data",
             init_time + 30,
         )
+        BOOT.fail("pv_wait", "no forecast data after the startup wait")
+else:
+    BOOT.skip("pv_wait", "no PV installations configured")
 
 # Perform initial battery price calculation if enabled (blocking, synchronous)
 # This ensures the first optimization run has the correct battery price
 try:
-    battery_interface.perform_initial_price_calculation()
+    with BOOT.step("battery_price"):
+        battery_interface.perform_initial_price_calculation()
 except (OSError, RuntimeError, ValueError, TypeError) as e:
     startup_validator.add_error(
         "configuration",
@@ -868,11 +1008,12 @@ def on_update_status_change(status):
 
 # Initialize update checker (checks for Docker image updates)
 # Automatically disabled for Home Assistant Add-on users
-update_checker = UpdateChecker(
-    current_version=__version__,
-    check_interval=43200,
-    on_status_change=on_update_status_change,
-)
+with BOOT.step("update_checker"):
+    update_checker = UpdateChecker(
+        current_version=__version__,
+        check_interval=43200,
+        on_status_change=on_update_status_change,
+    )
 
 # Publish initial update status to MQTT
 try:
@@ -1845,9 +1986,10 @@ class OptimizationScheduler:
             logger.info("[OPTIMIZATION] Update service Data Loop stopped.")
 
 
-optimization_scheduler = OptimizationScheduler(
-    config_manager.config["refresh_time"] * 60  # convert to seconds
-)
+with BOOT.step("scheduler"):
+    optimization_scheduler = OptimizationScheduler(
+        config_manager.config["refresh_time"] * 60  # convert to seconds
+    )
 
 
 def change_control_state():
@@ -2069,6 +2211,14 @@ evcc_interface.on_charging_state_change = charging_state_callback
 mqtt_interface.on_mqtt_command = mqtt_control_callback
 
 # web server
+#
+# Note what is NOT happening here: this app is not bound to a socket. The port
+# has been served since right after the config database opened, by the boot app
+# in boot_server.py. This one only takes over once every route below has been
+# registered — Flask refuses to register a route on an app that has already
+# answered a request, so letting a page load in before this point would turn
+# the next @app.route into an AssertionError.
+BOOT.begin("routes")
 app = Flask(__name__)
 
 # Ensure JSON responses preserve dict insertion order (SECTION_META order)
@@ -2109,108 +2259,10 @@ hot_reload_adapter = HotReloadAdapter(
 hot_reload_adapter.on_run_trigger = optimization_scheduler.request_immediate_run
 config_web.register_hot_reload_callback(hot_reload_adapter.on_config_changed)
 
-ASSET_CACHE_MAX_AGE_SECONDS = 31536000
-
-
-# web site support
-
-
-@app.route("/", methods=["GET"])
-def main_page():
-    """
-    Renders the main page of the web application.
-
-    This function reads the content of the 'index.html' file located in the 'web' directory
-    and returns it as a rendered template string.
-    """
-    with open(base_path + "/web/index.html", "r", encoding="utf-8") as html_file:
-        rendered_html = render_template_string(
-            html_file.read(),
-            asset_version=f"{__version__}-{int(time.time())}",
-            # Resolved here rather than in the browser: the version only reaches the
-            # frontend through /json/current_controls.json, which lands after the
-            # menu and the config panel have already built their documentation links.
-            docs_base_url=docs_base_url(__version__),
-        )
-    response = make_response(rendered_html)
-    response.headers["Cache-Control"] = "no-cache, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
-
-
-@app.route("/js/<filename>")
-def serve_js_files(filename):
-    """
-    Dynamically serve JavaScript files from the js directory.
-    This allows adding new JS modules without modifying the server code.
-    """
-    try:
-        js_directory = os.path.join(os.path.dirname(__file__), "web", "js")
-
-        # Security check: only allow .js files
-        if not filename.endswith(".js"):
-            logger.warning("[Web] Blocked attempt to serve non-JS file: %s", filename)
-            return "Not Found", 404
-
-        # Check if file exists
-        file_path = os.path.join(js_directory, filename)
-        if not os.path.exists(file_path):
-            logger.warning("[Web] JavaScript file not found: %s", filename)
-            return "Not Found", 404
-
-        # logger.debug("[Web] Serving JavaScript file: %s", filename)
-        response = send_from_directory(
-            js_directory,
-            filename,
-            mimetype="application/javascript",
-            max_age=ASSET_CACHE_MAX_AGE_SECONDS,
-        )
-        response.headers["Cache-Control"] = "no-cache, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-        return response
-
-    except (OSError, IOError, ValueError) as e:
-        logger.error("[Web] Error serving JavaScript file %s: %s", filename, e)
-        return "Server Error", 500
-
-
-# Also add CSS file serving for completeness
-@app.route("/css/<filename>")
-def serve_css_files(filename):
-    """
-    Dynamically serve CSS files from the web directory.
-    """
-    try:
-        web_directory = os.path.join(os.path.dirname(__file__), "web", "css")
-
-        # Security check: only allow .css files
-        if not filename.endswith(".css"):
-            logger.warning("[Web] Blocked attempt to serve non-CSS file: %s", filename)
-            return "Not Found", 404
-
-        # Check if file exists
-        file_path = os.path.join(web_directory, filename)
-        if not os.path.exists(file_path):
-            logger.warning("[Web] CSS file not found: %s", filename)
-            return "Not Found", 404
-
-        # logger.debug("[Web] Serving CSS file: %s", filename)
-        response = send_from_directory(
-            web_directory,
-            filename,
-            mimetype="text/css",
-            max_age=ASSET_CACHE_MAX_AGE_SECONDS,
-        )
-        response.headers["Cache-Control"] = "no-cache, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-        return response
-
-    except (OSError, IOError, ValueError) as e:
-        logger.error("[Web] Error serving CSS file %s: %s", filename, e)
-        return "Server Error", 500
+# The page, its JavaScript and its stylesheets are served from web_routes.py,
+# because the boot server has to serve exactly the same ones: index.html already
+# carries the startup overlay and the error panel a user needs while waiting.
+register_static_routes(app, base_path)
 
 
 @app.route("/json/optimize_request.json", methods=["GET"])
@@ -2486,9 +2538,16 @@ def serve_test_json_files(filename):
                 content_type="application/json",
             )
 
-        # Check if file exists in test directory
-        file_path = os.path.join(json_test_directory, filename)
-        if not os.path.exists(file_path):
+        # The missing-file case is left to send_from_directory, which answers it
+        # with NotFound.  Joining the path here to stat it first was the only
+        # place filename reached a path expression without passing through
+        # safe_join (CodeQL py/path-injection) — see _serve_asset in
+        # web_routes.py, which this mirrors.
+        try:
+            return send_from_directory(
+                json_test_directory, filename, mimetype="application/json"
+            )
+        except NotFound:
             logger.warning("[Web] Test JSON file not found: %s", filename)
             logger.debug("[Web] Looked in directory: %s", json_test_directory)
             return Response(
@@ -2496,11 +2555,6 @@ def serve_test_json_files(filename):
                 status=404,
                 content_type="application/json",
             )
-
-        # logger.info("[Web] Serving test JSON file: %s from %s", filename, json_test_directory)
-        return send_from_directory(
-            json_test_directory, filename, mimetype="application/json"
-        )
 
     except (OSError, IOError, ValueError) as e:
         logger.error("[Web] Error serving test JSON file %s: %s", filename, e)
@@ -2622,174 +2676,10 @@ def handle_mode_override():
         )
 
 
-@app.route("/logs", methods=["GET"])
-def get_logs():
-    """
-    Retrieve application logs with optional filtering.
-
-    Query parameters:
-    - level: Filter by log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-    - limit: Maximum number of records to return (default: 100)
-    - since: ISO timestamp to get logs since that time
-    """
-    try:
-        level_filter = request.args.get("level")
-        limit = int(request.args.get("limit", 100))
-        since = request.args.get("since")
-
-        logs = memory_handler.get_logs(
-            level_filter=level_filter, limit=limit, since=since
-        )
-
-        response_data = {
-            "logs": logs,
-            "total_count": len(logs),
-            "timestamp": datetime.now(time_zone).isoformat(),
-            "filters_applied": {"level": level_filter, "limit": limit, "since": since},
-        }
-
-        return Response(
-            json.dumps(response_data, indent=2), content_type="application/json"
-        )
-
-    except (ValueError, TypeError, KeyError) as e:
-        logger.error("[Web] Error retrieving logs: %s", e)
-        return Response(
-            json.dumps({"error": "Failed to retrieve logs"}),
-            status=500,
-            content_type="application/json",
-        )
-
-
-@app.route("/logs/alerts", methods=["GET"])
-def get_alerts():
-    """
-    Retrieve warning and error logs for alert system.
-
-    Query parameters:
-    - startup_only: if true/1/yes, only return alerts since current process start
-    - since: optional ISO timestamp override for custom filtering
-    - limit: optional maximum number of returned alerts
-    """
-    try:
-        startup_only_arg = request.args.get("startup_only", "false").strip().lower()
-        startup_only = startup_only_arg in {"1", "true", "yes", "on"}
-
-        # Allow explicit override via query param, otherwise use startup marker if requested.
-        since = request.args.get("since")
-        if startup_only and not since:
-            since = STARTUP_ALERTS_SINCE
-
-        limit_arg = request.args.get("limit")
-        limit = int(limit_arg) if limit_arg else None
-
-        alerts = memory_handler.get_alerts(since=since, limit=limit)
-
-        # Group alerts by level for easier processing
-        grouped_alerts = {
-            "WARNING": [a for a in alerts if a["level"] == "WARNING"],
-            "ERROR": [a for a in alerts if a["level"] == "ERROR"],
-            "CRITICAL": [a for a in alerts if a["level"] == "CRITICAL"],
-        }
-
-        response_data = {
-            "alerts": alerts,
-            "grouped_alerts": grouped_alerts,
-            "alert_counts": {
-                level: len(items) for level, items in grouped_alerts.items()
-            },
-            "filters_applied": {
-                "startup_only": startup_only,
-                "since": since,
-                "limit": limit,
-            },
-            "startup_since": STARTUP_ALERTS_SINCE,
-            "timestamp": datetime.now(time_zone).isoformat(),
-        }
-
-        return Response(
-            json.dumps(response_data, indent=2), content_type="application/json"
-        )
-
-    except (ValueError, TypeError, KeyError) as e:
-        logger.error("[Web] Error retrieving alerts: %s", e)
-        return Response(
-            json.dumps({"error": "Failed to retrieve alerts"}),
-            status=500,
-            content_type="application/json",
-        )
-
-
-@app.route("/logs/clear", methods=["POST"])
-def clear_logs():
-    """
-    Clear all stored logs from memory (file logs remain intact).
-    """
-    try:
-        memory_handler.clear_logs()
-        logger.info("[Web] Memory logs cleared via web API")
-
-        return Response(
-            json.dumps({"status": "success", "message": "Logs cleared"}),
-            content_type="application/json",
-        )
-
-    except (RuntimeError, ValueError, TypeError, KeyError) as e:
-        logger.error("[Web] Error clearing logs: %s", e)
-        return Response(
-            json.dumps({"error": "Failed to clear logs"}),
-            status=500,
-            content_type="application/json",
-        )
-
-
-@app.route("/logs/alerts/clear", methods=["POST"])
-def clear_alerts_only():
-    """
-    Clear only alert logs from memory, keeping regular logs intact.
-    """
-    try:
-        memory_handler.clear_alerts_only()
-        logger.info("[Web] Alert logs cleared via web API")
-
-        return Response(
-            json.dumps({"status": "success", "message": "Alert logs cleared"}),
-            content_type="application/json",
-        )
-
-    except (RuntimeError, ValueError, TypeError, KeyError) as e:
-        logger.error("[Web] Error clearing alert logs: %s", e)
-        return Response(
-            json.dumps({"error": "Failed to clear alert logs"}),
-            status=500,
-            content_type="application/json",
-        )
-
-
-@app.route("/logs/stats", methods=["GET"])
-def get_log_stats():
-    """
-    Get buffer usage statistics.
-    """
-    try:
-        stats = memory_handler.get_buffer_stats()
-
-        response_data = {
-            "buffer_stats": stats,
-            "timestamp": datetime.now(time_zone).isoformat(),
-        }
-
-        return Response(
-            json.dumps(response_data, indent=2), content_type="application/json"
-        )
-
-    except (ValueError, TypeError, KeyError) as e:
-        logger.error("[Web] Error retrieving buffer stats: %s", e)
-        return Response(
-            json.dumps({"error": "Failed to retrieve buffer stats"}),
-            status=500,
-            content_type="application/json",
-        )
+# The /logs family lives in web_routes.py so the boot server can serve it too:
+# while a start is slow or has failed, the log viewer is the main thing the user
+# has to work with.
+register_log_routes(app, memory_handler, time_zone, STARTUP_ALERTS_SINCE)
 
 
 @app.route("/api/update/status", methods=["GET"])
@@ -2941,85 +2831,82 @@ def get_pv_autoscaling_status():
         )
 
 
+# Every route is registered: hand the port over from the boot app to this one.
+# The socket, the listening thread and the port are untouched by the swap — the
+# gate is what waitress has been serving all along (see boot_server.BootGate).
+BOOT.finish("routes")
+boot_gate.target = app
+BOOT.set_ready()
+logger.info(
+    "[Main] Startup complete in %.1f s — serving the application on port %s",
+    BOOT.snapshot()["elapsed_s"],
+    actual_port,
+)
+
+
+def _shutdown_all():
+    """
+    Stop everything that is running, in the order the components depend on.
+
+    Lifted out of the ``except KeyboardInterrupt`` block it used to live in so
+    that every way out of the process — Ctrl-C, SIGTERM, and the restart in the
+    next step — goes through the same sequence instead of three near-copies.
+    """
+    optimization_scheduler.shutdown()
+    base_control.shutdown()
+    load_manager.shutdown()
+    if http_server:
+        http_server.stop()
+        logger.info("[Main] HTTP server stopped")
+
+    # Shutdown real inverter if it exists (not NullInverter/display-only or EvccInverter)
+    if inverter_interface is not None and not isinstance(
+        inverter_interface, (NullInverter, EvccInverter)
+    ):
+        inverter_interface.shutdown()
+    pv_interface.shutdown()
+    if pv_autoscaler is not None:
+        try:
+            pv_autoscaler.stop_update_service()
+        except Exception:
+            logger.exception("[Main] Error stopping pv_autoscaler update service")
+    price_interface.shutdown()
+    # Was missing from the original sequence: it owns a polling thread like the
+    # rest, and only the fact that every worker is a daemon hid the omission.
+    # Its stop method is named stop(), not shutdown() like its neighbours.
+    feed_in_price_interface.stop()
+    mqtt_interface.shutdown()
+    evcc_interface.shutdown()
+    battery_interface.shutdown()
+    update_checker.shutdown()
+    config_web.stop()
+    logger.info("[Main] Server stopped gracefully")
+
+
 if __name__ == "__main__":
-    http_server = None
+    # Start deferred inverter initialization in background thread
+    # This prevents hang if inverter is unreachable
+    inverter_init_thread = threading.Thread(
+        target=_deferred_inverter_initialization,
+        daemon=True,
+        name="InverterInit",
+    )
+    inverter_init_thread.start()
+    logger.info("[Main] Inverter initialization thread started (runs in background)")
+
+    exit_code = 0
     try:
-        # Create web server with port checking
-        HOST = "0.0.0.0"
-        # In HA addon mode, port is always 8081 (mapped via ports: config)
-        # In local/Docker mode, use the configured port
-        desired_port = config_manager.config.get("eos_connect_web_port", 8081)
-
-        logger.info("[Main] Initializing EOS Connect web server...")
-        http_server, actual_port = PortInterface.create_web_server_with_port_check(
-            HOST, desired_port, app, logger
-        )
-
-        logger.info(
-            "[Main] EOS Connect web server successfully created on %s:%s",
-            HOST,
-            actual_port,
-        )
-        logger.info(
-            "[Main] Web interface available at: http://localhost:%s", actual_port
-        )
-
-        # Start deferred inverter initialization in background thread
-        # This prevents hang if inverter is unreachable
-        inverter_init_thread = threading.Thread(
-            target=_deferred_inverter_initialization,
-            daemon=True,
-            name="InverterInit",
-        )
-        inverter_init_thread.start()
-        logger.info(
-            "[Main] Inverter initialization thread started (runs in background)"
-        )
-
-        # Start serving
-        logger.info("[Main] Starting EOS Connect web server...")
-        http_server.serve_forever()
-
-    except RuntimeError as e:
-        # PortInterface already provides detailed error messages and solutions
-        logger.error("[Main] %s", str(e))
-        logger.error("[Main] EOS Connect cannot start without its web interface.")
-        sys.exit(1)
-
-    except (OSError, ImportError) as e:
-        # Only handle truly unexpected errors (not port-related)
-        logger.error("[Main] Unexpected error: %s", str(e))
-        logger.error("[Main] EOS Connect cannot start. Please check the logs.")
-        sys.exit(1)
-
+        # The web server has its own thread now; the main thread's job is to stay
+        # available for signals and to run the teardown once.
+        shutdown_event.wait()
     except KeyboardInterrupt:
         logger.info("[Main] Shutting down EOS Connect (user requested)")
-        optimization_scheduler.shutdown()
-        base_control.shutdown()
-        load_manager.shutdown()
-        if http_server:
-            http_server.stop()
-            logger.info("[Main] HTTP server stopped")
-
-        # Shutdown real inverter if it exists (not NullInverter/display-only or EvccInverter)
-        if inverter_interface is not None and not isinstance(
-            inverter_interface, (NullInverter, EvccInverter)
-        ):
-            inverter_interface.shutdown()
-        pv_interface.shutdown()
-        if pv_autoscaler is not None:
-            try:
-                pv_autoscaler.stop_update_service()
-            except Exception:
-                logger.exception("[Main] Error stopping pv_autoscaler update service")
-        price_interface.shutdown()
-        mqtt_interface.shutdown()
-        evcc_interface.shutdown()
-        battery_interface.shutdown()
-        update_checker.shutdown()
-        config_web.stop()
-        logger.info("[Main] Server stopped gracefully")
     finally:
+        try:
+            _shutdown_all()
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("[Main] Error during shutdown")
+            exit_code = 1
         logging.shutdown()  # This will call close() on all handlers
         logger.info("[Main] Cleanup complete. Goodbye!")
-        sys.exit(0)
+        sys.exit(exit_code)
