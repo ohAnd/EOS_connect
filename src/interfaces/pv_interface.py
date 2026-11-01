@@ -2699,7 +2699,15 @@ class PvInterface:
                     " using the cached forecast"
                 )
             else:
-                message = f"Forecast.Solar API error: {exception}"
+                # The key is masked out of the URL a few lines above, and then a
+                # requests exception quotes the URL it tried - putting it back.
+                # `404 Client Error: ... for url: https://api.forecast.solar/KEY/...`
+                # goes to logger.error, which also fills the alert buffer, and the
+                # bug report copies the last 50 alerts into a public GitHub issue.
+                detail = str(exception)
+                if api_key:
+                    detail = detail.replace(api_key, "***")
+                message = f"Forecast.Solar API error: {detail}"
             return self._handle_interface_error(
                 error_type,
                 message,

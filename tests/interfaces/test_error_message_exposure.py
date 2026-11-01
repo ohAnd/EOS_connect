@@ -323,3 +323,110 @@ def test_a_missing_token_is_reported_as_missing(caplog):
 
     assert "not set" in log
     assert "0 characters" not in log
+
+
+# ---------------------------------------------------------------------------
+# Credentials in a URL an exception quotes back
+#
+# Forecast.Solar carries the API key as the first path segment. pv_interface
+# builds a masked `loggable_url` for exactly that reason — and then the generic
+# error branch stringified the requests exception, which quotes the URL it
+# tried and puts the key straight back. logger.error also fills the alert
+# buffer, and the bug report copies the last 50 alerts into a public issue.
+# ---------------------------------------------------------------------------
+
+FORECAST_SOLAR_KEY = "fs-Abc123SecretKeyXyz"
+
+
+def _forecast_solar_log(caplog, exception, api_key=FORECAST_SOLAR_KEY):
+    """
+    Drive the real request path with *exception* raised by requests.get, and
+    return everything it logged.
+
+    Deliberately not a reimplementation of the masking: the bug was that the
+    careful ``loggable_url`` a few lines up was undone by the generic error
+    branch, and only the real path can show whether that still holds.
+    """
+    from src.interfaces.pv_interface import PvInterface  # noqa: PLC0415
+
+    with patch.object(
+        PvInterface, "_PvInterface__update_pv_state_loop", lambda self: None
+    ):
+        pv = PvInterface(
+            {"source": "forecast_solar", "api_key": api_key},
+            [],
+            3600,
+            {},
+            timezone="UTC",
+        )
+
+    entry = {
+        "name": "roof", "lat": 47.5, "lon": 8.5,
+        "azimuth": 90, "tilt": 30, "power": 4600,
+    }
+
+    # The real path retries three times with a one-second pause. Nothing here is
+    # about the retry schedule, and paying for it would add eight seconds to a
+    # fifteen-second lane.
+    with caplog.at_level(logging.DEBUG, logger="__main__"):
+        with patch("src.interfaces.http_fetch.time.sleep"):
+            with patch(
+                "src.interfaces.pv_interface.requests.get", side_effect=exception
+            ):
+                pv._PvInterface__get_pv_forecast_forecast_solar_api(entry)
+
+    return "\n".join(record.getMessage() for record in caplog.records)
+
+
+def test_a_connection_error_does_not_carry_the_forecast_solar_key(caplog):
+    """
+    The key is the first path segment, and a ConnectionError quotes the path:
+    "Max retries exceeded with url: /KEY/estimate/...".
+    """
+    log = _forecast_solar_log(
+        caplog,
+        requests.exceptions.ConnectionError(
+            "HTTPSConnectionPool(host='api.forecast.solar', port=443): "
+            f"Max retries exceeded with url: /{FORECAST_SOLAR_KEY}/estimate/47.5/8.5"
+        ),
+    )
+
+    assert FORECAST_SOLAR_KEY not in log
+    # The diagnosis has to survive the masking.
+    assert "api.forecast.solar" in log
+
+
+def test_an_http_error_does_not_carry_the_forecast_solar_key(caplog):
+    """``raise_for_status()`` stringifies to "... for url: <the whole URL>"."""
+    url = f"https://api.forecast.solar/{FORECAST_SOLAR_KEY}/estimate/47.5/8.5/30/90/4.6"
+    log = _forecast_solar_log(
+        caplog,
+        requests.exceptions.HTTPError(
+            f"500 Server Error: Internal Server Error for url: {url}"
+        ),
+    )
+
+    assert FORECAST_SOLAR_KEY not in log
+    assert "500" in log
+
+
+def test_the_request_url_itself_is_never_logged(caplog):
+    """The debug line that announces the fetch uses the masked URL."""
+    log = _forecast_solar_log(
+        caplog, requests.exceptions.ConnectionError("connection refused")
+    )
+
+    assert FORECAST_SOLAR_KEY not in log
+    assert "api.forecast.solar/***/" in log
+
+
+def test_a_keyless_install_still_reports_its_error(caplog):
+    """Forecast.Solar also answers keyless; nothing to mask, nothing to break."""
+    log = _forecast_solar_log(
+        caplog,
+        requests.exceptions.ConnectionError("connection refused"),
+        api_key="",
+    )
+
+    assert "connection refused" in log
+    assert "***" not in log
