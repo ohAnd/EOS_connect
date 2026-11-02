@@ -61,6 +61,9 @@ _INTERNAL_TTL_CYCLES = 3
 _INTERNAL_TTL_MIN_MINUTES = 15
 
 
+# One load is one object: the config, the model, the gate, the plan, the demand and the
+# state they leave behind are all *it*, so the attribute count is the design, not sloth.
+# pylint: disable=too-many-instance-attributes
 class ManagedLoad:
     """A single entry from the ``managed_loads`` config section."""
 
@@ -105,6 +108,12 @@ class ManagedLoad:
         # household forecast *and* offer it to the solver at the same time.
         self.last_schedule_at = None
         self.waiting_for_schedule_since = None
+        # Whether the fallback planner currently owns the placement - i.e. the last
+        # schedule is older than the manager's staleness age and this load has been
+        # handed back to this module's own plan. Set only by the manager's cycle, read
+        # there and by schedulable(); a schedule arriving clears it by way of
+        # last_schedule_at, never by direct write.
+        self.fallback_active = False
         # Whether the reported price was measured against a run without this load, or
         # is only the tariff of the hours it occupies.
         self.last_cost_is_measured = False
@@ -657,6 +666,10 @@ class ManagedLoad:
             "energy_needed_wh": round(demand.total_wh, 1) if demand else 0.0,
             "planned_wh": round(sum(self.last_plan), 1) if self.last_plan else 0.0,
             "plan": [round(value, 1) for value in self.last_plan],
+            # Who placed this plan: the optimizer while its answers keep arriving, the
+            # fallback once its silence has outlasted the staleness age. Read "who is
+            # the planner", not a quality judgement.
+            "fallback_active": self.fallback_active,
             # The permanent draw the meter shows while the appliance is on standby, and
             # whether that draw is riding the household forecast beside this load's
             # plan. Both None when no threshold is set: then it is simply household.

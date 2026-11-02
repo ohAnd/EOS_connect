@@ -43,6 +43,11 @@ logger = logging.getLogger("__main__")
 # passed in rather than imported so this package stays standalone.
 DEFAULT_HORIZON_HOURS = 48
 
+# Extra seconds a solver's answer is trusted past its cadence before the fallback takes
+# over. Sits on top of the cadence so a couple of late quarter-aligned runs do not flap
+# between planners, but small enough that a dead solver keeps no load latched for long.
+SCHEDULER_GRACE_SECONDS = 120
+
 
 def _noop(*_args, **_kwargs):
     return None
@@ -188,7 +193,7 @@ class ManagedLoadManager:
 
     def __init__(self, entries, time_frame_base, time_zone, sources=None, store=None,
                  cycle_seconds=300, max_power_w=0, horizon_hours=DEFAULT_HORIZON_HOURS,
-                 on_release_change=None, clock=None):
+                 on_release_change=None, clock=None, scheduler_interval=None):
         self.time_frame_base = int(time_frame_base or 3600)
         self.time_zone = time_zone
         self.sources = sources or ManagedLoadSources()
@@ -197,6 +202,10 @@ class ManagedLoadManager:
         self.max_power_w = max(0.0, float(max_power_w or 0.0))
         self.horizon_hours = int(horizon_hours or DEFAULT_HORIZON_HOURS)
         self.on_release_change = on_release_change
+        # The optimizer's cadence, in seconds. The stale-schedule decision has to be
+        # measured *against* how often a schedule is actually expected - see
+        # _schedule_max_age - and the manager cannot know it without being told.
+        self.scheduler_interval = scheduler_interval
         # Injectable so tests can pin "now". Every planning decision depends on which
         # slot the current moment falls in, so a suite that reads the wall clock passes
         # in the morning and fails after lunch.
@@ -412,11 +421,16 @@ class ManagedLoadManager:
                     item.waiting_for_schedule_since = ctx_base.now
                 if item.schedule_is_stale(ctx_base.now, self._schedule_max_age()):
                     defer = False
+                    item.fallback_active = True
                     logger.warning(
                         "[LOADS] '%s' has had no schedule from the optimizer for over "
                         "%d s - deciding from its own plan until one arrives",
                         item.id, self._schedule_max_age(),
                     )
+                else:
+                    item.fallback_active = False
+            else:
+                item.fallback_active = False
             contribution, release = item.evaluate(
                 ctx, budget_wh=budget, defer_gate=defer
             )
@@ -442,15 +456,38 @@ class ManagedLoadManager:
         """
         How long a load may go unscheduled before it falls back to its own plan.
 
-        Two cycles: one missed run is a slow solve, two is something wrong. Short
-        enough that a dead optimizer does not leave a pump latched on for an hour,
-        long enough not to flap on a single late answer.
+        Two planners cannot own the same load at once. While the optimizer is the
+        planner, a fallback offered in between would reach the household forecast
+        *and* stay up for the solver to place again - the same energy twice, which is
+        exactly how a heat pump's afternoon slot doubled on a live install: with the
+        old fixed age (two managed-load cycles) the answer of an optimizer running
+        every five minutes was "overdue" forever, so every cycle built a fallback plan
+        on top of the schedule it kept being offered.
+
+        So the age is the interval a schedule is actually expected to arrive in, plus
+        a small grace for a late run. Two sources, in order of knowledge: the
+        cadence this app runs the solver at, when it is known; else the load's own
+        cycle - right for a small fast app, too eager beside a slow one, which is
+        what the interval exists to prevent. An interval of zero or less is "unknown":
+        the old cycle-based age stands, which leaves a fast external solver as it was
+        and never makes anything worse.
         """
+        interval = int(self.scheduler_interval or 0)
+        if interval > 0:
+            return interval + SCHEDULER_GRACE_SECONDS
         return max(120, self.cycle_seconds * 2)
 
     def schedulable(self):
         """
         The contingent loads, as records for an optimizer that can place them itself.
+
+        A load the fallback has already taken over stops being offered: it is in the
+        household forecast until a schedule arrives, and offering it as well would
+        have the solver place the same energy the forecast already carries. Its
+        staleness was decided on the last cycle - read here, not recomputed, so this
+        answers what the module is actually doing rather than racing the poll thread.
+        (An idle-optimizer fallback still yields no records *and* no contributions,
+        because the fallback's own demand can be nothing to place.)
 
         Nothing in a record names an appliance: a sauna and a hot-water tank produce
         the same shape from the same code, because what the energy is *for* lives in
@@ -459,6 +496,8 @@ class ManagedLoadManager:
         records = []
         for item in self.instances:
             if not item.enabled or not item.kind_is_contingent():
+                continue
+            if item.fallback_active:
                 continue
             demand = item.last_demand
             if demand is None or demand.total_wh <= 0 or demand.max_power_w <= 0:
@@ -527,6 +566,10 @@ class ManagedLoadManager:
             schedule = schedules.get(item.id)
             if schedule is None:
                 continue
+            # Whatever the fallback was doing, the optimizer has spoken: from here the
+            # solver owns the placement again. Clearing the flag *before* adopting is
+            # what keeps schedulable() offering the load again on the run that follows.
+            item.fallback_active = False
             ctx = self._last_ctx_for.get(item.id)
             if ctx is None:
                 continue
