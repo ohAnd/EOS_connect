@@ -75,6 +75,27 @@
                         tariff instead of being treated as free. See
                         <a href="daily-use.html#battery-pricing">What your stored energy actually cost</a> in
                         the User Guide for what it is worth in practice.</p>
+                    <p>The four power sensors are read as one energy balance, so they have to be
+                        measured at the same point: <strong>solar in, grid in, household out, battery
+                        in or out</strong>. What the balance cannot place is left unattributed rather
+                        than guessed at.</p>
+                    <ul>
+                        <li><strong>Load power</strong> is the <em>whole</em> household &mdash; heat pump,
+                            wallbox and managed loads included, everything behind the meter except the
+                            battery itself. Naming a partial load (say, the house without the wallbox)
+                            does not simply lose that appliance: the solar it consumed then looks like
+                            surplus, and charging that really came off the grid is booked as free, so
+                            the stored price comes out too low.</li>
+                        <li><strong>Grid power</strong> is the meter, import-positive by default. The
+                            opposite convention is detected from the data rather than assumed, so an
+                            export-positive sensor also works.</li>
+                        <li><strong>Price</strong> is what a kWh <em>drawn from the grid costs right
+                            now</em> &mdash; the import tariff, not a forecast and not your feed-in rate.
+                            Solar charging is costed separately, at the export revenue you gave up,
+                            from the feed-in price under <a href="config-price.html#price">What you pay</a>.</li>
+                    </ul>
+                    <p>On an EVCC data source none of this is yours to wire up: EVCC meters all four
+                        itself and the fields are filled in for you.</p>
                     <div data-schema-section="battery" data-schema-anchor="battery-price"></div>
                 </div>
 

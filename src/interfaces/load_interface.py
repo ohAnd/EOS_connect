@@ -6,7 +6,7 @@ load profiles based on historical energy consumption data.
 
 from datetime import datetime, timedelta, timezone, tzinfo
 import logging
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 import threading
 import time
 import math
@@ -61,7 +61,10 @@ class LoadInterface:
         extra_subtract_sensors=None,
     ):
         self.src = config.get("source", "")
-        self.url = config.get("url", "")
+        # Normalized the way Connection normalizes it: the EVCC endpoints below
+        # build their paths from this field directly rather than from a
+        # connection, and a trailing slash would double there just the same.
+        self.url = str(config.get("url", "") or "").strip().rstrip("/")
         self.load_sensor = config.get("load_sensor", "")
         self.car_charge_load_sensor = config.get("car_charge_load_sensor", "")
         self.additional_load_1_sensor = config.get("additional_load_1_sensor", "")
@@ -188,6 +191,10 @@ class LoadInterface:
         # Names that need the second connection while none is configured,
         # already reported. Once per name, not once per slot.
         self.__needs_supplementary_reported = set()
+        # Endpoint/entity/status triples whose 4xx has been reported. Same rule
+        # for the same reason: a refusal is a standing condition, and repeating
+        # it on every pass buries the log.
+        self.__refused_reported = set()
 
         self.configuration_state = "unknown"  # 'valid', 'incomplete', or 'invalid'
         self.configuration_valid = False
@@ -300,6 +307,54 @@ class LoadInterface:
                 str(error),
             )
 
+    @staticmethod
+    def __endpoint_key(url):
+        """The stable part of *url* - host and endpoint, without the variable tail.
+
+        A history path carries the requested timestamp, so the raw URL is never
+        the same twice and would defeat any "report this once" rule. Three path
+        segments is where every endpoint here stops being variable:
+        ``/api/history/period``, ``/api/services/recorder``.
+        """
+        parsed = urlparse(str(url or ""))
+        segments = [segment for segment in parsed.path.split("/") if segment]
+        return f"{parsed.netloc}/{'/'.join(segments[:3])}"
+
+    def __log_request_refused(self, url, status, error, item_label=""):
+        """Report a definitive 4xx once per endpoint, entity and status.
+
+        A 4xx is a standing condition, not a hiccup: the entity does not exist,
+        the token lacks the scope, or the path is not routed at all. The first
+        one is the finding; every later one is the same finding. Reported on
+        every pass instead, a single misconfigured base URL produced about 2000
+        ERROR lines in three hours and buried everything else in the log.
+        """
+        key = (self.__endpoint_key(url), item_label, status)
+        prefix = f"({item_label}) " if item_label else ""
+        if key in self.__refused_reported:
+            logger.debug(
+                "[LOAD-IF] %sstill refused with HTTP %s: %s", prefix, status, url
+            )
+            return
+        self.__refused_reported.add(key)
+        # A 404 on an endpoint that does exist is almost always the base URL:
+        # a trailing slash doubles into "//api/..." , which Home Assistant does
+        # not route. Worth naming, because the symptom points nowhere.
+        hint = (
+            " Check the data source URL under Settings > Data Source."
+            if status == 404
+            else ""
+        )
+        logger.error(
+            "[LOAD-IF] %srefused with HTTP %s: %s: %s - not retried, and not "
+            "reported again before the next restart.%s",
+            prefix,
+            status,
+            url,
+            str(error),
+            hint,
+        )
+
     def __request_with_retries(
         self,
         method,
@@ -361,10 +416,21 @@ class LoadInterface:
                 status = getattr(getattr(e, "response", None), "status_code", None)
                 if status is not None and 400 <= status < 500 and status != 429:
                     if status_sink is not None:
+                        # The caller asked for the status because it reports this
+                        # refusal itself, in words that fit its own endpoint.
+                        # Saying it here as well would only duplicate it.
                         status_sink.append(status)
-                    self.__log_request_failure(
-                        url, self.max_retries, self.max_retries, e, item_label
-                    )
+                        logger.debug(
+                            "[LOAD-IF] %s refused with HTTP %s: %s",
+                            url,
+                            status,
+                            str(e),
+                        )
+                        return None
+                    # Not "failed after N attempts": this branch makes exactly
+                    # one, and saying otherwise sent the one bug report this
+                    # came from looking for a flaky network.
+                    self.__log_request_refused(url, status, e, item_label)
                     return None
                 self.__log_request_failure(
                     url, attempt, self.max_retries, e, item_label

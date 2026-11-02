@@ -759,3 +759,84 @@ class TestBatteryPriceIncludeFeedin:
         assert result_off["total_cost"] == pytest.approx(
             result_on["total_cost"], rel=1e-6
         ), "Grid-only session cost must be the same regardless of the feedin toggle"
+
+
+class TestFailedAnalysisBacksOff:
+    """Issue #340: a failing analysis must not re-run on every pass.
+
+    ``last_price_calculation`` used to be stamped only when the analysis
+    produced a price. A failed one therefore left the previous stamp in place,
+    where it went stale and stayed stale: ``should_update_price`` answered yes
+    on every call from then on, and the full lookback ran on every turn of the
+    battery update loop — once every 30 seconds instead of once every 15
+    minutes, five sensors at a time. One site logged 1911 failed history
+    requests in about three hours that way.
+    """
+
+    @staticmethod
+    def _handler(battery_config, mock_load_interface):
+        """A handler whose interval has just elapsed.
+
+        The constructor stamps "now" when the feature is enabled, so a fresh
+        handler is inside its interval and would do nothing at all.
+        """
+        handler = BatteryPriceHandler(
+            config=battery_config, load_interface=mock_load_interface
+        )
+        handler.last_price_calculation -= timedelta(
+            seconds=battery_config["price_update_interval"] + 1
+        )
+        return handler
+
+    def test_a_failed_attempt_is_stamped(self, battery_config, mock_load_interface):
+        """Second call inside the interval does no work, even though the first failed."""
+        handler = self._handler(battery_config, mock_load_interface)
+        with patch.object(
+            handler, "calculate_battery_price_from_history", return_value=None
+        ) as calculate:
+            assert handler.update_price_if_needed(inventory_wh=1000) is False
+            assert handler.update_price_if_needed(inventory_wh=1000) is False
+
+        assert calculate.call_count == 1
+
+    def test_a_successful_attempt_still_backs_off(
+        self, battery_config, mock_load_interface
+    ):
+        """The interval is the interval — success never meant "run again either"."""
+        handler = self._handler(battery_config, mock_load_interface)
+        with patch.object(
+            handler, "calculate_battery_price_from_history", return_value=0.0002
+        ) as calculate:
+            assert handler.update_price_if_needed(inventory_wh=1000) is True
+            assert handler.update_price_if_needed(inventory_wh=1000) is False
+
+        assert calculate.call_count == 1
+        assert handler.price_euro_per_wh == 0.0002
+
+    def test_the_interval_still_releases_it(self, battery_config, mock_load_interface):
+        """Backing off is not giving up: the next window retries."""
+        handler = self._handler(battery_config, mock_load_interface)
+        with patch.object(
+            handler, "calculate_battery_price_from_history", return_value=None
+        ) as calculate:
+            handler.update_price_if_needed(inventory_wh=1000)
+            handler.last_price_calculation -= timedelta(
+                seconds=battery_config["price_update_interval"] + 1
+            )
+            handler.update_price_if_needed(inventory_wh=1000)
+
+        assert calculate.call_count == 2
+
+    def test_a_config_change_still_forces_a_recalculation(
+        self, battery_config, mock_load_interface
+    ):
+        """hot_reload clears the stamp to mean "now". That has to keep working."""
+        handler = self._handler(battery_config, mock_load_interface)
+        with patch.object(
+            handler, "calculate_battery_price_from_history", return_value=None
+        ) as calculate:
+            handler.update_price_if_needed(inventory_wh=1000)
+            handler.last_price_calculation = None
+            handler.update_price_if_needed(inventory_wh=1000)
+
+        assert calculate.call_count == 2

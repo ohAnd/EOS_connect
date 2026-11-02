@@ -1599,7 +1599,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for load power in W. EVCC supplies its household history",
+        description=(
+            "Sensor for total household load in W, wallbox and managed loads "
+            "included — the same balance point PV and grid are measured at. "
+            "EVCC supplies its household history"
+        ),
         labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
@@ -1611,7 +1615,10 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for electricity price. EVCC supplies its persisted tariff slots",
+        description=(
+            "Sensor for the current grid import price, not a forecast. EVCC "
+            "supplies its persisted tariff slots"
+        ),
         labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
