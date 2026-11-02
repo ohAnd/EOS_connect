@@ -14,6 +14,7 @@ from src.loads.presets import (
     apply_defaults,
     build_model,
     fallback_ambient_c,
+    is_evcc_loadpoint_series,
     preset_for,
     uses_outdoor_ambient,
 )
@@ -102,3 +103,31 @@ def test_contingent_types_get_a_release_gate(type_name):
 def test_a_profile_type_has_no_release_gate():
     """Nothing to gate: the caller has already decided when the energy is drawn."""
     assert ManagedLoad({"id": "x", "type": "external_profile"}).gate is None
+
+
+# --- EVCC loadpoint series and the base-load subtraction --------------------------------------
+
+@pytest.mark.parametrize(
+    "name", ["group:loadpoint:Carport", "group:loadpoint:Wärmepumpe", "group:loadpoint"]
+)
+def test_every_evcc_loadpoint_reference_is_recognized(name):
+    assert is_evcc_loadpoint_series(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "sensor.heat_pump_power",       # a home automation entity, as before
+        "group:home",                   # the base load itself
+        "group:consumer:Sauna",         # a tracked consumer - still inside home
+        "group:meter:Trockner",         # a metered appliance - still inside home
+        "group:grid", "group:pv", "group:battery",
+        "battery.soc",                  # a live state key, not a history series
+        "tariff:grid",
+        "group:loadpoints",             # a typo'd group must not match either
+        "group:", "",
+        None,
+    ],
+)
+def test_nothing_else_counts_as_a_loadpoint_series(name):
+    assert not is_evcc_loadpoint_series(name)

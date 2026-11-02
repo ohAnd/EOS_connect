@@ -137,6 +137,17 @@
                             <em>Additional Load</em>, which models a shiftable appliance such as a
                             dishwasher &mdash; a runtime and a total, for the optimizer to place. Do not
                             configure the same sensor as both.</p>
+                        <p><strong>One name is excluded from this:</strong> an EVCC loadpoint series
+                            (<code>group:loadpoint:&lt;title&gt;</code> or the whole
+                            <code>group:loadpoint</code> group). EVCC meters its household consumption
+                            <code>group:home</code> as the site balance <em>minus every charging
+                                point</em>, so a loadpoint's history is not inside the base load to begin
+                            with &mdash; subtracting it again would find nothing to take out and the log
+                            would fill with "household load smaller than controllables". Naming a
+                            loadpoint series is still the right thing for the sensor itself; the
+                            subtraction is simply skipped. A <code>group:consumer:&lt;title&gt;</code> or
+                            <code>group:meter:&lt;title&gt;</code> series <em>is</em> part of the home
+                            meter's balance, and keeps being subtracted as any other sensor.</p>
                     </div>
                 </div>
 

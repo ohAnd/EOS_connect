@@ -37,7 +37,13 @@ from .planner import (
     PlanOptions,
     plan_contingent,
 )
-from .presets import CONTINGENT_TYPES, EXTERNAL_TYPES, apply_defaults, build_model
+from .presets import (
+    CONTINGENT_TYPES,
+    EXTERNAL_TYPES,
+    apply_defaults,
+    build_model,
+    is_evcc_loadpoint_series,
+)
 
 logger = logging.getLogger("__main__")
 
@@ -124,8 +130,21 @@ class ManagedLoad:
         One question, two fields: a heated store names the appliance it measures, an
         externally fed load names the meter its forecast replaces. Resolving it here
         keeps the manager from having to know which type it is holding.
+
+        An EVCC loadpoint series is never returned: EVCC meters its home as the site
+        balance minus every loadpoint, so that history is not inside the base load
+        a `group:home` profile is built from, and asking for its subtraction can
+        only trip the household-smaller-than-controllables guard - the appliance
+        is counted once, by the loadpoint series, and the guard said nothing was
+        subtracted while claiming the opposite. A load whose base load is built
+        from elsewhere (a home automation meter that does carry the appliance) is
+        the case `subtract_from_base_load` exists for, so every other name still
+        returns as before - the load interface keeps deciding what the sensor
+        names, and with it which connection answers it.
         """
         if not self.subtract_from_base_load:
+            return ""
+        if is_evcc_loadpoint_series(self.power_sensor):
             return ""
         if self.type in EXTERNAL_TYPES:
             # Falling back to the old field name is not tidiness, it is the safety net

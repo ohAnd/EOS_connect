@@ -3236,7 +3236,7 @@
       "default": true,
       "section": "managed_loads",
       "level": "expert",
-      "description": "Remove this load's measured history from the household base load. Leave on unless the sensor named above overlaps another one already being subtracted - turning it off then makes the forecast count this appliance twice",
+      "description": "Remove this load's measured history from the household base load. Leave on unless the sensor named above overlaps another one already being subtracted - turning it off then makes the forecast count this appliance twice. An EVCC loadpoint series (group:loadpoint:...) is always already outside the group:home meter, so it is never subtracted regardless",
       "labels": [
         "restart_required"
       ],
