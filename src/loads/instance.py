@@ -91,6 +91,11 @@ class ManagedLoad:
 
         self.last_plan = []
         self.last_slot_capacity_wh = 0.0
+        # The permanent draw the meter showed while the appliance was idle, in watts.
+        # The standby forecast keeps the last measured figure while the appliance runs,
+        # because "what it draws when it is doing nothing" does not change with the
+        # compressor being on. None until a cycle has seen an idle reading.
+        self.last_standby_w = None
         # Per slot: could the load have paid for it? Ranks the blockers honestly.
         self.last_affordable = []
         # When a schedule last arrived from outside, and when this load first started
@@ -154,6 +159,20 @@ class ManagedLoad:
             # not subtracting it would double-count the appliance with nothing said.
             return self.replaces_sensor or self.power_sensor
         return self.power_sensor
+
+    def metered_out_of_base_load(self):
+        """
+        Whether this appliance's meter stands outside the household base load.
+
+        Two ways to arrive there, and both leave the meter's permanent draw with
+        nowhere to be counted: a subtracted meter is taken out of the household
+        history wholesale, and an EVCC loadpoint series was never inside `group:home`
+        to begin with - EVCC nets every loadpoint off the site balance it meters home
+        from. Anything the model measures below the standby threshold is added to the
+        household forecast so it is not lost; a load whose meter is part of the base
+        load (subtract off, ordinary sensor) needs none of that.
+        """
+        return bool(self.subtracted_sensor) or is_evcc_loadpoint_series(self.power_sensor)
 
     def schedule_is_stale(self, now, max_age_seconds):
         """
@@ -420,10 +439,6 @@ class ManagedLoad:
         return None
 
     def _contribution(self, plan, ctx, demand):
-        ttl_minutes = max(
-            _INTERNAL_TTL_MIN_MINUTES,
-            _INTERNAL_TTL_CYCLES * self.cycle_seconds // 60,
-        )
         source = SOURCE_INTERNAL
         if self.type in EXTERNAL_TYPES:
             source = getattr(self.model, "last_source", SOURCE_API)
@@ -432,9 +447,38 @@ class ManagedLoad:
             slots_wh=plan,
             anchor=ctx.anchor,
             time_frame_base=ctx.time_frame_base,
-            valid_until=ctx.now + timedelta(minutes=ttl_minutes),
+            valid_until=ctx.now + self.internal_ttl(),
             kind=demand.kind,
             source=source,
+        )
+
+    def internal_ttl(self):
+        """
+        How long a contribution computed internally stays valid.
+
+        Long enough to survive a skipped cycle, short enough that a wedged poll thread
+        stops inflating the forecast instead of holding a stale demand there for a day.
+        """
+        return timedelta(minutes=max(
+            _INTERNAL_TTL_MIN_MINUTES,
+            _INTERNAL_TTL_CYCLES * self.cycle_seconds // 60,
+        ))
+
+    def standby_forecast_active(self):
+        """
+        Whether this load's standby draw is riding the household forecast.
+
+        Same rule the manager publishes under - a threshold, a model that can measure
+        it, and a meter that stands outside the household base load. Reported so the
+        status page can show the term and where it is counted, without the manager
+        having to hand its registry over.
+        """
+        model = getattr(self, "model", None)
+        return bool(
+            model is not None
+            and getattr(model, "standby_threshold_w", 0) > 0
+            and hasattr(model, "standby_power_now")
+            and self.metered_out_of_base_load()
         )
 
     # -- external control -----------------------------------------------------------------
@@ -613,6 +657,14 @@ class ManagedLoad:
             "energy_needed_wh": round(demand.total_wh, 1) if demand else 0.0,
             "planned_wh": round(sum(self.last_plan), 1) if self.last_plan else 0.0,
             "plan": [round(value, 1) for value in self.last_plan],
+            # The permanent draw the meter shows while the appliance is on standby, and
+            # whether that draw is riding the household forecast beside this load's
+            # plan. Both None when no threshold is set: then it is simply household.
+            "standby_w": (
+                round(self.last_standby_w, 1)
+                if self.last_standby_w is not None and self.standby_forecast_active()
+                else None
+            ),
             "error": self.last_error,
             "model": self.model.status() if self.model else {},
         }

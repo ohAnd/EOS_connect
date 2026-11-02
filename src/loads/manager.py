@@ -18,7 +18,7 @@ import logging
 import threading
 from collections import deque
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 try:  # running from src/ — src/ is on sys.path
     from timeseries_grid import local_midnight
@@ -27,7 +27,8 @@ except ImportError:  # imported as src.loads (tests)
 
 from .ambient_bias import IMPLAUSIBLE_GAP_K, MAX_OFFSET_K, AmbientBias
 from .contribution import (
-    SOURCE_API, SOURCE_PULL, LoadContributionRegistry, ttl_from_minutes,
+    KIND_PROFILE, SOURCE_API, SOURCE_INTERNAL, SOURCE_PULL,
+    LoadContribution, LoadContributionRegistry, ttl_from_minutes,
 )
 from .injection import InjectionError, parse_push, profile_from_entries
 from .instance import ManagedLoad
@@ -96,6 +97,17 @@ MEDIUM_HISTORY_MAX = 2000
 # mind and this module falling back on its own plan look identical from the appliance.
 ORIGIN_OPTIMIZER = "optimizer"
 ORIGIN_SELF = "self"
+
+# Registry suffix of a load's standby contribution. Its appliance's planned energy is
+# keyed by the plain id; the permanent draw of its own systems is a *household* term,
+# kept out of the key the planner and the solver know so nothing downstream mistakes
+# it for placeable demand. `ManagedLoadManager.STANDBY_SUFFIX` in the lookup paths.
+STANDBY_SUFFIX = "::standby"
+
+
+def standby_contribution_id(load_id):
+    """The registry key a load's standby contribution is published under."""
+    return f"{load_id}{STANDBY_SUFFIX}"
 
 # A regional forecast and a garden thermometer disagree, and each is right about
 # something the other cannot know: the forecast has the shape - that tonight drops to
@@ -386,6 +398,7 @@ class ManagedLoadManager:
                 # not when its contribution happens to expire. Until this dropped, the
                 # optimizer kept planning around an appliance the user had disabled.
                 self.registry.drop(item.id)
+                self.registry.drop(standby_contribution_id(item.id))
                 continue
             ctx = self._context_for(item, ctx_base)
             self._last_ctx_for[item.id] = ctx
@@ -417,6 +430,7 @@ class ManagedLoadManager:
                 if item.kind_is_contingent():
                     self._record_decision(item, ctx, release, origin=ORIGIN_SELF)
             self._consume_budget(budget, item.last_plan)
+            self._publish_standby(item, ctx)
 
         self.stats.cycles += 1
         self.stats.last_cycle = ctx_base.now.isoformat()
@@ -522,6 +536,10 @@ class ManagedLoadManager:
                 self._publish_release(item, release)
                 self._record_decision(item, ctx, release, origin=ORIGIN_OPTIMIZER)
                 adopted += 1
+                # The schedule displaced whatever the fallback planner had placed - the
+                # standby term has to follow, or a slot newly scheduled keeps carrying a
+                # standby Wh for it until the next poll.
+                self._publish_standby(item, ctx)
         return adopted
 
     def _at_now(self, ctx, now):
@@ -568,6 +586,7 @@ class ManagedLoadManager:
             return False
         if not item.enabled:
             self.registry.drop(item.id)
+            self.registry.drop(standby_contribution_id(item.id))
             return False
 
         ctx_base = self._context()
@@ -580,6 +599,7 @@ class ManagedLoadManager:
         ctx = self._context_for(item, ctx_base)
         contribution, release = item.evaluate(ctx, budget_wh=budget)
         self._store_result(item, contribution, release)
+        self._publish_standby(item, ctx)
         return True
 
     def _store_result(self, item, contribution, release):
@@ -589,6 +609,63 @@ class ManagedLoadManager:
         else:
             self.registry.drop(item.id)
         self._publish_release(item, release)
+
+    def _publish_standby(self, item, ctx):
+        """
+        Carry the appliance's permanent draw in the household forecast.
+
+        A meter that stands out of the base load (subtracted, or an EVCC loadpoint
+        series EVCC nets off `group:home`) takes its standby draw out with it: the
+        circulation pumps and controls that run whatever the compressor does. The
+        appliance's *planned* energy is added back by the plan or the solver; this
+        adds the rest back as a profile contribution, so the household forecast
+        carries a draw the house genuinely makes around the clock.
+
+        Per slot it only fills where nothing is scheduled: a slot the appliance is
+        running in already carries its whole draw through the plan or the solver's
+        schedule, standby systems included, and stacking the standby there would
+        count those watts twice. While it runs, the last idle reading is kept rather
+        than read as zero - the draw does not vanish because the compressor started.
+
+        Nothing is published without a threshold: the feature is off, the meter is
+        part of the base load, and the draw is already counted there. The contribution
+        is dropped *before* it is built rather than replaced in one step only when the
+        new one exists - set() is atomic under the registry lock, and a reader on the
+        optimizer path must never see the household minus its standby because a cycle
+        happened to fall between the two writes.
+        """
+        if not item.enabled or not item.metered_out_of_base_load():
+            self.registry.drop(standby_contribution_id(item.id))
+            return
+        model = item.model
+        if model is None or not hasattr(model, "standby_power_now"):
+            self.registry.drop(standby_contribution_id(item.id))
+            return
+        measured = model.standby_power_now(ctx.readings or {})
+        if measured is not None:
+            item.last_standby_w = measured
+        if not item.last_standby_w or item.last_standby_w <= 0:
+            self.registry.drop(standby_contribution_id(item.id))
+            return
+
+        wh_per_slot = item.last_standby_w * ctx.hours_per_slot()
+        slots = [
+            0.0 if index < len(item.last_plan) and item.last_plan[index] > 0
+            else wh_per_slot
+            for index in range(ctx.slot_count)
+        ]
+        self.registry.set(
+            LoadContribution(
+                id=standby_contribution_id(item.id),
+                slots_wh=slots,
+                anchor=ctx.anchor,
+                time_frame_base=ctx.time_frame_base,
+                valid_until=ctx.now + item.internal_ttl(),
+                kind=KIND_PROFILE,
+                source=getattr(item.model, "last_source", SOURCE_INTERNAL)
+                if item.type in EXTERNAL_TYPES else SOURCE_INTERNAL,
+            )
+        )
 
     def _record_decision(self, item, ctx, release, origin):
         """

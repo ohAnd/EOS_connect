@@ -3476,6 +3476,30 @@
       "display_group": "Physical"
     },
     {
+      "key": "managed_loads.standby_threshold_w",
+      "type": "float",
+      "default": 0,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Watts this appliance's own systems draw permanently even when it is not running - circulation pumps, controls, standby electronics. Measured power at or below this counts as that permanent draw: it stays in the household load forecast and stays out of the appliance's calibration and planning; anything above it is the appliance actually running. Leave 0 when the sensor output falls to nearly nothing when off",
+      "labels": [],
+      "help_url": "config-managed-loads.html#managed-loads-standby",
+      "validation": {
+        "min": 0,
+        "max": 2000
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Physical"
+    },
+    {
       "key": "managed_loads.cop_nominal",
       "type": "float",
       "default": 5.0,
