@@ -1397,17 +1397,19 @@ def test_max_age_follows_the_optimizer_cadence_when_known(make_manager, installa
     manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
     manager.external_scheduler = True
     _run(manager, installation, water_c=20.0)
+    # A run finishing at :35 waits for the :45 boundary - the aligned scheduler can
+    # hold a solver quiet for nearly twice its interval, so the age makes the same
+    # trip: twice the interval, plus grace. A schedule 597 s old - the longest wait a
+    # 300 s interval actually produces - must read fresh.
     manager.adopt_schedules({"pool": [0.0] * 48})
-
-    load = manager.instance("pool")
-    # A schedule 330 s old: past the old cycle-based age (120 s) — which is what had
-    # the fallback firing every cycle against a healthy five-minute optimizer — but
-    # inside the cadence-aware age of cadence + grace (420 s).
     age = manager._schedule_max_age()
-    assert age == 300 + 120
-    assert not load.schedule_is_stale(manager._clock()[1] - timedelta(seconds=330), age)
+    assert age == 300 * 2 + 120
+    load = manager.instance("pool")
+    assert not load.schedule_is_stale(
+        manager._clock()[1] - timedelta(seconds=597), age
+    )
     # And it does go stale once genuinely dead: the last schedule shifted past
-    # cadence + grace.
+    # the doubled cadence plus grace.
     load.last_schedule_at = load.last_schedule_at - timedelta(seconds=age + 1)
     assert load.schedule_is_stale(manager._clock()[1], age)
 

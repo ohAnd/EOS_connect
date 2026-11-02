@@ -44,8 +44,10 @@ logger = logging.getLogger("__main__")
 DEFAULT_HORIZON_HOURS = 48
 
 # Extra seconds a solver's answer is trusted past its cadence before the fallback takes
-# over. Sits on top of the cadence so a couple of late quarter-aligned runs do not flap
-# between planners, but small enough that a dead solver keeps no load latched for long.
+# over. Sits on top of the quiet stretch, which the quarter-aligned scheduler can
+# stretch to nearly twice the configured interval (see
+# OptimizationInterface.calculate_next_run_time), so a couple of late runs do not flap
+# between planners - but small enough that a dead solver keeps no load latched for long.
 SCHEDULER_GRACE_SECONDS = 120
 
 
@@ -464,17 +466,17 @@ class ManagedLoadManager:
         every five minutes was "overdue" forever, so every cycle built a fallback plan
         on top of the schedule it kept being offered.
 
-        So the age is the interval a schedule is actually expected to arrive in, plus
-        a small grace for a late run. Two sources, in order of knowledge: the
-        cadence this app runs the solver at, when it is known; else the load's own
-        cycle - right for a small fast app, too eager beside a slow one, which is
-        what the interval exists to prevent. An interval of zero or less is "unknown":
-        the old cycle-based age stands, which leaves a fast external solver as it was
-        and never makes anything worse.
+        So the age is the longest quiet stretch this optimizer's scheduling produces,
+        plus a small grace. Two sources, in order of knowledge: the interval this app
+        runs the solver at, when known - its quarter-hour alignment can hold runs
+        back for nearly twice that, so the figure doubles - else the load's own
+        cycle, right for a small fast app and too eager beside a slow one. An
+        interval of zero or less is "unknown": the old cycle-based age stands, which
+        leaves a fast external solver as it was and never makes anything worse.
         """
         interval = int(self.scheduler_interval or 0)
         if interval > 0:
-            return interval + SCHEDULER_GRACE_SECONDS
+            return interval * 2 + SCHEDULER_GRACE_SECONDS
         return max(120, self.cycle_seconds * 2)
 
     def schedulable(self):
@@ -568,7 +570,10 @@ class ManagedLoadManager:
                 continue
             # Whatever the fallback was doing, the optimizer has spoken: from here the
             # solver owns the placement again. Clearing the flag *before* adopting is
-            # what keeps schedulable() offering the load again on the run that follows.
+            # what keeps schedulable() offering the load again on the run that follows
+            # - and it is what keeps the handover one-way in name only: a load that
+            # fell back is withheld from the solver, so its silence must never become
+            # permanent. An answer - even an empty one - flips it back.
             item.fallback_active = False
             ctx = self._last_ctx_for.get(item.id)
             if ctx is None:
