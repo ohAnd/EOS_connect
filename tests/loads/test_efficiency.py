@@ -221,6 +221,19 @@ def test_a_pushed_efficiency_is_used_when_asked_for():
     assert instance.last_demand.efficiency[20] == 1.0
 
 
+def test_the_house_preset_plans_by_its_cop():
+    temps = _autumn_day()
+    ctx = _ctx(temps)
+    ctx.readings = {"temp_sensor": "20.8"}
+    instance = ManagedLoad({"id": "house", "type": "space_heating"})
+    demand = instance.model.demand(ctx)
+    assert demand.detail["efficiency_source"] == "cop"
+    assert max(demand.efficiency) == 1.0
+    assert demand.efficiency[3] < demand.efficiency[15]
+    # The demand is the heat at the best hour's COP.
+    assert demand.detail["reference_cop"] > demand.detail["mean_cop"]
+
+
 def _parse(payload, time_frame_base=3600, slot_count=SLOTS):
     return parse_push(payload, ANCHOR, slot_count, time_frame_base, 0, now=ANCHOR)
 

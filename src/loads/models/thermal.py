@@ -105,21 +105,27 @@ class ThermalStorageModel(BaseDemandModel):
 
     kind = KIND_CONTINGENT
     sensor_keys = ("temp_sensor", "target_temp_sensor", "power_sensor",
-                   "ambient_temp_sensor", "cover_sensor")
+                   "ambient_temp_sensor", "cover_sensor", "heat_sensor")
 
-    def __init__(self, entry_id, config):
+    def __init__(self, entry_id, config, calibration=None):
         super().__init__(entry_id, config)
         self._apply_config(self.config)
+        # What the calibrator may learn for this kind of store - see the preset. Kept so
+        # a reset starts again under the same rules rather than the pool's.
+        self.calibration_options = dict(calibration or {})
+        self.calibrator = self._new_calibrator()
+        self.cover_habit = CoverHabit()
 
-        self.calibrator = ThermalCalibrator(
+    def _new_calibrator(self):
+        return ThermalCalibrator(
             volume_m3=self.volume_m3,
             surface_m2=self.surface_m2,
             loss_coefficient=self.config.get("heat_loss_w_per_m2_k", 25.0),
             cop_nominal=self.config.get("cop_nominal", 4.5),
             air_coefficient=self.config.get("cop_air_coeff", 0.0),
             cover_loss_factor=self.cover_loss_factor,
+            **self.calibration_options,
         )
-        self.cover_habit = CoverHabit()
 
     def _apply_config(self, config):
         """
@@ -152,14 +158,7 @@ class ThermalStorageModel(BaseDemandModel):
 
     def reset_calibration(self):
         """Discard what has been learned and start again from the configured values."""
-        self.calibrator = ThermalCalibrator(
-            volume_m3=self.volume_m3,
-            surface_m2=self.surface_m2,
-            loss_coefficient=self.config.get("heat_loss_w_per_m2_k", 25.0),
-            cop_nominal=self.config.get("cop_nominal", 4.5),
-            air_coefficient=self.config.get("cop_air_coeff", 0.0),
-            cover_loss_factor=self.cover_loss_factor,
-        )
+        self.calibrator = self._new_calibrator()
         self.cover_habit.reset()
 
     # -- configuration helpers ----------------------------------------------------------

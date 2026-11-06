@@ -112,6 +112,7 @@ MANAGED_LOAD_TYPES = [
     "sauna",
     "hot_water_tank",
     "buffer_tank",
+    "space_heating",
     "external_contingent",
     "external_profile",
 ]
@@ -122,6 +123,21 @@ MANAGED_LOAD_THERMAL_TYPES = [
     "sauna",
     "hot_water_tank",
     "buffer_tank",
+    "space_heating",
+]
+
+# Types whose physical starting values are derived from a description of the building
+# (living area, construction, insulation) rather than entered directly.
+MANAGED_LOAD_BUILDING_TYPES = ["space_heating"]
+MANAGED_LOAD_CONSTRUCTIONS = ["massive", "light"]
+MANAGED_LOAD_EMITTERS = ["floor", "radiators"]
+MANAGED_LOAD_BUILDING_FORMS = ["detached", "semi_detached", "terraced", "apartment"]
+MANAGED_LOAD_INSULATION = [
+    "before_1979",
+    "1979_1994",
+    "1995_2015",
+    "renovated",
+    "new_build",
 ]
 
 # Types the planner and the release gate apply to - everything except a pushed profile,
@@ -2468,12 +2484,14 @@ _ALL_FIELDS: list[FieldDef] = [
         level="getting_started",
         description=(
             "What kind of load this is - it decides which settings apply. "
-            "Pool heat pump, sauna, hot water tank and buffer tank are heated stores "
-            "that EOS Connect schedules and releases itself. "
+            "Pool heat pump, sauna, hot water tank, buffer tank and space heating are "
+            "heated stores that EOS Connect schedules and releases itself - for space "
+            "heating the store is the house. "
             "External energy budget takes a "
             '"needs X Wh by then" push and schedules it. '
             "External load profile takes a ready-made profile and injects it as given, "
-            "with no release signal - use it for space heating or air conditioning"
+            "with no release signal - use it for air conditioning or anything planned "
+            "elsewhere"
         ),
         labels=["restart_required"],
         help_url="config-managed-loads.html#managed-load-profiles",
@@ -2523,6 +2541,24 @@ _ALL_FIELDS: list[FieldDef] = [
             ),
             "link": "data_source",
         },
+    ),
+    FieldDef(
+        key="managed_loads.heat_sensor",
+        field_type="sensor",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Optional heat meter: entity/item counting the heat the heat pump has "
+            "delivered, in kWh (a running total, as most heat pumps report it). With it "
+            "the efficiency (COP) is measured - heat out over electricity in - instead "
+            "of assumed. Leave empty if you have none; the efficiency then stays at "
+            "its starting value"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-cop",
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Identity",
     ),
     FieldDef(
         key="managed_loads.replaces_sensor",
@@ -2576,6 +2612,92 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="config-managed-loads.html#managed-loads-operation",
         validation={"min": 1, "max": 999},
         display_group="Identity",
+    ),
+    # --- building (space heating) ---
+    FieldDef(
+        key="managed_loads.living_area_m2",
+        field_type="float",
+        default=150.0,
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "Heated living area in square metres. Together with the settings below it "
+            "gives the house's starting values - how much heat it stores and how fast "
+            "it loses it - which are then measured and corrected automatically"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-building",
+        validation={"min": 10, "max": 2000},
+        depends_on={"type": MANAGED_LOAD_BUILDING_TYPES},
+        display_group="Building",
+    ),
+    FieldDef(
+        key="managed_loads.insulation",
+        field_type="select",
+        default="renovated",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "How well the house is insulated: by the year it was built, or "
+            "'renovated' for an older house with insulated walls, roof and new "
+            "windows. Only the starting value of the losses depends on it"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-building",
+        validation={"choices": MANAGED_LOAD_INSULATION},
+        depends_on={"type": MANAGED_LOAD_BUILDING_TYPES},
+        display_group="Building",
+    ),
+    FieldDef(
+        key="managed_loads.emitter",
+        field_type="select",
+        default="floor",
+        section="managed_loads",
+        level="getting_started",
+        description=(
+            "How the heat reaches the rooms: floor heating (low flow temperature, "
+            "efficient, slow) or radiators (higher flow temperature). Sets the starting "
+            "efficiency, and floor heating adds the screed to the stored heat"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-building",
+        validation={"choices": MANAGED_LOAD_EMITTERS},
+        depends_on={"type": MANAGED_LOAD_BUILDING_TYPES},
+        display_group="Building",
+    ),
+    FieldDef(
+        key="managed_loads.construction",
+        field_type="select",
+        default="massive",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Masonry or concrete ('massive') stores about twice the heat of a timber "
+            "frame ('light'). When in doubt choose massive: guessing the house heavier "
+            "than it is costs far less than guessing it lighter"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-building",
+        validation={"choices": MANAGED_LOAD_CONSTRUCTIONS},
+        depends_on={"type": MANAGED_LOAD_BUILDING_TYPES},
+        display_group="Building",
+    ),
+    FieldDef(
+        key="managed_loads.building_form",
+        field_type="select",
+        default="detached",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "How much of the house faces outside: a detached house on all sides, a "
+            "terraced house on two, a flat often on one. Sets the starting value of "
+            "the surface that loses heat"
+        ),
+        labels=["restart_required"],
+        help_url="config-managed-loads.html#managed-loads-building",
+        validation={"choices": MANAGED_LOAD_BUILDING_FORMS},
+        depends_on={"type": MANAGED_LOAD_BUILDING_TYPES},
+        display_group="Building",
     ),
     # --- thermal ---
     FieldDef(
@@ -2658,7 +2780,9 @@ _ALL_FIELDS: list[FieldDef] = [
         level="standard",
         description=(
             "Stored volume in cubic metres. For a sauna this is a water-equivalent "
-            "that reproduces its heat-up time - the calibration corrects it over time"
+            "that reproduces its heat-up time - the calibration corrects it over time. "
+            "For space heating it is the house's water-equivalent, derived from the "
+            "living area - leave it empty unless you know better"
         ),
         labels=["restart_required"],
         help_url="config-managed-loads.html#managed-load-profiles",
@@ -2672,7 +2796,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default=32.0,
         section="managed_loads",
         level="standard",
-        description="Surface losing heat, in square metres",
+        description=(
+            "Surface losing heat, in square metres. For space heating it is derived "
+            "from the living area and building form - leave it empty unless you know "
+            "the envelope area, e.g. from an energy certificate"
+        ),
         labels=["restart_required"],
         help_url="config-managed-loads.html#managed-load-profiles",
         validation={"min": 0.1, "max": 1000},

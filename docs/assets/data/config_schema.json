@@ -3140,7 +3140,7 @@
       "default": "pool_heatpump",
       "section": "managed_loads",
       "level": "getting_started",
-      "description": "What kind of load this is - it decides which settings apply. Pool heat pump, sauna, hot water tank and buffer tank are heated stores that EOS Connect schedules and releases itself. External energy budget takes a \"needs X Wh by then\" push and schedules it. External load profile takes a ready-made profile and injects it as given, with no release signal - use it for space heating or air conditioning",
+      "description": "What kind of load this is - it decides which settings apply. Pool heat pump, sauna, hot water tank, buffer tank and space heating are heated stores that EOS Connect schedules and releases itself - for space heating the store is the house. External energy budget takes a \"needs X Wh by then\" push and schedules it. External load profile takes a ready-made profile and injects it as given, with no release signal - use it for air conditioning or anything planned elsewhere",
       "labels": [
         "restart_required"
       ],
@@ -3151,6 +3151,7 @@
           "sauna",
           "hot_water_tank",
           "buffer_tank",
+          "space_heating",
           "external_contingent",
           "external_profile"
         ]
@@ -3190,7 +3191,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": false,
@@ -3208,6 +3210,30 @@
         "text": "EVCC only meters what it meters. To name a Home Assistant or openHAB entity here instead of an EVCC series (group:consumer:<title>), set up a supplementary data source.",
         "link": "data_source"
       }
+    },
+    {
+      "key": "managed_loads.heat_sensor",
+      "type": "sensor",
+      "default": "",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Optional heat meter: entity/item counting the heat the heat pump has delivered, in kWh (a running total, as most heat pumps report it). With it the efficiency (COP) is measured - heat out over electricity in - instead of assumed. Leave empty if you have none; the efficiency then stays at its starting value",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "config-managed-loads.html#managed-loads-cop",
+      "validation": {},
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "space_heating"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Identity"
     },
     {
       "key": "managed_loads.replaces_sensor",
@@ -3264,6 +3290,134 @@
       "display_group": "Identity"
     },
     {
+      "key": "managed_loads.living_area_m2",
+      "type": "float",
+      "default": 150.0,
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "Heated living area in square metres. Together with the settings below it gives the house's starting values - how much heat it stores and how fast it loses it - which are then measured and corrected automatically",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "config-managed-loads.html#managed-loads-building",
+      "validation": {
+        "min": 10,
+        "max": 2000
+      },
+      "depends_on": {
+        "type": [
+          "space_heating"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Building"
+    },
+    {
+      "key": "managed_loads.insulation",
+      "type": "select",
+      "default": "renovated",
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "How well the house is insulated: by the year it was built, or 'renovated' for an older house with insulated walls, roof and new windows. Only the starting value of the losses depends on it",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "config-managed-loads.html#managed-loads-building",
+      "validation": {
+        "choices": [
+          "before_1979",
+          "1979_1994",
+          "1995_2015",
+          "renovated",
+          "new_build"
+        ]
+      },
+      "depends_on": {
+        "type": [
+          "space_heating"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Building"
+    },
+    {
+      "key": "managed_loads.emitter",
+      "type": "select",
+      "default": "floor",
+      "section": "managed_loads",
+      "level": "getting_started",
+      "description": "How the heat reaches the rooms: floor heating (low flow temperature, efficient, slow) or radiators (higher flow temperature). Sets the starting efficiency, and floor heating adds the screed to the stored heat",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "config-managed-loads.html#managed-loads-building",
+      "validation": {
+        "choices": [
+          "floor",
+          "radiators"
+        ]
+      },
+      "depends_on": {
+        "type": [
+          "space_heating"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Building"
+    },
+    {
+      "key": "managed_loads.construction",
+      "type": "select",
+      "default": "massive",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Masonry or concrete ('massive') stores about twice the heat of a timber frame ('light'). When in doubt choose massive: guessing the house heavier than it is costs far less than guessing it lighter",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "config-managed-loads.html#managed-loads-building",
+      "validation": {
+        "choices": [
+          "massive",
+          "light"
+        ]
+      },
+      "depends_on": {
+        "type": [
+          "space_heating"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Building"
+    },
+    {
+      "key": "managed_loads.building_form",
+      "type": "select",
+      "default": "detached",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "How much of the house faces outside: a detached house on all sides, a terraced house on two, a flat often on one. Sets the starting value of the surface that loses heat",
+      "labels": [
+        "restart_required"
+      ],
+      "help_url": "config-managed-loads.html#managed-loads-building",
+      "validation": {
+        "choices": [
+          "detached",
+          "semi_detached",
+          "terraced",
+          "apartment"
+        ]
+      },
+      "depends_on": {
+        "type": [
+          "space_heating"
+        ]
+      },
+      "hot_reload": false,
+      "display_group": "Building"
+    },
+    {
       "key": "managed_loads.temp_sensor",
       "type": "sensor",
       "default": "",
@@ -3280,7 +3434,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": false,
@@ -3304,7 +3459,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": true,
@@ -3327,7 +3483,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": false,
@@ -3351,7 +3508,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": true,
@@ -3374,7 +3532,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": false,
@@ -3386,7 +3545,7 @@
       "default": 30.0,
       "section": "managed_loads",
       "level": "standard",
-      "description": "Stored volume in cubic metres. For a sauna this is a water-equivalent that reproduces its heat-up time - the calibration corrects it over time",
+      "description": "Stored volume in cubic metres. For a sauna this is a water-equivalent that reproduces its heat-up time - the calibration corrects it over time. For space heating it is the house's water-equivalent, derived from the living area - leave it empty unless you know better",
       "labels": [
         "restart_required"
       ],
@@ -3400,7 +3559,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": false,
@@ -3412,7 +3572,7 @@
       "default": 32.0,
       "section": "managed_loads",
       "level": "standard",
-      "description": "Surface losing heat, in square metres",
+      "description": "Surface losing heat, in square metres. For space heating it is derived from the living area and building form - leave it empty unless you know the envelope area, e.g. from an energy certificate",
       "labels": [
         "restart_required"
       ],
@@ -3426,7 +3586,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": false,
@@ -3452,7 +3613,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": false,
@@ -3495,7 +3657,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": false,
@@ -3521,7 +3684,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": false,
@@ -3590,6 +3754,7 @@
           "sauna",
           "hot_water_tank",
           "buffer_tank",
+          "space_heating",
           "external_contingent"
         ]
       },
@@ -3614,6 +3779,7 @@
           "sauna",
           "hot_water_tank",
           "buffer_tank",
+          "space_heating",
           "external_contingent"
         ]
       },
@@ -3643,6 +3809,7 @@
           "sauna",
           "hot_water_tank",
           "buffer_tank",
+          "space_heating",
           "external_contingent"
         ]
       },
@@ -3668,6 +3835,7 @@
           "sauna",
           "hot_water_tank",
           "buffer_tank",
+          "space_heating",
           "external_contingent"
         ]
       },
@@ -3695,6 +3863,7 @@
           "sauna",
           "hot_water_tank",
           "buffer_tank",
+          "space_heating",
           "external_contingent"
         ]
       },
@@ -3720,6 +3889,7 @@
           "sauna",
           "hot_water_tank",
           "buffer_tank",
+          "space_heating",
           "external_contingent"
         ]
       },
@@ -3745,6 +3915,7 @@
           "sauna",
           "hot_water_tank",
           "buffer_tank",
+          "space_heating",
           "external_contingent"
         ]
       },
@@ -3770,6 +3941,7 @@
           "sauna",
           "hot_water_tank",
           "buffer_tank",
+          "space_heating",
           "external_contingent"
         ]
       },
@@ -3795,6 +3967,7 @@
           "sauna",
           "hot_water_tank",
           "buffer_tank",
+          "space_heating",
           "external_contingent"
         ]
       },
@@ -3820,6 +3993,7 @@
           "sauna",
           "hot_water_tank",
           "buffer_tank",
+          "space_heating",
           "external_contingent"
         ]
       },
@@ -3845,6 +4019,7 @@
           "sauna",
           "hot_water_tank",
           "buffer_tank",
+          "space_heating",
           "external_contingent"
         ]
       },
@@ -3869,7 +4044,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": true,
@@ -3893,7 +4069,8 @@
           "pool_heatpump",
           "sauna",
           "hot_water_tank",
-          "buffer_tank"
+          "buffer_tank",
+          "space_heating"
         ]
       },
       "hot_reload": true,
@@ -4205,7 +4382,8 @@
         "min_runtime_minutes": 30,
         "max_runtime_hours_per_day": 12,
         "strategy": "combined"
-      }
+      },
+      "derived_keys": []
     },
     "sauna": {
       "label": "Sauna",
@@ -4231,7 +4409,8 @@
         "max_runtime_hours_per_day": 0,
         "deadline_hours": 6,
         "strategy": "cheapest_slots"
-      }
+      },
+      "derived_keys": []
     },
     "hot_water_tank": {
       "label": "Hot water tank",
@@ -4256,7 +4435,8 @@
         "min_runtime_minutes": 20,
         "max_runtime_hours_per_day": 0,
         "strategy": "combined"
-      }
+      },
+      "derived_keys": []
     },
     "buffer_tank": {
       "label": "Buffer tank",
@@ -4281,7 +4461,46 @@
         "min_runtime_minutes": 20,
         "max_runtime_hours_per_day": 0,
         "strategy": "combined"
-      }
+      },
+      "derived_keys": []
+    },
+    "space_heating": {
+      "label": "Space heating (heat pump)",
+      "ambient": "outdoor",
+      "default_ambient_c": 7.0,
+      "defaults": {
+        "living_area_m2": 150.0,
+        "construction": "massive",
+        "emitter": "floor",
+        "building_form": "detached",
+        "insulation": "renovated",
+        "volume_m3": 16.12,
+        "surface_m2": 360.0,
+        "heat_loss_w_per_m2_k": 0.28,
+        "cop_nominal": 5.6,
+        "cop_air_coeff": 0.0155,
+        "rated_power_w": 1500.0,
+        "target_temp": 21.5,
+        "deadband_k": 0.5,
+        "cover_loss_factor": 1.0,
+        "min_ambient_temp_c": null,
+        "frost_protection_temp_c": 19.0,
+        "window_start": null,
+        "window_end": null,
+        "season_start": null,
+        "season_end": null,
+        "min_runtime_minutes": 60,
+        "max_runtime_hours_per_day": 0,
+        "strategy": "combined",
+        "efficiency_source": "cop"
+      },
+      "derived_keys": [
+        "volume_m3",
+        "surface_m2",
+        "heat_loss_w_per_m2_k",
+        "cop_nominal",
+        "cop_air_coeff"
+      ]
     },
     "external_contingent": {
       "label": "External energy budget",
@@ -4293,7 +4512,8 @@
         "max_runtime_hours_per_day": 0,
         "strategy": "combined",
         "ttl_minutes": 1440
-      }
+      },
+      "derived_keys": []
     },
     "external_profile": {
       "label": "External load profile",
@@ -4309,7 +4529,8 @@
         "data_token": "",
         "value_unit": "W",
         "rated_power_w": 0.0
-      }
+      },
+      "derived_keys": []
     }
   },
   "managed_load_groups": {
@@ -4317,13 +4538,15 @@
       "pool_heatpump",
       "sauna",
       "hot_water_tank",
-      "buffer_tank"
+      "buffer_tank",
+      "space_heating"
     ],
     "contingent": [
       "pool_heatpump",
       "sauna",
       "hot_water_tank",
       "buffer_tank",
+      "space_heating",
       "external_contingent"
     ],
     "external": [
