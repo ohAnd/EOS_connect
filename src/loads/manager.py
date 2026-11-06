@@ -394,19 +394,38 @@ class ManagedLoadManager:
                 self._hint_pv_counter(item)
             self._record_sample(item, ctx)
             defer = self.external_scheduler and item.kind_is_contingent()
-            if defer:
-                if item.waiting_for_schedule_since is None:
-                    item.waiting_for_schedule_since = ctx_base.now
-                if item.schedule_is_stale(ctx_base.now, self._schedule_max_age()):
-                    defer = False
-                    logger.warning(
-                        "[LOADS] '%s' has had no schedule from the optimizer for over "
-                        "%d s - deciding from its own plan until one arrives",
-                        item.id, self._schedule_max_age(),
-                    )
             contribution, release = item.evaluate(
                 ctx, budget_wh=budget, defer_gate=defer
             )
+            if defer:
+                # Judged on the demand just computed, not last cycle's: only a load that
+                # is being offered to the optimizer can be waiting on it. One with no
+                # demand is filtered out of `schedulable()`, so silence is the correct
+                # answer - this used to warn every cycle for a dishwasher that simply
+                # was not loaded.
+                if not item.offers_demand():
+                    # It settled its own gate in `evaluate`. The clock starts again when
+                    # demand comes back: keeping the old schedule time as well declared
+                    # a load scheduled yesterday stale on its first cycle this morning.
+                    item.waiting_for_schedule_since = None
+                    item.last_schedule_at = None
+                    defer = False
+                else:
+                    if item.waiting_for_schedule_since is None:
+                        item.waiting_for_schedule_since = ctx_base.now
+                    if item.schedule_is_stale(ctx_base.now, self._schedule_max_age()):
+                        logger.warning(
+                            "[LOADS] '%s' has had no schedule from the optimizer for "
+                            "over %d s - deciding from its own plan until one arrives",
+                            item.id, self._schedule_max_age(),
+                        )
+                        defer = False
+                        # Rare path, and the models' demand() is a pure function of the
+                        # context, so planning again is cheaper than predicting the
+                        # demand before the first pass.
+                        contribution, release = item.evaluate(
+                            ctx, budget_wh=budget, defer_gate=False
+                        )
             if defer:
                 # Its energy reaches the optimizer as something to place, not as part
                 # of the household profile. Registering it here as well would have the
@@ -446,9 +465,9 @@ class ManagedLoadManager:
         for item in self.instances:
             if not item.enabled or not item.kind_is_contingent():
                 continue
-            demand = item.last_demand
-            if demand is None or demand.total_wh <= 0 or demand.max_power_w <= 0:
+            if not item.offers_demand():
                 continue
+            demand = item.last_demand
             ctx = self._last_ctx_for.get(item.id)
             slots = ctx.slot_count if ctx else len(demand.feasible or [])
             # Read from *now*, not from whenever the cycle last ran: how far into a run
