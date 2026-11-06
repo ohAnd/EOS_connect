@@ -144,6 +144,10 @@ MANAGED_LOAD_COVER_TYPES = ["pool_heatpump"]
 # Placement strategies offered to the user.
 MANAGED_LOAD_STRATEGIES = ["combined", "cheapest_slots", "pv_surplus"]
 
+# Where a load's per-slot efficiency comes from. Mirrors ``loads.efficiency.SOURCES``.
+MANAGED_LOAD_EFFICIENCY_SOURCES = ["off", "cop", "ambient", "pushed"]
+MANAGED_LOAD_EFFICIENCY_REFERENCES = ["warmest", "coolest"]
+
 
 @dataclass
 class FieldDef:
@@ -2809,6 +2813,59 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="config-managed-loads.html#managed-loads-operation",
         validation={"choices": MANAGED_LOAD_STRATEGIES},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.efficiency_source",
+        field_type="select",
+        default="off",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Whether some hours do more with the same energy - a heat pump needs less "
+            "electricity when it is warmer outside. Off treats every hour alike. Cop "
+            "uses the load's own efficiency at each hour's air temperature (heated "
+            "stores). Ambient derives it from the outdoor forecast alone, for a load "
+            "with no model of its own. Pushed takes the 'efficiency' array sent with an "
+            "external energy budget"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-efficiency",
+        validation={"choices": MANAGED_LOAD_EFFICIENCY_SOURCES},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.efficiency_per_k",
+        field_type="float",
+        default=0.02,
+        section="managed_loads",
+        level="expert",
+        description=(
+            "For the ambient source: the share of efficiency lost per kelvin away from "
+            "the best hour. 0.02 is about what an air-source heat pump loses per kelvin "
+            "colder"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-efficiency",
+        validation={"min": 0, "max": 0.2},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.efficiency_reference",
+        field_type="select",
+        default="warmest",
+        section="managed_loads",
+        level="expert",
+        description=(
+            "For the ambient source: which hour is best. Warmest for heating, coolest "
+            "for cooling"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-efficiency",
+        validation={"choices": MANAGED_LOAD_EFFICIENCY_REFERENCES},
         depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
         display_group="Operation",
     ),

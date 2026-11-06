@@ -24,6 +24,7 @@ is off, or a pump that hunts around its setpoint.
 import logging
 from datetime import timedelta
 
+from .. import efficiency as slot_efficiency
 from .base import KIND_CONTINGENT, BaseDemandModel, EnergyDemand
 from .calibration import IDLE_POWER_W, ThermalCalibrator
 from .cover_habit import OBSERVED_HOURS, CoverHabit
@@ -327,6 +328,24 @@ class ThermalStorageModel(BaseDemandModel):
         thermal_wh = max(0.0, heat_up_wh + losses_wh)
         total_wh = thermal_to_electrical_wh(thermal_wh, mean_cop)
 
+        # With a COP per slot the solver can prefer the warm hours, and the demand is
+        # then the electricity the heat would take at the *best* of them: each slot's
+        # Wh counts at its own COP over that one, so the total is a statement about
+        # heat rather than about any particular placement.
+        efficiency, reference_cop = [], None
+        if slot_efficiency.source_of(self.config) == slot_efficiency.SOURCE_COP:
+            cops = self.cop_series(ctx)
+            usable = [
+                cops[index] for index in range(max(0, ctx.current_slot), ctx.slot_count)
+                if feasible[index]
+            ]
+            if usable:
+                reference_cop = max(usable)
+                efficiency = slot_efficiency.normalise(
+                    cops, ctx.slot_count, start=ctx.current_slot, feasible=feasible
+                )
+                total_wh = thermal_to_electrical_wh(thermal_wh, reference_cop)
+
         active, reason = self._control_state(current, target, ctx.readings, urgent)
         if not any(feasible):
             reason = REASON_OUT_OF_SEASON
@@ -337,11 +356,14 @@ class ThermalStorageModel(BaseDemandModel):
             feasible=feasible,
             feasible_reason=feasible_reason,
             max_power_w=self.rated_power_w,
+            efficiency=efficiency,
             deadline_slot=deadline_slot,
             urgent=urgent and active,
             reason=reason,
             detail={
                 "active": active,
+                "efficiency_source": slot_efficiency.source_of(self.config),
+                "reference_cop": _round_or_none(reference_cop, 2),
                 "temperature_c": round(current, 2),
                 "target_temperature_c": round(target, 2),
                 "heat_up_wh_thermal": round(heat_up_wh, 1),
@@ -374,6 +396,17 @@ class ThermalStorageModel(BaseDemandModel):
                 "thermal_power_w": round(self.rated_power_w * mean_cop),
             },
         )
+
+    def cop_series(self, ctx):
+        """The COP the appliance would run at in every slot, from its air temperature."""
+        series = []
+        for index in range(ctx.slot_count):
+            ambient = self._ambient_at(ctx, index)
+            series.append(
+                cop_at(ambient, self.calibrator.cop_nominal, self.calibrator.air_coefficient)
+                if ambient is not None else self.calibrator.cop_nominal
+            )
+        return series
 
     def cover_series(self, ctx, measured):
         """

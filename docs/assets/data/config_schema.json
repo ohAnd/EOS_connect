@@ -3621,6 +3621,87 @@
       "display_group": "Operation"
     },
     {
+      "key": "managed_loads.efficiency_source",
+      "type": "select",
+      "default": "off",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "Whether some hours do more with the same energy - a heat pump needs less electricity when it is warmer outside. Off treats every hour alike. Cop uses the load's own efficiency at each hour's air temperature (heated stores). Ambient derives it from the outdoor forecast alone, for a load with no model of its own. Pushed takes the 'efficiency' array sent with an external energy budget",
+      "labels": [],
+      "help_url": "config-managed-loads.html#managed-loads-efficiency",
+      "validation": {
+        "choices": [
+          "off",
+          "cop",
+          "ambient",
+          "pushed"
+        ]
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "external_contingent"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.efficiency_per_k",
+      "type": "float",
+      "default": 0.02,
+      "section": "managed_loads",
+      "level": "expert",
+      "description": "For the ambient source: the share of efficiency lost per kelvin away from the best hour. 0.02 is about what an air-source heat pump loses per kelvin colder",
+      "labels": [],
+      "help_url": "config-managed-loads.html#managed-loads-efficiency",
+      "validation": {
+        "min": 0,
+        "max": 0.2
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "external_contingent"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.efficiency_reference",
+      "type": "select",
+      "default": "warmest",
+      "section": "managed_loads",
+      "level": "expert",
+      "description": "For the ambient source: which hour is best. Warmest for heating, coolest for cooling",
+      "labels": [],
+      "help_url": "config-managed-loads.html#managed-loads-efficiency",
+      "validation": {
+        "choices": [
+          "warmest",
+          "coolest"
+        ]
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "external_contingent"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
       "key": "managed_loads.min_runtime_minutes",
       "type": "int",
       "default": 30,

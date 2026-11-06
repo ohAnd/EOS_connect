@@ -280,6 +280,12 @@ class ManagedLoadConfig:
             indifferent between a contiguous run and the same energy scattered over the
             day - every schedule of the same slots costs the same - so the solver
             returns whichever the search reaches first, and the appliance cycles.
+        efficiency: Per slot, what a Wh drawn there delivers relative to the best slot -
+            a heat pump's COP at that hour's air temperature over its best, say. The
+            demand and the value are both counted in delivered energy, so a slot at 0.9
+            needs a ninth more electricity for the same result and is chosen only when
+            it is that much cheaper. None is 1.0 everywhere, which is what every load
+            had before this existed.
     """
 
     id: str = ""
@@ -304,6 +310,14 @@ class ManagedLoadConfig:
     # evening peak it should have skipped.
     already_running: bool = False
     committed_off_slots: int = 0
+    efficiency: Optional[List[float]] = None
+
+    def efficiency_at(self, t):
+        """The efficiency of slot *t*, 1.0 where none was given."""
+        if not self.efficiency or t >= len(self.efficiency):
+            return 1.0
+        value = self.efficiency[t]
+        return float(value) if value is not None and value > 0 else 0.0
 
 
 @dataclass
@@ -569,7 +583,7 @@ class Optimizer:
                     f"ml_{i}_{t}",
                     lowBound=0,
                     upBound=per_slot[t] if (
-                        t < len(feasible) and feasible[t]
+                        t < len(feasible) and feasible[t] and load.efficiency_at(t) > 0
                     ) else 0.0,
                 )
                 for t in self.time_steps
@@ -624,8 +638,12 @@ class Optimizer:
         # battery it may charge earlier for exactly this purpose. So the energy bought
         # for the load comes in under `value_eur_per_wh` by construction; there is no
         # separate cap to enforce, and no averaging window to argue about.
+        #
+        # Counted in *delivered* energy: a slot whose efficiency is 0.9 earns nine
+        # tenths of the value per Wh drawn, so it wins only where it is that much
+        # cheaper - which is the whole of the warm-hours preference.
         for i, load in enumerate(self.managed_loads):
-            objective += load.value_eur_per_wh * pulp.lpSum(self.variables['ml'][i])
+            objective += load.value_eur_per_wh * self._delivered(i, load)
             starts = self.variables['ml_start'][i]
             if starts is not None:
                 objective -= load.start_cost_eur * pulp.lpSum(starts)
@@ -1009,12 +1027,13 @@ class Optimizer:
         """
         for i, load in enumerate(self.managed_loads):
             run = self.variables['ml'][i]
-            self.problem += pulp.lpSum(run) <= max(0.0, load.demand_wh)
+            delivered = self._delivered(i, load)
+            self.problem += delivered <= max(0.0, load.demand_wh)
 
             # Frost protection and the like: energy that must be placed whatever it
             # costs, so it is a floor the value term cannot argue with.
             if load.urgent_wh > 0:
-                self.problem += pulp.lpSum(run) >= min(load.urgent_wh, load.demand_wh)
+                self.problem += delivered >= min(load.urgent_wh, load.demand_wh)
 
             feasible = load.feasible or [True] * self.T
             self._add_daily_cap_constraints(load, run, feasible)
@@ -1046,6 +1065,13 @@ class Optimizer:
                 on, self.variables['ml_start'][i], int(load.min_runtime_slots),
                 already_running=load.already_running or load.committed_on_slots > 0,
             )
+
+    def _delivered(self, i, load):
+        """A load's placed energy in units of its best slot."""
+        run = self.variables['ml'][i]
+        if not load.efficiency:
+            return pulp.lpSum(run)
+        return pulp.lpSum(load.efficiency_at(t) * run[t] for t in self.time_steps)
 
     def _add_shared_budget_constraints(self):
         """
@@ -1139,10 +1165,11 @@ class Optimizer:
             for t in range(held_on):
                 cap = load.max_power_w * self.time_series.dt[t] / 3600.0
                 allowed = t < len(feasible) and feasible[t]
-                if not allowed or cap <= 0 or budget < cap:
+                delivered = cap * load.efficiency_at(t)
+                if not allowed or cap <= 0 or delivered <= 0 or budget < delivered:
                     break
                 self.problem += on[t] == 1
-                budget -= cap
+                budget -= delivered
 
         for t in range(min(int(load.committed_off_slots), self.T)):
             self.problem += on[t] == 0

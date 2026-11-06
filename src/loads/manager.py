@@ -178,6 +178,14 @@ def _padded(mask, length):
     return values + [True] * (length - len(values))
 
 
+def _padded_efficiency(values, length):
+    """An efficiency series at the horizon length, or None for a load without one."""
+    if not values:
+        return None
+    series = [float(value) for value in values][:length]
+    return series + [1.0] * (length - len(series))
+
+
 @dataclass
 class ManagerStats:
     """Counters shown on the status endpoint, for answering "is this thing running"."""
@@ -576,6 +584,9 @@ class ManagedLoadManager:
                 "max_power_w": float(demand.max_power_w),
                 "value_eur_per_wh": self._value_of(item),
                 "feasible": _padded(demand.feasible, slots),
+                # Per slot, what a Wh is worth against the best slot; the demand above
+                # is in those units. Absent means every slot is equal.
+                "efficiency": _padded_efficiency(demand.efficiency, slots),
                 "min_runtime_slots": item.min_runtime_slots(ctx) if ctx else 1,
                 "urgent_wh": float(demand.total_wh) if demand.urgent else 0.0,
                 "committed_on_slots": committed_on,

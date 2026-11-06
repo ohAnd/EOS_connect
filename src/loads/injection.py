@@ -14,7 +14,9 @@ whatever shape is natural at the sending end and normalises it here:
   resolution is inferred from the length and resampled to whatever the optimizer is
   currently running on, so a pusher does not break when ``eos.time_frame`` changes.
 - ``{"total_wh": 8000, "deadline_hours": 24}`` - an energy contingent to be placed by the
-  planner rather than a fixed profile.
+  planner rather than a fixed profile. It may carry ``"efficiency": [...]`` in the same
+  shapes as ``values``: how much a Wh is worth in each slot relative to the best one,
+  for a heat pump whose COP the sender knows - see `loads.efficiency`.
 
 A load can also be pointed at a source EOS Connect fetches itself, which arrives here as
 already-normalised timestamped entries - see `profile_from_entries`. Both paths end in
@@ -86,6 +88,8 @@ class PushedContingent:
     total_wh: float
     deadline_slot: object
     valid_until: datetime
+    # Per slot, relative to the best one; None when the sender did not say.
+    efficiency: list = None
 
 
 def _as_number(value, label):
@@ -228,7 +232,14 @@ def parse_push(payload, anchor, slot_count, time_frame_base, current_slot,
     valid_until = ttl_from_minutes(payload.get("ttl_minutes", default_ttl_minutes), now=now)
 
     if "total_wh" in payload:
-        return _parse_contingent(payload, slot_count, time_frame_base, current_slot, valid_until)
+        contingent = _parse_contingent(
+            payload, slot_count, time_frame_base, current_slot, valid_until
+        )
+        if payload.get("efficiency") is not None:
+            contingent.efficiency = _parse_efficiency(
+                payload, anchor, slot_count, time_frame_base, current_slot
+            )
+        return contingent
 
     return _parse_profile(
         payload, anchor, slot_count, time_frame_base, current_slot, valid_until
@@ -254,6 +265,54 @@ def _parse_contingent(payload, slot_count, time_frame_base, current_slot, valid_
     return PushedContingent(
         total_wh=total, deadline_slot=deadline_slot, valid_until=valid_until
     )
+
+
+def _parse_efficiency(payload, anchor, slot_count, time_frame_base, current_slot):
+    """
+    A pushed efficiency series, laid onto the slots like a profile would be.
+
+    An efficiency is a rate, not an amount, so resampling repeats it into finer slots
+    and averages it into coarser ones rather than splitting or summing. Slots the
+    series does not reach count as 1.0 - the sender said nothing about them.
+    """
+    raw = payload["efficiency"]
+    if not isinstance(raw, (list, tuple)) or not raw:
+        raise InjectionError("'efficiency' must be a non-empty array")
+    if len(raw) > _MAX_SERIES_LENGTH:
+        raise InjectionError(
+            f"'efficiency' has {len(raw)} entries - at most {_MAX_SERIES_LENGTH} accepted"
+        )
+    numbers = [_as_number(v, f"efficiency[{i}]") for i, v in enumerate(raw)]
+    for index, value in enumerate(numbers):
+        if not 0.0 < value <= 1.0:
+            raise InjectionError(
+                f"'efficiency[{index}]' must be above 0 and at most 1, got {value}"
+            )
+    source_base = _resolve_resolution(payload, len(numbers))
+    if source_base > time_frame_base:
+        if source_base % time_frame_base:
+            raise InjectionError(
+                f"cannot split {source_base}s slots into {time_frame_base}s slots"
+            )
+        factor = source_base // time_frame_base
+        numbers = [value for value in numbers for _ in range(factor)]
+    elif source_base < time_frame_base:
+        if time_frame_base % source_base:
+            raise InjectionError(
+                f"cannot combine {source_base}s slots into {time_frame_base}s slots"
+            )
+        factor = time_frame_base // source_base
+        numbers = [
+            sum(numbers[i:i + factor]) / len(numbers[i:i + factor])
+            for i in range(0, len(numbers), factor)
+        ]
+    start = _resolve_start_slot(payload, anchor, current_slot, time_frame_base)
+    series = [1.0] * slot_count
+    for index, value in enumerate(numbers):
+        target = start + index
+        if 0 <= target < slot_count:
+            series[target] = value
+    return series
 
 
 def _parse_profile(payload, anchor, slot_count, time_frame_base, current_slot, valid_until):

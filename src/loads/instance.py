@@ -37,6 +37,7 @@ from .planner import (
     PlanOptions,
     plan_contingent,
 )
+from . import efficiency as slot_efficiency
 from .presets import (
     CONTINGENT_TYPES,
     EXTERNAL_TYPES,
@@ -347,6 +348,8 @@ class ManagedLoad:
             return None, None
 
         self.last_error = None
+        if demand.kind != KIND_PROFILE:
+            demand.efficiency = self._efficiency(demand, ctx)
         self.last_demand = demand
 
         if demand.kind == KIND_PROFILE:
@@ -386,6 +389,40 @@ class ManagedLoad:
             return None, release
 
         return self._contribution(plan, ctx, demand), release
+
+    def _efficiency(self, demand, ctx):
+        """
+        The per-slot efficiency this load is configured to plan with, or [] for none.
+
+        The thermal model works out its own from its COP, and a push may carry one; the
+        outdoor-temperature rule needs neither and is applied here, so a load with no
+        model of its own can still prefer the warm hours. The setting decides which of
+        them counts: ``off`` discards anything a model or a sender supplied.
+        """
+        source = slot_efficiency.source_of(self.config)
+        if source == slot_efficiency.SOURCE_OFF:
+            return []
+        if source == slot_efficiency.SOURCE_AMBIENT:
+            return slot_efficiency.from_ambient(
+                ctx.outdoor_temp_c or ctx.ambient_temp_c,
+                ctx.slot_count,
+                start=ctx.current_slot,
+                feasible=demand.feasible or None,
+                per_k=self.config.get("efficiency_per_k", slot_efficiency.DEFAULT_PER_K),
+                reference=self.config.get(
+                    "efficiency_reference", slot_efficiency.REFERENCE_WARMEST
+                ),
+            )
+        values = list(demand.efficiency or [])
+        if not values:
+            return []
+        return [slot_efficiency.clamp(value) for value in values][: ctx.slot_count]
+
+    def delivered_wh(self, plan=None):
+        """What a plan delivers in units of the best slot - comparable to the demand."""
+        plan = self.last_plan if plan is None else plan
+        efficiency = self.last_demand.efficiency if self.last_demand else None
+        return slot_efficiency.effective_wh(plan, efficiency)
 
     def adopt_schedule(self, schedule, ctx, cost=None):
         """

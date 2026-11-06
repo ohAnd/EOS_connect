@@ -461,6 +461,39 @@
                             so compare it with <em>Planned</em> beside it rather than with
                             yesterday's figure.</p>
                     </div>
+
+                    <h3 id="managed-loads-efficiency">Preferring the hours that do more</h3>
+                    <p>A heat pump needs less electricity for the same heat when it is warmer
+                        outside. Without telling the optimizer so, every allowed hour looks equally
+                        good, and on a day of flat prices &mdash; or with a battery that makes
+                        every hour cost the same &mdash; the energy lands wherever the search
+                        reaches first. On the house that prompted this, a heating budget was
+                        released at 07:09 at 2&nbsp;&deg;C while the afternoon reached 13&nbsp;&deg;C,
+                        and the planned start moved between 08:30, 11:00 and 13:45 from one run
+                        to the next.</p>
+                    <p><strong>Efficiency Source</strong> gives each hour a weight: 1.0 where a Wh
+                        does the most, less where the same Wh does less. A slot at 0.9 needs a ninth
+                        more electricity for the same result, so it is chosen only where it is at
+                        least that much cheaper &mdash; the price still decides, the efficiency
+                        breaks the ties and weighs against it.</p>
+                    <ul>
+                        <li><strong>off</strong> &mdash; every hour alike, as before.</li>
+                        <li><strong>cop</strong> &mdash; the load's own efficiency at each hour's air
+                            temperature, over the best allowed hour. For heated stores; the default
+                            for space heating.</li>
+                        <li><strong>ambient</strong> &mdash; from the outdoor forecast alone, for a
+                            load without a model of its own, such as an external energy budget for a
+                            heat pump: <code>efficiency_per_k</code> (0.02, about what an air-source
+                            heat pump loses per kelvin colder) per kelvin below the warmest hour, or
+                            above the coolest for cooling.</li>
+                        <li><strong>pushed</strong> &mdash; the <code>efficiency</code> array sent
+                            with an external energy budget; see <a href="#managed-loads-push">Pushing
+                                it in</a>.</li>
+                    </ul>
+                    <p>A continuous rule rather than bands on purpose: inside a band where every
+                        hour counts the same, the optimizer is back to choosing arbitrarily. With an
+                        efficiency the <em>Energy needed</em> figure is the energy the best hour
+                        would take; the hours actually planned may add a little to it.</p>
                 </div>
 
                 <div class="content-section" data-level="standard">
@@ -745,7 +778,9 @@ attributes:
 
 {"value_wh": 1500}                       one hourly average, applied across the horizon
 {"values": [0, 0, 1200, 1400, ...]}      24 or 48 hourly values, or 96 or 192 quarter-hourly
-{"total_wh": 8000, "deadline_hours": 12} an energy budget for EOS Connect to place</code></pre>
+{"total_wh": 8000, "deadline_hours": 12} an energy budget for EOS Connect to place
+{"total_wh": 8000, "efficiency": [0.8, 0.8, ..., 1.0, ...]}
+                                         the same, with how much a Wh is worth per slot</code></pre>
                     <p>The resolution is inferred from how many values you send and resampled to whatever
                         the optimizer is running on, so your sender keeps working if you change the slot
                         length. Add <code>"unit": "W"</code> for average power, <code>"start": "now"</code>
@@ -764,7 +799,12 @@ attributes:
                     <p>The third form &mdash; <code>total_wh</code> with a deadline &mdash; is what an
                         <a href="#profile-external-contingent">External energy budget</a> takes. It is the
                         one pushed shape that is scheduled rather than injected, so it gets a
-                        released / blocked signal like a heated store.</p>
+                        released / blocked signal like a heated store. Its optional
+                        <code>efficiency</code> array takes the same lengths and <code>start</code>
+                        as <code>values</code>, each entry above 0 and at most 1; it is used when
+                        the load's <a href="#managed-loads-efficiency">efficiency source</a> is
+                        <em>pushed</em>, and <code>total_wh</code> is then the energy the best slot
+                        would take.</p>
 
                     <h4 id="managed-loads-replaces-sensor">Extra load, or the whole appliance?</h4>
                     <p>This is the one thing worth getting right, and it is invisible from the sending

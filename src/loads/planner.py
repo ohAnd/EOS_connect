@@ -17,6 +17,8 @@ entirely when the water is about to freeze.
 
 import logging
 
+from .efficiency import effective_wh
+
 logger = logging.getLogger("__main__")
 
 STRATEGY_CHEAPEST = "cheapest_slots"
@@ -73,7 +75,7 @@ def reasons_for_schedule(plan, demand, ctx):
     # a live pool: 36,280 Wh placed against 36,293 needed, and four blocked evening
     # hours labelled a price verdict, two of them *below* the configured cap.
     slot_wh = demand.max_power_w * ctx.hours_per_slot()
-    outstanding = demand.total_wh - sum(plan or ())
+    outstanding = demand.total_wh - effective_wh(plan, demand.efficiency)
     covered = outstanding < slot_wh if slot_wh > 0 else outstanding <= 0
 
     reasons = []
@@ -135,14 +137,38 @@ def _series(values, length, fill=0.0):
     return out
 
 
-def _slot_costs(ctx, options, caps):
+def _efficiency_at(efficiency, index):
+    if efficiency and index < len(efficiency) and efficiency[index] > 0:
+        return float(efficiency[index])
+    return 1.0
+
+
+def _slot_costs(ctx, options, caps, efficiency=None):
     """
     Cost per Wh of running in each slot, under the chosen strategy.
 
     PV surplus is valued at the *feed-in* tariff rather than at zero: the energy is not
     free, it is worth what the grid would have paid for it. That is what makes a slot
     with surplus beat a cheap grid slot without inventing a preference.
+
+    With an efficiency the cost is per Wh *delivered*: a slot at 0.9 needs a ninth more
+    electricity for the same result, so its price ranks a ninth higher.
     """
+    costs = _raw_slot_costs(ctx, options, caps)
+    if not efficiency:
+        return costs
+    weighted = []
+    for index, cost in enumerate(costs):
+        share = _efficiency_at(efficiency, index)
+        if isinstance(cost, tuple):
+            weighted.append((cost[0] * share, cost[1] / share))
+        else:
+            weighted.append(cost / share)
+    return weighted
+
+
+def _raw_slot_costs(ctx, options, caps):
+    """Cost per Wh drawn in each slot, before any efficiency."""
     length = ctx.slot_count
     price = _series(ctx.price_eur_per_wh, length, _UNKNOWN_PRICE)
     feed_in = _series(ctx.feed_in_eur_per_wh, length, 0.0)
@@ -271,7 +297,10 @@ def plan_contingent(demand, ctx, options, budget_wh=None):
             cap = min(cap, max(0.0, budget_wh[index]))
         caps.append(cap)
 
-    costs = _slot_costs(ctx, options, caps)
+    costs = _slot_costs(ctx, options, caps, demand.efficiency)
+    # What a drawn Wh costs, for reporting the plan's price - the ranking above is per
+    # Wh *delivered* and would overstate it.
+    drawn_costs = _raw_slot_costs(ctx, options, caps) if demand.efficiency else costs
     candidates, _ = _candidates(demand, ctx, caps, costs, options, reasons)
 
     if not candidates:
@@ -285,8 +314,9 @@ def plan_contingent(demand, ctx, options, budget_wh=None):
     if demand.urgent:
         # Cheapness is worthless if the pool freezes: take the next slots available.
         ordered = sorted(candidates)
-        plan = _fill(plan, ordered, caps, remaining, options, ctx, reasons)
-        demand.plan_price_eur_per_wh = plan_price(plan, _numeric_costs(costs, options))
+        plan = _fill(plan, ordered, caps, remaining, options, ctx, reasons,
+                     demand.efficiency)
+        demand.plan_price_eur_per_wh = plan_price(plan, _numeric_costs(drawn_costs, options))
         return plan
 
     ordered_blocks = _blocks(candidates, options.min_runtime_slots)
@@ -314,15 +344,18 @@ def plan_contingent(demand, ctx, options, budget_wh=None):
             if slot not in seen:
                 seen.add(slot)
                 order.append(slot)
-        remaining -= sum(caps[slot] for slot in fresh)
+        remaining -= sum(
+            caps[slot] * _efficiency_at(demand.efficiency, slot) for slot in fresh
+        )
 
     # Anything the blocks could not cover falls back to the cheapest leftover slots.
     leftovers = [index for index in candidates if index not in seen]
     leftovers.sort(key=lambda index: (costs[index], index))
     order.extend(leftovers)
 
-    plan = _fill(plan, order, caps, float(demand.total_wh), options, ctx, reasons)
-    demand.plan_price_eur_per_wh = plan_price(plan, _numeric_costs(costs, options))
+    plan = _fill(plan, order, caps, float(demand.total_wh), options, ctx, reasons,
+                 demand.efficiency)
+    demand.plan_price_eur_per_wh = plan_price(plan, _numeric_costs(drawn_costs, options))
     return plan
 
 
@@ -369,8 +402,13 @@ def plan_price(plan, costs):
     return total_cost / total_wh if total_wh > 0 else None
 
 
-def _fill(plan, order, caps, remaining, options, ctx, reasons):
-    """Pour *remaining* Wh into *order* until it is gone, honouring the daily cap."""
+def _fill(plan, order, caps, remaining, options, ctx, reasons, efficiency=None):
+    """
+    Pour *remaining* Wh into *order* until it is gone, honouring the daily cap.
+
+    *remaining* is in units of the best slot when there is an efficiency, so a slot at
+    0.9 takes a ninth more electricity to deliver its share.
+    """
     slots_per_day = max(1, 86400 // ctx.time_frame_base)
     used_per_day = {}
 
@@ -381,13 +419,14 @@ def _fill(plan, order, caps, remaining, options, ctx, reasons):
         if options.max_slots_per_day and used_per_day.get(day, 0) >= options.max_slots_per_day:
             reasons[slot] = SLOT_DAILY_CAP
             continue
-        take = min(caps[slot], remaining)
+        share = _efficiency_at(efficiency, slot)
+        take = min(caps[slot], remaining / share)
         if take <= 0:
             reasons[slot] = SLOT_BUDGET
             continue
         plan[slot] = take
         reasons[slot] = SLOT_PLANNED
-        remaining -= take
+        remaining -= take * share
         used_per_day[day] = used_per_day.get(day, 0) + 1
 
     if remaining > 1e-6:

@@ -64,6 +64,10 @@ class DemandContext:
     # Per-slot PV forecast, standing in for the irradiance sensor nobody has. The
     # fitted gain absorbs the array size, the water's absorptivity and the cover.
     solar_wh: list = field(default_factory=list)
+    # The outdoor forecast, raw, for every load - including the ones whose own ambient
+    # is indoor. A load with no model can still prefer the warm hours for a heat pump
+    # it controls; see `loads.efficiency`.
+    outdoor_temp_c: list = field(default_factory=list)
     readings: dict = field(default_factory=dict)
     history: list = field(default_factory=list)
 
@@ -101,6 +105,9 @@ class EnergyDemand:
             planner may put into a single slot.
         deadline_slot: Contingent only. Last slot the energy may occupy, or None for
             "anywhere in the horizon".
+        efficiency: Contingent only. Per-slot worth of a Wh relative to the best slot,
+            1.0 at best; empty means 1.0 everywhere. With it, ``total_wh`` is stated in
+            units of the best slot - see `loads.efficiency`.
         urgent: Skip price optimization and run as soon as feasible. Frost protection
             and a missed deadline both set this - being cheap is worthless if the pool
             freezes.
@@ -118,6 +125,7 @@ class EnergyDemand:
     # Filled in by the planner: what became of every slot. See `loads.planner`.
     slot_reasons: list = field(default_factory=list)
     max_power_w: float = 0.0
+    efficiency: list = field(default_factory=list)
     deadline_slot: object = None
     urgent: bool = False
     reason: str = ""
