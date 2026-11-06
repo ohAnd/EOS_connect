@@ -155,6 +155,40 @@
 
                     <div data-schema-section="eos" data-schema-anchor="local-evopt"></div>
 
+                    <h3 id="plan-stability">Plan stability</h3>
+                    <p>The optimizer starts from scratch every cycle and does not remember what it
+                        decided fifteen minutes ago. Where two plans cost almost the same &mdash; a
+                        flat price curve with a full battery, a heat pump that could run at 11:00 or
+                        at 12:00 for half a cent of difference &mdash; it picks one more or less at
+                        random, and the next cycle may pick the other. A device then starts, stops
+                        half an hour later and starts again, and the next planned start an
+                        automation reads keeps moving.</p>
+                    <p>To stop that, every Wh a decision moves away from the previous cycle's plan
+                        for the same slot costs a fraction of the mean import price:
+                        <code>eos.local_evopt_plan_stability_weight</code>, default
+                        <code>0.25</code>. A real change &mdash; new day-ahead prices, a forecast that
+                        moved a lot &mdash; is worth more than that and still wins; noise is not.
+                        The full weight applies to the next two hours, where a change switches
+                        something on or off; further ahead only a fifth of it, so a run planned
+                        for the afternoon still moves for a modest saving. Because moving a run
+                        counts its energy twice &mdash; off where it was, on where it goes &mdash;
+                        the default means a run about to start moves for a saving of more than
+                        half the mean price, one hours away for more than a tenth.
+                        <code>0</code> switches it off. The penalty only shapes the plan: it is not
+                        part of the cost the dashboard reports.</p>
+                    <p><code>eos.local_evopt_plan_stability_scope</code> decides what it applies
+                        to. <code>managed_loads</code> (default) holds the managed loads, which are
+                        what switch something on and off. <code>managed_loads_and_battery</code>
+                        also holds battery charging and discharging, for installations where the
+                        charge plan visibly jumps between cycles. <code>off</code> disables it.</p>
+                    <p>Measured over a day of quarter-hourly replanning with a heat pump, a 16 kWh
+                        battery and noisy PV forecasts: 3.0 starts a day and 19 jumps of the next
+                        planned start by an hour or more without it, 2.0 starts and under 4 jumps with
+                        the default, at 5&nbsp;% less electricity. After a restart there is no previous
+                        plan, so the first cycle runs without it.</p>
+
+                    <div data-schema-section="eos" data-schema-anchor="plan-stability"></div>
+
                     <h3 id="time-slot-config">Planning resolution</h3>
                     <p><code>eos.time_frame</code> sets how finely the day is sliced:
                         <code>3600</code> seconds (hourly, the default) or <code>900</code> (quarter-hourly).
