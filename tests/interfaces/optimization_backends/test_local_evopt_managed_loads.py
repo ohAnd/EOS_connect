@@ -765,6 +765,140 @@ def test_a_group_of_one_constrains_nothing():
     assert _optimizer(single).solve()["status"] == "Optimal"
 
 
+# --- a store planned by its temperature ---------------------------------------------------
+
+from src.interfaces.optimization_backends.local_evopt.optimizer import (  # noqa: E402
+    ThermalStoreConfig,
+)
+
+HOUSE_C = 21000.0       # Wh/K - the measured house
+HOUSE_H = 105.0         # W/K
+
+
+def _house(t0=21.2, pv_gain=None, ambient=None, cop=None, power=900.0, t_max=22.5,
+           **kwargs):
+    store = ThermalStoreConfig(
+        capacity_wh_per_k=HOUSE_C,
+        loss_w_per_k=[HOUSE_H] * T,
+        ambient_c=list(ambient or [5.0] * T),
+        cop=list(cop or [3.5] * T),
+        gain_wh=list(pv_gain or [0.0] * T),
+        t_initial=t0, t_min=21.0, t_max=t_max, t_target=21.5,
+    )
+    base = dict(id="house", demand_wh=0.0, value_eur_per_wh=0.0, max_power_w=power,
+                min_runtime_slots=1, store=store)
+    base.update(kwargs)
+    return ManagedLoadConfig(**base)
+
+
+def _temperature(result, load_id="house"):
+    for entry in result["managed_loads"]:
+        if entry["id"] == load_id:
+            return entry["temperature"]
+    raise AssertionError(f"no temperature returned for {load_id}")
+
+
+def test_a_store_stays_inside_its_band():
+    result = _optimizer([_house()], battery=False).solve()
+    assert result["status"] == "Optimal"
+    temps = _temperature(result)
+    assert min(temps) >= 21.0 - 0.01 and max(temps) <= 22.5 + 0.01
+
+
+def test_it_is_handed_over_without_any_demand():
+    """Nothing asks for an amount; staying in the band is what makes it run."""
+    result = _optimizer([_house()], battery=False).solve()
+    assert sum(_placed(result, "house")) > 0
+
+
+def test_it_heats_where_the_cop_is_best():
+    cop = [3.0] * T
+    for t in range(12, 17):
+        cop[t] = 4.2
+    # Warm enough to coast until the good hours, which is when it should heat.
+    result = _optimizer([_house(t0=22.3, cop=cop)], battery=False).solve()
+    placed = _placed(result, "house")
+    assert sum(placed) > 0
+    assert sum(placed[12:17]) > 0.8 * sum(placed)
+
+
+def test_it_heats_ahead_of_a_dear_evening():
+    prices = [CHEAP] * T
+    for t in range(16, 22):
+        prices[t] = DEAR * 3
+    result = _optimizer([_house(t0=21.1)], prices=prices, battery=False).solve()
+    placed = _placed(result, "house")
+    assert sum(placed[16:22]) == pytest.approx(0.0, abs=1.0)
+    assert _temperature(result)[15] > 21.3
+
+
+def test_surplus_pv_is_banked_above_target():
+    pv = [0.0] * T
+    for t in range(10, 15):
+        pv[t] = 3000.0
+    # A heat pump big enough to outrun the losses: 2 kW at COP 3.5 is 7 kW of heat.
+    result = _optimizer([_house(t0=21.5, power=2000.0)], pv=pv, prices=[DEAR] * T,
+                        battery=False).solve()
+    assert max(_temperature(result)[10:16]) > 21.8
+
+
+def test_the_end_of_the_horizon_is_not_filled_to_the_ceiling():
+    """Heat left at the end is worth something only up to target."""
+    result = _optimizer([_house(t0=21.5)], battery=False).solve()
+    assert _temperature(result)[-1] < 21.8
+
+
+def test_it_does_not_end_the_horizon_cold_either():
+    result = _optimizer([_house(t0=21.5)], battery=False).solve()
+    assert _temperature(result)[-1] >= 21.0 - 0.01
+
+
+def test_a_cold_start_heats_at_once_rather_than_failing():
+    result = _optimizer([_house(t0=19.5)], battery=False).solve()
+    assert result["status"] == "Optimal"
+    assert _placed(result, "house")[0] > 0
+
+
+def test_a_heat_pump_too_small_for_the_cold_is_short_not_infeasible():
+    result = _optimizer([_house(t0=21.0, ambient=[-20.0] * T, power=100.0)],
+                        battery=False).solve()
+    assert result["status"] == "Optimal"
+
+
+def test_a_sunny_afternoon_above_the_ceiling_is_not_infeasible():
+    result = _optimizer([_house(t0=22.4, pv_gain=[4000.0] * T)], battery=False).solve()
+    assert result["status"] == "Optimal"
+    assert sum(_placed(result, "house")) == pytest.approx(0.0, abs=1.0)
+
+
+def test_a_store_keeps_its_minimum_run():
+    result = _optimizer([_house(t0=21.0, min_runtime_slots=3)], battery=False).solve()
+    shape = [energy > 1.0 for energy in _placed(result, "house")]
+    runs, length = [], 0
+    for on in shape + [False]:
+        if on:
+            length += 1
+        elif length:
+            runs.append(length)
+            length = 0
+    assert runs and min(runs) >= 3
+
+
+def test_a_store_and_hot_water_share_the_compressor():
+    water = _load(id="water", demand_wh=2000.0, max_power_w=900.0,
+                  exclusive_group="heat_pump")
+    house = _house(t0=21.0, exclusive_group="heat_pump")
+    result = _optimizer([house, water], battery=False).solve()
+    assert result["status"] == "Optimal"
+    for a, b in zip(_placed(result, "house"), _placed(result, "water")):
+        assert a / 900.0 + b / 900.0 <= 1.0 + 1e-6
+
+
+def test_an_ordinary_load_reports_no_temperature():
+    result = _optimizer([_load()]).solve()
+    assert "temperature" not in result["managed_loads"][0]
+
+
 def test_two_days_at_quarter_hours_solve_in_reasonable_time():
     """The case that matters: 192 slots, a minimum run, priced starts, a battery."""
     import math
@@ -773,3 +907,24 @@ def test_two_days_at_quarter_hours_solve_in_reasonable_time():
     slots, dt = 192, 900
     hours = [t * 0.25 for t in range(slots)]
     ambient = [6 + 4 * math.sin(math.pi * ((h % 24) - 9) / 12) for h in hours]
+    store = ThermalStoreConfig(
+        capacity_wh_per_k=HOUSE_C, loss_w_per_k=[HOUSE_H] * slots, ambient_c=ambient,
+        cop=[3.4 + 0.08 * a for a in ambient], gain_wh=[0.0] * slots,
+        t_initial=21.2, t_min=21.0, t_max=22.5, t_target=21.5,
+    )
+    load = ManagedLoadConfig(id="house", max_power_w=900.0, min_runtime_slots=4,
+                             start_cost_eur=0.05, store=store)
+    series = TimeSeriesData(dt=[dt] * slots, gt=[75.0] * slots, ft=[0.0] * slots,
+                            p_N=[0.0003] * slots, p_E=[FEED_IN] * slots)
+    opt = Optimizer(
+        strategy=OptimizationStrategy(), grid=GridConfig(p_max_imp=20000, p_max_exp=20000),
+        batteries=[BatteryConfig(s_min=1000, s_max=16000, s_initial=8000, c_max=8000,
+                                 d_max=8000, p_a=0.00025, charge_from_grid=True,
+                                 s_capacity=16000)],
+        time_series=series, optimizer_settings=OptimizerSettings(time_limit=60),
+        M=60000, managed_loads=[load],
+    )
+    started = time.time()
+    result = opt.solve()
+    assert result["status"] == "Optimal"
+    assert time.time() - started < 20.0

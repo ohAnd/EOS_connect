@@ -234,6 +234,9 @@ def test_the_house_preset_plans_by_its_cop():
     assert demand.detail["reference_cop"] > demand.detail["mean_cop"]
 
 
+# -- the push -------------------------------------------------------------------------
+
+
 def _parse(payload, time_frame_base=3600, slot_count=SLOTS):
     return parse_push(payload, ANCHOR, slot_count, time_frame_base, 0, now=ANCHOR)
 

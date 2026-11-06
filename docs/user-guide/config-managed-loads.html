@@ -342,6 +342,9 @@
                             See <a href="#managed-loads-cop">The efficiency of a heat pump</a>.</li>
                         <li><strong>Windows span a real change of the house</strong> &mdash;
                             0.2&nbsp;K &mdash; rather than three ticks of its sensor.</li>
+                        <li><strong>It is planned by temperature</strong>, with the COP per hour:
+                            see <a href="#managed-loads-temperature">Planning a store by its
+                                temperature</a>.</li>
                     </ul>
                     <p>What the inputs should be:</p>
                     <ul>
@@ -505,6 +508,61 @@
                             so compare it with <em>Planned</em> beside it rather than with
                             yesterday's figure.</p>
                     </div>
+
+                    <h3 id="managed-loads-temperature">Planning a store by its temperature</h3>
+                    <p>Planned by <strong>energy</strong>, a heated store works out how much it
+                        will need over the next two days and that amount is placed in the cheapest
+                        hours. That is right for a pool, and blind to one thing a house cares
+                        about: <em>when</em> the heat arrives decides what the rooms feel like in
+                        between. An amount placed at midday is met in full while the bedrooms are
+                        at 20.3&nbsp;&deg;C at seven in the morning.</p>
+                    <p>Planned by <strong>temperature</strong>, the built-in optimizer is given
+                        the store itself instead: how much heat it holds per kelvin, what it loses
+                        to the air in each hour, what the sun adds and what the heat pump's COP is
+                        then &mdash; the calibrated model, slot by slot. It follows the temperature
+                        through the horizon the way it follows the battery's charge, and keeps it
+                        inside a band:</p>
+                    <ul>
+                        <li>at least <strong>target &minus; deadband</strong>: comfort. Falling below
+                            costs far more than any tariff, so it is in effect a hard floor &mdash;
+                            but a soft one, so a cold start or a heat pump too small for the frost
+                            makes a short plan rather than no plan;</li>
+                        <li>at most <strong>target + storage headroom</strong>: how much may be
+                            banked when energy is cheap or free;</li>
+                        <li>and back at <strong>target</strong> by the end of the horizon, valued
+                            at what the heat would cost to make again. Not above it: heat banked
+                            for a horizon nobody has planned yet would only leak away.</li>
+                    </ul>
+                    <p>Heating ahead of a dear evening, storing surplus PV and waiting for a
+                        warmer hour then come out of the optimization rather than being rules.
+                        On the measured house, planning the next day from its real forecasts
+                        (41&ndash;56&nbsp;ct/kWh, 18&nbsp;kWh of PV, 6&ndash;11&nbsp;&deg;C):</p>
+                    <div class="scroll-x">
+                        <table>
+                            <thead><tr><th>Planned by</th><th>Electricity</th><th>Runs</th>
+                                    <th>Coldest</th></tr></thead>
+                            <tbody>
+                                <tr><td>energy</td><td>7.9&nbsp;kWh</td>
+                                    <td>00:15&ndash;02:00, 08:45&ndash;15:45</td><td>20.6&nbsp;&deg;C</td></tr>
+                                <tr><td>energy, with the COP per hour</td><td>7.7&nbsp;kWh</td>
+                                    <td>09:00&ndash;17:30</td><td>20.3&nbsp;&deg;C</td></tr>
+                                <tr><td>temperature, band 21.0&ndash;22.5</td><td>7.9&nbsp;kWh</td>
+                                    <td>00:00&ndash;04:30, 11:30&ndash;15:45</td><td>20.9&nbsp;&deg;C
+                                        (the start)</td></tr>
+                                <tr><td>temperature, band 20.5&ndash;22.5</td><td>4.7&nbsp;kWh</td>
+                                    <td>05:30&ndash;06:45, 12:00&ndash;16:00</td><td>20.5&nbsp;&deg;C</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>The same energy as an amount, but the comfort held; and with a wider band
+                        the plan moves into the warm afternoon by itself. Space heating starts
+                        planned by temperature; any heated store can be. It needs the built-in
+                        optimizer &mdash; with another backend the store is planned by energy, and
+                        its deadband decides as before.</p>
+                    <p>Inside the band the plan decides, not the deadband: a house at
+                        21.3&nbsp;&deg;C may be released to bank PV, and one at the storage ceiling
+                        is stopped whatever the plan says. Frost protection still releases it
+                        immediately.</p>
 
                     <h3 id="managed-loads-exclusive">One machine, two loads</h3>
                     <p>A heat pump that heats the house and makes hot water is one compressor: at

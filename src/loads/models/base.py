@@ -126,6 +126,10 @@ class EnergyDemand:
     slot_reasons: list = field(default_factory=list)
     max_power_w: float = 0.0
     efficiency: list = field(default_factory=list)
+    # Contingent only, and only for a store planned by its temperature rather than by
+    # an amount: the physics the solver needs to follow the store slot by slot - see
+    # `ThermalStorageModel.thermal_store`. None for everything else.
+    store: dict = None
     deadline_slot: object = None
     urgent: bool = False
     reason: str = ""

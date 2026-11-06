@@ -572,6 +572,8 @@ class ManagedLoadManager:
         for item in self.instances:
             if not item.enabled or not item.kind_is_contingent():
                 continue
+            # One rule with the handover - see `_offerable`. A store planned by
+            # temperature is offered even when it wants nothing right now.
             if not item.offers_demand():
                 continue
             demand = item.last_demand
@@ -593,7 +595,11 @@ class ManagedLoadManager:
                 "efficiency": _padded_efficiency(demand.efficiency, slots),
                 "exclusive_group": item.exclusive_group,
                 "min_runtime_slots": item.min_runtime_slots(ctx) if ctx else 1,
-                "urgent_wh": float(demand.total_wh) if demand.urgent else 0.0,
+                "urgent_wh": (
+                    float(demand.total_wh) if demand.urgent and demand.store is None
+                    else 0.0
+                ),
+                "store": demand.store,
                 "committed_on_slots": committed_on,
                 "committed_off_slots": committed_off,
                 "already_running": item.is_running(),
