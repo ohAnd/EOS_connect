@@ -711,3 +711,65 @@ def test_an_efficiency_of_zero_closes_the_slot():
 
 # --- one compressor, two loads -----------------------------------------------------------
 
+def _group_pair(group="heat_pump", **kwargs):
+    heating = _load(id="house", demand_wh=3000.0, max_power_w=1000.0,
+                    exclusive_group=group, **kwargs)
+    water = _load(id="water", demand_wh=2000.0, max_power_w=1000.0,
+                  exclusive_group=group, **kwargs)
+    return [heating, water]
+
+
+def test_a_shared_compressor_never_runs_both_in_one_slot():
+    prices = [DEAR] * T
+    for t in (12, 13, 14):
+        prices[t] = CHEAP
+    opt = _optimizer(_group_pair(), prices=prices, battery=False)
+    result = opt.solve()
+    house, water = _placed(result, "house"), _placed(result, "water")
+    for t in range(T):
+        assert house[t] / 1000.0 + water[t] / 1000.0 <= 1.0 + 1e-6
+
+
+def test_both_still_get_their_energy_when_there_is_room():
+    opt = _optimizer(_group_pair(), battery=False)
+    result = opt.solve()
+    assert sum(_placed(result, "house")) == pytest.approx(3000.0, rel=0.01)
+    assert sum(_placed(result, "water")) == pytest.approx(2000.0, rel=0.01)
+
+
+def test_without_a_group_both_take_the_cheap_slot():
+    prices = [DEAR] * T
+    prices[12] = CHEAP
+    opt = _optimizer(_group_pair(group=""), prices=prices, battery=False)
+    result = opt.solve()
+    assert _placed(result, "house")[12] > 0 and _placed(result, "water")[12] > 0
+
+
+def test_a_group_holds_with_minimum_runs_too():
+    opt = _optimizer(_group_pair(min_runtime_slots=2), battery=False)
+    result = opt.solve()
+    house, water = _placed(result, "house"), _placed(result, "water")
+    assert all(not (house[t] > 0 and water[t] > 0) for t in range(T))
+
+
+def test_two_loads_both_already_running_do_not_make_the_model_infeasible():
+    loads = _group_pair(min_runtime_slots=2)
+    for load in loads:
+        load.committed_on_slots = 2
+    result = _optimizer(loads, battery=False).solve()
+    assert result["status"] == "Optimal"
+
+
+def test_a_group_of_one_constrains_nothing():
+    single = [_load(exclusive_group="heat_pump")]
+    assert _optimizer(single).solve()["status"] == "Optimal"
+
+
+def test_two_days_at_quarter_hours_solve_in_reasonable_time():
+    """The case that matters: 192 slots, a minimum run, priced starts, a battery."""
+    import math
+    import time
+
+    slots, dt = 192, 900
+    hours = [t * 0.25 for t in range(slots)]
+    ambient = [6 + 4 * math.sin(math.pi * ((h % 24) - 9) / 12) for h in hours]

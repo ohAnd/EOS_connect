@@ -420,6 +420,7 @@ class LocalEVOptBackend(EVOptBackend):
                 already_running=bool(entry.get("already_running", False)),
                 committed_off_slots=max(0, int(entry.get("committed_off_slots", 0) or 0)),
                 efficiency=self._solver_efficiency(entry.get("efficiency")),
+                exclusive_group=str(entry.get("exclusive_group", "") or "").strip(),
             ))
         if configs:
             logger.debug(

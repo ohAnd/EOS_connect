@@ -85,6 +85,7 @@ class ManagedLoad:
         self.type = str(resolved.get("type", "")).strip()
         self.enabled = bool(resolved.get("enabled", True))
         self.priority = int(resolved.get("priority", 100) or 100)
+        self.exclusive_group = str(resolved.get("exclusive_group", "") or "").strip()
         self.subtract_from_base_load = bool(resolved.get("subtract_from_base_load", True))
         self.power_sensor = str(resolved.get("power_sensor", "") or "").strip()
         # The meter an externally fed load's forecast stands in for. Separate from
@@ -316,6 +317,7 @@ class ManagedLoad:
         self.config = resolved
         self.enabled = bool(resolved.get("enabled", True))
         self.priority = int(resolved.get("priority", 100) or 100)
+        self.exclusive_group = str(resolved.get("exclusive_group", "") or "").strip()
         self.max_price_eur_per_wh = self._price_cap(resolved, "max_price_ct_kwh")
 
         if self.gate is not None:
