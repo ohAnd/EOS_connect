@@ -504,12 +504,24 @@ class MqttInterface:
         self.client.loop_start()
         logger.info("[MQTT] Successfully connected to MQTT broker.")
 
+    def __registry_items(self):
+        """
+        Snapshot of the topic registry, safe to iterate while topics are added.
+
+        ``register_topics`` adds the managed-load topics on the main thread while
+        ``__on_connect`` may be walking the registry on the paho network thread.
+        Iterating the dict itself then raises ``RuntimeError: dictionary changed size
+        during iteration``, which ends the network thread for good. A topic added
+        after the copy is subscribed and announced by ``register_topics`` itself.
+        """
+        return list(self.topics_publish.items())
+
     def __subscribe_needed_topics(self):
         """
         Subscribe to the necessary topics for the MQTT client.
         """
         if self.base_topic:
-            for topic, value in self.topics_publish.items():
+            for topic, value in self.__registry_items():
                 if "command_topic" in value and value["command_topic"]:
                     self.__subscribe(self.base_topic + "/" + value["command_topic"])
 
@@ -723,7 +735,7 @@ class MqttInterface:
         """
         Publish topics if they have changed since the last publish.
         """
-        for topic, value in self.topics_publish.items():
+        for topic, value in self.__registry_items():
             # Check if the topic is in the last published topics and if the value has changed
             if self.topics_publish_last[topic]["value"] != value["value"]:
                 # logger.debug("[MQTT] Topic '%s' has changed, publishing new value: %s",
@@ -839,7 +851,7 @@ class MqttInterface:
 
     def __send_mqtt_discovery_messages(self) -> None:
         """Publish all offered mqtt discovery config messages"""
-        for topic, value in self.topics_publish.items():
+        for topic, value in self.__registry_items():
             self.__publish_discovery_for(topic, value)
 
     def __publish_discovery_for(self, topic, value) -> None:
