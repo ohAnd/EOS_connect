@@ -637,3 +637,77 @@ def test_no_commitment_leaves_the_solver_free():
         prices=[DEAR] * T, battery=False,
     )
     assert sum(_placed(opt.solve())) == pytest.approx(0.0, abs=1.0)
+
+
+# --- efficiency per slot ----------------------------------------------------------------
+
+def _autumn_efficiency():
+    """Dawn at 80 %, mid-afternoon at 100 % - what a heat pump's COP does over a day."""
+    series = []
+    for t in range(T):
+        if t <= 6:
+            series.append(0.8)
+        elif t <= 15:
+            series.append(0.8 + (t - 6) * 0.2 / 9.0)
+        else:
+            series.append(1.0 - (t - 15) * 0.02)
+    return series
+
+
+def test_with_flat_prices_an_efficient_hour_wins():
+    eff = _autumn_efficiency()
+    opt = _optimizer([_load(demand_wh=3000.0, efficiency=eff)], battery=False)
+    result = opt.solve()
+    used = [t for t, energy in enumerate(_placed(result)) if energy > 1.0]
+    assert used and min(eff[t] for t in used) >= 0.95
+
+
+def test_the_demand_is_met_in_delivered_energy():
+    """A slot at 0.9 takes a ninth more electricity for the same result."""
+    opt = _optimizer([_load(demand_wh=2700.0, efficiency=[0.9] * T)], battery=False)
+    result = opt.solve()
+    assert sum(_placed(result)) == pytest.approx(3000.0, rel=0.01)
+
+
+def test_a_much_cheaper_inefficient_hour_still_wins():
+    prices = [DEAR] * T
+    prices[3] = CHEAP
+    eff = _autumn_efficiency()
+    opt = _optimizer(
+        [_load(demand_wh=1000.0, efficiency=eff, value_eur_per_wh=0.001)],
+        prices=prices, battery=False,
+    )
+    result = opt.solve()
+    assert _placed(result)[3] > 0
+
+
+def test_the_value_is_earned_per_delivered_wh():
+    """Worth 0.30 per delivered Wh, a slot at half efficiency is worth 0.15 drawn."""
+    prices = [0.00020] * T
+    opt = _optimizer(
+        [_load(demand_wh=6000.0, value_eur_per_wh=0.00030, efficiency=[0.5] * T)],
+        prices=prices, battery=False,
+    )
+    result = opt.solve()
+    assert sum(_placed(result)) == pytest.approx(0.0, abs=1.0)
+
+
+def test_no_efficiency_is_the_model_it_always_was():
+    with_none = _optimizer([_load()]).solve()
+    with_ones = _optimizer([_load(efficiency=[1.0] * T)]).solve()
+    assert sum(_placed(with_none)) == pytest.approx(sum(_placed(with_ones)), rel=1e-6)
+
+
+def test_an_efficiency_of_zero_closes_the_slot():
+    eff = [1.0] * T
+    eff[5] = 0.0
+    prices = [DEAR] * T
+    prices[5] = 0.0
+    opt = _optimizer([_load(demand_wh=1500.0, efficiency=eff)], prices=prices,
+                     battery=False)
+    result = opt.solve()
+    assert _placed(result)[5] == pytest.approx(0.0)
+
+
+# --- one compressor, two loads -----------------------------------------------------------
+

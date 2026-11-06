@@ -106,6 +106,14 @@ class ExternalPushModel(BaseDemandModel):
             total_wh=push.total_wh,
             feasible=[True] * ctx.slot_count,
             max_power_w=float(self.config.get("rated_power_w", 0) or 0),
+            # Aligned like a profile, with 0.0 - "no data" - turned back into 1.0.
+            efficiency=[
+                value if value > 0 else 1.0
+                for value in align_series(
+                    push.efficiency, self._anchor, ctx.anchor,
+                    ctx.time_frame_base, ctx.slot_count,
+                )
+            ] if push.efficiency else [],
             deadline_slot=push.deadline_slot,
             reason=REASON_PUSHED,
             detail={"active": push.total_wh > 0},

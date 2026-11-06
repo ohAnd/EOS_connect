@@ -419,6 +419,7 @@ class LocalEVOptBackend(EVOptBackend):
                 committed_on_slots=max(0, int(entry.get("committed_on_slots", 0) or 0)),
                 already_running=bool(entry.get("already_running", False)),
                 committed_off_slots=max(0, int(entry.get("committed_off_slots", 0) or 0)),
+                efficiency=self._solver_efficiency(entry.get("efficiency")),
             ))
         if configs:
             logger.debug(
@@ -426,6 +427,18 @@ class LocalEVOptBackend(EVOptBackend):
                 len(configs), ", ".join(c.id for c in configs),
             )
         return configs
+
+
+    def _solver_efficiency(self, series):
+        """An efficiency series in solver space, or None for a load without one."""
+        if not series:
+            return None
+        try:
+            values = [float(value) for value in series]
+        except (TypeError, ValueError):
+            logger.warning("[OPT-LocalEVopt] unreadable efficiency series - ignoring it")
+            return None
+        return self.to_solver_slots(values, fill=1.0)
 
     def _managed_load_cost(self, optimizer, evopt_request, evopt_response, timeout):
         """
