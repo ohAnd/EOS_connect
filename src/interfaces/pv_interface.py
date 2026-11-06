@@ -2485,16 +2485,23 @@ class PvInterface:
             # Stepping absolute hours also removes the need to trim or pad: 48
             # steps are 48 slots on a 23-, 24- or 25-hour day alike. The samples
             # are taken by absolute instant, which is what the library compares.
+            #
+            # The library works on Open-Meteo's 15-minute data, so the energy is
+            # integrated per planning slot rather than per hour: an hourly total
+            # split evenly over four quarter-hour slots would flatten the ramps
+            # at sunrise and sunset and every passing cloud.
             anchor = local_midnight(pytz.timezone(self.time_zone))
+            slot_minutes = 15 if self.time_frame_base == 900 else 60
             pv_forecast = []
-            for slot in range(48):
-                slot_start = anchor + timedelta(hours=slot)
-                current_hour_energy = 0
-                for minute in range(59):
-                    current_hour_energy += estimate.power_production_at_time(
+            for slot in range(48 * 60 // slot_minutes):
+                slot_start = anchor + timedelta(minutes=slot * slot_minutes)
+                slot_energy = 0
+                for minute in range(slot_minutes):
+                    slot_energy += estimate.power_production_at_time(
                         slot_start + timedelta(minutes=minute)
                     )
-                pv_forecast.append(round(current_hour_energy / 60, 1))
+                # One sample per minute: W * min / 60 = Wh.
+                pv_forecast.append(round(slot_energy / 60, 1))
 
             # Clear any previous errors on success
             self.pv_forcast_request_error["error"] = None
@@ -2504,8 +2511,6 @@ class PvInterface:
                 len(pv_forecast),
                 pv_forecast,
             )
-            if self.time_frame_base == 900:
-                return self._convert_hourly_to_15min(pv_forecast)
             return pv_forecast
 
         except (ValueError, TypeError, AttributeError) as e:
