@@ -279,6 +279,22 @@ KeyError: 0</code></pre>
                             against the next one.</p>
                         <p><strong>Fix:</strong> update EOS Connect. After such a run the next one follows
                             at the usual interval.</p>
+
+                        <h3 id="tb-mqtt-stops">MQTT stops right after a start</h3>
+                        <p><strong>Symptom:</strong> with managed loads configured, some starts leave
+                            MQTT dead: the EOS Connect entities in Home Assistant stop updating, and
+                            commands and load pushes sent over MQTT are ignored. The rest of EOS Connect
+                            keeps running. Near the top of the log:</p>
+                        <pre><code>Exception in thread paho-mqtt-client-:
+  ...
+  File "/app/src/interfaces/mqtt_interface.py", line 512, in __subscribe_needed_topics
+RuntimeError: dictionary changed size during iteration</code></pre>
+                        <p><strong>Cause:</strong> the managed-load topics are added while the MQTT
+                            connection is being set up on another thread. When the two overlap, the
+                            thread that handles all MQTT traffic stops, and nothing restarts it. Whether
+                            it happens depends on timing, so a restart usually works.</p>
+                        <p><strong>Fix:</strong> update EOS Connect. Topics added during the
+                            connection setup no longer stop it.</p>
                     </div>
 
                     <div data-level="expert">
