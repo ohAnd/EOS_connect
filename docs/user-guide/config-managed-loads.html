@@ -419,6 +419,20 @@
                             yesterday's figure.</p>
                     </div>
 
+                    <h3 id="managed-loads-exclusive">One machine, two loads</h3>
+                    <p>A heat pump that heats the house and makes hot water is one compressor: at
+                        any moment it does one or the other. Configured as two loads &mdash; a
+                        space heating load and a
+                        <a href="#profile-hot-water-tank">hot water tank</a> &mdash; both would
+                        otherwise be planned into the same warm afternoon, and the plan would count
+                        heat the machine cannot deliver.</p>
+                    <p>Give both the same <strong>Exclusive Group</strong>, e.g.
+                        <code>heat_pump</code>, and they are never planned into the same slot. The
+                        built-in optimizer decides between them on cost; the other backends take
+                        them in <strong>Priority</strong> order, slot by slot. A slot both are
+                        already running in is left alone &mdash; if the sensors say so, it is not
+                        the plan's to argue with.</p>
+
                     <h3 id="managed-loads-efficiency">Preferring the hours that do more</h3>
                     <p>A heat pump needs less electricity for the same heat when it is warmer
                         outside. Without telling the optimizer so, every allowed hour looks equally

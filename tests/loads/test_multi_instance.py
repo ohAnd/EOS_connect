@@ -189,3 +189,46 @@ def test_a_failing_publisher_does_not_break_the_cycle(make_manager, installation
     _cold(installation)
     manager.run_cycle()
     assert manager.stats.cycles == 1
+
+
+def test_an_exclusive_group_never_shares_a_slot(make_manager, installation):
+    """One compressor: the fallback planner gives each slot to one load of the group."""
+    prices = [0.0009] * 48
+    prices[12] = 0.0001
+    installation.prices = prices
+    _cold(installation)
+
+    manager = make_manager([
+        dict(POOL, exclusive_group="heat_pump"),
+        dict(SAUNA, exclusive_group="heat_pump"),
+    ])
+    manager.run_cycle()
+
+    pool_plan = manager.instance("pool").last_plan
+    sauna_plan = manager.instance("sauna").last_plan
+    assert pool_plan[12] > 0
+    assert all(not (a > 0 and b > 0) for a, b in zip(pool_plan, sauna_plan))
+    assert sum(sauna_plan) > 0
+
+
+def test_different_groups_do_not_constrain_each_other(make_manager, installation):
+    prices = [0.0009] * 48
+    prices[12] = 0.0001
+    installation.prices = prices
+    _cold(installation)
+
+    manager = make_manager([
+        dict(POOL, exclusive_group="pool_pump"),
+        dict(SAUNA, exclusive_group="sauna_heater"),
+    ])
+    manager.run_cycle()
+    assert manager.instance("pool").last_plan[12] > 0
+    assert manager.instance("sauna").last_plan[12] > 0
+
+
+def test_the_group_reaches_the_solver(make_manager, installation):
+    _cold(installation)
+    manager = make_manager([dict(POOL, exclusive_group="heat_pump")])
+    manager.run_cycle()
+    records = manager.schedulable()
+    assert records and records[0]["exclusive_group"] == "heat_pump"

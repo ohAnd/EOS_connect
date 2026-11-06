@@ -387,6 +387,8 @@ class ManagedLoadManager:
         ctx_base = self._context()
         budget = self._initial_budget(ctx_base)
         self._last_ctx = ctx_base
+        # Slots already taken within each exclusive group, by the loads planned before.
+        taken = {}
 
         for item in self.instances:
             if not item.enabled:
@@ -413,7 +415,8 @@ class ManagedLoadManager:
                         item.id, self._schedule_max_age(),
                     )
             contribution, release = item.evaluate(
-                ctx, budget_wh=budget, defer_gate=defer
+                ctx, budget_wh=self._group_budget(item, budget, taken, ctx.slot_count),
+                defer_gate=defer,
             )
             if defer:
                 # Its energy reaches the optimizer as something to place, not as part
@@ -425,6 +428,7 @@ class ManagedLoadManager:
                 if item.kind_is_contingent():
                     self._record_decision(item, ctx, release, origin=ORIGIN_SELF)
             self._consume_budget(budget, item.last_plan)
+            self._take_group_slots(item, taken)
 
         self.stats.cycles += 1
         self.stats.last_cycle = ctx_base.now.isoformat()
@@ -473,6 +477,7 @@ class ManagedLoadManager:
                 # Per slot, what a Wh is worth against the best slot; the demand above
                 # is in those units. Absent means every slot is equal.
                 "efficiency": _padded_efficiency(demand.efficiency, slots),
+                "exclusive_group": item.exclusive_group,
                 "min_runtime_slots": item.min_runtime_slots(ctx) if ctx else 1,
                 "urgent_wh": float(demand.total_wh) if demand.urgent else 0.0,
                 "committed_on_slots": committed_on,
@@ -1105,6 +1110,30 @@ class ManagedLoadManager:
             return None
         per_slot = self.max_power_w * ctx.time_frame_base / 3600.0
         return [per_slot] * ctx.slot_count
+
+    @staticmethod
+    def _group_budget(item, budget, taken, slot_count):
+        """
+        The budget this load may plan into, with its group's taken slots closed.
+
+        The fallback planner places loads one after another in priority order, so a
+        compressor shared by two of them goes to whichever comes first, slot by slot -
+        the same rule the solver applies all at once.
+        """
+        occupied = taken.get(item.exclusive_group) if item.exclusive_group else None
+        if not occupied:
+            return budget
+        base = list(budget) if budget is not None else [float("inf")] * slot_count
+        return [
+            0.0 if index in occupied else value for index, value in enumerate(base)
+        ]
+
+    @staticmethod
+    def _take_group_slots(item, taken):
+        if not item.exclusive_group or not item.last_plan:
+            return
+        occupied = taken.setdefault(item.exclusive_group, set())
+        occupied.update(index for index, value in enumerate(item.last_plan) if value > 0)
 
     @staticmethod
     def _consume_budget(budget, plan):

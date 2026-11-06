@@ -69,6 +69,7 @@
         "managed-loads-fetch": "Fetched Profiles",
         "managed-loads-replaces-sensor": "Replaced Sensor",
         "managed-loads-efficiency": "Efficiency per Hour",
+        "managed-loads-exclusive": "Shared Machine",
     };
 
     /* Every string the per-profile tables render. Collected rather than scattered

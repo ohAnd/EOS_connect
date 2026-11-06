@@ -2796,6 +2796,24 @@ _ALL_FIELDS: list[FieldDef] = [
         display_group="Operation",
     ),
     FieldDef(
+        key="managed_loads.exclusive_group",
+        field_type="str",
+        default="",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Loads that share one machine and cannot run at the same time - a heat pump "
+            "that heats the house and makes hot water. Give them the same name here and "
+            "they are never planned into the same slot. Leave empty for a load with an "
+            "appliance of its own"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-exclusive",
+        validation={"pattern": "^[a-z0-9_]{0,32}$"},
+        depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
         key="managed_loads.efficiency_source",
         field_type="select",
         default="off",

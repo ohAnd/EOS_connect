@@ -311,6 +311,9 @@ class ManagedLoadConfig:
     already_running: bool = False
     committed_off_slots: int = 0
     efficiency: Optional[List[float]] = None
+    # Loads sharing one compressor - a heat pump making both hot water and space heat -
+    # name the same group, and the solver never runs two of them in the same slot.
+    exclusive_group: str = ""
 
     def efficiency_at(self, t):
         """The efficiency of slot *t*, 1.0 where none was given."""
@@ -410,6 +413,8 @@ class Optimizer:
         self._add_battery_constraints()
         self._add_managed_load_constraints()
         self._add_shared_budget_constraints()
+        self._add_exclusive_group_constraints()
+
 
     def _new_var(self, name, lowBound=None, upBound=None, cat=pulp.LpContinuous):
         # pylint: disable=invalid-name
@@ -1098,6 +1103,49 @@ class Optimizer:
             self.problem += pulp.lpSum(
                 self.variables['ml'][i][t] for i in range(len(self.managed_loads))
             ) <= allowance
+
+    def _add_exclusive_group_constraints(self):
+        """
+        Never run two loads of one group in the same slot.
+
+        A heat pump that makes hot water and heats the house is one compressor: it
+        does one or the other. Planned as two independent loads, both land in the same
+        warm afternoon and the plan counts heat the machine cannot deliver.
+
+        Written on the share of each slot a load fills rather than on its on/off
+        binary, so it holds for loads modelled continuously too: two halves fit in one
+        slot, which is what a compressor switching over halfway through does. A load
+        with a binary fills either nothing or all of it, and the constraint becomes
+        "one at a time".
+
+        A slot that more than one load is already committed to is left alone. Two loads
+        both running is what the sensors say; refusing to believe it would make the
+        model infeasible and take the household's schedule down with it.
+        """
+        groups = {}
+        for i, load in enumerate(self.managed_loads):
+            name = str(load.exclusive_group or "").strip()
+            if name:
+                groups.setdefault(name, []).append(i)
+
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            for t in self.time_steps:
+                committed = sum(
+                    1 for i in members
+                    if t < int(self.managed_loads[i].committed_on_slots or 0)
+                )
+                if committed > 1:
+                    continue
+                shares = []
+                for i in members:
+                    load = self.managed_loads[i]
+                    cap = load.max_power_w * self.time_series.dt[t] / 3600.0
+                    if cap > 0:
+                        shares.append(self.variables['ml'][i][t] * (1.0 / cap))
+                if len(shares) > 1:
+                    self.problem += pulp.lpSum(shares) <= 1
 
     def _add_daily_cap_constraints(self, load, run, feasible):
         """
