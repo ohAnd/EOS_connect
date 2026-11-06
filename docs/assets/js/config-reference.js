@@ -72,6 +72,7 @@
         "managed-loads-cop": "Heat Pump Efficiency",
         "managed-loads-efficiency": "Efficiency per Hour",
         "managed-loads-exclusive": "Shared Machine",
+        "managed-loads-temperature": "Planning by Temperature"
     };
 
     /* Every string the per-profile tables render. Collected rather than scattered

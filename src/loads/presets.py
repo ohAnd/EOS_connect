@@ -231,6 +231,11 @@ PRESETS = {
             # Prefer the warm hours by the model's own COP - the point of planning a
             # heat pump rather than just switching it.
             "efficiency_source": "cop",
+            # The house is the store, and the built-in optimizer follows its temperature
+            # rather than placing an amount: heat ahead when it is cheap, bank surplus
+            # PV up to a kelvin above target, ride out a dear evening on the screed.
+            "planning_mode": "temperature",
+            "storage_headroom_k": 1.0,
         },
     },
     TYPE_EXTERNAL_CONTINGENT: {

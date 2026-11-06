@@ -459,7 +459,11 @@ class ManagedLoadManager:
             if not item.enabled or not item.kind_is_contingent():
                 continue
             demand = item.last_demand
-            if demand is None or demand.total_wh <= 0 or demand.max_power_w <= 0:
+            if demand is None or demand.max_power_w <= 0:
+                continue
+            # A store planned by temperature is handed over even when it wants nothing
+            # right now: whether to bank heat is the solver's question, not ours.
+            if demand.store is None and demand.total_wh <= 0:
                 continue
             ctx = self._last_ctx_for.get(item.id)
             slots = ctx.slot_count if ctx else len(demand.feasible or [])
@@ -479,7 +483,11 @@ class ManagedLoadManager:
                 "efficiency": _padded_efficiency(demand.efficiency, slots),
                 "exclusive_group": item.exclusive_group,
                 "min_runtime_slots": item.min_runtime_slots(ctx) if ctx else 1,
-                "urgent_wh": float(demand.total_wh) if demand.urgent else 0.0,
+                "urgent_wh": (
+                    float(demand.total_wh) if demand.urgent and demand.store is None
+                    else 0.0
+                ),
+                "store": demand.store,
                 "committed_on_slots": committed_on,
                 "committed_off_slots": committed_off,
                 "already_running": item.is_running(),

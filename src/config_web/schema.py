@@ -164,6 +164,9 @@ MANAGED_LOAD_STRATEGIES = ["combined", "cheapest_slots", "pv_surplus"]
 MANAGED_LOAD_EFFICIENCY_SOURCES = ["off", "cop", "ambient", "pushed"]
 MANAGED_LOAD_EFFICIENCY_REFERENCES = ["warmest", "coolest"]
 
+# How a heated store is planned. Mirrors ``loads.models.thermal.PLANNING_MODES``.
+MANAGED_LOAD_PLANNING_MODES = ["energy", "temperature"]
+
 
 @dataclass
 class FieldDef:
@@ -2921,6 +2924,43 @@ _ALL_FIELDS: list[FieldDef] = [
         help_url="config-managed-loads.html#managed-loads-operation",
         validation={"choices": MANAGED_LOAD_STRATEGIES},
         depends_on={"type": MANAGED_LOAD_CONTINGENT_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.planning_mode",
+        field_type="select",
+        default="energy",
+        section="managed_loads",
+        level="standard",
+        description=(
+            "How the store is planned. Energy works out an amount for the next two days "
+            "and places it in the cheapest hours. Temperature hands the store itself to "
+            "the built-in optimizer, which follows its temperature hour by hour inside "
+            "the band from target minus deadband to target plus storage headroom - so it "
+            "can heat ahead on cheap power, bank PV surplus and wait for a warmer hour "
+            "on its own. Temperature needs the built-in optimizer; with any other "
+            "backend the store is planned by energy"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-temperature",
+        validation={"choices": MANAGED_LOAD_PLANNING_MODES},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
+        display_group="Operation",
+    ),
+    FieldDef(
+        key="managed_loads.storage_headroom_k",
+        field_type="float",
+        default=1.0,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "When planned by temperature: how far above target the store may be heated "
+            "to bank cheap or free energy, in kelvin"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-temperature",
+        validation={"min": 0, "max": 30},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Operation",
     ),
     FieldDef(

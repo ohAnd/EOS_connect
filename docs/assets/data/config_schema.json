@@ -3762,6 +3762,58 @@
       "display_group": "Operation"
     },
     {
+      "key": "managed_loads.planning_mode",
+      "type": "select",
+      "default": "energy",
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "How the store is planned. Energy works out an amount for the next two days and places it in the cheapest hours. Temperature hands the store itself to the built-in optimizer, which follows its temperature hour by hour inside the band from target minus deadband to target plus storage headroom - so it can heat ahead on cheap power, bank PV surplus and wait for a warmer hour on its own. Temperature needs the built-in optimizer; with any other backend the store is planned by energy",
+      "labels": [],
+      "help_url": "config-managed-loads.html#managed-loads-temperature",
+      "validation": {
+        "choices": [
+          "energy",
+          "temperature"
+        ]
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "space_heating"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
+      "key": "managed_loads.storage_headroom_k",
+      "type": "float",
+      "default": 1.0,
+      "section": "managed_loads",
+      "level": "standard",
+      "description": "When planned by temperature: how far above target the store may be heated to bank cheap or free energy, in kelvin",
+      "labels": [],
+      "help_url": "config-managed-loads.html#managed-loads-temperature",
+      "validation": {
+        "min": 0,
+        "max": 30
+      },
+      "depends_on": {
+        "type": [
+          "pool_heatpump",
+          "sauna",
+          "hot_water_tank",
+          "buffer_tank",
+          "space_heating"
+        ]
+      },
+      "hot_reload": true,
+      "display_group": "Operation"
+    },
+    {
       "key": "managed_loads.exclusive_group",
       "type": "str",
       "default": "",
@@ -4492,7 +4544,9 @@
         "min_runtime_minutes": 60,
         "max_runtime_hours_per_day": 0,
         "strategy": "combined",
-        "efficiency_source": "cop"
+        "efficiency_source": "cop",
+        "planning_mode": "temperature",
+        "storage_headroom_k": 1.0
       },
       "derived_keys": [
         "volume_m3",

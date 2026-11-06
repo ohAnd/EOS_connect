@@ -291,7 +291,7 @@ class ManagedLoad:
             # remembers when it last released, so settling it against a plan that is
             # about to be replaced would start a minimum-runtime hold on a decision
             # nobody made.
-            self._mask_current_slot(demand, ctx)
+            self._mask_current_slot(demand, ctx, scheduled=True)
             plan = self._plan_only(demand, ctx, budget_wh)
             # The gate keeps whatever it last decided until a schedule arrives. Nulling
             # it left the card reporting a bare gate state - no energy figure, no next
@@ -382,8 +382,24 @@ class ManagedLoad:
         self.last_demand.slot_reasons = reasons_for_schedule(
             self.last_plan, self.last_demand, ctx
         )
-        self.last_release = self._gate_on(self.last_demand, ctx, self.last_plan)
+        self.last_release = self._gate_on(
+            self.last_demand, ctx, self.last_plan, scheduled=True
+        )
         return self.last_release
+
+    @staticmethod
+    def _active(demand, scheduled=False):
+        """
+        Whether the load may run now at all.
+
+        A store planned by temperature is free to run anywhere below its storage
+        ceiling once a solver is following it - inside the band the plan decides, and
+        the deadband that keeps a self-planned store from hunting would only veto the
+        heat the solver chose to bank. Planned by anything else, the deadband stands.
+        """
+        if scheduled and demand.store is not None:
+            return bool(demand.detail.get("storage_active", True))
+        return bool(demand.detail.get("active", demand.total_wh > 0))
 
     def _plan_only(self, demand, ctx, budget_wh):
         """The placement, without settling the gate on it."""
@@ -394,9 +410,9 @@ class ManagedLoad:
         self._remember_affordable(ctx)
         return plan_contingent(demand, ctx, options, budget_wh=budget_wh)
 
-    def _gate_on(self, demand, ctx, plan):
+    def _gate_on(self, demand, ctx, plan, scheduled=False):
         """Turn a placement into a release decision."""
-        active = bool(demand.detail.get("active", demand.total_wh > 0))
+        active = self._active(demand, scheduled)
         planned_now = (
             0 <= ctx.current_slot < len(plan) and plan[ctx.current_slot] > 0
         )
@@ -410,7 +426,7 @@ class ManagedLoad:
         release["energy_needed_wh"] = round(demand.total_wh, 1)
         return release
 
-    def _mask_current_slot(self, demand, ctx):
+    def _mask_current_slot(self, demand, ctx, scheduled=False):
         """
         A load that must not start right now must not be *forecast* to start now either.
 
@@ -419,7 +435,7 @@ class ManagedLoad:
         agreement. It belongs here rather than inside the planner because the same mask
         is handed out when something else does the placing.
         """
-        active = bool(demand.detail.get("active", demand.total_wh > 0))
+        active = self._active(demand, scheduled)
         feasible = list(demand.feasible) or [True] * ctx.slot_count
         if not active and 0 <= ctx.current_slot < len(feasible):
             feasible[ctx.current_slot] = False
@@ -545,7 +561,7 @@ class ManagedLoad:
         # daily cap and the demand still be met the next day, and reporting that as a
         # limit would send the user to loosen a setting that cost them nothing.
         needed = self.last_demand.total_wh
-        covered = sum(self.last_plan or []) >= needed - 1.0
+        covered = self.delivered_wh() >= needed - 1.0
 
         # Ranked by the slots relaxing it would actually free, not by how many it
         # excluded. On a live pool 56 slots were "too cold to run" and every one of
@@ -617,7 +633,7 @@ class ManagedLoad:
             # Set when no setting can close the gap, so the card stops naming one.
             "over_committed": over_committed,
             "reachable_wh": round(reachable_wh, 1),
-            "shortfall_wh": round(max(0.0, needed - sum(self.last_plan or [])), 1),
+            "shortfall_wh": round(max(0.0, needed - self.delivered_wh()), 1),
         }
 
     def status(self):

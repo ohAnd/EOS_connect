@@ -24,6 +24,7 @@ from .local_evopt.optimizer import (
     CbcSolverUnavailableError,
     GridConfig,
     ManagedLoadConfig,
+    ThermalStoreConfig,
     OptimizationStrategy,
     Optimizer,
     OptimizerSettings,
@@ -399,7 +400,8 @@ class LocalEVOptBackend(EVOptBackend):
                     entry.get("id"),
                 )
                 continue
-            if power <= 0 or demand <= 0:
+            store = self._solver_store(entry.get("store"))
+            if power <= 0 or (demand <= 0 and store is None):
                 continue
 
             mask = entry.get("feasible")
@@ -421,6 +423,7 @@ class LocalEVOptBackend(EVOptBackend):
                 committed_off_slots=max(0, int(entry.get("committed_off_slots", 0) or 0)),
                 efficiency=self._solver_efficiency(entry.get("efficiency")),
                 exclusive_group=str(entry.get("exclusive_group", "") or "").strip(),
+                store=store,
             ))
         if configs:
             logger.debug(
@@ -429,6 +432,40 @@ class LocalEVOptBackend(EVOptBackend):
             )
         return configs
 
+    def _solver_store(self, store):
+        """
+        A store planned by temperature, in solver space, or None.
+
+        Its per-slot physics makes the same trip as everything else indexed by slot. A
+        store that cannot be read is dropped back to the ordinary demand rather than
+        failing the solve: the record still carries its amount.
+        """
+        if not isinstance(store, dict):
+            return None
+        try:
+            capacity = float(store.get("capacity_wh_per_k") or 0)
+            if capacity <= 0:
+                return None
+            series = {
+                key: self.to_solver_slots([float(v) for v in store.get(key) or []])
+                for key in ("loss_w_per_k", "ambient_c", "cop", "gain_wh")
+            }
+            return ThermalStoreConfig(
+                capacity_wh_per_k=capacity,
+                t_initial=float(store["t_initial"]),
+                t_min=float(store["t_min"]),
+                t_max=float(store["t_max"]),
+                t_target=(
+                    float(store["t_target"]) if store.get("t_target") is not None
+                    else None
+                ),
+                **series,
+            )
+        except (KeyError, TypeError, ValueError):
+            logger.warning(
+                "[OPT-LocalEVopt] unreadable thermal store - planning it by energy"
+            )
+            return None
 
     def _solver_efficiency(self, series):
         """An efficiency series in solver space, or None for a load without one."""
