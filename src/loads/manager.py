@@ -891,9 +891,19 @@ class ManagedLoadManager:
             feed_in_eur_per_wh=self._series(self.sources.feed_in_price, slot_count),
             pv_surplus_wh=self._surplus(slot_count),
             solar_wh=self._series(self.sources.pv_forecast, slot_count),
+            outdoor_temp_c=self._outdoor(slot_count),
             ambient_temp_c=[],
             readings={},
         )
+
+    def _outdoor(self, slot_count):
+        """The raw outdoor forecast per slot, or [] when there is none."""
+        try:
+            hourly = self.sources.temperature_forecast() or []
+        except Exception:  # pylint: disable=broad-except
+            logger.debug("[LOADS] outdoor forecast unavailable", exc_info=True)
+            return []
+        return self._expand_hourly(hourly, slot_count) if hourly else []
 
     def _context_for(self, item, ctx_base):
         """Per-instance context: its own sensors and its own ambient series."""
@@ -910,6 +920,7 @@ class ManagedLoadManager:
             feed_in_eur_per_wh=ctx_base.feed_in_eur_per_wh,
             pv_surplus_wh=ctx_base.pv_surplus_wh,
             solar_wh=ctx_base.solar_wh,
+            outdoor_temp_c=ctx_base.outdoor_temp_c,
             ambient_temp_c=ambient,
             ambient_source=ambient_source,
             ambient_measured_c=measured,
@@ -1436,6 +1447,11 @@ class ManagedLoadManager:
                 # averages exactly the window, where a point sample of a passing cloud
                 # would speak for the whole of it.
                 "pv_counter_kwh": self._pv_counter(),
+                # A heat meter's running total, where one is configured. Differenced
+                # across a window like the PV counter, it makes the COP a measurement.
+                "heat_counter_kwh": self._reading_as_float(
+                    ctx.readings.get("heat_sensor"), None
+                ),
                 "solar_w": self._forecast_solar_w(ctx),
                 "ambient_measured_c": ctx.ambient_measured_c,
                 "ambient_forecast_c": ctx.ambient_forecast_c,
