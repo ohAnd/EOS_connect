@@ -656,6 +656,47 @@
       "display_group": "Local Optimizer"
     },
     {
+      "key": "eos.local_evopt_plan_stability_scope",
+      "type": "select",
+      "default": "managed_loads",
+      "section": "eos",
+      "level": "expert",
+      "description": "Which decisions are kept close to the previous run's plan, so near-equal options do not flip from one cycle to the next",
+      "labels": [],
+      "help_url": "config-optimizer.html#plan-stability",
+      "validation": {
+        "choices": [
+          "off",
+          "managed_loads",
+          "managed_loads_and_battery"
+        ]
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": true,
+      "display_group": "Local Optimizer"
+    },
+    {
+      "key": "eos.local_evopt_plan_stability_weight",
+      "type": "float",
+      "default": 0.25,
+      "section": "eos",
+      "level": "expert",
+      "description": "Cost of changing the plan, as a fraction of the mean import price per kWh moved (0 = off)",
+      "labels": [],
+      "help_url": "config-optimizer.html#plan-stability",
+      "validation": {
+        "min": 0,
+        "max": 2
+      },
+      "depends_on": {
+        "eos.source": "local_evopt"
+      },
+      "hot_reload": true,
+      "display_group": "Local Optimizer"
+    },
+    {
       "key": "eos.local_evopt_max_grid_import_w",
       "type": "int",
       "default": 0,

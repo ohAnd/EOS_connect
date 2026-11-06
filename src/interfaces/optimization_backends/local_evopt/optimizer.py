@@ -56,6 +56,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pulp
 
+from . import plan_stability
+
 # eos_connect.py attaches its handlers to the "__main__" logger, not to root, so
 # a logging.getLogger(__name__) here propagates to a handler-less root and the
 # solver diagnostics are silently discarded.
@@ -431,8 +433,16 @@ class Optimizer:
         optimizer_settings: Optional[OptimizerSettings] = None,
         managed_loads: Optional[List[ManagedLoadConfig]] = None,
         managed_load_budget_w: float = 0.0,
+        previous_plan: Optional[Dict[str, List[Optional[float]]]] = None,
+        plan_stability_weight: float = 0.0,
+        plan_stability_scope: str = plan_stability.SCOPE_OFF,
     ):
         self.settings = optimizer_settings or OptimizerSettings()
+        # What the previous run decided, keyed as in `plan_stability`, and how much a
+        # departure from it costs as a fraction of the mean import price per Wh.
+        self.previous_plan = dict(previous_plan or {})
+        self.plan_stability_weight = max(0.0, float(plan_stability_weight or 0.0))
+        self.plan_stability_scope = plan_stability_scope
         self.strategy = strategy
         self.grid = grid
         self.batteries = batteries
@@ -483,6 +493,54 @@ class Optimizer:
         self._add_managed_load_constraints()
         self._add_shared_budget_constraints()
         self._add_exclusive_group_constraints()
+
+    def plan_series(self):
+        """The decision series a plan-stability memory keeps, by key, as plain numbers."""
+        series = {}
+        for i, load in enumerate(self.managed_loads):
+            series[plan_stability.key_managed_load(load.id)] = [
+                pulp.value(var) or 0.0 for var in self.variables['ml'][i]
+            ]
+        for i, _ in enumerate(self.batteries):
+            series[plan_stability.key_battery_charge(i)] = [
+                pulp.value(var) or 0.0 for var in self.variables['c'][i]
+            ]
+            series[plan_stability.key_battery_discharge(i)] = [
+                pulp.value(var) or 0.0 for var in self.variables['d'][i]
+            ]
+        return series
+
+    def _add_plan_stability(self, objective):
+        """
+        Charge for departing from the previous plan - see `plan_stability`.
+
+        The price is the configured fraction of the mean import price over this
+        horizon, per Wh, so it scales with the tariff instead of being a fixed number
+        that is huge in one market and nothing in another - in full for the next two
+        hours, a fifth of it beyond.
+        """
+        if self.plan_stability_weight <= 0 or not self.previous_plan:
+            return objective
+        prices = self.time_series.p_N or []
+        mean_price = float(np.mean(prices)) if prices else 0.0
+        weight = self.plan_stability_weight * max(mean_price, 0.0)
+        if weight <= 0:
+            return objective
+        weight = plan_stability.slot_weights(weight, self.time_series.dt)
+        candidates = {}
+        for i, load in enumerate(self.managed_loads):
+            candidates[plan_stability.key_managed_load(load.id)] = self.variables['ml'][i]
+        for i, _ in enumerate(self.batteries):
+            candidates[plan_stability.key_battery_charge(i)] = self.variables['c'][i]
+            candidates[plan_stability.key_battery_discharge(i)] = self.variables['d'][i]
+        for key, variables in candidates.items():
+            if not plan_stability.scope_includes(self.plan_stability_scope, key):
+                continue
+            objective = plan_stability.add_change_penalty(
+                self.problem, self._new_var, objective, key, variables,
+                self.previous_plan.get(key), weight,
+            )
+        return objective
 
     def _new_var(self, name, lowBound=None, upBound=None, cat=pulp.LpContinuous):
         # pylint: disable=invalid-name
@@ -886,6 +944,7 @@ class Optimizer:
                     * bat.c_priority
                 )
 
+        objective = self._add_plan_stability(objective)
         self.problem += objective
 
     def _add_energy_balance_constraints(self):

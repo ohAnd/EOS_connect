@@ -24,6 +24,7 @@ EOS Connect fetches real-time and forecast data (solar, prices), runs the integr
 ## Key Features
 - **All-in-One Optimization Solution:** No external servers required for standard energy optimization.
 - **Privacy & Reliability:** With `local_evopt`, all calculations happen on your device, ensuring faster response times and no dependency on external network reachability.
+- **Plan Stability:** `local_evopt` remembers its previous plan and only departs from it for a real saving, so a device is not switched on and off by near-equal options from one cycle to the next. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/config-optimizer.html#plan-stability)
 - **Automated Energy Management:** Uses real-time and forecast data into a cohesive control strategy to maximize self-consumption.
 - **Battery and Inverter Management:** Precise charge/discharge control, grid/PV modes, and manufacturer-validated dynamic charging curves.
 - **Integration with Smart Home Platforms:** Home Assistant (MQTT auto discovery, native inverter control via service calls), OpenHAB, EVCC, and REST APIs. With EVCC as the data source, load and battery readings come straight from EVCC's measured energy history — no home-automation sensors needed on a site EVCC already meters. [Learn more →](https://ohAnd.github.io/EOS_connect/user-guide/config-data.html#data-source-evcc)

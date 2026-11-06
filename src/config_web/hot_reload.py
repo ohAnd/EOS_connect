@@ -48,6 +48,8 @@ Supported fields (Local EVopt strategies):
 - ``eos.local_evopt_discharging_strategy``
 - ``eos.local_evopt_emergency_reserve_pct``
 - ``eos.local_evopt_terminal_soc_value``
+- ``eos.local_evopt_plan_stability_scope``
+- ``eos.local_evopt_plan_stability_weight``
 
 Supported fields (External EVopt):
 - ``eos.external_evopt_terminal_soc_value``
@@ -134,6 +136,8 @@ _LOCAL_EVOPT_FIELD_MAP = {
     "eos.local_evopt_discharging_strategy": ("discharging_strategy", str),
     "eos.local_evopt_emergency_reserve_pct": ("emergency_reserve_pct", int),
     "eos.local_evopt_terminal_soc_value": ("terminal_soc_value", str),
+    "eos.local_evopt_plan_stability_scope": ("plan_stability_scope", str),
+    "eos.local_evopt_plan_stability_weight": ("plan_stability_weight", float),
 }
 
 # Map of external (HTTP) evopt keys to (backend_attr_name, coerce_fn)
