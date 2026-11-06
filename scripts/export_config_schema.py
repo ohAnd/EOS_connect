@@ -33,15 +33,7 @@ def managed_load_presets():
     ``model`` is a class and is dropped; a ``None`` in ``defaults`` is kept, because
     it means "no limit" rather than "unset" (a sauna has no allowed window).
     """
-    return {
-        name: {
-            "label": preset["label"],
-            "ambient": preset["ambient"],
-            "default_ambient_c": preset["default_ambient_c"],
-            "defaults": dict(preset["defaults"]),
-        }
-        for name, preset in presets.PRESETS.items()
-    }
+    return presets.presets_as_json()
 
 
 def managed_load_groups():

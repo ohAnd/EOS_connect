@@ -24,6 +24,7 @@ is off, or a pump that hunts around its setpoint.
 import logging
 from datetime import timedelta
 
+from .. import efficiency as slot_efficiency
 from .base import KIND_CONTINGENT, BaseDemandModel, EnergyDemand
 from .calibration import IDLE_POWER_W, ThermalCalibrator
 from .cover_habit import OBSERVED_HOURS, CoverHabit
@@ -45,6 +46,17 @@ REASON_FROST = "frost protection"
 REASON_HEATING = "below target temperature"
 REASON_HOLDING = "covering standing losses"
 REASON_OUT_OF_SEASON = "out of season"
+
+# How a store is planned. By energy, the original way: an amount over the horizon,
+# placed by price. By temperature: the store itself, handed to a solver that can follow
+# it slot by slot - see `store`.
+PLAN_BY_ENERGY = "energy"
+PLAN_BY_TEMPERATURE = "temperature"
+PLANNING_MODES = (PLAN_BY_ENERGY, PLAN_BY_TEMPERATURE)
+
+# How far above target a store planned by temperature may be heated to bank cheap or
+# free energy, unless configured.
+DEFAULT_STORAGE_HEADROOM_K = 1.0
 
 # Per-slot exclusions, reported so a shortfall can name the setting behind it.
 REASON_SLOT_WINDOW = "outside allowed hours"
@@ -104,21 +116,27 @@ class ThermalStorageModel(BaseDemandModel):
 
     kind = KIND_CONTINGENT
     sensor_keys = ("temp_sensor", "target_temp_sensor", "power_sensor",
-                   "ambient_temp_sensor", "cover_sensor")
+                   "ambient_temp_sensor", "cover_sensor", "heat_sensor")
 
-    def __init__(self, entry_id, config):
+    def __init__(self, entry_id, config, calibration=None):
         super().__init__(entry_id, config)
         self._apply_config(self.config)
+        # What the calibrator may learn for this kind of store - see the preset. Kept so
+        # a reset starts again under the same rules rather than the pool's.
+        self.calibration_options = dict(calibration or {})
+        self.calibrator = self._new_calibrator()
+        self.cover_habit = CoverHabit()
 
-        self.calibrator = ThermalCalibrator(
+    def _new_calibrator(self):
+        return ThermalCalibrator(
             volume_m3=self.volume_m3,
             surface_m2=self.surface_m2,
             loss_coefficient=self.config.get("heat_loss_w_per_m2_k", 25.0),
             cop_nominal=self.config.get("cop_nominal", 4.5),
             air_coefficient=self.config.get("cop_air_coeff", 0.0),
             cover_loss_factor=self.cover_loss_factor,
+            **self.calibration_options,
         )
-        self.cover_habit = CoverHabit()
 
     def _apply_config(self, config):
         """
@@ -144,6 +162,14 @@ class ThermalStorageModel(BaseDemandModel):
         self.season_start = _parse_month_day(config.get("season_start"))
         self.season_end = _parse_month_day(config.get("season_end"))
 
+        mode = str(config.get("planning_mode") or PLAN_BY_ENERGY).strip().lower()
+        self.planning_mode = mode if mode in PLANNING_MODES else PLAN_BY_ENERGY
+        try:
+            headroom = float(config.get("storage_headroom_k", DEFAULT_STORAGE_HEADROOM_K))
+        except (TypeError, ValueError):
+            headroom = DEFAULT_STORAGE_HEADROOM_K
+        self.storage_headroom_k = max(0.0, headroom)
+
     def reconfigure(self, config):
         """Apply changed settings, keeping the calibrator and everything it learned."""
         super().reconfigure(config)
@@ -151,14 +177,7 @@ class ThermalStorageModel(BaseDemandModel):
 
     def reset_calibration(self):
         """Discard what has been learned and start again from the configured values."""
-        self.calibrator = ThermalCalibrator(
-            volume_m3=self.volume_m3,
-            surface_m2=self.surface_m2,
-            loss_coefficient=self.config.get("heat_loss_w_per_m2_k", 25.0),
-            cop_nominal=self.config.get("cop_nominal", 4.5),
-            air_coefficient=self.config.get("cop_air_coeff", 0.0),
-            cover_loss_factor=self.cover_loss_factor,
-        )
+        self.calibrator = self._new_calibrator()
         self.cover_habit.reset()
 
     # -- configuration helpers ----------------------------------------------------------
@@ -285,9 +304,31 @@ class ThermalStorageModel(BaseDemandModel):
         thermal_wh = max(0.0, heat_up_wh + losses_wh)
         total_wh = thermal_to_electrical_wh(thermal_wh, mean_cop)
 
+        # With a COP per slot the solver can prefer the warm hours, and the demand is
+        # then the electricity the heat would take at the *best* of them: each slot's
+        # Wh counts at its own COP over that one, so the total is a statement about
+        # heat rather than about any particular placement.
+        efficiency, reference_cop = [], None
+        if slot_efficiency.source_of(self.config) == slot_efficiency.SOURCE_COP:
+            cops = self.cop_series(ctx)
+            usable = [
+                cops[index] for index in range(max(0, ctx.current_slot), ctx.slot_count)
+                if feasible[index]
+            ]
+            if usable:
+                reference_cop = max(usable)
+                efficiency = slot_efficiency.normalise(
+                    cops, ctx.slot_count, start=ctx.current_slot, feasible=feasible
+                )
+                total_wh = thermal_to_electrical_wh(thermal_wh, reference_cop)
+
         active, reason = self._control_state(current, target, ctx.readings, urgent)
         if not any(feasible):
             reason = REASON_OUT_OF_SEASON
+
+        store = None
+        if self.planning_mode == PLAN_BY_TEMPERATURE and self.volume_m3 > 0:
+            store = self.thermal_store(ctx, current, target, cover)
 
         return EnergyDemand(
             kind=self.kind,
@@ -295,11 +336,22 @@ class ThermalStorageModel(BaseDemandModel):
             feasible=feasible,
             feasible_reason=feasible_reason,
             max_power_w=self.rated_power_w,
+            efficiency=efficiency,
+            store=store,
             deadline_slot=deadline_slot,
             urgent=urgent and active,
             reason=reason,
             detail={
                 "active": active,
+                # Whether a solver following the temperature may run it now: anywhere
+                # below the storage ceiling, because inside the band the plan - not a
+                # deadband - decides when heat is worth putting in.
+                "storage_active": bool(
+                    urgent or current < target + self.storage_headroom_k
+                ),
+                "planning_mode": self.planning_mode,
+                "efficiency_source": slot_efficiency.source_of(self.config),
+                "reference_cop": _round_or_none(reference_cop, 2),
                 "temperature_c": round(current, 2),
                 "target_temperature_c": round(target, 2),
                 "heat_up_wh_thermal": round(heat_up_wh, 1),
@@ -332,6 +384,52 @@ class ThermalStorageModel(BaseDemandModel):
                 "thermal_power_w": round(self.rated_power_w * mean_cop),
             },
         )
+
+    def thermal_store(self, ctx, current, target, cover):
+        """
+        The store as a solver needs it to follow the temperature slot by slot.
+
+        The same physics as the demand and the projection - losses against the air
+        through the calibrated coefficient and the cover, heat in through the COP at
+        each slot's air temperature, the sun through the fitted gain - laid out per
+        slot instead of summed, so the three cannot disagree. The band is the deadband
+        below target and the storage headroom above it: comfort at the bottom, what may
+        be banked at the top. Lists are in EOS slot space, from local midnight.
+        """
+        solar = ctx.solar_wh or []
+        gain = self.calibrator.solar_gain
+        loss, ambient, gains = [], [], []
+        for index in range(ctx.slot_count):
+            air = self._ambient_at(ctx, index)
+            ambient.append(air if air is not None else 0.0)
+            factor = cover[index] if isinstance(cover, list) else cover
+            loss.append(self.calibrator.loss_coefficient * self.surface_m2 * factor)
+            gains.append(
+                gain * max(0.0, float(solar[index]))
+                if gain > 0 and index < len(solar) else 0.0
+            )
+        return {
+            "capacity_wh_per_k": WH_PER_M3_PER_K * self.volume_m3,
+            "loss_w_per_k": loss,
+            "ambient_c": ambient,
+            "cop": self.cop_series(ctx),
+            "gain_wh": gains,
+            "t_initial": float(current),
+            "t_min": float(target) - self.deadband_k,
+            "t_target": float(target),
+            "t_max": float(target) + self.storage_headroom_k,
+        }
+
+    def cop_series(self, ctx):
+        """The COP the appliance would run at in every slot, from its air temperature."""
+        series = []
+        for index in range(ctx.slot_count):
+            ambient = self._ambient_at(ctx, index)
+            series.append(
+                cop_at(ambient, self.calibrator.cop_nominal, self.calibrator.air_coefficient)
+                if ambient is not None else self.calibrator.cop_nominal
+            )
+        return series
 
     def cover_series(self, ctx, measured):
         """
@@ -431,6 +529,10 @@ class ThermalStorageModel(BaseDemandModel):
             return []
         if target is None:
             target = self.target_temperature(ctx.readings)
+            # A store planned by temperature is meant to go above target when heat is
+            # cheap; stopping the line there would draw a plan that is not the one made.
+            if self.planning_mode == PLAN_BY_TEMPERATURE:
+                target += self.storage_headroom_k
         hours = ctx.hours_per_slot()
         cover = self.cover_series(ctx, self.cover_factor(ctx.readings))
         solar = ctx.solar_wh or []

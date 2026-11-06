@@ -159,6 +159,14 @@ def _padded(mask, length):
     return values + [True] * (length - len(values))
 
 
+def _padded_efficiency(values, length):
+    """An efficiency series at the horizon length, or None for a load without one."""
+    if not values:
+        return None
+    series = [float(value) for value in values][:length]
+    return series + [1.0] * (length - len(series))
+
+
 @dataclass
 class ManagerStats:
     """Counters shown on the status endpoint, for answering "is this thing running"."""
@@ -379,6 +387,8 @@ class ManagedLoadManager:
         ctx_base = self._context()
         budget = self._initial_budget(ctx_base)
         self._last_ctx = ctx_base
+        # Slots already taken within each exclusive group, by the loads planned before.
+        taken = {}
 
         for item in self.instances:
             if not item.enabled:
@@ -405,7 +415,8 @@ class ManagedLoadManager:
                         item.id, self._schedule_max_age(),
                     )
             contribution, release = item.evaluate(
-                ctx, budget_wh=budget, defer_gate=defer
+                ctx, budget_wh=self._group_budget(item, budget, taken, ctx.slot_count),
+                defer_gate=defer,
             )
             if defer:
                 # Its energy reaches the optimizer as something to place, not as part
@@ -417,6 +428,7 @@ class ManagedLoadManager:
                 if item.kind_is_contingent():
                     self._record_decision(item, ctx, release, origin=ORIGIN_SELF)
             self._consume_budget(budget, item.last_plan)
+            self._take_group_slots(item, taken)
 
         self.stats.cycles += 1
         self.stats.last_cycle = ctx_base.now.isoformat()
@@ -447,7 +459,11 @@ class ManagedLoadManager:
             if not item.enabled or not item.kind_is_contingent():
                 continue
             demand = item.last_demand
-            if demand is None or demand.total_wh <= 0 or demand.max_power_w <= 0:
+            if demand is None or demand.max_power_w <= 0:
+                continue
+            # A store planned by temperature is handed over even when it wants nothing
+            # right now: whether to bank heat is the solver's question, not ours.
+            if demand.store is None and demand.total_wh <= 0:
                 continue
             ctx = self._last_ctx_for.get(item.id)
             slots = ctx.slot_count if ctx else len(demand.feasible or [])
@@ -462,8 +478,16 @@ class ManagedLoadManager:
                 "max_power_w": float(demand.max_power_w),
                 "value_eur_per_wh": self._value_of(item),
                 "feasible": _padded(demand.feasible, slots),
+                # Per slot, what a Wh is worth against the best slot; the demand above
+                # is in those units. Absent means every slot is equal.
+                "efficiency": _padded_efficiency(demand.efficiency, slots),
+                "exclusive_group": item.exclusive_group,
                 "min_runtime_slots": item.min_runtime_slots(ctx) if ctx else 1,
-                "urgent_wh": float(demand.total_wh) if demand.urgent else 0.0,
+                "urgent_wh": (
+                    float(demand.total_wh) if demand.urgent and demand.store is None
+                    else 0.0
+                ),
+                "store": demand.store,
                 "committed_on_slots": committed_on,
                 "committed_off_slots": committed_off,
                 "already_running": item.is_running(),
@@ -664,9 +688,19 @@ class ManagedLoadManager:
             feed_in_eur_per_wh=self._series(self.sources.feed_in_price, slot_count),
             pv_surplus_wh=self._surplus(slot_count),
             solar_wh=self._series(self.sources.pv_forecast, slot_count),
+            outdoor_temp_c=self._outdoor(slot_count),
             ambient_temp_c=[],
             readings={},
         )
+
+    def _outdoor(self, slot_count):
+        """The raw outdoor forecast per slot, or [] when there is none."""
+        try:
+            hourly = self.sources.temperature_forecast() or []
+        except Exception:  # pylint: disable=broad-except
+            logger.debug("[LOADS] outdoor forecast unavailable", exc_info=True)
+            return []
+        return self._expand_hourly(hourly, slot_count) if hourly else []
 
     def _context_for(self, item, ctx_base):
         """Per-instance context: its own sensors and its own ambient series."""
@@ -683,6 +717,7 @@ class ManagedLoadManager:
             feed_in_eur_per_wh=ctx_base.feed_in_eur_per_wh,
             pv_surplus_wh=ctx_base.pv_surplus_wh,
             solar_wh=ctx_base.solar_wh,
+            outdoor_temp_c=ctx_base.outdoor_temp_c,
             ambient_temp_c=ambient,
             ambient_source=ambient_source,
             ambient_measured_c=measured,
@@ -1096,6 +1131,30 @@ class ManagedLoadManager:
         return [per_slot] * ctx.slot_count
 
     @staticmethod
+    def _group_budget(item, budget, taken, slot_count):
+        """
+        The budget this load may plan into, with its group's taken slots closed.
+
+        The fallback planner places loads one after another in priority order, so a
+        compressor shared by two of them goes to whichever comes first, slot by slot -
+        the same rule the solver applies all at once.
+        """
+        occupied = taken.get(item.exclusive_group) if item.exclusive_group else None
+        if not occupied:
+            return budget
+        base = list(budget) if budget is not None else [float("inf")] * slot_count
+        return [
+            0.0 if index in occupied else value for index, value in enumerate(base)
+        ]
+
+    @staticmethod
+    def _take_group_slots(item, taken):
+        if not item.exclusive_group or not item.last_plan:
+            return
+        occupied = taken.setdefault(item.exclusive_group, set())
+        occupied.update(index for index, value in enumerate(item.last_plan) if value > 0)
+
+    @staticmethod
     def _consume_budget(budget, plan):
         if budget is None or not plan:
             return
@@ -1185,6 +1244,11 @@ class ManagedLoadManager:
                 # averages exactly the window, where a point sample of a passing cloud
                 # would speak for the whole of it.
                 "pv_counter_kwh": self._pv_counter(),
+                # A heat meter's running total, where one is configured. Differenced
+                # across a window like the PV counter, it makes the COP a measurement.
+                "heat_counter_kwh": self._reading_as_float(
+                    ctx.readings.get("heat_sensor"), None
+                ),
                 "solar_w": self._forecast_solar_w(ctx),
                 "ambient_measured_c": ctx.ambient_measured_c,
                 "ambient_forecast_c": ctx.ambient_forecast_c,
