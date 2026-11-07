@@ -1068,6 +1068,14 @@ def _deferred_inverter_initialization():
         logger.info("[Main] Inverter is ready for control")
 
 
+# What the managed loads contributed to the last request, per load, in the same
+# midnight-anchored slot space as `gesamtlast` and discounted for the partial slot the
+# same way. The chart draws it as its own band and takes it back out of the Load bar;
+# without it a forecast load is in the Load bar with nothing to say so, which is what
+# issue #362 reported. Set on every run of `create_optimize_request`.
+last_managed_forecast = {}
+
+
 # summarize all date
 def create_optimize_request():
     """
@@ -1120,7 +1128,9 @@ def create_optimize_request():
         # Managed loads join the household profile here, and nowhere else. Applied
         # before the partial-slot scaling below so the in-progress slot is discounted
         # once, consistently, for base load and contributions alike.
-        gesamtlast = load_manager.apply(gesamtlast, time_frame_base)
+        gesamtlast, managed_forecast = load_manager.apply(
+            gesamtlast, time_frame_base, per_load=True
+        )
 
         eos_source_for_scale = config_manager.config.get("eos", {}).get(
             "source", "eos_server"
@@ -1156,6 +1166,15 @@ def create_optimize_request():
                         current_slot + 1,
                         ts[current_slot],
                     )
+            # The contributions ride along: they are part of the figure that was just
+            # discounted, and a band the chart subtracts from the Load bar has to have
+            # had the same arithmetic done to it or the current slot goes negative.
+            for series in managed_forecast.values():
+                if series and len(series) > current_slot:
+                    series[current_slot] *= scale_factor
+
+        global last_managed_forecast  # pylint: disable=global-statement
+        last_managed_forecast = managed_forecast
 
         return {
             "pv_prognose_wh": pv_prognose_wh,
@@ -1709,6 +1728,10 @@ class OptimizationScheduler:
             int((response_now - response_anchor).total_seconds()) // time_frame_base
         )
         optimized_response["anchor"] = response_anchor.isoformat()
+        # The managed loads that are part of `gesamtlast` rather than something the
+        # solver placed. Attached here, after the request went out, because it is ours
+        # alone: an EOS server validates what it is posted and would reject the key.
+        optimized_response["managed_load_forecast"] = last_managed_forecast
         self.last_request_response["response"] = json.dumps(
             optimized_response, indent=4
         )

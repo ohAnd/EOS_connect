@@ -781,6 +781,21 @@ attributes:
                         the <a href="#managed-loads-calibration">calibration</a> with its Reset. An
                         override, an error, or an ambient figure
                         that is a fixed guess never folds: those change what you should do.</p>
+                    <p>The headline above the cards says which of the two things is happening,
+                        and on a mixed install it says both. Where the optimizer places a load it
+                        decides the <em>timing</em>, against the battery and the household
+                        together, so that load is not part of the load forecast at all. A
+                        <a href="#managed-loads-external">profile load</a> is nothing but
+                        forecast: something else decides when it runs and tells EOS Connect, so
+                        its card reports an <em>Energy forecast</em> &mdash; what it will use
+                        &mdash; where a load with a demand of its own reports <em>Energy
+                        needed</em>.</p>
+
+                    <h3 id="managed-loads-chart">On the optimization chart</h3>
+                    <p>Every enabled managed load is drawn as the blue <em>Managed Loads</em> band,
+                        whichever of the two it is, and the Load bar underneath it is reduced by
+                        exactly the same amount. The stack total is unchanged; what changes is that you
+                        can see the appliance. Hovering a slot gives the figure beside the rest.</p>
 
                     <h3 id="managed-loads-publishes">What it publishes</h3>
                     <ul>
