@@ -18,7 +18,7 @@ import logging
 import threading
 from collections import deque
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 try:  # running from src/ — src/ is on sys.path
     from timeseries_grid import local_midnight
@@ -27,7 +27,8 @@ except ImportError:  # imported as src.loads (tests)
 
 from .ambient_bias import IMPLAUSIBLE_GAP_K, MAX_OFFSET_K, AmbientBias
 from .contribution import (
-    SOURCE_API, SOURCE_PULL, LoadContributionRegistry, ttl_from_minutes,
+    KIND_PROFILE, SOURCE_API, SOURCE_INTERNAL, SOURCE_PULL,
+    LoadContribution, LoadContributionRegistry, ttl_from_minutes,
 )
 from .injection import InjectionError, parse_push, profile_from_entries
 from .instance import ManagedLoad
@@ -41,6 +42,13 @@ logger = logging.getLogger("__main__")
 # Horizon the optimizer plans over, in hours. Mirrors EOS_TGT_DURATION in eos_connect.py;
 # passed in rather than imported so this package stays standalone.
 DEFAULT_HORIZON_HOURS = 48
+
+# Extra seconds a solver's answer is trusted past its cadence before the fallback takes
+# over. Sits on top of the quiet stretch, which the quarter-aligned scheduler can
+# stretch to nearly twice the configured interval (see
+# OptimizationInterface.calculate_next_run_time), so a couple of late runs do not flap
+# between planners - but small enough that a dead solver keeps no load latched for long.
+SCHEDULER_GRACE_SECONDS = 120
 
 
 def _noop(*_args, **_kwargs):
@@ -96,6 +104,17 @@ MEDIUM_HISTORY_MAX = 2000
 # mind and this module falling back on its own plan look identical from the appliance.
 ORIGIN_OPTIMIZER = "optimizer"
 ORIGIN_SELF = "self"
+
+# Registry suffix of a load's standby contribution. Its appliance's planned energy is
+# keyed by the plain id; the permanent draw of its own systems is a *household* term,
+# kept out of the key the planner and the solver know so nothing downstream mistakes
+# it for placeable demand. `ManagedLoadManager.STANDBY_SUFFIX` in the lookup paths.
+STANDBY_SUFFIX = "::standby"
+
+
+def standby_contribution_id(load_id):
+    """The registry key a load's standby contribution is published under."""
+    return f"{load_id}{STANDBY_SUFFIX}"
 
 # A regional forecast and a garden thermometer disagree, and each is right about
 # something the other cannot know: the forecast has the shape - that tonight drops to
@@ -176,7 +195,7 @@ class ManagedLoadManager:
 
     def __init__(self, entries, time_frame_base, time_zone, sources=None, store=None,
                  cycle_seconds=300, max_power_w=0, horizon_hours=DEFAULT_HORIZON_HOURS,
-                 on_release_change=None, clock=None):
+                 on_release_change=None, clock=None, scheduler_interval=None):
         self.time_frame_base = int(time_frame_base or 3600)
         self.time_zone = time_zone
         self.sources = sources or ManagedLoadSources()
@@ -185,6 +204,10 @@ class ManagedLoadManager:
         self.max_power_w = max(0.0, float(max_power_w or 0.0))
         self.horizon_hours = int(horizon_hours or DEFAULT_HORIZON_HOURS)
         self.on_release_change = on_release_change
+        # The optimizer's cadence, in seconds. The stale-schedule decision has to be
+        # measured *against* how often a schedule is actually expected - see
+        # _schedule_max_age - and the manager cannot know it without being told.
+        self.scheduler_interval = scheduler_interval
         # Injectable so tests can pin "now". Every planning decision depends on which
         # slot the current moment falls in, so a suite that reads the wall clock passes
         # in the morning and fails after lunch.
@@ -393,6 +416,7 @@ class ManagedLoadManager:
                 # not when its contribution happens to expire. Until this dropped, the
                 # optimizer kept planning around an appliance the user had disabled.
                 self.registry.drop(item.id)
+                self.registry.drop(standby_contribution_id(item.id))
                 continue
             ctx = self._context_for(item, ctx_base)
             self._last_ctx_for[item.id] = ctx
@@ -406,11 +430,21 @@ class ManagedLoadManager:
                     item.waiting_for_schedule_since = ctx_base.now
                 if item.schedule_is_stale(ctx_base.now, self._schedule_max_age()):
                     defer = False
+                    item.fallback_active = True
+                    # Whatever offer was still outstanding is void: this cycle puts
+                    # the placement into the household forecast, so an answer landing
+                    # late must not be read as "the offer worked".
+                    item.offered_at = None
                     logger.warning(
                         "[LOADS] '%s' has had no schedule from the optimizer for over "
                         "%d s - deciding from its own plan until one arrives",
                         item.id, self._schedule_max_age(),
                     )
+                else:
+                    item.fallback_active = False
+            else:
+                item.fallback_active = False
+                item.offered_at = None
             contribution, release = item.evaluate(
                 ctx, budget_wh=budget, defer_gate=defer
             )
@@ -424,6 +458,7 @@ class ManagedLoadManager:
                 if item.kind_is_contingent():
                     self._record_decision(item, ctx, release, origin=ORIGIN_SELF)
             self._consume_budget(budget, item.last_plan)
+            self._publish_standby(item, ctx)
 
         self.stats.cycles += 1
         self.stats.last_cycle = ctx_base.now.isoformat()
@@ -435,20 +470,50 @@ class ManagedLoadManager:
         """
         How long a load may go unscheduled before it falls back to its own plan.
 
-        Two cycles: one missed run is a slow solve, two is something wrong. Short
-        enough that a dead optimizer does not leave a pump latched on for an hour,
-        long enough not to flap on a single late answer.
+        Two planners cannot own the same load at once. While the optimizer is the
+        planner, a fallback offered in between would reach the household forecast
+        *and* stay up for the solver to place again - the same energy twice, which is
+        exactly how a heat pump's afternoon slot doubled on a live install: with the
+        old fixed age (two managed-load cycles) the answer of an optimizer running
+        every five minutes was "overdue" forever, so every cycle built a fallback plan
+        on top of the schedule it kept being offered.
+
+        So the age is the longest quiet stretch this optimizer's scheduling produces,
+        plus a small grace. Two sources, in order of knowledge: the interval this app
+        runs the solver at, when known - its quarter-hour alignment can hold runs
+        back for nearly twice that, so the figure doubles - else the load's own
+        cycle, right for a small fast app and too eager beside a slow one. An
+        interval of zero or less is "unknown": the old cycle-based age stands, which
+        leaves a fast external solver as it was and never makes anything worse.
         """
+        interval = int(self.scheduler_interval or 0)
+        if interval > 0:
+            return interval * 2 + SCHEDULER_GRACE_SECONDS
         return max(120, self.cycle_seconds * 2)
 
     def schedulable(self):
         """
         The contingent loads, as records for an optimizer that can place them itself.
 
+        Two planners must never own one load at once: the fallback's placement is in
+        the household forecast, so offering the same load beside it would have the
+        solver place energy the profile already carries. This is where that is
+        decided, and deciding it *here* is the point - a solver asking for records is
+        a solver that is alive, so the load goes back to it in the same breath as its
+        contribution leaves the registry. Nothing can be placed twice, and the
+        handover is a decision per run rather than a latch: until this call the
+        fallback owned the load, after it the solver does, and an answer that never
+        comes puts the fallback back on the next cycle.
+
+        The drop has to reach the registry before the request is built, which is why
+        `__run_optimization_loop` asks for the records first and assembles the
+        household profile afterwards.
+
         Nothing in a record names an appliance: a sauna and a hot-water tank produce
         the same shape from the same code, because what the energy is *for* lives in
         the demand model that worked the numbers out.
         """
+        _, now, _ = self._clock()
         records = []
         for item in self.instances:
             if not item.enabled or not item.kind_is_contingent():
@@ -487,6 +552,14 @@ class ManagedLoadManager:
                     * demand.max_power_w * (ctx.hours_per_slot() if ctx else 1.0)
                 ),
             })
+            # Only now, with the record actually going out: a load dropped by one of
+            # the guards above was never offered and must keep whatever it had.
+            item.offered_at = now
+            if item.fallback_active:
+                # Handing it back - and taking the fallback's placement out of the
+                # household forecast, so this run's profile no longer carries it.
+                item.fallback_active = False
+                self.registry.drop(item.id)
         return records
 
     def adopt_schedules(self, schedules, cost=None):
@@ -495,7 +568,11 @@ class ManagedLoadManager:
 
         Loads the optimizer did not answer for keep the plan this module worked out on
         its own - a solver that failed, or was swapped out, must not leave a pool with
-        no way to decide anything.
+        no way to decide anything. A load that was *offered* and still came back
+        unanswered is the sharp case: `schedulable()` took its fallback placement out
+        of the household forecast on the way out, so if its last real schedule is by
+        now old enough to count as silence, the fallback has to be put back here and
+        not one poll cycle later.
 
         *cost* is what the household pays extra for them, measured by the optimizer
         against a run without them. It is the figure the price limit promises, so it is
@@ -514,12 +591,23 @@ class ManagedLoadManager:
         _, now, _ = self._clock()
 
         adopted = 0
+        unanswered = []
+        max_age = self._schedule_max_age()
         for item in self.instances:
             if not item.enabled or not item.kind_is_contingent():
                 continue
             schedule = schedules.get(item.id)
             if schedule is None:
+                if item.offered_at is not None:
+                    item.offered_at = None
+                    if item.schedule_is_stale(now, max_age):
+                        item.fallback_active = True
+                        unanswered.append(item.id)
                 continue
+            # The optimizer has spoken, so the offer is settled and the solver owns
+            # the placement until it stops answering.
+            item.offered_at = None
+            item.fallback_active = False
             ctx = self._last_ctx_for.get(item.id)
             if ctx is None:
                 continue
@@ -529,6 +617,18 @@ class ManagedLoadManager:
                 self._publish_release(item, release)
                 self._record_decision(item, ctx, release, origin=ORIGIN_OPTIMIZER)
                 adopted += 1
+                # The schedule displaced whatever the fallback planner had placed - the
+                # standby term has to follow, or a slot newly scheduled keeps carrying a
+                # standby Wh for it until the next poll.
+                self._publish_standby(item, ctx)
+        for entry_id in unanswered:
+            # Re-plans and publishes in one step, which is what puts the placement
+            # back into the household forecast the offer had just emptied.
+            logger.warning(
+                "[LOADS] '%s' was offered to the optimizer and came back unanswered "
+                "- deciding from its own plan until a schedule arrives", entry_id,
+            )
+            self.refresh(entry_id)
         return adopted
 
     def _at_now(self, ctx, now):
@@ -575,6 +675,7 @@ class ManagedLoadManager:
             return False
         if not item.enabled:
             self.registry.drop(item.id)
+            self.registry.drop(standby_contribution_id(item.id))
             return False
 
         ctx_base = self._context()
@@ -587,6 +688,7 @@ class ManagedLoadManager:
         ctx = self._context_for(item, ctx_base)
         contribution, release = item.evaluate(ctx, budget_wh=budget)
         self._store_result(item, contribution, release)
+        self._publish_standby(item, ctx)
         return True
 
     def _store_result(self, item, contribution, release):
@@ -596,6 +698,66 @@ class ManagedLoadManager:
         else:
             self.registry.drop(item.id)
         self._publish_release(item, release)
+
+    def _publish_standby(self, item, ctx):
+        """
+        Carry the appliance's permanent draw in the household forecast.
+
+        A meter that stands out of the base load (subtracted, or an EVCC loadpoint
+        series EVCC nets off `group:home`) takes its standby draw out with it: the
+        circulation pumps and controls that run whatever the compressor does. The
+        appliance's *planned* energy is added back by the plan or the solver; this
+        adds the rest back as a profile contribution, so the household forecast
+        carries a draw the house genuinely makes around the clock.
+
+        Per slot it only fills where nothing is scheduled: a slot the appliance is
+        running in already carries its whole draw through the plan or the solver's
+        schedule, standby systems included, and stacking the standby there would
+        count those watts twice. While it runs, the last idle reading is kept rather
+        than read as zero - the draw does not vanish because the compressor started.
+
+        Nothing is published without a threshold: the feature is off, the meter is
+        part of the base load, and the draw is already counted there. Whether this
+        load has a standby term at all is `ManagedLoad.standby_forecast_active()` -
+        the same answer the status payload and the MQTT topic report, asked once so
+        the three cannot drift apart. The measured figure goes with it: the setting
+        is hot-reloadable, and a threshold taken back to zero must not leave the last
+        reading behind to be published forever.
+
+        The contribution is dropped *before* it is built rather than replaced in one
+        step only when the new one exists - set() is atomic under the registry lock,
+        and a reader on the optimizer path must never see the household minus its
+        standby because a cycle happened to fall between the two writes.
+        """
+        if not item.enabled or not item.standby_forecast_active():
+            self.registry.drop(standby_contribution_id(item.id))
+            item.last_standby_w = None
+            return
+        measured = item.model.standby_power_now(ctx.readings or {})
+        if measured is not None:
+            item.last_standby_w = measured
+        if not item.last_standby_w or item.last_standby_w <= 0:
+            self.registry.drop(standby_contribution_id(item.id))
+            return
+
+        wh_per_slot = item.last_standby_w * ctx.hours_per_slot()
+        slots = [
+            0.0 if index < len(item.last_plan) and item.last_plan[index] > 0
+            else wh_per_slot
+            for index in range(ctx.slot_count)
+        ]
+        self.registry.set(
+            LoadContribution(
+                id=standby_contribution_id(item.id),
+                slots_wh=slots,
+                anchor=ctx.anchor,
+                time_frame_base=ctx.time_frame_base,
+                valid_until=ctx.now + item.internal_ttl(),
+                kind=KIND_PROFILE,
+                source=getattr(item.model, "last_source", SOURCE_INTERNAL)
+                if item.type in EXTERNAL_TYPES else SOURCE_INTERNAL,
+            )
+        )
 
     def _record_decision(self, item, ctx, release, origin):
         """

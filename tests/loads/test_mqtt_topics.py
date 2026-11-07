@@ -58,6 +58,28 @@ def test_only_thermal_loads_get_temperature_topics(manager):
     assert f"{PREFIX}/heating/temperature" not in topics
 
 
+def test_a_thermal_load_gets_a_standby_power_topic(manager):
+    topics = build_topics(manager)
+    entry = topics[f"{PREFIX}/pool/standby_w"]
+    assert entry["unit"] == "W"
+    assert entry["device_class"] == "power"
+
+
+def test_a_standby_topic_publishes_nothing_without_a_threshold(manager):
+    """Feature off: the draw is household, and there is nothing to report per load."""
+    assert f"{PREFIX}/pool/standby_w" in build_topics(manager)
+    assert f"{PREFIX}/pool/standby_w" not in build_values(manager)
+
+
+def test_a_standby_topic_reports_the_measured_draw(manager, installation):
+    installation.sensors["sensor.pool_power"] = 95.0
+    manager.instance("pool").reconfigure(dict(POOL, standby_threshold_w=150.0))
+    manager.run_cycle()
+
+    values = build_values(manager)
+    assert values[f"{PREFIX}/pool/standby_w"]["value"] == 95.0
+
+
 def test_only_external_loads_get_a_push_command(manager):
     topics = build_topics(manager)
     assert topics[f"{PREFIX}/heating"]["command_topic"] == f"{PREFIX}/heating/set"
