@@ -2086,6 +2086,72 @@ class TestOpenMeteoLibDSTNormalisation:
         ), f"Fall-back: expected 48 elements after trimming, got {len(result)}"
 
 
+class TestOpenMeteoLibQuarterHourResolution:
+    """
+    With 15-minute planning slots the Open-Meteo library forecast must keep its
+    15-minute shape.
+
+    The library works on Open-Meteo's ``minutely_15`` data. Integrating per hour and
+    dividing by four gave four identical slots per hour, which flattened the ramps at
+    sunrise and sunset.
+    """
+
+    _ENTRY = TestOpenMeteoLibDSTNormalisation._ENTRY
+
+    @staticmethod
+    def _run(frame_base, power_at):
+        """Run the lib fetch with *power_at(datetime) -> W* as the library's curve."""
+        pv = PvInterface({}, [], frame_base, {}, timezone="Europe/Berlin")
+
+        mock_estimate = MagicMock()
+        mock_estimate.power_production_at_time.side_effect = power_at
+
+        mock_forecast = MagicMock()
+        mock_forecast.estimate = AsyncMock(return_value=mock_estimate)
+
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__.return_value = mock_forecast
+        mock_cm.__aexit__.return_value = None
+
+        with patch(
+            "src.interfaces.pv_interface.OpenMeteoSolarForecast", return_value=mock_cm
+        ):
+            return pv._PvInterface__get_pv_forecast_openmeteo_lib(
+                TestOpenMeteoLibQuarterHourResolution._ENTRY
+            )
+
+    def test_quarter_hour_slots_follow_the_curve(self):
+        """Each 15-minute slot holds its own energy, not a quarter of the hour."""
+        result = self._run(900, lambda at: at.minute * 10)
+
+        assert len(result) == 192
+        # Minutes 0-14: 10 W * (0+...+14) / 60 = 17.5 Wh; minutes 15-29: 55.0 Wh.
+        assert result[0] == 17.5
+        assert result[1] == 55.0
+        assert result[0] != result[1]
+
+    def test_quarter_hour_slots_add_up_to_the_hour(self):
+        """Four quarter-hour slots carry the same energy as one hourly slot."""
+
+        def curve(at):
+            return 100 * at.hour + at.minute
+
+        quarter = self._run(900, curve)
+        hourly = self._run(3600, curve)
+
+        assert len(hourly) == 48
+        for hour in range(48):
+            assert sum(quarter[4 * hour : 4 * hour + 4]) == pytest.approx(
+                hourly[hour], abs=0.2
+            )
+
+    def test_hourly_slot_integrates_the_full_hour(self):
+        """A constant 600 W for a full hour is 600 Wh, not 590 Wh."""
+        result = self._run(3600, lambda at: 600)
+
+        assert result[0] == 600.0
+
+
 def test_get_current_pv_forecast_returns_a_copy():
     """
     The accessor must not hand out the cached arrays themselves.
