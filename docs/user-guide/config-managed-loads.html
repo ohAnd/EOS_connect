@@ -824,10 +824,16 @@ attributes:
                             <code>managed_load/&lt;id&gt;/released</code> (a binary sensor),
                             <code>/state</code>, <code>/reason</code>, <code>/next_release_start</code>,
                             <code>/energy_needed_wh</code>, <code>/temperature</code>,
-                            <code>/target_temperature</code> and
-                            <code>/calibration_confidence</code>.</li>
+                            <code>/target_temperature</code>,
+                            <code>/calibration_confidence</code> and, for a load with a
+                            <a href="#managed-loads-standby">stand-by threshold</a>,
+                            <code>/standby_w</code> &mdash; the permanent draw currently
+                            measured below it, published as a diagnostic sensor.</li>
                         <li><code>GET /api/managed_loads</code> for the full picture: the plan slot by
-                            slot, the release state and the calibration.</li>
+                            slot, the release state and the calibration. Each load also carries
+                            <code>standby_w</code> (the same figure as the MQTT topic, <code>null</code>
+                            without a threshold) and <code>fallback_active</code> &mdash; see
+                            <a href="#managed-loads-decisions">below</a>.</li>
                         <li><code>POST /api/managed_loads/&lt;id&gt;/override</code> with
                             <code>{"mode": "release" &#124; "block" &#124; "clear", "minutes": 60}</code>,
                             or publish the same to
@@ -864,6 +870,12 @@ attributes:
                         current at that moment actually carried energy &mdash; a release with
                         <code>planned_now: false</code> is being held by the minimum runtime or an
                         override, not by the plan.</p>
+                    <p>The same distinction as it stands <em>right now</em> is
+                        <code>fallback_active</code> in <code>GET /api/managed_loads</code>: true
+                        while EOS Connect is planning the load itself because the solver has gone
+                        quiet for longer than roughly two optimization intervals. It is not a fault
+                        &mdash; the appliance keeps running on a sound plan &mdash; and the next
+                        answer from the solver hands the load straight back.</p>
                     <p>Kept for seven days and purged on start. It is written for reading after the
                         fact; nothing uses it to run the house.</p>
                 </div>

@@ -1647,6 +1647,19 @@ class OptimizationScheduler:
               necessary configuration values for "eos.timeout" and "refresh_time".
         """
         logger.info("[Main] start new run")
+        # Contingent loads reach a solver that can place them as something to schedule,
+        # beside the request rather than inside it: that dict is posted verbatim to an
+        # EOS server, which validates what it is sent, and no other backend could use
+        # them anyway.
+        #
+        # Asked *before* the request is built, and that order is load-bearing: a load
+        # the fallback planner had taken over gives its placement back as it is
+        # offered, and the household profile below must be assembled after that, or it
+        # carries the energy the solver is about to place a second time.
+        managed_records = None
+        if getattr(eos_interface, "schedules_managed_loads", False):
+            managed_records = load_manager.schedulable()
+
         # create optimize request
         json_optimize_input = create_optimize_request()
         self.__set_state_request()
@@ -1659,13 +1672,7 @@ class OptimizationScheduler:
         mqtt_interface.update_publish_topics(
             {"optimization/state": {"value": self.get_current_state()["request_state"]}}
         )
-        # Contingent loads reach a solver that can place them as something to schedule,
-        # beside the request rather than inside it: that dict is posted verbatim to an
-        # EOS server, which validates what it is sent, and no other backend could use
-        # them anyway.
-        managed_records = None
-        if getattr(eos_interface, "schedules_managed_loads", False):
-            managed_records = load_manager.schedulable()
+        if managed_records is not None:
             optimized_response, avg_runtime = eos_interface.optimize(
                 json_optimize_input,
                 managed_loads=managed_records,
@@ -1737,10 +1744,13 @@ class OptimizationScheduler:
         ) = eos_interface.examine_response_to_control_data(optimized_response)
         # Settle each load's gate on what the optimizer decided, before anything else
         # acts on the response. A load the optimizer did not answer for keeps the plan
-        # the managed-load module worked out on its own.
-        if optimized_response.get("managed_loads"):
+        # the managed-load module worked out on its own - which is why this runs
+        # whenever loads were offered at all, not only when something came back: "the
+        # run is over" is news even for a run that placed nothing, and a load that was
+        # handed out and left unanswered has no placement anywhere until it is told.
+        if managed_records is not None:
             load_manager.adopt_schedules(
-                optimized_response["managed_loads"],
+                optimized_response.get("managed_loads") or {},
                 cost=optimized_response.get("managed_loads_cost"),
             )
 

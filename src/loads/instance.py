@@ -110,10 +110,15 @@ class ManagedLoad:
         self.waiting_for_schedule_since = None
         # Whether the fallback planner currently owns the placement - i.e. the last
         # schedule is older than the manager's staleness age and this load has been
-        # handed back to this module's own plan. Set only by the manager's cycle, read
-        # there and by schedulable(); a schedule arriving clears it by way of
-        # last_schedule_at, never by direct write.
+        # handed back to this module's own plan. The cycle sets it when the schedule
+        # goes stale; `schedulable()` takes it back the moment a solver asks, because
+        # a solver that asks is a solver that is alive.
         self.fallback_active = False
+        # When this load was last handed to a solver as something to place. The answer
+        # to that offer settles whether the fallback stays gone or comes straight back,
+        # so the manager has to be able to tell "was never offered" from "offered and
+        # not answered for".
+        self.offered_at = None
         # Whether the reported price was measured against a run without this load, or
         # is only the tariff of the hours it occupies.
         self.last_cost_is_measured = False

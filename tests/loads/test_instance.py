@@ -1423,46 +1423,108 @@ def test_unknown_cadence_keeps_the_cycle_based_age(make_manager):
     assert manager._schedule_max_age() == 180
 
 
-def test_a_fallback_stops_being_offered_to_the_solver(make_manager, installation):
-    """
-    The once-a-load-is-fallback race, as it showed live: the overdue fallback plan
-    went into the household forecast while the record stayed up for the solver, and
-    the optimizer placed the same energy again on top. One planner at a time - the
-    fallback owns it until a schedule arrives, and nothing is offered meanwhile.
-    """
-    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+def _fallen_back(manager, installation):
+    """A manager whose single pool has been taken over by the fallback planner."""
     manager.external_scheduler = True
     _run(manager, installation, water_c=20.0)
     manager.adopt_schedules({"pool": [0.0] * 48})
-
     load = manager.instance("pool")
     load.last_schedule_at = load.last_schedule_at - timedelta(seconds=3000)
     manager.run_cycle()
-
     assert load.fallback_active
-    assert manager.schedulable() == []
+    return load
+
+
+def test_the_fallback_carries_the_energy_while_it_owns_the_load(
+    make_manager, installation
+):
+    """
+    The once-a-load-is-fallback race, as it showed live: the overdue fallback plan
+    went into the household forecast while the record stayed up for the solver, and
+    the optimizer placed the same energy again on top. One planner at a time - while
+    the fallback owns it, the forecast is where the energy is.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    _fallen_back(manager, installation)
 
     base = [1000.0] * 48
     assert manager.apply(base, 3600) != base, "the fallback plan carries the energy"
 
 
-def test_a_landed_schedule_re_offers_the_load_and_clears_the_fallback(
+def test_a_solver_asking_takes_the_load_back_from_the_fallback(
     make_manager, installation
 ):
+    """
+    The handover is a decision per run, never a latch. A solver asking for records is
+    a solver that is alive, so the load goes back to it - and its placement leaves the
+    household forecast in the same call, because the request is built afterwards and
+    would otherwise carry the energy the solver is about to place.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    load = _fallen_back(manager, installation)
+    base = [1000.0] * 48
+    assert manager.apply(base, 3600) != base
+
+    records = manager.schedulable()
+
+    assert [record["id"] for record in records] == ["pool"]
+    assert not load.fallback_active
+    assert load.offered_at is not None
+    assert manager.apply(base, 3600) == base, (
+        "the fallback placement must leave the forecast as the load is offered"
+    )
+
+
+def test_a_landed_schedule_settles_the_offer(make_manager, installation):
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    load = _fallen_back(manager, installation)
+    manager.schedulable()
+
+    manager.adopt_schedules({"pool": [875.0] * 4 + [0.0] * 44})
+
+    assert not load.fallback_active
+    assert load.offered_at is None
+    assert manager.schedulable()
+
+
+def test_an_unanswered_offer_puts_the_fallback_straight_back(
+    make_manager, installation
+):
+    """
+    A solver that runs but cannot place anything - infeasible, no CBC - would
+    otherwise leave the household forecast short of the load until the next poll
+    cycle: the offer emptied it and nothing filled it again.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    load = _fallen_back(manager, installation)
+    base = [1000.0] * 48
+    manager.schedulable()
+    assert manager.apply(base, 3600) == base
+
+    manager.adopt_schedules({})
+
+    assert load.fallback_active
+    assert load.offered_at is None
+    assert manager.apply(base, 3600) != base
+
+
+def test_a_fresh_schedule_survives_a_run_that_answered_nothing(
+    make_manager, installation
+):
+    """
+    Only silence hands a load to the fallback. One infeasible run between two healthy
+    ones says nothing about the schedule that landed a moment ago.
+    """
     manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
     manager.external_scheduler = True
     _run(manager, installation, water_c=20.0)
     manager.adopt_schedules({"pool": [0.0] * 48})
-
     load = manager.instance("pool")
-    load.last_schedule_at = load.last_schedule_at - timedelta(seconds=3000)
-    manager.run_cycle()
-    assert load.fallback_active
+    manager.schedulable()
 
-    # The solver answers (any schedule, even an empty one) - it owns the load again.
-    manager.adopt_schedules({"pool": [875.0] * 4 + [0.0] * 44})
+    manager.adopt_schedules({})
+
     assert not load.fallback_active
-    assert manager.schedulable()
 
 
 def test_a_fallback_loads_plan_leaves_the_forecast_when_a_schedule_lands(

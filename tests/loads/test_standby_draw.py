@@ -301,3 +301,27 @@ def test_hot_reload_re_thresholds_the_fit_in_place():
     item.reconfigure(apply_defaults(tank(standby_threshold_w=150.0)))
     assert item.model.calibrator.idle_power_w == 150.0
     assert item.model.standby_threshold_w == 150.0
+
+def test_taking_the_threshold_back_to_zero_drops_the_standby_draw():
+    """
+    The setting is hot-reloadable in both directions. Turning it off has to take the
+    published term with it: the measured figure is only kept so the draw does not
+    vanish while the compressor runs, and without this guard that same memory kept a
+    load in the household forecast that nothing was measuring any more.
+    """
+    manager = make_manager([tank(
+        standby_threshold_w=150.0, power_sensor="group:loadpoint:Wärmepumpe",
+    )])
+    manager.run_cycle()
+    item = manager.instance("heatpumpt_heating")
+    assert manager.registry.get(standby_contribution_id("heatpumpt_heating")) is not None
+    assert item.last_standby_w == pytest.approx(100.0, rel=0.01)
+
+    item.reconfigure(apply_defaults(tank(
+        standby_threshold_w=0.0, power_sensor="group:loadpoint:Wärmepumpe",
+    )))
+    manager.run_cycle()
+
+    assert manager.registry.get(standby_contribution_id("heatpumpt_heating")) is None
+    assert item.last_standby_w is None
+    assert item.status()["standby_w"] is None

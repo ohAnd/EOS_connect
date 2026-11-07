@@ -424,6 +424,10 @@ class ManagedLoadManager:
                 if item.schedule_is_stale(ctx_base.now, self._schedule_max_age()):
                     defer = False
                     item.fallback_active = True
+                    # Whatever offer was still outstanding is void: this cycle puts
+                    # the placement into the household forecast, so an answer landing
+                    # late must not be read as "the offer worked".
+                    item.offered_at = None
                     logger.warning(
                         "[LOADS] '%s' has had no schedule from the optimizer for over "
                         "%d s - deciding from its own plan until one arrives",
@@ -433,6 +437,7 @@ class ManagedLoadManager:
                     item.fallback_active = False
             else:
                 item.fallback_active = False
+                item.offered_at = None
             contribution, release = item.evaluate(
                 ctx, budget_wh=budget, defer_gate=defer
             )
@@ -483,23 +488,28 @@ class ManagedLoadManager:
         """
         The contingent loads, as records for an optimizer that can place them itself.
 
-        A load the fallback has already taken over stops being offered: it is in the
-        household forecast until a schedule arrives, and offering it as well would
-        have the solver place the same energy the forecast already carries. Its
-        staleness was decided on the last cycle - read here, not recomputed, so this
-        answers what the module is actually doing rather than racing the poll thread.
-        (An idle-optimizer fallback still yields no records *and* no contributions,
-        because the fallback's own demand can be nothing to place.)
+        Two planners must never own one load at once: the fallback's placement is in
+        the household forecast, so offering the same load beside it would have the
+        solver place energy the profile already carries. This is where that is
+        decided, and deciding it *here* is the point - a solver asking for records is
+        a solver that is alive, so the load goes back to it in the same breath as its
+        contribution leaves the registry. Nothing can be placed twice, and the
+        handover is a decision per run rather than a latch: until this call the
+        fallback owned the load, after it the solver does, and an answer that never
+        comes puts the fallback back on the next cycle.
+
+        The drop has to reach the registry before the request is built, which is why
+        `__run_optimization_loop` asks for the records first and assembles the
+        household profile afterwards.
 
         Nothing in a record names an appliance: a sauna and a hot-water tank produce
         the same shape from the same code, because what the energy is *for* lives in
         the demand model that worked the numbers out.
         """
+        _, now, _ = self._clock()
         records = []
         for item in self.instances:
             if not item.enabled or not item.kind_is_contingent():
-                continue
-            if item.fallback_active:
                 continue
             demand = item.last_demand
             if demand is None or demand.total_wh <= 0 or demand.max_power_w <= 0:
@@ -535,6 +545,14 @@ class ManagedLoadManager:
                     * demand.max_power_w * (ctx.hours_per_slot() if ctx else 1.0)
                 ),
             })
+            # Only now, with the record actually going out: a load dropped by one of
+            # the guards above was never offered and must keep whatever it had.
+            item.offered_at = now
+            if item.fallback_active:
+                # Handing it back - and taking the fallback's placement out of the
+                # household forecast, so this run's profile no longer carries it.
+                item.fallback_active = False
+                self.registry.drop(item.id)
         return records
 
     def adopt_schedules(self, schedules, cost=None):
@@ -543,7 +561,11 @@ class ManagedLoadManager:
 
         Loads the optimizer did not answer for keep the plan this module worked out on
         its own - a solver that failed, or was swapped out, must not leave a pool with
-        no way to decide anything.
+        no way to decide anything. A load that was *offered* and still came back
+        unanswered is the sharp case: `schedulable()` took its fallback placement out
+        of the household forecast on the way out, so if its last real schedule is by
+        now old enough to count as silence, the fallback has to be put back here and
+        not one poll cycle later.
 
         *cost* is what the household pays extra for them, measured by the optimizer
         against a run without them. It is the figure the price limit promises, so it is
@@ -562,18 +584,22 @@ class ManagedLoadManager:
         _, now, _ = self._clock()
 
         adopted = 0
+        unanswered = []
+        max_age = self._schedule_max_age()
         for item in self.instances:
             if not item.enabled or not item.kind_is_contingent():
                 continue
             schedule = schedules.get(item.id)
             if schedule is None:
+                if item.offered_at is not None:
+                    item.offered_at = None
+                    if item.schedule_is_stale(now, max_age):
+                        item.fallback_active = True
+                        unanswered.append(item.id)
                 continue
-            # Whatever the fallback was doing, the optimizer has spoken: from here the
-            # solver owns the placement again. Clearing the flag *before* adopting is
-            # what keeps schedulable() offering the load again on the run that follows
-            # - and it is what keeps the handover one-way in name only: a load that
-            # fell back is withheld from the solver, so its silence must never become
-            # permanent. An answer - even an empty one - flips it back.
+            # The optimizer has spoken, so the offer is settled and the solver owns
+            # the placement until it stops answering.
+            item.offered_at = None
             item.fallback_active = False
             ctx = self._last_ctx_for.get(item.id)
             if ctx is None:
@@ -588,6 +614,14 @@ class ManagedLoadManager:
                 # standby term has to follow, or a slot newly scheduled keeps carrying a
                 # standby Wh for it until the next poll.
                 self._publish_standby(item, ctx)
+        for entry_id in unanswered:
+            # Re-plans and publishes in one step, which is what puts the placement
+            # back into the household forecast the offer had just emptied.
+            logger.warning(
+                "[LOADS] '%s' was offered to the optimizer and came back unanswered "
+                "- deciding from its own plan until a schedule arrives", entry_id,
+            )
+            self.refresh(entry_id)
         return adopted
 
     def _at_now(self, ctx, now):
@@ -676,20 +710,23 @@ class ManagedLoadManager:
         than read as zero - the draw does not vanish because the compressor started.
 
         Nothing is published without a threshold: the feature is off, the meter is
-        part of the base load, and the draw is already counted there. The contribution
-        is dropped *before* it is built rather than replaced in one step only when the
-        new one exists - set() is atomic under the registry lock, and a reader on the
-        optimizer path must never see the household minus its standby because a cycle
-        happened to fall between the two writes.
+        part of the base load, and the draw is already counted there. Whether this
+        load has a standby term at all is `ManagedLoad.standby_forecast_active()` -
+        the same answer the status payload and the MQTT topic report, asked once so
+        the three cannot drift apart. The measured figure goes with it: the setting
+        is hot-reloadable, and a threshold taken back to zero must not leave the last
+        reading behind to be published forever.
+
+        The contribution is dropped *before* it is built rather than replaced in one
+        step only when the new one exists - set() is atomic under the registry lock,
+        and a reader on the optimizer path must never see the household minus its
+        standby because a cycle happened to fall between the two writes.
         """
-        if not item.enabled or not item.metered_out_of_base_load():
+        if not item.enabled or not item.standby_forecast_active():
             self.registry.drop(standby_contribution_id(item.id))
+            item.last_standby_w = None
             return
-        model = item.model
-        if model is None or not hasattr(model, "standby_power_now"):
-            self.registry.drop(standby_contribution_id(item.id))
-            return
-        measured = model.standby_power_now(ctx.readings or {})
+        measured = item.model.standby_power_now(ctx.readings or {})
         if measured is not None:
             item.last_standby_w = measured
         if not item.last_standby_w or item.last_standby_w <= 0:
