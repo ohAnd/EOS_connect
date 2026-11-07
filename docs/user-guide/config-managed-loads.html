@@ -137,6 +137,13 @@
                             <em>Additional Load</em>, which models a shiftable appliance such as a
                             dishwasher &mdash; a runtime and a total, for the optimizer to place. Do not
                             configure the same sensor as both.</p>
+                        <p>Only the <strong>EOS Server</strong> backend places the Additional Load.
+                            Under the built-in optimizer or an external EVopt server there is no
+                            shiftable-appliance variable to place it with, so its consumption stays
+                            in the household load forecast at the times it ran historically and no
+                            start time is published; the alerts panel says so at startup. An
+                            appliance you want <em>scheduled</em> under those backends belongs here,
+                            as a managed load.</p>
                     </div>
                 </div>
 

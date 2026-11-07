@@ -399,7 +399,34 @@ load_interface = interface_factory.create_load_interface(
     # here would leave its history subtracted from the base load until a restart,
     # which reads as a household that is lighter than it really is.
     extra_subtract_sensors=load_manager.subtract_sensors,
+    # The Additional Load is handed to the optimizer as a shiftable appliance, so its
+    # measured history leaves the base load - but only EOS places it. EVopt reads no
+    # such device and returns a zero appliance array, so under it the subtraction had
+    # nothing putting the energy back and the appliance simply vanished from the
+    # forecast. A plain value, not a callable: `eos.source` needs a restart anyway.
+    places_additional_load=eos_interface.places_home_appliance,
 )
+
+# Configured and ignored is the worst of the three states, so it gets said out loud
+# once. The energy is no longer lost - it stays in the household forecast - but the
+# shifting the setting promises does not happen, and nothing else on the page would
+# tell anyone that.
+if (
+    config_manager.config.get("load", {}).get("additional_load_1_sensor", "")
+    and not eos_interface.places_home_appliance
+):
+    startup_validator.add_error(
+        "configuration",
+        "additional_load",
+        "warning",
+        "Additional Load is not placed by this optimizer",
+        "An Additional Load sensor is configured, but only the EOS Server backend "
+        "schedules that appliance. Its consumption stays in the household load "
+        "forecast at the times it ran historically, and no start time is published. "
+        "Configure it as a Managed Load to have the optimizer choose when it runs.",
+        action_required=False,
+        config_link="#load",
+    )
 
 # Build the load profile now rather than inside the first optimizer run. It is derived
 # from four finished historical days, so it changes only at midnight and the interface

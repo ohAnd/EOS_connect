@@ -591,7 +591,9 @@ def test_the_profile_is_built_once_per_day():
     config = dict(HA_CONFIG)
     config["car_charge_load_sensor"] = "sensor.car"
     config["additional_load_1_sensor"] = "sensor.hp"
-    interface = LoadInterface(config, 3600, "UTC")
+    # Placed, so its meter is read. Under an optimizer that does not place it the
+    # sensor is neither subtracted nor fetched - see the test below.
+    interface = LoadInterface(config, 3600, "UTC", places_additional_load=True)
 
     with _connected(fake), _frozen(today):
         first = interface.get_load_profile(48)
@@ -602,6 +604,26 @@ def test_the_profile_is_built_once_per_day():
     assert after_first == 12, "3 sensors x 4 days"
     assert len(fake.history_calls) == after_first, "later runs must not touch HA again"
     assert third == first
+
+
+def test_an_unplaced_additional_load_is_not_fetched_at_all():
+    """
+    Its history is only wanted to take it out of the profile, and that only happens
+    where something puts the energy back. One fewer sensor across four days.
+    """
+    today = datetime(2026, 3, 3, 9, 0, tzinfo=timezone.utc)
+    fake = _full_day_fake(today.replace(hour=0))
+    config = dict(HA_CONFIG)
+    config["car_charge_load_sensor"] = "sensor.car"
+    config["additional_load_1_sensor"] = "sensor.hp"
+    interface = LoadInterface(config, 3600, "UTC", places_additional_load=False)
+
+    with _connected(fake), _frozen(today):
+        interface.get_load_profile(48)
+
+    fetched = {call[0] for call in fake.history_calls}
+    assert "sensor.hp" not in fetched
+    assert fetched == {"sensor.house", "sensor.car"}
 
 
 def test_the_aggregation_is_not_re_run_either():
