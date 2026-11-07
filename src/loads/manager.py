@@ -304,7 +304,7 @@ class ManagedLoadManager:
 
     # -- the optimizer-facing call ---------------------------------------------------------
 
-    def apply(self, gesamtlast, time_frame_base=None):
+    def apply(self, gesamtlast, time_frame_base=None, per_load=False):
         """
         Add every active contribution to a household load profile.
 
@@ -316,23 +316,30 @@ class ManagedLoadManager:
         The input list is never modified - both series here are backed by a cache on the
         interface that produced them, and mutating one in place is a bug this codebase
         has already paid for once (see the comment in `get_ems_data`).
+
+        With *per_load*, returns ``(combined, {id: [Wh]})``: what went in, kept apart, so
+        the chart can draw each appliance as its own band and take exactly that much back
+        out of the Load bar. Split here rather than fetched again by the caller because a
+        second read happens a poll cycle later and need not agree with this one.
         """
         base = list(gesamtlast or [])
         if not base or not self._instances:
-            return base
+            return (base, {}) if per_load else base
 
         resolution = int(time_frame_base or self.time_frame_base)
         anchor, now, _ = self._clock()
         extra = self.registry.total(anchor, len(base), resolution, now=now)
         if not any(extra):
-            return base
+            return (base, {}) if per_load else base
 
         combined = [max(0.0, value + bonus) for value, bonus in zip(base, extra)]
         logger.debug(
             "[LOADS] added %.0f Wh across %d slots to the load forecast",
             sum(combined) - sum(base), len(base),
         )
-        return combined
+        if not per_load:
+            return combined
+        return combined, self.registry.per_id(anchor, len(base), resolution, now=now)
 
     def contribution_total_wh(self):
         """Summed contribution over the horizon, for MQTT and the dashboard."""
@@ -1447,6 +1454,12 @@ class ManagedLoadManager:
     def _load_status(self, item):
         """One load's status, plus what the manager knows about its site."""
         status = item.status()
+        # Per load, because the subsystem-level flag says only that the optimizer *can*
+        # place loads. A profile load is never one of them, and describing it as
+        # scheduled hides the one true thing about it: it is in the load forecast.
+        status["scheduled_by_optimizer"] = bool(
+            self.external_scheduler and item.kind_is_contingent()
+        )
         bias = self.ambient_bias_state(item.id)
         if bias is not None:
             status["ambient_bias"] = bias

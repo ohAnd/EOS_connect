@@ -1202,6 +1202,33 @@ def test_a_scheduled_load_is_not_also_in_the_household_forecast(make_manager, in
     assert manager.apply(base, 3600) == base
 
 
+def test_only_a_contingent_load_reports_itself_as_scheduled(make_manager, installation):
+    """
+    The subsystem flag says the optimizer *can* place loads; it says nothing about any
+    one of them. Reading it per install told the overlay a pushed profile was
+    "scheduled by the optimizer", which is issue #362's second half: it is not, and
+    saying so hid the only true thing - the profile is in the load forecast.
+    """
+    manager = make_manager([POOL, {"id": "heating", "type": TYPE_EXTERNAL_PROFILE}])
+    manager.external_scheduler = True
+    manager.push("heating", {"value_wh": 1500})
+    _run(manager, installation, water_c=20.0)
+
+    flags = {
+        load["id"]: load["scheduled_by_optimizer"] for load in manager.status()["loads"]
+    }
+    assert flags == {"pool": True, "heating": False}
+
+
+def test_nothing_is_scheduled_while_the_backend_cannot_place_it(
+    make_manager, installation
+):
+    manager = make_manager([POOL])
+    _run(manager, installation, water_c=20.0)
+
+    assert manager.status()["loads"][0]["scheduled_by_optimizer"] is False
+
+
 def test_the_load_is_offered_to_the_optimizer_instead(make_manager, installation):
     manager = make_manager([POOL])
     manager.external_scheduler = True

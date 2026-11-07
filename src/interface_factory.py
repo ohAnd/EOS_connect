@@ -70,6 +70,7 @@ class InterfaceFactory:
         request_timeout: int = 10,
         critical: bool = True,
         extra_subtract_sensors=None,
+        places_additional_load: bool = False,
     ):
         """
         Create LoadInterface with error handling.
@@ -82,6 +83,9 @@ class InterfaceFactory:
             critical: Whether interface is critical (stops startup on failure)
             extra_subtract_sensors: Power sensors of managed loads, removed from the
                 household base load so their predicted consumption is not counted twice
+            places_additional_load: Whether the optimizer in use places the Additional
+                Load. Only then may its meter leave the household base load - nothing
+                else puts that energy back
             
         Returns:
             LoadInterface instance or None if non-critical and failed
@@ -104,6 +108,7 @@ class InterfaceFactory:
                 time_zone,
                 request_timeout=request_timeout,
                 extra_subtract_sensors=extra_subtract_sensors,
+                places_additional_load=places_additional_load,
             ),
         )
 

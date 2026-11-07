@@ -151,3 +151,54 @@ def test_a_backend_that_cannot_schedule_is_never_offered_the_budget():
         {"ems": {}}, managed_loads=RECORDS, managed_load_budget_w=3000.0
     )
     assert "managed_load_budget_w" not in backend.optimize.call_args[1]
+
+
+# --- the Additional Load's other half ---------------------------------------------------
+
+def test_the_appliance_capability_is_read_through_to_the_backend():
+    """
+    The same `getattr` trap as above, on the flag that decides whether the Additional
+    Load's meter may leave the household profile.
+    """
+    backend = MagicMock()
+    backend.places_home_appliance = True
+    assert _interface("eos_server", backend).places_home_appliance is True
+
+
+def test_a_backend_that_does_not_place_the_appliance_says_so():
+    backend = MagicMock()
+    backend.places_home_appliance = False
+    assert _interface("local_evopt", backend).places_home_appliance is False
+
+
+def test_an_undeclared_backend_is_assumed_not_to_place_it():
+    """
+    The conservative default, and the opposite of the other flag's reasoning: assuming
+    a backend places the appliance leaves it subtracted from the forecast with nothing
+    putting it back, and the energy is gone. Assuming it does not merely forgoes the
+    shifting.
+    """
+    backend = MagicMock()
+    del backend.places_home_appliance
+    assert _interface("eos_server", backend).places_home_appliance is False
+
+
+def test_the_real_backends_declare_what_they_do():
+    """
+    Read off the classes, because this is the pair the application actually holds and
+    a default that silently applied to one of them is the bug being guarded.
+    """
+    from src.interfaces.optimization_backends.optimization_backend_eos import EOSBackend
+    from src.interfaces.optimization_backends.optimization_backend_evopt import (
+        EVOptBackend,
+    )
+    from src.interfaces.optimization_backends.optimization_backend_local_evopt import (
+        LocalEVOptBackend,
+    )
+
+    assert EOSBackend.places_home_appliance is True
+    assert EVOptBackend.places_home_appliance is False
+    assert LocalEVOptBackend.places_home_appliance is False
+    # The two capabilities are independent: the solver that places managed loads is
+    # exactly the one that does not place the appliance.
+    assert LocalEVOptBackend.schedules_managed_loads is True

@@ -88,18 +88,55 @@ def test_several_managed_loads_are_all_removed():
     assert profile[0] == pytest.approx(0.0, abs=1.0)
 
 
-def test_managed_loads_stack_with_the_existing_additional_load():
+def _with_additional_load(places, **kwargs):
     config = dict(CONFIG, additional_load_1_sensor="sensor.dishwasher")
     with patch("src.interfaces.load_interface.logger"):
-        interface = LoadInterface(
-            config, time_frame_base=3600, extra_subtract_sensors=["sensor.pool_power"]
+        return LoadInterface(
+            config, time_frame_base=3600, places_additional_load=places, **kwargs
         )
+
+
+def test_managed_loads_stack_with_the_existing_additional_load():
+    interface = _with_additional_load(True, extra_subtract_sensors=["sensor.pool_power"])
     profile = _profile_for_one_hour(
         interface,
         house_w=2000,
         sensor_readings={"sensor.pool_power": 800, "sensor.dishwasher": 500},
     )
     assert profile[0] == pytest.approx(700.0, rel=0.02)
+
+
+def test_the_additional_load_stays_in_the_profile_when_nothing_places_it():
+    """
+    Only EOS schedules that appliance. EVopt reads no such device and returns a zero
+    appliance array, so taking the meter out under it removed the energy from the
+    forecast and nothing ever put it back - the household simply read 500 W lighter
+    than it is, every hour the dishwasher had ever run.
+    """
+    interface = _with_additional_load(False)
+    profile = _profile_for_one_hour(
+        interface, house_w=2000, sensor_readings={"sensor.dishwasher": 500}
+    )
+    assert profile[0] == pytest.approx(2000.0, rel=0.01)
+
+
+def test_the_managed_loads_are_still_removed_when_it_is_not():
+    """The two rules are independent: a managed load has its own forecast either way."""
+    interface = _with_additional_load(False, extra_subtract_sensors=["sensor.pool_power"])
+    profile = _profile_for_one_hour(
+        interface,
+        house_w=2000,
+        sensor_readings={"sensor.pool_power": 800, "sensor.dishwasher": 500},
+    )
+    assert profile[0] == pytest.approx(1200.0, rel=0.02)
+
+
+def test_the_meter_is_not_even_read_when_nothing_places_it():
+    """No subtraction means no history fetch - it was one request per slot per day."""
+    assert _with_additional_load(False).subtracted_additional_load_sensor == ""
+    assert _with_additional_load(True).subtracted_additional_load_sensor == (
+        "sensor.dishwasher"
+    )
 
 
 def test_a_household_reading_smaller_than_its_controllables_is_left_alone():

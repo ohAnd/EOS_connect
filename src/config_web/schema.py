@@ -701,7 +701,7 @@ _ALL_FIELDS: list[FieldDef] = [
         default=0,
         section="load",
         level="standard",
-        description="Runtime for additional load 1 in minutes (0 = not used)",
+        description="Runtime for additional load 1 in hours (0 = not used)",
         labels=["restart_required"],
         help_url="config-data.html#load",
         validation={"min": 0},

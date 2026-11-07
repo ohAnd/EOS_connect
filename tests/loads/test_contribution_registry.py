@@ -170,3 +170,56 @@ def test_ttl_is_clamped_to_something_usable(minutes, expected):
     """A zero TTL would expire the contribution before the next optimizer run reads it."""
     now = datetime(2026, 6, 1, tzinfo=timezone.utc)
     assert ttl_from_minutes(minutes, now=now) == now + timedelta(minutes=expected)
+
+
+# --- the same numbers, kept apart ---------------------------------------------------------
+
+def test_per_id_splits_exactly_what_total_sums():
+    """
+    The chart draws the band from `per_id` and takes it out of the Load bar from the
+    same numbers, so a slot the two disagree on is a slot the stack is wrong in.
+    """
+    registry = LoadContributionRegistry()
+    registry.set(_contribution("pool", values=[100.0] * 48))
+    registry.set(_contribution("heating", values=[25.0] * 48))
+    now = _anchor().astimezone(timezone.utc)
+
+    per_id = registry.per_id(_anchor(), 48, 3600, now=now)
+    total = registry.total(_anchor(), 48, 3600, now=now)
+
+    assert sorted(per_id) == ["heating", "pool"]
+    assert [sum(values) for values in zip(*per_id.values())] == total
+
+
+def test_per_id_carries_the_alignment_total_does():
+    """A contribution read a day late is short-padded in both, identically."""
+    registry = LoadContributionRegistry()
+    item = _contribution("pool", values=[20.0] * 48)
+    registry.set(item)
+    tomorrow = _anchor(day=2)
+    now = item.anchor.astimezone(timezone.utc)
+
+    assert registry.per_id(tomorrow, 48, 3600, now=now)["pool"] == (
+        registry.total(tomorrow, 48, 3600, now=now)
+    )
+
+
+def test_per_id_drops_a_contribution_at_the_wrong_resolution():
+    """
+    Exactly as `total` does. Counting it in one and not the other would subtract an
+    appliance from the Load bar that nothing ever added to it.
+    """
+    registry = LoadContributionRegistry()
+    registry.set(_contribution("pool", values=[100.0] * 192, base=900))
+    now = _anchor().astimezone(timezone.utc)
+
+    assert registry.per_id(_anchor(), 48, 3600, now=now) == {}
+    assert registry.total(_anchor(), 48, 3600, now=now) == [0.0] * 48
+
+
+def test_per_id_leaves_out_an_expired_contribution():
+    registry = LoadContributionRegistry()
+    registry.set(_contribution("pool", values=[100.0] * 48, ttl_h=1))
+    moment = _anchor().astimezone(timezone.utc) + timedelta(hours=2)
+
+    assert registry.per_id(_anchor(), 48, 3600, now=moment) == {}

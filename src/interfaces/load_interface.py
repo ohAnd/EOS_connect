@@ -59,6 +59,7 @@ class LoadInterface:
         tz_name=None,  # Changed default to None
         request_timeout=10,  # Default timeout for API requests
         extra_subtract_sensors=None,
+        places_additional_load=False,
     ):
         self.src = config.get("source", "")
         self.url = config.get("url", "")
@@ -79,6 +80,14 @@ class LoadInterface:
         # enabling and disabling a managed load is a hot-reloadable setting and a
         # disabled one stops contributing its forecast the moment it is switched off.
         self.__extra_subtract_source = extra_subtract_sensors
+        # Whether anything downstream puts the Additional Load's energy back. The
+        # optimizer decides: EOS places the appliance and reports it in
+        # `Home_appliance_wh_per_hour`, EVopt has no such variable and returns zeros.
+        # Subtracting it either way is how its consumption vanished from the forecast
+        # under the built-in optimizer - taken out of the household profile and never
+        # placed anywhere. A plain flag rather than a callable like the sensors above:
+        # `eos.source` is restart-required, so it cannot change under a held profile.
+        self.places_additional_load = bool(places_additional_load)
         raw_token = config.get("access_token", "")
         # Strip leading/trailing whitespace that can be introduced by YAML >- block
         # scalar style when long tokens wrap across multiple lines
@@ -374,6 +383,17 @@ class LoadInterface:
                 sleep_seconds = self.retry_backoff * (2 ** (attempt - 1))
                 sleep_seconds = sleep_seconds + random.uniform(0, sleep_seconds * 0.5)
                 time.sleep(sleep_seconds)
+
+    @property
+    def subtracted_additional_load_sensor(self):
+        """The Additional Load's meter, when its history is ours to take out.
+
+        Empty when the optimizer in use does not place the appliance. Then nothing
+        adds the energy back and the household profile has to keep it - the same rule
+        the managed loads follow: a load cannot be both removed from the forecast and
+        absent from the plan.
+        """
+        return self.additional_load_1_sensor if self.places_additional_load else ""
 
     @property
     def extra_subtract_sensors(self):
@@ -1681,7 +1701,7 @@ class LoadInterface:
             entities = [
                 self.load_sensor,
                 self.car_charge_load_sensor,
-                self.additional_load_1_sensor,
+                self.subtracted_additional_load_sensor,
                 *self.extra_subtract_sensors,
             ]
             for entity_id in dict.fromkeys(entity for entity in entities if entity):
@@ -1713,14 +1733,16 @@ class LoadInterface:
             car_load_energy = max(car_load_energy, 0)  # prevent negative values
 
             add_load_data_1_energy = 0
-            # check if additional load 1 sensor is configured
-            if self.additional_load_1_sensor != "":
+            # Only where the optimizer puts it back. See
+            # `subtracted_additional_load_sensor`.
+            additional_sensor = self.subtracted_additional_load_sensor
+            if additional_sensor != "":
                 add_load_data_1 = self.__get_additional_load_list_from_to(
-                    self.additional_load_1_sensor, current_time_slot, next_slot
+                    additional_sensor, current_time_slot, next_slot
                 )
                 add_load_data_1_energy = abs(
                     self.__process_energy_data(
-                        {"data": add_load_data_1}, self.additional_load_1_sensor
+                        {"data": add_load_data_1}, additional_sensor
                     )
                 )
             add_load_data_1_energy = max(

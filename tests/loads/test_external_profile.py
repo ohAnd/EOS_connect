@@ -357,3 +357,56 @@ def test_a_push_does_not_survive_a_restart_on_its_own():
 
     assert forecast(restarted) == BASE_LOAD
     assert restarted.instance("heating").status()["model"]["pushed"] is False
+
+
+# --- what the chart draws it from ---------------------------------------------------------
+
+def test_apply_can_hand_back_what_each_load_contributed():
+    """
+    The band on the optimization chart, and the energy the Load bar gives up for it.
+
+    Both come from here so they cannot disagree: before issue #362 the chart had only
+    the solver's placements to draw from, and a profile load - which the solver never
+    sees - was inside the Load bar with nothing to say so.
+    """
+    manager = make_manager([heating()])
+    manager.push("heating", {"values": [0.0] * 10 + [470.0] * 3 + [0.0] * 35,
+                             "unit": "W", "interval": 3600})
+    manager.run_cycle()
+
+    combined, per_load = manager.apply(list(BASE_LOAD), per_load=True)
+
+    assert sorted(per_load) == ["heating"]
+    assert sum(per_load["heating"]) == pytest.approx(1410.0)
+    assert sum(per_load["heating"]) == pytest.approx(manager.contribution_total_wh())
+    assert [base + extra for base, extra in zip(BASE_LOAD, per_load["heating"])] == (
+        pytest.approx(combined)
+    )
+
+
+def test_the_split_does_not_change_the_profile_it_splits():
+    manager = make_manager([heating()])
+    manager.push("heating", {"value_wh": 1500})
+    manager.run_cycle()
+
+    plain = manager.apply(list(BASE_LOAD))
+    combined, _ = manager.apply(list(BASE_LOAD), per_load=True)
+
+    assert combined == plain
+
+
+def test_nothing_contributed_means_nothing_to_draw():
+    """An install with loads but no live contribution must not get a zero-filled band."""
+    manager = make_manager([heating()])
+    manager.run_cycle()
+
+    combined, per_load = manager.apply(list(BASE_LOAD), per_load=True)
+
+    assert combined == BASE_LOAD
+    assert per_load == {}
+
+
+def test_a_disabled_install_still_answers_the_split():
+    manager = make_manager([])
+
+    assert manager.apply([100.0] * SLOTS, per_load=True) == ([100.0] * SLOTS, {})

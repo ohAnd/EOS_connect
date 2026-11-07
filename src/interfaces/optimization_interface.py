@@ -186,6 +186,18 @@ class OptimizationInterface:
         """
         return bool(getattr(self.backend, "schedules_managed_loads", False))
 
+    @property
+    def places_home_appliance(self):
+        """
+        Whether the backend places the Additional Load and reports where.
+
+        Read through to the backend for the same reason as above. Defaults to False -
+        the conservative answer, because a backend that does not place it and is
+        assumed to leaves the appliance subtracted from the household profile with
+        nothing adding it back, and the energy simply disappears.
+        """
+        return bool(getattr(self.backend, "places_home_appliance", False))
+
     def optimize(self, eos_request, timeout=None, managed_loads=None,
                  managed_load_budget_w=0.0):
         """
