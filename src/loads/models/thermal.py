@@ -117,6 +117,7 @@ class ThermalStorageModel(BaseDemandModel):
             cop_nominal=self.config.get("cop_nominal", 4.5),
             air_coefficient=self.config.get("cop_air_coeff", 0.0),
             cover_loss_factor=self.cover_loss_factor,
+            idle_power_w=self.standby_threshold_w,
         )
         self.cover_habit = CoverHabit()
 
@@ -134,6 +135,13 @@ class ThermalStorageModel(BaseDemandModel):
         self.rated_power_w = float(config.get("rated_power_w", 0) or 0)
         self.deadband_k = max(0.0, float(config.get("deadband_k", 0.5) or 0.0))
         self.cover_loss_factor = float(config.get("cover_loss_factor", 1.0) or 1.0)
+        # The permanent draw of the appliance's own systems - circulation pumps,
+        # controls, an oil heating circuit - under which the meter never falls. It is
+        # the on/off threshold, not a contribution: how the measured idling enters the
+        # household forecast is decided where the plan is published.
+        self.standby_threshold_w = max(
+            0.0, float(config.get("standby_threshold_w", 0) or 0)
+        )
 
         self.min_ambient_temp_c = config.get("min_ambient_temp_c")
         self.frost_protection_temp_c = config.get("frost_protection_temp_c")
@@ -148,6 +156,9 @@ class ThermalStorageModel(BaseDemandModel):
         """Apply changed settings, keeping the calibrator and everything it learned."""
         super().reconfigure(config)
         self._apply_config(self.config)
+        # The threshold is a pure classification change: no window, row or coefficient
+        # is invalidated by it, so the fit carries over.
+        self.calibrator.set_idle_threshold(self.standby_threshold_w)
 
     def reset_calibration(self):
         """Discard what has been learned and start again from the configured values."""
@@ -192,14 +203,45 @@ class ThermalStorageModel(BaseDemandModel):
             return 1.0
         return self.calibrator.cover_loss_factor
 
+    def standby_power_now(self, readings):
+        """
+        The permanent draw this meter is reading while the appliance is off, in watts.
+
+        The threshold decides where standby ends; what is under it is measured, not
+        configured, because the real draw - the pump's own figure is 80-120 W - moves
+        about and the household forecast should carry what the meter actually says.
+        None when there is no threshold, no readable power, or the appliance is above
+        the threshold: there the standby is inside the running draw and is the
+        schedule's business, not a separate household term.
+        """
+        if self.standby_threshold_w <= 0:
+            return None
+        power = _as_float(readings.get("power_sensor"), 0.0)
+        if power is None or power <= 0 or power >= self.standby_threshold_w:
+            return None
+        return power
+
     def cover_factor(self, readings):
         """A closed cover cuts the losses; anything unreadable means "open"."""
         return self.effective_cover_factor() if self.is_covered(readings) else 1.0
 
     def is_running(self, readings):
-        """Whether the appliance is drawing more than standby power right now."""
+        """
+        Whether the appliance itself is drawing, above its permanent systems.
+
+        The configured threshold says where the standby draw on this meter ends and the
+        appliance begins; the 50 W default is the old guess for a circuit that does
+        drop to nearly nothing. A heat pump idling at 100 W of circulation pumps and
+        controls read as "running" around the clock under the bare guess, which held
+        the release gate open inside the deadband and fed the calibration compressor
+        windows that were only standby.
+        """
         power = _as_float(readings.get("power_sensor"), 0.0)
-        return power is not None and power >= IDLE_POWER_W
+        if power is None:
+            return False
+        # A configured threshold is authoritative, however low - the user knows the
+        # circuit. Only the unset zero stands down to the bare noise-floor guess.
+        return power >= (self.standby_threshold_w or IDLE_POWER_W)
 
     # -- feasibility --------------------------------------------------------------------
 
@@ -521,5 +563,6 @@ class ThermalStorageModel(BaseDemandModel):
             "surface_m2": self.surface_m2,
             "rated_power_w": self.rated_power_w,
             "deadband_k": self.deadband_k,
+            "standby_threshold_w": self.standby_threshold_w,
         })
         return state

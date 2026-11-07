@@ -2005,6 +2005,11 @@ with BOOT.step("scheduler"):
     optimization_scheduler = OptimizationScheduler(
         config_manager.config["refresh_time"] * 60  # convert to seconds
     )
+    # The managed-load manager judges "no schedule for a while" against the cadence
+    # the schedule actually arrives at, not against its own poll cycle: a fixed guess
+    # shorter than the optimizer's cadence had the fallback planner publishing into
+    # the household forecast on top of a solver that was merely about to run.
+    load_manager.scheduler_interval = optimization_scheduler.update_interval
 
 
 def change_control_state():

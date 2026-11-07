@@ -247,9 +247,19 @@ class ThermalCalibrator:
     """
 
     def __init__(self, volume_m3, surface_m2, loss_coefficient, cop_nominal,
-                 air_coefficient=0.0, cover_loss_factor=1.0):
+                 air_coefficient=0.0, cover_loss_factor=1.0, idle_power_w=None):
         self.volume_m3 = float(volume_m3 or 0.0)
         self.surface_m2 = float(surface_m2 or 0.0)
+
+        # Below this the appliance is standing by, not running. The module default is the
+        # coarse 50 W guess every install made do with; a load whose metered circuit never
+        # drops to zero - a heat pump's circulation pumps and controls - says otherwise,
+        # and its configured threshold replaces the guess. Zero means "not configured",
+        # which is the old behaviour, not "nothing runs".
+        self.idle_power_w = (
+            float(idle_power_w) if idle_power_w and float(idle_power_w) > 0
+            else IDLE_POWER_W
+        )
 
         self.configured_loss_coefficient = _clamp(
             float(loss_coefficient or 25.0), LOSS_COEFFICIENT_MIN, LOSS_COEFFICIENT_MAX
@@ -316,7 +326,7 @@ class ThermalCalibrator:
             return False
 
         closed = False
-        if self._window and self._state_changed(self._window[-1], sample):
+        if self._window and self._window_state_changed(self._window[-1], sample):
             # The transition itself describes neither state, so close what came before
             # it and begin again from the new one.
             self._learn_resolution(self._window[-1], sample)
@@ -332,6 +342,17 @@ class ThermalCalibrator:
         if closed and refit:
             self.refit()
         return closed
+
+    def _window_state_changed(self, previous, current):
+        """Whether the appliance switched on or off between two samples.
+
+        Per-instance rather than static since the standby threshold arrived: the same
+        two readings classify differently under different thresholds, and the module
+        constant only describes an install without one.
+        """
+        was_on = self._is_running_reading(previous.get("power_w", 0.0))
+        is_on = self._is_running_reading(current.get("power_w", 0.0))
+        return was_on != is_on
 
     def observe_series(self, samples):
         """
@@ -372,6 +393,21 @@ class ThermalCalibrator:
         was_on = float(previous.get("power_w", 0.0) or 0.0) >= IDLE_POWER_W
         is_on = float(current.get("power_w", 0.0) or 0.0) >= IDLE_POWER_W
         return was_on != is_on
+
+    def _is_running_reading(self, power_w):
+        """Whether one power reading is the appliance running, above its standby."""
+        return float(power_w or 0.0) >= self.idle_power_w
+
+    def set_idle_threshold(self, idle_power_w):
+        """
+        Re-threshold the on/off classification without touching the fit.
+
+        The only part of the calibrator a hot-reloadable setting reaches. Windows are
+        classified when they are *closed*, so no stored row goes stale; until the next
+        transition closes one, the previous classification simply keeps standing.
+        """
+        value = float(idle_power_w or 0)
+        self.idle_power_w = value if value > 0 else IDLE_POWER_W
 
     def _learn_resolution(self, previous, current):
         """
@@ -456,8 +492,8 @@ class ThermalCalibrator:
         if self.volume_m3 <= 0 or self.surface_m2 <= 0:
             return None
 
-        running = all(power >= IDLE_POWER_W for power in powers)
-        idle = all(power < IDLE_POWER_W for power in powers)
+        running = all(self._is_running_reading(power) for power in powers)
+        idle = all(not self._is_running_reading(power) for power in powers)
         if not running and not idle:
             # A window that spans a switch describes neither state.
             return None
@@ -467,6 +503,10 @@ class ThermalCalibrator:
             "timestamp": last["timestamp"],
             # Left-hand side: the rate heat actually accumulated in the store, in watts.
             "stored_w": delta_k / span * WH_PER_M3_PER_K * self.volume_m3,
+            # Idle windows keep the zero: the standby draw is household load, not heat
+            # into the store, and letting it into the power column would fit it to the
+            # COP term. The threshold classification is what keeps a pump that idles
+            # above the old 50 W guess from reading as permanently running.
             "power_w": sum(powers) / len(powers) if running else 0.0,
             "ambient_c": ambient,
             "drive_k": (medium_last + medium_first) / 2.0 - ambient,
@@ -496,7 +536,7 @@ class ThermalCalibrator:
         all about going without one, so the coefficient it never observed keeps the
         configured guess rather than absorbing the other one's error.
         """
-        on_rows = [row for row in rows if row["power_w"] >= IDLE_POWER_W]
+        on_rows = [row for row in rows if self._is_running_reading(row["power_w"])]
         span = 0.0
         if on_rows:
             temps = [row["ambient_c"] for row in on_rows]
@@ -717,14 +757,14 @@ class ThermalCalibrator:
         """Windows in the current fit during which the appliance was idle."""
         if not self._rows:
             return self._restored_loss_samples
-        return sum(1 for row in self._rows if row["power_w"] < IDLE_POWER_W)
+        return sum(1 for row in self._rows if not self._is_running_reading(row["power_w"]))
 
     @property
     def cop_samples(self):
         """Windows in the current fit during which it was running."""
         if not self._rows:
             return self._restored_cop_samples
-        return sum(1 for row in self._rows if row["power_w"] >= IDLE_POWER_W)
+        return sum(1 for row in self._rows if self._is_running_reading(row["power_w"]))
 
     # -- estimates --------------------------------------------------------------------
 

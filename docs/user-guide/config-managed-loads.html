@@ -137,6 +137,42 @@
                             <em>Additional Load</em>, which models a shiftable appliance such as a
                             dishwasher &mdash; a runtime and a total, for the optimizer to place. Do not
                             configure the same sensor as both.</p>
+                        <p><strong>One name is excluded from this:</strong> an EVCC loadpoint series
+                            (<code>group:loadpoint:&lt;title&gt;</code> or the whole
+                            <code>group:loadpoint</code> group). EVCC meters its household consumption
+                            <code>group:home</code> as the site balance <em>minus every charging
+                                point</em>, so a loadpoint's history is not inside the base load to begin
+                            with &mdash; subtracting it again would find nothing to take out and the log
+                            would fill with "household load smaller than controllables". Naming a
+                            loadpoint series is still the right thing for the sensor itself; the
+                            subtraction is simply skipped. A <code>group:consumer:&lt;title&gt;</code> or
+                            <code>group:meter:&lt;title&gt;</code> series <em>is</em> part of the home
+                            meter's balance, and keeps being subtracted as any other sensor.</p>
+                    </div>
+
+                    <h3 id="managed-loads-standby">The permanent draw of the appliance's own systems</h3>
+                    <p>Many appliances never fall back to zero, because the systems around them keep
+                        running: a heat pump's circulation pumps, crank heater and controls, an oil
+                        heating's stand-by burner - easily 80 to 120&nbsp;W around the clock. On a meter
+                        that stands outside the household base load (a subtracted sensor, or an EVCC
+                        loadpoint series, which EVCC nets off <code>group:home</code>) that draw would
+                        otherwise vanish from the forecast entirely, because only the <em>planned</em>
+                        energy is added back.</p>
+                    <p><strong>Stand-by threshold</strong> (<code>standby_threshold_w</code>) draws that
+                        line. Measured power at or below the threshold is the appliance standing by:
+                        those watts stay in the household load forecast (the currently measured value is
+                        carried forward across the whole horizon, refreshed every cycle), and they stay
+                        out of the appliance's own figures - the calibration classes its windows by the
+                        threshold, so idling at 100&nbsp;W no longer reads as a compressor that never
+                        stops, and the release gate stops holding a "running" appliance that is only
+                        its circulation pump. Measured power above the threshold is the appliance
+                        actually running, exactly as before.</p>
+                    <div class="alert alert-info">
+                        <p>Set the threshold a little above the highest standby reading you have seen -
+                            for a draw that wanders between 80 and 120&nbsp;W, 150&nbsp;W is a good
+                            value. Leave it at 0 when the sensor output drops to nearly nothing when the
+                            appliance is off: the built-in 50&nbsp;W rule then applies, as it always
+                            has. The setting is hot-reloadable and applies from the next cycle.</p>
                     </div>
                 </div>
 

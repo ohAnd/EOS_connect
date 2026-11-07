@@ -1387,6 +1387,112 @@ def test_an_adopted_schedule_restarts_the_clock(make_manager, installation):
     assert not load.schedule_is_stale(load.last_schedule_at, 120)
 
 
+def test_max_age_follows_the_optimizer_cadence_when_known(make_manager, installation):
+    """
+    A schedule is only "overdue" once the solver that produces them has actually
+    missed one. With the app's cadence known, the age is that cadence plus a little
+    grace - where the old cycle-based guess would have called a five-minute
+    optimizer overdue forever and fallen back on every cycle.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    # A run finishing at :35 waits for the :45 boundary - the aligned scheduler can
+    # hold a solver quiet for nearly twice its interval, so the age makes the same
+    # trip: twice the interval, plus grace. A schedule 597 s old - the longest wait a
+    # 300 s interval actually produces - must read fresh.
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    age = manager._schedule_max_age()
+    assert age == 300 * 2 + 120
+    load = manager.instance("pool")
+    assert not load.schedule_is_stale(
+        manager._clock()[1] - timedelta(seconds=597), age
+    )
+    # And it does go stale once genuinely dead: the last schedule shifted past
+    # the doubled cadence plus grace.
+    load.last_schedule_at = load.last_schedule_at - timedelta(seconds=age + 1)
+    assert load.schedule_is_stale(manager._clock()[1], age)
+
+
+def test_unknown_cadence_keeps_the_cycle_based_age(make_manager):
+    manager = make_manager([POOL], cycle_seconds=90)
+    manager.external_scheduler = True
+    assert manager._schedule_max_age() == 180
+
+    manager.scheduler_interval = 0
+    assert manager._schedule_max_age() == 180
+
+
+def test_a_fallback_stops_being_offered_to_the_solver(make_manager, installation):
+    """
+    The once-a-load-is-fallback race, as it showed live: the overdue fallback plan
+    went into the household forecast while the record stayed up for the solver, and
+    the optimizer placed the same energy again on top. One planner at a time - the
+    fallback owns it until a schedule arrives, and nothing is offered meanwhile.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    manager.adopt_schedules({"pool": [0.0] * 48})
+
+    load = manager.instance("pool")
+    load.last_schedule_at = load.last_schedule_at - timedelta(seconds=3000)
+    manager.run_cycle()
+
+    assert load.fallback_active
+    assert manager.schedulable() == []
+
+    base = [1000.0] * 48
+    assert manager.apply(base, 3600) != base, "the fallback plan carries the energy"
+
+
+def test_a_landed_schedule_re_offers_the_load_and_clears_the_fallback(
+    make_manager, installation
+):
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    manager.adopt_schedules({"pool": [0.0] * 48})
+
+    load = manager.instance("pool")
+    load.last_schedule_at = load.last_schedule_at - timedelta(seconds=3000)
+    manager.run_cycle()
+    assert load.fallback_active
+
+    # The solver answers (any schedule, even an empty one) - it owns the load again.
+    manager.adopt_schedules({"pool": [875.0] * 4 + [0.0] * 44})
+    assert not load.fallback_active
+    assert manager.schedulable()
+
+
+def test_a_fallback_loads_plan_leaves_the_forecast_when_a_schedule_lands(
+    make_manager, installation
+):
+    """
+    adopt_schedules() already republished the standby term because the schedule
+    displaced the fallback's slots; the *plan's* contribution follows the same rule
+    through the store_result that the next cycle runs - asserted here end to end.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    load = manager.instance("pool")
+    load.last_schedule_at = load.last_schedule_at - timedelta(seconds=3000)
+    manager.run_cycle()
+
+    base = [1000.0] * 48
+    with_fallback = manager.apply(base, 3600)
+    assert with_fallback != base
+
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    # Until the next cycle replaced the fallback contribution, it is *still* in the
+    # registry - adoption must not silently blank the forecast either.
+    assert manager.apply(base, 3600) != base
+    manager.run_cycle()
+    assert manager.apply(base, 3600) == base
+
+
 def test_the_release_survives_a_cycle_between_two_optimizer_runs(
     make_manager, installation
 ):
