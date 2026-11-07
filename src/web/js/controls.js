@@ -797,22 +797,16 @@ class ControlsManager {
 
             const total = Number(data.contribution_total_wh) || 0;
             const budget = Number(data.max_power_w) || 0;
-            // "Added to the load forecast" is only true of the loads that are in it.
-            // Where the optimizer schedules them they are not part of the forecast at
-            // all - they are something it is deciding the timing of.
-            const headline = Boolean(data.scheduled_by_optimizer)
-                ? 'scheduled by the optimizer, with the battery and the house'
-                : `<strong>${(total / 1000).toFixed(1)} kWh</strong> added to the load forecast`;
 
             let html = `<div style="margin-bottom: 16px; opacity: 0.85;">
-                ${loads.length} load${loads.length === 1 ? '' : 's'} &middot; ${headline}
+                ${loads.length} load${loads.length === 1 ? '' : 's'}
+                &middot; ${this._managedLoadsHeadline(loads, total)}
                 ${budget > 0 ? `&middot; shared limit ${budget} W` : ''}
             </div>`;
 
-            const scheduled = Boolean(data.scheduled_by_optimizer);
             html += loads
                 .map(l => this._managedLoadCard(
-                    l, slotSeconds, currentSlot, scheduled,
+                    l, slotSeconds, currentSlot, Boolean(l.scheduled_by_optimizer),
                     Boolean(data.pv_counter_available)))
                 .join('');
             showFullScreenOverlay(header, html);
@@ -821,6 +815,35 @@ class ControlsManager {
             showFullScreenOverlay(header,
                 "<div style='color:#dc3545;'>Failed to load managed load details.</div>");
         }
+    }
+
+    /**
+     * What the overlay says these loads are, in one clause.
+     *
+     * Per load rather than per install, because the two kinds coexist: the optimizer
+     * decides the *timing* of a contingent load, so it is not in the forecast at all,
+     * while a profile load is nothing but forecast. Saying "scheduled by the optimizer"
+     * over a mixed set - or over a forecast load on an install where the built-in
+     * solver happens to be running, which is what issue #362 showed - hides the only
+     * true thing about it.
+     *
+     * @param {Object[]} loads - The enabled entries from GET /api/managed_loads
+     * @param {number} totalWh - What the forecast loads add, from the same payload
+     * @returns {string} HTML
+     */
+    _managedLoadsHeadline(loads, totalWh) {
+        const scheduled = loads.filter(l => l.scheduled_by_optimizer).length;
+        const added = `<strong>${(totalWh / 1000).toFixed(1)} kWh</strong>`
+            + ' added to the load forecast';
+        if (scheduled === 0) {
+            return added;
+        }
+        if (scheduled === loads.length) {
+            return 'scheduled by the optimizer, with the battery and the house';
+        }
+        // Shorter here than on its own: the full clause beside a second one runs past
+        // the width the line has, and what matters in the mixed case is the count.
+        return `${scheduled} scheduled by the optimizer &middot; ${added}`;
     }
 
     /**
@@ -1039,11 +1062,18 @@ class ControlsManager {
                 </div>`;
         }
 
+        // A forecast load has no demand of its own - nothing worked out how much it
+        // ought to use, something told us how much it will. "Energy needed 0.0 kWh"
+        // beside a plan full of bars is the reading that sent issue #362.
+        const forecastOnly = needed <= 0 && planned > 0;
+        const label = forecastOnly ? 'Energy forecast' : 'Energy needed';
+        const figure = forecastOnly ? planned : needed;
+
         return `<div style="background:rgba(0,0,0,0.15);border-radius:6px;padding:10px;
                             margin-bottom:12px;">
             <div style="display:flex;justify-content:space-between;">
-                <span style="opacity:0.7;">Energy needed</span>
-                <strong>${kwh(needed)}</strong>
+                <span style="opacity:0.7;">${label}</span>
+                <strong>${kwh(figure)}</strong>
             </div>
             ${split}
             ${coverage}

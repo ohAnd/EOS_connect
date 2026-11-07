@@ -86,6 +86,44 @@ logger.info("[PRICE-IF] loading module ")
 PriceWindow = namedtuple("PriceWindow", "values first_covered real_slots")
 
 
+def is_contiguous(timeseries, resolution_seconds):
+    """True when the entries fill their own span exactly - no gap, no overlap.
+
+    Separated from the calendar-day question on purpose: a series can fail to
+    be a whole day for two very different reasons. Starting mid-day is normal
+    for a rolling source and says nothing about data quality; a hole in the
+    middle is a defect whichever day it falls on, and only that one is worth
+    telling the user about.
+
+    Args:
+        timeseries: Normalized entries, each with aware ``start`` and ``end``.
+        resolution_seconds: Slot length the entries were detected to have.
+
+    Returns:
+        True when ``len(timeseries) * resolution_seconds`` equals the span from
+        the first start to the last end, False otherwise.
+
+    This is a span measurement, not a pairwise walk: it catches a missing or a
+    duplicated entry, but a slot shifted inside an otherwise intact series
+    keeps both the count and the edges and still reads as contiguous.
+    """
+    if not timeseries or not resolution_seconds:
+        return False
+    start = timeseries[0].get("start")
+    end = timeseries[-1].get("end")
+    if start is None or end is None:
+        return False
+
+    # Measured in UTC on purpose. Subtracting two aware datetimes that share a
+    # tzinfo *object* gives the wall-clock difference, offsets ignored - that is
+    # Python's documented behaviour, and it would call the 25-hour day 24 hours
+    # long and reject it for the second time, by a different route.
+    span = (
+        end.astimezone(dt_timezone.utc) - start.astimezone(dt_timezone.utc)
+    ).total_seconds()
+    return len(timeseries) * resolution_seconds == span
+
+
 def whole_local_days_covered(timeseries, resolution_seconds, time_zone):
     """How many complete local calendar days *timeseries* covers, 0 if not whole.
 
@@ -128,16 +166,7 @@ def whole_local_days_covered(timeseries, resolution_seconds, time_zone):
     if days < 1:
         return 0
 
-    # Contiguous: the entries fill the span exactly - no gap, no overlap.
-    #
-    # Measured in UTC on purpose. Subtracting two aware datetimes that share a
-    # tzinfo *object* gives the wall-clock difference, offsets ignored - that is
-    # Python's documented behaviour, and it would call the 25-hour day 24 hours
-    # long and reject it for the second time, by a different route.
-    span = (
-        end.astimezone(dt_timezone.utc) - start.astimezone(dt_timezone.utc)
-    ).total_seconds()
-    if len(timeseries) * resolution_seconds != span:
+    if not is_contiguous(timeseries, resolution_seconds):
         return 0
     return days
 
@@ -2178,13 +2207,36 @@ class PriceInterface(ForecastMetadataMixin):
                 )
                 is_incomplete = False
             elif is_incomplete and not is_valid_complete_data:
-                logger.warning(
-                    "[PRICE-IF] EVCC data is incomplete/invalid: %d entries do not "
-                    "form one or two whole days without gaps. "
-                    "Falling back to cache or energyforecast",
-                    actual_timeseries_count,
-                )
-
+                # Two very different shapes land here, and only one is a fault.
+                #
+                # EVCC's contract is future rates, not whole days: its
+                # SlotWrapper drops every slot that ended before the current
+                # period, so a tariff that is not natively 15-minute arrives
+                # as a part-day starting at "now". Warning about that meant a
+                # UI alert on every single run for those users, while the
+                # fallback below quietly did the right thing. A series with a
+                # hole in it is a different matter - the real head itself is
+                # then untrustworthy, whatever the fallback does with the
+                # tail - so that one still warns.
+                if not is_contiguous(timeseries, resolution_seconds):
+                    logger.warning(
+                        "[PRICE-IF] EVCC rates are not contiguous: %d entries at "
+                        "%ds do not fill the span from %s to %s - the series has "
+                        "a gap or an overlap, check the tariff source",
+                        actual_timeseries_count,
+                        resolution_seconds,
+                        timeseries[0]["start"].isoformat(),
+                        timeseries[-1]["end"].isoformat(),
+                    )
+                else:
+                    logger.debug(
+                        "[PRICE-IF] EVCC published a partial day: %d entries "
+                        "from %s to %s - normal for a rolling tariff, filling "
+                        "the rest",
+                        actual_timeseries_count,
+                        timeseries[0]["start"].isoformat(),
+                        timeseries[-1]["end"].isoformat(),
+                    )
 
             if prices and is_incomplete:
                 # Data was incomplete, try fallback chain.
@@ -2204,8 +2256,9 @@ class PriceInterface(ForecastMetadataMixin):
                 num_forecast_prices_needed = num_missing_slots
 
                 logger.info(
-                    "[PRICE-IF] EVCC returned incomplete data: got %d real price slots, "
+                    "[PRICE-IF] EVCC sent %d entries covering %d real price slots, "
                     "need %d total (%d prices missing). Attempting fallback chain...",
+                    actual_timeseries_count,
                     num_real_slots,
                     expected_slots,
                     num_forecast_prices_needed,
@@ -2270,9 +2323,17 @@ class PriceInterface(ForecastMetadataMixin):
                         )
                     # Fallback 3: keep the placement's own gap policy.
                     else:
-                        logger.info(
-                            "[PRICE-IF] EVCC incomplete, no fallback available. "
-                            "Repeating today's prices for tomorrow."
+                        # The only branch that serves invented prices without
+                        # any source behind them, so the only one left at
+                        # WARNING. Rare in practice: once a run has succeeded
+                        # last_successful_prices is populated and fallback 2
+                        # takes over, which leaves cold start and a
+                        # horizon-length mismatch.
+                        logger.warning(
+                            "[PRICE-IF] EVCC incomplete and no fallback available "
+                            "(energyforecast unreachable, no cached prices) - "
+                            "repeating today's prices for the %d remaining slots",
+                            num_missing_slots,
                         )
                         # fill_price_gaps already repeated today's pattern into
                         # tomorrow's uncovered slots, so `prices` IS the

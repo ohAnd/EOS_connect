@@ -231,6 +231,23 @@ class LoadContributionRegistry:
                 summed[index] += value
         return summed
 
+    def per_id(self, anchor, slot_count, time_frame_base, now=None):
+        """
+        The same series as `total`, kept apart by id.
+
+        What the chart needs to draw a band per appliance and take the same energy out
+        of the Load bar, which is only honest if the two come from one source. The
+        resolution guard matches `total` exactly - a contribution either counts in both
+        or in neither - but says nothing: `total` runs in the same optimizer pass and
+        has already warned about it.
+        """
+        series = {}
+        for item in self.active(now):
+            if item.time_frame_base != time_frame_base:
+                continue
+            series[item.id] = item.aligned_to(anchor, slot_count)
+        return series
+
     def snapshot(self, now=None):
         """Serializable view for the REST API and the dashboard."""
         moment = now or _utcnow()

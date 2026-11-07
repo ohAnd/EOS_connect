@@ -94,18 +94,55 @@ class ChartManager {
     }
 
     /**
-     * The scheduled managed loads, summed and aligned to the chart's x-axis.
+     * Two sets of managed-load schedules as one, summed per slot.
+     *
+     * The solver's placements and the forecast contributions are disjoint by design -
+     * a load is either something the solver is timing or a fixed part of the household
+     * profile, never both - but merging by key would silently drop one if that ever
+     * stopped being true, and the symptom would be a band that is quietly too short.
+     *
+     * @param {Object|undefined} a - {id: [Wh per slot]}
+     * @param {Object|undefined} b - {id: [Wh per slot]}
+     * @returns {Object} {id: [Wh per slot]}
+     */
+    static mergeSchedules(a, b) {
+        const merged = {};
+        for (const source of [a || {}, b || {}]) {
+            for (const [id, values] of Object.entries(source)) {
+                if (!Array.isArray(values)) {
+                    continue;
+                }
+                const existing = merged[id];
+                if (!existing) {
+                    merged[id] = values.slice();
+                    continue;
+                }
+                const width = Math.max(existing.length, values.length);
+                merged[id] = Array.from({ length: width }, (_, i) =>
+                    (Number(existing[i]) || 0) + (Number(values[i]) || 0)
+                );
+            }
+        }
+        return merged;
+    }
+
+    /**
+     * The managed loads, summed and aligned to the chart's x-axis, in Wh.
      *
      * One band rather than one per load: the total is what the Load bar was missing,
      * and the managed-loads overlay already breaks it down per appliance.
+     *
+     * Separate from `managedLoadSeries` because the same numbers are needed twice and
+     * in two forms - drawn as the band, and subtracted from the Load bar - and the one
+     * thing this feature cannot afford is two expressions of the same rotation.
      *
      * @param {Object|undefined} schedules - {id: [Wh per slot]} from the response
      * @param {number} slot - Current slot index
      * @param {number} length - Slots the chart is drawing
      * @param {number} timeFrameBase - 900 or 3600
-     * @returns {Array<string>} kWh per slot, or empty when nothing was scheduled
+     * @returns {Array<number>} Wh per slot, or empty when there is nothing to draw
      */
-    static managedLoadSeries(schedules, slot, length, timeFrameBase) {
+    static managedLoadTotals(schedules, slot, length, timeFrameBase) {
         const series = Object.values(schedules || {}).filter(Array.isArray);
         if (!series.length) {
             return [];
@@ -117,7 +154,21 @@ class ChartManager {
         if (!summed.some(value => value > 0)) {
             return [];
         }
-        return ChartManager.alignToAxis(summed, slot, length, timeFrameBase)
+        return ChartManager.alignToAxis(summed, slot, length, timeFrameBase);
+    }
+
+    /**
+     * `managedLoadTotals` as the kWh strings the dataset wants.
+     *
+     * @param {Object|undefined} schedules - {id: [Wh per slot]} from the response
+     * @param {number} slot - Current slot index
+     * @param {number} length - Slots the chart is drawing
+     * @param {number} timeFrameBase - 900 or 3600
+     * @returns {Array<string>} kWh per slot, or empty when nothing was scheduled
+     */
+    static managedLoadSeries(schedules, slot, length, timeFrameBase) {
+        return ChartManager
+            .managedLoadTotals(schedules, slot, length, timeFrameBase)
             .map(value => (value / 1000).toFixed(3));
     }
 
@@ -180,21 +231,34 @@ class ChartManager {
         const gesamtlastSliced = ChartManager.alignToAxis(
             data_request["ems"]["gesamtlast"], axisSlot, axisLength, time_frame_base
         );
-        // Calculate consumption (excluding home appliances)
+        // The managed loads that are part of gesamtlast rather than something the
+        // solver placed - a pushed or pulled profile, and any contingent load no
+        // backend could time. They come out of the Load bar below and go into the band,
+        // which leaves the stack total untouched and finally makes the appliance
+        // visible: before this it was inside the Load bar with nothing to say so, which
+        // is what issue #362 reported.
+        const forecastWh = ChartManager.managedLoadTotals(
+            data_response["managed_load_forecast"], axisSlot, axisLength, time_frame_base
+        );
+        // Calculate consumption (excluding home appliances and managed loads)
         this.chartInstance.data.datasets[0].data = gesamtlastSliced.map((value, index) => {
             const actHomeApplianceValue = data_response["result"]["Home_appliance_wh_per_hour"][index] || 0;
-            return ((value - actHomeApplianceValue) / 1000).toFixed(3);
+            const managedValue = forecastWh[index] || 0;
+            return (Math.max(0, value - actHomeApplianceValue - managedValue) / 1000).toFixed(3);
         });
 
         // Home appliances
         this.chartInstance.data.datasets[1].data = data_response["result"]["Home_appliance_wh_per_hour"].map(value => (value / 1000).toFixed(3));
 
-        // Managed loads the optimizer placed. Only the built-in solver reports these;
-        // under the others the loads are still inside gesamtlast and the Load bar above
-        // already counts them, so an absent key has to leave the band empty rather than
-        // draw a zero line.
+        // The band: what the solver placed plus what the forecast carries. Only the
+        // built-in solver reports placements, and only loads it was given; without both
+        // halves a forecast-only appliance has no band at all. Still empty rather than a
+        // zero line when there is nothing, so the legend entry does not imply a load.
         this.chartInstance.data.datasets[13].data = ChartManager.managedLoadSeries(
-            data_response["managed_loads"], axisSlot, axisLength, time_frame_base
+            ChartManager.mergeSchedules(
+                data_response["managed_loads"], data_response["managed_load_forecast"]
+            ),
+            axisSlot, axisLength, time_frame_base
         );
 
         // PV forecast
