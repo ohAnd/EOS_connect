@@ -171,6 +171,15 @@
                         tariff slots are quarter-hourly &mdash; so <code>900</code> plans on
                         what it actually measured. What that costs is the size of the problem
                         the optimizer solves: 192 slots across the horizon instead of 48.</p>
+                    <p>Solar is energy too, and how much shape survives depends on the
+                        provider. <code>openmeteo</code> plans on the quarter-hourly energy
+                        Open-Meteo publishes, so at <code>900</code> the sunrise and sunset
+                        ramps and a passing cloud each land in their own slot;
+                        <a href="config-solar.html#pv-forecast-sources">Forecast.Solar</a>
+                        buckets at its own resolution. The providers that answer hourly
+                        &mdash; <code>openmeteo_local</code> and Akkudoktor &mdash; have one
+                        value per hour to give, so each quarter gets a quarter of it: the
+                        day's total is right, the shape inside the hour is flat.</p>
                     <div class="alert alert-info">
                         <p><strong>With the Akkudoktor EOS server, quarter-hourly needs a recent
                             build.</strong> EOS has two optimization endpoints. The older

@@ -1837,6 +1837,9 @@ import asyncio  # noqa: E402 – used only by the openmeteo_lib tests
 import pytz  # noqa: E402
 from unittest.mock import AsyncMock, MagicMock, patch  # noqa: E402
 
+from src.interfaces import pv_interface as pv_interface_module  # noqa: E402
+from src.timeseries_grid import local_midnight  # noqa: E402
+
 
 def _openmeteo_api_entry():
     """
@@ -1976,6 +1979,23 @@ class TestOpenMeteoApiDSTNormalisation:
         ), f"Fall-back: expected 48 elements after trimming, got {len(result)}"
 
 
+def _quarter_hour_energy(anchor, days=4, energy_wh=15.0, curve=None):
+    """
+    Build an ``Estimate.wh_period_15m`` around *anchor*, which must be the true
+    local midnight the code under test places its grid on.  Keyed at each
+    quarter's start, as the library keys it, from a day before *anchor* on.
+
+    *curve* takes the quarter's start and returns its energy in Wh; without one
+    every quarter carries *energy_wh*.
+    """
+    start = anchor - real_datetime.timedelta(days=1)
+    quarters = {}
+    for step in range(days * 96):
+        moment = start + real_datetime.timedelta(minutes=15 * step)
+        quarters[moment] = curve(moment) if curve else energy_wh
+    return quarters
+
+
 class TestOpenMeteoLibDSTNormalisation:
     """
     Tests for __get_pv_forecast_openmeteo_lib DST normalisation.
@@ -2017,10 +2037,15 @@ class TestOpenMeteoLibDSTNormalisation:
         """
         pv = PvInterface({}, [], time_frame_base, {}, timezone="Europe/Berlin")
 
-        # Build the estimate mock: timezone + power_production_at_time
+        # Build the estimate mock: timezone + the per-quarter energy series.
+        # A bare MagicMock will not do here: `wh_period_15m` would answer with a
+        # truthy mock whose .items() is unusable, and the call would end up in
+        # the error branch with the assertions below still passing.
         mock_estimate = MagicMock()
         mock_estimate.timezone = fake_now_berlin.tzinfo
-        mock_estimate.power_production_at_time.return_value = 60.0
+        mock_estimate.wh_period_15m = _quarter_hour_energy(
+            fake_now_berlin, days=4, energy_wh=15.0
+        )
 
         # The context manager yields a `forecast` object; calling
         # `await forecast.estimate()` returns the estimate above.
@@ -2091,20 +2116,35 @@ class TestOpenMeteoLibQuarterHourResolution:
     With 15-minute planning slots the Open-Meteo library forecast must keep its
     15-minute shape.
 
-    The library works on Open-Meteo's ``minutely_15`` data. Integrating per hour and
-    dividing by four gave four identical slots per hour, which flattened the ramps at
+    The library works on Open-Meteo's ``minutely_15`` data and publishes each
+    quarter's energy in ``wh_period_15m``.  Integrating per hour and dividing by
+    four gave four identical slots per hour, which flattened the ramps at
     sunrise and sunset.
     """
 
     _ENTRY = TestOpenMeteoLibDSTNormalisation._ENTRY
 
     @staticmethod
-    def _run(frame_base, power_at):
-        """Run the lib fetch with *power_at(datetime) -> W* as the library's curve."""
+    def _run(frame_base, curve=None, power_at=None):
+        """
+        Run the lib fetch for *frame_base*.
+
+        *curve* takes a quarter's start and returns its energy in Wh, which is
+        what the library publishes.  *power_at* instead builds an estimate with
+        no ``wh_period_15m`` at all and answers in W, which is the fallback for
+        libraries before 0.1.30.
+        """
         pv = PvInterface({}, [], frame_base, {}, timezone="Europe/Berlin")
+        anchor = local_midnight(pytz.timezone("Europe/Berlin"))
 
         mock_estimate = MagicMock()
-        mock_estimate.power_production_at_time.side_effect = power_at
+        if power_at is None:
+            mock_estimate.wh_period_15m = _quarter_hour_energy(
+                anchor, days=4, curve=curve
+            )
+        else:
+            mock_estimate.wh_period_15m = {}
+            mock_estimate.power_production_at_time.side_effect = power_at
 
         mock_forecast = MagicMock()
         mock_forecast.estimate = AsyncMock(return_value=mock_estimate)
@@ -2122,13 +2162,14 @@ class TestOpenMeteoLibQuarterHourResolution:
 
     def test_quarter_hour_slots_follow_the_curve(self):
         """Each 15-minute slot holds its own energy, not a quarter of the hour."""
-        result = self._run(900, lambda at: at.minute * 10)
+        result = self._run(900, curve=lambda at: at.minute * 1.0)
 
         assert len(result) == 192
-        # Minutes 0-14: 10 W * (0+...+14) / 60 = 17.5 Wh; minutes 15-29: 55.0 Wh.
-        assert result[0] == 17.5
-        assert result[1] == 55.0
-        assert result[0] != result[1]
+        # The quarters of an hour carry 0, 15, 30 and 45 Wh.
+        assert result[0] == 0.0
+        assert result[1] == 15.0
+        assert result[2] == 30.0
+        assert result[3] == 45.0
 
     def test_quarter_hour_slots_add_up_to_the_hour(self):
         """Four quarter-hour slots carry the same energy as one hourly slot."""
@@ -2136,8 +2177,8 @@ class TestOpenMeteoLibQuarterHourResolution:
         def curve(at):
             return 100 * at.hour + at.minute
 
-        quarter = self._run(900, curve)
-        hourly = self._run(3600, curve)
+        quarter = self._run(900, curve=curve)
+        hourly = self._run(3600, curve=curve)
 
         assert len(hourly) == 48
         for hour in range(48):
@@ -2145,11 +2186,68 @@ class TestOpenMeteoLibQuarterHourResolution:
                 hourly[hour], abs=0.2
             )
 
-    def test_hourly_slot_integrates_the_full_hour(self):
-        """A constant 600 W for a full hour is 600 Wh, not 590 Wh."""
-        result = self._run(3600, lambda at: 600)
+    def test_hourly_slot_sums_the_whole_hour(self):
+        """Four quarters of 150 Wh are 600 Wh in the hour, not 590."""
+        result = self._run(3600, curve=lambda at: 150.0)
 
         assert result[0] == 600.0
+
+    def test_energy_series_is_preferred_over_the_power_series(self):
+        """
+        ``estimate.watts`` must not be touched when the energy series is there.
+
+        It is the instantaneous power, taken at the end of each quarter - an
+        integral over it is both biased and a quarter of an hour early.
+        """
+        pv = PvInterface({}, [], 900, {}, timezone="Europe/Berlin")
+        anchor = local_midnight(pytz.timezone("Europe/Berlin"))
+
+        mock_estimate = MagicMock()
+        mock_estimate.wh_period_15m = _quarter_hour_energy(anchor, energy_wh=12.5)
+
+        mock_forecast = MagicMock()
+        mock_forecast.estimate = AsyncMock(return_value=mock_estimate)
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__.return_value = mock_forecast
+        mock_cm.__aexit__.return_value = None
+
+        with patch(
+            "src.interfaces.pv_interface.OpenMeteoSolarForecast", return_value=mock_cm
+        ):
+            result = pv._PvInterface__get_pv_forecast_openmeteo_lib(self._ENTRY)
+
+        assert result == [12.5] * 192
+        mock_estimate.power_production_at_time.assert_not_called()
+
+    def test_falls_back_to_the_power_series_without_one(self):
+        """
+        A library before 0.1.30 has no ``wh_period_15m``: integrate its power.
+
+        The slots keep their own shape there too - this is the old path, kept
+        so that an image pinning an older library still plans something sane.
+        """
+        result = self._run(900, power_at=lambda at: at.minute * 10)
+
+        assert len(result) == 192
+        # Minutes 0-14: 10 W * (0+...+14) / 60 = 17.5 Wh; minutes 15-29: 55.0 Wh.
+        assert result[0] == 17.5
+        assert result[1] == 55.0
+
+    def test_the_fallback_is_announced_once(self):
+        """The warning belongs in the log once, not once a forecast cycle."""
+        pv = PvInterface({}, [], 900, {}, timezone="Europe/Berlin")
+        assert pv._warned_openmeteo_lib_power_series is False
+
+        anchor = local_midnight(pytz.timezone("Europe/Berlin"))
+        mock_estimate = MagicMock()
+        mock_estimate.power_production_at_time.return_value = 40.0
+
+        with patch.object(pv_interface_module.logger, "warning") as warned:
+            pv._PvInterface__openmeteo_lib_forecast_from_power(mock_estimate, anchor)
+            pv._PvInterface__openmeteo_lib_forecast_from_power(mock_estimate, anchor)
+
+        assert warned.call_count == 1
+        assert pv._warned_openmeteo_lib_power_series is True
 
 
 def test_get_current_pv_forecast_returns_a_copy():

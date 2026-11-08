@@ -339,6 +339,8 @@ class PvInterface:
         self.site_location = _clean_site_location(site_location)
         # Said once, not once a cycle: the stored-installation fallback below.
         self._warned_stale_location = False
+        # Likewise for the Open-Meteo library without a per-quarter energy series.
+        self._warned_openmeteo_lib_power_series = False
         self.time_zone = timezone
         self.config_source = config_source
         # Set time_frame_base, defaulting to 3600 if None or not provided
@@ -2470,7 +2472,7 @@ class PvInterface:
         # Data processing
         try:
             # Slot 0 is TRUE local midnight today; every slot after it is one
-            # ABSOLUTE hour further on.
+            # ABSOLUTE planning slot further on.
             #
             # estimate.timezone is a fixed-offset tzinfo the library builds from
             # the API's utc_offset_seconds, so .replace(hour=0) on it is not
@@ -2482,26 +2484,49 @@ class PvInterface:
             # Before the slot indices moved, the wall-clock index cancelled this
             # anchor error; it does not any more.
             #
-            # Stepping absolute hours also removes the need to trim or pad: 48
-            # steps are 48 slots on a 23-, 24- or 25-hour day alike. The samples
-            # are taken by absolute instant, which is what the library compares.
+            # Placing by absolute instant also removes the need to trim or pad:
+            # the horizon is the same number of slots on a 23-, 24- or 25-hour
+            # day alike, and an instant is what the library's own keys are.
             #
-            # The library works on Open-Meteo's 15-minute data, so the energy is
-            # integrated per planning slot rather than per hour: an hourly total
-            # split evenly over four quarter-hour slots would flatten the ramps
-            # at sunrise and sunset and every passing cloud.
+            # The library works on Open-Meteo's 15-minute data and hands out the
+            # energy of each quarter hour in `wh_period_15m`, computed from the
+            # 15-minute MEAN power. That is the series to lay on the grid.
+            # `estimate.watts` is NOT: it holds the INSTANTANEOUS power, taken
+            # at the end of each quarter and stored under its start, so sampling
+            # it integrates nothing and shifts the curve about a quarter of an
+            # hour early - against a real fetch, 42 % high on the morning ramp,
+            # 71 % low at sunset and 2.7 % low over the day.
+            #
+            # place_on_grid sums the quarters into whatever slot length is
+            # configured, so hourly planning is corrected by the same code.
             anchor = local_midnight(pytz.timezone(self.time_zone))
-            slot_minutes = 15 if self.time_frame_base == 900 else 60
-            pv_forecast = []
-            for slot in range(48 * 60 // slot_minutes):
-                slot_start = anchor + timedelta(minutes=slot * slot_minutes)
-                slot_energy = 0
-                for minute in range(slot_minutes):
-                    slot_energy += estimate.power_production_at_time(
-                        slot_start + timedelta(minutes=minute)
+            quarters = getattr(estimate, "wh_period_15m", None)
+            if quarters:
+                placement = place_on_grid(
+                    [
+                        {
+                            "start": start,
+                            "end": start + timedelta(minutes=15),
+                            "value": energy_wh,
+                        }
+                        for start, energy_wh in quarters.items()
+                    ],
+                    anchor,
+                    horizon_slots(self.time_frame_base),
+                    self.time_frame_base,
+                    KIND_EXTENSIVE,
+                )
+                pv_forecast = [round(value, 1) for value in placement.values]
+                uncovered = sum(1 for share in placement.coverage if share < 0.999)
+                if uncovered:
+                    logger.warning(
+                        "[PV-IF] OpenMeteo Lib forecast reaches %s of %s slots - "
+                        "the rest is planned as no production",
+                        len(pv_forecast) - uncovered,
+                        len(pv_forecast),
                     )
-                # One sample per minute: W * min / 60 = Wh.
-                pv_forecast.append(round(slot_energy / 60, 1))
+            else:
+                pv_forecast = self.__openmeteo_lib_forecast_from_power(estimate, anchor)
 
             # Clear any previous errors on success
             self.pv_forcast_request_error["error"] = None
@@ -2520,6 +2545,39 @@ class PvInterface:
                 pv_config_entry,
                 "openmeteo_lib",
             )
+
+    def __openmeteo_lib_forecast_from_power(self, estimate, anchor):
+        """
+        Integrate the library's instantaneous power series slot by slot.
+
+        The fallback for open-meteo-solar-forecast before 0.1.30, which has no
+        ``wh_period_15m``.  ``power_production_at_time`` steps over the API's
+        quarter hours, so a sample per minute integrates that step function
+        exactly - but the steps hold instantaneous power taken at the END of
+        each quarter, which puts the curve about a quarter of an hour early and
+        a few per cent low over the day.  Said once per interface, since the
+        forecast is refetched on a cycle.
+        """
+        if not self._warned_openmeteo_lib_power_series:
+            self._warned_openmeteo_lib_power_series = True
+            logger.warning(
+                "[PV-IF] This open-meteo-solar-forecast has no per-quarter energy "
+                "series (needs 0.1.30 or newer) - planning on its instantaneous "
+                "power instead, which runs a few per cent low and about a quarter "
+                "of an hour early"
+            )
+        slot_minutes = max(1, int(self.time_frame_base) // 60)
+        pv_forecast = []
+        for slot in range(horizon_slots(self.time_frame_base)):
+            slot_start = anchor + timedelta(minutes=slot * slot_minutes)
+            slot_energy = 0
+            for minute in range(slot_minutes):
+                slot_energy += estimate.power_production_at_time(
+                    slot_start + timedelta(minutes=minute)
+                )
+            # One sample per minute: W * min / 60 = Wh.
+            pv_forecast.append(round(slot_energy / 60, 1))
+        return pv_forecast
 
     def __forecast_solar_request_path(self, pv_config_entry):
         """
