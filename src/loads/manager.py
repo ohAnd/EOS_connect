@@ -425,29 +425,22 @@ class ManagedLoadManager:
                 self._hint_pv_counter(item)
             self._record_sample(item, ctx)
             defer = self.external_scheduler and item.kind_is_contingent()
-            if defer:
-                if item.waiting_for_schedule_since is None:
-                    item.waiting_for_schedule_since = ctx_base.now
-                if item.schedule_is_stale(ctx_base.now, self._schedule_max_age()):
-                    defer = False
-                    item.fallback_active = True
-                    # Whatever offer was still outstanding is void: this cycle puts
-                    # the placement into the household forecast, so an answer landing
-                    # late must not be read as "the offer worked".
-                    item.offered_at = None
-                    logger.warning(
-                        "[LOADS] '%s' has had no schedule from the optimizer for over "
-                        "%d s - deciding from its own plan until one arrives",
-                        item.id, self._schedule_max_age(),
-                    )
-                else:
-                    item.fallback_active = False
-            else:
+            if not defer:
                 item.fallback_active = False
                 item.offered_at = None
             contribution, release = item.evaluate(
                 ctx, budget_wh=budget, defer_gate=defer
             )
+            if defer:
+                defer, replan = self._settle_handover(item, ctx_base)
+                if replan:
+                    # The gate was left for the optimizer and the optimizer is not
+                    # answering. Rare path, and the models' demand() is a pure function
+                    # of the context, so planning again is cheaper than predicting the
+                    # demand before the first pass.
+                    contribution, release = item.evaluate(
+                        ctx, budget_wh=budget, defer_gate=False
+                    )
             if defer:
                 # Its energy reaches the optimizer as something to place, not as part
                 # of the household profile. Registering it here as well would have the
@@ -465,6 +458,55 @@ class ManagedLoadManager:
         return self.stats.cycles
 
     # -- handing the placing to something that can do it better -----------------------------
+
+    def _settle_handover(self, item, ctx_base):
+        """
+        Who owns this load's placement for the rest of the cycle.
+
+        Called after ``evaluate``, so it judges the demand just computed rather than
+        last cycle's: only a load that is being offered to the optimizer can be
+        waiting on one. Returns ``(defer, replan)`` - whether the optimizer keeps the
+        placement, and whether the load has to be planned again with its gate settled
+        because it does not.
+
+        The two flags are this handover's record, and `schedulable` reads them: it
+        takes a fallback placement back out of the registry only where
+        ``fallback_active`` says there is one.
+        """
+        if not item.offers_demand():
+            # Nothing to place, so nothing is being waited for - this used to warn
+            # every cycle for a dishwasher that simply was not loaded. `evaluate`
+            # settled the gate itself. The clock starts again when demand comes back:
+            # keeping the old schedule time as well declared a load scheduled
+            # yesterday stale on its first cycle this morning.
+            item.waiting_for_schedule_since = None
+            item.last_schedule_at = None
+            # Neither offered nor falling back. Both flags are cleared by whoever ends
+            # the handover, and for an idle load that is nobody else: `schedulable`
+            # filters it out before the line that clears them, so they would stay up
+            # on the card for good - reading as a failing optimizer rather than as no
+            # work to do.
+            item.fallback_active = False
+            item.offered_at = None
+            return False, False
+
+        if item.waiting_for_schedule_since is None:
+            item.waiting_for_schedule_since = ctx_base.now
+        if not item.schedule_is_stale(ctx_base.now, self._schedule_max_age()):
+            item.fallback_active = False
+            return True, False
+
+        logger.warning(
+            "[LOADS] '%s' has had no schedule from the optimizer for "
+            "over %d s - deciding from its own plan until one arrives",
+            item.id, self._schedule_max_age(),
+        )
+        # This cycle puts the placement into the household forecast, so `schedulable`
+        # has to take it back out when it next offers the load, and an answer landing
+        # late must not read as "the offer worked".
+        item.fallback_active = True
+        item.offered_at = None
+        return False, True
 
     def _schedule_max_age(self):
         """
@@ -518,9 +560,9 @@ class ManagedLoadManager:
         for item in self.instances:
             if not item.enabled or not item.kind_is_contingent():
                 continue
-            demand = item.last_demand
-            if demand is None or demand.total_wh <= 0 or demand.max_power_w <= 0:
+            if not item.offers_demand():
                 continue
+            demand = item.last_demand
             ctx = self._last_ctx_for.get(item.id)
             slots = ctx.slot_count if ctx else len(demand.feasible or [])
             # Read from *now*, not from whenever the cycle last ran: how far into a run
