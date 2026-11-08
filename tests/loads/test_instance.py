@@ -1473,6 +1473,33 @@ def test_an_offered_load_still_warns_when_the_optimizer_is_silent(make_manager, 
     assert "no schedule from the optimizer" in caplog.text
 
 
+def test_an_idle_load_stops_reporting_a_fallback(make_manager, installation):
+    """
+    A load that fell back and then ran out of demand is not falling back any more.
+
+    `fallback_active` is cleared by whoever ends the handover, and for a load with
+    nothing to place that is nobody: `schedulable` filters it out before it reaches
+    the line that clears the flag, and `adopt_schedules` only looks at loads with an
+    outstanding offer. The flag would stay up on the card and the API for good,
+    reading as "the optimizer is failing us" where the truth is "nothing to do".
+    """
+    manager = make_manager([BUDGET], cycle_seconds=60)
+    manager.external_scheduler = True
+    load = _push_budget(manager, 1500)
+
+    # Nothing answers, so this cycle hands the load back to its own plan.
+    load.waiting_for_schedule_since -= timedelta(seconds=600)
+    manager.run_cycle()
+    assert load.fallback_active
+    assert load.offered_at is None
+
+    _push_budget(manager, 0)
+
+    assert not load.offers_demand()
+    assert not load.fallback_active
+    assert load.offered_at is None
+
+
 def test_a_load_that_falls_back_rejoins_the_household_forecast(make_manager, installation):
     """Otherwise its energy is in neither place and the optimizer plans around nothing."""
     manager = make_manager([POOL], cycle_seconds=60)

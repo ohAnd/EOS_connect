@@ -897,7 +897,9 @@ attributes:
                         while EOS Connect is planning the load itself because the solver has gone
                         quiet for longer than roughly two optimization intervals. It is not a fault
                         &mdash; the appliance keeps running on a sound plan &mdash; and the next
-                        answer from the solver hands the load straight back.</p>
+                        answer from the solver hands the load straight back. A load with nothing to
+                        place is not this case and does not report it: it is never offered to the
+                        solver, so there is no silence to fall back from.</p>
                     <p>Kept for seven days and purged on start. It is written for reading after the
                         fact; nothing uses it to run the house.</p>
                 </div>
