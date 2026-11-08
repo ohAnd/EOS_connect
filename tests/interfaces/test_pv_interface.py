@@ -558,6 +558,11 @@ def _run_one_update_loop_iteration(pv):
         return calls["n"] > 1
 
     pv._stop_event.is_set = is_set_once
+    # The loop asks the stop event twice per cycle: ``is_set()`` at the top, and
+    # ``wait()`` for the pause between cycles -- which is interruptible, where it used
+    # to be a plain ``time.sleep``. Both have to answer "stopped", or this waits out a
+    # real update interval.
+    pv._stop_event.wait = lambda timeout=None: True
     pv._PvInterface__update_pv_state_loop()
 
 

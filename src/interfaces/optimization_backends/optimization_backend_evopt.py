@@ -54,6 +54,13 @@ class EVOptBackend:
     Accepts EOS-format requests, transforms to EVopt format, and returns EOS-format responses.
     """
 
+    # EVopt has no shiftable-appliance variable: the `dishwasher` device is not read
+    # from the request and `Home_appliance_wh_per_hour` comes back as zeros. Stated
+    # here because the consequence is upstream - the Additional Load's history must
+    # stay in the household profile, or its energy is subtracted and never replaced.
+    # Managed loads are the feature that does get placed; see `LocalEVOptBackend`.
+    places_home_appliance = False
+
     def __init__(
         self,
         base_url,

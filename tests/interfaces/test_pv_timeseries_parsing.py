@@ -18,7 +18,9 @@ from unittest.mock import patch, MagicMock
 
 import pytz
 import pytest
+import requests
 
+from src.interfaces.http_fetch import bearer_request_kwargs
 from src.interfaces.pv_interface import PvInterface
 from src.interfaces.timeseries_normalizer import (
     detect_resolution_seconds,
@@ -330,3 +332,33 @@ class TestPvTimeseriesFetchDispatch:
         assert result[hours_since_midnight] == 777.0
         if hours_since_midnight > 0:
             assert result[0] == 0.0  # midnight slot itself has no data in this feed
+
+
+class TestPvTimeseriesTimeoutMessage:
+    """
+    The timeout the log reports has to be the timeout that was actually waited.
+    It used to be written out as "10s" next to a request that read its timeout
+    from a constant, so the two could drift apart without anyone noticing.
+    """
+
+    def test_the_message_names_the_timeout_the_request_used(self, monkeypatch):
+        source_config = {
+            "source": "timeseries",
+            "data_url": "http://test.local/timeseries",
+            "data_path": "data",
+        }
+        pv = make_pv_interface(source_config=source_config)
+        pv.configuration_valid = True
+        monkeypatch.setattr("src.interfaces.pv_interface.time.sleep", lambda _s: None)
+
+        def always_times_out(*_args, **_kwargs):
+            raise requests.exceptions.Timeout()
+
+        monkeypatch.setattr("requests.get", always_times_out)
+
+        pv.get_summarized_pv_forecast()
+
+        used_timeout = bearer_request_kwargs()["timeout"]
+        message = str(pv.pv_forcast_request_error["message"])
+        assert pv.pv_forcast_request_error["error"] == "timeout"
+        assert f"timeout after {used_timeout}s" in message

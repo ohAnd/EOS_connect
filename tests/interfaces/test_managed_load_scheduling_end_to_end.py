@@ -10,7 +10,7 @@ So this drives the three together - real manager, real interface, real solver - 
 asserts the one thing that matters: the pool runs in the hours the solver chose.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -209,3 +209,41 @@ def test_the_placed_plan_honours_the_cap(wired):
         assert sum(1 for v in window if v > 0) <= 3 * ctx.slots_per_hour(), (
             f"day {day} exceeded the cap: {window}"
         )
+
+
+def test_a_silent_optimizer_hands_the_load_back_when_it_returns(wired):
+    """
+    The latch, driven through the layers it latched on. A load the fallback has taken
+    over is withheld from nobody: the next real run asks for records, gets this one,
+    places it, and the handover undoes itself. Asserted against the interface rather
+    than a hand-written schedule map, because the solver only ever answers for the
+    records it was given - a load withheld from that list could never be freed by an
+    answer that could not mention it.
+    """
+    manager, interface, prices = wired
+    manager.run_cycle()
+
+    path = "src.interfaces.optimization_backends.optimization_backend_evopt.datetime"
+    with patch(path, _clock()):
+        response, _ = interface.optimize(
+            _eos_request(prices), managed_loads=manager.schedulable()
+        )
+    manager.adopt_schedules(response["managed_loads"])
+
+    # The optimizer goes quiet for longer than the staleness age, and the next cycle
+    # hands the load to the fallback planner.
+    load = manager.instance("pool")
+    load.last_schedule_at = load.last_schedule_at - timedelta(seconds=3600)
+    manager.run_cycle()
+    assert load.fallback_active
+    assert manager.apply([1000.0] * SLOTS, 3600) != [1000.0] * SLOTS
+
+    # It comes back. One ordinary run is all it takes.
+    records = manager.schedulable()
+    assert [record["id"] for record in records] == ["pool"]
+    with patch(path, _clock()):
+        response, _ = interface.optimize(_eos_request(prices), managed_loads=records)
+
+    assert manager.adopt_schedules(response["managed_loads"]) == 1
+    assert not load.fallback_active
+    assert sum(load.last_plan) > 0

@@ -54,7 +54,9 @@
                         <li>Settings marked <span class="badge badge-hot"><i class="fas fa-bolt"
                                     aria-hidden="true"></i>live</span> take effect immediately.</li>
                         <li>Settings marked <span class="badge badge-restart"><i class="fas fa-rotate"
-                                    aria-hidden="true"></i>restart</span> need EOS Connect restarted.</li>
+                                    aria-hidden="true"></i>restart</span> need EOS Connect restarted.
+                            Saving one raises a banner with a <strong>Restart now</strong> button;
+                            see <a href="#restarting">Restarting</a>.</li>
                         <li><span class="badge badge-experimental"><i class="fas fa-flask"
                                     aria-hidden="true"></i>experimental</span> may change without notice;
                             <span class="badge badge-deprecated"><i class="fas fa-triangle-exclamation"
@@ -71,6 +73,33 @@
                 </div>
 
                 <div class="content-section">
+                    <h2 id="restarting"><i class="fas fa-rotate" aria-hidden="true"></i> Restarting</h2>
+                    <p>Sixty-six settings need a restart to take effect &mdash; anything that decides
+                        what EOS Connect connects to at startup. There are three places to do it
+                        without leaving the browser:</p>
+                    <ul>
+                        <li>the <strong>banner</strong> that appears after saving such a setting, which
+                            lists what is waiting to be applied;</li>
+                        <li>the <strong>rotate icon</strong> in the settings header, available at any
+                            time;</li>
+                        <li>the <strong>setup wizard's</strong> closing screen.</li>
+                    </ul>
+                    <p>EOS Connect restarts <em>in place</em> and comes back on the same address. The
+                        container is not stopped and not recreated, so this works the same under Docker,
+                        under <code>docker run</code> without a restart policy, and as a Home Assistant
+                        add-on. Your settings, the measured PV history and the managed-load calibration
+                        are untouched.</p>
+                    <p>It takes a few seconds, during which optimization and inverter control pause and
+                        the page shows the startup progress. Through the Home Assistant ingress panel the
+                        page may briefly report an error while the process is away &mdash; it recovers by
+                        itself, no reload needed.</p>
+                    <div class="alert alert-info">
+                        <p>The restart is reachable even when EOS Connect could not finish starting. If a
+                            setting stops a required component from being built, the settings UI stays up
+                            in <a href="troubleshooting.html#tb-rescue">rescue mode</a> &mdash; correct the
+                            setting there and restart from the same page.</p>
+                    </div>
+
                     <h2 id="sections"><i class="fas fa-map" aria-hidden="true"></i> The seven areas</h2>
                     <p>Settings are grouped the same way here as in the application. Each page carries its
                         own parameters and the explanation of what they do, so configuring one thing does

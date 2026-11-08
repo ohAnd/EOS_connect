@@ -44,6 +44,20 @@
                 <div id="site-level"></div>
 
                 <div class="content-section">
+                    <h2 id="starting-up"><i class="fas fa-hourglass-start" aria-hidden="true"></i>
+                        While it starts</h2>
+                    <p>The web interface answers about a second after launch, well before EOS Connect
+                        has finished connecting to everything. Until it is ready the page shows a
+                        progress bar naming the step it is on &mdash; the MQTT broker, the load
+                        history, the PV forecast &mdash; so a slow start looks like a slow start
+                        rather than a broken one.</p>
+                    <p>How long that takes depends on what you have connected. A local setup is up in
+                        a few seconds; a large Home Assistant recorder or an unreachable MQTT broker
+                        can stretch it to a minute or more. The settings and the log viewer work the
+                        whole time, which is also what makes a failed start recoverable &mdash; see
+                        <a href="troubleshooting.html#tb-rescue">A required component cannot
+                        start</a>.</p>
+
                     <h2 id="first-run"><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i> First
                         run</h2>
                     <p>On first launch a <strong>setup wizard</strong> opens and asks, in order, for the
@@ -71,7 +85,9 @@
                             built-in demo curve so the first run finishes without your roof geometry.</li>
                     </ol>
 
-                    <p>Restart EOS Connect when the wizard finishes, and the dashboard starts filling in.</p>
+                    <p>The wizard's closing screen has a <strong>Restart now</strong> button &mdash; press
+                        it and the dashboard starts filling in. See
+                        <a href="configuration.html#restarting">Restarting</a>.</p>
 
                     <div class="alert alert-warning">
                         <p>The <strong>Default</strong> PV source is a fixed demo curve for an assumed

@@ -453,6 +453,84 @@ curl -X POST "http://localhost:8081/api/backup/import?dry_run=1" \
                         <code>is_ha_addon</code> is <code>true</code>. Both routes are served with
                         <code>Cache-Control: no-store</code> and report
                         <code>"api_version": "0.0.1"</code>.</p>
+
+                    <h3 id="restart-api">Restart</h3>
+                    <p><code>POST /api/config/restart</code> restarts EOS Connect in place. It answers
+                        <strong>202</strong> immediately and tears down afterwards &mdash; the response
+                        has to reach you over the socket the shutdown is about to close. A second call
+                        while one is already running answers <strong>409</strong>.</p>
+                    <pre><code>curl -sS -X POST http://localhost:8081/api/config/restart \
+  -H 'Content-Type: application/json' -d '{"reason":"applied MQTT settings"}'
+
+{"status": "restarting", "pid": 1, "poll": "/api/boot/status"}</code></pre>
+                    <p>The optional <code>reason</code> is recorded in the log, truncated at 200
+                        characters. Poll <a href="#boot-api"><code>/api/boot/status</code></a> to follow
+                        the restart: it starts answering again a second or so later, and 404s once the
+                        application is back up.</p>
+                    <p>The process is replaced with <code>os.execv</code> rather than exited, so the
+                        container never stops and the PID does not change. That is also how you verify
+                        one happened: the log shows the startup banner a second time while
+                        <code>docker ps</code> reports unchanged container uptime.</p>
+                    <div class="alert alert-info">
+                        <p>Served by the settings blueprint, which the boot server also mounts &mdash; so
+                            this endpoint answers during a slow start and in rescue mode, not only on a
+                            fully started application.</p>
+                    </div>
+
+                    <h3 id="boot-api">Startup progress</h3>
+                    <p><code>GET /api/boot/status</code> reports how far the current start has got. It
+                        exists only while EOS Connect is still starting: once the application is up the
+                        route is gone and the request returns <strong>404</strong>. That makes it a
+                        readiness probe &mdash; a 404 means ready, a 200 means still coming up.</p>
+
+                    <div class="scroll-x">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Field</th>
+                                    <th>Meaning</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>ready</code></td>
+                                    <td>Always <code>false</code> here &mdash; a ready application does not
+                                        serve this route.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>fatal</code></td>
+                                    <td><code>null</code>, or <code>{component, message, also}</code> when a
+                                        required component failed and EOS Connect is in rescue mode.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>current</code> / <code>current_label</code></td>
+                                    <td>The step running right now, e.g. <code>mqtt</code> /
+                                        <code>MQTT broker</code>.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>done</code> / <code>total</code></td>
+                                    <td>Progress. <code>total</code> is the whole step catalogue and does not
+                                        change, so <code>done / total</code> is a usable fraction.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>elapsed_s</code></td>
+                                    <td>Seconds since the start began.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>steps</code></td>
+                                    <td>Every step as <code>{id, label, state, duration_ms, detail}</code>.
+                                        <code>state</code> is <code>pending</code>, <code>running</code>,
+                                        <code>ok</code>, <code>failed</code> or <code>skipped</code>.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <pre><code>curl -s "http://localhost:8081/api/boot/status" | jq '{done, total, current_label, fatal}'</code></pre>
+
+                    <p>The settings API (<code>/api/config/...</code>) and the log routes answer for the
+                        whole of startup and in rescue mode, which is what makes a failed start
+                        recoverable without touching the host.</p>
                 </div>
 
                 <div class="content-section">

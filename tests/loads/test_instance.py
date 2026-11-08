@@ -1202,6 +1202,33 @@ def test_a_scheduled_load_is_not_also_in_the_household_forecast(make_manager, in
     assert manager.apply(base, 3600) == base
 
 
+def test_only_a_contingent_load_reports_itself_as_scheduled(make_manager, installation):
+    """
+    The subsystem flag says the optimizer *can* place loads; it says nothing about any
+    one of them. Reading it per install told the overlay a pushed profile was
+    "scheduled by the optimizer", which is issue #362's second half: it is not, and
+    saying so hid the only true thing - the profile is in the load forecast.
+    """
+    manager = make_manager([POOL, {"id": "heating", "type": TYPE_EXTERNAL_PROFILE}])
+    manager.external_scheduler = True
+    manager.push("heating", {"value_wh": 1500})
+    _run(manager, installation, water_c=20.0)
+
+    flags = {
+        load["id"]: load["scheduled_by_optimizer"] for load in manager.status()["loads"]
+    }
+    assert flags == {"pool": True, "heating": False}
+
+
+def test_nothing_is_scheduled_while_the_backend_cannot_place_it(
+    make_manager, installation
+):
+    manager = make_manager([POOL])
+    _run(manager, installation, water_c=20.0)
+
+    assert manager.status()["loads"][0]["scheduled_by_optimizer"] is False
+
+
 def test_the_load_is_offered_to_the_optimizer_instead(make_manager, installation):
     manager = make_manager([POOL])
     manager.external_scheduler = True
@@ -1385,6 +1412,174 @@ def test_an_adopted_schedule_restarts_the_clock(make_manager, installation):
     load = manager.instance("pool")
     assert load.last_schedule_at is not None
     assert not load.schedule_is_stale(load.last_schedule_at, 120)
+
+
+def test_max_age_follows_the_optimizer_cadence_when_known(make_manager, installation):
+    """
+    A schedule is only "overdue" once the solver that produces them has actually
+    missed one. With the app's cadence known, the age is that cadence plus a little
+    grace - where the old cycle-based guess would have called a five-minute
+    optimizer overdue forever and fallen back on every cycle.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    # A run finishing at :35 waits for the :45 boundary - the aligned scheduler can
+    # hold a solver quiet for nearly twice its interval, so the age makes the same
+    # trip: twice the interval, plus grace. A schedule 597 s old - the longest wait a
+    # 300 s interval actually produces - must read fresh.
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    age = manager._schedule_max_age()
+    assert age == 300 * 2 + 120
+    load = manager.instance("pool")
+    assert not load.schedule_is_stale(
+        manager._clock()[1] - timedelta(seconds=597), age
+    )
+    # And it does go stale once genuinely dead: the last schedule shifted past
+    # the doubled cadence plus grace.
+    load.last_schedule_at = load.last_schedule_at - timedelta(seconds=age + 1)
+    assert load.schedule_is_stale(manager._clock()[1], age)
+
+
+def test_unknown_cadence_keeps_the_cycle_based_age(make_manager):
+    manager = make_manager([POOL], cycle_seconds=90)
+    manager.external_scheduler = True
+    assert manager._schedule_max_age() == 180
+
+    manager.scheduler_interval = 0
+    assert manager._schedule_max_age() == 180
+
+
+def _fallen_back(manager, installation):
+    """A manager whose single pool has been taken over by the fallback planner."""
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    load = manager.instance("pool")
+    load.last_schedule_at = load.last_schedule_at - timedelta(seconds=3000)
+    manager.run_cycle()
+    assert load.fallback_active
+    return load
+
+
+def test_the_fallback_carries_the_energy_while_it_owns_the_load(
+    make_manager, installation
+):
+    """
+    The once-a-load-is-fallback race, as it showed live: the overdue fallback plan
+    went into the household forecast while the record stayed up for the solver, and
+    the optimizer placed the same energy again on top. One planner at a time - while
+    the fallback owns it, the forecast is where the energy is.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    _fallen_back(manager, installation)
+
+    base = [1000.0] * 48
+    assert manager.apply(base, 3600) != base, "the fallback plan carries the energy"
+
+
+def test_a_solver_asking_takes_the_load_back_from_the_fallback(
+    make_manager, installation
+):
+    """
+    The handover is a decision per run, never a latch. A solver asking for records is
+    a solver that is alive, so the load goes back to it - and its placement leaves the
+    household forecast in the same call, because the request is built afterwards and
+    would otherwise carry the energy the solver is about to place.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    load = _fallen_back(manager, installation)
+    base = [1000.0] * 48
+    assert manager.apply(base, 3600) != base
+
+    records = manager.schedulable()
+
+    assert [record["id"] for record in records] == ["pool"]
+    assert not load.fallback_active
+    assert load.offered_at is not None
+    assert manager.apply(base, 3600) == base, (
+        "the fallback placement must leave the forecast as the load is offered"
+    )
+
+
+def test_a_landed_schedule_settles_the_offer(make_manager, installation):
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    load = _fallen_back(manager, installation)
+    manager.schedulable()
+
+    manager.adopt_schedules({"pool": [875.0] * 4 + [0.0] * 44})
+
+    assert not load.fallback_active
+    assert load.offered_at is None
+    assert manager.schedulable()
+
+
+def test_an_unanswered_offer_puts_the_fallback_straight_back(
+    make_manager, installation
+):
+    """
+    A solver that runs but cannot place anything - infeasible, no CBC - would
+    otherwise leave the household forecast short of the load until the next poll
+    cycle: the offer emptied it and nothing filled it again.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    load = _fallen_back(manager, installation)
+    base = [1000.0] * 48
+    manager.schedulable()
+    assert manager.apply(base, 3600) == base
+
+    manager.adopt_schedules({})
+
+    assert load.fallback_active
+    assert load.offered_at is None
+    assert manager.apply(base, 3600) != base
+
+
+def test_a_fresh_schedule_survives_a_run_that_answered_nothing(
+    make_manager, installation
+):
+    """
+    Only silence hands a load to the fallback. One infeasible run between two healthy
+    ones says nothing about the schedule that landed a moment ago.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    load = manager.instance("pool")
+    manager.schedulable()
+
+    manager.adopt_schedules({})
+
+    assert not load.fallback_active
+
+
+def test_a_fallback_loads_plan_leaves_the_forecast_when_a_schedule_lands(
+    make_manager, installation
+):
+    """
+    adopt_schedules() already republished the standby term because the schedule
+    displaced the fallback's slots; the *plan's* contribution follows the same rule
+    through the store_result that the next cycle runs - asserted here end to end.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=300)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    load = manager.instance("pool")
+    load.last_schedule_at = load.last_schedule_at - timedelta(seconds=3000)
+    manager.run_cycle()
+
+    base = [1000.0] * 48
+    with_fallback = manager.apply(base, 3600)
+    assert with_fallback != base
+
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    # Until the next cycle replaced the fallback contribution, it is *still* in the
+    # registry - adoption must not silently blank the forecast either.
+    assert manager.apply(base, 3600) != base
+    manager.run_cycle()
+    assert manager.apply(base, 3600) == base
 
 
 def test_the_release_survives_a_cycle_between_two_optimizer_runs(

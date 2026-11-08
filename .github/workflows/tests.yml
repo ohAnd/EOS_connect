@@ -1,0 +1,185 @@
+name: Tests
+
+# The test suite, in stages, shared by the feature / develop / main workflows.
+#
+# 604 of the 3665 tests drive a real Chromium and account for about nine tenths of
+# the wall clock. Running them in their own jobs does three things: the fast lane
+# needs no browser installed at all, the two browser halves run in parallel instead
+# of back to back, and -- because nothing in those processes calls asyncio.run() --
+# they can share one Chromium across the session instead of relaunching it per test
+# (see browser_scope in tests/conftest.py).
+#
+# Every job passes -m explicitly. pytest.ini defaults to -m "not browser" so that a
+# plain local `pytest` is the fast lane, and a job that forgot to say which half it
+# wanted would otherwise silently run the wrong one.
+#
+# The runner is pinned to ubuntu-24.04 rather than ubuntu-latest. That label moves to
+# Ubuntu 26 gradually between 2026-10-19 and 2026-11-19
+# (actions/runner-images#14748), so for a month a job lands on either image depending
+# on when it runs. ``playwright install --with-deps`` apt-installs a per-distro
+# dependency list, and Playwright only gained Ubuntu 26.04 in 1.61 and full support
+# in 1.64 — below that it refuses outright with "does not support chromium on
+# ubuntu26.04-x64". Pinning turns that into a deliberate upgrade: raise the
+# ``playwright`` floor in requirements-dev.txt to >=1.64 first, then move these four
+# jobs to ubuntu-26.04 and watch the browser jobs.
+
+on:
+  workflow_call:
+    inputs:
+      full:
+        description: >-
+          Run the browser jobs whatever changed. Set for the gates that must be
+          complete -- pull requests, and pushes to develop and main.
+        type: boolean
+        default: false
+
+# Every job here only ever checks the repository out. Saying so explicitly keeps the
+# GITHUB_TOKEN read-only in all four of them — the callers grant more (docker_feature
+# adds packages: write to publish an image), and a called workflow cannot be given
+# less than it asks for, so this is the place to pin it down.
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Decide which browser jobs are needed
+    runs-on: ubuntu-24.04
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # the diff below needs history, not just the tip
+
+      - name: Compare against the right base
+        id: filter
+        env:
+          FULL: ${{ inputs.full }}
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          if [ "$FULL" = "true" ]; then
+            echo "web=true"  >> "$GITHUB_OUTPUT"
+            echo "docs=true" >> "$GITHUB_OUTPUT"
+            echo "Full run requested — both browser jobs will run."
+            exit 0
+          fi
+
+          # A push gives us the previous tip; a brand new branch gives us zeroes,
+          # in which case develop is the only sensible thing to compare against.
+          if [ "$EVENT" = "pull_request" ]; then
+            git fetch --quiet origin "$BASE_REF"
+            base="origin/$BASE_REF"
+          elif [ -n "${BEFORE:-}" ] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            base="$BEFORE"
+          else
+            git fetch --quiet origin develop
+            base="origin/develop"
+          fi
+
+          changed="$(git diff --name-only "$base"...HEAD)"
+          echo "Base: $base"
+          echo "$changed" | sed 's/^/  /'
+
+          # This file is in both lists on purpose: editing the browser jobs is
+          # exactly when you want them to run, and without it a commit that touches
+          # only .github/workflows/ skips the very jobs it changed.
+          self='\.github/workflows/tests\.yml'
+          # Anything the browser harness imports counts, not just the UI assets —
+          # tests/web/conftest.py builds the app out of config_web, loads and
+          # persistence, so a change in any of them can break the page.
+          web_paths="^(src/web/|src/config_web/|src/loads/|src/persistence/|src/docs_links\.py|tests/web/|tests/conftest\.py|pytest\.ini|$self)"
+          # The docs tests read the committed config_schema.json and compare the
+          # level filter against ConfigSchema, so the schema and its exporter count.
+          docs_paths="^(docs/|tests/docs/|src/config_web/schema\.py|scripts/export_config_schema\.py|tests/conftest\.py|pytest\.ini|$self)"
+
+          if echo "$changed" | grep -qE "$web_paths"; then web=true; else web=false; fi
+          if echo "$changed" | grep -qE "$docs_paths"; then docs=true; else docs=false; fi
+
+          echo "web=$web"   >> "$GITHUB_OUTPUT"
+          echo "docs=$docs" >> "$GITHUB_OUTPUT"
+          echo "browser-web=$web, browser-docs=$docs"
+
+  fast:
+    name: Unit and regression tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      # Deliberately no Chromium here: that install is a minute on its own, and
+      # nothing in this job needs it.
+      - name: Run the non-browser tests
+        run: python -m pytest -m "not browser" tests/
+
+  browser_web:
+    name: Browser tests — web UI
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      # -n auto splits across the runner's cores; each worker gets its own browser.
+      - name: Run the web UI browser tests
+        run: python -m pytest tests/web -m browser -n auto
+
+  browser_docs:
+    name: Browser tests — documentation
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run the documentation browser tests
+        run: python -m pytest tests/docs -m browser -n auto

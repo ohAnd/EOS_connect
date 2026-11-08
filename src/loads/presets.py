@@ -271,3 +271,32 @@ def fallback_ambient_c(type_name):
     """Ambient to assume when nothing better is configured or forecast."""
     preset = preset_for(type_name)
     return preset["default_ambient_c"] if preset else 18.0
+
+
+# The one draw EVCC's own home meter is already net of: it meters home as the site
+# power balance - grid, PV, battery - minus the charging power of every loadpoint
+# (evcc-io/evcc core/site.go: homePower = grid + pv + battery - totalChargePower), so a
+# loadpoint series stands outside the base load a `group:home` profile is built from.
+# A consumer or meter series is *not* in that subtraction - what one of those draws
+# reaches the site balance and stays in home. Held as name grammar rather than imported
+# from `interfaces.evcc_entities`: this package imports nothing from `interfaces`
+# (see tests/loads/test_layering.py), and the grammar here is only the prefix - the
+# entity-name validation that decides where a name is *read from* stays in
+# interfaces/evcc_entities.py, which is a different question.
+EVCC_LOADPOINT_GROUP = "loadpoint"
+
+
+def is_evcc_loadpoint_series(name):
+    """Whether *name* is one of EVCC's loadpoint history series.
+
+    ``group:loadpoint:Carport`` names one wallbox by its title, bare
+    ``group:loadpoint`` all of them together - EVCC's home is net of every
+    loadpoint either way, so the whole-group form is as much outside the base
+    load as a single one. Everything else answers False: a consumer or meter
+    series does reach the site balance home reports, and anything not shaped
+    like an EVCC reference at all is a different connection's business.
+    """
+    parts = str(name or "").strip().split(":")
+    return len(parts) in (2, 3) and parts[0] == "group" and parts[1] == (
+        EVCC_LOADPOINT_GROUP
+    )

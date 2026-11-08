@@ -339,9 +339,8 @@ class EvccInterface:
                     # Skip this iteration but don't break the loop
                     sleep_interval = self.update_interval
                     while sleep_interval > 0:
-                        if self._stop_event.is_set():
+                        if self._stop_event.wait(min(1, sleep_interval)):
                             return
-                        time.sleep(min(1, sleep_interval))
                         sleep_interval -= 1
                     continue
 
@@ -369,12 +368,13 @@ class EvccInterface:
                     + " Continuing with last known values",
                     e,
                 )
-            # Break the sleep interval into smaller chunks to allow immediate shutdown
+            # Wait in one-second chunks so a stop is acted on at once: Event.wait()
+            # returns the moment the event is set, where the time.sleep() this used
+            # to call could not be woken and held the thread for the rest of it.
             sleep_interval = self.update_interval
             while sleep_interval > 0:
-                if self._stop_event.is_set():
+                if self._stop_event.wait(min(1, sleep_interval)):
                     return  # Exit immediately if stop event is set
-                time.sleep(min(1, sleep_interval))  # Sleep in 1-second chunks
                 sleep_interval -= 1
 
     def __get_evcc_loadpoints_vehicles(self):

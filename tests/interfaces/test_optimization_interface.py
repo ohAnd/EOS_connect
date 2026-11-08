@@ -658,3 +658,91 @@ def test_simulation_over_time():
         )
 
     assert True  # Always pass - this is for documentation
+
+
+@pytest.fixture(name="scheduler")
+def fixture_scheduler():
+    """OptimizationInterface used only for calculate_next_run_time()."""
+    with patch("src.interfaces.optimization_interface.EOSBackend"):
+        yield OptimizationInterface(
+            {"source": "eos_server", "server": "localhost", "port": 1234}, 900, None
+        )
+
+
+@pytest.mark.parametrize(
+    "now, avg_runtime, expected_start",
+    [
+        # Real cases from a quarter-hour setup (update_interval 180 s): the
+        # quarter-aligned run finished a few seconds before the boundary.
+        # Before the fix the next run was the following quarter-aligned one,
+        # i.e. no optimization for a full slot (12:59:58 and 12:29:55).
+        (datetime(2026, 10, 24, 12, 44, 58), 1, datetime(2026, 10, 24, 12, 47, 58)),
+        (datetime(2026, 10, 24, 12, 14, 54), 4, datetime(2026, 10, 24, 12, 17, 54)),
+    ],
+)
+def test_next_run_gap_fill_after_quarter_too_close(
+    scheduler, now, avg_runtime, expected_start
+):
+    """A run that ends shortly before a boundary is followed by a gap-fill run."""
+    assert scheduler.calculate_next_run_time(now, avg_runtime, 180) == expected_start
+
+
+@pytest.mark.parametrize(
+    "now, avg_runtime, update_interval, expected_start",
+    [
+        # Quarter start already in the past -> gap-fill (unchanged).
+        (
+            datetime(2026, 10, 24, 16, 59, 59),
+            2,
+            180,
+            datetime(2026, 10, 24, 17, 2, 59),
+        ),
+        # Not enough time for a gap-fill before the next quarter (unchanged).
+        (
+            datetime(2026, 10, 24, 12, 39, 3),
+            2,
+            180,
+            datetime(2026, 10, 24, 12, 44, 58),
+        ),
+        # Quarter too close but update interval too long for a gap-fill:
+        # still the following quarter-aligned run (unchanged).
+        (
+            datetime(2026, 10, 24, 12, 44, 58),
+            1,
+            900,
+            datetime(2026, 10, 24, 12, 59, 59),
+        ),
+    ],
+)
+def test_next_run_unchanged_cases(
+    scheduler, now, avg_runtime, update_interval, expected_start
+):
+    """Scheduling outside the too-close case behaves as before."""
+    assert (
+        scheduler.calculate_next_run_time(now, avg_runtime, update_interval)
+        == expected_start
+    )
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        datetime(2026, 10, 24, 12, 0, 0),
+        datetime(2026, 10, 24, 23, 45, 0),  # crosses midnight
+    ],
+)
+@pytest.mark.parametrize("update_interval", [60, 180, 300, 900])
+@pytest.mark.parametrize("avg_runtime", [1, 2, 4, 7])
+def test_no_full_slot_without_run(scheduler, base, update_interval, avg_runtime):
+    """Idle time after any run never reaches a full slot, for every end second."""
+    for offset in range(0, 1800, 1):
+        finish = base + timedelta(seconds=offset)
+        next_run = scheduler.calculate_next_run_time(
+            finish, avg_runtime, update_interval
+        )
+        idle = (next_run - finish).total_seconds()
+        assert 0 < idle <= 2 * update_interval, (
+            f"finish {finish:%H:%M:%S}, avg {avg_runtime}s, "
+            f"interval {update_interval}s: next run {next_run:%H:%M:%S} "
+            f"({idle:.0f}s idle)"
+        )

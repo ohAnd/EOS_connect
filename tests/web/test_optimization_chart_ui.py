@@ -110,7 +110,7 @@ def test_the_band_is_as_long_as_the_axis(page):
 
 # --- wired into the chart ---------------------------------------------------------------
 
-def _fixtures(slots=192, base=900, managed=None):
+def _fixtures(slots=192, base=900, managed=None, forecast=None):
     load = [400.0] * slots
     request = {
         "ems": {
@@ -140,6 +140,8 @@ def _fixtures(slots=192, base=900, managed=None):
     }
     if managed is not None:
         response["managed_loads"] = managed
+    if forecast is not None:
+        response["managed_load_forecast"] = forecast
     controls = {
         "used_time_frame_base": base,
         "used_optimization_source": "local_evopt",
@@ -213,3 +215,94 @@ def test_the_load_bar_is_left_alone_either_way(page):
     with_band = _run_update(page, *_fixtures(managed=managed))
     without = _run_update(page, *_fixtures())
     assert with_band["load"] == without["load"]
+
+
+# --- the loads the solver never sees (issue #362) ----------------------------------------
+
+def test_a_forecast_only_load_gets_a_band_of_its_own(page):
+    """
+    A profile load is in `gesamtlast` and nowhere else - the solver is never asked to
+    place it, so nothing ever reached `managed_loads` and the band stayed empty while
+    the appliance sat invisible inside the Load bar. That is what #362 reported.
+    """
+    forecast = {"heating": [0.0] * 192}
+    forecast["heating"][100] = 400.0
+    result = _run_update(page, *_fixtures(forecast=forecast))
+    assert "error" not in result, result.get("error")
+    assert result["managed"][76] == "0.400"
+
+
+def test_the_load_bar_gives_up_exactly_what_the_band_takes(page):
+    """
+    The forecast half is energy already counted in `gesamtlast`, so drawing it twice
+    would overstate the household by the size of the appliance. The stack total has to
+    come out identical to the bar before the band existed.
+    """
+    forecast = {"heating": [0.0] * 192}
+    forecast["heating"][100] = 400.0
+    result = _run_update(page, *_fixtures(forecast=forecast))
+    plain = _run_update(page, *_fixtures())
+    assert "error" not in result, result.get("error")
+
+    assert result["load"][76] == "0.000"
+    assert float(result["load"][76]) + float(result["managed"][76]) == pytest.approx(
+        float(plain["load"][76])
+    )
+    assert result["load"][:76] == plain["load"][:76]
+    assert result["load"][77:] == plain["load"][77:]
+
+
+def test_a_placed_load_still_leaves_the_load_bar_alone(page):
+    """
+    Only the forecast half comes out. What the solver placed was never in `gesamtlast`
+    to begin with, so subtracting it would take the household below what it will use.
+    """
+    managed = {"pool": [400.0] * 192}
+    with_band = _run_update(page, *_fixtures(managed=managed))
+    without = _run_update(page, *_fixtures())
+    assert with_band["load"] == without["load"]
+
+
+def test_both_halves_are_drawn_as_one_band(page):
+    managed = {"pool": [0.0] * 192}
+    managed["pool"][100] = 400.0
+    forecast = {"heating": [0.0] * 192}
+    forecast["heating"][100] = 100.0
+    result = _run_update(page, *_fixtures(managed=managed, forecast=forecast))
+    assert "error" not in result, result.get("error")
+    assert result["managed"][76] == "0.500"
+
+
+def test_the_forecast_band_rides_the_same_rotation_as_the_load_bar(page):
+    """A band that makes the trip onto the x-axis differently names the wrong hours."""
+    forecast = {"heating": list(range(192))}
+    band = _band(page, forecast, 24, 192, 900)
+    aligned = _align(page, list(range(192)), 24, 192, 900)
+
+    assert band == [f"{value / 1000:.3f}" for value in aligned]
+    assert band[0] == "0.024"
+
+
+def test_an_id_in_both_halves_is_summed_rather_than_shadowed(page):
+    """
+    They are disjoint by design - a load is either timed by the solver or part of the
+    forecast. Merging by key would drop one silently if that ever stopped holding, and
+    a band quietly too short is the hardest kind of wrong to notice.
+    """
+    merged = page.evaluate(
+        """() => ChartManager.mergeSchedules({pool: [1, 2]}, {pool: [10, 20]})"""
+    )
+    assert merged == {"pool": [11, 22]}
+
+
+def test_merging_keeps_the_longer_of_two_series(page):
+    merged = page.evaluate(
+        """() => ChartManager.mergeSchedules({pool: [1]}, {pool: [10, 20]})"""
+    )
+    assert merged == {"pool": [11, 20]}
+
+
+def test_an_absent_forecast_key_still_leaves_the_band_empty(page):
+    result = _run_update(page, *_fixtures())
+    assert "error" not in result, result.get("error")
+    assert result["managed"] == []

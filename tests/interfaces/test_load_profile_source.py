@@ -18,7 +18,11 @@ from zoneinfo import ZoneInfo
 import pytest
 import requests
 
-from src.interfaces.load_profile_source import ProfileSourceError, fetch_profile
+from src.interfaces.load_profile_source import (
+    ProfileSourceError,
+    _endpoint,
+    fetch_profile,
+)
 
 BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -72,12 +76,13 @@ def _fetch(payload, entry=None, **kwargs):
         else:
             get.return_value = _Response(payload)
         result = fetch_profile(
-            entry or _entry(), data_source=DATA_SOURCE, time_zone=BERLIN, **kwargs
+            entry or _entry(), connection=DATA_SOURCE, time_zone=BERLIN, **kwargs
         )
     return result, get
 
 
 # --- the connection ------------------------------------------------------------------
+
 
 def test_the_central_connection_builds_the_states_url():
     """Built the same way the price and PV sources build theirs."""
@@ -101,9 +106,7 @@ def test_a_standalone_endpoint_is_used_verbatim():
 
 
 def test_an_endpoint_with_no_token_sends_no_authorization_header():
-    entry = _entry(
-        use_ha_central_data_source=False, data_url="http://nas.local/f.json"
-    )
+    entry = _entry(use_ha_central_data_source=False, data_url="http://nas.local/f.json")
     _, get = _fetch(_payload([1000.0, 1000.0]), entry)
 
     assert "Authorization" not in get.call_args[1]["headers"]
@@ -111,11 +114,12 @@ def test_an_endpoint_with_no_token_sends_no_authorization_header():
 
 def test_nothing_configured_says_what_to_configure():
     with pytest.raises(ProfileSourceError) as excinfo:
-        fetch_profile(_entry(ha_sensor_name=""), data_source=DATA_SOURCE)
+        fetch_profile(_entry(ha_sensor_name=""), connection=DATA_SOURCE)
     assert "no entity configured" in str(excinfo.value)
 
 
 # --- units ---------------------------------------------------------------------------
+
 
 def test_watts_are_integrated_over_each_entry():
     """1500 W held for an hour is 1500 Wh."""
@@ -140,9 +144,18 @@ def test_an_hour_missing_from_the_source_stays_a_hole():
     deliberately longer span is declared with an explicit `end` instead.
     """
     entries = [
-        {"start": datetime(2026, 1, 15, 9, 0, tzinfo=BERLIN).isoformat(), "value": 1000.0},
-        {"start": datetime(2026, 1, 15, 10, 0, tzinfo=BERLIN).isoformat(), "value": 1000.0},
-        {"start": datetime(2026, 1, 15, 12, 0, tzinfo=BERLIN).isoformat(), "value": 1000.0},
+        {
+            "start": datetime(2026, 1, 15, 9, 0, tzinfo=BERLIN).isoformat(),
+            "value": 1000.0,
+        },
+        {
+            "start": datetime(2026, 1, 15, 10, 0, tzinfo=BERLIN).isoformat(),
+            "value": 1000.0,
+        },
+        {
+            "start": datetime(2026, 1, 15, 12, 0, tzinfo=BERLIN).isoformat(),
+            "value": 1000.0,
+        },
     ]
     payload = {"state": "unknown", "attributes": {"forecast": entries}}
 
@@ -154,7 +167,10 @@ def test_an_hour_missing_from_the_source_stays_a_hole():
 def test_a_declared_end_keeps_a_long_entry_long():
     """One overnight value in a hand-written profile: 300 W for 8 h is 2400 Wh."""
     entries = [
-        {"start": datetime(2026, 1, 15, 21, 0, tzinfo=BERLIN).isoformat(), "value": 400.0},
+        {
+            "start": datetime(2026, 1, 15, 21, 0, tzinfo=BERLIN).isoformat(),
+            "value": 400.0,
+        },
         {
             "start": datetime(2026, 1, 15, 22, 0, tzinfo=BERLIN).isoformat(),
             "end": datetime(2026, 1, 16, 6, 0, tzinfo=BERLIN).isoformat(),
@@ -169,8 +185,7 @@ def test_a_declared_end_keeps_a_long_entry_long():
 
 
 def test_energy_units_pass_through_unscaled():
-    result, _ = _fetch(_payload([250.0] * 4, step_minutes=15),
-                       _entry(value_unit="Wh"))
+    result, _ = _fetch(_payload([250.0] * 4, step_minutes=15), _entry(value_unit="Wh"))
 
     assert [entry["value"] for entry in result["entries"]] == [250.0] * 4
 
@@ -197,7 +212,7 @@ def test_a_half_hourly_grid_is_accepted_on_its_own_span():
 
 def test_an_unknown_unit_is_refused_before_anything_is_fetched():
     with pytest.raises(ProfileSourceError) as excinfo:
-        fetch_profile(_entry(value_unit="MJ"), data_source=DATA_SOURCE)
+        fetch_profile(_entry(value_unit="MJ"), connection=DATA_SOURCE)
     assert "unknown unit 'MJ'" in str(excinfo.value)
 
 
@@ -211,9 +226,11 @@ def test_a_unit_mistake_is_warned_about_against_the_rated_power(caplog):
 
 # --- what the payload has to look like -----------------------------------------------
 
+
 def test_the_array_is_read_from_the_configured_path():
-    result, _ = _fetch(_payload([100.0, 100.0], path="data"),
-                       _entry(data_path="attributes.data"))
+    result, _ = _fetch(
+        _payload([100.0, 100.0], path="data"), _entry(data_path="attributes.data")
+    )
 
     assert len(result["entries"]) == 2
 
@@ -253,15 +270,22 @@ def test_a_single_entry_is_taken_to_cover_one_hour():
 def test_a_malformed_entry_names_the_keys_it_actually_had():
     """The normalizer's contract, and the reason the format can afford to be strict."""
     with pytest.raises(ProfileSourceError) as excinfo:
-        _fetch({"attributes": {"forecast": [
-            {"time": "2026-01-15T00:00:00+01:00", "watts": 100},
-            {"time": "2026-01-15T01:00:00+01:00", "watts": 100},
-        ]}})
+        _fetch(
+            {
+                "attributes": {
+                    "forecast": [
+                        {"time": "2026-01-15T00:00:00+01:00", "watts": 100},
+                        {"time": "2026-01-15T01:00:00+01:00", "watts": 100},
+                    ]
+                }
+            }
+        )
     message = str(excinfo.value)
     assert "time" in message and "watts" in message
 
 
 # --- when the source is not there ----------------------------------------------------
+
 
 def test_a_timeout_says_it_timed_out():
     with pytest.raises(ProfileSourceError) as excinfo:
@@ -293,5 +317,117 @@ def test_an_http_error_is_reported_as_unreachable():
     with patch("src.interfaces.load_profile_source.requests.get") as get:
         get.return_value = _Response({}, status=404)
         with pytest.raises(ProfileSourceError) as excinfo:
-            fetch_profile(_entry(), data_source=DATA_SOURCE, time_zone=BERLIN)
+            fetch_profile(_entry(), connection=DATA_SOURCE, time_zone=BERLIN)
     assert "could not be reached" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# The wiring, not just the function
+# ---------------------------------------------------------------------------
+
+
+def test_the_merged_config_carries_the_connection_this_needs():
+    """What the caller hands over has to be a place that actually holds it.
+
+    Every test above passes a connection dict in by hand, which is why nobody
+    noticed that the caller was reading one from a section the merge does not
+    emit. The merge resolves ``data_source`` into ``load`` and ``battery``; a
+    fully configured install therefore had ``config["data_source"] == {}`` and
+    every central-source profile reported "no entity configured" - blaming the
+    one thing that was set.
+    """
+    # pylint: disable=import-outside-toplevel
+    import os
+    import tempfile
+    from unittest.mock import patch
+
+    from src.config_web.merger import build_merged_config
+    from src.config_web.schema import ConfigSchema
+    from src.config_web.store import ConfigStore
+
+    directory = tempfile.mkdtemp()
+    store = ConfigStore(os.path.join(directory, "wiring.db"))
+    store.open()
+    try:
+        store.set_batch(
+            {
+                "data_source.type": "homeassistant",
+                "data_source.url": "http://ha.local:8123",
+                "data_source.access_token": "tok",
+            }
+        )
+        with patch(
+            "src.interfaces.evcc_parameters.fetch_evcc_parameters", return_value=None
+        ):
+            merged = build_merged_config({}, store, ConfigSchema())
+    finally:
+        store.close()
+
+    assert "data_source" not in merged, "the merge deliberately emits no such section"
+
+    url, token, _label, _ssl = _endpoint(
+        {"use_ha_central_data_source": True, "ha_sensor_name": "sensor.pool_forecast"},
+        merged["load"],
+    )
+    assert url == "http://ha.local:8123/api/states/sensor.pool_forecast"
+    assert token == "tok"
+
+
+def test_an_evcc_source_reads_the_forecast_through_the_supplementary():
+    """
+    A forecast lives in a Home Assistant entity, and EVCC has no /api/states to
+    serve one from. The central connection under EVCC is therefore the
+    supplementary one - this used to build the URL against EVCC itself and 404.
+    """
+    load_section = {
+        "source": "evcc",
+        "url": "http://evcc.local:7070",
+        "access_token": "",
+        "supplementary_type": "homeassistant",
+        "supplementary_url": "http://ha.local:8123",
+        "supplementary_access_token": "supp-token",
+        "supplementary_ssl_ignore": True,
+    }
+
+    url, token, _label, ssl_ignore = _endpoint(
+        {"use_ha_central_data_source": True, "ha_sensor_name": "sensor.pool_forecast"},
+        load_section,
+    )
+
+    assert url == "http://ha.local:8123/api/states/sensor.pool_forecast"
+    assert token == "supp-token"
+    assert ssl_ignore is True, "the answering connection's flag, not the primary's"
+
+
+def test_evcc_without_a_supplementary_says_which_one_is_missing():
+    """Not "no entity configured" - the entity is fine, there is nowhere to ask."""
+    load_section = {
+        "source": "evcc",
+        "url": "http://evcc.local:7070",
+        "supplementary_type": "",
+    }
+
+    with pytest.raises(ProfileSourceError) as excinfo:
+        _endpoint(
+            {
+                "use_ha_central_data_source": True,
+                "ha_sensor_name": "sensor.pool_forecast",
+            },
+            load_section,
+        )
+
+    message = str(excinfo.value)
+    assert "supplementary" in message
+    assert "sensor.pool_forecast" in message
+
+
+def test_a_missing_connection_is_not_blamed_on_the_entity():
+    """Two different problems deserve two different sentences."""
+    entry = {"use_ha_central_data_source": True, "ha_sensor_name": "sensor.pool"}
+    with pytest.raises(ProfileSourceError) as without_connection:
+        _endpoint(entry, {})
+    assert "data source connection" in str(without_connection.value)
+
+    with pytest.raises(ProfileSourceError) as without_entity:
+        _endpoint({**entry, "ha_sensor_name": ""}, DATA_SOURCE)
+    assert "no entity configured" in str(without_entity.value)

@@ -84,18 +84,14 @@ def test_request_with_retries_ssl_verify_false(config_fixture):
     with patch(
         "src.interfaces.load_interface.requests.get",
         return_value=mock_response,
-    ) as mock_get, patch(
-        "src.interfaces.load_interface.time.sleep"
-    ), patch(
+    ) as mock_get, patch("src.interfaces.load_interface.time.sleep"), patch(
         "src.interfaces.load_interface.logger"
     ):
-        getattr(li, "_LoadInterface__request_with_retries")(
-            "get", "http://dummy"
-        )
+        getattr(li, "_LoadInterface__request_with_retries")("get", "http://dummy")
         _, kwargs = mock_get.call_args
-        assert kwargs.get("verify") is False, (
-            "Expected verify=False when ssl_ignore=True"
-        )
+        assert (
+            kwargs.get("verify") is False
+        ), "Expected verify=False when ssl_ignore=True"
 
 
 def test_request_with_retries_ssl_verify_default(config_fixture):
@@ -111,18 +107,14 @@ def test_request_with_retries_ssl_verify_default(config_fixture):
     with patch(
         "src.interfaces.load_interface.requests.get",
         return_value=mock_response,
-    ) as mock_get, patch(
-        "src.interfaces.load_interface.time.sleep"
-    ), patch(
+    ) as mock_get, patch("src.interfaces.load_interface.time.sleep"), patch(
         "src.interfaces.load_interface.logger"
     ):
-        getattr(li, "_LoadInterface__request_with_retries")(
-            "get", "http://dummy"
-        )
+        getattr(li, "_LoadInterface__request_with_retries")("get", "http://dummy")
         _, kwargs = mock_get.call_args
-        assert kwargs.get("verify", True) is True, (
-            "Expected verify=True when ssl_ignore is not set"
-        )
+        assert (
+            kwargs.get("verify", True) is True
+        ), "Expected verify=True when ssl_ignore is not set"
 
 
 def test_fetch_historical_energy_data_from_openhab_success(config_fixture):
@@ -163,9 +155,8 @@ def test_fetch_historical_energy_data_from_openhab_success(config_fixture):
     ):
         start = datetime(2023, 7, 1, 0, 0)
         end = datetime(2023, 7, 1, 1, 0)
-        result = li._LoadInterface__fetch_historical_energy_data_from_openhab(
-            "sensor.test", start, end
-        )
+        li.src = "openhab"
+        result = li.fetch_historical_energy_data("sensor.test", start, end)
         assert isinstance(result, list)
         assert result[0]["state"] == "10"
         assert "last_updated" in result[0]
@@ -196,9 +187,8 @@ def test_fetch_historical_energy_data_from_openhab_failure(config_fixture):
     ):
         start = datetime(2023, 7, 1, 0, 0)
         end = datetime(2023, 7, 1, 1, 0)
-        result = li._LoadInterface__fetch_historical_energy_data_from_openhab(
-            "sensor.test", start, end
-        )
+        li.src = "openhab"
+        result = li.fetch_historical_energy_data("sensor.test", start, end)
         assert result == []
 
 
@@ -222,9 +212,8 @@ def test_fetch_historical_energy_data_from_homeassistant_success(config_fixture)
     ):
         start = datetime(2023, 7, 1, 0, 0)
         end = datetime(2023, 7, 1, 1, 0)
-        result = li._LoadInterface__fetch_historical_energy_data_from_homeassistant(
-            "sensor.test", start, end
-        )
+        li.src = "homeassistant"
+        result = li.fetch_historical_energy_data("sensor.test", start, end)
         assert isinstance(result, list)
         assert result[0]["state"] == "5"
         assert "last_updated" in result[0]
@@ -243,9 +232,8 @@ def test_fetch_historical_energy_data_from_homeassistant_failure(config_fixture)
     ):
         start = datetime(2023, 7, 1, 0, 0)
         end = datetime(2023, 7, 1, 1, 0)
-        result = li._LoadInterface__fetch_historical_energy_data_from_homeassistant(
-            "sensor.test", start, end
-        )
+        li.src = "homeassistant"
+        result = li.fetch_historical_energy_data("sensor.test", start, end)
         assert result == []
 
 
@@ -264,16 +252,9 @@ def test_empty_sensor_returns_empty_list(config_fixture):
     li = LoadInterface(config_fixture, 3600)
     start = datetime(2023, 7, 1, 0, 0)
     end = datetime(2023, 7, 1, 1, 0)
-    assert (
-        li._LoadInterface__fetch_historical_energy_data_from_openhab("", start, end)
-        == []
-    )
-    assert (
-        li._LoadInterface__fetch_historical_energy_data_from_homeassistant(
-            "", start, end
-        )
-        == []
-    )
+    for source in ("openhab", "homeassistant"):
+        li.src = source
+        assert li.fetch_historical_energy_data("", start, end) == []
 
 
 def test_get_load_profile_returns_expected_structure(config_fixture):
@@ -455,7 +436,7 @@ def test_load_profile_for_day_15min_intervals_openhab(monkeypatch):
     }
     li = LoadInterface(config, 900)
 
-    def mock_fetch(item, start, end):
+    def mock_fetch(item, start, end):  # the public entry point's signature
         # Return 96 data points, all with state "100"
         return [
             {
@@ -465,9 +446,7 @@ def test_load_profile_for_day_15min_intervals_openhab(monkeypatch):
             for i in range(96)
         ]
 
-    monkeypatch.setattr(
-        li, "_LoadInterface__fetch_historical_energy_data_from_openhab", mock_fetch
-    )
+    monkeypatch.setattr(li, "fetch_historical_energy_data", mock_fetch)
     start = datetime(2023, 7, 1, 0, 0)
     end = start + timedelta(days=1)
     profile = li.get_load_profile_for_day(start, end)
@@ -494,7 +473,7 @@ def test_load_profile_for_day_15min_intervals_homeassistant(monkeypatch):
     li = LoadInterface(config, 900)
 
     # Mock the fetch method to return a constant value for each interval
-    def mock_fetch(entity_id, start, end):
+    def mock_fetch(entity_id, start, end):  # the public entry point's signature
         # Return 96 data points, all with state "200"
         return [
             {
@@ -504,11 +483,7 @@ def test_load_profile_for_day_15min_intervals_homeassistant(monkeypatch):
             for i in range(96)
         ]
 
-    monkeypatch.setattr(
-        li,
-        "_LoadInterface__fetch_historical_energy_data_from_homeassistant",
-        mock_fetch,
-    )
+    monkeypatch.setattr(li, "fetch_historical_energy_data", mock_fetch)
     start = datetime(2023, 7, 1, 0, 0)
     end = start + timedelta(days=1)
     profile = li.get_load_profile_for_day(start, end)
@@ -726,8 +701,9 @@ class TestAConnectedSourceThatReturnsNothing:
 
     def _profile_with_no_data(self, config_fixture, caplog):
         iface = LoadInterface(config_fixture, 3600, "UTC")
-        with patch.object(iface, "get_load_profile_for_day", return_value=[0] * 24), \
-                caplog.at_level(logging.WARNING, logger="__main__"):
+        with patch.object(
+            iface, "get_load_profile_for_day", return_value=[0] * 24
+        ), caplog.at_level(logging.WARNING, logger="__main__"):
             profile = iface._LoadInterface__create_load_profile_weekdays()
         return iface, profile
 
@@ -745,7 +721,9 @@ class TestAConnectedSourceThatReturnsNothing:
         # It still degrades rather than failing — it just says so now.
         assert profile == iface._get_default_profile()
 
-    def test_the_default_source_keeps_the_reassuring_wording(self, config_fixture, caplog):
+    def test_the_default_source_keeps_the_reassuring_wording(
+        self, config_fixture, caplog
+    ):
         """With nothing connected, "normal for a new installation" is simply true."""
         config_fixture["source"] = "default"
         _, _ = self._profile_with_no_data(config_fixture, caplog)

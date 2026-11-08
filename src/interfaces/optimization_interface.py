@@ -186,6 +186,18 @@ class OptimizationInterface:
         """
         return bool(getattr(self.backend, "schedules_managed_loads", False))
 
+    @property
+    def places_home_appliance(self):
+        """
+        Whether the backend places the Additional Load and reports where.
+
+        Read through to the backend for the same reason as above. Defaults to False -
+        the conservative answer, because a backend that does not place it and is
+        assumed to leaves the appliance subtracted from the household profile with
+        nothing adding it back, and the energy simply disappears.
+        """
+        return bool(getattr(self.backend, "places_home_appliance", False))
+
     def optimize(self, eos_request, timeout=None, managed_loads=None,
                  managed_load_budget_w=0.0):
         """
@@ -433,6 +445,16 @@ class OptimizationInterface:
             self.last_control_data[0]["discharge_allowed"] = discharge_allowed
             # Store the dynamic override state for later use (e.g., in web UI)
             self.last_control_data[0]["dyn_override_active"] = dyn_override_active
+
+            # The control loop switches to entry 1 at the slot boundary, which can
+            # be minutes before the next run refreshes entry 0. Carry the override
+            # into it, or the plain optimizer value reaches the inverter meanwhile.
+            next_override_active = next_step < len(
+                dyn_override_allowed_array
+            ) and bool(dyn_override_allowed_array[next_step])
+            if next_override_active:
+                self.last_control_data[1]["discharge_allowed"] = True
+            self.last_control_data[1]["dyn_override_active"] = next_override_active
             # Store the array of override states for all slots
             self.last_control_data[0][
                 "dyn_override_allowed_array"
@@ -595,6 +617,21 @@ class OptimizationInterface:
                 next_quarter.strftime("%H:%M:%S"),
             )
 
+        # Skip a quarter that is too close to reach. This must happen before the
+        # gap-fill check: otherwise a run finishing a few seconds before a
+        # boundary fails the gap-fill check against the near quarter, is then
+        # moved to the following one, and no run happens for a full slot.
+        absolute_min_seconds = max(avg_runtime * 0.5, 30)
+        if (
+            quarter_aligned_start - current_time
+        ).total_seconds() < absolute_min_seconds:
+            next_quarter += timedelta(minutes=15)
+            quarter_aligned_start = next_quarter - timedelta(seconds=avg_runtime)
+            logger.debug(
+                "[OPTIMIZATION] Quarter too close, moved to next: %s",
+                next_quarter.strftime("%H:%M:%S"),
+            )
+
         time_until_quarter_start = (
             quarter_aligned_start - current_time
         ).total_seconds()
@@ -623,15 +660,6 @@ class OptimizationInterface:
             return normal_next_start
 
         # Otherwise, use quarter-aligned timing
-        absolute_min_seconds = max(avg_runtime * 0.5, 30)
-        if time_until_quarter_start < absolute_min_seconds:
-            next_quarter += timedelta(minutes=15)
-            quarter_aligned_start = next_quarter - timedelta(seconds=avg_runtime)
-            logger.debug(
-                "[OPTIMIZATION] Quarter too close, moved to next: %s",
-                next_quarter.strftime("%H:%M:%S"),
-            )
-
         logger.info(
             "[OPTIMIZATION] Quarter-hour aligned run: start %s, finish at %s",
             quarter_aligned_start.strftime("%H:%M:%S"),

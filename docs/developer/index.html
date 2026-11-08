@@ -53,7 +53,7 @@
 
                     <h3 id="startup-sequence">Startup sequence</h3>
                     <p>Everything below happens at module level in <code>src/eos_connect.py</code>, in this
-                        order, before the web server binds.</p>
+                        order. The socket is bound third, before anything that can block.</p>
                     <ol>
                         <li><strong>Bootstrap config.</strong> <code>ConfigManager</code>
                             (<code>src/config.py</code>) reads the three keys in <code>src/config.yaml</code>
@@ -67,15 +67,58 @@
                             value the user set in the web UI into the config dict. Everything constructed after
                             this point therefore receives authoritative values &mdash; there is no post-init
                             re-sync step.</li>
+                        <li><strong>Bind and serve.</strong>
+                            <code>PortInterface.create_web_server_with_port_check()</code> binds
+                            <code>0.0.0.0</code> on the configured port (default 8081), and waitress serves
+                            it from a daemon thread. What it serves is a <code>BootGate</code> &mdash; see
+                            <a href="#boot-server">The boot server</a>.</li>
                         <li><strong>Build the interfaces</strong> through
-                            <code>InterfaceFactory</code>, in dependency order.</li>
+                            <code>InterfaceFactory</code>, in dependency order. Each one marks its step on
+                            <code>BOOT</code> (<code>src/boot_state.py</code>) as it goes, which is what
+                            <code>/api/boot/status</code> serves.</li>
                         <li><strong>Start the scheduler.</strong> <code>OptimizationScheduler</code> spawns
                             its three daemon threads.</li>
-                        <li><strong>Serve.</strong>
-                            <code>PortInterface.create_web_server_with_port_check()</code> binds
-                            <code>0.0.0.0</code> on the configured port (default 8081) and hands Flask to
-                            waitress.</li>
+                        <li><strong>Hand over.</strong> Once the last <code>@app.route</code> has run,
+                            <code>boot_gate.target</code> is set to the real Flask app and
+                            <code>BOOT.set_ready()</code> is called. The main thread then waits on
+                            <code>shutdown_event</code>.</li>
                     </ol>
+
+                    <h3 id="boot-server">The boot server</h3>
+                    <p>The interfaces above reach the network: an unreachable MQTT broker costs a TCP
+                        timeout, a large recorder costs the load-profile build, and there is a fixed
+                        settle sleep. Binding after all of that meant 15&ndash;45&nbsp;s of
+                        <em>connection refused</em>, and a start that died on a bad setting took the
+                        configuration UI with it (issues #349, #310, #83).</p>
+                    <p>The real Flask app cannot simply answer earlier. Flask bars route registration
+                        once an app has served a request (<code>_check_setup_finished</code>), so a page
+                        load arriving mid-startup would turn the next <code>@app.route</code> into an
+                        <code>AssertionError</code>. Instead <code>src/boot_server.py</code> builds a
+                        second, complete app and puts a gate in front:</p>
+                    <ul>
+                        <li><code>BootGate</code> is the WSGI callable waitress is given. While
+                            <code>target</code> is <code>None</code> it serves the boot app; afterwards it
+                            serves the real one. The socket, the thread and the port never change, so
+                            there is no hand-over window.</li>
+                        <li>The boot app serves the same <code>index.html</code>, JavaScript and CSS as
+                            the real one &mdash; shared from <code>src/web_routes.py</code> &mdash; plus
+                            the log routes, <code>/api/boot/status</code>, and
+                            <strong><code>config_bp</code> and <code>backup_bp</code></strong>. That last
+                            part is the point: the settings API answers throughout startup and in rescue
+                            mode. The same blueprint objects are registered on both apps, which Flask
+                            allows.</li>
+                        <li>Dashboard endpoints get the <code>{"status": "starting up"}</code> placeholder
+                            the frontend already renders. Unknown URLs still 404, so the two apps agree
+                            on what exists.</li>
+                    </ul>
+                    <p>When a <code>critical=True</code> interface fails, the factory no longer re-raises.
+                        It records the failure on <code>BOOT.set_fatal()</code> and returns
+                        <code>None</code>; <code>eos_connect.py</code> checks <code>BOOT.fatal</code> once,
+                        after the four required interfaces, and enters <strong>rescue mode</strong>: the
+                        rest of the module is abandoned, the gate is never handed over, and the boot app
+                        keeps serving the settings. The module-level sequence is dropped rather than
+                        nursed along with stand-in objects, because half of what follows reads from the
+                        interface that just failed.</p>
 
                     <p>Only four environment variables are read, and all four are bootstrap-only
                         (<code>src/config.py:205-212</code>). Everything else lives in the database.</p>
@@ -115,13 +158,74 @@
                         </table>
                     </div>
 
+                    <h3 id="restarting-in-place">Restarting in place</h3>
+                    <p><code>src/restart.py</code> holds the request, bounds the teardown and replaces
+                        the process. It owns no teardown sequence of its own &mdash;
+                        <code>_shutdown_all()</code> in eos_connect.py is the one every exit path uses,
+                        and a second list here would be a second place to forget a component.</p>
+                    <p><strong>Why <code>os.execv</code> and not exit-and-be-restarted.</strong> The
+                        obvious approach fails on two of the three supported run modes:</p>
+                    <div class="scroll-x">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Run mode</th>
+                                    <th>PID 1</th>
+                                    <th>On process exit</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>docker compose</code></td>
+                                    <td>python</td>
+                                    <td><code>restart: unless-stopped</code> brings it back</td>
+                                </tr>
+                                <tr>
+                                    <td><code>docker run</code></td>
+                                    <td>python</td>
+                                    <td><strong>stays dead</strong> &mdash; documented without a
+                                        <code>--restart</code> flag</td>
+                                </tr>
+                                <tr>
+                                    <td>HA add-on</td>
+                                    <td>s6-overlay <code>/init</code></td>
+                                    <td><strong>stays dead</strong> &mdash; s6 tears the container down,
+                                        and no add-on manifest declares <code>watchdog:</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>Calling the Supervisor API instead was ruled out for the same reason it would not
+                        help: it does nothing for Docker, <code>SUPERVISOR_TOKEN</code> is never read, and
+                        the add-on manifests grant neither <code>hassio_api</code> nor
+                        <code>hassio_role</code> &mdash; that would be a change in a second repository.
+                        <code>execv</code> replaces the process image, so the PID does not change, the
+                        container never exits and s6 never sees a service stop. One mechanism, identical
+                        everywhere.</p>
+                    <p>Two details carry it:</p>
+                    <ul>
+                        <li><strong>The command line is frozen at import</strong>
+                            (<code>_frozen_argv()</code>), before anything can <code>chdir</code>. The
+                            repository Dockerfile starts the app with a <em>relative</em> path, and
+                            <code>sys.argv[1]</code> may be a config directory the user passed.
+                            <code>sys.executable</code> covers <code>python</code> and the add-on's
+                            <code>/opt/venv/bin/python</code> alike.</li>
+                        <li><strong>The teardown has a deadline</strong> (10&nbsp;s).
+                            <code>optimization_scheduler.shutdown()</code> joins without one, and a run
+                            blocked on its backend can hold that for the full three-minute timeout.
+                            Cutting it short leaks nothing: <code>execv</code> replaces the whole process
+                            image and every thread goes with it.</li>
+                    </ul>
+
                     <h3 id="interface-factory">The interface factory</h3>
                     <p><code>src/interface_factory.py</code> exposes ten <code>create_*</code> methods, one per
                         interface. Each delegates to the private <code>_create_interface()</code>, which
                         catches whatever the constructor raises, registers it through
-                        <code>StartupValidator.add_error()</code>, and then either re-raises (when
-                        <code>critical=True</code>) or returns <code>None</code> so the caller can substitute a
-                        degraded stand-in.</p>
+                        <code>StartupValidator.add_error()</code>, marks the matching boot step failed,
+                        and returns <code>None</code> so the caller can substitute a degraded stand-in.
+                        <strong>It never re-raises.</strong> A <code>critical=True</code> failure
+                        additionally calls <code>BOOT.set_fatal()</code>, which is what puts the
+                        application into rescue mode rather than ending the process.</p>
                     <p><code>StartupValidator</code> (<code>src/startup_validator.py</code>, 58 lines) keeps no
                         state of its own. It formats one log line onto the <code>__main__</code> logger, with
                         <code>| Config: #section</code> and <code>| ACTION REQUIRED</code> markers appended.
@@ -148,7 +252,7 @@ battery_interface = factory.create_battery_interface(
     time_zone,          # time_zone: tzinfo
     base_control,       # base_control: BaseControl
     request_timeout=10,
-    critical=True,      # halt startup on failure
+    critical=True,      # a failure here is fatal: rescue mode, not a degraded run
 )</code></pre>
                     </div>
                     <p>Note the import paths. <code>_import_and_create()</code> imports
@@ -394,9 +498,10 @@ python src/eos_connect.py</code></pre>
                     </div>
 
                     <h3 id="dev-deps">What is and is not in requirements-dev.txt</h3>
-                    <p>It is four lines: <code>pytest&gt;=8.0</code>, <code>pylint&gt;=3.0</code>,
-                        <code>black&gt;=24.0</code>, <code>playwright&gt;=1.40</code>. Two of the comments
-                        around them matter more than the pins.</p>
+                    <p>It is five lines: <code>pytest&gt;=8.0</code>, <code>pytest-xdist&gt;=3.5</code>,
+                        <code>pylint&gt;=3.0</code>, <code>black&gt;=24.0</code>,
+                        <code>playwright&gt;=1.40</code>. Two of the comments around them matter more
+                        than the pins.</p>
                     <div class="alert alert-warning">
                         <p><strong>Install <code>playwright</code>, not <code>pytest-playwright</code>.</strong>
                             The plugin drags in <code>pytest-base-url</code>, whose session-scoped
@@ -433,26 +538,56 @@ python src/eos_connect.py</code></pre>
 
                     <h3 id="running-tests">Running the suite</h3>
                     <div class="scroll-x">
-                        <pre><code>python -m pytest                    # everything, 1772 tests
+                        <pre><code>python -m pytest                    # the fast lane, 3061 tests
+python -m pytest -m browser         # only the browser tests, 604
+python -m pytest -m ""              # the whole suite, 3665
 python -m pytest tests/config_web   # one directory
 python -m pytest -k battery_price   # by name
-python -m pytest -v tests/          # what CI runs</code></pre>
+python -m pytest -m "" -n auto      # the whole suite, in parallel</code></pre>
                     </div>
-                    <p>Both <code>pytest</code> and <code>python -m pytest</code> work, from the repository
-                        root, because <code>pytest.ini</code> is short and does exactly two things:</p>
+
+                    <h3 id="test-lanes">Why the default run is not everything</h3>
+                    <p>604 of the 3665 tests drive a real Chromium, and they account for roughly nine
+                        tenths of the wall clock &mdash; the other 3061 finish in about fifteen seconds.
+                        Running them together meant every change paid for the browser, so they are marked
+                        <code>browser</code> and excluded by default:</p>
                     <div class="scroll-x">
                         <pre><code>[pytest]
 pythonpath = .
-testpaths = tests</code></pre>
+testpaths = tests
+addopts = -m "not browser"</code></pre>
                     </div>
-                    <p>Tests import as <code>src.config_web...</code> and <code>tests.config_web...</code>,
-                        which only resolves with the repository root on <code>sys.path</code>. Bare
-                        <code>pytest tests/</code> does not put it there on its own; <code>pythonpath = .</code>
-                        does.</p>
+                    <p>A <code>-m</code> on the command line replaces the one in <code>addopts</code>, which
+                        is what makes <code>-m browser</code> and <code>-m ""</code> above work. CI never
+                        relies on the default: every job passes <code>-m</code> explicitly, so no job can
+                        silently run the wrong half.</p>
+                    <p>The marker is applied by path in <code>tests/conftest.py</code> &mdash;
+                        <code>tests/web/</code> and <code>tests/docs/test_docs_rendering.py</code> &mdash;
+                        not by which fixtures a test asks for. That looks like the tidier rule but is wrong:
+                        <code>tests/docs/test_docs_integrity.py</code> parametrises over an argument called
+                        <code>page</code> that is a <code>pathlib.Path</code>, and parametrised arguments are
+                        indistinguishable from fixtures in a signature. It would have exiled 136 static
+                        tests that run in 0.06s to the browser job.
+                        <code>tests/test_staging_markers.py</code> fails if a browser test appears outside
+                        those paths, or if one of them is renamed out from under the marker.</p>
+                    <p>In a browser-only run one Chromium serves the whole session instead of being
+                        relaunched per test, which is most of why those jobs are bearable &mdash; measured at
+                        304&nbsp;ms per test launching each time against 44&nbsp;ms reusing it. It is only
+                        safe when nothing in the process calls <code>asyncio.run()</code>: an open
+                        <code>sync_playwright()</code> holds an event loop, and
+                        <code>src/interfaces/pv_interface.py</code> calls <code>asyncio.run()</code>, which
+                        refuses to run inside one. So the fixture scope is chosen per run by
+                        <code>browser_scope</code> in <code>tests/conftest.py</code>; a full
+                        <code>-m ""</code> run quietly falls back to one browser per test.</p>
+                    <p>Both <code>pytest</code> and <code>python -m pytest</code> work, from the repository
+                        root. Tests import as <code>src.config_web...</code> and
+                        <code>tests.config_web...</code>, which only resolves with the repository root on
+                        <code>sys.path</code>. Bare <code>pytest tests/</code> does not put it there on its
+                        own; <code>pythonpath = .</code> does.</p>
 
                     <h3 id="test-layout">Layout</h3>
-                    <p><code>tests/</code> mirrors <code>src/</code>. 73 <code>test_*.py</code> files,
-                        1772 collected tests.</p>
+                    <p><code>tests/</code> mirrors <code>src/</code>. 128 <code>test_*.py</code> files,
+                        3665 collected tests.</p>
                     <div class="scroll-x">
                         <table>
                             <thead>
@@ -564,17 +699,17 @@ scripts/install_playwright_deps_userspace.sh      # the alternative, without roo
                                     <td><code>docker_feature.yml</code></td>
                                     <td>Push to any branch but <code>main</code>/<code>develop</code>; PRs to
                                         <code>develop</code></td>
-                                    <td>Full pytest with Chromium, then a Docker image as a PR artifact.</td>
+                                    <td>The staged suite (see below), then a Docker image as a PR artifact.</td>
                                 </tr>
                                 <tr>
                                     <td><code>docker_develop.yml</code></td>
                                     <td>Push to <code>develop</code></td>
-                                    <td>Full pytest with Chromium, then build and publish.</td>
+                                    <td>The full staged suite, then build and publish.</td>
                                 </tr>
                                 <tr>
                                     <td><code>docker_main.yml</code></td>
                                     <td>Push to <code>main</code></td>
-                                    <td>Full pytest with Chromium, then the release image.</td>
+                                    <td>The full staged suite, then the release image.</td>
                                 </tr>
                                 <tr>
                                     <td><code>pages.yml</code></td>
@@ -586,10 +721,25 @@ scripts/install_playwright_deps_userspace.sh      # the alternative, without roo
                             </tbody>
                         </table>
                     </div>
-                    <p>The three Docker workflows install Chromium with
-                        <code>python -m playwright install --with-deps chromium</code> before running
-                        <code>python -m pytest -v tests/</code>, so <code>tests/web/</code> genuinely runs in
-                        CI. A fifth workflow, <code>docker-image.yml</code>, is manual-dispatch only.</p>
+                    <p>All three Docker workflows call one reusable workflow,
+                        <code>tests.yml</code>, which splits the suite into three jobs that run in
+                        parallel: <code>fast</code> (<code>-m "not browser"</code>, and deliberately no
+                        Chromium install at all), <code>browser_web</code>
+                        (<code>tests/web -m browser -n auto</code>) and <code>browser_docs</code>
+                        (<code>tests/docs -m browser -n auto</code>). Both browser jobs install Chromium
+                        with <code>python -m playwright install --with-deps chromium</code>, so the UI
+                        genuinely runs in CI.</p>
+                    <p>On a push to a feature branch the browser jobs run only if the change could affect
+                        them &mdash; a <code>changes</code> job diffs against the base and looks for
+                        <code>src/web/</code>, <code>src/config_web/</code>, <code>src/loads/</code>,
+                        <code>src/persistence/</code>, <code>src/docs_links.py</code> or
+                        <code>tests/web/</code> for the first, and <code>docs/</code>,
+                        <code>tests/docs/</code>, <code>src/config_web/schema.py</code> or
+                        <code>scripts/export_config_schema.py</code> for the second. Pull requests and
+                        pushes to <code>develop</code> and <code>main</code> pass <code>full: true</code>
+                        and run everything regardless &mdash; those are the gates, and they are never
+                        narrowed. A sixth workflow, <code>docker-image.yml</code>, is manual-dispatch
+                        only.</p>
                 </div>
 
                 <div class="content-section">
@@ -912,7 +1062,7 @@ docs: update MQTT topic table</code></pre>
 │   └── timeseries_doctor.py       offline payload diagnosis, probe verdicts
 ├── .github/workflows/             pylint.yaml + 4 Docker image workflows
 ├── requirements.txt               14 runtime dependencies
-├── requirements-dev.txt           pytest, pylint, black, playwright
+├── requirements-dev.txt           pytest, pytest-xdist, pylint, black, playwright
 ├── pytest.ini
 ├── Dockerfile                     python:3.13-slim
 ├── docker-compose.yml

@@ -90,6 +90,11 @@ def _run_one_update_loop_iteration(pv):
         return calls["n"] > 1
 
     pv._stop_event.is_set = is_set_once
+    # The loop asks the stop event twice per cycle: ``is_set()`` at the top, and
+    # ``wait()`` for the pause between cycles -- which is interruptible, where it used
+    # to be a plain ``time.sleep``. Both have to answer "stopped", or this waits out a
+    # real update interval.
+    pv._stop_event.wait = lambda timeout=None: True
     pv._PvInterface__update_pv_state_loop()
 
 
@@ -149,7 +154,11 @@ def test_temperature_fetch_uses_the_location_only_request(monkeypatch):
         raise RuntimeError("stop here — only the params are under test")
 
     monkeypatch.setattr("src.interfaces.pv_interface.requests.get", fake_get)
-    monkeypatch.setattr(pv, "_retry_request", lambda req, err, *a, **k: req())
+    # The request closure takes the attempt's timeout now (#358), so the stub has to
+    # hand it one - the first rung of the ladder it was called with.
+    monkeypatch.setattr(
+        pv, "_retry_request", lambda req, err, *a, **k: req(k["timeouts"][0])
+    )
 
     with pytest.raises(RuntimeError):
         pv._PvInterface__get_pv_forecast_akkudoktor_api(
@@ -365,7 +374,10 @@ def test_temperature_uses_the_short_retry_policy(monkeypatch):
     monkeypatch.setattr(
         pv,
         "_retry_request",
-        lambda req, err, retries=3, delay=1: seen.append((retries, delay)) or [],
+        lambda req, err, retries=3, delay=1, timeouts=None: seen.append(
+            (retries, delay, timeouts)
+        )
+        or [],
     )
 
     pv._PvInterface__get_pv_forecast_akkudoktor_api(
@@ -375,7 +387,12 @@ def test_temperature_uses_the_short_retry_policy(monkeypatch):
         tgt_value="power", pv_config_entry=dict(FULL_ENTRY)
     )
 
-    assert seen == [(TEMP_MAX_RETRIES, TEMP_RETRY_DELAY_S), (5, 3)]
+    # Each policy carries its own timeout ladder, derived from its own attempt count
+    # (#358): both start at 5 s and end at 30 s, however many rungs lie between.
+    assert seen == [
+        (TEMP_MAX_RETRIES, TEMP_RETRY_DELAY_S, (5, 30)),
+        (5, 3, (5, 8, 12, 19, 30)),
+    ]
 
 
 # ---------------------------------------------------------------------------

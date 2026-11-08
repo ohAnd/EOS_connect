@@ -11,11 +11,34 @@ import logging
 from typing import Optional, Dict, Any
 from datetime import tzinfo
 
+try:  # running from src/ — src/ is on sys.path
+    from boot_state import BOOT
+except ImportError:  # imported as src.interface_factory (tests)
+    from .boot_state import BOOT
+
 # eos_connect.py attaches its handlers to the "__main__" logger, not to root, so
 # a logging.getLogger(__name__) here propagates to a handler-less root and every
 # message is silently discarded — including the ones this module exists to
 # surface in /logs/alerts and the startup-errors panel.
 logger = logging.getLogger("__main__")
+
+#: Which boot step each component belongs to.  Kept here rather than at the call
+#: sites: the factory already knows the component name and whether creation
+#: worked, so threading the step through two dozen module-level statements in
+#: eos_connect.py would only be a second place to forget one.
+_BOOT_STEPS = {
+    "optimization_interface": "eos",
+    "inverter_interface": "inverter",
+    "managed_load_manager": "managed_loads",
+    "load_interface": "load",
+    "battery_interface": "battery",
+    "mqtt_interface": "mqtt",
+    "evcc_interface": "evcc",
+    "price_interface": "price",
+    "feed_in_price_interface": "feed_in_price",
+    "pv_interface": "pv",
+    "pv_autoscaler": "pv_autoscale",
+}
 
 
 class InterfaceFactory:
@@ -47,6 +70,7 @@ class InterfaceFactory:
         request_timeout: int = 10,
         critical: bool = True,
         extra_subtract_sensors=None,
+        places_additional_load: bool = False,
     ):
         """
         Create LoadInterface with error handling.
@@ -59,6 +83,9 @@ class InterfaceFactory:
             critical: Whether interface is critical (stops startup on failure)
             extra_subtract_sensors: Power sensors of managed loads, removed from the
                 household base load so their predicted consumption is not counted twice
+            places_additional_load: Whether the optimizer in use places the Additional
+                Load. Only then may its meter leave the household base load - nothing
+                else puts that energy back
             
         Returns:
             LoadInterface instance or None if non-critical and failed
@@ -81,6 +108,7 @@ class InterfaceFactory:
                 time_zone,
                 request_timeout=request_timeout,
                 extra_subtract_sensors=extra_subtract_sensors,
+                places_additional_load=places_additional_load,
             ),
         )
 
@@ -529,11 +557,22 @@ class InterfaceFactory:
             additional_message: Additional context for the error message
             
         Returns:
-            Interface instance or None if non-critical and failed
-            
-        Raises:
-            Exception if critical interface fails
+            Interface instance, or None if creation failed.  **Never raises.**
+
+            A critical failure used to re-raise and end the process.  In the HA
+            add-on that meant s6 tearing the container down, which is how a
+            single bad setting made the configuration UI unreachable and left
+            the user no way to correct it (#349, #310, #83).  Now it records the
+            failure as fatal on the boot state and returns None; the caller
+            substitutes a stand-in, the web server stays up, and the user can
+            fix the setting and restart.  ``BOOT.fatal`` is what keeps that
+            honest — it stops the optimizer from running against a stand-in and
+            holds the error in front of the user.
         """
+        step = _BOOT_STEPS.get(component_name)
+        if step:
+            BOOT.begin(step)
+
         try:
             interface = creator_func()
 
@@ -547,6 +586,8 @@ class InterfaceFactory:
             self._report_degraded_configuration(
                 interface, component_name, config_link
             )
+            if step:
+                BOOT.finish(step)
             return interface
 
         except Exception as e:  # pylint: disable=broad-except
@@ -571,11 +612,23 @@ class InterfaceFactory:
                 config_link=config_link,
             )
 
-            # Handle critical vs non-critical failures
-            if critical:
-                raise  # Re-raise to stop startup
+            if step:
+                BOOT.fail(step, full_message)
 
-            # For non-critical, return None but allow continued startup
+            if critical:
+                # Rescue mode: survive, but say so loudly. The caller's fallback
+                # keeps the module-level sequence running to the end so the web
+                # UI comes up complete; BOOT.fatal stops the optimizer and puts
+                # the error in front of the user.
+                BOOT.set_fatal(component_name, full_message)
+                logger.error(
+                    "[Factory] %s is required and could not be created — "
+                    "starting in rescue mode: the web interface stays up so the "
+                    "configuration can be corrected, but optimization is paused",
+                    component_name,
+                )
+                return None
+
             logger.warning(
                 "[Factory] %s failed but is non-critical, continuing startup",
                 component_name,

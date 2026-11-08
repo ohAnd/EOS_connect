@@ -72,6 +72,83 @@
                             issue; a <code>FileNotFoundError</code> naming <code>cbc</code> is this one.</p>
                     </div>
 
+                    <h3 id="tb-rescue">A required component cannot start</h3>
+                    <p><strong>Symptom:</strong> the web interface opens, but instead of the
+                        dashboard it shows <em>Startup stopped &mdash; check the configuration</em>
+                        and names the component that failed. The log carries:</p>
+                    <pre><code>ERROR [Main] Startup cannot complete: optimization_interface could not be created.
+  Running in RESCUE MODE &mdash; the web interface stays available ...</code></pre>
+                    <p><strong>Cause:</strong> one of the four components EOS Connect cannot work
+                        without &mdash; the optimizer, the inverter, the load source or the battery
+                        &mdash; could not be built from the current settings. Almost always a
+                        setting that points somewhere it should not.</p>
+                    <p><strong>What happens:</strong> EOS Connect stays running instead of stopping.
+                        Optimization and inverter control are paused, but the settings, the log
+                        viewer and the startup errors are all reachable. This matters most in the
+                        Home Assistant add-on: a component failure used to end the process, and
+                        the Supervisor then shut the container down, taking the settings UI with
+                        it &mdash; so the one tool that could fix the problem was gone.</p>
+                    <p><strong>Fix:</strong> press <strong>Open configuration</strong> on the
+                        message, correct the setting it names, then press <strong>Restart now</strong>
+                        in the settings header &mdash; the restart works from rescue mode too, which is
+                        the whole point of staying up. The startup errors panel and the log viewer both
+                        carry the full message.</p>
+
+                    <h3 id="tb-eos-devices">Nothing starts after an EOS server update</h3>
+                    <p><strong>Symptom:</strong> with <code>eos.source</code> set to
+                        <code>eos_server</code>, EOS Connect stops while starting up and the web
+                        interface never appears &mdash; so the settings cannot be reached either. The
+                        log ends with:</p>
+                    <pre><code>ERROR [Factory] Failed to create optimization_interface (critical=True):
+  Failed to load optimizer configuration: 0
+...
+KeyError: 0</code></pre>
+                    <p><strong>Cause:</strong> EOS reorganised how it stores devices. Its
+                        <code>devices/electric_vehicles</code> configuration used to be a list and is
+                        now keyed by device ID, and EOS Connect read the first entry by position while
+                        checking the server's charge rates.</p>
+                    <p><strong>Fix:</strong> update EOS Connect. It reads both layouts now, and leaves
+                        the charge rates alone on servers that fill them in themselves. A server
+                        configuration that does not look the way EOS Connect expects is logged from now
+                        on instead of stopping the start, so the settings stay reachable. Any other failure of
+                        a required component now ends in rescue mode rather than a stopped
+                        container &mdash; see <a href="#tb-rescue">A required component cannot
+                        start</a>.</p>
+
+                    <h3 id="tb-eos-horizon">The EOS optimization horizon is not set</h3>
+                    <p><strong>Symptom:</strong> with <code>eos.source</code> set to
+                        <code>eos_server</code>, the horizon on the EOS server stays at its default
+                        of 24 hours however often EOS Connect starts. Nothing in the log looks wrong
+                        &mdash; it even reports the horizon being set:</p>
+                    <pre><code>WARNING [OPT-EOS] Detected EOS version &gt;= 0.1.0 - config updated with : {... 'horizon_hours': 48}</code></pre>
+                    <p><strong>Cause:</strong> EOS moved the optimization horizon. It used to sit at
+                        <code>optimization.horizon_hours</code>; newer builds keep it per algorithm
+                        under <code>optimization.genetic</code> and <code>optimization.genetic0</code>
+                        and no longer read the old key. EOS Connect wrote only the old one. Newer EOS
+                        does fold a flat value into the algorithm's section, but only where the nested
+                        value is still unset &mdash; and it never is, so the 48 was dropped without an
+                        error.</p>
+                    <p><strong>Fix:</strong> update EOS Connect. It now writes the horizon to the key
+                        the server actually reads for the request it receives, and reports a
+                        configuration update only when the server accepted it. Older EOS servers keep
+                        the previous behaviour. To check your server yourself:</p>
+                    <pre><code>curl http://&lt;eos&gt;:8503/v1/config/optimization/genetic0/horizon_hours</code></pre>
+                    <p>It should answer <code>48</code>. On an EOS build that predates the split into
+                        <code>genetic</code> and <code>genetic0</code> that path does not exist;
+                        <code>/v1/config/optimization</code> shows <code>horizon_hours</code> at the
+                        top level there instead.</p>
+                    <div class="alert alert-info">
+                        <p><strong>What this horizon does, and does not do.</strong> Measured against
+                            EOS 0.2.0, 0.3.0 and a current dev build with a fixed optimizer seed: with
+                            the request EOS Connect sends &mdash; which carries all 48 slots of prices,
+                            PV and load &mdash; the horizon changes <em>how far ahead EV charging is
+                            optimized</em>, and nothing else. Battery charge, discharge and grid
+                            decisions came back identical at 24 and at 48, because the length of the
+                            supplied series already decides how far the plan reaches. So setting it
+                            right is worth doing if you charge an EV through EOS; it is not the
+                            difference between a one-day and a two-day battery plan.</p>
+                    </div>
+
                     <h3 id="tb-ssl">Self-signed certificates</h3>
                     <p>EOS Connect validates TLS certificates when talking to Home Assistant or OpenHAB.
                         With a private CA you can turn that off in <em>Settings &rsaquo; Data Source
@@ -130,11 +207,107 @@
                         <p>Home Assistant's recorder purges detailed state history after
                             <code>purge_keep_days</code> (10 by default), while the load profile looks
                             back 14 days. For days whose history is gone, EOS Connect falls back to
-                            recorder <em>statistics</em>, which are kept indefinitely.</p>
+                            recorder <em>statistics</em> &mdash; five-minute buckets first, hourly
+                            long-term statistics second. Only the hourly ones are kept indefinitely;
+                            the five-minute buckets are purged on the same schedule as the history
+                            itself. At the default setting, the fourteen-day-old day therefore
+                            arrives as 24 hourly values.</p>
+                        <p>Whether that matters depends on how finely you plan. At
+                            <a href="config-optimizer.html#time-slot-config"><code>eos.time_frame</code></a>
+                            3600 it is the same profile either way &mdash; 24 values for 24 slots. At
+                            900 it is not, because each hourly value then has to stand for four
+                            quarter-hours, and the shape within the hour is gone from half the
+                            samples the profile averages. If you plan in quarter-hours, set
+                            <code>purge_keep_days: 15</code> under <code>recorder</code> in
+                            <code>configuration.yaml</code> and restart Home Assistant. It costs
+                            database size, in proportion to how many entities the recorder keeps.</p>
                         <p>That fallback calls the <code>recorder.get_statistics</code> action, so the
                             long-lived access token needs permission to call services. On a Home Assistant
                             too old to offer it, the log says so once and the profile simply uses the days
                             it can still read.</p>
+
+                        <h3 id="tb-pv-slow">A forecast provider is slow to answer</h3>
+                        <p><strong>Symptom:</strong> the PV or outside-temperature forecast stops
+                            updating while the provider is having a bad day, and the log reports a
+                            timeout:</p>
+                        <pre><code>[PV-IF] Forecast.Solar did not answer within 5/12/30 s - the service is
+  slow or unreachable; using the cached forecast</code></pre>
+                        <p><strong>Cause:</strong> the public forecast services &mdash;
+                            Forecast.Solar, Open-Meteo and akkudoktor.net &mdash; normally answer in
+                            well under a second, but go through spells of double-digit response
+                            times. EOS Connect used to give each attempt the same five seconds, so
+                            retrying could not help: all three attempts hit the same wall.</p>
+                        <p><strong>Fix:</strong> update EOS Connect. Each attempt now waits longer
+                            than the one before &mdash; the PV forecast tries five seconds, then
+                            twelve, then thirty &mdash; so a slow spell is simply ridden out.
+                            Nothing to configure, and no extra requests are made: the number of
+                            attempts is unchanged.</p>
+                        <p>The outside-temperature forecast does the same with two attempts, five
+                            seconds and then thirty. It settles for fewer deliberately: a held
+                            temperature curve is a perfectly good answer, where a held PV array is
+                            not, and every retry holds up the shared update cycle.</p>
+                        <p>If the message appears anyway, the provider did not answer within thirty
+                            seconds. The last successful forecast keeps being used in the meantime,
+                            so a passing outage costs nothing. Note that Forecast.Solar's free tier
+                            allows 12&nbsp;requests per hour per IP address &mdash; a separate
+                            limit, with its own message &mdash; see
+                            <a href="config-solar.html#pv-forecast-sources">Who supplies the
+                                forecast</a>.</p>
+
+                        <h3 id="tb-pv-key">Forecast.Solar rejects the API key</h3>
+                        <p><strong>Symptom:</strong> the PV forecast never updates and the log
+                            repeats, once per cycle:</p>
+                        <pre><code>[PV-IF] Forecast.Solar rejected the API key (HTTP 401) - check api_key in
+  Settings &rsaquo; PV Source, or clear it to use the public tier</code></pre>
+                        <p><strong>Fix:</strong> correct the key under <em>Settings &rsaquo; PV
+                                Source</em>, or clear the field entirely &mdash; an empty key is
+                            valid and selects the free tier. A key that has expired or belongs to a
+                            different account gives the same message.</p>
+                        <p>The key itself is never written to the log, and neither are your
+                            coordinates: both sit in the request path, so the URL is masked before
+                            it is logged. Log excerpts from this message are safe to paste into a
+                            bug report.</p>
+
+                        <h3 id="tb-evcc-price-partial">EVCC supplies only part of the day</h3>
+                        <p><strong>What you see:</strong> with <code>price.source</code> set to
+                            <code>evcc</code>, the log reports fewer rates than the 48-hour horizon
+                            needs, and the chart marks part of the price curve as forecast:</p>
+                        <pre><code>[PRICE-IF] EVCC published a partial day: 64 entries from 08:00 to 00:00
+[PRICE-IF] EVCC sent 64 entries covering 64 real price slots, need 192 total</code></pre>
+                        <p>This is normal. EVCC serves <em>future</em> rates: for any tariff that is not
+                            natively quarter-hourly it drops the slots that have already ended, so a
+                            fetch at 08:00 returns the 64 quarter-hours left in the day. Tariffs that
+                            already publish quarter-hourly skip that step and arrive as whole days, so
+                            what you see depends on your tariff, not on your settings.</p>
+                        <p>EOS Connect fills the remainder itself &mdash; first from the
+                            <a href="config-price.html#energyforecast">smart forecast</a>, then from the last
+                            prices it stored. Both are reported at info level and need no action.</p>
+                        <p><strong>When it does need a look:</strong> two cases are logged as warnings
+                            and show up as alerts.</p>
+                        <pre><code>[PRICE-IF] EVCC rates are not contiguous: 63 entries at 900s do not fill
+  the span from 08:00 to 00:00 - the series has a gap or an overlap</code></pre>
+                        <p>The rates EVCC delivered have a hole in them, so the prices before the gap
+                            cannot be trusted either. Check the tariff in EVCC itself &mdash; its own log
+                            usually names the provider request that failed.</p>
+                        <pre><code>[PRICE-IF] EVCC incomplete and no fallback available (energyforecast
+  unreachable, no cached prices) - repeating today's prices for the 128
+  remaining slots</code></pre>
+                        <p>Nothing was available to fill the gap, so the rest of the horizon repeats
+                            today's curve. Expect this once shortly after a restart, before the first
+                            successful run has stored a price curve. If it persists, check that
+                            energyforecast.de is reachable from the container.</p>
+
+                        <h3 id="tb-optimization-pause">The optimization pauses for a whole quarter hour</h3>
+                        <p><strong>Symptom:</strong> in quarter-hourly mode the optimization usually runs
+                            several times per slot, but now and then the log shows a pause of a full
+                            quarter hour right after a run:</p>
+                        <pre><code>[OPTIMIZATION] Quarter-hour aligned run: start 12:59:58, finish at 13:00:00
+[Main] Next optimization at 12:59:58 (based on average runtime of 1 seconds). Sleeping for 15 min 0 seconds</code></pre>
+                        <p><strong>Cause:</strong> a run that finished a few seconds before a quarter-hour
+                            boundary skipped that boundary, and the runs in between were not scheduled
+                            against the next one.</p>
+                        <p><strong>Fix:</strong> update EOS Connect. After such a run the next one follows
+                            at the usual interval.</p>
                     </div>
 
                     <div data-level="expert">

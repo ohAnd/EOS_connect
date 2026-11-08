@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 from flask import Flask
 
+from src.config_web import api as api_module
 from src.config_web.api import config_bp, init_api
 from src.config_web.merger import build_merged_config
 from src.config_web.migration import migrate_yaml_to_store
@@ -23,7 +24,9 @@ from .test_api import _FakeModule, _sample_config
 
 # The endpoint judges window coverage against local midnight *today*, so the
 # payloads are built relative to now rather than pinned to a date.
-MIDNIGHT = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+MIDNIGHT = datetime.now(timezone.utc).replace(
+    hour=12, minute=0, second=0, microsecond=0
+)
 
 
 def _at(minutes):
@@ -187,10 +190,14 @@ class TestTestTimeseriesEndpoint:
         assert "log" in data["error"]
 
     def test_pv_domain_supported(self, client):
-        payload = {"attributes": {"data": [
-            {"start": _at(0), "value": 4000.0},
-            {"start": _at(15), "value": 4000.0},
-        ]}}
+        payload = {
+            "attributes": {
+                "data": [
+                    {"start": _at(0), "value": 4000.0},
+                    {"start": _at(15), "value": 4000.0},
+                ]
+            }
+        }
         resp, _ = post_test_timeseries(
             client,
             {
@@ -369,7 +376,10 @@ class TestCentralModeResolution:
                     content_type="application/json",
                 )
 
-        assert mock_get.call_args[0][0] == "http://ha.local:8123/api/states/sensor.grid_prices"
+        assert (
+            mock_get.call_args[0][0]
+            == "http://ha.local:8123/api/states/sensor.grid_prices"
+        )
         store.close()
 
     def test_switching_central_off_probes_the_users_own_url(self, tmp_path):
@@ -410,7 +420,9 @@ class TestCentralModeResolution:
         with app.test_client() as client:
             with patch(
                 "src.config_web.timeseries_probe.requests.get",
-                return_value=FakeResponse({"attributes": {"data": EVCC_RATES["rates"]}}),
+                return_value=FakeResponse(
+                    {"attributes": {"data": EVCC_RATES["rates"]}}
+                ),
             ) as mock_get:
                 client.post(
                     "/api/config/test-timeseries",
@@ -592,7 +604,9 @@ class TestConnectionFieldResolution:
         with app.test_client() as client:
             with patch(
                 "src.config_web.timeseries_probe.requests.get",
-                return_value=FakeResponse({"attributes": {"data": EVCC_RATES["rates"]}}),
+                return_value=FakeResponse(
+                    {"attributes": {"data": EVCC_RATES["rates"]}}
+                ),
             ) as mock_get:
                 client.post(
                     "/api/config/test-timeseries",
@@ -612,7 +626,9 @@ class TestConnectionFieldResolution:
         with app.test_client() as client:
             with patch(
                 "src.config_web.timeseries_probe.requests.get",
-                return_value=FakeResponse({"attributes": {"data": EVCC_RATES["rates"]}}),
+                return_value=FakeResponse(
+                    {"attributes": {"data": EVCC_RATES["rates"]}}
+                ),
             ) as mock_get:
                 client.post(
                     "/api/config/test-timeseries",
@@ -732,8 +748,10 @@ class TestStaleSeriesDoesNotBlockTheSave:
     STALE = {
         "rates": [
             {"start": (MIDNIGHT - timedelta(days=30)).isoformat(), "value": 0.30},
-            {"start": (MIDNIGHT - timedelta(days=30, minutes=-15)).isoformat(),
-             "value": 0.31},
+            {
+                "start": (MIDNIGHT - timedelta(days=30, minutes=-15)).isoformat(),
+                "value": 0.31,
+            },
         ]
     }
 
@@ -752,10 +770,119 @@ class TestStaleSeriesDoesNotBlockTheSave:
 
     def test_the_tester_still_calls_it_red(self, client):
         """The probe verdict itself is unchanged — only the save is unblocked."""
-        resp, _ = post_test_timeseries(
-            client, {"domain": "price"}, payload=self.STALE
-        )
+        resp, _ = post_test_timeseries(client, {"domain": "price"}, payload=self.STALE)
 
         body = resp.get_json()
         assert body["ok"] is False
         assert "optimization window" in body["error"]
+
+
+class TestMergerAndProbeAgreeOnEveryDataSourceType:
+    """
+    The probe's own comment promises it "can never pass on a URL the running
+    interface would fetch differently". Nothing held it to that promise across
+    data source types, and it drifted: the merger learnt to route EVCC sites to
+    the supplementary connection while the probe kept building the URL from
+    data_source.url, so the Test button reported on an address nothing reads
+    from.
+
+    So this compares the two resolvers against each other rather than against a
+    literal. A hand-written expectation only pins what its author thought of —
+    this fails for any divergence, in either direction.
+    """
+
+    CASES = {
+        "homeassistant": {
+            "data_source.type": "homeassistant",
+            "data_source.url": "http://ha.local:8123",
+            "data_source.access_token": "ha-token",
+        },
+        "evcc with a supplementary HA": {
+            "data_source.type": "evcc",
+            "data_source.url": "http://evcc.local:7070",
+            "data_source.supplementary_type": "homeassistant",
+            "data_source.supplementary_url": "http://ha.local:8123",
+            "data_source.supplementary_access_token": "supp-token",
+        },
+        "evcc with a supplementary openHAB": {
+            "data_source.type": "evcc",
+            "data_source.url": "http://evcc.local:7070",
+            "data_source.supplementary_type": "openhab",
+            "data_source.supplementary_url": "http://oh.local:8080",
+        },
+        "evcc with no supplementary at all": {
+            "data_source.type": "evcc",
+            "data_source.url": "http://evcc.local:7070",
+            "data_source.supplementary_type": "",
+        },
+    }
+
+    def _resolved(self, tmp_path, name, settings):
+        store = ConfigStore(str(tmp_path / f"{abs(hash(name))}.db"))
+        store.open()
+        try:
+            config = _sample_config()
+            schema = ConfigSchema()
+            migrate_yaml_to_store(config, store, schema)
+            store.set_batch(
+                {
+                    "price.source": "timeseries",
+                    "price.use_ha_central_data_source": True,
+                    "price.ha_sensor_name": "sensor.grid_prices",
+                    **settings,
+                }
+            )
+            init_api(store, schema, _FakeModule(config, store, schema))
+
+            # The merge is what the running interface is handed; the resolver is
+            # what the Test button probes. Same store, so any difference is the
+            # two disagreeing.
+            merged = build_merged_config({}, store, schema)
+            probe = api_module._resolve_timeseries_config(
+                "price", {}, api_module._effective_value_getter({})
+            )
+            return merged["price"], probe
+        finally:
+            store.close()
+
+    @pytest.mark.parametrize("name", sorted(CASES))
+    def test_the_url_is_the_same(self, tmp_path, name):
+        runtime, probe = self._resolved(tmp_path, name, self.CASES[name])
+        assert probe["data_url"] == runtime["data_url"], (
+            f"{name}: the Test button would probe {probe['data_url']!r} while "
+            f"the interface reads {runtime['data_url']!r}"
+        )
+
+    @pytest.mark.parametrize("name", sorted(CASES))
+    def test_the_token_is_the_same(self, tmp_path, name):
+        """A matching URL with the wrong token still fails at runtime with 401."""
+        runtime, probe = self._resolved(tmp_path, name, self.CASES[name])
+        assert probe["data_token"] == runtime["data_token"], name
+
+    def test_an_evcc_site_resolves_to_the_supplementary_host(self, tmp_path):
+        """
+        Guards the direction of the agreement: both could agree on the EVCC URL
+        and the parity tests above would still pass, while every price fetch
+        404s against an EVCC that has no /api/states.
+        """
+        runtime, _ = self._resolved(
+            tmp_path, "direction", self.CASES["evcc with a supplementary HA"]
+        )
+        assert runtime["data_url"] == (
+            "http://ha.local:8123/api/states/sensor.grid_prices"
+        )
+        assert runtime["data_token"] == "supp-token"
+
+    def test_evcc_without_a_supplementary_falls_back_to_the_own_url(self, tmp_path):
+        """
+        The merger's warning offers two ways out - configure the supplementary
+        connection, "or give the domain its own URL". This is the second one:
+        central mode is effectively off, so the domain's own field is read, by
+        the interface and the Test button alike.
+        """
+        settings = dict(self.CASES["evcc with no supplementary at all"])
+        settings["price.data_url"] = "http://my-own.local/prices"
+        runtime, probe = self._resolved(tmp_path, "own url", settings)
+
+        assert runtime["data_url"] == "http://my-own.local/prices"
+        assert probe["data_url"] == "http://my-own.local/prices"

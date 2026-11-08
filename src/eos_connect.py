@@ -8,19 +8,22 @@ from datetime import datetime, timedelta
 import time
 import logging
 import json
+import signal
 import threading
 import pytz
 import requests
 from flask import (
     Flask,
     Response,
-    make_response,
-    render_template_string,
     request,
     send_from_directory,
 )
+from werkzeug.exceptions import NotFound
 from version import __version__
-from docs_links import docs_base_url
+from boot_state import BOOT
+from boot_server import BootGate, build_boot_app
+from restart import RESTART
+from web_routes import register_log_routes, register_static_routes
 from config import ConfigManager
 from log_handler import MemoryLogHandler
 from startup_validator import StartupValidator
@@ -31,6 +34,9 @@ from interfaces.base_control import (
     BaseControl,
     calculate_tgt_dc_charge_power,
     mode_uses_dc_charge_limit,
+)
+from interfaces.optimization_backends.optimization_backend_eos_genetic import (
+    supports_genetic_optimize,
 )
 from interfaces.load_interface import LoadInterface
 from interfaces.battery_interface import BatteryInterface
@@ -46,7 +52,12 @@ from interfaces.inverters.null_inverter import NullInverter
 from interfaces.inverters.evcc_inverter import EvccInverter
 from interfaces.pv_autoscaler import PvAutoscaler, TIMEFRAME_IDS, timeframe_bounds
 from interfaces.load_profile_source import fetch_profile
-from interfaces.state_source import fetch_remote_state, fetch_remote_state_details
+from interfaces.state_source import (
+    fetch_remote_state,
+    fetch_remote_state_details,
+    needs_access_token,
+)
+from interfaces.evcc_entities import connection_for, connections_from_section
 from loads import api as loads_api
 from loads import mqtt_topics as managed_load_topics
 from loads.manager import ManagedLoadManager, ManagedLoadSources
@@ -139,13 +150,144 @@ STARTUP_ALERTS_SINCE = datetime.now(time_zone).isoformat()
 # post-init re-sync is needed.
 config_web = ConfigWebModule(config_manager)
 try:
-    config_web.start_db()
+    with BOOT.step("config_db"):
+        config_web.start_db()
 except (OSError, RuntimeError):
+    # Caught outside the step so the failure is recorded rather than swallowed:
+    # the start continues on config.yaml values, but the boot status has to say
+    # the settings database is not there, because every setting the user made in
+    # the web UI is missing from this run.
     logger.exception(
         "[Main] Config database startup failed — continuing with config.yaml values. "
         "Check data directory permissions and disk space."
     )
 
+###################################################################################################
+# Phase 1b: bind the web server, right here, before anything that can block.
+#
+# Everything below this line talks to the network: an unreachable MQTT broker
+# costs a TCP timeout, a large recorder costs the load-profile build, and the
+# interface settle is a hard sleep. Until this change the socket was bound after
+# all of it, so a start that took a minute was a minute of "connection refused"
+# — and a start that died on a bad setting took the configuration UI down with
+# it, leaving no way to correct the setting that caused it (#349, #310, #83).
+#
+# The gate serves a small stand-in app until the real one is complete; see
+# boot_server.py for why the real app cannot simply answer earlier.
+HOST = "0.0.0.0"
+# In HA addon mode the port is always 8081 (mapped via the addon's ports: config);
+# elsewhere it is whatever the user configured.
+desired_port = config_manager.config.get("eos_connect_web_port", 8081)
+
+logger.info("[Main] Initializing EOS Connect web server...")
+boot_gate = BootGate(
+    build_boot_app(
+        config_web=config_web,
+        memory_handler=memory_handler,
+        base_path=base_path,
+        time_zone=time_zone,
+        startup_alerts_since=STARTUP_ALERTS_SINCE,
+        boot_state=BOOT,
+    )
+)
+try:
+    http_server, actual_port = PortInterface.create_web_server_with_port_check(
+        HOST, desired_port, boot_gate, logger
+    )
+except RuntimeError as exc:
+    # PortInterface has already logged the conflict and how to resolve it. There
+    # is no rescue mode for this one: the UI that would let the user change the
+    # port is the very thing that cannot bind.
+    logger.error("[Main] %s", exc)
+    logger.error("[Main] EOS Connect cannot start without its web interface.")
+    sys.exit(1)
+except (OSError, ImportError) as exc:
+    logger.error("[Main] Unexpected error creating the web server: %s", exc)
+    logger.error("[Main] EOS Connect cannot start. Please check the logs.")
+    sys.exit(1)
+
+threading.Thread(
+    target=http_server.run_forever, daemon=True, name="WebServer"
+).start()
+logger.info(
+    "[Main] Web interface available at: http://localhost:%s "
+    "— startup progress is shown there while the rest comes up",
+    actual_port,
+)
+
+#: Set to end the process. The main thread waits on this instead of serving,
+#: now that waitress runs on its own thread: it is what Ctrl-C, SIGTERM and
+#: rescue mode all come down to.
+shutdown_event = threading.Event()
+
+# A restart asked for over HTTP is a shutdown that comes back. It frees the main
+# thread the same way a signal does; what happens next is decided where the wait
+# ends, by asking RESTART.requested.
+RESTART.on_request = shutdown_event.set
+
+
+def _request_shutdown(signum, _frame):
+    """Wake the main thread so a signal gets the same teardown as Ctrl-C."""
+    logger.info("[Main] Received %s — shutting down", signal.Signals(signum).name)
+    shutdown_event.set()
+
+
+# waitress installs no signal handlers of its own — there is not one
+# `signal.signal` call in the package, and `run()` only catches what is raised
+# inside its own loop (which is why Ctrl-C has always worked and SIGTERM never
+# did). Without this, `docker stop` and an add-on stop kill the process
+# outright: no inverter released, no MQTT goodbye, no clean database close.
+# Installed here rather than in __main__ so that rescue mode, which never gets
+# that far, is covered by it as well.
+signal.signal(signal.SIGTERM, _request_shutdown)
+
+
+def _enter_rescue_mode():
+    """
+    Stay up with a broken configuration, serving the UI that can mend it.
+
+    Reached when a required interface could not be created. Before this, that
+    ended the process — and under the HA add-on s6 then tore the container down,
+    so the one tool that could fix the offending setting disappeared along with
+    it (#349, #310, #83).
+
+    This never returns. The module-level sequence below is abandoned
+    deliberately rather than nursed along with stand-in objects: half of it
+    reads from the interfaces that just failed, and a stand-in that quietly
+    answers None for a battery SOC produces a dashboard that looks plausible and
+    is wrong. The boot server keeps serving the configuration API, the logs and
+    the startup-error panel, which is everything needed to find the problem,
+    correct it and restart.
+    """
+    fatal = BOOT.fatal or {}
+    logger.error(
+        "[Main] Startup cannot complete: %s could not be created. "
+        "Running in RESCUE MODE — the web interface stays available at "
+        "http://localhost:%s so the configuration can be corrected. "
+        "Optimization and inverter control are paused until the next restart.",
+        fatal.get("component", "a required interface"),
+        actual_port,
+    )
+    def _rescue_teardown():
+        """The little there is to stop: nothing past the failure was started."""
+        http_server.stop()
+        config_web.stop()
+
+    try:
+        shutdown_event.wait()
+    except KeyboardInterrupt:
+        logger.info("[Main] Shutting down EOS Connect (user requested)")
+    else:
+        if RESTART.requested:
+            # The way out of rescue mode: the user corrected the setting in the
+            # configuration UI the boot server kept serving, and pressed restart.
+            RESTART.run(_rescue_teardown)  # never returns
+
+    _rescue_teardown()
+    logging.shutdown()
+    sys.exit(0)
+
+###################################################################################################
 # Initialize startup validator to collect errors during initialization
 startup_validator = StartupValidator()
 
@@ -179,11 +321,31 @@ if time_frame_base not in (900, 3600):
     )
     time_frame_base = 3600
 elif time_frame_base == 900 and eos_source not in ("evopt", "local_evopt"):
-    logger.warning(
-        "[Config] 15-min time_frame only supported with EVopt or Local EVopt "
-        "source; defaulting to 3600"
+    # Whether the Akkudoktor EOS server can plan quarter-hourly depends on its
+    # build, so it is asked rather than assumed (issue #353). The old
+    # /optimize endpoint runs GENETIC0, whose interval is a computed constant
+    # of 3600 s; only /v1/optimize accepts 900, and only recent builds have it.
+    #
+    # This has to happen here, before the optimization interface is built: the
+    # answer decides the width of every series the run assembles, and that is
+    # settled long before any backend exists.
+    _eos_config = config_manager.config.get("eos", {})
+    _eos_base_url = (
+        f"http://{_eos_config.get('server', '192.168.1.1')}"
+        f":{_eos_config.get('port', 8503)}"
     )
-    time_frame_base = 3600
+    if eos_source == "eos_server" and supports_genetic_optimize(_eos_base_url):
+        logger.info(
+            "[Config] EOS server at %s plans in 15-min slots - keeping time_frame 900",
+            _eos_base_url,
+        )
+    else:
+        logger.warning(
+            "[Config] 15-min time_frame is not available with this Akkudoktor EOS "
+            "server - its optimize endpoint plans in hourly slots only. Using 3600. "
+            "A newer EOS build supports it; EVopt and Local EVopt always do."
+        )
+        time_frame_base = 3600
 
 # PHASE 2: Initialize core interfaces (critical - stop on failure)
 eos_interface = interface_factory.create_optimization_interface(
@@ -199,7 +361,8 @@ eos_interface = interface_factory.create_optimization_interface(
     ),
 )
 
-base_control = BaseControl(config_manager.config, time_zone, time_frame_base)
+with BOOT.step("base_control"):
+    base_control = BaseControl(config_manager.config, time_zone, time_frame_base)
 
 # PHASE 3: Initialize other interfaces using factory
 inverter_interface = interface_factory.create_inverter_interface(
@@ -236,7 +399,34 @@ load_interface = interface_factory.create_load_interface(
     # here would leave its history subtracted from the base load until a restart,
     # which reads as a household that is lighter than it really is.
     extra_subtract_sensors=load_manager.subtract_sensors,
+    # The Additional Load is handed to the optimizer as a shiftable appliance, so its
+    # measured history leaves the base load - but only EOS places it. EVopt reads no
+    # such device and returns a zero appliance array, so under it the subtraction had
+    # nothing putting the energy back and the appliance simply vanished from the
+    # forecast. A plain value, not a callable: `eos.source` needs a restart anyway.
+    places_additional_load=eos_interface.places_home_appliance,
 )
+
+# Configured and ignored is the worst of the three states, so it gets said out loud
+# once. The energy is no longer lost - it stays in the household forecast - but the
+# shifting the setting promises does not happen, and nothing else on the page would
+# tell anyone that.
+if (
+    config_manager.config.get("load", {}).get("additional_load_1_sensor", "")
+    and not eos_interface.places_home_appliance
+):
+    startup_validator.add_error(
+        "configuration",
+        "additional_load",
+        "warning",
+        "Additional Load is not placed by this optimizer",
+        "An Additional Load sensor is configured, but only the EOS Server backend "
+        "schedules that appliance. Its consumption stays in the household load "
+        "forecast at the times it ran historically, and no start time is published. "
+        "Configure it as a Managed Load to have the optimizer choose when it runs.",
+        action_required=False,
+        config_link="#load",
+    )
 
 # Build the load profile now rather than inside the first optimizer run. It is derived
 # from four finished historical days, so it changes only at midnight and the interface
@@ -247,7 +437,8 @@ load_interface = interface_factory.create_load_interface(
 # on its own, and the same failure there is caught and logged rather than fatal.
 if load_interface is not None:
     try:
-        load_interface.refresh_load_profile()
+        with BOOT.step("load_profile"):
+            load_interface.refresh_load_profile()
     except (requests.exceptions.RequestException, ValueError, KeyError) as e:
         logger.warning(
             "[Main] Could not build the load profile at startup (%s); "
@@ -264,8 +455,7 @@ battery_config["feed_in_price"] = (
 # BatteryPriceHandler expect price_euro_per_wh_accu in €/Wh internally
 battery_config.pop("price_ct_kwh_accu", None)
 battery_config["price_euro_per_wh_accu"] = (
-    config_manager.config.get("battery", {}).get("price_ct_kwh_accu", 0.0)
-    / 100000.0
+    config_manager.config.get("battery", {}).get("price_ct_kwh_accu", 0.0) / 100000.0
 )
 
 battery_interface = interface_factory.create_battery_interface(
@@ -276,6 +466,13 @@ battery_interface = interface_factory.create_battery_interface(
     request_timeout=config_manager.config.get("request_timeout", 10),
     critical=True,
 )
+
+# All four interfaces the application cannot work without have now been
+# attempted. The factory no longer raises on a critical failure, so this is the
+# one place that decides what a failure means — and the last point at which
+# nothing below has been touched yet.
+if BOOT.fatal:
+    _enter_rescue_mode()  # never returns
 
 # Non-critical interfaces (startup continues if these fail)
 mqtt_interface = interface_factory.create_mqtt_interface(
@@ -294,9 +491,34 @@ evcc_interface = interface_factory.create_evcc_interface(
     on_charging_state_change=None,
 )
 
+# When EVCC is the data source for load and battery, it is not merely an optional
+# integration any more - the load profile and the SOC both read it. An unreachable
+# EVCC then degrades those inputs silently (default profile, 5% SOC), which is the
+# situation the startup panel exists to make visible.
+if config_manager.config.get("data_source", {}).get("type") == "evcc" and (
+    not getattr(evcc_interface, "evcc_version", None)
+):
+    startup_validator.add_error(
+        "connectivity",
+        "evcc_data_source",
+        "warning",
+        "EVCC data source unreachable",
+        "EVCC is selected as the data source but its state endpoint did not answer "
+        "at startup. The load profile falls back to the built-in curve and the "
+        "battery SOC to 5% until EVCC is reachable.",
+        action_required=True,
+        config_link="#evcc",
+    )
+
 price_interface = interface_factory.create_price_interface(
-    config_manager.config["price"], time_frame_base, time_zone, evcc_interface, critical=False
-) or PriceInterface(config_manager.config["price"], time_frame_base, time_zone, evcc_interface)
+    config_manager.config["price"],
+    time_frame_base,
+    time_zone,
+    evcc_interface,
+    critical=False,
+) or PriceInterface(
+    config_manager.config["price"], time_frame_base, time_zone, evcc_interface
+)
 
 # Feed-in price interface (for dynamic export pricing)
 # Defensive check: ensure price config is a dict before accessing it
@@ -316,9 +538,7 @@ feed_in_config = {
         "feed_in_static_adder", 0.0
     ),  # ct/kWh (standard unit)
     "multiplier": price_config.get("feed_in_multiplier", 1.0),
-    "fixed_price_ct_kwh": price_config.get(
-        "feed_in_price", 0.0
-    ),  # ct/kWh
+    "fixed_price_ct_kwh": price_config.get("feed_in_price", 0.0),  # ct/kWh
     "negative_price_switch": price_config.get(
         "feed_in_negative_price_switch", False
     ),  # Clamp negative prices to 0 if enabled
@@ -333,6 +553,7 @@ feed_in_config = {
 feed_in_price_interface = interface_factory.create_feed_in_price_interface(
     feed_in_config, time_frame_base, time_zone, evcc_interface, critical=False
 ) or FeedInPriceInterface(feed_in_config, time_frame_base, time_zone, evcc_interface)
+
 
 def site_location():
     """
@@ -393,15 +614,23 @@ try:
     if not pv_autoscaler_cfg.get("enabled"):
         logger.info("[Main] PvAutoscaler is disabled — skipping data source checks")
     elif pv_autoscaler_cfg.get("use_ha_central_data_source"):
-        token_status = "SET" if pv_autoscaler_cfg.get("access_token") else "NOT SET"
+        # Only Home Assistant authenticates these reads. EVCC has no auth at
+        # all and openHAB serves items without one, so an empty token there is
+        # the correct configuration - not a 401 waiting to happen.
+        src = pv_autoscaler_cfg.get("src", "homeassistant")
+        wants_token = needs_access_token(src)
+        if pv_autoscaler_cfg.get("access_token"):
+            token_status = "SET"
+        else:
+            token_status = "NOT SET" if wants_token else "not needed"
         logger.info(
             "[Main] PvAutoscaler using CENTRAL data source: url=%s, src=%s, token=%s",
             pv_autoscaler_cfg.get("url", "(not set)"),
-            pv_autoscaler_cfg.get("src", "homeassistant"),
+            src,
             token_status,
         )
 
-        if not pv_autoscaler_cfg.get("access_token"):
+        if wants_token and not pv_autoscaler_cfg.get("access_token"):
             logger.warning(
                 "[Main] PvAutoscaler: access_token is EMPTY! Requests to %s will fail with 401.",
                 pv_autoscaler_cfg.get("url", "(not set)"),
@@ -441,34 +670,69 @@ except Exception:
     logger.exception("[Main] Failed to initialize PvAutoscaler")
     pv_autoscaler = None
 
+
 # Managed loads: sensor access, forecasts and the release publisher.
 #
 # Everything the manager needs arrives as a callable, which is what keeps the `loads`
 # package free of imports from `interfaces` - it asks for "the price series" and does
 # not care which interface produced it.
+# Names already reported as needing the second connection. Once per name, not
+# once per reading - a managed load is polled on every cycle.
+_managed_load_unreachable = set()
+
+
+def _managed_load_connection(sensor):
+    """The connection that answers *sensor*, or None if none can.
+
+    A managed load names a household appliance, and EVCC does not meter the
+    dishwasher. Asking it anyway returned an empty reading rather than an
+    error, so the load looked idle forever while the supplementary connection
+    that could have answered sat unused in the same config section.
+    """
+    primary, supplementary = connections_from_section(
+        config_manager.config.get("load", {})
+    )
+    conn = connection_for(sensor, primary, supplementary)
+    if conn is None and sensor not in _managed_load_unreachable:
+        _managed_load_unreachable.add(sensor)
+        logger.warning(
+            "[Main] managed load sensor '%s' is not something EVCC meters, so "
+            "it needs the supplementary data source - configure one under "
+            "Settings > Data Source, or name an EVCC series instead. The load "
+            "reads as unavailable meanwhile. "
+            "| Config: #data-source | ACTION REQUIRED",
+            sensor,
+        )
+    return conn
+
+
 def _managed_load_read_sensor(sensor):
-    """Read one entity for a managed load, through the configured data source."""
-    load_config = config_manager.config.get("load", {})
+    """Read one entity for a managed load, through the connection that has it."""
+    conn = _managed_load_connection(sensor)
+    if conn is None:
+        return None
     return fetch_remote_state(
-        source=load_config.get("source", ""),
+        source=conn.src,
         sensor=sensor,
-        url=load_config.get("url", ""),
-        access_token=load_config.get("access_token", ""),
+        url=conn.url,
+        access_token=conn.access_token,
         request_timeout=config_manager.config.get("request_timeout", 10),
-        ssl_ignore=bool(load_config.get("ssl_ignore", False)),
+        ssl_ignore=conn.ssl_ignore,
     )
 
 
 def _managed_load_read_sensor_details(sensor):
     """Read one entity together with its unit, so a kWh counter can be spotted."""
-    load_config = config_manager.config.get("load", {})
+    conn = _managed_load_connection(sensor)
+    if conn is None:
+        return None
     return fetch_remote_state_details(
-        source=load_config.get("source", ""),
+        source=conn.src,
         sensor=sensor,
-        url=load_config.get("url", ""),
-        access_token=load_config.get("access_token", ""),
+        url=conn.url,
+        access_token=conn.access_token,
         request_timeout=config_manager.config.get("request_timeout", 10),
-        ssl_ignore=bool(load_config.get("ssl_ignore", False)),
+        ssl_ignore=conn.ssl_ignore,
     )
 
 
@@ -530,10 +794,15 @@ def _managed_load_read_profile(entry):
     failure is reported - the manager keeps the previous profile and warns once, rather
     than blanking the forecast because Home Assistant happened to be restarting.
     """
+    # The load section, because that is where the merge puts the central
+    # connection: it resolves data_source into load and battery and emits no
+    # data_source section of its own. Asking for one returned an empty dict on
+    # every database-configured install, which is every install since the
+    # settings moved out of config.yaml.
     load_config = config_manager.config.get("load", {})
     return fetch_profile(
         entry,
-        data_source=config_manager.config.get("data_source", {}),
+        connection=load_config,
         time_zone=time_zone,
         ssl_ignore=bool(load_config.get("ssl_ignore", False)),
     )
@@ -569,13 +838,18 @@ load_manager.external_scheduler = getattr(
 )
 
 if load_manager.enabled_ids():
-    mqtt_interface.register_topics(managed_load_topics.build_topics(load_manager))
-    load_manager.check_power_sensors()
-    load_manager.backfill()
-    load_manager.start()
+    with BOOT.step("load_sensors"):
+        mqtt_interface.register_topics(
+            managed_load_topics.build_topics(load_manager)
+        )
+        load_manager.check_power_sensors()
+        load_manager.backfill()
+        load_manager.start()
     logger.info(
         "[MAIN] Managed loads active: %s", ", ".join(load_manager.enabled_ids())
     )
+else:
+    BOOT.skip("load_sensors", "no managed loads configured")
 
 
 # Callback functions for event handling
@@ -708,7 +982,8 @@ def mqtt_control_callback(mqtt_cmd):
 # wait for the interfaces to initialize - depend on entries for pv_forecast
 init_time = 3 + 1 * len(config_manager.config["pv_forecast"])
 logger.info("[Main] Waiting %s seconds for interfaces to initialize", init_time)
-time.sleep(init_time)
+with BOOT.step("settle", f"{init_time} s"):
+    time.sleep(init_time)
 
 # After the base wait, poll until PV forecast data is actually populated.
 # The background thread fetches all PV sources SEQUENTIALLY, so with multiple
@@ -716,22 +991,30 @@ time.sleep(init_time)
 # = 8 s while init_time = 7 s).  We give up to 30 extra seconds before giving
 # up and logging a warning so the first optimization run is not penalised.
 if config_manager.config["pv_forecast"]:
+    BOOT.begin("pv_wait")
     _pv_poll_deadline = time.time() + 30
-    while not pv_interface.get_current_pv_forecast() and time.time() < _pv_poll_deadline:
+    while (
+        not pv_interface.get_current_pv_forecast() and time.time() < _pv_poll_deadline
+    ):
         time.sleep(1)
     if pv_interface.get_current_pv_forecast():
         logger.info("[Main] PV forecast ready after startup wait")
+        BOOT.finish("pv_wait")
     else:
         logger.warning(
             "[Main] PV forecast not available after %d s startup wait; "
             "first optimization run will proceed without PV data",
             init_time + 30,
         )
+        BOOT.fail("pv_wait", "no forecast data after the startup wait")
+else:
+    BOOT.skip("pv_wait", "no PV installations configured")
 
 # Perform initial battery price calculation if enabled (blocking, synchronous)
 # This ensures the first optimization run has the correct battery price
 try:
-    battery_interface.perform_initial_price_calculation()
+    with BOOT.step("battery_price"):
+        battery_interface.perform_initial_price_calculation()
 except (OSError, RuntimeError, ValueError, TypeError) as e:
     startup_validator.add_error(
         "configuration",
@@ -767,11 +1050,12 @@ def on_update_status_change(status):
 
 # Initialize update checker (checks for Docker image updates)
 # Automatically disabled for Home Assistant Add-on users
-update_checker = UpdateChecker(
-    current_version=__version__,
-    check_interval=43200,
-    on_status_change=on_update_status_change,
-)
+with BOOT.step("update_checker"):
+    update_checker = UpdateChecker(
+        current_version=__version__,
+        check_interval=43200,
+        on_status_change=on_update_status_change,
+    )
 
 # Publish initial update status to MQTT
 try:
@@ -787,7 +1071,7 @@ except (KeyError, TypeError, ValueError) as e:
 def _deferred_inverter_initialization():
     """
     Initialize the inverter interface in a background thread after web server starts.
-    
+
     This prevents the app from hanging if the inverter is unreachable during startup.
     If initialization fails, the app falls back to NullInverter for display-only mode.
     """
@@ -809,6 +1093,14 @@ def _deferred_inverter_initialization():
         logger.info("[Main] Switched to NullInverter; inverter control is disabled")
     else:
         logger.info("[Main] Inverter is ready for control")
+
+
+# What the managed loads contributed to the last request, per load, in the same
+# midnight-anchored slot space as `gesamtlast` and discounted for the partial slot the
+# same way. The chart draws it as its own band and takes it back out of the Load bar;
+# without it a forecast load is in the Load bar with nothing to say so, which is what
+# issue #362 reported. Set on every run of `create_optimize_request`.
+last_managed_forecast = {}
 
 
 # summarize all date
@@ -855,15 +1147,21 @@ def create_optimize_request():
         strompreis_euro_pro_wh = price_interface.get_current_prices()
         # Use dynamic feed-in prices from FeedInPriceInterface instead of
         # constant PriceInterface value
-        einspeiseverguetung_euro_pro_wh = feed_in_price_interface.get_current_feedin_prices()
+        einspeiseverguetung_euro_pro_wh = (
+            feed_in_price_interface.get_current_feedin_prices()
+        )
         slots_per_hour = 3600 // time_frame_base
         gesamtlast = load_interface.get_load_profile(EOS_TGT_DURATION * slots_per_hour)
         # Managed loads join the household profile here, and nowhere else. Applied
         # before the partial-slot scaling below so the in-progress slot is discounted
         # once, consistently, for base load and contributions alike.
-        gesamtlast = load_manager.apply(gesamtlast, time_frame_base)
+        gesamtlast, managed_forecast = load_manager.apply(
+            gesamtlast, time_frame_base, per_load=True
+        )
 
-        eos_source_for_scale = config_manager.config.get("eos", {}).get("source", "eos_server")
+        eos_source_for_scale = config_manager.config.get("eos", {}).get(
+            "source", "eos_server"
+        )
         if eos_source_for_scale in ("evopt", "local_evopt"):
             now = datetime.now(time_zone)
             # Absolute seconds since true local midnight: the arrays indexed
@@ -895,6 +1193,15 @@ def create_optimize_request():
                         current_slot + 1,
                         ts[current_slot],
                     )
+            # The contributions ride along: they are part of the figure that was just
+            # discounted, and a band the chart subtracts from the Load bar has to have
+            # had the same arithmetic done to it or the current slot goes negative.
+            for series in managed_forecast.values():
+                if series and len(series) > current_slot:
+                    series[current_slot] *= scale_factor
+
+        global last_managed_forecast  # pylint: disable=global-statement
+        last_managed_forecast = managed_forecast
 
         return {
             "pv_prognose_wh": pv_prognose_wh,
@@ -909,7 +1216,9 @@ def create_optimize_request():
         # This ensures EVopt receives realistic charging limits based on current SOC
         current_dynamic_max = battery_interface.get_max_charge_power()
         config_fixed_max = config_manager.config["battery"]["max_charge_power_w"]
-        is_dynamic = config_manager.config["battery"].get("charging_curve_enabled", True)
+        is_dynamic = config_manager.config["battery"].get(
+            "charging_curve_enabled", True
+        )
 
         if is_dynamic and current_dynamic_max > 0:
             max_charge_power = current_dynamic_max
@@ -1083,7 +1392,12 @@ last_control_data = {
 }
 
 
-def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_allowed):
+def setting_control_data(
+    ac_charge_demand_rel,
+    dc_charge_demand_rel,
+    discharge_allowed,
+    dyn_override_active=None,
+):
     """
     Process the optimized response from EOS and update the load interface.
 
@@ -1091,6 +1405,9 @@ def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_a
         ac_charge_demand_rel (float): The relative AC charge demand.
         dc_charge_demand_rel (float): The relative DC charge demand.
         discharge_allowed (bool): Whether discharge is allowed (True/False).
+        dyn_override_active (bool | None): Dynamic PV>Load override state of the
+            control entry the values were taken from. None falls back to the
+            current slot's entry.
     """
     # Safety check: Prevent AC charging if battery SoC exceeds maximum
     current_soc = battery_interface.get_current_soc()
@@ -1120,9 +1437,10 @@ def setting_control_data(ac_charge_demand_rel, dc_charge_demand_rel, discharge_a
     base_control.set_current_discharge_allowed(bool(discharge_allowed))
 
     # Set the dynamic override discharge allowed active flag from latest optimization data
-    dyn_override_active = eos_interface.get_last_control_data()[0].get(
-        "dyn_override_active", False
-    )
+    if dyn_override_active is None:
+        dyn_override_active = eos_interface.get_last_control_data()[0].get(
+            "dyn_override_active", False
+        )
     base_control.set_dyn_override_discharge_allowed_active(dyn_override_active)
 
     # set the current battery state of charge
@@ -1271,7 +1589,9 @@ class OptimizationScheduler:
         the event is consumed at the start of the next sleep, causing that sleep to
         be skipped as well.
         """
-        logger.info("[OPTIMIZATION] Immediate run requested via request_immediate_run()")
+        logger.info(
+            "[OPTIMIZATION] Immediate run requested via request_immediate_run()"
+        )
         self._immediate_run_event.set()
 
     def __start_update_service_optimization_loop(self):
@@ -1336,9 +1656,16 @@ class OptimizationScheduler:
                 if self._stop_event.is_set():
                     return  # Exit immediately if stop event is set
                 if self._immediate_run_event.is_set():
-                    logger.info("[OPTIMIZATION] Immediate run requested — skipping remaining sleep")
+                    logger.info(
+                        "[OPTIMIZATION] Immediate run requested — skipping remaining sleep"
+                    )
                     break  # Skip the rest of the wait and run now
-                time.sleep(min(1, actual_sleep_interval))  # Sleep in 1-second chunks
+                # Waiting on the event rather than sleeping is what makes both exits
+                # immediate: time.sleep() cannot be woken, so a shutdown or a "run now"
+                # arriving mid-second was not noticed until the second had elapsed.
+                # ``shutdown()`` sets this event too, so a stop wakes the wait here and
+                # the ``_stop_event`` check at the top of the loop returns.
+                self._immediate_run_event.wait(min(1, actual_sleep_interval))
                 actual_sleep_interval -= 1
 
         # self.__start_update_service_optimization_loop()
@@ -1366,6 +1693,19 @@ class OptimizationScheduler:
               necessary configuration values for "eos.timeout" and "refresh_time".
         """
         logger.info("[Main] start new run")
+        # Contingent loads reach a solver that can place them as something to schedule,
+        # beside the request rather than inside it: that dict is posted verbatim to an
+        # EOS server, which validates what it is sent, and no other backend could use
+        # them anyway.
+        #
+        # Asked *before* the request is built, and that order is load-bearing: a load
+        # the fallback planner had taken over gives its placement back as it is
+        # offered, and the household profile below must be assembled after that, or it
+        # carries the energy the solver is about to place a second time.
+        managed_records = None
+        if getattr(eos_interface, "schedules_managed_loads", False):
+            managed_records = load_manager.schedulable()
+
         # create optimize request
         json_optimize_input = create_optimize_request()
         self.__set_state_request()
@@ -1378,19 +1718,16 @@ class OptimizationScheduler:
         mqtt_interface.update_publish_topics(
             {"optimization/state": {"value": self.get_current_state()["request_state"]}}
         )
-        # Contingent loads reach a solver that can place them as something to schedule,
-        # beside the request rather than inside it: that dict is posted verbatim to an
-        # EOS server, which validates what it is sent, and no other backend could use
-        # them anyway.
-        managed_records = None
-        if getattr(eos_interface, "schedules_managed_loads", False):
-            managed_records = load_manager.schedulable()
+        if managed_records is not None:
             optimized_response, avg_runtime = eos_interface.optimize(
-                json_optimize_input, managed_loads=managed_records,
-                managed_load_budget_w=load_manager.max_power_w
+                json_optimize_input,
+                managed_loads=managed_records,
+                managed_load_budget_w=load_manager.max_power_w,
             )
         else:
-            optimized_response, avg_runtime = eos_interface.optimize(json_optimize_input)
+            optimized_response, avg_runtime = eos_interface.optimize(
+                json_optimize_input
+            )
         # Store the runtime for use in sleep calculation (defensive against None)
         try:
             if avg_runtime is None:
@@ -1421,10 +1758,14 @@ class OptimizationScheduler:
         # The absolute slot this response was produced in, plus the grid anchor
         # it counts from - the UI aligns the midnight-anchored arrays with
         # these instead of re-deriving a slot from a browser clock.
-        optimized_response["current_slot"] = int(
-            (response_now - response_anchor).total_seconds()
-        ) // time_frame_base
+        optimized_response["current_slot"] = (
+            int((response_now - response_anchor).total_seconds()) // time_frame_base
+        )
         optimized_response["anchor"] = response_anchor.isoformat()
+        # The managed loads that are part of `gesamtlast` rather than something the
+        # solver placed. Attached here, after the request went out, because it is ours
+        # alone: an EOS server validates what it is posted and would reject the key.
+        optimized_response["managed_load_forecast"] = last_managed_forecast
         self.last_request_response["response"] = json.dumps(
             optimized_response, indent=4
         )
@@ -1453,10 +1794,13 @@ class OptimizationScheduler:
         ) = eos_interface.examine_response_to_control_data(optimized_response)
         # Settle each load's gate on what the optimizer decided, before anything else
         # acts on the response. A load the optimizer did not answer for keeps the plan
-        # the managed-load module worked out on its own.
-        if optimized_response.get("managed_loads"):
+        # the managed-load module worked out on its own - which is why this runs
+        # whenever loads were offered at all, not only when something came back: "the
+        # run is over" is news even for a run that placed nothing, and a load that was
+        # handed out and left unanswered has no placement anywhere until it is told.
+        if managed_records is not None:
             load_manager.adopt_schedules(
-                optimized_response["managed_loads"],
+                optimized_response.get("managed_loads") or {},
                 cost=optimized_response.get("managed_loads_cost"),
             )
 
@@ -1497,12 +1841,13 @@ class OptimizationScheduler:
                 self.__run_control_loop()
             except (requests.exceptions.RequestException, ValueError, KeyError) as e:
                 logger.error("[OPTIMIZATION] Error while running control loop: %s", e)
-                # Break the sleep interval into smaller chunks to allow immediate shutdown
+            # Wait in one-second chunks so a stop is acted on at once: Event.wait()
+            # returns the moment the event is set, where the time.sleep() this used
+            # to call could not be woken and held the thread for the rest of it.
             sleep_interval = 1
             while sleep_interval > 0:
-                if self._stop_event_control_loop.is_set():
+                if self._stop_event_control_loop.wait(min(1, sleep_interval)):
                     return  # Exit immediately if stop event is set
-                time.sleep(min(1, sleep_interval))  # Sleep in 1-second chunks
                 sleep_interval -= 1
         self.__start_update_service_control_loop()
 
@@ -1533,8 +1878,9 @@ class OptimizationScheduler:
             # entry for as long as a run could plausibly take, and only then
             # stop acting on data that has gone stale.
             latest = max(control_data, key=lambda entry: entry["valid_until"])
-            grace = timedelta(seconds=max(CONTROL_DATA_GRACE_SECONDS,
-                                          2 * time_frame_base))
+            grace = timedelta(
+                seconds=max(CONTROL_DATA_GRACE_SECONDS, 2 * time_frame_base)
+            )
             if latest["valid_until"] <= now < latest["valid_until"] + grace:
                 last_control_selected_entry = control_data.index(latest)
             else:
@@ -1585,7 +1931,14 @@ class OptimizationScheduler:
             #     dc_charge_demand,
             #     discharge_allowed,
             # )
-            setting_control_data(ac_charge_demand, dc_charge_demand, discharge_allowed)
+            setting_control_data(
+                ac_charge_demand,
+                dc_charge_demand,
+                discharge_allowed,
+                eos_interface.get_last_control_data()[last_control_selected_entry].get(
+                    "dyn_override_active", False
+                ),
+            )
             # get recent evcc states
             base_control.set_current_evcc_charging_state(
                 evcc_interface.get_charging_state()
@@ -1626,12 +1979,13 @@ class OptimizationScheduler:
                 logger.error(
                     "[OPTIMIZATION] Error while running data control loop: %s", e
                 )
-                # Break the sleep interval into smaller chunks to allow immediate shutdown
+            # Wait in one-second chunks so a stop is acted on at once: Event.wait()
+            # returns the moment the event is set, where the time.sleep() this used
+            # to call could not be woken and held the thread for the rest of it.
             sleep_interval = 15
             while sleep_interval > 0:
-                if self._stop_event_data_loop.is_set():
+                if self._stop_event_data_loop.wait(min(1, sleep_interval)):
                     return  # Exit immediately if stop event is set
-                time.sleep(min(1, sleep_interval))  # Sleep in 1-second chunks
                 sleep_interval -= 1
         self.__start_update_service_data_loop()
 
@@ -1689,6 +2043,9 @@ class OptimizationScheduler:
             and self._update_thread_optimization_loop.is_alive()
         ):
             self._stop_event.set()
+            # The optimization loop waits on the immediate-run event between cycles;
+            # setting it too wakes that wait at once instead of after up to a second.
+            self._immediate_run_event.set()
             self._update_thread_optimization_loop.join()
             logger.info("[OPTIMIZATION] Update service Optimization Loop stopped.")
         if (
@@ -1704,9 +2061,15 @@ class OptimizationScheduler:
             logger.info("[OPTIMIZATION] Update service Data Loop stopped.")
 
 
-optimization_scheduler = OptimizationScheduler(
-    config_manager.config["refresh_time"] * 60  # convert to seconds
-)
+with BOOT.step("scheduler"):
+    optimization_scheduler = OptimizationScheduler(
+        config_manager.config["refresh_time"] * 60  # convert to seconds
+    )
+    # The managed-load manager judges "no schedule for a while" against the cadence
+    # the schedule actually arrives at, not against its own poll cycle: a fixed guess
+    # shorter than the optimizer's cadence had the fallback planner publishing into
+    # the household forecast on top of a solver that was merely about to run.
+    load_manager.scheduler_interval = optimization_scheduler.update_interval
 
 
 def change_control_state():
@@ -1738,9 +2101,6 @@ def change_control_state():
         else:
             # Real inverter (Fronius, Victron, etc.)
             inverter_fronius_en = True
-
-    current_overall_state = base_control.get_current_overall_state_number()
-    current_overall_state_text = base_control.get_current_overall_state()
 
     mqtt_interface.update_publish_topics(
         {
@@ -1818,7 +2178,14 @@ def change_control_state():
     )
 
     # Check if the overall state of the inverter was changed recently and consume the event
-    if base_control.was_overall_state_changed_recently(consume=True):
+    # Consume the change flag BEFORE reading the state. The optimization thread can
+    # change the state at any moment; read the other way round, a change landing in
+    # between was consumed together with the old one and the stale state was written
+    # to the inverter, which then stayed there with nothing left to correct it.
+    state_changed = base_control.was_overall_state_changed_recently(consume=True)
+    current_overall_state = base_control.get_current_overall_state_number()
+    current_overall_state_text = base_control.get_current_overall_state()
+    if state_changed:
         logger.debug("[Main] Overall state changed recently")
         if inverter_fronius_en and mode_uses_dc_charge_limit(current_overall_state):
             inverter_interface.api_set_max_pv_charge_rate(tgt_dc_charge_power)
@@ -1924,16 +2291,26 @@ evcc_interface.on_charging_state_change = charging_state_callback
 mqtt_interface.on_mqtt_command = mqtt_control_callback
 
 # web server
+#
+# Note what is NOT happening here: this app is not bound to a socket. The port
+# has been served since right after the config database opened, by the boot app
+# in boot_server.py. This one only takes over once every route below has been
+# registered — Flask refuses to register a route on an app that has already
+# answered a request, so letting a page load in before this point would turn
+# the next @app.route into an AssertionError.
+BOOT.begin("routes")
 app = Flask(__name__)
 
 # Ensure JSON responses preserve dict insertion order (SECTION_META order)
-app.config['JSON_SORT_KEYS'] = False
+app.config["JSON_SORT_KEYS"] = False
 
 # Phase 2: register the Flask REST API now that app exists.
 try:
     config_web.start_api(app)
 except (ValueError, RuntimeError):
-    logger.exception("[Main] Config web API registration failed — config UI unavailable")
+    logger.exception(
+        "[Main] Config web API registration failed — config UI unavailable"
+    )
 
 # Managed loads REST API. Registered even with nothing configured, so a caller gets a
 # 404 with an explanation rather than a bare Flask 404 that says nothing.
@@ -1944,7 +2321,9 @@ except (ValueError, RuntimeError):
     logger.exception("[Main] Managed loads API registration failed")
 
 # Register hot-reload: live config changes are applied without restart
-from config_web.hot_reload import HotReloadAdapter  # pylint: disable=wrong-import-position
+from config_web.hot_reload import (
+    HotReloadAdapter,
+)  # pylint: disable=wrong-import-position
 
 hot_reload_adapter = HotReloadAdapter(
     price_interface=price_interface,
@@ -1960,108 +2339,10 @@ hot_reload_adapter = HotReloadAdapter(
 hot_reload_adapter.on_run_trigger = optimization_scheduler.request_immediate_run
 config_web.register_hot_reload_callback(hot_reload_adapter.on_config_changed)
 
-ASSET_CACHE_MAX_AGE_SECONDS = 31536000
-
-
-# web site support
-
-
-@app.route("/", methods=["GET"])
-def main_page():
-    """
-    Renders the main page of the web application.
-
-    This function reads the content of the 'index.html' file located in the 'web' directory
-    and returns it as a rendered template string.
-    """
-    with open(base_path + "/web/index.html", "r", encoding="utf-8") as html_file:
-        rendered_html = render_template_string(
-            html_file.read(),
-            asset_version=f"{__version__}-{int(time.time())}",
-            # Resolved here rather than in the browser: the version only reaches the
-            # frontend through /json/current_controls.json, which lands after the
-            # menu and the config panel have already built their documentation links.
-            docs_base_url=docs_base_url(__version__),
-        )
-    response = make_response(rendered_html)
-    response.headers["Cache-Control"] = "no-cache, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
-
-
-@app.route("/js/<filename>")
-def serve_js_files(filename):
-    """
-    Dynamically serve JavaScript files from the js directory.
-    This allows adding new JS modules without modifying the server code.
-    """
-    try:
-        js_directory = os.path.join(os.path.dirname(__file__), "web", "js")
-
-        # Security check: only allow .js files
-        if not filename.endswith(".js"):
-            logger.warning("[Web] Blocked attempt to serve non-JS file: %s", filename)
-            return "Not Found", 404
-
-        # Check if file exists
-        file_path = os.path.join(js_directory, filename)
-        if not os.path.exists(file_path):
-            logger.warning("[Web] JavaScript file not found: %s", filename)
-            return "Not Found", 404
-
-        # logger.debug("[Web] Serving JavaScript file: %s", filename)
-        response = send_from_directory(
-            js_directory,
-            filename,
-            mimetype="application/javascript",
-            max_age=ASSET_CACHE_MAX_AGE_SECONDS,
-        )
-        response.headers["Cache-Control"] = "no-cache, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-        return response
-
-    except (OSError, IOError, ValueError) as e:
-        logger.error("[Web] Error serving JavaScript file %s: %s", filename, e)
-        return "Server Error", 500
-
-
-# Also add CSS file serving for completeness
-@app.route("/css/<filename>")
-def serve_css_files(filename):
-    """
-    Dynamically serve CSS files from the web directory.
-    """
-    try:
-        web_directory = os.path.join(os.path.dirname(__file__), "web", "css")
-
-        # Security check: only allow .css files
-        if not filename.endswith(".css"):
-            logger.warning("[Web] Blocked attempt to serve non-CSS file: %s", filename)
-            return "Not Found", 404
-
-        # Check if file exists
-        file_path = os.path.join(web_directory, filename)
-        if not os.path.exists(file_path):
-            logger.warning("[Web] CSS file not found: %s", filename)
-            return "Not Found", 404
-
-        # logger.debug("[Web] Serving CSS file: %s", filename)
-        response = send_from_directory(
-            web_directory,
-            filename,
-            mimetype="text/css",
-            max_age=ASSET_CACHE_MAX_AGE_SECONDS,
-        )
-        response.headers["Cache-Control"] = "no-cache, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-        return response
-
-    except (OSError, IOError, ValueError) as e:
-        logger.error("[Web] Error serving CSS file %s: %s", filename, e)
-        return "Server Error", 500
+# The page, its JavaScript and its stylesheets are served from web_routes.py,
+# because the boot server has to serve exactly the same ones: index.html already
+# carries the startup overlay and the error panel a user needs while waiting.
+register_static_routes(app, base_path)
 
 
 @app.route("/json/optimize_request.json", methods=["GET"])
@@ -2337,9 +2618,16 @@ def serve_test_json_files(filename):
                 content_type="application/json",
             )
 
-        # Check if file exists in test directory
-        file_path = os.path.join(json_test_directory, filename)
-        if not os.path.exists(file_path):
+        # The missing-file case is left to send_from_directory, which answers it
+        # with NotFound.  Joining the path here to stat it first was the only
+        # place filename reached a path expression without passing through
+        # safe_join (CodeQL py/path-injection) — see _serve_asset in
+        # web_routes.py, which this mirrors.
+        try:
+            return send_from_directory(
+                json_test_directory, filename, mimetype="application/json"
+            )
+        except NotFound:
             logger.warning("[Web] Test JSON file not found: %s", filename)
             logger.debug("[Web] Looked in directory: %s", json_test_directory)
             return Response(
@@ -2347,11 +2635,6 @@ def serve_test_json_files(filename):
                 status=404,
                 content_type="application/json",
             )
-
-        # logger.info("[Web] Serving test JSON file: %s from %s", filename, json_test_directory)
-        return send_from_directory(
-            json_test_directory, filename, mimetype="application/json"
-        )
 
     except (OSError, IOError, ValueError) as e:
         logger.error("[Web] Error serving test JSON file %s: %s", filename, e)
@@ -2473,174 +2756,10 @@ def handle_mode_override():
         )
 
 
-@app.route("/logs", methods=["GET"])
-def get_logs():
-    """
-    Retrieve application logs with optional filtering.
-
-    Query parameters:
-    - level: Filter by log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-    - limit: Maximum number of records to return (default: 100)
-    - since: ISO timestamp to get logs since that time
-    """
-    try:
-        level_filter = request.args.get("level")
-        limit = int(request.args.get("limit", 100))
-        since = request.args.get("since")
-
-        logs = memory_handler.get_logs(
-            level_filter=level_filter, limit=limit, since=since
-        )
-
-        response_data = {
-            "logs": logs,
-            "total_count": len(logs),
-            "timestamp": datetime.now(time_zone).isoformat(),
-            "filters_applied": {"level": level_filter, "limit": limit, "since": since},
-        }
-
-        return Response(
-            json.dumps(response_data, indent=2), content_type="application/json"
-        )
-
-    except (ValueError, TypeError, KeyError) as e:
-        logger.error("[Web] Error retrieving logs: %s", e)
-        return Response(
-            json.dumps({"error": "Failed to retrieve logs"}),
-            status=500,
-            content_type="application/json",
-        )
-
-
-@app.route("/logs/alerts", methods=["GET"])
-def get_alerts():
-    """
-    Retrieve warning and error logs for alert system.
-
-    Query parameters:
-    - startup_only: if true/1/yes, only return alerts since current process start
-    - since: optional ISO timestamp override for custom filtering
-    - limit: optional maximum number of returned alerts
-    """
-    try:
-        startup_only_arg = request.args.get("startup_only", "false").strip().lower()
-        startup_only = startup_only_arg in {"1", "true", "yes", "on"}
-
-        # Allow explicit override via query param, otherwise use startup marker if requested.
-        since = request.args.get("since")
-        if startup_only and not since:
-            since = STARTUP_ALERTS_SINCE
-
-        limit_arg = request.args.get("limit")
-        limit = int(limit_arg) if limit_arg else None
-
-        alerts = memory_handler.get_alerts(since=since, limit=limit)
-
-        # Group alerts by level for easier processing
-        grouped_alerts = {
-            "WARNING": [a for a in alerts if a["level"] == "WARNING"],
-            "ERROR": [a for a in alerts if a["level"] == "ERROR"],
-            "CRITICAL": [a for a in alerts if a["level"] == "CRITICAL"],
-        }
-
-        response_data = {
-            "alerts": alerts,
-            "grouped_alerts": grouped_alerts,
-            "alert_counts": {
-                level: len(items) for level, items in grouped_alerts.items()
-            },
-            "filters_applied": {
-                "startup_only": startup_only,
-                "since": since,
-                "limit": limit,
-            },
-            "startup_since": STARTUP_ALERTS_SINCE,
-            "timestamp": datetime.now(time_zone).isoformat(),
-        }
-
-        return Response(
-            json.dumps(response_data, indent=2), content_type="application/json"
-        )
-
-    except (ValueError, TypeError, KeyError) as e:
-        logger.error("[Web] Error retrieving alerts: %s", e)
-        return Response(
-            json.dumps({"error": "Failed to retrieve alerts"}),
-            status=500,
-            content_type="application/json",
-        )
-
-
-@app.route("/logs/clear", methods=["POST"])
-def clear_logs():
-    """
-    Clear all stored logs from memory (file logs remain intact).
-    """
-    try:
-        memory_handler.clear_logs()
-        logger.info("[Web] Memory logs cleared via web API")
-
-        return Response(
-            json.dumps({"status": "success", "message": "Logs cleared"}),
-            content_type="application/json",
-        )
-
-    except (RuntimeError, ValueError, TypeError, KeyError) as e:
-        logger.error("[Web] Error clearing logs: %s", e)
-        return Response(
-            json.dumps({"error": "Failed to clear logs"}),
-            status=500,
-            content_type="application/json",
-        )
-
-
-@app.route("/logs/alerts/clear", methods=["POST"])
-def clear_alerts_only():
-    """
-    Clear only alert logs from memory, keeping regular logs intact.
-    """
-    try:
-        memory_handler.clear_alerts_only()
-        logger.info("[Web] Alert logs cleared via web API")
-
-        return Response(
-            json.dumps({"status": "success", "message": "Alert logs cleared"}),
-            content_type="application/json",
-        )
-
-    except (RuntimeError, ValueError, TypeError, KeyError) as e:
-        logger.error("[Web] Error clearing alert logs: %s", e)
-        return Response(
-            json.dumps({"error": "Failed to clear alert logs"}),
-            status=500,
-            content_type="application/json",
-        )
-
-
-@app.route("/logs/stats", methods=["GET"])
-def get_log_stats():
-    """
-    Get buffer usage statistics.
-    """
-    try:
-        stats = memory_handler.get_buffer_stats()
-
-        response_data = {
-            "buffer_stats": stats,
-            "timestamp": datetime.now(time_zone).isoformat(),
-        }
-
-        return Response(
-            json.dumps(response_data, indent=2), content_type="application/json"
-        )
-
-    except (ValueError, TypeError, KeyError) as e:
-        logger.error("[Web] Error retrieving buffer stats: %s", e)
-        return Response(
-            json.dumps({"error": "Failed to retrieve buffer stats"}),
-            status=500,
-            content_type="application/json",
-        )
+# The /logs family lives in web_routes.py so the boot server can serve it too:
+# while a start is slow or has failed, the log viewer is the main thing the user
+# has to work with.
+register_log_routes(app, memory_handler, time_zone, STARTUP_ALERTS_SINCE)
 
 
 @app.route("/api/update/status", methods=["GET"])
@@ -2705,7 +2824,10 @@ def get_pv_autoscaling_status():
         # The autoscaler owns the aggregation, so the numbers shown here are the ones the
         # scale factors were actually derived from.
         autoscaler = pv_autoscaler
-        if autoscaler is None and getattr(config_web, "pv_yield_store", None) is not None:
+        if (
+            autoscaler is None
+            and getattr(config_web, "pv_yield_store", None) is not None
+        ):
             # Not running (feature disabled): build a throwaway instance so the page can
             # still show what the factors would be.
             try:
@@ -2772,7 +2894,9 @@ def get_pv_autoscaling_status():
             "api_version": "0.0.1",
         }
 
-        response = Response(json.dumps(response_data, indent=2), content_type="application/json")
+        response = Response(
+            json.dumps(response_data, indent=2), content_type="application/json"
+        )
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -2787,83 +2911,88 @@ def get_pv_autoscaling_status():
         )
 
 
+# Every route is registered: hand the port over from the boot app to this one.
+# The socket, the listening thread and the port are untouched by the swap — the
+# gate is what waitress has been serving all along (see boot_server.BootGate).
+BOOT.finish("routes")
+boot_gate.target = app
+BOOT.set_ready()
+logger.info(
+    "[Main] Startup complete in %.1f s — serving the application on port %s",
+    BOOT.snapshot()["elapsed_s"],
+    actual_port,
+)
+
+
+def _shutdown_all():
+    """
+    Stop everything that is running, in the order the components depend on.
+
+    Lifted out of the ``except KeyboardInterrupt`` block it used to live in so
+    that every way out of the process — Ctrl-C, SIGTERM, and the restart in the
+    next step — goes through the same sequence instead of three near-copies.
+    """
+    optimization_scheduler.shutdown()
+    base_control.shutdown()
+    load_manager.shutdown()
+    if http_server:
+        http_server.stop()
+        logger.info("[Main] HTTP server stopped")
+
+    # Shutdown real inverter if it exists (not NullInverter/display-only or EvccInverter)
+    if inverter_interface is not None and not isinstance(
+        inverter_interface, (NullInverter, EvccInverter)
+    ):
+        inverter_interface.shutdown()
+    pv_interface.shutdown()
+    if pv_autoscaler is not None:
+        try:
+            pv_autoscaler.stop_update_service()
+        except Exception:
+            logger.exception("[Main] Error stopping pv_autoscaler update service")
+    price_interface.shutdown()
+    # Was missing from the original sequence: it owns a polling thread like the
+    # rest, and only the fact that every worker is a daemon hid the omission.
+    # Its stop method is named stop(), not shutdown() like its neighbours.
+    feed_in_price_interface.stop()
+    mqtt_interface.shutdown()
+    evcc_interface.shutdown()
+    battery_interface.shutdown()
+    update_checker.shutdown()
+    config_web.stop()
+    logger.info("[Main] Server stopped gracefully")
+
+
 if __name__ == "__main__":
-    http_server = None
+    # Start deferred inverter initialization in background thread
+    # This prevents hang if inverter is unreachable
+    inverter_init_thread = threading.Thread(
+        target=_deferred_inverter_initialization,
+        daemon=True,
+        name="InverterInit",
+    )
+    inverter_init_thread.start()
+    logger.info("[Main] Inverter initialization thread started (runs in background)")
+
+    exit_code = 0
     try:
-        # Create web server with port checking
-        HOST = "0.0.0.0"
-        # In HA addon mode, port is always 8081 (mapped via ports: config)
-        # In local/Docker mode, use the configured port
-        desired_port = config_manager.config.get("eos_connect_web_port", 8081)
-
-        logger.info("[Main] Initializing EOS Connect web server...")
-        http_server, actual_port = PortInterface.create_web_server_with_port_check(
-            HOST, desired_port, app, logger
-        )
-
-        logger.info(
-            "[Main] EOS Connect web server successfully created on %s:%s",
-            HOST,
-            actual_port,
-        )
-        logger.info(
-            "[Main] Web interface available at: http://localhost:%s", actual_port
-        )
-
-        # Start deferred inverter initialization in background thread
-        # This prevents hang if inverter is unreachable
-        inverter_init_thread = threading.Thread(
-            target=_deferred_inverter_initialization,
-            daemon=True,
-            name="InverterInit",
-        )
-        inverter_init_thread.start()
-        logger.info("[Main] Inverter initialization thread started (runs in background)")
-
-        # Start serving
-        logger.info("[Main] Starting EOS Connect web server...")
-        http_server.serve_forever()
-
-    except RuntimeError as e:
-        # PortInterface already provides detailed error messages and solutions
-        logger.error("[Main] %s", str(e))
-        logger.error("[Main] EOS Connect cannot start without its web interface.")
-        sys.exit(1)
-
-    except (OSError, ImportError) as e:
-        # Only handle truly unexpected errors (not port-related)
-        logger.error("[Main] Unexpected error: %s", str(e))
-        logger.error("[Main] EOS Connect cannot start. Please check the logs.")
-        sys.exit(1)
-
+        # The web server has its own thread now; the main thread's job is to stay
+        # available for signals and to run the teardown once.
+        shutdown_event.wait()
     except KeyboardInterrupt:
         logger.info("[Main] Shutting down EOS Connect (user requested)")
-        optimization_scheduler.shutdown()
-        base_control.shutdown()
-        load_manager.shutdown()
-        if http_server:
-            http_server.stop()
-            logger.info("[Main] HTTP server stopped")
+    else:
+        if RESTART.requested:
+            # Same teardown as every other way out, but under a deadline and
+            # followed by execv instead of exit: the process is replaced in
+            # place, so the container never stops. See src/restart.py.
+            RESTART.run(_shutdown_all)  # never returns
 
-        # Shutdown real inverter if it exists (not NullInverter/display-only or EvccInverter)
-        if inverter_interface is not None and not isinstance(
-            inverter_interface, (NullInverter, EvccInverter)
-        ):
-            inverter_interface.shutdown()
-        pv_interface.shutdown()
-        if pv_autoscaler is not None:
-            try:
-                pv_autoscaler.stop_update_service()
-            except Exception:
-                logger.exception("[Main] Error stopping pv_autoscaler update service")
-        price_interface.shutdown()
-        mqtt_interface.shutdown()
-        evcc_interface.shutdown()
-        battery_interface.shutdown()
-        update_checker.shutdown()
-        config_web.stop()
-        logger.info("[Main] Server stopped gracefully")
-    finally:
-        logging.shutdown()  # This will call close() on all handlers
-        logger.info("[Main] Cleanup complete. Goodbye!")
-        sys.exit(0)
+    try:
+        _shutdown_all()
+    except Exception:  # pylint: disable=broad-except
+        logger.exception("[Main] Error during shutdown")
+        exit_code = 1
+    logging.shutdown()  # This will call close() on all handlers
+    logger.info("[Main] Cleanup complete. Goodbye!")
+    sys.exit(exit_code)

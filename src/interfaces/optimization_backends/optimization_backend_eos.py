@@ -14,7 +14,28 @@ import numpy as np
 from packaging import version
 import pytz
 
+try:  # running from src/ as a script - src/ is on sys.path
+    from interfaces.optimization_backends.optimization_backend_eos_genetic import (
+        EOSGeneticPath,
+        supports_genetic_optimize,
+    )
+except ImportError:  # imported as src.interfaces... (tests)
+    from .optimization_backend_eos_genetic import (
+        EOSGeneticPath,
+        supports_genetic_optimize,
+    )
+
 logger = logging.getLogger("__main__")
+
+# Charge rates EOS_connect pushes into an EOS server that has none of its own,
+# as a factor of the maximum charging power.
+DEFAULT_EV_CHARGE_RATES = sorted([0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0])
+
+# The EOS device rework keys ``devices/*`` by device_id instead of listing them,
+# and fills in its own charge rates. It shipped in 0.3.0 dev builds, and PEP 440
+# sorts those *before* 0.3.0 - comparing against the plain release would miss
+# every build that actually carries the change.
+EOS_DEVICE_MAPPING_VERSION = "0.3.0.dev0"
 
 
 class EOSBackend:
@@ -23,6 +44,12 @@ class EOSBackend:
     Accepts and returns EOS-format requests/responses.
     """
 
+    # EOS places the `dishwasher` device itself and reports where it put it in
+    # `Home_appliance_wh_per_hour`. Declared so the caller knows the Additional Load's
+    # measured history may leave the household profile: it only may where something
+    # puts the energy back. See the comment on `LoadInterface.places_additional_load`.
+    places_home_appliance = True
+
     def __init__(self, base_url, time_frame_base, time_zone):
         self.base_url = base_url
         self.time_frame_base = time_frame_base
@@ -30,6 +57,7 @@ class EOSBackend:
         self.last_optimization_runtimes = [0] * 5
         self.last_optimization_runtime_number = 0
         self.eos_version = "0.0.2"  # default
+        self._genetic_path = None
         try:
             self.eos_version = self._retrieve_eos_version()
             # if self.eos_version in ["0.1.0+dev", "0.2.0+dev"]:
@@ -37,7 +65,36 @@ class EOSBackend:
                 # check config for needed values
                 config_optimization = self.__get_config_path("optimization")
                 config_optimization_upodate_needed = False
-                if config_optimization.get("horizon_hours", 0) != 48:
+                horizon_updated = False
+                # Newer EOS builds keep the horizon per algorithm, under
+                # optimization.genetic (or genetic0), and no longer read the
+                # top-level key: writing only that one left them at their default
+                # of 24 hours. Set the nested key on its own path, so the computed
+                # fields of the optimization object are not sent back with it.
+                #
+                # Which section counts is decided by the endpoint, not by the
+                # configuration: POST /optimize - the only one this backend calls -
+                # is hardwired to the GENETIC0 algorithm and never reads
+                # optimization.algorithm. So where the server has a genetic0
+                # section, that is the horizon it honours; following
+                # optimization.algorithm instead (GENETIC by default) wrote a key
+                # this endpoint does not read. Older servers have no genetic0 and
+                # keep the previous behaviour.
+                algorithm_section = (
+                    "genetic0"
+                    if isinstance(config_optimization.get("genetic0"), dict)
+                    else str(config_optimization.get("algorithm", "GENETIC")).lower()
+                )
+                algorithm_config = config_optimization.get(algorithm_section)
+                if (
+                    isinstance(algorithm_config, dict)
+                    and "horizon_hours" in algorithm_config
+                ):
+                    if algorithm_config["horizon_hours"] != 48:
+                        horizon_updated = self.__set_config_path(
+                            f"optimization/{algorithm_section}/horizon_hours", 48
+                        )
+                elif config_optimization.get("horizon_hours", 0) != 48:
                     config_optimization["horizon_hours"] = 48
                     config_optimization_upodate_needed = True
                 if config_optimization.get("genetic", None) is None:
@@ -47,44 +104,54 @@ class EOSBackend:
                     }
                     config_optimization_upodate_needed = True
                 if config_optimization_upodate_needed:
-                    self.__set_config_path("optimization", config_optimization)
+                    if self.__set_config_path("optimization", config_optimization):
+                        logger.warning(
+                            "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with "
+                            + ": %s",
+                            config_optimization,
+                        )
+                elif horizon_updated:
                     logger.warning(
-                        "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with "
-                        + ": %s",
-                        config_optimization,
+                        "[OPT-EOS] Detected EOS version >= 0.1.0 - set "
+                        + "optimization.%s.horizon_hours to 48",
+                        algorithm_section,
                     )
                 else:
                     logger.info(
                         "[OPT-EOS] Detected EOS version >= 0.1.0 - config optimization values OK"
                     )
 
-                config_devices = self.__get_config_path("devices/electric_vehicles")
-                if config_devices is None:
-                    # if config_devices[0].get("charge_rates", None) is None:
-                    config_devices = [{}]
-                    config_devices[0]["charge_rates"] = sorted(
-                        [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+                self.__ensure_ev_charge_rates()
+                # EOS marks the endpoint this backend grew up on deprecated, so
+                # wherever the current one is available it is the one used - for
+                # hourly runs too, not only for the quarter-hourly slots that
+                # need it. That leaves the legacy path to the servers that have
+                # nothing else, which is where it can eventually be retired.
+                #
+                # Asked here rather than in __init__'s first lines so a server
+                # below 0.1.0 is still left completely alone: it cannot have the
+                # endpoint, and probing it would cost a request for nothing.
+                if supports_genetic_optimize(self.base_url):
+                    self._genetic_path = EOSGeneticPath(
+                        self.base_url,
+                        self.time_frame_base,
+                        self.time_zone,
+                        self.__get_config_path,
+                        self.__set_config_path,
                     )
-                    self.__set_config_path("devices/electric_vehicles", config_devices)
-                    logger.warning(
-                        "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with charge "
-                        + "rates for electric vehicles"
-                    )
-                elif "charge_rates" not in config_devices[0]:
-                    config_devices[0]["charge_rates"] = sorted(
-                        [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
-                    )
-                    self.__set_config_path("devices/electric_vehicles", config_devices)
-                    logger.warning(
-                        "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with charge "
-                        + "rates for electric vehicles"
+                    logger.info(
+                        "[OPT-EOS] EOS server offers /v1/optimize - using it "
+                        "for %d s slots",
+                        self.time_frame_base,
                     )
                 else:
                     logger.info(
-                        "[OPT-EOS] Detected EOS version >= 0.1.0 - config charge rates for "
-                        + "electric vehicles OK"
+                        "[OPT-EOS] EOS server has only the deprecated /optimize "
+                        "endpoint - using it; 15-min slots need a newer EOS build"
                     )
             logger.info("[OPT-EOS] Configuration validation successful")
+        except requests.exceptions.RequestException as e:
+            self.__report_config_check_failed(e)
         except ValueError as e:
             logger.error("[OPT-EOS] EOS backend configuration error: %s", str(e))
             logger.error(
@@ -92,6 +159,89 @@ class EOSBackend:
                 "Use Settings to fix configuration"
             )
             raise  # Let caller handle graceful degradation instead of sys.exit(1)
+        except (KeyError, TypeError, IndexError, AttributeError) as e:
+            # An EOS server whose config does not look the way we expect is not a
+            # reason to refuse to start: this interface is created with
+            # critical=True, long before the web server comes up, so raising here
+            # takes the settings UI down with it - and the settings UI is exactly
+            # what the user needs to get out of the situation (#349).
+            self.__report_config_check_failed(e)
+
+    def __report_config_check_failed(self, error):
+        """
+        Log that the EOS server configuration could not be checked, and carry on.
+
+        The optimizer still works against whatever the server has configured; a
+        run that then fails reports itself per cycle, which leaves the add-on
+        running and the settings reachable.
+        """
+        logger.error(
+            "[OPT-EOS] Could not check the configuration of the EOS server at %s: "
+            "%s: %s | Config: #eos | ACTION REQUIRED",
+            self.base_url,
+            type(error).__name__,
+            error,
+        )
+        logger.warning(
+            "[OPT-EOS] Continuing with the configuration the EOS server already has - "
+            "optimization may fail until it is corrected"
+        )
+
+    def __ensure_ev_charge_rates(self):
+        """
+        Make sure the electric vehicles on the EOS server carry charge rates.
+
+        ``devices/electric_vehicles`` changed shape with the EOS device rework: it
+        used to be a list of device dicts and is now a mapping keyed by device_id.
+        Both are read here and written back the way the server handed them over.
+        Indexing ``[0]`` into the mapping is what stopped the add-on from starting
+        against a current EOS build (#349).
+        """
+        config_devices = self.__get_config_path("devices/electric_vehicles")
+
+        if config_devices is None:
+            if self.is_eos_version_at_least(EOS_DEVICE_MAPPING_VERSION):
+                # Mapping-era servers default the charge rates themselves, and a
+                # list pushed into a mapping field would only earn a 422.
+                logger.info(
+                    "[OPT-EOS] No electric vehicles configured - EOS supplies its own "
+                    "charge rates"
+                )
+                return
+            config_devices = [{"charge_rates": list(DEFAULT_EV_CHARGE_RATES)}]
+            if self.__set_config_path("devices/electric_vehicles", config_devices):
+                logger.warning(
+                    "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with charge "
+                    + "rates for electric vehicles"
+                )
+            return
+
+        devices = (
+            list(config_devices.values())
+            if isinstance(config_devices, dict)
+            else list(config_devices)
+        )
+        # The dicts are the ones inside config_devices, so filling them in here is
+        # what gets written back below - in the original shape, whichever it was.
+        without_rates = [
+            device
+            for device in devices
+            if isinstance(device, dict) and "charge_rates" not in device
+        ]
+        if not without_rates:
+            logger.info(
+                "[OPT-EOS] Detected EOS version >= 0.1.0 - config charge rates for "
+                + "electric vehicles OK"
+            )
+            return
+
+        for device in without_rates:
+            device["charge_rates"] = list(DEFAULT_EV_CHARGE_RATES)
+        if self.__set_config_path("devices/electric_vehicles", config_devices):
+            logger.warning(
+                "[OPT-EOS] Detected EOS version >= 0.1.0 - config updated with charge "
+                + "rates for electric vehicles"
+            )
 
     def _get_expected_hourly_slots(self):
         """
@@ -190,6 +340,8 @@ class EOSBackend:
         Send the optimize request to the EOS server.
         Returns (response_json, avg_runtime)
         """
+        if self._genetic_path is not None:
+            return self._genetic_path.optimize(eos_request, timeout)
         # Adjust all arrays for DST before sending to EOS server.
         # Sources always produce 48 (hourly) or 192 (15-min) slots.
         # For old EOS (< 0.1.0), the server computed a DST-aware expected
@@ -314,6 +466,9 @@ class EOSBackend:
             path (str): The configuration path.
             value (dict or list): The configuration value as a JSON-serializable
             object or a list of such objects.
+
+        Returns:
+            bool: True if EOS accepted the value.
         """
 
         def convert_sets(obj):
@@ -341,6 +496,8 @@ class EOSBackend:
             logger.error(
                 "[OPT-EOS] Failed to set config value for path '%s': %s", path, e
             )
+            return False
+        return True
 
     def send_measurement_to_eos(self, dataframe):
         """

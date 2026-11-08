@@ -7,6 +7,7 @@
  */
 
 /* global showFullScreenOverlay, closeFullScreenOverlay, CONFIG_SECTIONS */
+/* global configurationManager, ConfigurationManager */
 
 /**
  * Friendlier option text for the PV source dropdown.
@@ -36,6 +37,9 @@ class SetupWizard {
     constructor() {
         this.schema = null;
         this.values = {};
+        // What the merge would derive from the answers so far - see
+        // _refreshResolved. Empty until a step needs it.
+        this.resolvedValues = {};
         this.currentStep = 0;
         this.skippedSteps = new Set();
         // Replaced by the list the schema endpoint serves; this is only what to fall
@@ -69,19 +73,19 @@ class SetupWizard {
                 description: "Select and configure the optimization backend (EOS Server or EVopt).",
             },
             {
-                id: "evcc",
-                title: "EVCC (Optional)",
-                icon: "fa-car",
-                sections: ["evcc"],
-                description: "Optional — Define here to use EVCC as a data source for PV forecasts, as an inverter control gateway, and/or for car charging dependent control. If not used, simply skip this step.",
-                isOptional: true,
-            },
-            {
                 id: "data_source",
                 title: "Data Source",
                 icon: "fa-plug",
                 sections: ["data_source"],
-                description: "Connect to Home Assistant or OpenHAB to read sensor data.",
+                description: "Where the measured data comes from: Home Assistant, OpenHAB, or EVCC. Asked before the EVCC step, because choosing EVCC here is what configures its address — the EVCC step then has nothing left to ask.",
+            },
+            {
+                id: "evcc",
+                title: "EVCC (Optional)",
+                icon: "fa-car",
+                sections: ["evcc"],
+                description: "Optional — Define here to use EVCC as a PV forecast source, as an inverter control gateway, and/or for car charging dependent control. Skip this step if EVCC is already the data source, or if you do not use it at all.",
+                isOptional: true,
             },
             {
                 id: "inverter",
@@ -150,7 +154,7 @@ class SetupWizard {
         try {
             await this._loadData();
             this.currentStep = 0;
-            this._render();
+            await this._enterStep();
         } catch (err) {
             console.error("[SetupWizard] Failed to load:", err);
             document.getElementById("full_screen_content").innerHTML = `
@@ -206,6 +210,52 @@ class SetupWizard {
     /**
      * Render the current wizard step into the overlay.
      */
+    /**
+     * Move to the step the wizard is now on, with what EVCC resolves for it.
+     *
+     * Separate from ``_render`` because the answer comes from the server: the
+     * wizard holds every answer until one final save, so the store still
+     * describes the previous installation and nothing local can say whether
+     * this site's battery reports its SoC limits.
+     */
+    async _enterStep() {
+        await this._refreshResolved();
+        this._render();
+    }
+
+    /**
+     * Ask what the merge would derive from the answers so far.
+     *
+     * Only where it can matter: a step carrying fields EVCC manages, with EVCC
+     * chosen as the data source. Everywhere else the answer is empty and the
+     * request is not worth making.
+     *
+     * A failure leaves the fields as ordinary inputs. Asking for something the
+     * user does not need to supply is a small cost; a wizard that will not move
+     * because a lookup failed is not.
+     */
+    async _refreshResolved() {
+        const step = this.steps[this.currentStep];
+        const managed = (this._getVisibleStepFields(step) || []).some(
+            f => (f.labels || []).includes("evcc_managed")
+        );
+        if (!managed || this.values["data_source.type"] !== "evcc") {
+            this.resolvedValues = {};
+            return;
+        }
+        try {
+            const res = await fetch("api/config/resolved", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(this.values),
+            });
+            this.resolvedValues = res.ok ? await res.json() : {};
+        } catch (err) {
+            console.warn("[SetupWizard] could not resolve EVCC values:", err);
+            this.resolvedValues = {};
+        }
+    }
+
     _render() {
         const step = this.steps[this.currentStep];
         const totalSteps = this.steps.length;
@@ -327,6 +377,23 @@ class SetupWizard {
      * @returns {string} HTML string
      */
     _renderField(f) {
+        // A field EVCC manages reads out instead of asking - the same rule the
+        // settings page applies, asked of the same resolution. The level check
+        // it also makes is implicit here: the wizard only ever shows
+        // getting_started fields, which is below expert.
+        //
+        // Only where the resolution actually produced a value. EVCC reports a
+        // battery's SoC limits through a capability not every integration
+        // implements, so "EVCC manages this" is a fact about the site. Showing
+        // it read-only regardless would leave a field the user has to set and
+        // cannot.
+        if (
+            (f.labels || []).includes("evcc_managed")
+            && this.values["data_source.type"] === "evcc"
+            && Object.prototype.hasOwnProperty.call(this.resolvedValues || {}, f.key)
+        ) {
+            return this._renderEvccManagedField(f);
+        }
         const value = this.values[f.key] !== undefined ? this.values[f.key] : f.default;
         const cssKey = f.key.replace(/\./g, "-");
         const label = this._prettyLabel(f.key);
@@ -358,9 +425,56 @@ class SetupWizard {
                 <label>${this._escapeHtml(label)}${this._isRequired(f) ? ' <span class="required">*</span>' : ""}</label>
                 ${inputHtml}
                 <div class="field-hint">${this._escapeHtml(f.description)}</div>
+                ${this._renderNotice(f)}
                 <div class="field-error" id="wiz-err-${cssKey}"></div>
             </div>
         `;
+    }
+
+    /**
+     * A field the data source fills in, shown rather than asked for.
+     *
+     * Carries no ``data-key`` and no error row on purpose: ``_collectCurrentStep``
+     * gathers by that attribute, and a derived value collected here would be
+     * saved - which is the one thing the resolution exists to avoid. It is
+     * derived on every merge precisely so it cannot go stale in the store.
+     */
+    _renderEvccManagedField(f) {
+        const cssKey = f.key.replace(/\./g, "-");
+        const label = this._prettyLabel(f.key);
+        const value = String(this.resolvedValues[f.key] ?? "").trim();
+        return `
+            <div class="wizard-field" id="wiz-field-${cssKey}">
+                <label>${this._escapeHtml(label)}
+                    <span class="wizard-badge-evcc">
+                        <i class="fas fa-car" aria-hidden="true"></i> from EVCC
+                    </span>
+                </label>
+                <input type="text" class="wizard-input-readonly" readonly
+                    value="${this._escapeAttr(value)}"
+                    data-evcc-managed="${this._escapeAttr(f.key)}">
+                <div class="field-hint">${this._escapeHtml(f.description)}</div>
+            </div>
+        `;
+    }
+
+    /**
+     * A note about the setup around a field, while its condition holds.
+     *
+     * Same data and same evaluator as the settings page: a rule implemented
+     * once in the schema has to read the same in both places, or the wizard
+     * quietly tells a new user something different.
+     */
+    _renderNotice(f) {
+        const notice = f.notice_when;
+        if (!notice || !this._conditionsMet(notice.when)) {
+            return "";
+        }
+        return `
+            <div class="field-notice" data-notice-for="${this._escapeAttr(f.key)}">
+                <i class="fas fa-circle-info" aria-hidden="true"></i>
+                <span>${this._escapeHtml(notice.text)}</span>
+            </div>`;
     }
 
     /**
@@ -799,7 +913,7 @@ class SetupWizard {
             this.skippedSteps.add(step.id);
             if (this.currentStep < this.steps.length - 1) {
                 this.currentStep++;
-                this._render();
+                this._enterStep();
             }
         }
     }
@@ -808,7 +922,7 @@ class SetupWizard {
         if (this.currentStep > 0) {
             this._collectCurrentStep();
             this.currentStep--;
-            this._render();
+            this._enterStep();
         }
     }
 
@@ -834,7 +948,7 @@ class SetupWizard {
             await this._finish();
         } else {
             this.currentStep++;
-            this._render();
+            await this._enterStep();
         }
     }
 
@@ -1027,12 +1141,16 @@ class SetupWizard {
                     <h2 style="color:#fff;margin-bottom:8px;">Setup Complete!</h2>
                     <p style="color:#aaa;max-width:480px;margin-bottom:24px;">
                         Your configuration has been saved.
-                        Please <strong style="color:#ffc107;">restart EOS Connect</strong> for the new settings to take effect.
+                        <strong style="color:#ffc107;">Restart EOS Connect</strong> for the new settings to take effect.
                     </p>
                     <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;">
-                        <button onclick="closeFullScreenOverlay();"
+                        <button onclick="restartAfterWizard()"
                                 style="background:#4a9eff;color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:0.95em;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
-                            <i class="fas fa-times"></i> Close
+                            <i class="fas fa-rotate"></i> Restart now
+                        </button>
+                        <button onclick="closeFullScreenOverlay();"
+                                style="background:rgba(74,158,255,0.15);color:#fff;border:2px solid rgba(74,158,255,0.4);border-radius:8px;padding:10px 24px;font-size:0.95em;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
+                            <i class="fas fa-times"></i> Later
                         </button>
                         <button onclick="closeFullScreenOverlay(); if(typeof showConfigurationMenu === 'function') showConfigurationMenu();"
                                 style="background:rgba(74,158,255,0.15);color:#fff;border:2px solid rgba(74,158,255,0.4);border-radius:8px;padding:10px 24px;font-size:0.95em;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
@@ -1142,10 +1260,26 @@ class SetupWizard {
         if (!f.depends_on) {
             return true;
         }
-        for (const [depKey, allowed] of Object.entries(f.depends_on)) {
+        return this._conditionsMet(f.depends_on);
+    }
+
+    /**
+     * Whether every entry of a depends_on-shaped condition holds.
+     *
+     * Shared with notice_when so a notice cannot drift away from the rule that
+     * decides whether the field is shown at all - the same split config.js and
+     * api._conditions_met make.
+     */
+    _conditionsMet(conditions) {
+        for (const [depKey, allowed] of Object.entries(conditions || {})) {
             const current = this.values[depKey];
             if (allowed === "!empty") {
                 if (!current || current === "") {
+                    return false;
+                }
+            } else if (typeof allowed === "string" && allowed.startsWith("!") && allowed.length > 1) {
+                // "!value": applies while the governing key does NOT hold it.
+                if (String(current) === allowed.slice(1)) {
                     return false;
                 }
             } else if (Array.isArray(allowed)) {
@@ -1253,4 +1387,23 @@ async function checkWizardStatus() {
     } catch {
         _wizardCheckDone = false;       // allow retry on transient failure
     }
+}
+
+
+/**
+ * Restart from the wizard's closing screen.
+ *
+ * The wizard is the one place a restart needs no confirmation of its own - the
+ * screen it sits on already says the settings need one. It does need to cope
+ * with the settings panel never having been opened, which is the normal
+ * first-run path, so the manager is created on demand the way backup.js does.
+ */
+function restartAfterWizard() {
+    if (typeof configurationManager === "undefined") {
+        return;
+    }
+    if (!configurationManager) {
+        configurationManager = new ConfigurationManager();
+    }
+    configurationManager._doRestart("completed the setup wizard");
 }

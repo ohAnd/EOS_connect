@@ -707,7 +707,15 @@ class MqttInterface:
     def shutdown(self):
         """
         Stop the MQTT client loop.
+
+        Returns quietly when MQTT is disabled: ``__init__`` bails out before it
+        creates ``self.client`` in that case, so this used to raise
+        ``AttributeError`` and abort the rest of the application's teardown.
+        It stayed hidden because the only path that reached it was Ctrl-C —
+        ``docker stop`` killed the process outright until SIGTERM was handled.
         """
+        if not self.enable_mqtt:
+            return
         logger.info("[MQTT] Stopping MQTT client loop.")
         self.client.loop_stop()
 

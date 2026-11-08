@@ -1,9 +1,13 @@
-"""Browser fixtures for the documentation tests.
+"""Server fixtures for the documentation tests.
 
-Same constraints as ``tests/web``: Playwright and a Chromium build are not in
-``requirements.txt`` and CI has no browser, so the browser-driven module is
-skipped when either is missing.  ``test_docs_integrity.py`` is static and always
-runs.
+The Chromium itself comes from the shared ``browser`` fixture in
+``tests/conftest.py`` — there has to be exactly one ``sync_playwright()`` per
+process, and two directories each keeping their own broke a run that covered both.
+
+Playwright and a Chromium build are not in ``requirements.txt``, so
+``test_docs_rendering.py`` is skipped when the package is missing; it is also
+marked ``browser`` and left out of the default run, and CI gives it a job of its
+own with a browser installed.  ``test_docs_integrity.py`` is static and always runs.
 
 The docs are served over HTTP rather than opened as ``file://`` because
 ``configuration.html`` fetches ``assets/data/config_schema.json``, and the file
@@ -15,7 +19,6 @@ import functools
 import http.server
 import os
 import shutil
-import socket
 import threading
 
 import pytest
@@ -25,23 +28,9 @@ try:
 except ImportError:  # pragma: no cover - depends on the environment
     collect_ignore_glob = ["test_docs_rendering.py"]
 
-# Shared libraries unpacked by scripts/install_playwright_deps_userspace.sh, for
-# hosts where Chromium's dependencies cannot be apt-installed.
-_USER_LIBS = os.path.join(os.path.expanduser("~"), ".cache", "ms-playwright-deps", "lib")
-if os.path.isdir(_USER_LIBS):
-    os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(
-        [_USER_LIBS, os.environ.get("LD_LIBRARY_PATH", "")]
-    ).rstrip(os.pathsep)
-
 DOCS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "docs"
 )
-
-
-def _free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -53,14 +42,18 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 @pytest.fixture(name="docs_url", scope="session")
 def docs_url_fixture():
-    """Serve docs/ on a loopback port for the duration of the session."""
-    port = _free_port()
+    """Serve docs/ on a loopback port for the duration of the session.
+
+    Port 0 lets the OS choose and the server keeps the socket it was handed.
+    Picking a free port first, closing it and binding it again leaves a window
+    in between for anything else on the machine to take it.
+    """
     handler = functools.partial(_QuietHandler, directory=DOCS_DIR)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{port}/"
+        yield f"http://127.0.0.1:{server.server_port}/"
     finally:
         server.shutdown()
         server.server_close()
@@ -81,40 +74,12 @@ def preview_docs_url_fixture(tmp_path_factory):
     root = tmp_path_factory.mktemp("pages-site")
     shutil.copytree(DOCS_DIR, os.path.join(str(root), "develop"))
 
-    port = _free_port()
     handler = functools.partial(_QuietHandler, directory=str(root))
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{port}/develop/"
+        yield f"http://127.0.0.1:{server.server_port}/develop/"
     finally:
         server.shutdown()
         server.server_close()
-
-
-@pytest.fixture(name="browser")
-def browser_fixture():
-    """Chromium for one test, following the pattern in ``tests/web/conftest.py``.
-
-    Deliberately function-scoped. Holding ``sync_playwright()`` open across the
-    session leaves an asyncio event loop in place that later async tests pick
-    up, which breaks ``tests/interfaces/test_pv_interface.py`` with "coroutine
-    was never awaited". Opening and closing it per test keeps the suite
-    order-independent.
-    """
-    # Imported here, not at module scope: the module is skipped when Playwright
-    # is absent, and a top-level import would run before that check.
-    from playwright.sync_api import sync_playwright  # pylint: disable=import-outside-toplevel
-
-    with sync_playwright() as driver:
-        try:
-            browser = driver.chromium.launch()
-        # Playwright raises a variety of errors for a browser that will not
-        # start (missing libraries, no sandbox, out of memory); all mean "skip".
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            pytest.skip(f"Chromium could not be launched: {exc}")
-        try:
-            yield browser
-        finally:
-            browser.close()

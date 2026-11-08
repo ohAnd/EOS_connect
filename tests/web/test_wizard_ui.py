@@ -20,7 +20,6 @@ import pytest
 
 from tests.web import wizard_driver as wz
 
-
 # ----------------------------------------------------------------------
 # Shape of the walk
 # ----------------------------------------------------------------------
@@ -34,9 +33,10 @@ def test_the_wizard_opens_by_itself_on_a_fresh_install(fresh_page):
 
 def test_it_hides_the_startup_overlay(fresh_page):
     """The loading overlay sits on top of everything, including the wizard."""
-    assert fresh_page.eval_on_selector(
-        "#overlay", "e => getComputedStyle(e).display"
-    ) == "none"
+    assert (
+        fresh_page.eval_on_selector("#overlay", "e => getComputedStyle(e).display")
+        == "none"
+    )
 
 
 def test_data_source_is_asked_before_inverter(fresh_page):
@@ -53,6 +53,10 @@ def test_data_source_is_asked_before_inverter(fresh_page):
 
     assert order == wz.STEP_IDS
     assert order.index("data_source") < order.index("inverter")
+    # Data Source before EVCC: choosing EVCC there is what configures its
+    # address, and the EVCC step then has nothing left to ask. The other way
+    # round the same URL was asked for twice.
+    assert order.index("data_source") < order.index("evcc")
 
 
 # ----------------------------------------------------------------------
@@ -88,8 +92,12 @@ def test_the_inverter_step_offers_the_type(fresh_page):
 
     assert "inverter.type" in wz.visible_fields(fresh_page)
     assert [c for c, _ in wz.choices(fresh_page, "inverter.type")] == [
-        "fronius_gen24", "fronius_gen24_legacy", "victron",
-        "evcc", "homeassistant", "default",
+        "fronius_gen24",
+        "fronius_gen24_legacy",
+        "victron",
+        "evcc",
+        "homeassistant",
+        "default",
     ]
 
 
@@ -99,9 +107,11 @@ def test_the_inverter_step_survives_openhab(fresh_page):
         wz.next_step(fresh_page)
     wz.set_field(fresh_page, "data_source.type", "openhab")
     wz.set_field(fresh_page, "data_source.url", "http://openhab.local:8080")
-    wz.next_step(fresh_page)
+    # EVCC sits between the two now; this test is about what the inverter step
+    # offers, not about how many steps precede it.
+    while wz.current_step_id(fresh_page) != "inverter":
+        wz.next_step(fresh_page)
 
-    assert wz.current_step_id(fresh_page) == "inverter"
     assert "inverter.type" in wz.visible_fields(fresh_page)
 
 
@@ -115,13 +125,11 @@ def test_a_step_with_nothing_visible_says_so(fresh_page):
         wz.next_step(fresh_page)
 
     # Make the step's only visible field depend on something that is not true.
-    fresh_page.evaluate(
-        """() => {
+    fresh_page.evaluate("""() => {
             const f = setupWizard.schema.find(x => x.key === 'inverter.type');
             f.depends_on = {'data_source.type': ['nothing-selects-this']};
             setupWizard._render();
-        }"""
-    )
+        }""")
 
     assert wz.visible_fields(fresh_page) == []
     assert fresh_page.is_visible(".wizard-step-empty")
@@ -222,7 +230,11 @@ PERSONAS = {
     ),
     "external_eos_server": (
         {
-            "eos": {"eos.source": "eos_server", "eos.server": "10.0.0.5", "eos.port": 8503},
+            "eos": {
+                "eos.source": "eos_server",
+                "eos.server": "10.0.0.5",
+                "eos.port": 8503,
+            },
             "data_source": {
                 "data_source.type": "homeassistant",
                 "data_source.url": "http://homeassistant.local:8123",
@@ -250,15 +262,23 @@ PERSONAS = {
     ),
     "victron": (
         {
-            "inverter": {"inverter.type": "victron", "inverter.address": "192.168.1.60"},
+            "inverter": {
+                "inverter.type": "victron",
+                "inverter.address": "192.168.1.60",
+            },
             "pv": {"pv_forecast_source.source": "openmeteo_local"},
         },
         ["evcc"],
     ),
     "forecast_solar": (
-        {"pv": {"pv_forecast_source.source": "forecast_solar",
-                "pv_forecast.lat": 52.5, "pv_forecast.lon": 13.4,
-                "pv_forecast.power": 8200}},
+        {
+            "pv": {
+                "pv_forecast_source.source": "forecast_solar",
+                "pv_forecast.lat": 52.5,
+                "pv_forecast.lon": 13.4,
+                "pv_forecast.power": 8200,
+            }
+        },
         ["evcc"],
     ),
 }
@@ -318,9 +338,9 @@ def test_it_stores_nothing_the_user_never_saw(
     stored = fresh_server.store.get_all()
 
     assert "time_zone" not in stored, "a bootstrap key belongs in config.yaml"
-    assert not [k for k in stored if k.startswith("pv_autoscaling.")], (
-        "no wizard step covers PV auto-scaling"
-    )
+    assert not [
+        k for k in stored if k.startswith("pv_autoscaling.")
+    ], "no wizard step covers PV auto-scaling"
     assert "tibberBearerToken" not in stored.values()
     assert "abc123" not in stored.values()
 
@@ -338,7 +358,8 @@ def test_installations_are_only_stored_for_sources_that_use_them(
     stored = fresh_server.store.get_all()
 
     unindexed = [
-        k for k in stored
+        k
+        for k in stored
         if k.startswith("pv_forecast.") and not k.split(".")[1].isdigit()
     ]
     assert not unindexed, f"template keys reached the store: {unindexed}"
@@ -415,21 +436,27 @@ def _refuse_the_save(page, body=None):
     """
     payload = body or {
         "success": False,
-        "unmet_dependencies": [{
-            "field": "price.source",
-            "reason": "EVCC selected as price source but EVCC URL is not configured",
-            "requires": "evcc.url",
-            "blocking": True,
-        }],
+        "unmet_dependencies": [
+            {
+                "field": "price.source",
+                "reason": "EVCC selected as price source but EVCC URL is not configured",
+                "requires": "evcc.url",
+                "blocking": True,
+            }
+        ],
         "message": "Cannot save: required dependencies not configured",
     }
     page.route(
         "**/api/config/",
-        lambda route: route.fulfill(
-            status=200,
-            content_type="application/json",
-            body=json.dumps(payload),
-        ) if route.request.method == "PUT" else route.continue_(),
+        lambda route: (
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(payload),
+            )
+            if route.request.method == "PUT"
+            else route.continue_()
+        ),
     )
 
 
@@ -448,7 +475,7 @@ def test_a_refused_save_does_not_claim_success(fresh_page):
 
 
 def test_the_refusal_says_which_field_is_at_fault(fresh_page):
-    """"Save failed: 200" told the user nothing they could act on."""
+    """ "Save failed: 200" told the user nothing they could act on."""
     while wz.current_step_id(fresh_page) != "review":
         wz.next_step(fresh_page)
     _refuse_the_save(fresh_page)
@@ -479,13 +506,24 @@ def test_a_field_level_rejection_names_the_field(fresh_page):
         wz.next_step(fresh_page)
     fresh_page.route(
         "**/api/config/",
-        lambda route: route.fulfill(
-            status=422,
-            content_type="application/json",
-            body=json.dumps({"errors": [
-                {"key": "battery.capacity_wh", "error": "Must be at least 100"},
-            ]}),
-        ) if route.request.method == "PUT" else route.continue_(),
+        lambda route: (
+            route.fulfill(
+                status=422,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "errors": [
+                            {
+                                "key": "battery.capacity_wh",
+                                "error": "Must be at least 100",
+                            },
+                        ]
+                    }
+                ),
+            )
+            if route.request.method == "PUT"
+            else route.continue_()
+        ),
     )
     wz.finish(fresh_page)
 
@@ -564,7 +602,9 @@ def test_an_optional_empty_field_is_not_treated_as_malformed(fresh_page):
     wz.set_field(fresh_page, "data_source.access_token", "")
     wz.next_step(fresh_page)
 
-    assert wz.current_step_id(fresh_page) == "inverter"
+    # Advancing at all is the assertion: a blank optional field must not hold
+    # the step. Which step follows is the wizard's order, pinned elsewhere.
+    assert wz.current_step_id(fresh_page) != "data_source"
 
 
 # ----------------------------------------------------------------------
@@ -692,15 +732,17 @@ def test_a_password_field_can_still_be_revealed_after_a_re_render(fresh_page):
     _go_to_pv_with_evcc_configured(fresh_page)
     wz.set_field(fresh_page, "pv_forecast_source.source", "solcast")
 
-    assert fresh_page.eval_on_selector(
-        "#wiz-pv_forecast_source-api_key", "e => e.type"
-    ) == "password"
+    assert (
+        fresh_page.eval_on_selector("#wiz-pv_forecast_source-api_key", "e => e.type")
+        == "password"
+    )
     fresh_page.click(
         '.wizard-password-toggle[data-target="wiz-pv_forecast_source-api_key"]'
     )
-    assert fresh_page.eval_on_selector(
-        "#wiz-pv_forecast_source-api_key", "e => e.type"
-    ) == "text"
+    assert (
+        fresh_page.eval_on_selector("#wiz-pv_forecast_source-api_key", "e => e.type")
+        == "text"
+    )
 
 
 # ----------------------------------------------------------------------

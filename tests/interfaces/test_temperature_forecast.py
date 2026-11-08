@@ -34,23 +34,42 @@ def _hourly(values):
     return {"hourly": {"temperature_2m": list(values)}}
 
 
+@pytest.fixture(autouse=True)
+def no_retry_delay(monkeypatch):
+    """
+    The delay between attempts is real seconds, and the failure tests walk the whole
+    ladder. Patched on the shared ``time`` module because that is where the retry loop
+    in http_fetch reads it from.
+    """
+    monkeypatch.setattr("src.interfaces.http_fetch.time.sleep", lambda _s: None)
+
+
+def _patch_get(monkeypatch, fake_get):
+    """
+    Swap the module's ``requests`` for one whose ``get`` is ``fake_get``.
+
+    The module reference, not requests.get -- ``requests`` is one shared module
+    object and patching its ``get`` reaches every other caller in the process.
+    """
+    monkeypatch.setattr(
+        tf, "requests",
+        types.SimpleNamespace(get=fake_get, exceptions=requests.exceptions),
+    )
+
+
 @pytest.fixture(name="captured")
 def captured_fixture(monkeypatch):
     """Capture the request instead of making it."""
-    seen = {}
+    seen = {"timeouts": []}
 
     def fake_get(url, params=None, timeout=None):
         seen["url"] = url
         seen["params"] = params
         seen["timeout"] = timeout
+        seen["timeouts"].append(timeout)
         return seen.get("response", _Response(_hourly([10.0] * 48)))
 
-    # The module reference, not requests.get -- ``requests`` is one shared module
-    # object and patching its ``get`` reaches every other caller in the process.
-    monkeypatch.setattr(
-        tf, "requests",
-        types.SimpleNamespace(get=fake_get, exceptions=requests.exceptions),
-    )
+    _patch_get(monkeypatch, fake_get)
     return seen
 
 
@@ -127,6 +146,80 @@ def test_a_non_json_answer_is_reported_as_such(captured):
     with pytest.raises(tf.TemperatureForecastError) as excinfo:
         tf.fetch_openmeteo_temperature(48.8, 8.9, hours=48)
     assert "not JSON" in str(excinfo.value)
+
+
+class TestTheRetryLadder:
+    """
+    Same treatment as the other public forecast APIs (#358): a provider that is only
+    slow gets a second attempt with more time, rather than the same one twice.
+    """
+
+    def test_a_healthy_answer_costs_one_request(self, captured):
+        tf.fetch_openmeteo_temperature(48.8, 8.9, hours=48)
+
+        assert captured["timeouts"] == [5]
+
+    def test_the_second_attempt_gets_more_time(self, captured):
+        captured["response"] = _Response({}, status=503)
+
+        with pytest.raises(tf.TemperatureForecastError):
+            tf.fetch_openmeteo_temperature(48.8, 8.9, hours=48)
+
+        assert captured["timeouts"] == [5, 30]
+        assert captured["timeouts"] == list(tf.TEMPERATURE_TIMEOUTS)
+
+    def test_a_slow_provider_is_waited_out_instead_of_asked_twice(self, monkeypatch):
+        """The failure from #358, on the path most installations actually use."""
+        attempts = []
+
+        def slow_then_fine(_url, timeout=None, **_kwargs):
+            attempts.append(timeout)
+            if timeout < 30:
+                raise requests.exceptions.Timeout()
+            return _Response(_hourly([7.5] * 48))
+
+        _patch_get(monkeypatch, slow_then_fine)
+
+        values = tf.fetch_openmeteo_temperature(48.8, 8.9, hours=48)
+
+        assert attempts == [5, 30]
+        assert values[0] == 7.5
+
+    def test_the_timeout_message_names_what_was_tried(self, monkeypatch):
+        def always_times_out(*_args, **_kwargs):
+            raise requests.exceptions.Timeout()
+
+        _patch_get(monkeypatch, always_times_out)
+
+        with pytest.raises(tf.TemperatureForecastError) as excinfo:
+            tf.fetch_openmeteo_temperature(48.8, 8.9, hours=48)
+
+        assert "did not answer within 5/30 s" in str(excinfo.value)
+
+    @pytest.mark.parametrize("payload", [{}, _hourly([1.0, "warm", 3.0]), _hourly([500.0] * 48)])
+    def test_a_series_that_arrived_is_judged_once(self, captured, payload):
+        """
+        A series that is missing, non-numeric or implausible says the same thing
+        however often it is asked for - only the request is worth repeating.
+        """
+        captured["response"] = _Response(payload)
+
+        with pytest.raises(tf.TemperatureForecastError):
+            tf.fetch_openmeteo_temperature(48.8, 8.9, hours=48)
+
+        assert captured["timeouts"] == [5]
+
+    def test_a_body_that_is_not_json_at_all_is_retried(self, captured):
+        """
+        The other side of the line above: a body that never decoded is usually a
+        proxy's HTML error page, and that is as transient as a timeout.
+        """
+        captured["response"] = _Response(ValueError("not json"))
+
+        with pytest.raises(tf.TemperatureForecastError):
+            tf.fetch_openmeteo_temperature(48.8, 8.9, hours=48)
+
+        assert captured["timeouts"] == [5, 30]
 
 
 def test_the_schema_offers_exactly_the_providers_that_exist():

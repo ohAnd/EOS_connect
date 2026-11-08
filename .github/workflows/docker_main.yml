@@ -24,35 +24,15 @@ env:
   VERSION_PREFIX: 0.3.
 
 jobs:
-  pytest:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
-
-      - name: Install Chromium for the browser tests
-        # Without a browser, tests/web is skipped silently by the collect_ignore_glob
-        # in its conftest — so the setup wizard, the config page and the backup panel
-        # had no CI coverage at all despite having tests.
-        run: python -m playwright install --with-deps chromium
-
-      - name: Run unit and regression tests
-        run: python -m pytest -v tests/
+  tests:
+    # This is a gate on a shared branch, so everything runs regardless of the diff.
+    uses: ./.github/workflows/tests.yml
+    with:
+      full: true
 
   publish_image:
-    runs-on: ubuntu-latest
-    needs: pytest
+    runs-on: ubuntu-24.04
+    needs: tests
     steps:
       - name: Checkout
         uses: actions/checkout@v6

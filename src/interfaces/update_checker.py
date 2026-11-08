@@ -343,12 +343,13 @@ class UpdateChecker:
                     "[UPDATE-CHECK] Unexpected error in update check loop: %s", e
                 )
 
-            # Sleep until next check (in 1-second chunks for responsive shutdown)
+            # Wait in one-second chunks so a stop is acted on at once: Event.wait()
+            # returns the moment the event is set, where the time.sleep() this used
+            # to call could not be woken and held the thread for the rest of it.
             sleep_interval = self.check_interval
             while sleep_interval > 0:
-                if self._stop_event.is_set():
+                if self._stop_event.wait(min(1, sleep_interval)):
                     return
-                time.sleep(min(1, sleep_interval))
                 sleep_interval -= 1
 
     def shutdown(self):

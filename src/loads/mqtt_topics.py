@@ -111,6 +111,14 @@ def _topics_for(manager, item):
     }
 
     if item.type in THERMAL_TYPES:
+        topics[f"{base}/standby_w"] = {
+            "name": f"{label} Standby Power",
+            "unit": "W",
+            "type": "sensor",
+            "device_class": "power",
+            "icon": "mdi:transmission-tower-import",
+            "entity_category": "diagnostic",
+        }
         topics[f"{base}/temperature"] = {
             "name": f"{label} Temperature",
             "unit": "°C",
@@ -254,6 +262,8 @@ def build_values(manager):
 
             detail = demand.detail or {}
             if item.type in THERMAL_TYPES:
+                if item.standby_forecast_active() and item.last_standby_w is not None:
+                    values[f"{base}/standby_w"] = {"value": round(item.last_standby_w, 1)}
                 if "temperature_c" in detail:
                     values[f"{base}/temperature"] = {"value": detail["temperature_c"]}
                 if "target_temperature_c" in detail:

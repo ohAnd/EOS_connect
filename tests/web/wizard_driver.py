@@ -18,8 +18,8 @@ is genuinely empty from one that merely looks it.
 STEP_IDS = [
     "welcome",
     "eos",
-    "evcc",
     "data_source",
+    "evcc",
     "inverter",
     "battery",
     "load",
@@ -113,8 +113,7 @@ def field_value(page, key):
 
 def review_rows(page):
     """The review step's summary as ``{section title: {label: value}}``."""
-    return page.evaluate(
-        """() => {
+    return page.evaluate("""() => {
             const out = {};
             for (const sec of document.querySelectorAll('.wizard-review-section')) {
                 const title = sec.querySelector('h4').innerText.trim();
@@ -126,8 +125,7 @@ def review_rows(page):
                 out[title] = rows;
             }
             return out;
-        }"""
-    )
+        }""")
 
 
 # ── Interaction ─────────────────────────────────────────────────

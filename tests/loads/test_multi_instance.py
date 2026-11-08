@@ -162,6 +162,53 @@ def test_subtract_sensors_lists_what_must_leave_the_base_load(make_manager, inst
     assert manager.subtract_sensors() == ["sensor.pool_power"]
 
 
+def test_an_evcc_loadpoint_series_is_not_subtracted_from_the_base_load(make_manager):
+    """
+    The appliance EVCC meters as a loadpoint is already out of the base load.
+
+    EVCC computes its home meter as the site balance minus every loadpoint's
+    charging power, so a `group:loadpoint:<title>` series is not inside the
+    household history a profile is built from - subtracting it again asks the
+    load interface to take out something that is not there. On the install that
+    surfaced this, each heat-pump slot then read "household load smaller than
+    controllables" and nothing was subtracted, while the config claimed its
+    opposite. The whole-group form is excluded too: EVCC is net of all of them.
+    """
+    heat_pump = dict(
+        OPEN, id="heatpumpt_heating", type="buffer_tank", temp_sensor="sensor.dhw",
+        power_sensor="group:loadpoint:Wärmepumpe", target_temp=45.0,
+        rated_power_w=3500.0,
+    )
+    manager = make_manager([heat_pump])
+
+    assert manager.subtract_sensors() == []
+
+
+def test_an_evcc_whole_group_loadpoint_series_is_not_subtracted_either(make_manager):
+    """One wallbox or all of them - EVCC's home is net of every loadpoint either way."""
+    manager = make_manager([dict(
+        OPEN, id="wallbox", type="buffer_tank", temp_sensor="sensor.dhw",
+        power_sensor="group:loadpoint", target_temp=45.0,
+    )])
+
+    assert manager.subtract_sensors() == []
+
+
+def test_an_evcc_consumer_series_is_still_subtracted(make_manager):
+    """
+    A consumers is *not* in EVCC's loadpoint subtraction: what it draws reaches
+    the site balance the home meter reports, so its history is inside the base
+    load and asking for the subtraction is the ordinary case. The exclusion is
+    about loadpoints specifically, not about EVCC references in general.
+    """
+    manager = make_manager([dict(
+        OPEN, id="sauna", type="sauna", temp_sensor="sensor.sauna",
+        power_sensor="group:consumer:Sauna", target_temp=90.0,
+    )])
+
+    assert manager.subtract_sensors() == ["group:consumer:Sauna"]
+
+
 def test_a_disabled_load_is_not_subtracted(make_manager):
     manager = make_manager([dict(POOL, enabled=False)])
     assert manager.subtract_sensors() == []

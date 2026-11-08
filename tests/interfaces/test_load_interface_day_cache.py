@@ -306,15 +306,21 @@ def test_dst_end_day_is_unchanged():
     assert cached == per_slot
 
 
-def test_naive_local_bounds_are_unchanged():
-    """`time_zone: UTC` leaves the interface on naive local datetimes.
+def test_naive_bounds_are_read_in_the_configured_zone():
+    """Naive day bounds belong to the configured zone, not the host's.
 
-    The day bounds then arrive naive while Home Assistant answers in UTC, and both
-    have to land in the same frame or every slice comes back empty.
+    They arrive naive from ``__now()`` while Home Assistant answers in UTC, and
+    both have to land in the same frame or every slice comes back empty. Which
+    frame that is has to follow the setting: reading a naive bound on the host
+    clock instead is what shifted a whole load profile by the host's offset on
+    any container that did not happen to run the configured zone.
     """
     day_start = datetime(2026, 3, 3, 0, 0)
     series = _series(
-        day_start.astimezone(timezone.utc), DAY_VALUES, 15, {"unit_of_measurement": "W"}
+        day_start.replace(tzinfo=timezone.utc),
+        DAY_VALUES,
+        15,
+        {"unit_of_measurement": "W"},
     )
 
     per_slot, cached, _ = _both_ways(
@@ -585,7 +591,9 @@ def test_the_profile_is_built_once_per_day():
     config = dict(HA_CONFIG)
     config["car_charge_load_sensor"] = "sensor.car"
     config["additional_load_1_sensor"] = "sensor.hp"
-    interface = LoadInterface(config, 3600, "UTC")
+    # Placed, so its meter is read. Under an optimizer that does not place it the
+    # sensor is neither subtracted nor fetched - see the test below.
+    interface = LoadInterface(config, 3600, "UTC", places_additional_load=True)
 
     with _connected(fake), _frozen(today):
         first = interface.get_load_profile(48)
@@ -596,6 +604,26 @@ def test_the_profile_is_built_once_per_day():
     assert after_first == 12, "3 sensors x 4 days"
     assert len(fake.history_calls) == after_first, "later runs must not touch HA again"
     assert third == first
+
+
+def test_an_unplaced_additional_load_is_not_fetched_at_all():
+    """
+    Its history is only wanted to take it out of the profile, and that only happens
+    where something puts the energy back. One fewer sensor across four days.
+    """
+    today = datetime(2026, 3, 3, 9, 0, tzinfo=timezone.utc)
+    fake = _full_day_fake(today.replace(hour=0))
+    config = dict(HA_CONFIG)
+    config["car_charge_load_sensor"] = "sensor.car"
+    config["additional_load_1_sensor"] = "sensor.hp"
+    interface = LoadInterface(config, 3600, "UTC", places_additional_load=False)
+
+    with _connected(fake), _frozen(today):
+        interface.get_load_profile(48)
+
+    fetched = {call[0] for call in fake.history_calls}
+    assert "sensor.hp" not in fetched
+    assert fetched == {"sensor.house", "sensor.car"}
 
 
 def test_the_aggregation_is_not_re_run_either():

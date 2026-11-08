@@ -379,6 +379,121 @@ Array.from(document.getElementsByClassName("valueChange")).forEach(function (ele
     observer.observe(element, { characterData: false, childList: true, attributes: false });
 });
 
+// ---------------------------------------------------------------------------
+// Startup progress
+//
+// The web server answers about a second after launch now, long before the
+// interfaces behind it exist. /api/boot/status fills that window: while it
+// answers, the application is still coming up and the dashboard endpoints have
+// no data worth fetching. Once the real application takes over the port that
+// route is gone - a 404 is how we know we are through.
+// ---------------------------------------------------------------------------
+const bootProgress = {
+    _done: false,
+    _last: null,
+
+    /** Start watching again. Used after a restart has been triggered. */
+    reset() {
+        this._done = false;
+        this._last = null;
+    },
+
+    /** Current boot status, or null once the application is fully up. */
+    async fetchStatus() {
+        if (this._done) return null;
+        try {
+            const res = await fetch("api/boot/status", { cache: "no-store" });
+            if (res.status === 404) {
+                // The real application is serving: the boot app is gone.
+                this._done = true;
+                return null;
+            }
+            if (!res.ok) return this._last;
+            const data = await res.json();
+            // Anything that is not a boot status means we are not talking to the
+            // boot app: an older build without the route, a reverse proxy with a
+            // catch-all, or the test harness. Stop asking and let the dashboard
+            // load, rather than holding the overlay up forever on a stray {}.
+            if (typeof data.ready !== "boolean" || !Array.isArray(data.steps)) {
+                this._done = true;
+                return null;
+            }
+            this._last = data;
+            return this._last;
+        } catch (_) {
+            // Unreachable - mid-restart, or the server is still binding. Keep
+            // showing the last progress rather than falling through to the data
+            // fetch, which would paint "Connection Error" over a healthy start.
+            return this._last;
+        }
+    },
+
+    render(status) {
+        const waiting = document.getElementById("waiting_text");
+        const errorText = document.getElementById("waiting_error_text");
+        const overlay = document.getElementById("overlay");
+        const progress = document.getElementById("boot-progress");
+        const bar = document.getElementById("boot-progress-bar");
+        const label = document.getElementById("boot-progress-label");
+        const fatal = document.getElementById("boot-fatal");
+
+        if (overlay) overlay.style.display = "flex";
+        if (errorText) errorText.innerText = "";
+
+        if (status.fatal) {
+            if (waiting) waiting.innerText = "Startup stopped";
+            if (progress) progress.style.display = "none";
+            if (fatal) {
+                fatal.style.display = "block";
+                const msg = document.getElementById("boot-fatal-message");
+                if (msg) {
+                    msg.innerText = status.fatal.component
+                        + ": " + status.fatal.message;
+                }
+            }
+            return;
+        }
+
+        if (fatal) fatal.style.display = "none";
+        if (waiting) waiting.innerText = "Starting up ...";
+        if (progress) progress.style.display = "block";
+
+        const total = status.total || 1;
+        const done = status.done || 0;
+        if (bar) bar.style.width = Math.round((done / total) * 100) + "%";
+        if (label) {
+            label.innerText = status.current_label
+                ? "Step " + Math.min(done + 1, total) + " of " + total
+                    + " \u2014 " + status.current_label
+                : "Step " + done + " of " + total;
+        }
+    },
+
+    hide() {
+        const progress = document.getElementById("boot-progress");
+        const fatal = document.getElementById("boot-fatal");
+        if (progress) progress.style.display = "none";
+        if (fatal) fatal.style.display = "none";
+    },
+};
+
+// main.js is the last script the page loads, and config.js needs to re-arm this
+// after triggering a restart. A top-level const lives in the global *lexical*
+// scope, where even `typeof` throws for a script that runs before this one; the
+// window property is a plain lookup that cannot.
+window.bootProgress = bootProgress;
+
+// Wired here rather than inline in the HTML so the overlay markup stays free of
+// behaviour; showConfigurationMenu is defined in ui.js.
+document.addEventListener("DOMContentLoaded", () => {
+    const btn = document.getElementById("boot-fatal-config-btn");
+    if (btn) {
+        btn.addEventListener("click", () => {
+            if (typeof showConfigurationMenu === "function") showConfigurationMenu();
+        });
+    }
+});
+
 // Updated init function to use dataManager
 async function init() {
     try {
@@ -411,6 +526,16 @@ async function init() {
                 loggingManager.init();
             }, 1000);
         }
+
+        // Still coming up? Show how far it has got and stop here - the data
+        // endpoints have nothing yet, and reading localization off a placeholder
+        // would throw straight into the "Connection Error" branch below.
+        const bootStatus = await bootProgress.fetchStatus();
+        if (bootStatus && !bootStatus.ready) {
+            bootProgress.render(bootStatus);
+            return;
+        }
+        bootProgress.hide();
 
         // Fetch all data using the dataManager
         const allData = await dataManager.fetchAllData(isTestMode, currentTestScenario);

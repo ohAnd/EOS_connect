@@ -13,6 +13,11 @@
 # one in tests/interfaces/optimization_backends/test_optimization_backend_eos.py and
 # errors out 44 unrelated tests. Nothing here needs that plugin.
 pytest>=8.0
+# Used by the browser CI jobs (``-n auto``) and worth it for a local full run. The
+# suite is safe to split: servers bind on a free port rather than a fixed one, tests
+# write only under ``tmp_path``, and there are no async tests. Separate processes also
+# keep the shared ``requests`` monkeypatches from reaching each other.
+pytest-xdist>=3.5
 pylint>=3.0
 black>=24.0
 playwright>=1.40

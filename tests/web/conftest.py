@@ -2,11 +2,15 @@
 Browser-driven tests for the web UI.
 
 These need Playwright and a Chromium build, neither of which is in ``requirements.txt``
-— CI has no browser, so the whole directory is skipped there.  To run them locally::
+— they are marked ``browser`` and left out of the default run.  To run them locally::
 
     pip install playwright          # NOT pytest-playwright, see below
     playwright install chromium
-    pytest tests/web
+    pytest tests/web -m browser
+
+The ``-m browser`` is not optional: ``pytest.ini`` defaults to ``-m "not browser"``,
+so a bare ``pytest tests/web`` deselects every test in this directory and reports
+that nothing ran.
 
 Install ``playwright`` alone.  ``pytest-playwright`` depends on ``pytest-base-url``,
 whose ``base_url`` fixture is session-scoped and collides with the function-scoped
@@ -31,12 +35,12 @@ three ``config.yaml`` keys, so migration writes seven defaults and marks neither
 
 import logging
 import os
-import socket
 import threading
 from zoneinfo import ZoneInfo
 
 import pytest
 from flask import Flask, jsonify, make_response, render_template_string, send_from_directory
+from werkzeug.serving import make_server
 
 from src.config_web.api import config_bp, init_api
 from src.docs_links import DOCS_BASE_PREVIEW, DOCS_BASE_RELEASE
@@ -57,15 +61,6 @@ except ImportError:  # pragma: no cover - depends on the environment
     # directory rather than failing collection.
     collect_ignore_glob = ["test_*.py"]
 
-# Shared libraries unpacked by scripts/install_playwright_deps_userspace.sh, for hosts
-# where Chromium's dependencies cannot be apt-installed.  Chromium is a subprocess, so
-# it inherits this; harmless when the directory does not exist.
-_USER_LIBS = os.path.join(os.path.expanduser("~"), ".cache", "ms-playwright-deps", "lib")
-if os.path.isdir(_USER_LIBS):
-    os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(
-        [_USER_LIBS, os.environ.get("LD_LIBRARY_PATH", "")]
-    ).rstrip(os.pathsep)
-
 WEB_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "src", "web"
 )
@@ -78,12 +73,6 @@ BOOTSTRAP_ONLY_CONFIG = {
     "time_zone": "Europe/Berlin",
     "log_level": "info",
 }
-
-
-def _free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def _build_app(store, schema, module, docs_base=DOCS_BASE_RELEASE):
@@ -187,20 +176,38 @@ def _serve(tmp_path, db_name, bootstrap_config, *, migrate, docs_base=DOCS_BASE_
     pv_store.ensure_schema()
     module.pv_yield_store = pv_store
 
-    port = _free_port()
     app = _build_app(store, schema, module, docs_base=docs_base)
     # The dashboard polls several endpoints a second; its request log drowns out the
     # test output without saying anything useful.
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
+    # Bound here rather than inside the thread, and on port 0 rather than one
+    # picked beforehand. Starting a thread is not the same as being ready to
+    # accept, so the first page.goto could arrive before Flask was listening and
+    # fail with ERR_CONNECTION_REFUSED - seen twice in CI, green on a re-run.
+    # Asking for a port, closing it and letting the server bind it again left a
+    # second gap in between for anything else on the machine to take it.
+    # threaded=True is what app.run defaults to; the dashboard issues several
+    # requests at once and a serial server would queue them.
+    server = make_server("127.0.0.1", 0, app, threaded=True)
+    # The poll interval is how long shutdown() waits to be noticed, and this
+    # fixture is function scoped: at the default half-second it added some three
+    # minutes across the browser lane for nothing.
     thread = threading.Thread(
-        target=lambda: app.run(host="127.0.0.1", port=port, use_reloader=False),
-        daemon=True,
+        target=lambda: server.serve_forever(poll_interval=0.02), daemon=True
     )
     thread.start()
 
     try:
-        yield _Server(f"http://127.0.0.1:{port}", store, pv_store)
+        yield _Server(f"http://127.0.0.1:{server.port}", store, pv_store)
     finally:
+        # Every browser test gets its own server - the fixture is function
+        # scoped - and none of them used to end. Each left a listening socket
+        # and a thread alive for the rest of the session, several hundred of
+        # them by the end of the lane, which is exactly the condition under
+        # which a server is slow to come up.
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
         store.close()
 
 
@@ -237,26 +244,21 @@ def offline_timeseries_fixture(monkeypatch):
     monkeypatch.setattr(config_api, "probe", lambda *a, **kw: {"ok": True, "warnings": []})
 
 
-def _launch_browser(driver):
-    """Chromium, or a skip if this host cannot start it."""
-    try:
-        browser = driver.chromium.launch()
-    # Playwright raises a variety of errors for a browser that will not start
-    # (missing libraries, no sandbox, out of memory); all of them mean "skip".
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        pytest.skip(f"Chromium could not be launched: {exc}")
-    return browser
-
-
 def _open_page(browser, url):
-    """A page on *url* with the dashboard's CDN traffic blocked."""
+    """A page on *url*, in its own context, with the dashboard's CDN traffic blocked.
+
+    The context is what keeps tests apart now that the browser is shared across the
+    session: storage, cookies and routes all belong to it, and closing it in the
+    fixture teardown leaves nothing behind for the next test.
+    """
     # Pinned, because the dashboard reads the clock. `chart.js` turns the server's
     # timestamp into a slot index with `Date.getHours()`, which answers in the
     # *browser's* zone - so a chart assertion that holds on a developer's machine in
     # Berlin fails on a CI runner in UTC, six hours off and entirely plausible looking.
     # UTC is the choice because that is what CI already runs under: pinning it makes a
     # local run agree with the one that decides whether the branch is green.
-    page = browser.new_page(timezone_id="UTC")
+    context = browser.new_context(timezone_id="UTC")
+    page = context.new_page()
     # The page pulls FontAwesome, Chart.js and a font from CDNs. Blocking them keeps
     # the tests offline and fast; none of them affect the behaviour under test.
     page.route("**://cdnjs.cloudflare.com/**", lambda route: route.abort())
@@ -270,33 +272,41 @@ def _open_page(browser, url):
     return page
 
 
+def _suppress_startup_overlay(page):
+    """Keep the boot overlay down for the rest of the test.
+
+    Setting ``style.display`` once is not enough: ``main.js`` puts the overlay back
+    with ``display = 'flex'`` whenever a data response carries an error, and this
+    harness answers ``/api/*`` and ``/json/*`` with ``{}``, so the dashboard's
+    one-second poll re-raises it. Any test that took longer than that to reach its
+    first click then failed on "<div id=\"overlay\"> intercepts pointer events",
+    which is a race in the harness and nothing to do with what is under test.
+
+    A stylesheet wins over the inline style the app sets, so this holds. Only
+    ``page`` and ``develop_page`` get it — ``fresh_page`` must keep the real
+    behaviour, because the wizard hiding the overlay is itself under test.
+    """
+    page.add_style_tag(content="#overlay { display: none !important; }")
+
+
 @pytest.fixture(name="page")
-def page_fixture(server):
+def page_fixture(browser, server):
     """A browser page with the app open and the dashboard's own noise suppressed."""
-    # Imported here, not at module scope: the directory is skipped when Playwright is
-    # absent, and a top-level import would run before that check.
-    from playwright.sync_api import sync_playwright  # pylint: disable=import-outside-toplevel
+    page = _open_page(browser, server.url)
+    page.wait_for_function("typeof showBackupMenu === 'function'")
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        page = _open_page(browser, server.url)
-        page.wait_for_function("typeof showBackupMenu === 'function'")
-
-        # The startup overlay only clears once the dashboard has rendered its chart from
-        # real optimizer output, which this harness does not serve. It covers the menu
-        # icon, so dismiss it — booting the dashboard is not what these tests are about.
-        page.evaluate(
-            "() => { const o = document.getElementById('overlay');"
-            " if (o) { o.style.display = 'none'; } }"
-        )
-        try:
-            yield page
-        finally:
-            browser.close()
+    # The startup overlay only clears once the dashboard has rendered its chart from
+    # real optimizer output, which this harness does not serve. It covers the menu
+    # icon, so dismiss it — booting the dashboard is not what these tests are about.
+    _suppress_startup_overlay(page)
+    try:
+        yield page
+    finally:
+        page.context.close()
 
 
 @pytest.fixture(name="fresh_page")
-def fresh_page_fixture(fresh_server):
+def fresh_page_fixture(browser, fresh_server):
     """
     A browser page on a first install, with the Setup Wizard already open.
 
@@ -305,17 +315,13 @@ def fresh_page_fixture(fresh_server):
     ``init()`` polls once a second and calls ``checkWizardStatus()`` on every path, so
     the wizard arrives on its own — no test needs to summon it.
     """
-    from playwright.sync_api import sync_playwright  # pylint: disable=import-outside-toplevel
-
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        page = _open_page(browser, fresh_server.url)
-        page.wait_for_function("typeof showSetupWizard === 'function'")
-        page.wait_for_selector(".wizard-container")
-        try:
-            yield page
-        finally:
-            browser.close()
+    page = _open_page(browser, fresh_server.url)
+    page.wait_for_function("typeof showSetupWizard === 'function'")
+    page.wait_for_selector(".wizard-container")
+    try:
+        yield page
+    finally:
+        page.context.close()
 
 
 @pytest.fixture(name="develop_server")
@@ -332,19 +338,12 @@ def develop_server_fixture(tmp_path):
 
 
 @pytest.fixture(name="develop_page")
-def develop_page_fixture(develop_server):
+def develop_page_fixture(browser, develop_server):
     """A browser page on a develop build, dashboard noise suppressed as in ``page``."""
-    from playwright.sync_api import sync_playwright  # pylint: disable=import-outside-toplevel
-
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        page = _open_page(browser, develop_server.url)
-        page.wait_for_function("typeof showBackupMenu === 'function'")
-        page.evaluate(
-            "() => { const o = document.getElementById('overlay');"
-            " if (o) { o.style.display = 'none'; } }"
-        )
-        try:
-            yield page
-        finally:
-            browser.close()
+    page = _open_page(browser, develop_server.url)
+    page.wait_for_function("typeof showBackupMenu === 'function'")
+    _suppress_startup_overlay(page)
+    try:
+        yield page
+    finally:
+        page.context.close()
