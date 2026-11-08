@@ -6,6 +6,7 @@ over the manager, which is the whole reason the mapping lives outside the interf
 """
 
 import json
+import threading
 
 import pytest
 
@@ -246,6 +247,7 @@ def _bare_interface():
 
     interface = MqttInterface.__new__(MqttInterface)
     interface.enable_mqtt = True
+    interface._registry_lock = threading.Lock()  # pylint: disable=protected-access
     interface.ha_auto_discovery = False
     interface.base_topic = "eos_connect"
     interface.topics_publish = {}
