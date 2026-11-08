@@ -7,7 +7,11 @@ from unittest.mock import Mock
 import pytest
 import pytz
 
-from src.interfaces.price_interface import PriceInterface, whole_local_days_covered
+from src.interfaces.price_interface import (
+    PriceInterface,
+    is_contiguous,
+    whole_local_days_covered,
+)
 
 # Accessing protected members is fine in white-box tests.
 # pylint: disable=protected-access
@@ -632,3 +636,233 @@ class TestACompleteDayIsMeasuredNotCounted:
         assert (
             whole_local_days_covered(self._day("2026-10-20", 96), 0, self.BERLIN) == 0
         )
+
+
+class TestAPartialDayIsNotAnAlert:
+    """
+    EVCC's contract is future rates, not whole calendar days.
+
+    Its ``SlotWrapper`` expands any tariff that is not natively 15-minute onto
+    a 15-minute grid and drops every slot that ended before the current
+    period (``tariff/slots.go``: "only keep slots >= now"). Users on an hourly
+    tariff therefore get a part-day starting at "now" - 64 entries when the
+    fetch runs at 08:00 - and that raised a WARNING, and so a UI alert, on
+    every single run while the fallback below quietly did the right thing.
+
+    Natively 15-minute tariffs skip the wrapper (``tariff/config.go``) and
+    still arrive as whole days, which is why the shape went unreported for a
+    year. Both are valid EVCC; only a series with a hole is a fault.
+
+    See issue #342.
+    """
+
+    ZONE = ZoneInfo("Europe/Berlin")
+    # 08:00 local on an ordinary day: 16 hours left, 64 quarter-hour slots.
+    ANCHOR = datetime(2026, 11, 10, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+    FETCHED_AT = datetime(2026, 11, 10, 8, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+
+    def _wrapper_shaped_rates(self, drop_index=None):
+        """What EVCC's SlotWrapper serves for an hourly tariff fetched at 08:00.
+
+        Quarter-hour slots whose values are constant across each source hour,
+        starting at the current period and running to midnight. Pass
+        *drop_index* to punch a hole in it.
+        """
+        rates = []
+        cursor = self.FETCHED_AT
+        midnight = self.ANCHOR + timedelta(days=1)
+        index = 0
+        while cursor < midnight:
+            nxt = cursor + timedelta(minutes=15)
+            if index != drop_index:
+                rates.append(
+                    {
+                        "start": cursor.isoformat(),
+                        "end": nxt.isoformat(),
+                        # Constant per source hour, as the wrapper leaves them.
+                        "value": 0.30 + (cursor.hour % 6) * 0.01,
+                    }
+                )
+            cursor = nxt
+            index += 1
+        return rates
+
+    def _interface(self, monkeypatch, rates, forecast=None, cached=None):
+        """A 15-minute PriceInterface wired to *rates*, fallbacks under control."""
+        monkeypatch.setattr(
+            PriceInterface, "_PriceInterface__start_update_service", lambda self: None
+        )
+
+        def fake_get(url, headers=None, timeout=None):
+            class R:
+                """Minimal stand-in for the requests response."""
+
+                def raise_for_status(self):
+                    """The stub never fails."""
+
+                def json(self):
+                    """Only the grid endpoint is stubbed."""
+                    if "/api/tariff/grid" in url:
+                        return {"rates": rates}
+                    return {"error": "unknown"}
+
+            return R()
+
+        monkeypatch.setattr("src.interfaces.price_interface.requests.get", fake_get)
+
+        price_iface = PriceInterface(
+            {"source": "evcc"},
+            time_frame_base=900,
+            timezone=self.ZONE,
+            evcc_interface=Mock(url="http://evcc.local:7070"),
+        )
+        monkeypatch.setattr(
+            price_iface,
+            "_fetch_adaptive_energyforecast_fallback",
+            lambda **kwargs: (
+                [0.25] * kwargs["num_missing_hours"] if forecast else []
+            ),
+        )
+        if cached is not None:
+            price_iface.last_successful_prices = cached
+        return price_iface
+
+    def _run(self, price_iface):
+        price_iface.update_prices(192, start_time=self.ANCHOR)
+        return price_iface.get_current_prices()
+
+    @staticmethod
+    def _price_warnings(caplog):
+        return [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING" and "[PRICE-IF]" in r.getMessage()
+        ]
+
+    def test_the_normal_rolling_part_day_raises_no_alert(self, monkeypatch, caplog):
+        """The shape from issue #342: served correctly, and silently."""
+        price_iface = self._interface(
+            monkeypatch, self._wrapper_shaped_rates(), forecast=True
+        )
+        with caplog.at_level("DEBUG"):
+            prices = self._run(price_iface)
+
+        assert len(prices) == 192
+        assert self._price_warnings(caplog) == []
+        assert "EVCC published a partial day: 64 entries" in caplog.text
+        assert price_iface.get_forecast_metadata()["forecast_type"] == "smart_forecast"
+
+    def test_a_hole_in_the_rates_still_warns(self, monkeypatch, caplog):
+        """A gap makes the real head untrustworthy, whatever fills the tail."""
+        price_iface = self._interface(
+            monkeypatch, self._wrapper_shaped_rates(drop_index=20), forecast=True
+        )
+        with caplog.at_level("DEBUG"):
+            self._run(price_iface)
+
+        assert any(
+            "EVCC rates are not contiguous" in message
+            for message in self._price_warnings(caplog)
+        )
+
+    def test_the_cache_fallback_is_also_silent(self, monkeypatch, caplog):
+        """Yesterday's prices are a real source, so no alert either."""
+        price_iface = self._interface(
+            monkeypatch,
+            self._wrapper_shaped_rates(),
+            forecast=False,
+            cached=[0.00022] * 192,
+        )
+        with caplog.at_level("DEBUG"):
+            prices = self._run(price_iface)
+
+        assert len(prices) == 192
+        assert self._price_warnings(caplog) == []
+        assert price_iface.get_forecast_metadata()["forecast_type"] == "fallback_history"
+
+    def test_no_fallback_at_all_does_warn(self, monkeypatch, caplog):
+        """Invented prices with nothing behind them stay worth an alert."""
+        price_iface = self._interface(
+            monkeypatch, self._wrapper_shaped_rates(), forecast=False, cached=[]
+        )
+        with caplog.at_level("DEBUG"):
+            self._run(price_iface)
+
+        assert any(
+            "no fallback available" in message
+            for message in self._price_warnings(caplog)
+        )
+        assert (
+            price_iface.get_forecast_metadata()["forecast_type"] == "simple_repetition"
+        )
+
+
+class TestContiguityIsItsOwnQuestion:
+    """``is_contiguous`` answers only "any holes?", not "a whole day?"."""
+
+    ZONE = ZoneInfo("Europe/Berlin")
+
+    def _series(self, slots, resolution_seconds=900, drop_index=None):
+        start = datetime(2026, 11, 10, 8, 0, tzinfo=self.ZONE)
+        step = timedelta(seconds=resolution_seconds)
+        cursor = start.astimezone(timezone.utc)
+        entries = []
+        for index in range(slots):
+            nxt = cursor + step
+            if index != drop_index:
+                entries.append(
+                    {
+                        "start": cursor.astimezone(self.ZONE),
+                        "end": nxt.astimezone(self.ZONE),
+                        "value": 0.3,
+                    }
+                )
+            cursor = nxt
+        return entries
+
+    def test_a_gapless_part_day_is_contiguous(self):
+        assert is_contiguous(self._series(64), 900) is True
+
+    def test_a_hole_is_not_contiguous(self):
+        assert is_contiguous(self._series(64, drop_index=20), 900) is False
+
+    def test_a_duplicated_slot_is_not_contiguous(self):
+        """One entry too many for the span it covers - the overlap case."""
+        entries = self._series(4)
+        entries.insert(2, dict(entries[1]))
+        assert is_contiguous(entries, 900) is False
+
+    def test_a_shift_inside_the_series_is_not_detected(self):
+        """The edges and the count still agree, so this one slips through.
+
+        Pinned deliberately: the check is a cheap span measurement, not a
+        pairwise walk, and callers must not read a True as "every boundary
+        lines up".
+        """
+        entries = self._series(4)
+        entries[2]["start"] = entries[1]["start"]
+        assert is_contiguous(entries, 900) is True
+
+    def test_an_empty_series_is_not_contiguous(self):
+        assert is_contiguous([], 900) is False
+
+    def test_a_missing_resolution_is_not_contiguous(self):
+        assert is_contiguous(self._series(4), None) is False
+
+    def test_the_day_the_clock_goes_back_is_still_contiguous(self):
+        """100 quarter-hours across the transition must not read as a gap."""
+        start = datetime(2026, 10, 25, 0, 0, tzinfo=self.ZONE)
+        cursor = start.astimezone(timezone.utc)
+        entries = []
+        for _ in range(100):
+            nxt = cursor + timedelta(minutes=15)
+            entries.append(
+                {
+                    "start": cursor.astimezone(self.ZONE),
+                    "end": nxt.astimezone(self.ZONE),
+                    "value": 0.3,
+                }
+            )
+            cursor = nxt
+        assert is_contiguous(entries, 900) is True
+        assert whole_local_days_covered(entries, 900, pytz.timezone("Europe/Berlin")) == 1

@@ -10,6 +10,8 @@ interface it was noticed in.
 
 import requests
 
+from .evcc_entities import is_evcc_reference, evcc_entity_parts
+
 SUPPORTED_SOURCES = ("homeassistant", "openhab", "evcc")
 
 
@@ -57,6 +59,73 @@ def _evcc_path(payload, path):
             return None
         current = current.get(part)
     return current
+
+
+def _evcc_series_power(payload, name):
+    """
+    A series reference's current power from the state document, in watts.
+
+    A history series like ``group:loadpoint:Wärmepumpe`` is not a dotted path:
+    the document carries no key by that name, and its power lives in a list of
+    objects matched by title. EVCC meters every loadpoint as the charging it does
+    (`chargePower`), each consumer by its `power`, and the site groups in
+    `pvPower`/`homePower`/`grid.power` - the same series the energy history
+    integrates. None when the group or its entry is not in the document, which
+    is the caller's sign to answer "" the way an absent path does.
+
+    Titles resolve case-insensitively: EVCC's titles come from the user and the
+    energy page nowhere promises any casing.
+    """
+    entity = evcc_entity_parts(name)
+    if entity is None:
+        return None
+    group, title = entity
+
+    def _num(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    if group == "loadpoint":
+        if title is None:
+            return None
+        for lp in payload.get("loadpoints") or ():
+            if str(lp.get("title", "")).strip().lower() == title.strip().lower():
+                return _num(lp.get("chargePower"))
+        return None
+    if group == "consumer":
+        if title is None:
+            return None
+        for consumer in payload.get("consumers") or ():
+            if str(consumer.get("title", "")).strip().lower() == title.strip().lower():
+                return _num(consumer.get("power"))
+        return None
+
+    key = {"home": "homePower", "pv": "pvPower"}.get(group)
+    if key is not None:
+        return _num(payload.get(key))
+    if group == "grid":
+        grid = payload.get("grid") or {}
+        return _num(grid.get("power") if isinstance(grid, dict) else None)
+    if group == "battery":
+        battery = payload.get("battery") or {}
+        return _num(battery.get("power") if isinstance(battery, dict) else None)
+    return None
+
+
+def _evcc_state_value(payload, name):
+    """
+    The value one configured name has in the state document.
+
+    Two shapes answer here: a dotted key into the document (`battery.soc`) and
+    a series reference, whose live power sits in the objects the document
+    carries rather than under a key the reference names. None when neither
+    names anything.
+    """
+    if is_evcc_reference(name):
+        return _evcc_series_power(payload, name)
+    return _evcc_path(payload, name)
 
 
 def needs_access_token(source) -> bool:
@@ -109,7 +178,7 @@ def fetch_remote_state(
         }
     elif source == "evcc":
         payload = fetch_evcc_state(base, request_timeout, ssl_ignore)
-        value = _evcc_path(payload, sensor)
+        value = _evcc_state_value(payload, sensor)
         return "" if value is None else str(value).strip()
     else:
         raise ValueError(f"Unknown source: {source}")
@@ -154,7 +223,7 @@ def fetch_remote_state_details(
         }
     elif source == "evcc":
         payload = fetch_evcc_state(base, request_timeout, ssl_ignore)
-        value = _evcc_path(payload, sensor)
+        value = _evcc_state_value(payload, sensor)
         return {
             "state": "" if value is None else str(value).strip(),
             "unit": "",

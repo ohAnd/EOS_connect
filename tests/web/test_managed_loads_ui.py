@@ -1313,3 +1313,90 @@ def test_a_good_fit_carries_no_warning(page):
                                     "cop_samples": 20, "fit_quality": 0.9})
     assert "Only part of this store" not in html
     assert "measured" in html
+
+
+# ── What the overlay says these loads are (issue #362) ───────────────────────────
+
+def _headline(page, loads, total_wh):
+    return page.evaluate(
+        """([loads, total]) => controlsManager._managedLoadsHeadline(loads, total)""",
+        [loads, total_wh],
+    )
+
+
+def test_a_forecast_load_is_described_as_forecast(page):
+    """
+    The flag it used to read said only that the optimizer *can* place loads, so on an
+    install running the built-in solver a pushed profile was announced as "scheduled by
+    the optimizer" - and the one true line about it, that it is in the load forecast,
+    was the one suppressed.
+    """
+    _open_overlay(page)
+    text = _headline(page, [{"id": "heating", "scheduled_by_optimizer": False}], 1410)
+
+    assert "1.4 kWh" in text
+    assert "added to the load forecast" in text
+    assert "scheduled by the optimizer" not in text
+
+
+def test_a_placed_load_is_still_described_as_placed(page):
+    _open_overlay(page)
+    text = _headline(page, [{"id": "pool", "scheduled_by_optimizer": True}], 0)
+
+    assert "scheduled by the optimizer" in text
+    assert "added to the load forecast" not in text
+
+
+def test_a_mixed_install_gets_told_about_both(page):
+    """One pool the solver times and one profile it does not - both are true at once."""
+    _open_overlay(page)
+    text = _headline(page, [
+        {"id": "pool", "scheduled_by_optimizer": True},
+        {"id": "heating", "scheduled_by_optimizer": False},
+    ], 1410)
+
+    assert "1 scheduled by the optimizer" in text
+    assert "1.4 kWh" in text
+    assert "added to the load forecast" in text
+
+
+def test_a_forecast_load_reports_a_forecast_not_a_demand(page):
+    """
+    "Energy needed 0.0 kWh" over a strip full of bars is what sent issue #362. Nothing
+    worked out what this load ought to use; something told us what it will.
+    """
+    _open_overlay(page)
+    page.evaluate(
+        """() => {
+            const load = {id: 'heating', type: 'external_profile', enabled: true,
+                reason: 'pushed by an external system', energy_needed_wh: 0,
+                planned_wh: 1410, plan: [], plan_reasons: [], model: {},
+                release: null, detail: {}, scheduled_by_optimizer: false};
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadCard(load, 900, 0, false);
+        }"""
+    )
+    shown = page.text_content("#full_screen_content")
+
+    assert "Energy forecast" in shown
+    assert "1.4 kWh" in shown
+    assert "Energy needed" not in shown
+
+
+def test_a_load_with_a_real_demand_still_says_needed(page):
+    _open_overlay(page)
+    page.evaluate(
+        """() => {
+            const load = {id: 'pool', type: 'pool_heatpump', enabled: true,
+                reason: 'below target', energy_needed_wh: 5000, planned_wh: 5000,
+                plan: [], plan_reasons: [], model: {}, release: null, detail: {},
+                plan_summary: {slots: 192, planned: 40, limited_by: null,
+                               limited_slots: 0, counts: {}}};
+            document.getElementById('full_screen_content').innerHTML =
+                controlsManager._managedLoadCard(load, 900, 0, true);
+        }"""
+    )
+    shown = page.text_content("#full_screen_content")
+
+    assert "Energy needed" in shown
+    assert "Energy forecast" not in shown

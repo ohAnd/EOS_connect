@@ -44,6 +44,12 @@ class EOSBackend:
     Accepts and returns EOS-format requests/responses.
     """
 
+    # EOS places the `dishwasher` device itself and reports where it put it in
+    # `Home_appliance_wh_per_hour`. Declared so the caller knows the Additional Load's
+    # measured history may leave the household profile: it only may where something
+    # puts the energy back. See the comment on `LoadInterface.places_additional_load`.
+    places_home_appliance = True
+
     def __init__(self, base_url, time_frame_base, time_zone):
         self.base_url = base_url
         self.time_frame_base = time_frame_base

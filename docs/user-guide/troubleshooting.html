@@ -268,6 +268,35 @@ KeyError: 0</code></pre>
                             it is logged. Log excerpts from this message are safe to paste into a
                             bug report.</p>
 
+                        <h3 id="tb-evcc-price-partial">EVCC supplies only part of the day</h3>
+                        <p><strong>What you see:</strong> with <code>price.source</code> set to
+                            <code>evcc</code>, the log reports fewer rates than the 48-hour horizon
+                            needs, and the chart marks part of the price curve as forecast:</p>
+                        <pre><code>[PRICE-IF] EVCC published a partial day: 64 entries from 08:00 to 00:00
+[PRICE-IF] EVCC sent 64 entries covering 64 real price slots, need 192 total</code></pre>
+                        <p>This is normal. EVCC serves <em>future</em> rates: for any tariff that is not
+                            natively quarter-hourly it drops the slots that have already ended, so a
+                            fetch at 08:00 returns the 64 quarter-hours left in the day. Tariffs that
+                            already publish quarter-hourly skip that step and arrive as whole days, so
+                            what you see depends on your tariff, not on your settings.</p>
+                        <p>EOS Connect fills the remainder itself &mdash; first from the
+                            <a href="config-price.html#energyforecast">smart forecast</a>, then from the last
+                            prices it stored. Both are reported at info level and need no action.</p>
+                        <p><strong>When it does need a look:</strong> two cases are logged as warnings
+                            and show up as alerts.</p>
+                        <pre><code>[PRICE-IF] EVCC rates are not contiguous: 63 entries at 900s do not fill
+  the span from 08:00 to 00:00 - the series has a gap or an overlap</code></pre>
+                        <p>The rates EVCC delivered have a hole in them, so the prices before the gap
+                            cannot be trusted either. Check the tariff in EVCC itself &mdash; its own log
+                            usually names the provider request that failed.</p>
+                        <pre><code>[PRICE-IF] EVCC incomplete and no fallback available (energyforecast
+  unreachable, no cached prices) - repeating today's prices for the 128
+  remaining slots</code></pre>
+                        <p>Nothing was available to fill the gap, so the rest of the horizon repeats
+                            today's curve. Expect this once shortly after a restart, before the first
+                            successful run has stored a price curve. If it persists, check that
+                            energyforecast.de is reachable from the container.</p>
+
                         <h3 id="tb-optimization-pause">The optimization pauses for a whole quarter hour</h3>
                         <p><strong>Symptom:</strong> in quarter-hourly mode the optimization usually runs
                             several times per slot, but now and then the log shows a pause of a full

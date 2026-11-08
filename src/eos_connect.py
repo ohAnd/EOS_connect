@@ -399,7 +399,34 @@ load_interface = interface_factory.create_load_interface(
     # here would leave its history subtracted from the base load until a restart,
     # which reads as a household that is lighter than it really is.
     extra_subtract_sensors=load_manager.subtract_sensors,
+    # The Additional Load is handed to the optimizer as a shiftable appliance, so its
+    # measured history leaves the base load - but only EOS places it. EVopt reads no
+    # such device and returns a zero appliance array, so under it the subtraction had
+    # nothing putting the energy back and the appliance simply vanished from the
+    # forecast. A plain value, not a callable: `eos.source` needs a restart anyway.
+    places_additional_load=eos_interface.places_home_appliance,
 )
+
+# Configured and ignored is the worst of the three states, so it gets said out loud
+# once. The energy is no longer lost - it stays in the household forecast - but the
+# shifting the setting promises does not happen, and nothing else on the page would
+# tell anyone that.
+if (
+    config_manager.config.get("load", {}).get("additional_load_1_sensor", "")
+    and not eos_interface.places_home_appliance
+):
+    startup_validator.add_error(
+        "configuration",
+        "additional_load",
+        "warning",
+        "Additional Load is not placed by this optimizer",
+        "An Additional Load sensor is configured, but only the EOS Server backend "
+        "schedules that appliance. Its consumption stays in the household load "
+        "forecast at the times it ran historically, and no start time is published. "
+        "Configure it as a Managed Load to have the optimizer choose when it runs.",
+        action_required=False,
+        config_link="#load",
+    )
 
 # Build the load profile now rather than inside the first optimizer run. It is derived
 # from four finished historical days, so it changes only at midnight and the interface
@@ -1068,6 +1095,14 @@ def _deferred_inverter_initialization():
         logger.info("[Main] Inverter is ready for control")
 
 
+# What the managed loads contributed to the last request, per load, in the same
+# midnight-anchored slot space as `gesamtlast` and discounted for the partial slot the
+# same way. The chart draws it as its own band and takes it back out of the Load bar;
+# without it a forecast load is in the Load bar with nothing to say so, which is what
+# issue #362 reported. Set on every run of `create_optimize_request`.
+last_managed_forecast = {}
+
+
 # summarize all date
 def create_optimize_request():
     """
@@ -1120,7 +1155,9 @@ def create_optimize_request():
         # Managed loads join the household profile here, and nowhere else. Applied
         # before the partial-slot scaling below so the in-progress slot is discounted
         # once, consistently, for base load and contributions alike.
-        gesamtlast = load_manager.apply(gesamtlast, time_frame_base)
+        gesamtlast, managed_forecast = load_manager.apply(
+            gesamtlast, time_frame_base, per_load=True
+        )
 
         eos_source_for_scale = config_manager.config.get("eos", {}).get(
             "source", "eos_server"
@@ -1156,6 +1193,15 @@ def create_optimize_request():
                         current_slot + 1,
                         ts[current_slot],
                     )
+            # The contributions ride along: they are part of the figure that was just
+            # discounted, and a band the chart subtracts from the Load bar has to have
+            # had the same arithmetic done to it or the current slot goes negative.
+            for series in managed_forecast.values():
+                if series and len(series) > current_slot:
+                    series[current_slot] *= scale_factor
+
+        global last_managed_forecast  # pylint: disable=global-statement
+        last_managed_forecast = managed_forecast
 
         return {
             "pv_prognose_wh": pv_prognose_wh,
@@ -1647,6 +1693,19 @@ class OptimizationScheduler:
               necessary configuration values for "eos.timeout" and "refresh_time".
         """
         logger.info("[Main] start new run")
+        # Contingent loads reach a solver that can place them as something to schedule,
+        # beside the request rather than inside it: that dict is posted verbatim to an
+        # EOS server, which validates what it is sent, and no other backend could use
+        # them anyway.
+        #
+        # Asked *before* the request is built, and that order is load-bearing: a load
+        # the fallback planner had taken over gives its placement back as it is
+        # offered, and the household profile below must be assembled after that, or it
+        # carries the energy the solver is about to place a second time.
+        managed_records = None
+        if getattr(eos_interface, "schedules_managed_loads", False):
+            managed_records = load_manager.schedulable()
+
         # create optimize request
         json_optimize_input = create_optimize_request()
         self.__set_state_request()
@@ -1659,13 +1718,7 @@ class OptimizationScheduler:
         mqtt_interface.update_publish_topics(
             {"optimization/state": {"value": self.get_current_state()["request_state"]}}
         )
-        # Contingent loads reach a solver that can place them as something to schedule,
-        # beside the request rather than inside it: that dict is posted verbatim to an
-        # EOS server, which validates what it is sent, and no other backend could use
-        # them anyway.
-        managed_records = None
-        if getattr(eos_interface, "schedules_managed_loads", False):
-            managed_records = load_manager.schedulable()
+        if managed_records is not None:
             optimized_response, avg_runtime = eos_interface.optimize(
                 json_optimize_input,
                 managed_loads=managed_records,
@@ -1709,6 +1762,10 @@ class OptimizationScheduler:
             int((response_now - response_anchor).total_seconds()) // time_frame_base
         )
         optimized_response["anchor"] = response_anchor.isoformat()
+        # The managed loads that are part of `gesamtlast` rather than something the
+        # solver placed. Attached here, after the request went out, because it is ours
+        # alone: an EOS server validates what it is posted and would reject the key.
+        optimized_response["managed_load_forecast"] = last_managed_forecast
         self.last_request_response["response"] = json.dumps(
             optimized_response, indent=4
         )
@@ -1737,10 +1794,13 @@ class OptimizationScheduler:
         ) = eos_interface.examine_response_to_control_data(optimized_response)
         # Settle each load's gate on what the optimizer decided, before anything else
         # acts on the response. A load the optimizer did not answer for keeps the plan
-        # the managed-load module worked out on its own.
-        if optimized_response.get("managed_loads"):
+        # the managed-load module worked out on its own - which is why this runs
+        # whenever loads were offered at all, not only when something came back: "the
+        # run is over" is news even for a run that placed nothing, and a load that was
+        # handed out and left unanswered has no placement anywhere until it is told.
+        if managed_records is not None:
             load_manager.adopt_schedules(
-                optimized_response["managed_loads"],
+                optimized_response.get("managed_loads") or {},
                 cost=optimized_response.get("managed_loads_cost"),
             )
 
@@ -2005,6 +2065,11 @@ with BOOT.step("scheduler"):
     optimization_scheduler = OptimizationScheduler(
         config_manager.config["refresh_time"] * 60  # convert to seconds
     )
+    # The managed-load manager judges "no schedule for a while" against the cadence
+    # the schedule actually arrives at, not against its own poll cycle: a fixed guess
+    # shorter than the optimizer's cadence had the fallback planner publishing into
+    # the household forecast on top of a solver that was merely about to run.
+    load_manager.scheduler_interval = optimization_scheduler.update_interval
 
 
 def change_control_state():

@@ -701,7 +701,7 @@ _ALL_FIELDS: list[FieldDef] = [
         default=0,
         section="load",
         level="standard",
-        description="Runtime for additional load 1 in minutes (0 = not used)",
+        description="Runtime for additional load 1 in hours (0 = not used)",
         labels=["restart_required"],
         help_url="config-data.html#load",
         validation={"min": 0},
@@ -2549,7 +2549,8 @@ _ALL_FIELDS: list[FieldDef] = [
             "Remove this load's measured history from the household base load. Leave on "
             "unless the sensor named above overlaps another one already being "
             "subtracted - turning it off then makes the forecast count this appliance "
-            "twice"
+            "twice. An EVCC loadpoint series (group:loadpoint:...) is always already "
+            "outside the group:home meter, so it is never subtracted regardless"
         ),
         labels=["restart_required"],
         help_url="config-managed-loads.html#managed-loads-sensor",
@@ -2706,6 +2707,26 @@ _ALL_FIELDS: list[FieldDef] = [
         hot_reload=True,
         help_url="config-managed-loads.html#managed-load-profiles",
         validation={"min": 1, "max": 100000},
+        display_group="Physical",
+    ),
+    FieldDef(
+        key="managed_loads.standby_threshold_w",
+        field_type="float",
+        default=0,
+        section="managed_loads",
+        level="standard",
+        description=(
+            "Watts this appliance's own systems draw permanently even when it is not "
+            "running - circulation pumps, controls, standby electronics. Measured "
+            "power at or below this counts as that permanent draw: it stays in the "
+            "household load forecast and stays out of the appliance's calibration and "
+            "planning; anything above it is the appliance actually running. Leave 0 "
+            "when the sensor output falls to nearly nothing when off"
+        ),
+        hot_reload=True,
+        help_url="config-managed-loads.html#managed-loads-standby",
+        validation={"min": 0, "max": 2000},
+        depends_on={"type": MANAGED_LOAD_THERMAL_TYPES},
         display_group="Physical",
     ),
     FieldDef(
