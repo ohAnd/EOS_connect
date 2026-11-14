@@ -19,6 +19,7 @@ it:
 
 import logging
 
+from .. import efficiency as slot_efficiency
 from ..contribution import align_series
 from ..injection import PushedContingent, PushedProfile
 from .base import KIND_CONTINGENT, KIND_PROFILE, BaseDemandModel, EnergyDemand
@@ -107,17 +108,24 @@ class ExternalPushModel(BaseDemandModel):
             feasible=[True] * ctx.slot_count,
             max_power_w=float(self.config.get("rated_power_w", 0) or 0),
             # Aligned like a profile, with 0.0 - "no data" - turned back into 1.0.
+            # Only where the load is configured to take it. This model has no COP of
+            # its own, so `cop` has nothing to compute from - and handing the pushed
+            # series over for it would make the setting say one thing and do another.
             efficiency=[
                 value if value > 0 else 1.0
                 for value in align_series(
                     push.efficiency, self._anchor, ctx.anchor,
                     ctx.time_frame_base, ctx.slot_count,
                 )
-            ] if push.efficiency else [],
+            ] if push.efficiency and self._takes_pushed_efficiency() else [],
             deadline_slot=push.deadline_slot,
             reason=REASON_PUSHED,
             detail={"active": push.total_wh > 0},
         )
+
+    def _takes_pushed_efficiency(self):
+        """Whether this load is configured to plan on what the sender sent."""
+        return slot_efficiency.source_of(self.config) == slot_efficiency.SOURCE_PUSHED
 
     def _nothing(self, ctx, reason):
         return EnergyDemand(

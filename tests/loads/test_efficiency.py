@@ -221,6 +221,21 @@ def test_a_pushed_efficiency_is_used_when_asked_for():
     assert instance.last_demand.efficiency[20] == 1.0
 
 
+def test_cop_on_a_load_with_no_model_does_not_borrow_the_pushed_series():
+    """
+    `cop` means "the load's own efficiency at each hour's air temperature".
+
+    An external budget has no model and therefore no COP. Handing it the sender's
+    series for that setting would have `cop` and `pushed` do the same thing here,
+    and the setting would say one thing while doing another.
+    """
+    ctx = _ctx()
+    instance = _instance(efficiency_source="cop")
+    _push(instance, {"total_wh": 2000, "efficiency": [0.5] * 24}, ctx)
+    instance.evaluate(ctx)
+    assert instance.last_demand.efficiency == []
+
+
 def test_the_house_preset_plans_by_its_cop():
     temps = _autumn_day()
     ctx = _ctx(temps)

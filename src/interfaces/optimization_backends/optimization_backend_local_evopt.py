@@ -498,7 +498,9 @@ class LocalEVOptBackend(EVOptBackend):
             )
         except (KeyError, TypeError, ValueError):
             logger.warning(
-                "[OPT-LocalEVopt] unreadable thermal store - planning it by energy"
+                "[OPT-LocalEVopt] unreadable thermal store - falling back to the "
+                "load's energy demand, and where it has none the load is left to "
+                "plan itself this cycle"
             )
             return None
 
