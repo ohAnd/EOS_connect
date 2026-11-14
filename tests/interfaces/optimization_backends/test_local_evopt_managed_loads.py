@@ -928,3 +928,42 @@ def test_two_days_at_quarter_hours_solve_in_reasonable_time():
     result = opt.solve()
     assert result["status"] == "Optimal"
     assert time.time() - started < 20.0
+
+
+def test_a_store_that_leaks_faster_than_it_holds_stays_a_store():
+    """
+    A slot may lose at most the whole store.
+
+    The temperature step is explicit in the loss, so once an hour's loss exceeds the
+    capacity the ``capacity - loss`` coefficient turns negative: the colder the store
+    was, the hotter the model says it gets. Out of reach for a house, not for a small
+    barely insulated one on hourly slots - and it would not look like a bad plan, it
+    would look like a store that boils.
+    """
+    leaky = ThermalStoreConfig(
+        capacity_wh_per_k=100.0,  # a few litres
+        loss_w_per_k=[500.0] * T,  # five times the capacity every hour
+        ambient_c=[5.0] * T,
+        cop=[3.0] * T,
+        gain_wh=[0.0] * T,
+        t_initial=21.2,
+        t_min=21.0,
+        t_max=22.5,
+        t_target=21.5,
+    )
+    load = ManagedLoadConfig(
+        id="house",
+        demand_wh=0.0,
+        value_eur_per_wh=0.0,
+        max_power_w=900.0,
+        min_runtime_slots=1,
+        store=leaky,
+    )
+    result = _optimizer([load], battery=False).solve()
+
+    assert result["status"] == "Optimal"
+    temps = _temperature(result)
+    # It cannot hold heat, so it sits at the air temperature and whatever it is being
+    # given - never below the air, never anywhere near the model's own -50..150 rails.
+    assert min(temps) >= 5.0 - 0.01
+    assert max(temps) <= 35.0

@@ -268,3 +268,21 @@ def test_an_unknown_scope_falls_back_to_the_default():
     opt = _optimizer([PRICE] * T)
     backend._attach_previous_plan(opt, backend._plan_start())
     assert opt.plan_stability_scope == plan_stability.SCOPE_MANAGED_LOADS
+
+
+# -- telling two loads apart --------------------------------------------------------------
+
+
+def test_ids_that_differ_only_in_a_hyphen_get_their_own_variables():
+    """
+    A load id is slug-safe, so it may carry a hyphen - which the LP format cannot.
+
+    Flattening both to the same name would have the two loads share deviation
+    variables, and the solver would hold one load's plan against the other's.
+    """
+    assert plan_stability._safe("ml:heat-pump") != plan_stability._safe("ml:heat_pump")
+
+
+def test_the_same_key_always_gives_the_same_variable_name():
+    """Across runs too - the name is read back out of the model in the tests above."""
+    assert plan_stability._safe("ml:heat") == plan_stability._safe("ml:heat")

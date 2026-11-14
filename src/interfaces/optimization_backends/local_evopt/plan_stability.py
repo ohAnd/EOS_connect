@@ -43,6 +43,7 @@ Narrowing the optimality gap from 1 % to 0.1 % instead did nothing for the flips
 took up to 13 s per solve.
 """
 
+import hashlib
 import re
 from datetime import timedelta
 
@@ -185,5 +186,15 @@ def add_change_penalty(problem, new_var, objective, name, variables, previous, w
 
 
 def _safe(name):
-    """A key as a solver variable name: CBC's LP format takes no colons or spaces."""
-    return re.sub(r"\W", "_", str(name))
+    """
+    A key as a solver variable name: CBC's LP format takes no colons or spaces.
+
+    The readable part is lossy - a load id is slug-safe, so ``ml:heat-pump`` and
+    ``ml:heat_pump`` both flatten to ``ml_heat_pump`` - and a short digest of the
+    original key rides along to tell them apart. Two loads sharing deviation
+    variables would have the solver hold one load's plan against the other's, and
+    nothing would say so.
+    """
+    raw = str(name)
+    digest = hashlib.blake2s(raw.encode("utf-8"), digest_size=3).hexdigest()
+    return re.sub(r"\W", "_", raw) + "_" + digest

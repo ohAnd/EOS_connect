@@ -1268,6 +1268,12 @@ class Optimizer:
         Explicit in the loss - each slot loses heat at the temperature it started at -
         which keeps it linear and, for a building whose time constant is days, differs
         from the exact solution by far less than the sensor resolution.
+
+        A slot may lose at most the whole store: beyond that the explicit step turns
+        ``capacity - loss`` negative and the temperature swings further the colder it
+        was, which is not a store cooling down, it is the integration falling apart.
+        Out of reach for a house or a pool; a small, barely insulated store on hourly
+        slots can get there.
         """
         store = load.store
         capacity = float(store.capacity_wh_per_k)
@@ -1278,7 +1284,7 @@ class Optimizer:
         for t in self.time_steps:
             hours = self.time_series.dt[t] / 3600.0
             previous = store.t_initial if t == 0 else temps[t - 1]
-            loss = store.at("loss_w_per_k", t) * hours
+            loss = min(store.at("loss_w_per_k", t) * hours, capacity)
             self.problem += (
                 capacity * temps[t]
                 == (capacity - loss) * previous
