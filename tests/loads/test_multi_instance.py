@@ -236,3 +236,81 @@ def test_a_failing_publisher_does_not_break_the_cycle(make_manager, installation
     _cold(installation)
     manager.run_cycle()
     assert manager.stats.cycles == 1
+
+
+def test_an_exclusive_group_never_shares_a_slot(make_manager, installation):
+    """One compressor: the fallback planner gives each slot to one load of the group."""
+    prices = [0.0009] * 48
+    prices[12] = 0.0001
+    installation.prices = prices
+    _cold(installation)
+
+    manager = make_manager([
+        dict(POOL, exclusive_group="heat_pump"),
+        dict(SAUNA, exclusive_group="heat_pump"),
+    ])
+    manager.run_cycle()
+
+    pool_plan = manager.instance("pool").last_plan
+    sauna_plan = manager.instance("sauna").last_plan
+    assert pool_plan[12] > 0
+    assert all(not (a > 0 and b > 0) for a, b in zip(pool_plan, sauna_plan))
+    assert sum(sauna_plan) > 0
+
+
+def test_different_groups_do_not_constrain_each_other(make_manager, installation):
+    prices = [0.0009] * 48
+    prices[12] = 0.0001
+    installation.prices = prices
+    _cold(installation)
+
+    manager = make_manager([
+        dict(POOL, exclusive_group="pool_pump"),
+        dict(SAUNA, exclusive_group="sauna_heater"),
+    ])
+    manager.run_cycle()
+    assert manager.instance("pool").last_plan[12] > 0
+    assert manager.instance("sauna").last_plan[12] > 0
+
+
+def test_the_group_reaches_the_solver(make_manager, installation):
+    _cold(installation)
+    manager = make_manager([dict(POOL, exclusive_group="heat_pump")])
+    manager.run_cycle()
+    records = manager.schedulable()
+    assert records and records[0]["exclusive_group"] == "heat_pump"
+
+
+def test_an_exclusive_group_holds_when_a_quiet_optimizer_hands_back(
+    make_manager, installation
+):
+    """
+    The replan after a stale schedule is planning too. It has to see the slots the
+    group has already taken, or the fallback puts both loads on one compressor the
+    moment the optimizer goes quiet.
+    """
+    from datetime import timedelta
+
+    prices = [0.0009] * 48
+    prices[12] = 0.0001
+    installation.prices = prices
+    _cold(installation)
+    manager = make_manager([
+        dict(POOL, exclusive_group="heat_pump"),
+        dict(SAUNA, exclusive_group="heat_pump"),
+    ])
+    manager.external_scheduler = True
+    manager.run_cycle()
+    for load_id in ("pool", "sauna"):
+        # Offered once, then never answered.
+        manager.instance(load_id).waiting_for_schedule_since = (
+            manager.instance(load_id).waiting_for_schedule_since - timedelta(hours=2)
+        )
+    manager.run_cycle()
+
+    pool_plan = manager.instance("pool").last_plan
+    sauna_plan = manager.instance("sauna").last_plan
+    assert manager.instance("pool").fallback_active
+    assert manager.instance("sauna").fallback_active
+    assert sum(pool_plan) > 0 and sum(sauna_plan) > 0
+    assert all(not (a > 0 and b > 0) for a, b in zip(pool_plan, sauna_plan))

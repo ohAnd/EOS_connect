@@ -56,6 +56,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pulp
 
+from . import plan_stability
+
 # eos_connect.py attaches its handlers to the "__main__" logger, not to root, so
 # a logging.getLogger(__name__) here propagates to a handler-less root and the
 # solver diagnostics are silently discarded.
@@ -238,6 +240,71 @@ class BatteryConfig:
 
 
 @dataclass
+class ThermalStoreConfig:
+    """
+    A managed load planned by the temperature of what it heats (EOS_connect extension).
+
+    The ordinary managed load asks for an amount of energy. A heated store does not
+    really want an amount: it wants to stay inside a temperature band, and how much
+    energy that takes depends on when it is delivered - heat put in early leaks out
+    for longer, heat put in on a warm afternoon costs less electricity, and heat put
+    in while the sun shines may be what the band can hold rather than what it needs.
+    So instead of a demand the solver is given the store itself, with a temperature
+    per slot that evolves the way the battery's state of charge does::
+
+        C * (T[t] - T[t-1]) = COP[t] * E[t] + gain[t] - H[t] * dt * (T[t-1] - T_air[t])
+
+    linear in T and E. The lower bound is comfort, the upper bound is how much may be
+    stored, both soft so a cold start or a sunny afternoon cannot make the model
+    infeasible. Pre-heating on cheap power, shifting into warm hours and storing PV
+    then fall out of the optimization instead of being rules.
+
+    Every per-slot list is in solver slot space and as long as the horizon.
+
+    Attributes:
+        capacity_wh_per_k: Heat stored per kelvin.
+        loss_w_per_k: Per slot, heat lost per kelvin of difference to the air.
+        ambient_c: Per slot, the air temperature the store loses heat to.
+        cop: Per slot, heat delivered per Wh drawn.
+        gain_wh: Per slot, heat gained without the appliance - the sun.
+        t_initial: The store's temperature now.
+        t_min: Comfort floor. Falling below it costs `penalty_eur_per_k_h` per kelvin
+            and hour.
+        t_max: Storage ceiling, penalised the same way above it.
+        t_target: Where the store should be left at the end of the horizon. Heat up to
+            here is worth `terminal_eur_per_k` per kelvin; heat beyond it is worth
+            nothing, because it would only leak away while waiting for a horizon that
+            has not been planned yet. Without that cap every plan ended by filling the
+            store to its ceiling in its last hours. None is ``t_min``.
+        terminal_eur_per_k: What a kelvin left in the store at the end of the horizon is
+            worth. None works it out from the horizon's mean price and mean COP, the
+            way the battery values what it ends with.
+        penalty_eur_per_k_h: None works it out from the dearest price, high enough
+            that the band is near-hard.
+    """
+
+    capacity_wh_per_k: float = 0.0
+    loss_w_per_k: Optional[List[float]] = None
+    ambient_c: Optional[List[float]] = None
+    cop: Optional[List[float]] = None
+    gain_wh: Optional[List[float]] = None
+    t_initial: float = 0.0
+    t_min: float = 0.0
+    t_max: float = 0.0
+    t_target: Optional[float] = None
+    terminal_eur_per_k: Optional[float] = None
+    penalty_eur_per_k_h: Optional[float] = None
+
+    def at(self, series, t, default=0.0):
+        """Slot *t* of a per-slot list, holding the last value past its end."""
+        values = getattr(self, series) or []
+        if not values:
+            return default
+        value = values[t] if t < len(values) else values[-1]
+        return default if value is None else float(value)
+
+
+@dataclass
 class ManagedLoadConfig:
     """
     A load whose *timing* is the optimizer's to choose (EOS_connect extension).
@@ -280,6 +347,12 @@ class ManagedLoadConfig:
             indifferent between a contiguous run and the same energy scattered over the
             day - every schedule of the same slots costs the same - so the solver
             returns whichever the search reaches first, and the appliance cycles.
+        efficiency: Per slot, what a Wh drawn there delivers relative to the best slot -
+            a heat pump's COP at that hour's air temperature over its best, say. The
+            demand and the value are both counted in delivered energy, so a slot at 0.9
+            needs a ninth more electricity for the same result and is chosen only when
+            it is that much cheaper. None is 1.0 everywhere, which is what every load
+            had before this existed.
     """
 
     id: str = ""
@@ -304,6 +377,21 @@ class ManagedLoadConfig:
     # evening peak it should have skipped.
     already_running: bool = False
     committed_off_slots: int = 0
+    efficiency: Optional[List[float]] = None
+    # Loads sharing one compressor - a heat pump making both hot water and space heat -
+    # name the same group, and the solver never runs two of them in the same slot.
+    exclusive_group: str = ""
+    # Set for a load planned by temperature rather than by an amount of energy. The
+    # demand, its value and the efficiency are then unused: the store's band and what
+    # heat is worth at the end of the horizon take their place.
+    store: Optional[ThermalStoreConfig] = None
+
+    def efficiency_at(self, t):
+        """The efficiency of slot *t*, 1.0 where none was given."""
+        if not self.efficiency or t >= len(self.efficiency):
+            return 1.0
+        value = self.efficiency[t]
+        return float(value) if value is not None and value > 0 else 0.0
 
 
 @dataclass
@@ -345,8 +433,16 @@ class Optimizer:
         optimizer_settings: Optional[OptimizerSettings] = None,
         managed_loads: Optional[List[ManagedLoadConfig]] = None,
         managed_load_budget_w: float = 0.0,
+        previous_plan: Optional[Dict[str, List[Optional[float]]]] = None,
+        plan_stability_weight: float = 0.0,
+        plan_stability_scope: str = plan_stability.SCOPE_OFF,
     ):
         self.settings = optimizer_settings or OptimizerSettings()
+        # What the previous run decided, keyed as in `plan_stability`, and how much a
+        # departure from it costs as a fraction of the mean import price per Wh.
+        self.previous_plan = dict(previous_plan or {})
+        self.plan_stability_weight = max(0.0, float(plan_stability_weight or 0.0))
+        self.plan_stability_scope = plan_stability_scope
         self.strategy = strategy
         self.grid = grid
         self.batteries = batteries
@@ -396,6 +492,55 @@ class Optimizer:
         self._add_battery_constraints()
         self._add_managed_load_constraints()
         self._add_shared_budget_constraints()
+        self._add_exclusive_group_constraints()
+
+    def plan_series(self):
+        """The decision series a plan-stability memory keeps, by key, as plain numbers."""
+        series = {}
+        for i, load in enumerate(self.managed_loads):
+            series[plan_stability.key_managed_load(load.id)] = [
+                pulp.value(var) or 0.0 for var in self.variables['ml'][i]
+            ]
+        for i, _ in enumerate(self.batteries):
+            series[plan_stability.key_battery_charge(i)] = [
+                pulp.value(var) or 0.0 for var in self.variables['c'][i]
+            ]
+            series[plan_stability.key_battery_discharge(i)] = [
+                pulp.value(var) or 0.0 for var in self.variables['d'][i]
+            ]
+        return series
+
+    def _add_plan_stability(self, objective):
+        """
+        Charge for departing from the previous plan - see `plan_stability`.
+
+        The price is the configured fraction of the mean import price over this
+        horizon, per Wh, so it scales with the tariff instead of being a fixed number
+        that is huge in one market and nothing in another - in full for the next two
+        hours, a fifth of it beyond.
+        """
+        if self.plan_stability_weight <= 0 or not self.previous_plan:
+            return objective
+        prices = self.time_series.p_N or []
+        mean_price = float(np.mean(prices)) if prices else 0.0
+        weight = self.plan_stability_weight * max(mean_price, 0.0)
+        if weight <= 0:
+            return objective
+        weight = plan_stability.slot_weights(weight, self.time_series.dt)
+        candidates = {}
+        for i, load in enumerate(self.managed_loads):
+            candidates[plan_stability.key_managed_load(load.id)] = self.variables['ml'][i]
+        for i, _ in enumerate(self.batteries):
+            candidates[plan_stability.key_battery_charge(i)] = self.variables['c'][i]
+            candidates[plan_stability.key_battery_discharge(i)] = self.variables['d'][i]
+        for key, variables in candidates.items():
+            if not plan_stability.scope_includes(self.plan_stability_scope, key):
+                continue
+            objective = plan_stability.add_change_penalty(
+                self.problem, self._new_var, objective, key, variables,
+                self.previous_plan.get(key), weight,
+            )
+        return objective
 
     def _new_var(self, name, lowBound=None, upBound=None, cat=pulp.LpContinuous):
         # pylint: disable=invalid-name
@@ -569,7 +714,7 @@ class Optimizer:
                     f"ml_{i}_{t}",
                     lowBound=0,
                     upBound=per_slot[t] if (
-                        t < len(feasible) and feasible[t]
+                        t < len(feasible) and feasible[t] and load.efficiency_at(t) > 0
                     ) else 0.0,
                 )
                 for t in self.time_steps
@@ -585,6 +730,30 @@ class Optimizer:
                 ]
             else:
                 self.variables['ml_on'][i] = None
+
+        # Heated stores planned by temperature: the temperature after each slot, and
+        # how far it strays below the comfort floor or above the storage ceiling.
+        self.variables['tm'] = {}
+        self.variables['tm_lo'] = {}
+        self.variables['tm_hi'] = {}
+        for i, load in enumerate(self.managed_loads):
+            if load.store is None:
+                continue
+            self.variables['tm'][i] = [
+                self._new_var(f"tm_{i}_{t}", lowBound=-50, upBound=150)
+                for t in self.time_steps
+            ]
+            self.variables['tm_lo'][i] = [
+                self._new_var(f"tm_lo_{i}_{t}", lowBound=0) for t in self.time_steps
+            ]
+            self.variables['tm_hi'][i] = [
+                self._new_var(f"tm_hi_{i}_{t}", lowBound=0) for t in self.time_steps
+            ]
+            target = load.store.t_target
+            self.variables.setdefault('tm_end', {})[i] = self._new_var(
+                f"tm_end_{i}", lowBound=-50,
+                upBound=float(load.store.t_min if target is None else target),
+            )
 
         # Binary variable to lock charging against discharging
         self.variables['z_cd'] = {}
@@ -624,8 +793,15 @@ class Optimizer:
         # battery it may charge earlier for exactly this purpose. So the energy bought
         # for the load comes in under `value_eur_per_wh` by construction; there is no
         # separate cap to enforce, and no averaging window to argue about.
+        #
+        # Counted in *delivered* energy: a slot whose efficiency is 0.9 earns nine
+        # tenths of the value per Wh drawn, so it wins only where it is that much
+        # cheaper - which is the whole of the warm-hours preference.
         for i, load in enumerate(self.managed_loads):
-            objective += load.value_eur_per_wh * pulp.lpSum(self.variables['ml'][i])
+            if load.store is not None:
+                objective += self._store_objective(i, load)
+            else:
+                objective += load.value_eur_per_wh * self._delivered(i, load)
             starts = self.variables['ml_start'][i]
             if starts is not None:
                 objective -= load.start_cost_eur * pulp.lpSum(starts)
@@ -768,6 +944,7 @@ class Optimizer:
                     * bat.c_priority
                 )
 
+        objective = self._add_plan_stability(objective)
         self.problem += objective
 
     def _add_energy_balance_constraints(self):
@@ -1009,12 +1186,18 @@ class Optimizer:
         """
         for i, load in enumerate(self.managed_loads):
             run = self.variables['ml'][i]
-            self.problem += pulp.lpSum(run) <= max(0.0, load.demand_wh)
+            if load.store is not None:
+                # No amount to cap: the band does that, and urgency is the floor's
+                # penalty rather than a separate quantity.
+                self._add_store_constraints(i, load)
+            else:
+                delivered = self._delivered(i, load)
+                self.problem += delivered <= max(0.0, load.demand_wh)
 
-            # Frost protection and the like: energy that must be placed whatever it
-            # costs, so it is a floor the value term cannot argue with.
-            if load.urgent_wh > 0:
-                self.problem += pulp.lpSum(run) >= min(load.urgent_wh, load.demand_wh)
+                # Frost protection and the like: energy that must be placed whatever
+                # it costs, so it is a floor the value term cannot argue with.
+                if load.urgent_wh > 0:
+                    self.problem += delivered >= min(load.urgent_wh, load.demand_wh)
 
             feasible = load.feasible or [True] * self.T
             self._add_daily_cap_constraints(load, run, feasible)
@@ -1047,6 +1230,80 @@ class Optimizer:
                 already_running=load.already_running or load.committed_on_slots > 0,
             )
 
+    def _store_values(self, load):
+        """The terminal value per kelvin and the band penalty, worked out if unset."""
+        store = load.store
+        capacity = max(0.0, float(store.capacity_wh_per_k))
+        cops = [max(0.8, store.at("cop", t, 1.0)) for t in self.time_steps] or [1.0]
+        terminal = store.terminal_eur_per_k
+        if terminal is None:
+            # What the heat would cost to make again, at the horizon's average: the
+            # same footing the battery's final charge is valued on.
+            mean_price = float(np.mean(self.time_series.p_N)) if self.T else 0.0
+            terminal = capacity * mean_price / float(np.mean(cops))
+        penalty = store.penalty_eur_per_k_h
+        if penalty is None:
+            # Ten times what a kelvin-hour would cost with a resistive heater at the
+            # dearest price: never worth trading for money, still a number.
+            dearest = max(float(self.max_import_price), 0.1e-3)
+            penalty = capacity * dearest * 10.0
+        return max(0.0, terminal), max(0.0, penalty)
+
+    def _store_objective(self, i, load):
+        """What a store planned by temperature contributes to the objective."""
+        terminal, penalty = self._store_values(load)
+        lows = self.variables['tm_lo'][i]
+        highs = self.variables['tm_hi'][i]
+        term = terminal * self.variables['tm_end'][i]
+        term -= pulp.lpSum(
+            penalty * self.time_series.dt[t] / 3600.0 * (lows[t] + highs[t])
+            for t in self.time_steps
+        )
+        return term
+
+    def _add_store_constraints(self, i, load):
+        """
+        The store's temperature, slot by slot, and the band it should stay in.
+
+        Explicit in the loss - each slot loses heat at the temperature it started at -
+        which keeps it linear and, for a building whose time constant is days, differs
+        from the exact solution by far less than the sensor resolution.
+
+        A slot may lose at most the whole store: beyond that the explicit step turns
+        ``capacity - loss`` negative and the temperature swings further the colder it
+        was, which is not a store cooling down, it is the integration falling apart.
+        Out of reach for a house or a pool; a small, barely insulated store on hourly
+        slots can get there.
+        """
+        store = load.store
+        capacity = float(store.capacity_wh_per_k)
+        temps = self.variables['tm'][i]
+        lows = self.variables['tm_lo'][i]
+        highs = self.variables['tm_hi'][i]
+        run = self.variables['ml'][i]
+        for t in self.time_steps:
+            hours = self.time_series.dt[t] / 3600.0
+            previous = store.t_initial if t == 0 else temps[t - 1]
+            loss = min(store.at("loss_w_per_k", t) * hours, capacity)
+            self.problem += (
+                capacity * temps[t]
+                == (capacity - loss) * previous
+                + store.at("cop", t, 1.0) * run[t]
+                + store.at("gain_wh", t)
+                + loss * store.at("ambient_c", t)
+            )
+            self.problem += temps[t] + lows[t] >= store.t_min
+            self.problem += temps[t] - highs[t] <= store.t_max
+        # What is credited at the end: the final temperature, but no more than target.
+        self.problem += self.variables['tm_end'][i] <= temps[-1]
+
+    def _delivered(self, i, load):
+        """A load's placed energy in units of its best slot."""
+        run = self.variables['ml'][i]
+        if not load.efficiency:
+            return pulp.lpSum(run)
+        return pulp.lpSum(load.efficiency_at(t) * run[t] for t in self.time_steps)
+
     def _add_shared_budget_constraints(self):
         """
         Hold every managed load together under one site limit.
@@ -1072,6 +1329,49 @@ class Optimizer:
             self.problem += pulp.lpSum(
                 self.variables['ml'][i][t] for i in range(len(self.managed_loads))
             ) <= allowance
+
+    def _add_exclusive_group_constraints(self):
+        """
+        Never run two loads of one group in the same slot.
+
+        A heat pump that makes hot water and heats the house is one compressor: it
+        does one or the other. Planned as two independent loads, both land in the same
+        warm afternoon and the plan counts heat the machine cannot deliver.
+
+        Written on the share of each slot a load fills rather than on its on/off
+        binary, so it holds for loads modelled continuously too: two halves fit in one
+        slot, which is what a compressor switching over halfway through does. A load
+        with a binary fills either nothing or all of it, and the constraint becomes
+        "one at a time".
+
+        A slot that more than one load is already committed to is left alone. Two loads
+        both running is what the sensors say; refusing to believe it would make the
+        model infeasible and take the household's schedule down with it.
+        """
+        groups = {}
+        for i, load in enumerate(self.managed_loads):
+            name = str(load.exclusive_group or "").strip()
+            if name:
+                groups.setdefault(name, []).append(i)
+
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            for t in self.time_steps:
+                committed = sum(
+                    1 for i in members
+                    if t < int(self.managed_loads[i].committed_on_slots or 0)
+                )
+                if committed > 1:
+                    continue
+                shares = []
+                for i in members:
+                    load = self.managed_loads[i]
+                    cap = load.max_power_w * self.time_series.dt[t] / 3600.0
+                    if cap > 0:
+                        shares.append(self.variables['ml'][i][t] * (1.0 / cap))
+                if len(shares) > 1:
+                    self.problem += pulp.lpSum(shares) <= 1
 
     def _add_daily_cap_constraints(self, load, run, feasible):
         """
@@ -1135,14 +1435,16 @@ class Optimizer:
         """
         held_on = min(int(load.committed_on_slots), self.T)
         if held_on:
-            budget = max(0.0, load.demand_wh)
+            # A store has no amount to run out of; its band is what ends a run.
+            budget = max(0.0, load.demand_wh) if load.store is None else float("inf")
             for t in range(held_on):
                 cap = load.max_power_w * self.time_series.dt[t] / 3600.0
                 allowed = t < len(feasible) and feasible[t]
-                if not allowed or cap <= 0 or budget < cap:
+                delivered = cap * load.efficiency_at(t)
+                if not allowed or cap <= 0 or delivered <= 0 or budget < delivered:
                     break
                 self.problem += on[t] == 1
-                budget -= cap
+                budget -= delivered
 
         for t in range(min(int(load.committed_off_slots), self.T)):
             self.problem += on[t] == 0
@@ -1248,6 +1550,11 @@ class Optimizer:
                         'energy': [
                             pulp.value(var) or 0.0 for var in self.variables['ml'][i]
                         ],
+                        **({
+                            'temperature': [
+                                pulp.value(var) for var in self.variables['tm'][i]
+                            ],
+                        } if load.store is not None else {}),
                     }
                     for i, load in enumerate(self.managed_loads)
                 ],

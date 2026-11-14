@@ -7,12 +7,14 @@ and a couple of behavioural switches: where the ambient temperature comes from, 
 a cover and a season are meaningful, how long the thing should run once started.
 
 Keeping that here rather than in the model is what makes "add a sauna" a table entry.
-Adding a space-heating type later is one more entry plus a profile-kind model; nothing
-in the framework has to learn about it.
+A house is one too: it is a store whose medium is the rooms, so it reuses the same
+model and calibration, and what its preset adds is a way to derive the starting values
+from the things an owner knows - see `loads.models.building`.
 """
 
 import logging
 
+from .models import building
 from .models.external import ExternalPushModel
 from .models.thermal import ThermalStorageModel
 
@@ -22,6 +24,7 @@ TYPE_POOL_HEATPUMP = "pool_heatpump"
 TYPE_SAUNA = "sauna"
 TYPE_HOT_WATER_TANK = "hot_water_tank"
 TYPE_BUFFER_TANK = "buffer_tank"
+TYPE_SPACE_HEATING = "space_heating"
 TYPE_EXTERNAL_CONTINGENT = "external_contingent"
 TYPE_EXTERNAL_PROFILE = "external_profile"
 
@@ -36,6 +39,7 @@ THERMAL_TYPES = (
     TYPE_SAUNA,
     TYPE_HOT_WATER_TANK,
     TYPE_BUFFER_TANK,
+    TYPE_SPACE_HEATING,
 )
 
 # Types the planner and the release gate apply to.
@@ -169,6 +173,71 @@ PRESETS = {
             "strategy": "combined",
         },
     },
+    TYPE_SPACE_HEATING: {
+        "label": "Space heating (heat pump)",
+        "model": ThermalStorageModel,
+        "ambient": AMBIENT_OUTDOOR,
+        "default_ambient_c": 7.0,
+        # The house is the store: its rooms are the medium, the outdoor air is what it
+        # loses heat to. The physical values are not set here but derived from what
+        # the owner knows - living area, construction, heat emitter, building form and
+        # insulation - by `building.starting_values`, and calibrated from there.
+        "derive": building.starting_values,
+        "derived_keys": building.DERIVED_KEYS,
+        # What the calibrator may and may not learn for this store. Measured on a real
+        # house, both defaults of the pool were wrong for it:
+        #
+        # - The loss coefficient floor of 1.0 W/(m2 K) sits four times above a
+        #   renovated house (0.25), so the fit clamped there and reported no confidence.
+        # - Learning the COP from the room temperature does not work when the heat
+        #   pump mostly runs while the sun is out, which is exactly what a PV-led plan
+        #   makes it do: electrical power and sunshine rise together and the fit cannot
+        #   tell their heat apart. It drifted from 3.3 to 0.8 over a week while the
+        #   heat meter read 4.0, and the room temperature prediction stayed good the
+        #   whole time - so nothing would ever have flagged it. The COP is held at its
+        #   starting value instead, and the losses and the sun are learned around it.
+        "calibration": {
+            "loss_coefficient_min": 0.02,
+            "loss_coefficient_max": 5.0,
+            "learn_cop": False,
+            # A window has to span a real change of the house, not a flicker of one
+            # room: 0.2 K, against the three sensor ticks that serve a pool.
+            "min_window_change_k": 0.2,
+        },
+        "defaults": {
+            **building.DEFAULT_INPUTS,
+            # What the default inputs produce, so the documentation can show a house
+            # starting from real numbers. Derived values for the entry's own inputs
+            # take precedence over these - see `apply_defaults`.
+            **building.starting_values(building.DEFAULT_INPUTS),
+            # A modulating heat pump draws well under its nameplate most of the time;
+            # this is the typical draw while running, which is what the plan needs.
+            "rated_power_w": 1500.0,
+            "target_temp": 21.5,
+            "deadband_k": 0.5,
+            "cover_loss_factor": 1.0,
+            # An air-source heat pump for a house is built to run far below zero.
+            "min_ambient_temp_c": None,
+            # Below this the house is cold enough that price no longer matters.
+            "frost_protection_temp_c": 19.0,
+            "window_start": None,
+            "window_end": None,
+            "season_start": None,
+            "season_end": None,
+            # Floor heating takes an hour to deliver anything a room notices.
+            "min_runtime_minutes": 60,
+            "max_runtime_hours_per_day": 0,
+            "strategy": "combined",
+            # Prefer the warm hours by the model's own COP - the point of planning a
+            # heat pump rather than just switching it.
+            "efficiency_source": "cop",
+            # The house is the store, and the built-in optimizer follows its temperature
+            # rather than placing an amount: heat ahead when it is cheap, bank surplus
+            # PV up to a kelvin above target, ride out a dear evening on the screed.
+            "planning_mode": "temperature",
+            "storage_headroom_k": 1.0,
+        },
+    },
     TYPE_EXTERNAL_CONTINGENT: {
         "label": "External energy budget",
         "model": ExternalPushModel,
@@ -206,6 +275,28 @@ PRESETS = {
 TYPES = tuple(PRESETS.keys())
 
 
+def presets_as_json():
+    """
+    The per-type starting values, as plain data.
+
+    What the settings form seeds a new or retyped entry with, and what the
+    documentation renders per profile. ``model`` and ``derive`` are code and are
+    dropped; ``derived_keys`` names the fields a type computes for itself, which the
+    form leaves empty so the runtime can fill them from the entry's own inputs. A
+    ``None`` in ``defaults`` is kept, because it means "no limit" rather than "unset".
+    """
+    return {
+        name: {
+            "label": preset["label"],
+            "ambient": preset["ambient"],
+            "default_ambient_c": preset["default_ambient_c"],
+            "defaults": dict(preset["defaults"]),
+            "derived_keys": list(preset.get("derived_keys", ())),
+        }
+        for name, preset in PRESETS.items()
+    }
+
+
 def preset_for(type_name):
     """The preset for a type, or None when the type is unknown."""
     return PRESETS.get(str(type_name or "").strip())
@@ -218,11 +309,23 @@ def apply_defaults(entry):
     Only keys the user has genuinely not set are filled: an explicit ``None`` in the
     stored config means "no limit" for fields like ``window_start``, and overwriting it
     with the preset would silently reimpose a restriction the user removed.
+
+    A preset with a ``derive`` function computes some of its values from others - a
+    house's volume from its living area. Those are filled first, from the entry's own
+    inputs, so a 200 m2 house does not start from the 150 m2 the preset documents. A
+    derived key left empty counts as unset: unlike a window, it has no "no limit"
+    meaning, and an empty volume would only break the model.
     """
     resolved = dict(entry or {})
     preset = preset_for(resolved.get("type"))
     if preset is None:
         return resolved
+    derive = preset.get("derive")
+    if derive is not None:
+        inputs = {**preset["defaults"], **resolved}
+        for key, value in derive(inputs).items():
+            if resolved.get(key) in (None, ""):
+                resolved[key] = value
     for key, value in preset["defaults"].items():
         if key not in resolved:
             resolved[key] = value
@@ -243,6 +346,9 @@ def build_model(entry):
             entry.get("id", "?"), entry.get("type"), ", ".join(TYPES),
         )
         return None
+    options = preset.get("calibration")
+    if options:
+        return preset["model"](entry.get("id"), entry, calibration=options)
     return preset["model"](entry.get("id"), entry)
 
 

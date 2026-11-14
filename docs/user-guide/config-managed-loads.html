@@ -319,9 +319,55 @@
                         heated envelope &mdash; what leaks out of it is not really lost.</p>
                     <p>Worth saying what this profile is <em>not</em>: it models the store, not the
                         heating system drawing from it. If what you want is the house's heat demand
-                        over the next two days, that is an
-                        <a href="#profile-external-profile">external load profile</a>.</p>
+                        over the next two days, that is <a href="#profile-space-heating">space
+                            heating</a>.</p>
                     <div data-managed-load-profile="buffer_tank"></div>
+
+                    <h3 id="profile-space-heating">Space heating (heat pump)</h3>
+                    <p>A heat pump heating a house, with the <strong>house as the store</strong>: the
+                        rooms are the medium, the outdoor air is what it loses heat to, and the
+                        screed and walls are what let it wait a few hours for a cheaper or warmer
+                        one. It is the same model and the same calibration as the pool &mdash; a
+                        house is a big, slow, well-insulated pool &mdash; and it differs in three
+                        places.</p>
+                    <ul>
+                        <li><strong>You describe the building, not its physics.</strong> Living
+                            area, insulation, heat emitter, construction and building form give the
+                            starting values for the stored heat, the surface and the losses; see
+                            <a href="#managed-loads-building">Starting values for a house</a>. Leave
+                            <code>volume_m3</code>, <code>surface_m2</code> and
+                            <code>heat_loss_w_per_m2_k</code> empty and they follow the
+                            description.</li>
+                        <li><strong>The efficiency is held, or measured, but not fitted.</strong>
+                            See <a href="#managed-loads-cop">The efficiency of a heat pump</a>.</li>
+                        <li><strong>Windows span a real change of the house</strong> &mdash;
+                            0.2&nbsp;K &mdash; rather than three ticks of its sensor.</li>
+                        <li><strong>It is planned by temperature</strong>, with the COP per hour:
+                            see <a href="#managed-loads-temperature">Planning a store by its
+                                temperature</a>.</li>
+                    </ul>
+                    <p>What the inputs should be:</p>
+                    <ul>
+                        <li><code>temp_sensor</code>: the <strong>mean of several rooms</strong>,
+                            e.g. a Home Assistant <em>Min/Max</em> helper set to <em>mean</em>. Avoid
+                            a single room the sun reaches: on the measured house a south-facing dining
+                            room alone doubled the prediction error, a cool bathroom alone cost a
+                            quarter.</li>
+                        <li><code>power_sensor</code>: the heat pump's electrical power <strong>while
+                                it heats the house</strong>. If it also makes hot water and reports
+                            only one figure, a template sensor that reads zero during hot water
+                            runs is better; the total still works, at about one and a half times
+                            the error.</li>
+                        <li><code>heat_sensor</code>, optional: the heat pump's delivered-heat
+                            counter, if it has one.</li>
+                        <li><code>rated_power_w</code>: the <em>typical</em> draw while running,
+                            not the nameplate &mdash; a modulating heat pump spends most of its time
+                            well below it.</li>
+                    </ul>
+                    <p>The target is the room temperature you want and the deadband how far below
+                        it heating may start. <code>frost_protection_temp_c</code> is where price
+                        stops mattering; for a house that is a cold room, not frost.</p>
+                    <div data-managed-load-profile="space_heating"></div>
 
                     <h3 id="profile-external-contingent">External energy budget</h3>
                     <p>For an appliance EOS Connect cannot model but you can. You send it
@@ -334,8 +380,9 @@
                     <div data-managed-load-profile="external_contingent"></div>
 
                     <h3 id="profile-external-profile">External load profile</h3>
-                    <p>For something whose timing was never yours to choose &mdash; space heating, air
-                        conditioning, anything you already model elsewhere. You hand over a ready-made
+                    <p>For something whose timing was never yours to choose &mdash; air
+                        conditioning, a heating curve you already model elsewhere, anything planned
+                        outside EOS Connect. You hand over a ready-made
                         curve, either fetched from an entity or pushed, and it is added to the forecast
                         exactly as given.</p>
                     <p>This is the one profile that is not scheduled, so it has no release signal and
@@ -461,6 +508,108 @@
                             so compare it with <em>Planned</em> beside it rather than with
                             yesterday's figure.</p>
                     </div>
+
+                    <h3 id="managed-loads-temperature">Planning a store by its temperature</h3>
+                    <p>Planned by <strong>energy</strong>, a heated store works out how much it
+                        will need over the next two days and that amount is placed in the cheapest
+                        hours. That is right for a pool, and blind to one thing a house cares
+                        about: <em>when</em> the heat arrives decides what the rooms feel like in
+                        between. An amount placed at midday is met in full while the bedrooms are
+                        at 20.3&nbsp;&deg;C at seven in the morning.</p>
+                    <p>Planned by <strong>temperature</strong>, the built-in optimizer is given
+                        the store itself instead: how much heat it holds per kelvin, what it loses
+                        to the air in each hour, what the sun adds and what the heat pump's COP is
+                        then &mdash; the calibrated model, slot by slot. It follows the temperature
+                        through the horizon the way it follows the battery's charge, and keeps it
+                        inside a band:</p>
+                    <ul>
+                        <li>at least <strong>target &minus; deadband</strong>: comfort. Falling below
+                            costs far more than any tariff, so it is in effect a hard floor &mdash;
+                            but a soft one, so a cold start or a heat pump too small for the frost
+                            makes a short plan rather than no plan;</li>
+                        <li>at most <strong>target + storage headroom</strong>: how much may be
+                            banked when energy is cheap or free;</li>
+                        <li>and back at <strong>target</strong> by the end of the horizon, valued
+                            at what the heat would cost to make again. Not above it: heat banked
+                            for a horizon nobody has planned yet would only leak away.</li>
+                    </ul>
+                    <p>Heating ahead of a dear evening, storing surplus PV and waiting for a
+                        warmer hour then come out of the optimization rather than being rules.
+                        On the measured house, planning the next day from its real forecasts
+                        (41&ndash;56&nbsp;ct/kWh, 18&nbsp;kWh of PV, 6&ndash;11&nbsp;&deg;C):</p>
+                    <div class="scroll-x">
+                        <table>
+                            <thead><tr><th>Planned by</th><th>Electricity</th><th>Runs</th>
+                                    <th>Coldest</th></tr></thead>
+                            <tbody>
+                                <tr><td>energy</td><td>7.9&nbsp;kWh</td>
+                                    <td>00:15&ndash;02:00, 08:45&ndash;15:45</td><td>20.6&nbsp;&deg;C</td></tr>
+                                <tr><td>energy, with the COP per hour</td><td>7.7&nbsp;kWh</td>
+                                    <td>09:00&ndash;17:30</td><td>20.3&nbsp;&deg;C</td></tr>
+                                <tr><td>temperature, band 21.0&ndash;22.5</td><td>7.9&nbsp;kWh</td>
+                                    <td>00:00&ndash;04:30, 11:30&ndash;15:45</td><td>20.9&nbsp;&deg;C
+                                        (the start)</td></tr>
+                                <tr><td>temperature, band 20.5&ndash;22.5</td><td>4.7&nbsp;kWh</td>
+                                    <td>05:30&ndash;06:45, 12:00&ndash;16:00</td><td>20.5&nbsp;&deg;C</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>The same energy as an amount, but the comfort held; and with a wider band
+                        the plan moves into the warm afternoon by itself. Space heating starts
+                        planned by temperature; any heated store can be. It needs the built-in
+                        optimizer &mdash; with another backend the store is planned by energy, and
+                        its deadband decides as before.</p>
+                    <p>Inside the band the plan decides, not the deadband: a house at
+                        21.3&nbsp;&deg;C may be released to bank PV, and one at the storage ceiling
+                        is stopped whatever the plan says. Frost protection still releases it
+                        immediately.</p>
+
+                    <h3 id="managed-loads-exclusive">One machine, two loads</h3>
+                    <p>A heat pump that heats the house and makes hot water is one compressor: at
+                        any moment it does one or the other. Configured as two loads &mdash; a
+                        <a href="#profile-space-heating">space heating</a> load and a
+                        <a href="#profile-hot-water-tank">hot water tank</a> &mdash; both would
+                        otherwise be planned into the same warm afternoon, and the plan would count
+                        heat the machine cannot deliver.</p>
+                    <p>Give both the same <strong>Exclusive Group</strong>, e.g.
+                        <code>heat_pump</code>, and they are never planned into the same slot. The
+                        built-in optimizer decides between them on cost; the other backends take
+                        them in <strong>Priority</strong> order, slot by slot. A slot both are
+                        already running in is left alone &mdash; if the sensors say so, it is not
+                        the plan's to argue with.</p>
+
+                    <h3 id="managed-loads-efficiency">Preferring the hours that do more</h3>
+                    <p>A heat pump needs less electricity for the same heat when it is warmer
+                        outside. Without telling the optimizer so, every allowed hour looks equally
+                        good, and on a day of flat prices &mdash; or with a battery that makes
+                        every hour cost the same &mdash; the energy lands wherever the search
+                        reaches first. On the house that prompted this, a heating budget was
+                        released at 07:09 at 2&nbsp;&deg;C while the afternoon reached 13&nbsp;&deg;C,
+                        and the planned start moved between 08:30, 11:00 and 13:45 from one run
+                        to the next.</p>
+                    <p><strong>Efficiency Source</strong> gives each hour a weight: 1.0 where a Wh
+                        does the most, less where the same Wh does less. A slot at 0.9 needs a ninth
+                        more electricity for the same result, so it is chosen only where it is at
+                        least that much cheaper &mdash; the price still decides, the efficiency
+                        breaks the ties and weighs against it.</p>
+                    <ul>
+                        <li><strong>off</strong> &mdash; every hour alike, as before.</li>
+                        <li><strong>cop</strong> &mdash; the load's own efficiency at each hour's air
+                            temperature, over the best allowed hour. For heated stores; the default
+                            for space heating.</li>
+                        <li><strong>ambient</strong> &mdash; from the outdoor forecast alone, for a
+                            load without a model of its own, such as an external energy budget for a
+                            heat pump: <code>efficiency_per_k</code> (0.02, about what an air-source
+                            heat pump loses per kelvin colder) per kelvin below the warmest hour, or
+                            above the coolest for cooling.</li>
+                        <li><strong>pushed</strong> &mdash; the <code>efficiency</code> array sent
+                            with an external energy budget; see <a href="#managed-loads-push">Pushing
+                                it in</a>.</li>
+                    </ul>
+                    <p>A continuous rule rather than bands on purpose: inside a band where every
+                        hour counts the same, the optimizer is back to choosing arbitrarily. With an
+                        efficiency the <em>Energy needed</em> figure is the energy the best hour
+                        would take; the hours actually planned may add a little to it.</p>
                 </div>
 
                 <div class="content-section" data-level="standard">
@@ -576,6 +725,78 @@
                             full sun does, and a store that can never separate the two behaves
                             exactly as it did before this existed.</p>
                     </div>
+
+                    <h3 id="managed-loads-building">Starting values for a house</h3>
+                    <p>A house starts from five things its owner knows, and the calibration takes
+                        over from there. The values below are deliberately rough: they are close
+                        enough for the first plan, and on the measured house the learned values no
+                        longer depended on them after two to three days.</p>
+                    <div class="scroll-x">
+                        <table>
+                            <thead><tr><th>Value</th><th>From</th><th>Rule</th></tr></thead>
+                            <tbody>
+                                <tr><td>Stored heat</td><td><code>living_area_m2</code>,
+                                        <code>construction</code>, <code>emitter</code></td>
+                                    <td>massive 90, light 45&nbsp;Wh/(K&middot;m&sup2;), plus 35 for
+                                        floor heating in screed; written as
+                                        <code>volume_m3</code> of water (&divide;&nbsp;1163)</td></tr>
+                                <tr><td>Surface</td><td><code>living_area_m2</code>,
+                                        <code>building_form</code></td>
+                                    <td>detached 2.4, semi-detached 1.9, terraced 1.4, flat 1.0
+                                        &times; living area</td></tr>
+                                <tr><td>Losses</td><td><code>insulation</code></td>
+                                    <td>before 1979: 1.0 &middot; 1979&ndash;1994: 0.65 &middot;
+                                        1995&ndash;2015: 0.4 &middot; renovated: 0.28 &middot; new
+                                        build: 0.2&nbsp;W/(m&sup2;&middot;K)</td></tr>
+                                <tr><td>Efficiency</td><td><code>emitter</code></td>
+                                    <td>floor: 3.3 at 0&nbsp;&deg;C, 4.0 at 7&nbsp;&deg;C &middot;
+                                        radiators: about a quarter lower</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>The losses are <em>effective</em> values, about half of what an energy
+                        certificate would give: the calibration has no separate term for the heat
+                        people and appliances give off, so it is netted against the losses. On the
+                        measured house (1960s, masonry, renovated, floor heating, 170&nbsp;m&sup2;) the
+                        calibration settled at 0.25 against a design value of about 0.45.</p>
+                    <p>If you are unsure between two answers, choose the <strong>heavier</strong>
+                        house. Half the measured stored heat made a 24-hour prediction 0.6&nbsp;K out,
+                        one and a half times it only 0.2&nbsp;K: a model that thinks the house is light
+                        expects it to react faster than it does.</p>
+
+                    <h3 id="managed-loads-cop">The efficiency of a heat pump</h3>
+                    <p>A pool learns its heat pump's efficiency from how fast the water warms. A
+                        house cannot, and the reason is worth knowing: a heat pump planned around
+                        PV mostly runs while the sun is out, and the sun warms the rooms too. With
+                        both rising together the fit cannot tell their heat apart. On the measured
+                        house a fitted COP drifted from 3.3 to 0.8 over a week while its heat meter
+                        read 4.0 &mdash; and the temperature prediction stayed good throughout,
+                        because the sun term absorbed the difference. Only a plan for a night run
+                        would have shown it: it expected a third of the real heat. Dropping the sun
+                        term does not help; the sun then ends up in the losses instead.</p>
+                    <p>So for space heating the efficiency comes from one of two places:</p>
+                    <ul>
+                        <li><strong>A heat meter</strong> (<code>heat_sensor</code>), where there is
+                            one. Many heat pumps count the heat they deliver. Heat out over electricity
+                            in, per running window, against the outdoor temperature: the level settled
+                            within two days on the measured house, the slope once it had seen a cold
+                            spell. The overlay then reports the COP as measured.</li>
+                        <li><strong>The starting value</strong> otherwise, held fixed &mdash; from the
+                            heat emitter, or from your data sheet: set <code>cop_nominal</code> and
+                            <code>cop_air_coeff</code> so that the curve passes through its A7/W35
+                            and A2/W35 figures. A data sheet is usually within 5&ndash;10&nbsp;%,
+                            and what the plan mostly needs is the <em>shape</em> &mdash; how much
+                            better 12&nbsp;&deg;C is than 2&nbsp;&deg;C &mdash; which it gets
+                            right.</li>
+                    </ul>
+
+                    <p>Learning the COP from whole days instead of hours, where the floor's
+                        delay evens out, was tried and is not used. With two weeks of data it
+                        moved a correct starting value up to 40&nbsp;% away from the heat
+                        meter, and did not reliably correct one that was a quarter too high: the
+                        losses and the sun learned from the hours describe how the rooms react,
+                        not a daily energy balance, and a fortnight has too few days with both
+                        heating and no sun to separate them.</p>
 
                     <h3 id="managed-loads-cover">The cover</h3>
                     <p>A pool cover is worth roughly two thirds of the heat loss, and it goes on
@@ -745,7 +966,9 @@ attributes:
 
 {"value_wh": 1500}                       one hourly average, applied across the horizon
 {"values": [0, 0, 1200, 1400, ...]}      24 or 48 hourly values, or 96 or 192 quarter-hourly
-{"total_wh": 8000, "deadline_hours": 12} an energy budget for EOS Connect to place</code></pre>
+{"total_wh": 8000, "deadline_hours": 12} an energy budget for EOS Connect to place
+{"total_wh": 8000, "efficiency": [0.8, 0.8, ..., 1.0, ...]}
+                                         the same, with how much a Wh is worth per slot</code></pre>
                     <p>The resolution is inferred from how many values you send and resampled to whatever
                         the optimizer is running on, so your sender keeps working if you change the slot
                         length. Add <code>"unit": "W"</code> for average power, <code>"start": "now"</code>
@@ -764,7 +987,12 @@ attributes:
                     <p>The third form &mdash; <code>total_wh</code> with a deadline &mdash; is what an
                         <a href="#profile-external-contingent">External energy budget</a> takes. It is the
                         one pushed shape that is scheduled rather than injected, so it gets a
-                        released / blocked signal like a heated store.</p>
+                        released / blocked signal like a heated store. Its optional
+                        <code>efficiency</code> array takes the same lengths and <code>start</code>
+                        as <code>values</code>, each entry above 0 and at most 1; it is used when
+                        the load's <a href="#managed-loads-efficiency">efficiency source</a> is
+                        <em>pushed</em>, and <code>total_wh</code> is then the energy the best slot
+                        would take.</p>
 
                     <h4 id="managed-loads-replaces-sensor">Extra load, or the whole appliance?</h4>
                     <p>This is the one thing worth getting right, and it is invisible from the sending

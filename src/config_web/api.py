@@ -40,6 +40,11 @@ except ImportError:  # imported as src.config_web (tests)
 from .timeseries_probe import probe
 
 try:  # running from src/ as a script — src/ is on sys.path
+    from loads.presets import presets_as_json
+except ImportError:  # imported as src.config_web (tests)
+    from ..loads.presets import presets_as_json
+
+try:  # running from src/ as a script — src/ is on sys.path
     from restart import RESTART
 except ImportError:  # imported as src.config_web (tests)
     from ..restart import RESTART
@@ -122,6 +127,10 @@ def get_schema():
         # them listed "default" and the other did not, so the wizard rendered the
         # installation fields for a source it then refused to save them for.
         "location_based_pv_sources": list(LOCATION_BASED_PV_SOURCES),
+        # What each managed-load type starts from. A field's default is the pool's -
+        # one FieldDef serves every heated store - so without these the form seeded a
+        # sauna with 28 C and a house with a pool's volume, and saved them.
+        "managed_load_presets": presets_as_json(),
     }
     # Use json.dumps with sort_keys=False to preserve SECTION_META insertion order
     response = Response(
