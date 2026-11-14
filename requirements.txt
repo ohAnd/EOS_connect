@@ -9,7 +9,7 @@ ruamel.yaml==0.18.17
 paho-mqtt>=2.1.0
 packaging>=23.2
 # pvlib>=0.13.0
-open-meteo-solar-forecast>=0.1.22
+open-meteo-solar-forecast>=0.1.30
 psutil>=7.0.0
 # <3.16: 3.16.0 (2026-10-11) crashes on import without the optional
 # pyserial extra (NameError in pymodbus/transport/serialtransport.py)
