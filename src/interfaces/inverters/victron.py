@@ -23,6 +23,13 @@ the grid import accordingly and uses the imported energy to charge the
 batteries.
 When EOS Connect is closed or terminated, the original ESS mode is automatically restored.
 This ensures that the Victron system returns to its normal ESS operation.
+
+The 0 W setpoint suits AC-coupled PV. With DC-coupled PV (MPPT) the MultiPlus no
+longer inverts at 0 W, so all PV goes into the battery and the house runs from the
+grid. For such systems "Avoid Discharge" can instead use the ESS minimum SoC
+(inverter.victron_avoid_discharge_method = "min_soc"): ESS stays in its normal mode
+and register 2901 is raised to the current SoC. On "Discharge Allowed" and on
+shutdown it is set back to the configured battery minimum SoC.
 """
 
 import logging
@@ -51,6 +58,17 @@ except ImportError as e:
     ModbusTcpClient = None  # type: ignore
     logger.warning("[Inverter] pymodbus import failed: %s", e)
 
+AVOID_DISCHARGE_EXTERNAL_CONTROL = "external_control"
+AVOID_DISCHARGE_MIN_SOC = "min_soc"
+AVOID_DISCHARGE_METHODS = (AVOID_DISCHARGE_EXTERNAL_CONTROL, AVOID_DISCHARGE_MIN_SOC)
+
+# Register 2901 carries the ESS minimum SoC in tenths of a percent. Victron's
+# scalefactor divides (value = raw / 10), while RegisterDef.decode() multiplies,
+# so this register is read and written as raw words here.
+_MIN_SOC_REG = Reg.SETTINGS_Settings_CGwacs_BatteryLife_MinimumSocLimit
+_MIN_SOC_RAW_PER_PCT = 10
+_DEFAULT_RESTORE_MIN_SOC_PCT = 5.0
+
 
 class VictronInverter(BaseInverter):
     """Victron inverter interface implementation."""
@@ -78,6 +96,8 @@ class VictronInverter(BaseInverter):
 
         # ESS state management
         self._saved_ess_state: dict[Reg, int] | None = None
+        # True while "avoid discharge" holds the battery via a raised ESS min SoC
+        self._min_soc_override_active: bool = False
 
     def start_vebus_keepalive(
         self, targets: dict[Reg, int], interval_s: float = 1.0, unit: int = 227
@@ -207,8 +227,153 @@ class VictronInverter(BaseInverter):
         self.port = 502
         self.unit_id = 100
 
+        method = (
+            str(
+                self.config.get("victron_avoid_discharge_method")
+                or AVOID_DISCHARGE_EXTERNAL_CONTROL
+            )
+            .strip()
+            .lower()
+        )
+        if method not in AVOID_DISCHARGE_METHODS:
+            logger.warning(
+                "[VictronModbus] Unknown victron_avoid_discharge_method '%s' "
+                "-> using '%s'",
+                method,
+                AVOID_DISCHARGE_EXTERNAL_CONTROL,
+            )
+            method = AVOID_DISCHARGE_EXTERNAL_CONTROL
+        self.avoid_discharge_method = method
+
+        try:
+            restore_pct = float(self.config.get("battery_min_soc_percentage"))
+        except (TypeError, ValueError):
+            restore_pct = _DEFAULT_RESTORE_MIN_SOC_PCT
+        self.restore_min_soc_pct = max(0.0, min(100.0, restore_pct))
+        self._min_soc_override_active = False
+
+        logger.info(
+            "[VictronModbus] Avoid discharge method: %s (min SoC restore target %.0f%%)",
+            self.avoid_discharge_method,
+            self.restore_min_soc_pct,
+        )
+
         self.client = ModbusTcpClient(self.address, port=self.port)
         self.connect_inverter()
+
+    # ------------------------------------------------------------------
+    # ESS minimum SoC (avoid discharge via min_soc)
+    # ------------------------------------------------------------------
+
+    def _read_raw_word(self, reg: Reg) -> int:
+        """Read the first raw register word of a single-word register."""
+        resp = self.read_registers(reg, unit=self.unit_id)
+        if resp is None or resp.isError() or not getattr(resp, "registers", None):
+            raise RuntimeError(f"Read error for {reg.name}")
+        return int(resp.registers[0])
+
+    def _read_soc_pct(self) -> float:
+        """Read the current battery SoC in percent (register 843, no scaling)."""
+        return float(self._read_raw_word(Reg.SYSTEM_Dc_Battery_Soc))
+
+    def _read_min_soc_pct(self) -> float:
+        """Read the ESS minimum SoC in percent (register 2901)."""
+        return self._read_raw_word(_MIN_SOC_REG) / _MIN_SOC_RAW_PER_PCT
+
+    def _write_min_soc_pct(
+        self, pct: float, retries: int = 8, delay_s: float = 0.2
+    ) -> None:
+        """Write the ESS minimum SoC in percent and verify it by raw readback."""
+        pct = max(0.0, min(100.0, float(pct)))
+        raw = int(round(pct * _MIN_SOC_RAW_PER_PCT))
+
+        res = self.write_register(unit=self.unit_id, reg=_MIN_SOC_REG, value=raw)
+        if hasattr(res, "isError") and res.isError():
+            raise RuntimeError(f"Write failed for {_MIN_SOC_REG.name}")
+
+        last = None
+        for i in range(retries):
+            time.sleep(delay_s)
+            last = self._read_raw_word(_MIN_SOC_REG)
+            if last == raw:
+                logger.info(
+                    "[VictronModbus] ESS minimum SoC set to %.1f%% (raw %d) "
+                    "after %d attempt(s)",
+                    pct,
+                    raw,
+                    i + 1,
+                )
+                return
+
+        raise RuntimeError(
+            f"Write verification failed for {_MIN_SOC_REG.name}: "
+            f"expected raw {raw}, got {last}"
+        )
+
+    def _external_control_active(self) -> bool:
+        """Return True if ESS is in External Control or the keepalive is running."""
+        reg = Reg.SETTINGS_Settings_Cgwacs_Hub4Mode
+        rdef = REGISTERS[reg]
+        resp = self.read_registers(reg, unit=100)
+
+        if resp is None or resp.isError():
+            raise RuntimeError(
+                f"Failed to read {reg.name} @ {rdef.address} before restoring ESS mode"
+            )
+
+        current_mode = int(rdef.decode(resp.registers))
+        keepalive_running = (
+            self._vebus_keepalive_thread is not None
+            and self._vebus_keepalive_thread.is_alive()
+        )
+
+        logger.info(
+            "[VictronModbus] Current Hub4Mode=%d, keepalive_running=%s",
+            current_mode,
+            keepalive_running,
+        )
+        return current_mode == 3 or keepalive_running
+
+    def _avoid_discharge_via_min_soc(self) -> None:
+        """Hold the battery by raising the ESS minimum SoC to the current SoC.
+
+        ESS keeps running in its normal mode, so DC-coupled PV still covers the
+        house and feeds in; only discharge below the current SoC is blocked.
+        """
+        # Coming from force charge, ESS is still under external control
+        if self._external_control_active():
+            self.restore_ess_state(unit=100, retries=8, delay_s=0.2)
+
+        soc = self._read_soc_pct()
+        target = max(float(math.ceil(soc)), self.restore_min_soc_pct)
+        self._write_min_soc_pct(target)
+        self._min_soc_override_active = True
+
+        logger.info(
+            "[VictronModbus] Hold mode active via ESS minimum SoC "
+            "(SoC %.1f%% -> minimum SoC %.0f%%)",
+            soc,
+            target,
+        )
+
+    def _restore_min_soc(self) -> None:
+        """Set the ESS minimum SoC back to the configured battery minimum."""
+        target = self.restore_min_soc_pct
+        if not self._min_soc_override_active:
+            # After a restart the override flag is gone; compare with the device
+            try:
+                if abs(self._read_min_soc_pct() - target) < 1.0 / _MIN_SOC_RAW_PER_PCT:
+                    return
+            except RuntimeError as e:
+                logger.warning(
+                    "[VictronModbus] Could not read ESS minimum SoC (%s) "
+                    "-> writing restore value anyway",
+                    e,
+                )
+
+        logger.info("[VictronModbus] Restoring ESS minimum SoC to %.0f%%", target)
+        self._write_min_soc_pct(target)
+        self._min_soc_override_active = False
 
     def set_mode_avoid_discharge(self):
         """Set the inverter to avoid discharging the battery.
@@ -218,6 +383,13 @@ class VictronInverter(BaseInverter):
             Battery may charge from PV
             Grid absorbs difference
         """
+        if self.avoid_discharge_method == AVOID_DISCHARGE_MIN_SOC:
+            logger.info(
+                "[VictronModbus] Setting hold mode, avoid discharge (ESS minimum SoC)"
+            )
+            self._avoid_discharge_via_min_soc()
+            return
+
         logger.info("[VictronModbus] Setting hold mode, avoid discharge")
 
         # ESS Externe Regelung ES Mode auf 3 und setzen dann ID 37,41 und 42
@@ -277,31 +449,13 @@ class VictronInverter(BaseInverter):
         """Set the inverter back to normal ESS operation (allow discharge)."""
         logger.info("[VictronModbus] Setting discharge mode, allow discharge")
 
-        # Aktuellen Hub4Mode lesen
-        reg = Reg.SETTINGS_Settings_Cgwacs_Hub4Mode
-        rdef = REGISTERS[reg]
-        resp = self.read_registers(reg, unit=100)
-
-        if resp is None or resp.isError():
-            raise RuntimeError(
-                f"Failed to read {reg.name} @ {rdef.address} before restoring ESS mode"
-            )
-
-        current_mode = int(rdef.decode(resp.registers))
-
-        keepalive_running = (
-            self._vebus_keepalive_thread is not None
-            and self._vebus_keepalive_thread.is_alive()
-        )
-
-        logger.info(
-            "[VictronModbus] Current Hub4Mode=%d, keepalive_running=%s",
-            current_mode,
-            keepalive_running,
-        )
+        # Release a min_soc hold first: it lives in normal ESS mode, so the
+        # early return below would otherwise skip it
+        if self.avoid_discharge_method == AVOID_DISCHARGE_MIN_SOC:
+            self._restore_min_soc()
 
         # If neither External Control is active nor Keepalive is running, do nothing
-        if current_mode != 3 and not keepalive_running:
+        if not self._external_control_active():
             logger.info(
                 "[VictronModbus] ESS already in normal mode, nothing to restore"
             )
@@ -394,6 +548,10 @@ class VictronInverter(BaseInverter):
             # optional: keepalive stoppen + setpoints auf 0
             # self.stop_vebus_keepalive(unit=227, write_zero=True)
             return
+
+        # A min_soc hold must not outlive the switch to grid charging
+        if self._min_soc_override_active:
+            self._restore_min_soc()
 
         # Save current ESS state
         self.save_ess_state(unit=100)
@@ -919,6 +1077,14 @@ class VictronInverter(BaseInverter):
         # Vorher gespeicherten ESS Zustand wiederherstellen (Hub4Mode + BatteryLife)
         # Fallbacks sind in restore_ess_state() drin, falls nie gespeichert wurde
         logger.info("[VictronModbus] Restoring ESS state before shutdown...")
+        if self.avoid_discharge_method == AVOID_DISCHARGE_MIN_SOC:
+            try:
+                self._restore_min_soc()
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                # Shutdown must go on to restore ESS mode and close the session
+                logger.warning(
+                    "[VictronModbus] Could not restore ESS minimum SoC: %s", e
+                )
         self.restore_ess_state(unit=100, retries=8, delay_s=0.2)
         # Close modbus session
         self.disconnect()

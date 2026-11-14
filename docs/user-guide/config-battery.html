@@ -85,6 +85,27 @@
                         control paths themselves &mdash; what a charge or discharge command does, and what
                         the API and MQTT expose &mdash; are in
                         <a href="../advanced/index.html#control">Controlling the battery</a>.</p>
+
+                    <h3 id="victron-avoid-discharge">Victron: how "avoid discharge" holds the battery</h3>
+                    <p>A Victron ESS can hold the battery in two ways, chosen with
+                        <code>inverter.victron_avoid_discharge_method</code>:</p>
+                    <ul>
+                        <li><strong><code>external_control</code></strong> (default) switches ESS to external
+                            control and keeps the MultiPlus at a 0&nbsp;W AC setpoint on all three phases. The
+                            MultiPlus then neither inverts nor charges from AC. That suits PV that is
+                            AC-coupled: it covers the house and feeds in as usual. PV on an MPPT
+                            (DC-coupled) can no longer reach the house in this mode &mdash; all of it goes
+                            into the battery while the house runs from the grid.</li>
+                        <li><strong><code>min_soc</code></strong> leaves ESS in its normal mode and raises the
+                            ESS minimum SoC to the current state of charge. DC-coupled PV keeps covering the
+                            house and feeding in, and the battery cannot discharge below where it stood.
+                            When discharge is allowed again, and when EOS Connect shuts down, the minimum SoC
+                            goes back to <code>battery.min_soc_percentage</code> &mdash; so set that to the
+                            minimum SoC you want ESS to use. Once the battery reaches the raised minimum, the
+                            MultiPlus stops inverting and only resumes after the SoC has risen a few
+                            percent; with load above PV this cycles in small steps.</li>
+                    </ul>
+                    <p>Charging from the grid uses external control with either setting.</p>
                     <div data-schema-section="inverter"></div>
                 </div>
 
