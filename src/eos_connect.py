@@ -365,8 +365,17 @@ with BOOT.step("base_control"):
     base_control = BaseControl(config_manager.config, time_zone, time_frame_base)
 
 # PHASE 3: Initialize other interfaces using factory
+# The Victron min_soc method restores the ESS minimum SoC to the battery's configured
+# minimum. Taking it from config rather than reading it back off the inverter keeps a
+# restart in the middle of "avoid discharge" from adopting the raised value for good.
 inverter_interface = interface_factory.create_inverter_interface(
-    config_manager.config["inverter"], critical=True
+    {
+        **config_manager.config["inverter"],
+        "battery_min_soc_percentage": config_manager.config.get("battery", {}).get(
+            "min_soc_percentage"
+        ),
+    },
+    critical=True,
 )
 
 # Managed loads are built before the load interface because the interface needs to know

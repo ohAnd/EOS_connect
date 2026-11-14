@@ -2134,6 +2134,24 @@ _ALL_FIELDS: list[FieldDef] = [
         display_group="Hardware",
     ),
     FieldDef(
+        key="inverter.victron_avoid_discharge_method",
+        field_type="select",
+        default="external_control",
+        section="inverter",
+        level="standard",
+        description=(
+            "How Victron holds the battery in 'avoid discharge': external_control "
+            "writes a 0 W AC setpoint (suits AC-coupled PV); min_soc keeps ESS "
+            "running and raises its minimum SoC to the current SoC (use when most "
+            "PV is DC-coupled via MPPT)"
+        ),
+        labels=["restart_required"],
+        help_url="config-battery.html#victron-avoid-discharge",
+        validation={"choices": ["external_control", "min_soc"]},
+        depends_on={"inverter.type": ["victron"]},
+        display_group="Hardware",
+    ),
+    FieldDef(
         key="inverter.user",
         field_type="str",
         default="customer",
