@@ -872,9 +872,8 @@ scripts/install_playwright_deps_userspace.sh      # the alternative, without roo
                     <div class="alert alert-info">
                         <p><strong>Why the publish runs twice.</strong> The build number reaches
                             <code>src/version.py</code> only <em>after</em> the push that started the build,
-                            in the <code>[AUTO]</code> commit the image workflows push with
-                            <code>GITHUB_TOKEN</code> &mdash; and GitHub starts no workflow run from an event
-                            that token created. So the run that the docs push started reads the previous
+                            in the <code>[AUTO]</code> commit the image workflows push &mdash; and that commit
+                            carries <code>[skip ci]</code>, so GitHub starts no workflow run for it. So the run that the docs push started reads the previous
                             build number. <code>pages.yml</code> therefore also listens on
                             <code>workflow_run</code> for those two workflows finishing, and publishes again
                             with the version current. That trigger only fires for the copy of the file on the
@@ -953,6 +952,11 @@ docs: update MQTT topic table</code></pre>
                     </div>
                     <p>Do not edit <code>src/version.py</code>. Versions are bumped by automation and land as
                         <code>[AUTO] Update version to ...</code> commits.</p>
+                    <p>Only the maintainer merges into <code>main</code> and <code>develop</code>. A ruleset
+                        restricts updates to both branches, so collaborators with write access push their own
+                        branches and open pull requests, but cannot push or merge there. The version bump gets
+                        through with a deploy key that only workflows on <code>main</code> and
+                        <code>develop</code> can read.</p>
 
                     <h3 id="pr-checklist">What a pull request needs</h3>
                     <ul>
