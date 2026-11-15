@@ -472,9 +472,8 @@ def test_pages_reruns_after_the_image_builds():
     that true.
 
     ``src/version.py`` is rewritten after the push that started the build, by the
-    ``[AUTO]`` commit the image workflows push with ``GITHUB_TOKEN`` - and GitHub
-    starts no workflow run from an event that token created, so the path filter on
-    that file never fires. A ``workflow_run`` trigger is what actually reruns the
+    ``[AUTO]`` commit the image workflows push - and that commit carries
+    ``[skip ci]``, so the path filter on that file never fires. A ``workflow_run`` trigger is what actually reruns the
     publish once the version is current.
 
     ``workflow_run`` matches on the *name* of the other workflow, so a rename
@@ -501,18 +500,50 @@ def test_pages_reruns_after_the_image_builds():
 
 
 def test_the_version_bump_cannot_trigger_the_publish():
-    """The comments above rest on the bump being pushed with GITHUB_TOKEN.
+    """The comments above rest on the [AUTO] commit starting no workflow run.
 
-    Swap in a personal access token there and the [AUTO] commit starts triggering
-    workflows - which would make docker_develop.yml, triggered by every push to
-    develop with no path filter, run itself in a loop.
+    The bump is pushed with a deploy key, so that a ruleset can lock main and
+    develop to the maintainer and deploy keys. Unlike GITHUB_TOKEN, a deploy-key
+    push does start workflows - and docker_develop.yml, triggered by every push to
+    develop with no path filter, would then bump again on its own bump, forever.
+    Two things stop that: ``[skip ci]`` in the commit message, and a guard on the
+    ``tests`` job, which every publishing job depends on.
     """
+    guard = "!startsWith(github.event.head_commit.message, '[AUTO]')"
     for name in ("docker_main.yml", "docker_develop.yml"):
         text = (REPO / ".github/workflows" / name).read_text(encoding="utf-8")
         step = re.search(r"Commit version file and push changes(.*?)\n\n", text, re.S)
         assert step, f"{name} no longer has the version commit step"
-        assert "secrets.GITHUB_TOKEN" in step.group(1), (
-            f"{name} pushes the version bump with something other than GITHUB_TOKEN; "
-            "that makes [AUTO] commits trigger workflows, and docker_develop.yml "
-            "has no path filter to stop it looping"
+        assert "[skip ci]" in step.group(1), (
+            f"{name} commits the version bump without [skip ci]; the deploy-key push "
+            "would start workflows, and docker_develop.yml would loop on its own bump"
         )
+        tests_job = re.search(r"^  tests:\n(.*?)^  \S", text, re.S | re.M)
+        assert tests_job, f"{name} has no tests job"
+        assert guard in tests_job.group(1), (
+            f"{name} runs its tests job on [AUTO] commits; that guard is the second "
+            "line against the bump looping"
+        )
+
+
+def test_the_deploy_key_is_only_reachable_from_main_and_develop():
+    """The bump pushes with a deploy key that may bypass the branch ruleset.
+
+    It must come from the version-bump environment, which only main and develop
+    may use. As a repository secret, any collaborator's workflow on any branch
+    could read it and push straight past the ruleset.
+    """
+    bumping = ("docker_main.yml", "docker_develop.yml")
+    for name in bumping:
+        text = (REPO / ".github/workflows" / name).read_text(encoding="utf-8")
+        job = re.search(r"^  publish_image:\n(.*?)(?=^  \S|\Z)", text, re.S | re.M)
+        assert job, f"{name} has no publish_image job"
+        body = job.group(1)
+        assert "environment: version-bump" in body, (
+            f"{name} reads VERSION_BUMP_DEPLOY_KEY outside the version-bump environment"
+        )
+        assert "secrets.VERSION_BUMP_DEPLOY_KEY" in body
+    for path in (REPO / ".github/workflows").glob("*.y*ml"):
+        if path.name not in bumping:
+            text = path.read_text(encoding="utf-8")
+            assert "VERSION_BUMP_DEPLOY_KEY" not in text, f"{path.name} uses the deploy key"

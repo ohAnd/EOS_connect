@@ -28,11 +28,10 @@ on:
 
   # The preview banner names the build it documents, which it reads out of
   # src/version.py. That file is rewritten *after* the push that started the
-  # build, by the [AUTO] commit the image workflows push with GITHUB_TOKEN - and
-  # GitHub deliberately starts no workflow run from an event that token created.
-  # (Verified against the run history: no repository workflow has ever run on an
-  # [AUTO] commit. Which is also why docker_develop.yml, triggered by every push
-  # to develop with no path filter, does not loop.)
+  # build, by the [AUTO] commit the image workflows push - and that commit carries
+  # [skip ci], so GitHub starts no workflow run for it. (That is also why
+  # docker_develop.yml, triggered by every push to develop with no path filter,
+  # does not loop; its tests job additionally skips [AUTO] commits.)
   #
   # So a run started by the docs push reads the *previous* build number, and the
   # path filter above never rescues it. Running again once the image workflow has
