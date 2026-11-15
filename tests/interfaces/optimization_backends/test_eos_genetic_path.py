@@ -663,3 +663,96 @@ class TestAcChargeIsSlotEnergy:
 
         assert control.get_current_ac_charge_demand() == pytest.approx(450.0)
         assert control.get_needed_ac_charge_power() == pytest.approx(1800.0)
+
+
+# ----------------------------------------------------------------------
+# The running slot: EOS plans only what is left of it
+# ----------------------------------------------------------------------
+
+
+class TestFirstSlotFraction:
+    """
+    A run inside a slot plans only its remainder. EOS reports the share as
+    ``first_slot_fraction``; the first ``ac_charge`` is the power for that
+    remainder, so its energy is only the remainder's share of a slot.
+    """
+
+    def test_the_running_slot_holds_only_its_remainder(self):
+        normalized = _path(3600)._normalize(
+            {"ac_charge": [0.5, 0.5], "first_slot_fraction": 0.25},
+            first_slot=0,
+            total_slots=2,
+        )
+        assert normalized["ac_charge"] == [0.125, 0.5]
+
+    def test_it_combines_with_the_quarter_hour_scaling(self):
+        normalized = _path(900)._normalize(
+            {"ac_charge": [1.0, 1.0], "first_slot_fraction": 0.5},
+            first_slot=0,
+            total_slots=2,
+        )
+        assert normalized["ac_charge"] == [0.125, 0.25]
+
+    def test_the_fraction_applies_where_now_lands_on_the_grid(self):
+        """Index 0 of the answer is the current slot, wherever it is anchored."""
+        normalized = _path(3600)._normalize(
+            {"ac_charge": [0.8, 0.8], "first_slot_fraction": 0.5},
+            first_slot=10,
+            total_slots=12,
+        )
+        assert normalized["ac_charge"][10] == pytest.approx(0.4)
+        assert normalized["ac_charge"][11] == pytest.approx(0.8)
+
+    @pytest.mark.parametrize("fraction", [None, 0, -0.5, 1.5, "0.5", True])
+    def test_a_missing_or_impossible_fraction_means_a_whole_slot(self, fraction):
+        solution = {"ac_charge": [0.5]}
+        if fraction is not None:
+            solution["first_slot_fraction"] = fraction
+        normalized = _path(3600)._normalize(solution, first_slot=0, total_slots=1)
+        assert normalized["ac_charge"] == [0.5]
+
+    def test_other_controls_are_not_scaled(self):
+        """They are permissions and power shares, not energies."""
+        normalized = _path(3600)._normalize(
+            {
+                "ac_charge": [1.0],
+                "dc_charge": [1.0],
+                "discharge_allowed": [1],
+                "first_slot_fraction": 0.25,
+            },
+            first_slot=0,
+            total_slots=1,
+        )
+        assert normalized["dc_charge"] == [1.0]
+        assert normalized["discharge_allowed"] == [1]
+
+    @patch("src.interfaces.base_control.datetime")
+    def test_a_half_power_plan_at_quarter_to_runs_at_half_power(self, mock_datetime):
+        """
+        Hourly slots, a run at 10:45, EOS plans half of 3600 W for the 15
+        minutes left. Counted as a whole slot, the 1800 Wh would have been
+        pushed through in those 15 minutes - full power, capped by the battery.
+        """
+        from src.interfaces.base_control import (  # pylint: disable=import-outside-toplevel
+            BaseControl,
+        )
+
+        mock_datetime.now.return_value = BERLIN.localize(
+            datetime(2026, 11, 15, 10, 45, 0)
+        )
+        config = {
+            "battery": {"max_charge_power_w": 3600, "capacity_wh": 10000},
+            "inverter": {"max_grid_charge_rate": 3600, "max_pv_charge_rate": 3600},
+        }
+        normalized = _path(3600)._normalize(
+            {"ac_charge": [0.5], "first_slot_fraction": 0.25},
+            first_slot=0,
+            total_slots=1,
+        )
+
+        control = BaseControl(config, BERLIN, time_frame_base=3600)
+        control.set_current_bat_charge_max(3600)
+        control.set_current_ac_charge_demand(normalized["ac_charge"][0])
+
+        assert control.get_current_ac_charge_demand() == pytest.approx(450.0)
+        assert control.get_needed_ac_charge_power() == pytest.approx(1800.0)

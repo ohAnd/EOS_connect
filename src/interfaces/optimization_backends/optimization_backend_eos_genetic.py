@@ -211,6 +211,20 @@ def _to_profile_settings(group, settings):
     return converted, dropped
 
 
+def _first_slot_fraction(solution):
+    """
+    The part of the first slot a GENETIC solution planned, in (0, 1].
+
+    Anything missing or outside that range counts as a whole slot: that is
+    what a server without the field plans, and scaling by a value EOS itself
+    would reject could only make the first slot's charge wrong in a new way.
+    """
+    value = solution.get("first_slot_fraction", 1.0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 1.0
+    return float(value) if 0.0 < value <= 1.0 else 1.0
+
+
 class EOSGeneticPath:  # pylint: disable=too-many-instance-attributes
     """
     Translates EOS Connect's optimization request to and from ``/v1/optimize``.
@@ -456,6 +470,15 @@ class EOSGeneticPath:  # pylint: disable=too-many-instance-attributes
         as four times its energy. The chart showed four times the charge, and
         the control loop asked for four times the power, which only the battery's
         limit stopped - so a planned half-power charge ran at full power (#371).
+
+        The first slot is shorter still. A run inside a slot plans only the part
+        of it that is left, and EOS says how much as ``first_slot_fraction``
+        (0.25 for a run at 10:45 on hourly slots). Its ``ac_charge`` is the power
+        for that remainder, so its energy is the remainder's share too. The
+        control loop spreads the slot's energy over the seconds left in it;
+        counted as a full slot, the energy was delivered four times over in that
+        quarter hour - the #371 pattern again, on every run off a slot boundary.
+        Servers that do not send the field plan whole slots, hence 1.0.
         """
         normalized = dict(solution)
         if isinstance(normalized.get("ac_charge"), list):
@@ -463,6 +486,8 @@ class EOSGeneticPath:  # pylint: disable=too-many-instance-attributes
             normalized["ac_charge"] = [
                 float(value) * slot_hours for value in normalized["ac_charge"]
             ]
+            if normalized["ac_charge"]:
+                normalized["ac_charge"][0] *= _first_slot_fraction(solution)
         for key in ("ac_charge", "dc_charge", "discharge_allowed"):
             if key in normalized:
                 normalized[key] = self._to_midnight_anchored(
