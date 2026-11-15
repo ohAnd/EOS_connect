@@ -1569,6 +1569,25 @@ def test_max_age_follows_the_optimizer_cadence_when_known(make_manager, installa
     assert load.schedule_is_stale(manager._clock()[1], age)
 
 
+def test_max_age_makes_room_for_a_slow_solver(make_manager, installation):
+    """
+    #366: a 20-minute solve on a 15-minute interval. The schedule lands when a run
+    ends, so the gap between two of them is the wait *plus* the run - and with the
+    runtime left out, the age of 1920 s called every second gap overdue.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=900)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    manager.scheduler_runtime = 1200.0
+    age = manager._schedule_max_age()
+    assert age == 900 * 2 + 1200 + 120
+    load = manager.instance("pool")
+    # Two aligned slots apart, with the run finishing four minutes late.
+    load.last_schedule_at = manager._clock()[1] - timedelta(seconds=1800 + 240)
+    assert not load.schedule_is_stale(manager._clock()[1], age)
+
+
 def test_unknown_cadence_keeps_the_cycle_based_age(make_manager):
     manager = make_manager([POOL], cycle_seconds=90)
     manager.external_scheduler = True

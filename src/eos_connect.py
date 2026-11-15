@@ -1732,6 +1732,9 @@ class OptimizationScheduler:
                 e,
             )
             self._last_avg_runtime = 120
+        # A schedule only arrives when a run ends, so how long runs take is part of
+        # the gap between two schedules the load manager has to tolerate.
+        load_manager.scheduler_runtime = self._last_avg_runtime
 
         json_optimize_input["timestamp"] = datetime.now(time_zone).isoformat()
         self.last_request_response["request"] = json.dumps(
@@ -2055,6 +2058,9 @@ with BOOT.step("scheduler"):
     # shorter than the optimizer's cadence had the fallback planner publishing into
     # the household forecast on top of a solver that was merely about to run.
     load_manager.scheduler_interval = optimization_scheduler.update_interval
+    # The built-in solver keeps its runs to a share of the same cadence: a plan that
+    # takes longer than the interval arrives stale and leaves loads unscheduled.
+    eos_interface.set_scheduler_interval(optimization_scheduler.update_interval)
 
 
 def change_control_state():
