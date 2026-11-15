@@ -17,11 +17,13 @@ import pytz
 try:  # running from src/ as a script - src/ is on sys.path
     from interfaces.optimization_backends.optimization_backend_eos_genetic import (
         EOSGeneticPath,
+        supports_device_profiles,
         supports_genetic_optimize,
     )
 except ImportError:  # imported as src.interfaces... (tests)
     from .optimization_backend_eos_genetic import (
         EOSGeneticPath,
+        supports_device_profiles,
         supports_genetic_optimize,
     )
 
@@ -132,17 +134,24 @@ class EOSBackend:
                 # below 0.1.0 is still left completely alone: it cannot have the
                 # endpoint, and probing it would cost a request for nothing.
                 if supports_genetic_optimize(self.base_url):
+                    device_profiles = supports_device_profiles(self.base_url)
                     self._genetic_path = EOSGeneticPath(
                         self.base_url,
                         self.time_frame_base,
                         self.time_zone,
                         self.__get_config_path,
                         self.__set_config_path,
+                        device_profiles=device_profiles,
                     )
                     logger.info(
                         "[OPT-EOS] EOS server offers /v1/optimize - using it "
-                        "for %d s slots",
+                        "for %d s slots%s",
                         self.time_frame_base,
+                        (
+                            ", devices written as profile adjustments"
+                            if device_profiles
+                            else ""
+                        ),
                     )
                 else:
                     logger.info(

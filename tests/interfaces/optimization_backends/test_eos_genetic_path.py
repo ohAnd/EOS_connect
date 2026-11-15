@@ -20,6 +20,7 @@ import requests
 
 from src.interfaces.optimization_backends.optimization_backend_eos_genetic import (
     EOSGeneticPath,
+    supports_device_profiles,
     supports_genetic_optimize,
 )
 
@@ -29,7 +30,7 @@ MODULE = (
 BERLIN = pytz.timezone("Europe/Berlin")
 
 
-def _path(time_frame_base=900, writes=None):
+def _path(time_frame_base=900, writes=None, device_profiles=False):
     """A path object whose config writes are recorded instead of sent."""
     recorded = writes if writes is not None else []
 
@@ -38,7 +39,12 @@ def _path(time_frame_base=900, writes=None):
         return True
 
     return EOSGeneticPath(
-        "http://eos:8503", time_frame_base, BERLIN, lambda key: None, set_config
+        "http://eos:8503",
+        time_frame_base,
+        BERLIN,
+        lambda key: None,
+        set_config,
+        device_profiles=device_profiles,
     )
 
 
@@ -217,6 +223,166 @@ class TestDeviceMirroring:
 
 
 # ----------------------------------------------------------------------
+# Servers that describe devices by profile
+# ----------------------------------------------------------------------
+
+
+class TestDeviceProfileDetection:
+    """
+    EOS builds from 2026-11-11 on describe batteries and inverters by profile.
+    They answer HTTP 200 to the flat keys and drop them silently, so the shape
+    is chosen by asking the schema - never by version.
+    """
+
+    @staticmethod
+    def _openapi(schemas):
+        response = Mock()
+        response.json.return_value = {
+            "paths": {},
+            "components": {"schemas": {name: {} for name in schemas}},
+        }
+        response.raise_for_status = Mock()
+        return response
+
+    def test_a_server_with_profiles_is_recognised(self):
+        with patch(
+            MODULE + ".requests.get",
+            return_value=self._openapi(
+                ["BatteryProfileAdjustment", "BatteriesCommonSettings-Input"]
+            ),
+        ):
+            assert supports_device_profiles("http://eos:8503") is True
+
+    def test_a_server_without_profiles_is_not(self):
+        with patch(
+            MODULE + ".requests.get",
+            return_value=self._openapi(["BatteriesCommonSettings-Input"]),
+        ):
+            assert supports_device_profiles("http://eos:8503") is False
+
+    def test_an_unreachable_server_keeps_the_flat_shape(self):
+        with patch(
+            MODULE + ".requests.get",
+            side_effect=requests.exceptions.ConnectionError("refused"),
+        ):
+            assert supports_device_profiles("http://eos:8503") is False
+
+    def test_a_server_answering_nonsense_keeps_the_flat_shape(self):
+        response = Mock()
+        response.json.return_value = ["not", "an", "object"]
+        response.raise_for_status = Mock()
+        with patch(MODULE + ".requests.get", return_value=response):
+            assert supports_device_profiles("http://eos:8503") is False
+
+
+class TestProfileShapedMirroring:
+    """
+    On a server with profiles, capacity and power go into ``profile_adjustment``
+    - the mapping EOS's own config-file migration applies.
+    """
+
+    REQUEST = {
+        "pv_akku": {
+            "device_id": "battery1",
+            "capacity_wh": 12000,
+            "charging_efficiency": 0.93,
+            "discharging_efficiency": 0.94,
+            "max_charge_power_w": 4000,
+            "initial_soc_percentage": 42,
+            "min_soc_percentage": 10,
+            "max_soc_percentage": 95,
+        },
+        "inverter": {
+            "device_id": "inverter1",
+            "max_power_wh": 10000,
+            "battery_id": "battery1",
+        },
+        "eauto": {
+            "device_id": "ev1",
+            "capacity_wh": 27000,
+            "charging_efficiency": 0.90,
+            "discharging_efficiency": 0.95,
+            "max_charge_power_w": 7360,
+        },
+    }
+
+    def _written(self, device_profiles=True):
+        writes = []
+        _path(900, writes, device_profiles)._mirror_devices(self.REQUEST)
+        return dict(writes)
+
+    def test_the_battery_capacity_and_power_become_an_adjustment(self):
+        battery = self._written()["devices/batteries"]["battery1"]
+        assert battery["profile_adjustment"] == {
+            "nominal_capacity_wh": 12000,
+            "max_charge_power_w": 4000,
+            "max_discharge_power_w": 4000,
+        }
+        for flat in ("capacity_wh", "max_charge_power_w"):
+            assert flat not in battery
+
+    def test_the_charge_limit_also_caps_discharging(self):
+        """
+        Without profiles one number capped both directions. Leaving the discharge
+        limit out would hand it to the profile default (5000 W for generic-lfp).
+        """
+        battery = self._written()["devices/batteries"]["battery1"]
+        adjustment = battery["profile_adjustment"]
+        assert adjustment["max_discharge_power_w"] == adjustment["max_charge_power_w"]
+
+    def test_efficiencies_are_left_to_the_profile(self):
+        """The server has no setting left for them; sending them changes nothing."""
+        written = self._written()
+        for group, device_id in (
+            ("devices/batteries", "battery1"),
+            ("devices/electric_vehicles", "ev1"),
+        ):
+            device = written[group][device_id]
+            assert "charging_efficiency" not in device
+            assert "discharging_efficiency" not in device
+
+    def test_policy_settings_stay_where_they_are(self):
+        battery = self._written()["devices/batteries"]["battery1"]
+        assert battery["min_soc_percentage"] == 10
+        assert battery["max_soc_percentage"] == 95
+        assert "initial_soc_percentage" not in battery
+
+    def test_the_inverter_power_becomes_its_nominal_power(self):
+        inverter = self._written()["devices/inverters"]["inverter1"]
+        assert inverter["profile_adjustment"] == {"nominal_power_w": 10000}
+        assert inverter["battery_id"] == "battery1"
+        assert "max_power_w" not in inverter
+        assert "max_power_wh" not in inverter
+
+    def test_the_ev_is_converted_like_the_battery(self):
+        ev = self._written()["devices/electric_vehicles"]["ev1"]
+        assert ev["profile_adjustment"]["nominal_capacity_wh"] == 27000
+        assert ev["profile_adjustment"]["max_charge_power_w"] == 7360
+
+    def test_a_server_without_profiles_keeps_the_flat_shape(self):
+        battery = self._written(device_profiles=False)["devices/batteries"]["battery1"]
+        assert battery["capacity_wh"] == 12000
+        assert battery["charging_efficiency"] == 0.93
+        assert "profile_adjustment" not in battery
+
+    def test_the_dropped_efficiencies_are_reported_once(self, caplog):
+        path = _path(900, [], device_profiles=True)
+        with caplog.at_level("WARNING", logger="__main__"):
+            path._mirror_devices(self.REQUEST)
+            changed = {
+                **self.REQUEST,
+                "pv_akku": {**self.REQUEST["pv_akku"], "capacity_wh": 13000},
+            }
+            path._mirror_devices(changed)
+        battery_warnings = [
+            record
+            for record in caplog.records
+            if "efficiencies of 'battery1'" in record.getMessage()
+        ]
+        assert len(battery_warnings) == 1
+
+
+# ----------------------------------------------------------------------
 # The request body
 # ----------------------------------------------------------------------
 
@@ -343,7 +509,7 @@ class TestPathSelection:
     EOS_MODULE = "src.interfaces.optimization_backends.optimization_backend_eos"
 
     @staticmethod
-    def _backend(time_frame_base, supported):
+    def _backend(time_frame_base, supported, profiles=False):
         """Build an EOSBackend against a mocked EOS, with capability forced."""
         from src.interfaces.optimization_backends.optimization_backend_eos import (
             EOSBackend,
@@ -375,7 +541,9 @@ class TestPathSelection:
             module + ".requests.put"
         ), patch(
             module + ".supports_genetic_optimize", return_value=supported
-        ) as probe:
+        ) as probe, patch(
+            module + ".supports_device_profiles", return_value=profiles
+        ):
             backend = EOSBackend(
                 "http://eos:8503", time_frame_base, BERLIN
             )
@@ -402,6 +570,14 @@ class TestPathSelection:
         """0.2.0 and 0.3.0 have no /v1/optimize; they must still work."""
         backend, _ = self._backend(900, supported=False)
         assert backend._genetic_path is None
+
+    def test_a_server_with_profiles_gets_profile_shaped_devices(self):
+        backend, _ = self._backend(900, supported=True, profiles=True)
+        assert backend._genetic_path.device_profiles is True
+
+    def test_a_server_without_profiles_gets_flat_devices(self):
+        backend, _ = self._backend(900, supported=True, profiles=False)
+        assert backend._genetic_path.device_profiles is False
 
     def test_the_genetic_path_is_the_one_that_answers(self):
         backend, _ = self._backend(900, supported=True)

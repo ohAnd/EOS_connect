@@ -59,6 +59,46 @@ _PER_RUN_KEYS = frozenset({"initial_soc_percentage"})
 #: configuration calls the same number ``max_power_w``.
 _RENAMED_DEVICE_KEYS = {"inverters": {"max_power_wh": "max_power_w"}}
 
+#: The schema only a server with device profiles has. Its battery and inverter
+#: settings no longer carry capacity, power or efficiencies as flat keys.
+_DEVICE_PROFILE_SCHEMA = "BatteryProfileAdjustment"
+
+#: Flat keys that move into ``profile_adjustment`` on a server with device
+#: profiles, as (flat key, adjustment key) per group. The mapping is the one
+#: EOS's own config-file migration applies (``configmigrate.py``), so a server
+#: fed by EOS Connect ends up exactly where a migrated config file would.
+_PROFILE_ADJUSTMENT_KEYS = {
+    "batteries": (
+        ("capacity_wh", "nominal_capacity_wh"),
+        ("max_charge_power_w", "max_charge_power_w"),
+    ),
+    "electric_vehicles": (
+        ("capacity_wh", "nominal_capacity_wh"),
+        ("max_charge_power_w", "max_charge_power_w"),
+    ),
+    "inverters": (
+        ("max_power_w", "nominal_power_w"),
+        ("max_ac_charge_power_w", "max_ac_charge_power_w"),
+    ),
+}
+
+#: Flat keys a server with device profiles takes from the profile instead.
+_PROFILE_PROVIDED_KEYS = {
+    "batteries": ("charging_efficiency", "discharging_efficiency"),
+    "electric_vehicles": ("charging_efficiency", "discharging_efficiency"),
+    "inverters": ("ac_to_dc_efficiency", "dc_to_ac_efficiency"),
+}
+
+
+def _fetch_openapi(base_url, timeout):
+    """The server's OpenAPI document; raises on anything but a usable answer."""
+    response = requests.get(base_url + "/openapi.json", timeout=timeout)
+    response.raise_for_status()
+    document = response.json()
+    if not isinstance(document, dict):
+        raise ValueError("OpenAPI document is not an object")
+    return document
+
 
 def supports_genetic_optimize(base_url, timeout=10):
     """
@@ -88,9 +128,7 @@ def supports_genetic_optimize(base_url, timeout=10):
         failing every cycle instead of one request.
     """
     try:
-        response = requests.get(base_url + "/openapi.json", timeout=timeout)
-        response.raise_for_status()
-        paths = response.json().get("paths", {})
+        paths = _fetch_openapi(base_url, timeout).get("paths", {})
     except (requests.exceptions.RequestException, ValueError, AttributeError) as err:
         logger.warning(
             "[OPT-EOS] Could not ask the EOS server at %s what it supports (%s: %s) - "
@@ -103,7 +141,77 @@ def supports_genetic_optimize(base_url, timeout=10):
     return GENETIC_OPTIMIZE_PATH in paths
 
 
-class EOSGeneticPath:
+def supports_device_profiles(base_url, timeout=10):
+    """
+    Whether this EOS server describes batteries and inverters by profile.
+
+    Such a server moved capacity and power limits into ``profile_adjustment``
+    and takes efficiencies from the profile. It still answers HTTP 200 to the
+    flat keys, but drops them without a word: a device written the old way
+    ends up with no capacity at all. So the shape has to be chosen up front,
+    and like ``supports_genetic_optimize`` it is asked, not derived from a
+    version string.
+
+    Args:
+        base_url (str): Base URL of the EOS server.
+        timeout (int): Seconds to wait for the server.
+
+    Returns:
+        bool: True when the server's schema has a battery profile adjustment.
+        An unreachable server returns False, which keeps the flat shape that
+        every server before profiles needs.
+    """
+    try:
+        schemas = (
+            _fetch_openapi(base_url, timeout).get("components", {}).get("schemas", {})
+        )
+    except (requests.exceptions.RequestException, ValueError, AttributeError) as err:
+        logger.warning(
+            "[OPT-EOS] Could not ask the EOS server at %s for its device schema "
+            "(%s: %s) - writing devices without profiles",
+            base_url,
+            type(err).__name__,
+            err,
+        )
+        return False
+    return isinstance(schemas, dict) and _DEVICE_PROFILE_SCHEMA in schemas
+
+
+def _to_profile_settings(group, settings):
+    """
+    Rewrite flat device settings into the shape of a server with profiles.
+
+    Capacity and power limits move into ``profile_adjustment``. A battery's
+    charge limit becomes its discharge limit as well: without profiles that one
+    number capped both directions, and EOS's own migration carries it over the
+    same way - otherwise the profile's default discharge power would apply.
+
+    Efficiencies are dropped: the server takes them from the profile and has
+    no setting left for them.
+
+    Returns:
+        tuple: ``(settings, dropped_keys)``.
+    """
+    converted = dict(settings)
+    adjustment = {}
+    for flat_key, adjustment_key in _PROFILE_ADJUSTMENT_KEYS.get(group, ()):
+        value = converted.pop(flat_key, None)
+        if value is not None:
+            adjustment[adjustment_key] = value
+    if (
+        group in ("batteries", "electric_vehicles")
+        and "max_charge_power_w" in adjustment
+    ):
+        adjustment.setdefault("max_discharge_power_w", adjustment["max_charge_power_w"])
+    dropped = [key for key in _PROFILE_PROVIDED_KEYS.get(group, ()) if key in converted]
+    for key in dropped:
+        del converted[key]
+    if adjustment:
+        converted["profile_adjustment"] = adjustment
+    return converted, dropped
+
+
+class EOSGeneticPath:  # pylint: disable=too-many-instance-attributes
     """
     Translates EOS Connect's optimization request to and from ``/v1/optimize``.
 
@@ -112,7 +220,15 @@ class EOSGeneticPath:
     to the server.
     """
 
-    def __init__(self, base_url, time_frame_base, time_zone, get_config, set_config):
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        base_url,
+        time_frame_base,
+        time_zone,
+        get_config,
+        set_config,
+        device_profiles=False,
+    ):
         """
         Args:
             base_url (str): Base URL of the EOS server.
@@ -120,14 +236,19 @@ class EOSGeneticPath:
             time_zone: Timezone the midnight-anchored arrays are built on.
             get_config (callable): ``path -> value``, from the owning backend.
             set_config (callable): ``path, value -> bool``, from the owning backend.
+            device_profiles (bool): Whether the server describes devices by
+                profile, see ``supports_device_profiles``.
         """
         self.base_url = base_url
         self.time_frame_base = time_frame_base
         self.time_zone = time_zone
         self._get_config = get_config
         self._set_config = set_config
+        self.device_profiles = device_profiles
         #: What was last written to devices/*, so an unchanged cycle writes nothing.
         self._mirrored_devices = {}
+        #: Groups whose dropped efficiencies were already reported.
+        self._reported_dropped = set()
 
     # ------------------------------------------------------------------
     # Slot arithmetic
@@ -167,6 +288,9 @@ class EOSGeneticPath:
         ride along in every request has to live on the server. The values come
         from the request EOS Connect already builds, which keeps a single source
         of truth; only a changed group is written.
+
+        On a server with device profiles the settings are rewritten into that
+        shape first - see ``_to_profile_settings``.
         """
         for request_key, group in _DEVICE_GROUPS:
             device = eos_request.get(request_key)
@@ -178,6 +302,9 @@ class EOSGeneticPath:
                 for key, value in device.items()
                 if key not in _PER_RUN_KEYS
             }
+            if self.device_profiles:
+                settings, dropped = _to_profile_settings(group, settings)
+                self._report_dropped(group, device["device_id"], dropped)
             payload = {device["device_id"]: settings}
             if self._mirrored_devices.get(group) == payload:
                 continue
@@ -186,6 +313,19 @@ class EOSGeneticPath:
                 logger.debug(
                     "[OPT-EOS] Mirrored %s into the EOS device configuration", group
                 )
+
+    def _report_dropped(self, group, device_id, dropped):
+        """Say once per group that EOS uses its profile's efficiencies, not ours."""
+        if not dropped or group in self._reported_dropped:
+            return
+        self._reported_dropped.add(group)
+        logger.warning(
+            "[OPT-EOS] EOS takes the efficiencies of '%s' from its device profile - "
+            "%s from EOS Connect are not applied. Choose or create a matching "
+            "profile in EOSdash if the profile's values do not fit.",
+            device_id,
+            ", ".join(dropped),
+        )
 
     def _apply_run_settings(self, eos_request, now=None):
         """

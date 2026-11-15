@@ -63,6 +63,14 @@
                     <p>Capacity, the charge and discharge limits, and the state of charge the optimizer
                         plans against. These are the numbers every plan is built on, so a capacity that is
                         out by a third makes every decision out by a third.</p>
+                    <p>Recent Akkudoktor EOS builds describe a battery by a <em>battery profile</em>.
+                        On such a server EOS Connect writes the capacity and
+                        <code>battery.max_charge_power_w</code> as the profile adjustment, the same
+                        place EOS's own migration puts them. The charge and discharge efficiencies
+                        come from the profile, so <code>battery.charge_efficiency</code> and
+                        <code>battery.discharge_efficiency</code> do not reach that optimizer. The
+                        log says so once at startup. If the profile's values do not fit your
+                        battery, choose or create a matching profile in EOSdash.</p>
                     <div data-schema-section="battery" data-schema-anchor="battery"></div>
                     <h3 id="charging-curve">The charging curve</h3>
                     <p>With <code>battery.charging_curve_enabled</code> on, the charge power falls as the
