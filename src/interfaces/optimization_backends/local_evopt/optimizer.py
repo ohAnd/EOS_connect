@@ -231,10 +231,19 @@ class BatteryConfig:
     c_priority: int = 0
     # Emergency reserve: minimum end-of-horizon SOC in Wh (EOS_connect extension)
     s_reserve: float = 0.0
+    # Charge power limit per slot in W (EOS_connect extension). Carries the charging
+    # curve into the plan; None = c_max in every slot. Values above c_max are clipped.
+    c_max_series: Optional[List[float]] = None
 
     def __post_init__(self):
         if self.s_capacity is None:
             self.s_capacity = self.s_max
+
+    def c_max_at(self, t: int) -> float:
+        """Charge power limit in W for slot t: the per-slot value if one is set."""
+        if self.c_max_series is not None and t < len(self.c_max_series):
+            return min(self.c_max, max(0.0, self.c_max_series[t]))
+        return self.c_max
 
 
 @dataclass
@@ -422,7 +431,7 @@ class Optimizer:
                 self._new_var(
                     f"c_{i}_{t}",
                     lowBound=0,
-                    upBound=bat.c_max * self.time_series.dt[t] / 3600.
+                    upBound=bat.c_max_at(t) * self.time_series.dt[t] / 3600.
                 )
                 for t in self.time_steps
             ]
@@ -919,7 +928,7 @@ class Optimizer:
             if bat.p_demand is not None:
                 for t in self.time_steps:
                     if bat.p_demand[t] > 0:
-                        p_demand = min(bat.c_max * self.time_series.dt[t] / 3600., bat.p_demand[t])
+                        p_demand = min(bat.c_max_at(t) * self.time_series.dt[t] / 3600., bat.p_demand[t])
                         # two alternative constraints, only one is active:
                         self.problem += (
                             self.variables['c'][i][t] + self.variables['p_demand_pen'][i][t]
@@ -962,7 +971,7 @@ class Optimizer:
             # Control battery charging from grid — per-slot tight M
             if not bat.charge_from_grid:
                 for t in self.time_steps:
-                    _c_max_t = bat.c_max * self.time_series.dt[t] / 3600.0
+                    _c_max_t = bat.c_max_at(t) * self.time_series.dt[t] / 3600.0
                     self.problem += self.variables['c'][i][t] <= _c_max_t * self.variables['y'][t]
 
             # Control battery discharging to grid — per-slot tight M
@@ -978,7 +987,7 @@ class Optimizer:
             # Using c_max/d_max * dt per slot tightens the LP relaxation when z_cd
             # is fractional (matches the variable upper bounds exactly).
             for t in self.time_steps:
-                _c_max_t = bat.c_max * self.time_series.dt[t] / 3600.0
+                _c_max_t = bat.c_max_at(t) * self.time_series.dt[t] / 3600.0
                 _d_max_t = bat.d_max * self.time_series.dt[t] / 3600.0
                 self.problem += (
                     self.variables['d'][i][t]

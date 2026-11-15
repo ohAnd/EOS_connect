@@ -1462,7 +1462,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default=True,
         section="battery",
         level="standard",
-        description="Enable charging curve for controlled charging power according to SOC",
+        description=(
+            "Reduce the charge power as the battery fills, by SOC and battery "
+            "temperature. Always limits real charging; the built-in optimizer "
+            "(local_evopt) also plans with it. Never limits discharging"
+        ),
         labels=["restart_required"],
         help_url="config-battery.html#battery",
         display_group="Charging",
