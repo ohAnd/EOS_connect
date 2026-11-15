@@ -1240,6 +1240,13 @@ class Optimizer:
         if status == 'Optimal':
             result = {
                 'status': status,
+                # PuLP reports a CBC stop on the time limit as 'Optimal' as long as a
+                # plan was found; only the solution status tells the two apart. Without
+                # it, a solver hitting its limit on every run looks healthy in the log.
+                'time_limit_reached': (
+                    getattr(self.problem, 'sol_status', None)
+                    == pulp.LpSolutionIntegerFeasible
+                ),
                 'objective_value': self.get_clean_objective_value(),
                 'limit_violations': {
                     'grid_import_limit_exceeded': grid_imp_limit_violated,

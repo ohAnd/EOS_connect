@@ -208,6 +208,17 @@ class OptimizationInterface:
         """
         return bool(getattr(self.backend, "plans_charging_curve", False))
 
+    def set_scheduler_interval(self, seconds):
+        """
+        Tell the backend how often it is run.
+
+        Only the in-process solver uses it: it caps its solve time at a share of the
+        interval, so a plan arrives before the next run is due. The external backends
+        are bounded by the request timeout alone.
+        """
+        if hasattr(self.backend, "scheduler_interval"):
+            self.backend.scheduler_interval = seconds
+
     def optimize(self, eos_request, timeout=None, managed_loads=None,
                  managed_load_budget_w=0.0, charge_power_limit=None):
         """

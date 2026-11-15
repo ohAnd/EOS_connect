@@ -824,7 +824,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default=180,
         section="eos",
         level="standard",
-        description="Timeout for optimization requests in seconds",
+        description=(
+            "Timeout for optimization requests in seconds. The built-in optimizer "
+            "spends at most 80 % of it solving, and never more than a quarter of "
+            "the optimization interval"
+        ),
         labels=[],
         help_url="config-optimizer.html#eos",
         validation={"min": 10, "max": 600},
@@ -991,7 +995,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default=0,
         section="eos",
         level="expert",
-        description="CBC solver time limit in seconds for built-in optimizer (0 = no limit)",
+        description=(
+            "CBC solver time limit in seconds for built-in optimizer, all solver runs "
+            "of one optimization together (0 = 80 % of the timeout). Never more than "
+            "a quarter of the optimization interval"
+        ),
         help_url="config-optimizer.html#eos",
         validation={"min": 0, "max": 600},
         depends_on={"eos.source": "local_evopt"},

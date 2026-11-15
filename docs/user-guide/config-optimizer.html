@@ -140,9 +140,16 @@
                             <code>eos.local_evopt_max_grid_import_w</code> and
                             <code>eos.local_evopt_max_grid_export_w</code>. Both default to
                             <code>0</code>, meaning "use the inverter's own limit".
-                            <code>eos.local_evopt_num_threads</code> and
-                            <code>eos.local_evopt_time_limit</code> bound the CBC solver on slow hardware;
-                            <code>0</code> means no limit.</p>
+                            <code>eos.local_evopt_num_threads</code> sets how many threads the CBC
+                            solver uses; <code>0</code> means automatic.</p>
+                        <p>The solver's time is one budget per optimization, shared by every run of
+                            the charging-curve loop and the cost comparison for managed loads:
+                            <code>eos.local_evopt_time_limit</code> if set, otherwise 80&nbsp;% of
+                            <code>eos.timeout</code>, and never more than a quarter of the optimization
+                            interval (<code>refresh_time</code>). CBC usually finds its plan within
+                            seconds and spends the rest proving it optimal, so a plan cut off by the
+                            budget is the one it would have kept. The log says so when that happens:
+                            <em>best plan found within the time limit</em>.</p>
                         <div class="alert alert-warning">
                             <p>The external-EVopt equivalents,
                                 <code>eos.external_evopt_max_grid_import_w</code> and
