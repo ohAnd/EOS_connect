@@ -309,6 +309,16 @@ battery_interface = factory.create_battery_interface(
                         <li><code>evopt</code> &mdash; an external EVopt instance.</li>
                         <li><code>eos_server</code> &mdash; an external Akkudoktor EOS server.</li>
                     </ul>
+                    <p>The battery's charging curve reaches only <code>local_evopt</code>. The request carries
+                        the fixed <code>max_charge_power_w</code> for every backend, because EOS and EVopt take one
+                        limit for the whole horizon and also use it to cap discharging. The MILP cannot evaluate
+                        the curve either &mdash; the SOC is one of its unknowns &mdash; so
+                        <code>LocalEVOptBackend</code> applies it around the solver: each run gets a charge limit
+                        per slot (<code>BatteryConfig.c_max_series</code>), lowered to the curve at the SOC the
+                        previous run planned for the start of that slot, until no limit changes or
+                        <code>CHARGE_CURVE_MAX_RUNS</code> is reached. Limits only come down; replaced outright
+                        they never settle, because the plan has many equally cheap ways to place its
+                        charging.</p>
                     <p>Inverter support works the same way: <code>inverters/inverter_factory.py</code> maps
                         <code>inverter.type</code> onto a class, and every class implements the abstract
                         contract in <code>src/interfaces/base_inverter.py</code>. Adding hardware means adding a

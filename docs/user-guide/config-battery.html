@@ -64,6 +64,22 @@
                         plans against. These are the numbers every plan is built on, so a capacity that is
                         out by a third makes every decision out by a third.</p>
                     <div data-schema-section="battery" data-schema-anchor="battery"></div>
+                    <h3 id="charging-curve">The charging curve</h3>
+                    <p>With <code>battery.charging_curve_enabled</code> on, the charge power falls as the
+                        battery fills: the full <code>battery.max_charge_power_w</code> up to 50&nbsp;% SOC,
+                        then less and less, down to 0.05&nbsp;C near full and never below 500&nbsp;W. A
+                        battery temperature sensor lowers it further in the cold and the heat.</p>
+                    <ul>
+                        <li><strong>Real charging</strong> is always held to the curve, whatever the plan
+                            asks for.</li>
+                        <li><strong>The plan</strong> follows the curve only with the built-in optimizer
+                            (<code>local_evopt</code>): every slot is planned with the charge power the
+                            curve allows at the state of charge planned for that slot. The temperature is
+                            taken as it is now for the whole horizon. EOS and EVopt accept one charge limit
+                            for all 48 hours, so they plan with <code>battery.max_charge_power_w</code>.</li>
+                        <li><strong>Discharging</strong> is never limited by the curve. The planned
+                            discharge limit is <code>battery.max_charge_power_w</code>.</li>
+                    </ul>
                 </div>
 
                 <div class="content-section" data-level="standard">
