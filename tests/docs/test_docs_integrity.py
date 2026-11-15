@@ -547,3 +547,17 @@ def test_the_deploy_key_is_only_reachable_from_main_and_develop():
         if path.name not in bumping:
             text = path.read_text(encoding="utf-8")
             assert "VERSION_BUMP_DEPLOY_KEY" not in text, f"{path.name} uses the deploy key"
+
+
+def test_every_workflow_pins_its_token_permissions():
+    """The repository hands GITHUB_TOKEN write access by default.
+
+    A workflow without a top-level ``permissions:`` block inherits that, in every
+    job. Each one therefore states what it needs, and jobs that need more (GHCR
+    publishing) widen it for themselves.
+    """
+    for path in sorted((REPO / ".github/workflows").glob("*.y*ml")):
+        text = path.read_text(encoding="utf-8")
+        assert re.search(r"^permissions:", text, re.M), (
+            f"{path.name} has no top-level permissions block; its jobs get a writable token"
+        )

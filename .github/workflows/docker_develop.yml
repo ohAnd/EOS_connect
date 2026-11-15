@@ -30,6 +30,13 @@ env:
   VERSION_PREFIX: 0.3.42.
   VERSION_SUFFIX: -develop
 
+# Read-only by default; the repository default would hand every job a writable
+# GITHUB_TOKEN. Jobs that publish to GHCR add packages: write for themselves. The
+# [AUTO] version commit does not need contents: write - it is pushed with the
+# deploy key, not with this token.
+permissions:
+  contents: read
+
 jobs:
   tests:
     # This is a gate on a shared branch, so everything runs regardless of the diff.
@@ -44,6 +51,9 @@ jobs:
     runs-on: ubuntu-24.04
     needs: tests
     environment: version-bump
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -105,6 +115,8 @@ jobs:
   cleanup_old_develops:
     needs: publish_image
     runs-on: ubuntu-24.04
+    permissions:
+      packages: write
     steps:
       - name: Convert repository owner to lowercase
         run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV

@@ -740,6 +740,13 @@ scripts/install_playwright_deps_userspace.sh      # the alternative, without roo
                         and run everything regardless &mdash; those are the gates, and they are never
                         narrowed. A sixth workflow, <code>docker-image.yml</code>, is manual-dispatch
                         only.</p>
+                    <p>Every workflow declares its <code>GITHUB_TOKEN</code> permissions in a top-level
+                        <code>permissions:</code> block, because the repository default is write access. The
+                        default there is <code>contents: read</code>; only the jobs that publish to GHCR add
+                        <code>packages: write</code>, and <code>docker-image.yml</code> takes
+                        <code>contents: write</code> to create its release.
+                        <code>test_every_workflow_pins_its_token_permissions</code> fails on a workflow
+                        without the block.</p>
                 </div>
 
                 <div class="content-section">

@@ -7,6 +7,10 @@ on:
   #   branches: [ "main" ]
   workflow_dispatch: # allows manual triggering of the workflow
 
+# Creates a GitHub release with the image attached, which needs contents: write.
+permissions:
+  contents: write
+
 jobs:
 
   build:
