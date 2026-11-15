@@ -427,3 +427,63 @@ class TestPathSelection:
         assert normalized["result"]["Last_Wh_pro_Stunde"] == [5, 6]
         assert normalized["result"]["Electricity_price"] == [0.1, 0.2]
         assert len(normalized["ac_charge"]) == 8, "the control array still shifts"
+
+
+# ----------------------------------------------------------------------
+# ac_charge: EOS answers in power, EOS Connect reads energy (#371)
+# ----------------------------------------------------------------------
+
+
+class TestAcChargeIsSlotEnergy:
+    """
+    EOS answers ``ac_charge`` as a fraction of the charge power: 1.0 is
+    ``max_charge_power_w`` for the whole slot. EOS Connect reads
+    ``ac_charge × max_charge_power_w`` as the slot's energy in Wh, which is how
+    the EVopt backends answer. The two agree on hourly slots only; at 900 s an
+    unscaled answer was read as four times its energy - on the chart, and as
+    four times the power by the control loop.
+    """
+
+    def test_a_quarter_hour_takes_a_quarter_of_the_power_as_energy(self):
+        normalized = _path(900)._normalize(
+            {"ac_charge": [1.0, 0.5, 0.0]}, first_slot=0, total_slots=3
+        )
+        assert normalized["ac_charge"] == [0.25, 0.125, 0.0]
+
+    def test_an_hour_is_left_as_it_is(self):
+        normalized = _path(3600)._normalize(
+            {"ac_charge": [1.0, 0.5]}, first_slot=0, total_slots=2
+        )
+        assert normalized["ac_charge"] == [1.0, 0.5]
+
+    def test_only_ac_charge_is_rescaled(self):
+        normalized = _path(900)._normalize(
+            {"dc_charge": [1, 1], "discharge_allowed": [1, 0]},
+            first_slot=0,
+            total_slots=2,
+        )
+        assert normalized["dc_charge"] == [1, 1]
+        assert normalized["discharge_allowed"] == [1, 0]
+
+    @patch("src.interfaces.base_control.datetime")
+    def test_a_planned_half_power_charge_is_driven_at_half_power(self, mock_datetime):
+        """The reported case: 3600 W, 15-minute slots, EOS plans half power."""
+        from src.interfaces.base_control import (  # pylint: disable=import-outside-toplevel
+            BaseControl,
+        )
+
+        mock_datetime.now.return_value = BERLIN.localize(datetime(2026, 11, 7, 10, 0, 0))
+        config = {
+            "battery": {"max_charge_power_w": 3600, "capacity_wh": 10000},
+            "inverter": {"max_grid_charge_rate": 3600, "max_pv_charge_rate": 3600},
+        }
+        normalized = _path(900)._normalize(
+            {"ac_charge": [0.5]}, first_slot=0, total_slots=1
+        )
+
+        control = BaseControl(config, BERLIN, time_frame_base=900)
+        control.set_current_bat_charge_max(3600)
+        control.set_current_ac_charge_demand(normalized["ac_charge"][0])
+
+        assert control.get_current_ac_charge_demand() == pytest.approx(450.0)
+        assert control.get_needed_ac_charge_power() == pytest.approx(1800.0)

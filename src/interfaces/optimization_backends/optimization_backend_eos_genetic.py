@@ -307,8 +307,22 @@ class EOSGeneticPath:
         so ``result`` can end up to three quarter-slots shorter than the old
         convention's ``total - first``. The axis simply ends 45 minutes earlier
         at the far edge of a two-day view, consistently for every series on it.
+
+        ``ac_charge`` is rescaled to the slot. EOS answers with a fraction of the
+        charge *power* - 1.0 is ``max_charge_power_w`` for the whole slot - while
+        EOS Connect reads ``ac_charge × max_charge_power_w`` as the slot's
+        *energy* in Wh, the way the EVopt backends answer. Both readings agree on
+        hourly slots and nowhere else: at 900 s every planned AC charge was read
+        as four times its energy. The chart showed four times the charge, and
+        the control loop asked for four times the power, which only the battery's
+        limit stopped - so a planned half-power charge ran at full power (#371).
         """
         normalized = dict(solution)
+        if isinstance(normalized.get("ac_charge"), list):
+            slot_hours = self.time_frame_base / 3600.0
+            normalized["ac_charge"] = [
+                float(value) * slot_hours for value in normalized["ac_charge"]
+            ]
         for key in ("ac_charge", "dc_charge", "discharge_allowed"):
             if key in normalized:
                 normalized[key] = self._to_midnight_anchored(
