@@ -70,7 +70,9 @@
                         come from the profile, so <code>battery.charge_efficiency</code> and
                         <code>battery.discharge_efficiency</code> do not reach that optimizer. The
                         log says so once at startup. If the profile's values do not fit your
-                        battery, choose or create a matching profile in EOSdash.</p>
+                        battery, choose or create a matching profile in EOSdash. EOS Connect
+                        writes only its own fields, and only when they differ: the profile you
+                        choose and anything else set in EOSdash stay as they are.</p>
                     <div data-schema-section="battery" data-schema-anchor="battery"></div>
                     <h3 id="charging-curve">The charging curve</h3>
                     <p>With <code>battery.charging_curve_enabled</code> on, the charge power falls as the

@@ -225,6 +225,22 @@ def _first_slot_fraction(solution):
     return float(value) if 0.0 < value <= 1.0 else 1.0
 
 
+def _changed_fields(settings, existing, prefix=""):
+    """
+    Yield ``(path, value)`` for every field of *settings* that *existing* lacks
+    or holds differently, descending into nested settings such as
+    ``profile_adjustment``. ``device_id`` is the key, never a field to write.
+    """
+    for key, value in settings.items():
+        if key == "device_id":
+            continue
+        current = existing.get(key) if isinstance(existing, dict) else None
+        if isinstance(value, dict) and isinstance(current, dict):
+            yield from _changed_fields(value, current, f"{prefix}{key}/")
+        elif current != value:
+            yield f"{prefix}{key}", value
+
+
 class EOSGeneticPath:  # pylint: disable=too-many-instance-attributes
     """
     Translates EOS Connect's optimization request to and from ``/v1/optimize``.
@@ -304,7 +320,8 @@ class EOSGeneticPath:  # pylint: disable=too-many-instance-attributes
         of truth; only a changed group is written.
 
         On a server with device profiles the settings are rewritten into that
-        shape first - see ``_to_profile_settings``.
+        shape first - see ``_to_profile_settings`` - and written field by field
+        into a device that already exists, see ``_write_profile_device``.
         """
         for request_key, group in _DEVICE_GROUPS:
             device = eos_request.get(request_key)
@@ -322,11 +339,57 @@ class EOSGeneticPath:  # pylint: disable=too-many-instance-attributes
             payload = {device["device_id"]: settings}
             if self._mirrored_devices.get(group) == payload:
                 continue
-            if self._set_config(f"devices/{group}", payload):
+            if self.device_profiles:
+                written = self._write_profile_device(
+                    group, device["device_id"], settings
+                )
+            else:
+                written = self._set_config(f"devices/{group}", payload)
+            if written:
                 self._mirrored_devices[group] = payload
                 logger.debug(
                     "[OPT-EOS] Mirrored %s into the EOS device configuration", group
                 )
+
+    def _write_profile_device(self, group, device_id, settings):
+        """
+        Write EOS Connect's fields of one device without touching the rest.
+
+        A device on a server with profiles carries more than EOS Connect knows
+        about: the battery profile chosen in EOSdash, a full-charge interval, a
+        storage cost. Replacing the whole group reset all of it on every start
+        (#385), so a device that exists only gets the fields EOS Connect owns,
+        and only those that differ.
+
+        A device that does not exist yet cannot be created by its own path -
+        EOS answers 400 - so it is added to the group, which is written back
+        with the devices already in it.
+
+        Returns:
+            bool: True when every write was accepted. False leaves the group
+            unmirrored, so the next cycle tries again.
+        """
+        try:
+            current = self._get_config(f"devices/{group}")
+        except (requests.exceptions.RequestException, ValueError) as err:
+            logger.warning(
+                "[OPT-EOS] Could not read devices/%s from EOS (%s) - "
+                "writing it with the next cycle",
+                group,
+                err,
+            )
+            return False
+        devices = current if isinstance(current, dict) else {}
+        existing = devices.get(device_id)
+        if not isinstance(existing, dict):
+            return self._set_config(
+                f"devices/{group}", {**devices, device_id: settings}
+            )
+        accepted = True
+        for path, value in _changed_fields(settings, existing):
+            if not self._set_config(f"devices/{group}/{device_id}/{path}", value):
+                accepted = False
+        return accepted
 
     def _report_dropped(self, group, device_id, dropped):
         """Say once per group that EOS uses its profile's efficiencies, not ours."""

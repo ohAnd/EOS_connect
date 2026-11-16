@@ -382,6 +382,127 @@ class TestProfileShapedMirroring:
         assert len(battery_warnings) == 1
 
 
+class TestProfileDevicesKeepWhatEOSdashSet:
+    """
+    #385: replacing the whole device on every start reset what was set on the
+    server - the profile chosen in EOSdash, a full-charge interval, and with
+    the old keys even the capacity. An existing device only gets the fields
+    EOS Connect owns, and only those that changed.
+    """
+
+    REQUEST = TestProfileShapedMirroring.REQUEST
+
+    #: What GET devices/batteries returns for a battery set up in EOSdash.
+    ON_SERVER = {
+        "battery1": {
+            "device_id": "battery1",
+            "battery_profile": "my-byd-hvs",
+            "profile_adjustment": {
+                "nominal_capacity_wh": 12000,
+                "max_charge_power_w": 3000.0,
+                "max_discharge_power_w": 3000.0,
+                "full_charge_interval_days": 21.0,
+                "full_charge_detect_percentage": None,
+            },
+            "levelized_cost_of_storage_amt_kwh": 0.08,
+            "min_soc_percentage": 10,
+            "max_soc_percentage": 95,
+            "effective_nominal_capacity_wh": 12000,
+        },
+        "battery2": {"device_id": "battery2", "battery_profile": "generic-lfp"},
+    }
+
+    @staticmethod
+    def _path(on_server, writes, failing_read=False):
+        def get_config(key):
+            if failing_read:
+                raise requests.exceptions.ConnectionError("refused")
+            return on_server.get(key)
+
+        def set_config(key, value):
+            writes.append((key, value))
+            return True
+
+        return EOSGeneticPath(
+            "http://eos:8503",
+            900,
+            BERLIN,
+            get_config,
+            set_config,
+            device_profiles=True,
+        )
+
+    def _battery_writes(self, on_server, request=None):
+        writes = []
+        path = self._path(on_server, writes)
+        path._mirror_devices({"pv_akku": (request or self.REQUEST)["pv_akku"]})
+        return writes
+
+    def test_only_the_changed_fields_are_written(self):
+        writes = self._battery_writes({"devices/batteries": self.ON_SERVER})
+        assert writes == [
+            ("devices/batteries/battery1/profile_adjustment/max_charge_power_w", 4000),
+            (
+                "devices/batteries/battery1/profile_adjustment/max_discharge_power_w",
+                4000,
+            ),
+        ]
+
+    def test_what_eosdash_set_is_never_written(self):
+        writes = self._battery_writes({"devices/batteries": self.ON_SERVER})
+        written_paths = [key for key, _ in writes]
+        assert "devices/batteries" not in written_paths
+        for untouched in (
+            "battery_profile",
+            "full_charge_interval_days",
+            "levelized_cost_of_storage_amt_kwh",
+        ):
+            assert not any(key.endswith(untouched) for key in written_paths)
+
+    def test_a_device_matching_the_server_writes_nothing(self):
+        in_sync = {
+            "battery1": {
+                **self.ON_SERVER["battery1"],
+                "profile_adjustment": {
+                    **self.ON_SERVER["battery1"]["profile_adjustment"],
+                    "max_charge_power_w": 4000.0,
+                    "max_discharge_power_w": 4000.0,
+                },
+            }
+        }
+        assert not self._battery_writes({"devices/batteries": in_sync})
+
+    def test_a_new_device_joins_the_devices_already_there(self):
+        """EOS answers 400 to a device created by its own path."""
+        on_server = {"battery2": self.ON_SERVER["battery2"]}
+        writes = self._battery_writes({"devices/batteries": on_server})
+        assert len(writes) == 1
+        key, group = writes[0]
+        assert key == "devices/batteries"
+        assert group["battery2"] == self.ON_SERVER["battery2"]
+        assert group["battery1"]["profile_adjustment"]["nominal_capacity_wh"] == 12000
+
+    def test_an_empty_server_gets_the_device(self):
+        writes = self._battery_writes({"devices/batteries": None})
+        assert [key for key, _ in writes] == ["devices/batteries"]
+
+    def test_an_unreadable_group_is_tried_again_next_cycle(self):
+        writes = []
+        path = self._path({}, writes, failing_read=True)
+        path._mirror_devices({"pv_akku": self.REQUEST["pv_akku"]})
+        assert not writes
+        assert "batteries" not in path._mirrored_devices
+
+    def test_a_server_without_profiles_still_gets_the_whole_group(self):
+        """Before profiles, the group write is what those servers understand."""
+        writes = []
+        on_server = {"devices/batteries": self.ON_SERVER}
+        path = self._path(on_server, writes)
+        path.device_profiles = False
+        path._mirror_devices({"pv_akku": self.REQUEST["pv_akku"]})
+        assert [key for key, _ in writes] == ["devices/batteries"]
+
+
 # ----------------------------------------------------------------------
 # The request body
 # ----------------------------------------------------------------------
