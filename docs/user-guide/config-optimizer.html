@@ -205,6 +205,12 @@
                             path to the servers that have nothing else. Nothing about this is
                             configurable and nothing about it is visible in the plan &mdash; the
                             log line at startup names the endpoint in use.</p>
+                        <p>Behind <code>/v1/optimize</code>, EOS reads battery, inverter and car from
+                            its own device configuration, and EOS Connect writes them there. Recent
+                            builds describe these devices by profile; EOS Connect asks the server
+                            for that as well and writes capacity and power limits as profile
+                            adjustments &mdash; see <a href="config-battery.html#battery">The
+                            battery itself</a> for what the profile takes over.</p>
                     </div>
 
                     <div data-schema-section="eos" data-schema-anchor="time-slot-config"></div>
