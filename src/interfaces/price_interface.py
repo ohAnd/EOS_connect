@@ -217,6 +217,27 @@ def fill_price_gaps(values, coverage, slots_per_day):
     return filled, first_data, forecast_start
 
 
+def timestamp_key(stamp):
+    """The instant a price timestamp names, so two spellings of it compare equal.
+
+    Matching learning samples by the raw string only works while both sides
+    write a moment the same way: ``2026-11-10T13:00:00.000Z`` and
+    ``2026-11-10T14:00:00+01:00`` are one slot. Returns epoch seconds for an
+    aware datetime or ISO string, else the string itself, so a timestamp that
+    names no instant still matches an identical spelling as before.
+    """
+    if isinstance(stamp, datetime):
+        moment = stamp
+    else:
+        try:
+            moment = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        except ValueError:
+            return str(stamp)
+    if moment.tzinfo is None:
+        return str(stamp)
+    return moment.timestamp()
+
+
 AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
 TIBBER_API = "https://api.tibber.com/v1-beta/gql"
 SMARTENERGY_API = "https://apis.smartenergy.at/market/v1/price"
@@ -1718,16 +1739,18 @@ class PriceInterface(ForecastMetadataMixin):
 
         # Align by timestamps if available, otherwise use simple index matching
         if use_timestamps:
-            # Create timestamp -> price mappings
+            # Create timestamp -> price mappings, keyed by the instant
             known_map = {
-                entry["timestamp"]: entry["price"] for entry in known_prices_with_ts
+                timestamp_key(entry["timestamp"]): entry["price"]
+                for entry in known_prices_with_ts
             }
             epex_map = {
-                entry["timestamp"]: entry["price"] for entry in energyforecast_data
+                timestamp_key(entry["timestamp"]): entry["price"]
+                for entry in energyforecast_data
             }
 
-            # Find overlapping timestamps
-            common_timestamps = sorted(set(known_map.keys()) & set(epex_map.keys()))
+            # Find overlapping timestamps, in the order the source sent them
+            common_timestamps = [key for key in known_map if key in epex_map]
 
             if len(common_timestamps) == 0:
                 logger.warning(
@@ -1832,14 +1855,19 @@ class PriceInterface(ForecastMetadataMixin):
         # Extract future prices from energyforecast (timestamps after known data)
         if use_timestamps:
             # Get last timestamp from known prices
-            last_known_ts = known_prices_with_ts[-1]["timestamp"]
+            last_known_ts = timestamp_key(known_prices_with_ts[-1]["timestamp"])
 
-            # Filter energyforecast for future timestamps
-            future_epex = [
-                entry["price"]
-                for entry in energyforecast_data
-                if entry["timestamp"] > last_known_ts
-            ][:num_missing_hours]
+            # Filter energyforecast for future timestamps. Only like compares
+            # with like: an unparseable string is never "later" than an instant.
+            future_epex = []
+            for entry in energyforecast_data:
+                entry_ts = timestamp_key(entry["timestamp"])
+                if (
+                    isinstance(entry_ts, type(last_known_ts))
+                    and entry_ts > last_known_ts
+                ):
+                    future_epex.append(entry["price"])
+            future_epex = future_epex[:num_missing_hours]
 
         else:
             # Simple index-based extraction
@@ -2284,10 +2312,31 @@ class PriceInterface(ForecastMetadataMixin):
                         combined.extend(filler)
                     return combined
 
+                # What the forecast learns from: only the slots EVCC actually
+                # covered, each with its own timestamp. EVCC publishes from the
+                # current period on, so everything before window.first_covered
+                # is the first price copied back to midnight - learning from
+                # that pulled the factor down and got it rejected (#376).
+                anchor_epoch = (
+                    start_time
+                    if start_time is not None
+                    else local_midnight(self.time_zone)
+                ).timestamp()
+                learning_prices = [
+                    {
+                        "price": prices[slot],
+                        "timestamp": datetime.fromtimestamp(
+                            anchor_epoch + slot * self.time_frame_base,
+                            tz=dt_timezone.utc,
+                        ).isoformat(),
+                    }
+                    for slot in range(window.first_covered, num_real_slots)
+                ]
+
                 if real_prices and num_missing_slots > 0:
                     # Fallback 1: Try energyforecast.de smart price prediction
                     forecast_prices = self._fetch_adaptive_energyforecast_fallback(
-                        known_prices=real_prices,
+                        known_prices_with_ts=learning_prices,
                         num_missing_hours=num_forecast_prices_needed,
                     )
 
