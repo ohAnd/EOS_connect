@@ -28,8 +28,9 @@ The 0 W setpoint suits AC-coupled PV. With DC-coupled PV (MPPT) the MultiPlus no
 longer inverts at 0 W, so all PV goes into the battery and the house runs from the
 grid. For such systems "Avoid Discharge" can instead use the ESS minimum SoC
 (inverter.victron_avoid_discharge_method = "min_soc"): ESS stays in its normal mode
-and register 2901 is raised to the current SoC. On "Discharge Allowed" and on
-shutdown it is set back to the configured battery minimum SoC.
+and register 2901 is raised to the current SoC, and raised again behind a battery
+that keeps charging. On "Discharge Allowed" and on shutdown it is set back to the
+configured battery minimum SoC.
 """
 
 import logging
@@ -69,6 +70,15 @@ _MIN_SOC_REG = Reg.SETTINGS_Settings_CGwacs_BatteryLife_MinimumSocLimit
 _MIN_SOC_RAW_PER_PCT = 10
 _DEFAULT_RESTORE_MIN_SOC_PCT = 5.0
 
+# A hold leaves the battery free to charge, and ESS allows discharge again once the
+# SoC stands a few percent above its minimum. A minimum written once at the start of
+# the hold is therefore overtaken by DC-coupled PV, and the hold ends with nobody
+# asking for it - which is the one situation this method exists for. The refresh pulls
+# the minimum up behind the SoC. A minute is short against the time a battery needs to
+# charge through that band, and a tick only writes when the target actually moves:
+# register 2901 is a stored setting, not a volatile setpoint.
+_MIN_SOC_REFRESH_INTERVAL_S = 60.0
+
 
 class VictronInverter(BaseInverter):
     """Victron inverter interface implementation."""
@@ -98,6 +108,15 @@ class VictronInverter(BaseInverter):
         self._saved_ess_state: dict[Reg, int] | None = None
         # True while "avoid discharge" holds the battery via a raised ESS min SoC
         self._min_soc_override_active: bool = False
+        # The minimum this hold has written, so the refresh only ever ratchets up
+        self._min_soc_target: float | None = None
+        self._min_soc_refresh_thread: threading.Thread | None = None
+        self._min_soc_refresh_stop = threading.Event()
+        # One modbus session, two writers: the refresh thread and whichever mode
+        # change the control loop makes. Interleaved transactions hand each other's
+        # responses back, and _write_min_soc_pct() verifies by reading. Re-entrant
+        # because the hold takes the lock and then raises the minimum under it.
+        self._min_soc_lock = threading.RLock()
 
     def start_vebus_keepalive(
         self, targets: dict[Reg, int], interval_s: float = 1.0, unit: int = 227
@@ -251,6 +270,7 @@ class VictronInverter(BaseInverter):
             restore_pct = _DEFAULT_RESTORE_MIN_SOC_PCT
         self.restore_min_soc_pct = max(0.0, min(100.0, restore_pct))
         self._min_soc_override_active = False
+        self._min_soc_target = None
 
         logger.info(
             "[VictronModbus] Avoid discharge method: %s (min SoC restore target %.0f%%)",
@@ -339,15 +359,21 @@ class VictronInverter(BaseInverter):
 
         ESS keeps running in its normal mode, so DC-coupled PV still covers the
         house and feeds in; only discharge below the current SoC is blocked.
+
+        The minimum is raised again for as long as the hold lasts - see
+        `_MIN_SOC_REFRESH_INTERVAL_S` for why a single write does not hold.
         """
         # Coming from force charge, ESS is still under external control
         if self._external_control_active():
             self.restore_ess_state(unit=100, retries=8, delay_s=0.2)
 
-        soc = self._read_soc_pct()
-        target = max(float(math.ceil(soc)), self.restore_min_soc_pct)
-        self._write_min_soc_pct(target)
-        self._min_soc_override_active = True
+        with self._min_soc_lock:
+            # A new hold starts from where the battery stands now, not from
+            # whatever the previous one had ratcheted up to.
+            self._min_soc_target = None
+            soc, target = self._raise_min_soc_to_soc()
+            self._min_soc_override_active = True
+            self._start_min_soc_refresh()
 
         logger.info(
             "[VictronModbus] Hold mode active via ESS minimum SoC "
@@ -356,24 +382,107 @@ class VictronInverter(BaseInverter):
             target,
         )
 
+    def _raise_min_soc_to_soc(self) -> tuple[float, float]:
+        """Lift the ESS minimum SoC to the current SoC, never lower it.
+
+        Returns the SoC that was read and the minimum now in force. Holding the
+        minimum where it is when the SoC dips matters: following the battery down
+        would hand back exactly the discharge the hold was asked to prevent.
+        """
+        with self._min_soc_lock:
+            soc = self._read_soc_pct()
+            target = max(float(math.ceil(soc)), self.restore_min_soc_pct)
+
+            if self._min_soc_target is not None and target <= self._min_soc_target:
+                return soc, self._min_soc_target
+
+            self._write_min_soc_pct(target)
+            self._min_soc_target = target
+            return soc, target
+
+    def _start_min_soc_refresh(self) -> None:
+        """Start the loop that pulls the minimum SoC up behind a charging battery."""
+        t = self._min_soc_refresh_thread
+        if t and t.is_alive():
+            return
+
+        self._min_soc_refresh_stop.clear()
+
+        def _loop():
+            logger.info("[VictronModbus] ESS minimum SoC refresh loop entered")
+            while not self._min_soc_refresh_stop.wait(
+                timeout=_MIN_SOC_REFRESH_INTERVAL_S
+            ):
+                try:
+                    before = self._min_soc_target
+                    soc, target = self._raise_min_soc_to_soc()
+                    if before is None or target > before:
+                        logger.info(
+                            "[VictronModbus] Battery charged on during hold "
+                            "(SoC %.1f%%) -> ESS minimum SoC raised to %.0f%%",
+                            soc,
+                            target,
+                        )
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    # One failed read or write must not end the hold: the minimum
+                    # already on the device keeps holding until the next tick.
+                    logger.warning(
+                        "[VictronModbus] Could not refresh ESS minimum SoC: %s", e
+                    )
+
+            logger.info("[VictronModbus] ESS minimum SoC refresh loop exited")
+
+        self._min_soc_refresh_thread = threading.Thread(
+            target=_loop,
+            daemon=True,
+            name="VictronMinSocRefresh",
+        )
+        self._min_soc_refresh_thread.start()
+
+        logger.info(
+            "[VictronModbus] ESS minimum SoC refresh started (every %.0fs)",
+            _MIN_SOC_REFRESH_INTERVAL_S,
+        )
+
+    def _stop_min_soc_refresh(self) -> None:
+        """Stop the refresh loop and wait out a write that is already in flight.
+
+        Joining matters: a tick that lands after the restore would write the hold
+        back onto a device that has just been released.
+        """
+        self._min_soc_refresh_stop.set()
+
+        t = self._min_soc_refresh_thread
+        if t and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=5.0)
+        self._min_soc_refresh_thread = None
+
     def _restore_min_soc(self) -> None:
         """Set the ESS minimum SoC back to the configured battery minimum."""
-        target = self.restore_min_soc_pct
-        if not self._min_soc_override_active:
-            # After a restart the override flag is gone; compare with the device
-            try:
-                if abs(self._read_min_soc_pct() - target) < 1.0 / _MIN_SOC_RAW_PER_PCT:
-                    return
-            except RuntimeError as e:
-                logger.warning(
-                    "[VictronModbus] Could not read ESS minimum SoC (%s) "
-                    "-> writing restore value anyway",
-                    e,
-                )
+        self._stop_min_soc_refresh()
 
-        logger.info("[VictronModbus] Restoring ESS minimum SoC to %.0f%%", target)
-        self._write_min_soc_pct(target)
-        self._min_soc_override_active = False
+        with self._min_soc_lock:
+            target = self.restore_min_soc_pct
+            if not self._min_soc_override_active:
+                # After a restart the override flag is gone; compare with the device
+                try:
+                    if (
+                        abs(self._read_min_soc_pct() - target)
+                        < 1.0 / _MIN_SOC_RAW_PER_PCT
+                    ):
+                        self._min_soc_target = None
+                        return
+                except RuntimeError as e:
+                    logger.warning(
+                        "[VictronModbus] Could not read ESS minimum SoC (%s) "
+                        "-> writing restore value anyway",
+                        e,
+                    )
+
+            logger.info("[VictronModbus] Restoring ESS minimum SoC to %.0f%%", target)
+            self._write_min_soc_pct(target)
+            self._min_soc_override_active = False
+            self._min_soc_target = None
 
     def set_mode_avoid_discharge(self):
         """Set the inverter to avoid discharging the battery.

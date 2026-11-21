@@ -103,7 +103,11 @@
                             goes back to <code>battery.min_soc_percentage</code> &mdash; so set that to the
                             minimum SoC you want ESS to use. Once the battery reaches the raised minimum, the
                             MultiPlus stops inverting and only resumes after the SoC has risen a few
-                            percent; with load above PV this cycles in small steps.</li>
+                            percent; with load above PV this cycles in small steps. The same few percent
+                            are why the minimum follows a charging battery upward for as long as the hold
+                            lasts, once a minute: DC-coupled PV would otherwise lift the SoC clear of the
+                            minimum written when the hold began, and ESS would allow discharge again. It
+                            never follows the SoC back down.</li>
                     </ul>
                     <p>Charging from the grid uses external control with either setting.</p>
                     <div data-schema-section="inverter"></div>
